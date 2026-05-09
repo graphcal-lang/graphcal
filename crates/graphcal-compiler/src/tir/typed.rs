@@ -567,98 +567,212 @@ pub struct ResolvedDomainConstraint {
 }
 
 // ---------------------------------------------------------------------------
-// DAG registry key
+// DAG registry
 // ---------------------------------------------------------------------------
 
-/// Lookup key for a compiled DAG inside [`TIR::dags`].
+/// Map from canonical [`DagId`](crate::syntax::dag_id::DagId) to its
+/// compiled per-DAG TIR.
 ///
-/// A DAG is reachable either by its bare local name (for same-file inline
-/// calls `@dag(args).out` — single-segment key) or by its module-aliased
-/// path (for cross-file qualified calls `@module.dag(args).out` —
-/// multi-segment key, where leading segments are the importer's module
-/// aliases). Storing the path as a `Vec<Ident>` rather than as a
-/// `"alias::dag"` string keeps the structure explicit and removes the
-/// pre-`v0.0.1-alpha.4` `::` separator from internal data — the surface
-/// language has no such token.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DagKey {
-    /// Path segments. Always non-empty; one segment for same-file calls,
-    /// two-or-more for cross-file qualified calls.
-    segments: Vec<String>,
-}
-
-impl DagKey {
-    /// Same-file call key: just the bare DAG name.
-    #[must_use]
-    pub fn local(name: impl Into<String>) -> Self {
-        Self {
-            segments: vec![name.into()],
-        }
-    }
-
-    /// Cross-file qualified call key: `module-alias.dag-name`.
-    #[must_use]
-    pub fn aliased(alias: impl Into<String>, name: impl Into<String>) -> Self {
-        Self {
-            segments: vec![alias.into(), name.into()],
-        }
-    }
-
-    /// Build a key from a parsed `ModulePath` reference (the post-`@`
-    /// path of an inline DAG call).
-    #[must_use]
-    pub fn from_module_path(path: &crate::syntax::ast::ModulePath) -> Self {
-        Self {
-            segments: path.segments.iter().map(|s| s.name.clone()).collect(),
-        }
-    }
-
-    /// The DAG name itself (the leaf segment, regardless of qualification).
-    #[must_use]
-    pub fn leaf(&self) -> &str {
-        // `segments` is always non-empty by construction.
-        self.segments.last().map_or("", |s| s.as_str())
-    }
-
-    /// `true` if this key is single-segment (a same-file call).
-    #[must_use]
-    pub const fn is_local(&self) -> bool {
-        self.segments.len() == 1
-    }
-}
-
-impl std::fmt::Display for DagKey {
-    /// Render the key in the surface syntax: dot-separated segments,
-    /// matching how the call would appear in source (`module.dag`).
-    /// Used for diagnostics where the user needs to identify the DAG.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut first = true;
-        for seg in &self.segments {
-            if !first {
-                f.write_str(".")?;
-            }
-            f.write_str(seg)?;
-            first = false;
-        }
-        Ok(())
-    }
-}
-
-/// Map from DAG key to its compiled TIR.
-pub type DagRegistry = HashMap<DagKey, TIR>;
+/// Holds every DAG in scope at this file: the file's own top-level body
+/// (keyed by [`TIR::root_dag_id`]), every inline `dag X { ... }` child
+/// (keyed by `parent_dag_id.child(name)`), and every dep DAG merged in
+/// by `merge_dep_dag_tirs` (keyed by the dep's canonical id).
+pub type DagRegistry = HashMap<crate::syntax::dag_id::DagId, DagTIR>;
 
 // ---------------------------------------------------------------------------
 // TIR struct
 // ---------------------------------------------------------------------------
 
-/// Typed Intermediate Representation — the result of [`type_resolve`].
+/// Typed Intermediate Representation of a single Graphcal file.
 ///
-/// Contains everything from `IR` plus resolved type annotations for
-/// every declaration and function signature.
+/// Wraps a file-scoped [`Registry`] plus a flat [`DagRegistry`] of every
+/// DAG in scope. The file's own top-level body lives at
+/// `dags[&root_dag_id]`; inline `dag X { ... }` children live at
+/// `dags[&root_dag_id.child(name)]`; cross-file dep DAGs merged in by
+/// `merge_dep_dag_tirs` live at their own canonical
+/// [`DagId`](crate::syntax::dag_id::DagId).
 #[derive(Debug, Clone)]
 pub struct TIR {
-    /// The type/unit/dimension/index/struct registry.
+    /// The type/unit/dimension/index/struct registry, shared by every DAG
+    /// in this file.
     pub registry: Registry,
+    /// Canonical id of the file itself; the key under which the file's
+    /// own top-level body lives in `dags`.
+    pub root_dag_id: crate::syntax::dag_id::DagId,
+    /// Every DAG reachable from this file. Always contains an entry for
+    /// `root_dag_id`. Inline children and merged dep DAGs are inserted by
+    /// the project pipeline.
+    pub dags: DagRegistry,
+    /// Maps each `import path as alias` (or `import path`) module alias to
+    /// the dep file's canonical `DagId`. Used by [`TIR::lookup_call_target`]
+    /// to translate user-typed `@alias.dag(args)` references into the
+    /// canonical key under which the dep's DAGs were inserted by
+    /// `merge_dep_dag_tirs`.
+    pub module_aliases: HashMap<String, crate::syntax::dag_id::DagId>,
+}
+
+impl TIR {
+    /// Borrow the file's own top-level [`DagTIR`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `root_dag_id` is not in `dags`. Construction sites
+    /// (`type_resolve_single`) populate this entry; the invariant must
+    /// not be broken by callers.
+    #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "TIR invariant: root entry always present"
+    )]
+    pub fn root(&self) -> &DagTIR {
+        self.dags
+            .get(&self.root_dag_id)
+            .expect("TIR.dags must contain root_dag_id")
+    }
+
+    /// Mutably borrow the file's own top-level [`DagTIR`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `root_dag_id` is not in `dags`.
+    #[expect(
+        clippy::expect_used,
+        reason = "TIR invariant: root entry always present"
+    )]
+    pub fn root_mut(&mut self) -> &mut DagTIR {
+        self.dags
+            .get_mut(&self.root_dag_id)
+            .expect("TIR.dags must contain root_dag_id")
+    }
+
+    /// Returns true if this file declares any required param or required index.
+    ///
+    /// Such files cannot be evaluated standalone; they must be bound via a
+    /// parameterized include from another file.
+    #[must_use]
+    pub fn is_library(&self) -> bool {
+        self.root().params.iter().any(|p| p.default_expr.is_none())
+            || self
+                .registry
+                .indexes
+                .all_indexes()
+                .any(crate::registry::types::IndexDef::is_required)
+    }
+
+    /// Build a concrete `DeclaredType` map from the file root's resolved
+    /// types plus its imported-value metadata. Adds builtin constants as
+    /// `Dimensionless`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphcalError`] if any resolved type contains unresolved generic
+    /// parameters.
+    pub fn build_declared_types(
+        &self,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<HashMap<String, crate::registry::declared_type::DeclaredType>, GraphcalError> {
+        self.root().build_declared_types(src)
+    }
+
+    /// Resolve a user-typed inline-DAG call path to the corresponding
+    /// [`DagTIR`] in [`Self::dags`].
+    ///
+    /// - Single-segment `[name]` (a same-file call `@name(args)`) → looks
+    ///   up `root_dag_id.child(name)`.
+    /// - Multi-segment `[alias, name, ...]` (a cross-file qualified call
+    ///   `@alias.name(args)`) → translates `alias` via [`Self::module_aliases`]
+    ///   to the dep file's `DagId`, then appends the remaining segments.
+    ///
+    /// Returns `None` when the path doesn't resolve (unknown alias, no
+    /// matching DAG, etc.); call sites surface a structured error.
+    #[must_use]
+    pub fn lookup_call_target(&self, path: &crate::syntax::ast::ModulePath) -> Option<&DagTIR> {
+        let id = self.resolve_call_path(path)?;
+        self.dags.get(&id)
+    }
+
+    /// Build the canonical [`DagId`](crate::syntax::dag_id::DagId) that
+    /// `path` refers to under this file's scope (alias-translated for
+    /// multi-segment paths, file-root-scoped for single-segment paths).
+    ///
+    /// Returns `None` when the leading alias of a multi-segment path is
+    /// unknown.
+    #[must_use]
+    pub fn resolve_call_path(
+        &self,
+        path: &crate::syntax::ast::ModulePath,
+    ) -> Option<crate::syntax::dag_id::DagId> {
+        if path.segments.is_empty() {
+            return None;
+        }
+        if path.segments.len() == 1 {
+            return Some(self.root_dag_id.child(path.segments[0].name.as_str()));
+        }
+        let alias = path.segments[0].name.as_str();
+        let dep_id = self.module_aliases.get(alias)?;
+        let mut id = dep_id.clone();
+        for seg in &path.segments[1..] {
+            id = id.child(seg.name.as_str());
+        }
+        Some(id)
+    }
+
+    /// Construct a minimal `TIR` for callers that need a context to satisfy
+    /// the eval pipeline's invariants but never look up an inline DAG.
+    ///
+    /// Currently used by display-only unit-scale resolution. The returned
+    /// TIR has a synthetic root id and empty per-DAG content; calling
+    /// [`Self::lookup_call_target`] on it always returns `None`.
+    #[must_use]
+    pub fn empty_for_eval_helpers(registry: Registry) -> Self {
+        let root_dag_id = crate::syntax::dag_id::DagId::new(["<eval-helper>"]);
+        let mut dags = DagRegistry::new();
+        dags.insert(
+            root_dag_id.clone(),
+            DagTIR {
+                dag_id: root_dag_id.clone(),
+                consts: Vec::new(),
+                params: Vec::new(),
+                nodes: Vec::new(),
+                asserts: Vec::new(),
+                plots: Vec::new(),
+                figures: Vec::new(),
+                layers: Vec::new(),
+                runtime_deps: HashMap::new(),
+                const_deps: HashMap::new(),
+                source_order: Vec::new(),
+                assert_names: std::collections::HashSet::new(),
+                assumes_map: HashMap::new(),
+                expected_fail: HashMap::new(),
+                resolved_decl_types: HashMap::new(),
+                domain_constraints: HashMap::new(),
+                imported_values: HashMap::new(),
+                imported_decl_types: HashMap::new(),
+                imported_value_sources: HashMap::new(),
+                pub_nodes: std::collections::HashSet::new(),
+            },
+        );
+        Self {
+            registry,
+            root_dag_id,
+            dags,
+            module_aliases: HashMap::new(),
+        }
+    }
+}
+
+/// The per-DAG compiled body — every field that's specific to one DAG (the
+/// file's own top-level body or an inline `dag X { ... }` child).
+///
+/// Inserted into [`TIR::dags`] by `type_resolve_single` (one entry per
+/// file root) and by the project pipeline's
+/// `compile_inline_dag_bodies` / `merge_dep_dag_tirs`.
+#[derive(Debug, Clone)]
+pub struct DagTIR {
+    /// Canonical identity of this DAG. Equal to the key under which this
+    /// `DagTIR` is stored in [`TIR::dags`]; carried inline so the struct
+    /// is self-describing when passed by reference.
+    pub dag_id: crate::syntax::dag_id::DagId,
     /// Const declarations in source order.
     pub consts: Vec<crate::ir::lower::ConstEntry>,
     /// Param declarations in source order.
@@ -686,21 +800,14 @@ pub struct TIR {
     /// Set of all assert names. Membership-only, never iterated.
     pub assert_names: std::collections::HashSet<ScopedName>,
     /// Mapping from assert name to the list of declarations that assume it.
-    /// Iterated during merge; feeds into `ExecPlan` `HashMap` (key-lookup only).
     pub assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
-    /// Iterated during merge; feeds into `ExecPlan` `HashMap` (key-lookup only).
     pub expected_fail: HashMap<ScopedName, ExpectedFail>,
     /// Resolved type for each const/param/node declaration.
-    /// Iterated in `build_declared_types`; feeds into `HashMap` (key-lookup only).
     pub resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     /// Resolved domain constraints for declarations that have them.
-    /// Key-lookup only, order irrelevant.
     pub domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>,
     /// Pre-evaluated values imported from dependency files (passed through from IR).
-    /// Each entry carries the runtime value and its declared type (for `dim_check`).
-    /// Iterated in `build_declared_types` and `ExecPlan` construction;
-    /// feeds into `HashMap`s (key-lookup only).
     pub imported_values: HashMap<
         ScopedName,
         (
@@ -713,20 +820,6 @@ pub struct TIR {
     pub imported_decl_types: HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
     /// Runtime source bindings for imported DAG-body values.
     pub imported_value_sources: HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
-    /// Per-dag compiled TIRs, one per `dag { ... }` declaration in this file.
-    ///
-    /// Each entry is the TIR of the dag body, compiled as if it were a
-    /// top-level Graphcal file whose registry inherits the enclosing file's
-    /// dimensions, units, types, and indexes. Produced by [`type_resolve`]
-    /// and consumed by `dim_check` and `eval` to resolve inline
-    /// `@dag(args).out` invocations.
-    ///
-    /// Cross-file qualified calls (`@module.dag(args).out`) are merged in
-    /// by `graphcal-eval`'s project pipeline using two-segment
-    /// [`DagKey`]s of the form `(module-alias, dag-name)`.
-    ///
-    /// Key-lookup only; order irrelevant.
-    pub dags: DagRegistry,
     /// Names of `pub` nodes declared in this dag body.
     ///
     /// Used by `dim_check` to reject cross-file projection of private
@@ -736,30 +829,15 @@ pub struct TIR {
     pub pub_nodes: std::collections::HashSet<String>,
 }
 
-impl TIR {
-    /// Returns true if this file declares any required param or required index.
-    ///
-    /// Such files cannot be evaluated standalone; they must be bound via a
-    /// parameterized include from another file.
-    #[must_use]
-    pub fn is_library(&self) -> bool {
-        self.params.iter().any(|p| p.default_expr.is_none())
-            || self
-                .registry
-                .indexes
-                .all_indexes()
-                .any(crate::registry::types::IndexDef::is_required)
-    }
-
-    /// Build a concrete `DeclaredType` map from resolved types.
-    ///
-    /// Converts each entry in `resolved_decl_types` via [`resolved_to_declared_type`]
-    /// and adds builtin constants as `Dimensionless`.
+impl DagTIR {
+    /// Build a concrete `DeclaredType` map from this DAG's resolved types
+    /// plus its imported-value metadata. Adds builtin constants as
+    /// `Dimensionless`.
     ///
     /// # Errors
     ///
-    /// Returns a [`GraphcalError`] if any resolved type contains unresolved generic
-    /// parameters.
+    /// Returns a [`GraphcalError`] if any resolved type contains unresolved
+    /// generic parameters.
     pub fn build_declared_types(
         &self,
         src: &NamedSource<Arc<String>>,
@@ -775,8 +853,6 @@ impl TIR {
             let dt = resolved_to_declared_type(resolved, src)?;
             declared_types.insert(name.to_string(), dt);
         }
-        // Include imported values' declared types so dim_check can resolve references.
-        // ScopedName → String: dim_check uses flat string keys.
         for (name, (_rv, dt)) in &self.imported_values {
             declared_types.insert(name.to_string(), dt.clone());
         }
@@ -785,125 +861,224 @@ impl TIR {
         }
         Ok(declared_types)
     }
+
+    /// Populate this DAG's `pub_nodes` set from its source body.
+    pub fn populate_pub_nodes(&mut self, body: &[crate::desugar::desugared_ast::Declaration]) {
+        use crate::desugar::desugared_ast::DeclKind;
+
+        for decl in body {
+            if !decl.visibility.is_public() {
+                continue;
+            }
+            if let DeclKind::Node(n) = &decl.kind {
+                self.pub_nodes.insert(n.name.value.to_string());
+            }
+        }
+    }
 }
 
-/// Resolve all type annotations in an `IR`, producing a [`TIR`].
+/// Resolve all type annotations in an `IR`, producing a [`TIR`] whose
+/// `dags` registry contains exactly one entry: the file's own root.
 ///
-/// For each const/param/node, resolves the type annotation with no generic
-/// params in scope. Inline `dag { ... }` declarations are NOT compiled here;
-/// the project pipeline (or test helpers) compile them explicitly via
-/// `graphcal_eval::inline_dag::compile_inline_dag_bodies` after type-resolving the file-level
-/// declarations. This separation lets callers that have loader-level
-/// information (e.g. self-import path resolution, parent `DagId`) thread it
-/// in at the right point, without forcing every `type_resolve` caller to
-/// know about it.
-///
-/// The returned `TIR` always has an empty `dags` field. Use
-/// `graphcal_eval::inline_dag::compile_inline_dag_bodies` to populate it.
+/// Inline `dag { ... }` declarations are NOT compiled here; the project
+/// pipeline compiles them explicitly via
+/// `graphcal_eval::inline_dag::compile_inline_dag_bodies` after the
+/// file-level type resolution.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if any type annotation references an unknown
 /// dimension, struct, or index.
-pub fn type_resolve(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
-    type_resolve_single(ir, src)
-}
-
-/// Populate a dag TIR's `pub_nodes` set from the AST body declarations.
-///
-/// Downstream cross-file qualified calls (`@mod::dag(args)::out`) use this
-/// set to enforce projection of `pub` nodes only. Same-file calls still
-/// read visibility from the raw AST because the body is reachable through
-/// `registry.dags`; this set is the proxy that survives cross-file merges.
-pub fn populate_pub_nodes(
-    dag_tir: &mut TIR,
-    dag_body: &[crate::desugar::desugared_ast::Declaration],
-) {
-    use crate::desugar::desugared_ast::DeclKind;
-
-    for decl in dag_body {
-        if !decl.visibility.is_public() {
-            continue;
-        }
-        if let DeclKind::Node(n) = &decl.kind {
-            dag_tir.pub_nodes.insert(n.name.value.to_string());
-        }
-    }
-}
-
-/// Resolve type annotations without recursively compiling nested dag bodies.
-///
-/// Used both as the base case for the file-level [`type_resolve`] and by
-/// the eval crate's per-dag-body compilation pipeline. The returned TIR
-/// has an empty `dags` map; cross-dag references are resolved against the
-/// enclosing file TIR's `dags` map.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if any type annotation references an unknown
-/// dimension, struct, or index.
-pub fn type_resolve_single(ir: IR, src: &NamedSource<Arc<String>>) -> Result<TIR, GraphcalError> {
-    let mut resolved_decl_types = HashMap::new();
-
-    let no_generic_params: &[GenericParamName] = &[];
-
-    for entry in &ir.consts {
-        let resolved = resolve_type_expr(
-            &entry.type_ann,
-            &ir.registry,
-            no_generic_params,
-            no_generic_params,
-            no_generic_params,
-            src,
-        )?;
-        resolved_decl_types.insert(entry.name.clone(), resolved);
-    }
-    for entry in &ir.params {
-        let resolved = resolve_type_expr(
-            &entry.type_ann,
-            &ir.registry,
-            no_generic_params,
-            no_generic_params,
-            no_generic_params,
-            src,
-        )?;
-        resolved_decl_types.insert(entry.name.clone(), resolved);
-    }
-    for entry in &ir.nodes {
-        let resolved = resolve_type_expr(
-            &entry.type_ann,
-            &ir.registry,
-            no_generic_params,
-            no_generic_params,
-            no_generic_params,
-            src,
-        )?;
-        resolved_decl_types.insert(entry.name.clone(), resolved);
-    }
-
+pub fn type_resolve(
+    ir: IR,
+    root_dag_id: crate::syntax::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+) -> Result<TIR, GraphcalError> {
+    let root_dag = type_resolve_dag(
+        ir.consts,
+        ir.params,
+        ir.nodes,
+        &ir.registry,
+        src,
+        &root_dag_id,
+    )?
+    .with_body(
+        ir.asserts,
+        ir.plots,
+        ir.figures,
+        ir.layers,
+        ir.runtime_deps,
+        ir.const_deps,
+        ir.source_order,
+        ir.assert_names,
+        ir.assumes_map,
+        ir.expected_fail,
+        ir.imported_values,
+        ir.imported_decl_types,
+        ir.imported_value_sources,
+    );
+    let mut dags = DagRegistry::new();
+    dags.insert(root_dag_id.clone(), root_dag);
     Ok(TIR {
         registry: ir.registry,
-        consts: ir.consts,
-        params: ir.params,
-        nodes: ir.nodes,
-        asserts: ir.asserts,
-        plots: ir.plots,
-        figures: ir.figures,
-        layers: ir.layers,
-        runtime_deps: ir.runtime_deps,
-        const_deps: ir.const_deps,
-        source_order: ir.source_order,
-        assert_names: ir.assert_names,
-        assumes_map: ir.assumes_map,
-        expected_fail: ir.expected_fail,
-        resolved_decl_types,
-        domain_constraints: HashMap::new(), // Resolved later in compile()
-        imported_values: ir.imported_values,
-        imported_decl_types: ir.imported_decl_types,
-        imported_value_sources: ir.imported_value_sources,
-        dags: DagRegistry::new(),
-        pub_nodes: std::collections::HashSet::new(),
+        root_dag_id,
+        dags,
+        module_aliases: HashMap::new(),
     })
+}
+
+/// Resolve type annotations for a single DAG body.
+///
+/// Used both for the file-level root (via [`type_resolve`]) and by
+/// the eval crate's per-dag-body compilation pipeline. Returns the
+/// per-DAG content keyed by `dag_id`; the caller decides where to
+/// install it in [`TIR::dags`].
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if any type annotation references an unknown
+/// dimension, struct, or index.
+pub fn type_resolve_single(
+    ir: IR,
+    dag_id: &crate::syntax::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+) -> Result<DagTIR, GraphcalError> {
+    Ok(
+        type_resolve_dag(ir.consts, ir.params, ir.nodes, &ir.registry, src, dag_id)?.with_body(
+            ir.asserts,
+            ir.plots,
+            ir.figures,
+            ir.layers,
+            ir.runtime_deps,
+            ir.const_deps,
+            ir.source_order,
+            ir.assert_names,
+            ir.assumes_map,
+            ir.expected_fail,
+            ir.imported_values,
+            ir.imported_decl_types,
+            ir.imported_value_sources,
+        ),
+    )
+}
+
+/// Internal helper: resolve type annotations for the const/param/node
+/// declarations of a single DAG, returning a partially-built [`DagTIR`].
+fn type_resolve_dag(
+    consts: Vec<crate::ir::lower::ConstEntry>,
+    params: Vec<crate::ir::lower::ParamEntry>,
+    nodes: Vec<crate::ir::lower::NodeEntry>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    dag_id: &crate::syntax::dag_id::DagId,
+) -> Result<DagTIRSeed, GraphcalError> {
+    let mut resolved_decl_types = HashMap::new();
+    let no_generic_params: &[GenericParamName] = &[];
+
+    for entry in &consts {
+        let resolved = resolve_type_expr(
+            &entry.type_ann,
+            registry,
+            no_generic_params,
+            no_generic_params,
+            no_generic_params,
+            src,
+        )?;
+        resolved_decl_types.insert(entry.name.clone(), resolved);
+    }
+    for entry in &params {
+        let resolved = resolve_type_expr(
+            &entry.type_ann,
+            registry,
+            no_generic_params,
+            no_generic_params,
+            no_generic_params,
+            src,
+        )?;
+        resolved_decl_types.insert(entry.name.clone(), resolved);
+    }
+    for entry in &nodes {
+        let resolved = resolve_type_expr(
+            &entry.type_ann,
+            registry,
+            no_generic_params,
+            no_generic_params,
+            no_generic_params,
+            src,
+        )?;
+        resolved_decl_types.insert(entry.name.clone(), resolved);
+    }
+
+    Ok(DagTIRSeed {
+        dag_id: dag_id.clone(),
+        consts,
+        params,
+        nodes,
+        resolved_decl_types,
+    })
+}
+
+/// Partially-built [`DagTIR`] returned by [`type_resolve_dag`]; finalized
+/// by [`DagTIRSeed::with_body`] which fills in the rest of the per-DAG
+/// fields.
+struct DagTIRSeed {
+    dag_id: crate::syntax::dag_id::DagId,
+    consts: Vec<crate::ir::lower::ConstEntry>,
+    params: Vec<crate::ir::lower::ParamEntry>,
+    nodes: Vec<crate::ir::lower::NodeEntry>,
+    resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
+}
+
+impl DagTIRSeed {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "single conversion that absorbs every IR field beyond the resolved decls"
+    )]
+    fn with_body(
+        self,
+        asserts: Vec<crate::ir::lower::AssertEntry>,
+        plots: Vec<crate::ir::lower::PlotEntry>,
+        figures: Vec<crate::ir::lower::FigureEntry>,
+        layers: Vec<crate::ir::lower::LayerEntry>,
+        runtime_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
+        const_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
+        source_order: Vec<(ScopedName, DeclCategory)>,
+        assert_names: std::collections::HashSet<ScopedName>,
+        assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
+        expected_fail: HashMap<ScopedName, ExpectedFail>,
+        imported_values: HashMap<
+            ScopedName,
+            (
+                crate::registry::runtime_value::RuntimeValue,
+                crate::registry::declared_type::DeclaredType,
+            ),
+        >,
+        imported_decl_types: HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
+        imported_value_sources: HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+    ) -> DagTIR {
+        DagTIR {
+            dag_id: self.dag_id,
+            consts: self.consts,
+            params: self.params,
+            nodes: self.nodes,
+            asserts,
+            plots,
+            figures,
+            layers,
+            runtime_deps,
+            const_deps,
+            source_order,
+            assert_names,
+            assumes_map,
+            expected_fail,
+            resolved_decl_types: self.resolved_decl_types,
+            domain_constraints: HashMap::new(), // Resolved later in compile()
+            imported_values,
+            imported_decl_types,
+            imported_value_sources,
+            pub_nodes: std::collections::HashSet::new(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2230,7 +2405,7 @@ mod tests {
         let ir = crate::ir::lower::lower(&file, &src)?;
         let parent_dag_id =
             crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test"));
-        let mut tir = type_resolve(ir, &src)?;
+        let mut tir = type_resolve(ir, parent_dag_id.clone(), &src)?;
         compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id)?;
         Ok(tir)
     }
@@ -2266,9 +2441,10 @@ mod tests {
                 src,
                 parent_dag_id,
             )?;
-            let mut compiled_dag = type_resolve_single(dag_body_ir, src)?;
-            populate_pub_nodes(&mut compiled_dag, &body);
-            tir.dags.insert(DagKey::local(name), compiled_dag);
+            let dag_id = parent_dag_id.child(name.as_str());
+            let mut compiled_dag = type_resolve_single(dag_body_ir, &dag_id, src)?;
+            compiled_dag.populate_pub_nodes(&body);
+            tir.dags.insert(dag_id, compiled_dag);
         }
         Ok(())
     }
@@ -2279,15 +2455,18 @@ mod tests {
         let tir = parse_and_type_resolve(source).unwrap();
         // All declarations should have resolved types
         assert!(
-            tir.resolved_decl_types
+            tir.root()
+                .resolved_decl_types
                 .contains_key(&ScopedName::local("dry_mass"))
         );
         assert!(
-            tir.resolved_decl_types
+            tir.root()
+                .resolved_decl_types
                 .contains_key(&ScopedName::local("delta_v"))
         );
         assert!(
-            tir.resolved_decl_types
+            tir.root()
+                .resolved_decl_types
                 .contains_key(&ScopedName::local("g0"))
         );
     }
@@ -2297,7 +2476,7 @@ mod tests {
         let source = include_str!("../../../../tests/fixtures/valid/indexed.gcl");
         let tir = parse_and_type_resolve(source).unwrap();
         // delta_v should be Velocity[Maneuver]
-        let dv_type = &tir.resolved_decl_types[&ScopedName::local("delta_v")];
+        let dv_type = &tir.root().resolved_decl_types[&ScopedName::local("delta_v")];
         assert!(matches!(dv_type, ResolvedTypeExpr::Indexed { .. }));
     }
 
@@ -2321,7 +2500,7 @@ mod tests {
         let source = include_str!("../../../../tests/fixtures/valid/generics.gcl");
         let tir = parse_and_type_resolve(source).unwrap();
         // pos_eci should be a GenericStruct with type args
-        let pos_type = &tir.resolved_decl_types[&ScopedName::local("pos_eci")];
+        let pos_type = &tir.root().resolved_decl_types[&ScopedName::local("pos_eci")];
         match pos_type {
             ResolvedTypeExpr::GenericStruct {
                 name, type_args, ..
@@ -2342,7 +2521,7 @@ mod tests {
         }
         // x_pos should be scalar Length
         assert_eq!(
-            tir.resolved_decl_types[&ScopedName::local("x_pos")],
+            tir.root().resolved_decl_types[&ScopedName::local("x_pos")],
             ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude("Length".to_string())))
         );
     }
@@ -2353,7 +2532,7 @@ mod tests {
         let tir = parse_and_type_resolve(source).unwrap();
 
         // pos3_eci: Pos3<Length, Eci> — explicit, 2 type args
-        let pos3_eci = &tir.resolved_decl_types[&ScopedName::local("pos3_eci")];
+        let pos3_eci = &tir.root().resolved_decl_types[&ScopedName::local("pos3_eci")];
         match pos3_eci {
             ResolvedTypeExpr::GenericStruct {
                 name, type_args, ..
@@ -2374,7 +2553,7 @@ mod tests {
         }
 
         // pos3_default: Pos3<Length> — default fills in Unframed
-        let pos3_default = &tir.resolved_decl_types[&ScopedName::local("pos3_default")];
+        let pos3_default = &tir.root().resolved_decl_types[&ScopedName::local("pos3_default")];
         match pos3_default {
             ResolvedTypeExpr::GenericStruct {
                 name, type_args, ..

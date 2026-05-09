@@ -166,6 +166,7 @@ pub(super) fn run_eval_loop(
 
     // Build string-keyed runtime_deps for lookups (TIR uses ScopedName keys).
     let runtime_deps: HashMap<String, Vec<String>> = tir
+        .root()
         .runtime_deps
         .iter()
         .map(|(k, v)| (k.to_string(), v.iter().map(ToString::to_string).collect()))
@@ -219,7 +220,7 @@ pub(super) fn run_eval_loop(
             registry: &tir.registry,
             src,
             unfold_context: Some(unfold_ctx),
-            compiled_dags: &tir.dags,
+            tir,
         };
 
         let result = eval_expr(expr, &values, &empty_locals, &ctx);
@@ -278,7 +279,7 @@ pub(super) fn evaluate_plan(
         registry: &tir.registry,
         src,
         unfold_context: None,
-        compiled_dags: &tir.dags,
+        tir,
     };
 
     let EvalLoopResult { values, errors } =
@@ -286,15 +287,22 @@ pub(super) fn evaluate_plan(
 
     // Build a map from name -> expression for display unit extraction
     let expr_map: HashMap<String, &graphcal_compiler::desugar::desugared_ast::Expr> = tir
+        .root()
         .consts
         .iter()
         .map(|e| (e.name.to_string(), &e.expr))
         .chain(
-            tir.params
+            tir.root()
+                .params
                 .iter()
                 .filter_map(|e| e.default_expr.as_ref().map(|ex| (e.name.to_string(), ex))),
         )
-        .chain(tir.nodes.iter().map(|e| (e.name.to_string(), &e.expr)))
+        .chain(
+            tir.root()
+                .nodes
+                .iter()
+                .map(|e| (e.name.to_string(), &e.expr)),
+        )
         .collect();
 
     let make_value = |name: &str, rv: &RuntimeValue| -> Value {
@@ -313,6 +321,7 @@ pub(super) fn evaluate_plan(
     };
 
     let consts = tir
+        .root()
         .consts
         .iter()
         .map(|e| {
@@ -322,6 +331,7 @@ pub(super) fn evaluate_plan(
         })
         .collect();
     let params = tir
+        .root()
         .params
         .iter()
         .map(|e| {
@@ -330,6 +340,7 @@ pub(super) fn evaluate_plan(
         })
         .collect();
     let nodes = tir
+        .root()
         .nodes
         .iter()
         .map(|e| {
@@ -339,6 +350,7 @@ pub(super) fn evaluate_plan(
         .collect();
 
     let all = tir
+        .root()
         .source_order
         .iter()
         .filter_map(|(name, cat)| {

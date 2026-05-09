@@ -20,7 +20,6 @@ use graphcal_compiler::registry::builtins::BuiltinFunction;
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{Registry, UnitScale};
-use graphcal_compiler::tir::typed::TIR;
 
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
@@ -37,12 +36,15 @@ pub struct EvalContext<'a> {
     /// When set, enables inline evaluation of `ExprKind::Unfold` expressions.
     /// Contains the name of the node being evaluated and the declared types map.
     pub unfold_context: Option<UnfoldContext<'a>>,
-    /// Per-dag compiled TIRs from the enclosing file.
+    /// The enclosing file's full TIR.
     ///
-    /// Used by [`eval_inline_dag_call`] to evaluate `@dag(args)::out` against
-    /// the dag's topologically ordered body. The map is shared across nested
-    /// inline calls so a dag body invoking another dag can still resolve it.
-    pub compiled_dags: &'a graphcal_compiler::tir::typed::DagRegistry,
+    /// Used by [`eval_inline_dag_call`] to translate `@dag(args)::out` /
+    /// `@alias.dag(args)::out` paths to canonical
+    /// [`DagId`](graphcal_compiler::syntax::dag_id::DagId)s via
+    /// [`graphcal_compiler::tir::typed::TIR::lookup_call_target`] and to
+    /// reach the file's flat per-DAG body map. Shared across nested inline
+    /// calls so a dag body invoking another dag can still resolve it.
+    pub tir: &'a graphcal_compiler::tir::typed::TIR,
 }
 
 /// Context required to evaluate an `unfold(...)` expression inline.
@@ -315,11 +317,12 @@ fn eval_inline_dag_call(
     caller_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let key = graphcal_compiler::tir::typed::DagKey::from_module_path(path);
-
-    let dag_tir = ctx.compiled_dags.get(&key).ok_or_else(|| {
+    let display_path = path.display_path();
+    let dag_tir = ctx.tir.lookup_call_target(path).ok_or_else(|| {
         ctx.internal_error(
-            format!("dag `{key}` has no compiled TIR (should have been caught by dim-check)"),
+            format!(
+                "dag `{display_path}` has no compiled TIR (should have been caught by dim-check)"
+            ),
             path.span,
         )
     })?;
@@ -370,16 +373,17 @@ fn eval_inline_dag_call(
         }
     }
 
-    // Inside the dag body the visible registry is the dag's own (merged
-    // parent types + sibling dags). `compiled_dags` still points to the
-    // file-level map so nested inline calls resolve.
+    // Inside the dag body the visible registry is the file's shared one
+    // (every DAG in the file resolves through the same registry); `tir`
+    // continues to point at the file-level map so nested inline calls
+    // resolve.
     let dag_ctx = EvalContext {
         builtin_consts: ctx.builtin_consts,
         builtin_fns: ctx.builtin_fns,
-        registry: &dag_tir.registry,
+        registry: ctx.registry,
         src: ctx.src,
         unfold_context: None,
-        compiled_dags: ctx.compiled_dags,
+        tir: ctx.tir,
     };
 
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
@@ -407,7 +411,7 @@ fn eval_inline_dag_call(
         .ok_or_else(|| {
             ctx.internal_error(
                 format!(
-                    "dag `{key}` has no node `{}` after evaluation (should have been caught by dim-check)",
+                    "dag `{display_path}` has no node `{}` after evaluation (should have been caught by dim-check)",
                     output.value,
                 ),
                 output.span,
@@ -421,7 +425,7 @@ fn eval_inline_dag_call(
 /// of its runtime and const dependencies. Cycles are impossible in a
 /// well-typed dag body because compile-time dep collection rejects them.
 fn topo_order_for_dag_body(
-    dag_tir: &TIR,
+    dag_tir: &graphcal_compiler::tir::typed::DagTIR,
 ) -> Vec<graphcal_compiler::registry::resolve_types::ScopedName> {
     use graphcal_compiler::registry::resolve_types::ScopedName;
     use std::collections::BTreeSet;
@@ -492,7 +496,7 @@ fn topo_order_for_dag_body(
 /// Returns `None` for params (they receive their value from the call-site
 /// argument binding, not from a body-local expression).
 fn lookup_dag_body_expr<'a>(
-    dag_tir: &'a TIR,
+    dag_tir: &'a graphcal_compiler::tir::typed::DagTIR,
     name: &graphcal_compiler::registry::resolve_types::ScopedName,
 ) -> Option<&'a Expr> {
     if let Some(c) = dag_tir.consts.iter().find(|c| &c.name == name) {

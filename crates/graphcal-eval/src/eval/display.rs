@@ -127,14 +127,17 @@ fn resolve_display_unit_scale(
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let empty_src = miette::NamedSource::new("<display>", std::sync::Arc::new(String::new()));
-    let empty_dags: graphcal_compiler::tir::typed::DagRegistry = HashMap::new();
+    // Display-only path never resolves an inline dag call; use an empty
+    // stub TIR with a synthetic root so the context still satisfies its
+    // invariants.
+    let stub_tir = graphcal_compiler::tir::typed::TIR::empty_for_eval_helpers(registry.clone());
     let ctx = crate::eval_expr::EvalContext {
         builtin_consts,
         builtin_fns,
         registry,
         src: &empty_src,
         unfold_context: None,
-        compiled_dags: &empty_dags,
+        tir: &stub_tir,
     };
     let empty_locals = HashMap::new();
     crate::eval_expr::resolve_unit_scale(unit, values, &empty_locals, &ctx).ok()

@@ -989,8 +989,7 @@ fn collect_expr_refs(
             table.references.push(ReferenceInfo {
                 span: output.span,
                 target: SymbolKey::Qualified {
-                    module: graphcal_compiler::tir::typed::DagKey::from_module_path(path)
-                        .to_string(),
+                    module: path.display_path(),
                     name: output.value.to_string(),
                 },
             });
@@ -1537,22 +1536,23 @@ fn extract_constraints(type_expr: &TypeExpr) -> &[DomainBound] {
 )]
 pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     let registry = &tir.registry;
+    let root = tir.root();
 
     // Build a map from declaration name to its AST TypeExpr constraints.
     let mut decl_constraints: HashMap<String, &[DomainBound]> = HashMap::new();
-    for e in &tir.params {
+    for e in &root.params {
         let constraints = extract_constraints(&e.type_ann);
         if !constraints.is_empty() {
             decl_constraints.insert(e.name.to_string(), constraints);
         }
     }
-    for e in &tir.nodes {
+    for e in &root.nodes {
         let constraints = extract_constraints(&e.type_ann);
         if !constraints.is_empty() {
             decl_constraints.insert(e.name.to_string(), constraints);
         }
     }
-    for e in &tir.consts {
+    for e in &root.consts {
         let constraints = extract_constraints(&e.type_ann);
         if !constraints.is_empty() {
             decl_constraints.insert(e.name.to_string(), constraints);
@@ -1560,7 +1560,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     }
 
     // Enrich param/node/const declarations with resolved types + constraints.
-    for (name, resolved_type) in &tir.resolved_decl_types {
+    for (name, resolved_type) in &root.resolved_decl_types {
         let name_str = name.to_string();
         let key = SymbolKey::TopLevel(name_str.clone());
         if let Some(def) = table.definitions.get_mut(&key) {
