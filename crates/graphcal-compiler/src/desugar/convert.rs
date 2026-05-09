@@ -466,6 +466,9 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
             ExprKind::QualifiedConstRef { module, name } => {
                 Self::QualifiedConstRef { module, name }
             }
+            ExprKind::QualifiedGraphRef { qualifier, member } => {
+                Self::QualifiedGraphRef { qualifier, member }
+            }
             ExprKind::NameRef(i) => Self::NameRef(i),
             ExprKind::QualifiedNameRef { qualifier, member } => {
                 Self::QualifiedNameRef { qualifier, member }

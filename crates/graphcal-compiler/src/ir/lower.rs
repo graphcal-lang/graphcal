@@ -1632,6 +1632,7 @@ pub(crate) fn substitute_type_names_in_expr(
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::QualifiedConstRef { .. }
+        | ExprKind::QualifiedGraphRef { .. }
         | ExprKind::VariantLiteral { .. } => {}
 
         ExprKind::InlineDagRef { args, .. } => {

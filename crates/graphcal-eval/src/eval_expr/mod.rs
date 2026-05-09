@@ -119,6 +119,18 @@ pub fn eval_expr(
                 expr.span,
             )
         }),
+        // `QualifiedGraphRef` is flattened to `GraphRef` by
+        // `rewrite_qualified_refs_in_ast` before any IR/eval consumer
+        // sees it. Reaching this arm is a compiler bug.
+        #[expect(
+            clippy::unreachable,
+            reason = "QualifiedGraphRef must be flattened by the project pipeline before eval"
+        )]
+        ExprKind::QualifiedGraphRef { .. } => {
+            unreachable!(
+                "`QualifiedGraphRef` reached the evaluator without being flattened by `rewrite_qualified_refs_in_ast`"
+            )
+        }
         ExprKind::ConstRef(ident) | ExprKind::QualifiedConstRef { name: ident, .. } => values
             .get(ident.value.as_str())
             .cloned()

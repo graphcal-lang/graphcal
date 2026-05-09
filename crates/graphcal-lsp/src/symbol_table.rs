@@ -968,6 +968,15 @@ fn collect_expr_refs(
                 },
             });
         }
+        ExprKind::QualifiedGraphRef { qualifier, member } => {
+            table.references.push(ReferenceInfo {
+                span: member.span,
+                target: SymbolKey::Qualified {
+                    module: qualifier.name.clone(),
+                    name: member.value.to_string(),
+                },
+            });
+        }
         ExprKind::InlineDagRef { path, args, output } => {
             // Same-file calls (`@dag(args).out`) reference the DAG by its
             // bare name. Cross-file qualified calls (`@module.dag(args).out`)

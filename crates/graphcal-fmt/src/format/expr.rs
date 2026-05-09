@@ -31,6 +31,11 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::QualifiedConstRef { module, name } => {
             RcDoc::text(format!("{}.{}", module.name.as_str(), name.value.as_str()))
         }
+        ExprKind::QualifiedGraphRef { qualifier, member } => RcDoc::text(format!(
+            "@{}.{}",
+            qualifier.name.as_str(),
+            member.value.as_str()
+        )),
         ExprKind::LocalRef(ident) | ExprKind::NameRef(ident) => RcDoc::text(ident.name.clone()),
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
