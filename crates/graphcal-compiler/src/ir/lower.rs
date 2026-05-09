@@ -416,24 +416,6 @@ pub fn lower_dag_body_to_ir(
     Ok(unfrozen.freeze(builder.build()))
 }
 
-/// What kind of value declaration a name in the parent file refers to.
-///
-/// Used by `preprocess_dag_body_self_imports` to classify each item in a
-/// dag-body `import <self>.{...}` brace list, choosing between the resolver's
-/// const-name vs. runtime-name slots and rejecting runtime imports per the
-/// `import` (compile-time only) discipline.
-#[derive(Debug, Clone)]
-pub enum ParentValueKind {
-    /// `const node` declaration in the parent file.
-    Const(DeclaredType),
-    /// `param` declaration in the parent file. Cannot be brought into a dag
-    /// body via `import`; pass via the dag's own params instead.
-    Param(DeclaredType),
-    /// `node` declaration in the parent file. Cannot be brought into a dag
-    /// body via `import`; pass via the dag's own params instead.
-    Node(DeclaredType),
-}
-
 /// Result of `preprocess_dag_body_self_imports`: imported names, declared
 /// types, source bindings, and the body with self-import declarations stripped.
 pub struct DagBodySelfImports {

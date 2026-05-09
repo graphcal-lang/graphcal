@@ -20,14 +20,12 @@ use miette::NamedSource;
 
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration};
 use graphcal_compiler::ir::lower::{
-    DagBodySelfImports, ImportedValueSource, ParentValueKind, lower_dag_body_to_ir,
-    type_system_names_from_registry,
+    DagBodySelfImports, ImportedValueSource, lower_dag_body_to_ir, type_system_names_from_registry,
 };
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::dag_id::DagId;
-use graphcal_compiler::syntax::dimension::Dimension;
 use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type, type_resolve_single};
 
 use crate::loader::LoadedDag;
@@ -54,7 +52,27 @@ pub fn compile_inline_dag_bodies(
     parent_pub_names: &HashSet<String>,
     inline_dags: &[LoadedDag],
 ) -> Result<(), GraphcalError> {
-    let parent_value_decls = build_parent_value_decls(tir, src)?;
+    // Read parent's value decls directly from the (already type-resolved)
+    // root DagTIR. With the flat registry, `tir.root()` IS the parent
+    // file's body — no separate `ParentValueKind` table needed.
+    let root = tir.root();
+    let mut parent_consts: HashMap<String, DeclaredType> = HashMap::new();
+    for entry in &root.consts {
+        let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
+            continue;
+        };
+        parent_consts.insert(
+            entry.name.member().to_string(),
+            resolved_to_declared_type(resolved, src)?,
+        );
+    }
+    let mut parent_runtime_names: HashSet<String> = HashSet::new();
+    for entry in &root.params {
+        parent_runtime_names.insert(entry.name.member().to_string());
+    }
+    for entry in &root.nodes {
+        parent_runtime_names.insert(entry.name.member().to_string());
+    }
     let parent_type_system_names = type_system_names_from_registry(&tir.registry);
 
     for loaded_dag in inline_dags {
@@ -67,7 +85,8 @@ pub fn compile_inline_dag_bodies(
             &loaded_dag.body,
             parent_dag_id,
             &parent_type_system_names,
-            &parent_value_decls,
+            &parent_consts,
+            &parent_runtime_names,
             parent_pub_names,
             &loaded_dag.resolved_imports,
             src,
@@ -120,11 +139,16 @@ pub fn compile_inline_dag_bodies(
 /// Returns a [`GraphcalError`] if a self-import names a runtime declaration
 /// (param/node), a private declaration (no `pub`), or a name that does not
 /// exist in the parent.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "self-import classification needs parent's type-system, const, runtime, and pub views"
+)]
 pub fn preprocess_dag_body_self_imports(
     body: &[Declaration],
     parent_dag_id: &DagId,
     parent_type_system_names: &HashSet<String>,
-    parent_value_decls: &HashMap<String, ParentValueKind>,
+    parent_consts: &HashMap<String, DeclaredType>,
+    parent_runtime_names: &HashSet<String>,
     parent_pub_names: &HashSet<String>,
     body_resolved_imports: &HashMap<String, DagId>,
     src: &NamedSource<Arc<String>>,
@@ -156,9 +180,10 @@ pub fn preprocess_dag_body_self_imports(
                     let span = item.name.span;
                     let exists_as_type_system =
                         parent_type_system_names.contains(orig_name.as_str());
-                    let value_kind = parent_value_decls.get(orig_name.as_str());
+                    let const_dt = parent_consts.get(orig_name.as_str());
+                    let is_runtime = parent_runtime_names.contains(orig_name.as_str());
 
-                    if !exists_as_type_system && value_kind.is_none() {
+                    if !exists_as_type_system && const_dt.is_none() && !is_runtime {
                         return Err(GraphcalError::ImportNameNotFound {
                             name: orig_name.clone(),
                             file_path: import_decl.path.display_path(),
@@ -176,27 +201,27 @@ pub fn preprocess_dag_body_self_imports(
                         });
                     }
 
-                    match value_kind {
-                        Some(ParentValueKind::Const(dt)) => {
-                            let scoped = ScopedName::Local(local_name);
-                            names.const_names.push((scoped.clone(), span));
-                            decl_types.insert(scoped.clone(), dt.clone());
-                            value_sources.insert(
-                                scoped,
-                                ImportedValueSource {
-                                    dag_id: parent_dag_id.clone(),
-                                    source_name: orig_name.clone(),
-                                },
-                            );
-                        }
-                        Some(ParentValueKind::Param(_) | ParentValueKind::Node(_)) => {
-                            return Err(GraphcalError::ImportRuntimeItem {
-                                name: orig_name.clone(),
-                                src: src.clone(),
-                                span: span.into(),
-                            });
-                        }
-                        None => {}
+                    if let Some(dt) = const_dt {
+                        let scoped = ScopedName::Local(local_name);
+                        names.const_names.push((scoped.clone(), span));
+                        decl_types.insert(scoped.clone(), dt.clone());
+                        value_sources.insert(
+                            scoped,
+                            ImportedValueSource {
+                                dag_id: parent_dag_id.clone(),
+                                source_name: orig_name.clone(),
+                            },
+                        );
+                    } else if is_runtime {
+                        return Err(GraphcalError::ImportRuntimeItem {
+                            name: orig_name.clone(),
+                            src: src.clone(),
+                            span: span.into(),
+                        });
+                    } else {
+                        // Type-system items: no resolver registration
+                        // needed — they're already accessible through the
+                        // parent-registry merge once visibility is satisfied.
                     }
                 }
             }
@@ -214,78 +239,37 @@ pub fn preprocess_dag_body_self_imports(
     })
 }
 
-/// Build the `name → ParentValueKind` table consumed by
-/// [`preprocess_dag_body_self_imports`] from a fully type-resolved parent
-/// `TIR`.
+/// Classify the value-kind decls in a file's AST for use as the
+/// `parent_consts` / `parent_runtime_names` arguments of
+/// [`preprocess_dag_body_self_imports`].
 ///
-/// Walks the parent file's TIR-level const/param/node entries and resolves
-/// each declared type to a concrete `DeclaredType`. Declarations that carry
-/// a generic dim/index/type parameter cannot appear at file scope (generics
-/// are dag-body-only), so the conversion is total in well-formed input.
-fn build_parent_value_decls(
-    tir: &TIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<String, ParentValueKind>, GraphcalError> {
-    let mut out = HashMap::new();
-    let root = tir.root();
-    for entry in &root.consts {
-        let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
-            continue;
-        };
-        let dt = resolved_to_declared_type(resolved, src)?;
-        out.insert(entry.name.member().to_string(), ParentValueKind::Const(dt));
-    }
-    for entry in &root.params {
-        let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
-            continue;
-        };
-        let dt = resolved_to_declared_type(resolved, src)?;
-        out.insert(entry.name.member().to_string(), ParentValueKind::Param(dt));
-    }
-    for entry in &root.nodes {
-        let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
-            continue;
-        };
-        let dt = resolved_to_declared_type(resolved, src)?;
-        out.insert(entry.name.member().to_string(), ParentValueKind::Node(dt));
-    }
-    Ok(out)
-}
-
-/// Build the `name → ParentValueKind` table from the importer's AST,
-/// without resolving types.
-///
-/// Used to classify dag-body self-imports before compiling an inline DAG
-/// include. The declared type payload is not consumed on this include path:
-/// the dag IR is merged into the importer before type resolution, so the
-/// importer's own resolved declared types drive downstream dim-checking.
-pub fn build_importer_value_decls(
-    importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
-) -> HashMap<String, ParentValueKind> {
-    let unused_type = || DeclaredType::Scalar(Dimension::dimensionless());
-    let mut out = HashMap::new();
-    for decl in &importer_ast.declarations {
+/// Used by `process_deferred_inline_dag_includes` for the include path:
+/// when the parent file's TIR isn't yet type-resolved, the AST tells us
+/// which names exist and which kind they are. Const types are
+/// placeholder `Dimensionless` — the cross-file path overrides them with
+/// real types from the parent's `EvaluatedFile.declared_types`; the
+/// same-file path lets the importer's own resolved types win at
+/// dim-check time.
+pub fn classify_value_decls_in_ast(
+    ast: &graphcal_compiler::desugar::desugared_ast::File,
+) -> (HashMap<String, DeclaredType>, HashSet<String>) {
+    let placeholder =
+        || DeclaredType::Scalar(graphcal_compiler::syntax::dimension::Dimension::dimensionless());
+    let mut consts: HashMap<String, DeclaredType> = HashMap::new();
+    let mut runtime_names: HashSet<String> = HashSet::new();
+    for decl in &ast.declarations {
         match &decl.kind {
             DeclKind::ConstNode(c) => {
-                out.insert(
-                    c.name.value.to_string(),
-                    ParentValueKind::Const(unused_type()),
-                );
+                consts.insert(c.name.value.to_string(), placeholder());
             }
             DeclKind::Param(p) => {
-                out.insert(
-                    p.name.value.to_string(),
-                    ParentValueKind::Param(unused_type()),
-                );
+                runtime_names.insert(p.name.value.to_string());
             }
             DeclKind::Node(n) => {
-                out.insert(
-                    n.name.value.to_string(),
-                    ParentValueKind::Node(unused_type()),
-                );
+                runtime_names.insert(n.name.value.to_string());
             }
             _ => {}
         }
     }
-    out
+    (consts, runtime_names)
 }
