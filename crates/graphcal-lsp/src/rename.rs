@@ -116,6 +116,8 @@ mod tests {
         reason = "test code"
     )]
 
+    use std::sync::Arc;
+
     use super::*;
     use crate::server::build_fn_signatures;
     use crate::symbol_table;
@@ -128,10 +130,10 @@ mod tests {
         let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
         let symbol_table = symbol_table::build_from_ast(&ast, source);
         AnalysisResult {
-            source: source.to_string(),
+            source: Arc::new(source.to_string()),
             symbol_table,
             imported_definitions: HashMap::new(),
-            diagnostics: HashMap::new(),
+            diagnostics: Arc::new(HashMap::new()),
             eval_values: HashMap::new(),
             fn_signatures: build_fn_signatures(),
             import_links: Vec::new(),
