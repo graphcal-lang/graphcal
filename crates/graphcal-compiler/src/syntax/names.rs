@@ -269,25 +269,6 @@ pub fn is_lower_snake_case(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// Check if `s` is a valid `UPPER_SNAKE_CASE` identifier
-/// (starts with an uppercase letter, contains only uppercase letters, digits, and underscores).
-#[must_use]
-pub fn is_upper_snake_case(s: &str) -> bool {
-    !s.is_empty()
-        && s.starts_with(|c: char| c.is_ascii_uppercase())
-        && s.chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-}
-
-/// Check if `s` is a valid `PascalCase` identifier
-/// (starts with an uppercase letter, contains at least one lowercase letter).
-#[must_use]
-pub fn is_pascal_case(s: &str) -> bool {
-    !s.is_empty()
-        && s.starts_with(|c: char| c.is_ascii_uppercase())
-        && s.chars().any(|c| c.is_ascii_lowercase())
-}
-
 // --- Spanned wrapper ---
 
 use crate::syntax::span::Span;
