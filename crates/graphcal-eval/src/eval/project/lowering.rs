@@ -111,7 +111,7 @@ pub(super) fn lower_and_finalize(
         file_src,
         file_dag_id,
         &parent_pub_names,
-        &importer_self_imports,
+        &importer_loaded.inline_dags,
     )?;
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
     graphcal_compiler::tir::dim_check::check_dimensions_tir(&tir, file_src)?;
@@ -349,6 +349,18 @@ pub(super) fn process_deferred_inline_dag_includes(
     let importer_type_system_names =
         graphcal_compiler::ir::lower::collect_type_system_names(importer_ast);
     let importer_value_decls = crate::inline_dag::build_importer_value_decls(importer_ast);
+    // Cross-file include scoping: the included dag body's `<self>.{...}` is
+    // resolved against the *importer*'s file (the dag is being inlined into
+    // it). Synthesize a per-body resolved-imports map by mapping every
+    // importer-side self-import path to `importer_dag_id`. The same dag
+    // included into different importers therefore sees different scopes.
+    // Aligning this with the parent-file scoping used by
+    // `compile_inline_dag_bodies` is a Concept-9 follow-up (Slice C3+).
+    let importer_self_resolved: HashMap<String, graphcal_compiler::syntax::dag_id::DagId> =
+        importer_self_import_paths
+            .iter()
+            .map(|p| (p.clone(), importer_dag_id.clone()))
+            .collect();
     for deferred in deferred_dags {
         // Pre-process `import <self>.{...}` declarations inside the dag body
         // so they bring parent-file consts into the resolver's scope.
@@ -358,7 +370,7 @@ pub(super) fn process_deferred_inline_dag_includes(
             &importer_type_system_names,
             &importer_value_decls,
             &importer_pub_names,
-            importer_self_import_paths,
+            &importer_self_resolved,
             file_src,
         )?;
         let mut combined_names = deferred.dag_imported_names.clone();
