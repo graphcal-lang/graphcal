@@ -533,6 +533,7 @@ pub(super) fn process_instantiated_include<'a>(
 pub(super) fn process_inline_dag_include(
     dag_def: &graphcal_compiler::desugar::desugared_ast::DagDecl,
     dag_name: &str,
+    parent_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     file_src: &NamedSource<Arc<String>>,
@@ -686,6 +687,8 @@ pub(super) fn process_inline_dag_include(
     ctx.deferred_inline_dags.push(DeferredInlineDagInclude {
         dag_body,
         dag_imported_names,
+        parent_dag_id: parent_dag_id.clone(),
+        dag_name: dag_name.to_string(),
         prefix,
         bindings,
         index_bindings,

@@ -164,6 +164,16 @@ pub(super) struct DeferredInlineDagInclude {
     pub(super) dag_body: graphcal_compiler::desugar::desugared_ast::File,
     /// Imported names collected from `import ..` inside the DAG body.
     pub(super) dag_imported_names: ImportedValueNames,
+    /// `DagId` of the file where this DAG was *defined* (its parent), which
+    /// may differ from the importer when the include is a cross-file
+    /// qualified-DAG reference. Used to scope `import <self>.{...}` against
+    /// the parent file (Concept 9: a DAG's `<self>` is its own enclosing
+    /// file, regardless of where the DAG is being included).
+    pub(super) parent_dag_id: graphcal_compiler::syntax::dag_id::DagId,
+    /// The DAG's bare name in source (matches the parent file's
+    /// `LoadedDag.name`). May differ from `prefix` when an alias or the
+    /// selective form rewrites the namespace.
+    pub(super) dag_name: String,
     /// The prefix for all merged declarations (from alias or dag name).
     pub(super) prefix: String,
     /// Param bindings: `param_name` → binding expression.
