@@ -175,9 +175,9 @@ pub struct InlayHintEntry {
 #[derive(Debug, Default)]
 pub struct SymbolTable {
     /// All symbol definitions keyed by a typed `SymbolKey`.
-    pub definitions: HashMap<SymbolKey, DefinitionInfo>,
+    pub(crate) definitions: HashMap<SymbolKey, DefinitionInfo>,
     /// All reference occurrences sorted by span offset.
-    pub references: Vec<ReferenceInfo>,
+    pub(crate) references: Vec<ReferenceInfo>,
     /// Secondary index: name-span byte offset → `SymbolKey`.
     ///
     /// Populated alongside `definitions` so that `find_definition_key` is O(1)

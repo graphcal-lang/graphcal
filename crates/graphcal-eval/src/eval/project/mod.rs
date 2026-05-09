@@ -92,10 +92,7 @@ impl ExprVisitorMut<Desugared> for AliasFieldAccessRewriter<'_> {
 /// `GraphRef` in-place. This is the only producer of qualified graph
 /// references in the project pipeline — qualified const references come
 /// out of name resolution directly.
-pub(super) fn rewrite_alias_field_access(
-    expr: &mut Expr,
-    qualified_pairs: &HashSet<(String, String)>,
-) {
+fn rewrite_alias_field_access(expr: &mut Expr, qualified_pairs: &HashSet<(String, String)>) {
     if qualified_pairs.is_empty() {
         return;
     }
