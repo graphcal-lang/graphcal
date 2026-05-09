@@ -482,18 +482,35 @@ pub(super) fn process_deferred_inline_dag_includes(
     Ok(())
 }
 
-/// Add alias declarations for selective inline DAG includes.
-pub(super) fn add_inline_dag_selective_aliases(
-    dag_body: &graphcal_compiler::desugar::desugared_ast::File,
+/// Bindings that an alias's type annotation must be rewritten through before
+/// it is registered in the importer's IR. Shared by both inline-DAG and
+/// file-include alias paths so their type-substitution stays in lock-step.
+pub(super) struct AliasSubstitutions<'a> {
+    pub index: &'a HashMap<IndexName, IndexName>,
+    pub r#type: &'a HashMap<StructTypeName, StructTypeName>,
+    pub dim: &'a HashMap<DimName, DimName>,
+}
+
+/// Add `local_name = @prefix::orig_name` aliases (const or graph) for each
+/// selected item, rewriting the type annotation through `subs` so it lands
+/// in the importer's merged registry.
+///
+/// `decls` is the dep's source list — the dag body's declarations for
+/// inline-DAG includes, the file's top-level declarations for file
+/// includes. Names not found in `decls` (e.g., type-system-only items) are
+/// silently skipped.
+fn add_selective_aliases_inner(
+    decls: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     selective: &[(String, String)],
-    deferred: &DeferredInlineDagInclude,
+    prefix: &str,
+    subs: &AliasSubstitutions<'_>,
+    import_span: Span,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) {
     for (orig_name, local_name) in selective {
-        let prefixed_name = format!("{}::{}", deferred.prefix, orig_name);
+        let prefixed_name = format!("{prefix}::{orig_name}");
 
-        // Find the type annotation from the DAG body's declarations.
-        let type_ann = dag_body.declarations.iter().find_map(|d| match &d.kind {
+        let type_ann = decls.iter().find_map(|d| match &d.kind {
             DeclKind::Param(p) if p.name.value.as_str() == orig_name => Some(p.type_ann.clone()),
             DeclKind::Node(n) if n.name.value.as_str() == orig_name => Some(n.type_ann.clone()),
             DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name => {
@@ -506,47 +523,29 @@ pub(super) fn add_inline_dag_selective_aliases(
             continue;
         };
 
-        // Substitute index/type/dim names in the type annotation.
-        graphcal_compiler::ir::lower::substitute_type_expr_index_names(
-            &mut type_ann,
-            &deferred.index_bindings,
-        );
+        graphcal_compiler::ir::lower::substitute_type_expr_index_names(&mut type_ann, subs.index);
         graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(
             &mut type_ann,
-            &deferred.type_bindings,
+            subs.r#type,
         );
-        graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(
-            &mut type_ann,
-            &deferred.dim_bindings,
-        );
+        graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(&mut type_ann, subs.dim);
 
-        let is_const = dag_body.declarations.iter().any(
+        let is_const = decls.iter().any(
             |d| matches!(&d.kind, DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name),
         );
-        let alias_expr = if is_const {
-            Expr::new(
-                ExprKind::ConstRef(Spanned::new(
-                    DeclName::new(&prefixed_name),
-                    deferred.import_span,
-                )),
-                deferred.import_span,
-            )
+        let alias_kind = if is_const {
+            ExprKind::ConstRef(Spanned::new(DeclName::new(&prefixed_name), import_span))
         } else {
-            Expr::new(
-                ExprKind::GraphRef(Spanned::new(
-                    DeclName::new(&prefixed_name),
-                    deferred.import_span,
-                )),
-                deferred.import_span,
-            )
+            ExprKind::GraphRef(Spanned::new(DeclName::new(&prefixed_name), import_span))
         };
+        let alias_expr = Expr::new(alias_kind, import_span);
 
         if is_const {
             unfrozen.add_const_alias(
                 ScopedName::local(local_name.clone()),
                 type_ann,
                 alias_expr,
-                deferred.import_span,
+                import_span,
                 ScopedName::local(prefixed_name),
             );
         } else {
@@ -554,11 +553,32 @@ pub(super) fn add_inline_dag_selective_aliases(
                 ScopedName::local(local_name.clone()),
                 type_ann,
                 alias_expr,
-                deferred.import_span,
+                import_span,
                 ScopedName::local(prefixed_name),
             );
         }
     }
+}
+
+/// Add alias declarations for selective inline DAG includes.
+pub(super) fn add_inline_dag_selective_aliases(
+    dag_body: &graphcal_compiler::desugar::desugared_ast::File,
+    selective: &[(String, String)],
+    deferred: &DeferredInlineDagInclude,
+    unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
+) {
+    add_selective_aliases_inner(
+        &dag_body.declarations,
+        selective,
+        &deferred.prefix,
+        &AliasSubstitutions {
+            index: &deferred.index_bindings,
+            r#type: &deferred.type_bindings,
+            dim: &deferred.dim_bindings,
+        },
+        deferred.import_span,
+        unfrozen,
+    );
 }
 
 /// Add alias declarations for selective instantiated imports.
@@ -571,87 +591,18 @@ pub(super) fn add_selective_aliases(
     deferred: &DeferredInstantiatedImport,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) {
-    for (orig_name, local_name) in selective {
-        let prefixed_name = format!("{}::{}", deferred.prefix, orig_name);
-
-        // Find the type annotation from the dependency's AST.
-        let type_ann = dep_loaded
-            .ast
-            .declarations
-            .iter()
-            .find_map(|d| match &d.kind {
-                DeclKind::Param(p) if p.name.value.as_str() == orig_name => {
-                    Some(p.type_ann.clone())
-                }
-                DeclKind::Node(n) if n.name.value.as_str() == orig_name => Some(n.type_ann.clone()),
-                DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name => {
-                    Some(c.type_ann.clone())
-                }
-                _ => None,
-            });
-
-        let Some(mut type_ann) = type_ann else {
-            continue;
-        };
-
-        // Substitute index/type/dim names in the type annotation so the alias
-        // resolves against the importer's merged registry.
-        graphcal_compiler::ir::lower::substitute_type_expr_index_names(
-            &mut type_ann,
-            &deferred.index_bindings,
-        );
-        graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(
-            &mut type_ann,
-            &deferred.type_bindings,
-        );
-        graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(
-            &mut type_ann,
-            &deferred.dim_bindings,
-        );
-
-        // Determine if this is a const or runtime declaration.
-        let is_const = dep_loaded.ast.declarations.iter().any(
-            |d| matches!(&d.kind, DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name),
-        );
-
-        // Create an alias expression: `@prefix::orig_name` (or `PREFIX::CONST`)
-        let alias_expr = if is_const {
-            Expr::new(
-                ExprKind::ConstRef(Spanned::new(
-                    DeclName::new(&prefixed_name),
-                    deferred.import_span,
-                )),
-                deferred.import_span,
-            )
-        } else {
-            Expr::new(
-                ExprKind::GraphRef(Spanned::new(
-                    DeclName::new(&prefixed_name),
-                    deferred.import_span,
-                )),
-                deferred.import_span,
-            )
-        };
-
-        // Add the alias as a declaration in the importer's IR.
-        if is_const {
-            unfrozen.add_const_alias(
-                ScopedName::local(local_name.clone()),
-                type_ann,
-                alias_expr,
-                deferred.import_span,
-                ScopedName::local(prefixed_name),
-            );
-        } else {
-            unfrozen.add_node_alias(
-                ScopedName::local(local_name.clone()),
-                type_ann,
-                alias_expr,
-                deferred.import_span,
-                ScopedName::local(prefixed_name),
-            );
-        }
-    }
+    add_selective_aliases_inner(
+        &dep_loaded.ast.declarations,
+        selective,
+        &deferred.prefix,
+        &AliasSubstitutions {
+            index: &deferred.index_bindings,
+            r#type: &deferred.type_bindings,
+            dim: &deferred.dim_bindings,
+        },
+        deferred.import_span,
+        unfrozen,
+    );
 }
 
 /// Merge type-system declarations from a dependency's frozen Registry into a builder.
