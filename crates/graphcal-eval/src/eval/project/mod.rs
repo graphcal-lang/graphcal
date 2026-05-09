@@ -128,11 +128,20 @@ pub(super) struct DepImportedValues {
     pub(super) values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
 }
 
-/// An instantiated import that needs IR merging (deferred until after lowering).
-pub(super) struct DeferredInstantiatedImport {
-    /// DAG identifier of the dependency.
-    pub(super) dep_dag_id: graphcal_compiler::syntax::dag_id::DagId,
-    /// The prefix for all merged declarations (from alias or filename).
+/// A deferred include of a DAG (file-level or inline) — compile its body
+/// and merge into the importer's IR after the importer's own decls are
+/// lowered.
+///
+/// A file include (`include lib(args).{...}`) is a DAG whose source is
+/// the file root; an inline DAG include (`include dag(args)` /
+/// `include lib.dag(args)`) is a DAG inside some file. After the flat
+/// TIR registry, both are uniformly addressed by canonical [`DagId`].
+pub(super) struct DeferredDagInclude {
+    /// Identifies the source kind and any kind-specific data (file's AST
+    /// vs inline dag's body + parent context).
+    pub(super) source: DeferredDagSource,
+    /// The prefix for all merged declarations (from alias or dag name or
+    /// filename).
     pub(super) prefix: String,
     /// Param bindings: `param_name` → binding expression.
     pub(super) bindings: HashMap<String, Expr>,
@@ -142,61 +151,52 @@ pub(super) struct DeferredInstantiatedImport {
     pub(super) type_bindings: HashMap<StructTypeName, StructTypeName>,
     /// Dimension bindings: `dep_dim_name` → `importer_dim_name`.
     pub(super) dim_bindings: HashMap<DimName, DimName>,
-    /// For selective imports: the selected names and their local aliases.
-    /// `None` for module imports (all names are accessible via `prefix::`).
-    pub(super) selective_names: Option<Vec<(String, String)>>, // (orig_name, local_name)
-    /// Span of the import declaration (for diagnostics).
-    pub(super) import_span: Span,
-    /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on imported assertions).
-    /// Key = original name in dep, Value = list of attributes from the import item.
-    pub(super) import_item_attributes:
-        HashMap<String, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
-    /// Whether this include carries a leading `pub` (whole-module re-export, issue #452).
-    pub(super) pub_reexport_whole: bool,
-    /// Original names (in the dep) of selective items marked `pub` in the
-    /// importer's brace list (issue #452). Empty for whole-module form.
-    pub(super) pub_reexport_items: HashSet<String>,
-}
-
-/// A deferred inline DAG include that needs IR merging.
-pub(super) struct DeferredInlineDagInclude {
-    /// Virtual File AST constructed from the DAG body declarations.
-    pub(super) dag_body: graphcal_compiler::desugar::desugared_ast::File,
-    /// Imported names collected from `import ..` inside the DAG body.
-    pub(super) dag_imported_names: ImportedValueNames,
-    /// `DagId` of the file where this DAG was *defined* (its parent), which
-    /// may differ from the importer when the include is a cross-file
-    /// qualified-DAG reference. Used to scope `import <self>.{...}` against
-    /// the parent file (Concept 9: a DAG's `<self>` is its own enclosing
-    /// file, regardless of where the DAG is being included).
-    pub(super) parent_dag_id: graphcal_compiler::syntax::dag_id::DagId,
-    /// The DAG's bare name in source (matches the parent file's
-    /// `LoadedDag.name`). May differ from `prefix` when an alias or the
-    /// selective form rewrites the namespace.
-    pub(super) dag_name: String,
-    /// The prefix for all merged declarations (from alias or dag name).
-    pub(super) prefix: String,
-    /// Param bindings: `param_name` → binding expression.
-    pub(super) bindings: HashMap<String, Expr>,
-    /// Index bindings: `dep_index_name` → `importer_index_name`.
-    pub(super) index_bindings: HashMap<IndexName, IndexName>,
-    /// Type bindings: `dep_type_name` → `importer_type_name`.
-    pub(super) type_bindings: HashMap<StructTypeName, StructTypeName>,
-    /// Dimension bindings: `dep_dim_name` → `importer_dim_name`.
-    pub(super) dim_bindings: HashMap<DimName, DimName>,
-    /// For selective imports: the selected names and their local aliases.
-    /// `None` for module imports.
+    /// For selective includes: the selected names and their local aliases.
+    /// `None` for module-form includes (all names accessible via `prefix::`).
     pub(super) selective_names: Option<Vec<(String, String)>>,
     /// Span of the include declaration (for diagnostics).
     pub(super) import_span: Span,
-    /// Per-import-item attributes.
+    /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on
+    /// included assertions). Key = original name in dep.
     pub(super) import_item_attributes:
         HashMap<String, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
-    /// Whether this include carries a leading `pub` (whole-module re-export, issue #452).
+    /// Whether this include carries a leading `pub` (whole-module re-export).
     pub(super) pub_reexport_whole: bool,
-    /// Original names (in the DAG body) of selective items marked `pub` in
-    /// the importer's brace list (issue #452). Empty for whole-module form.
+    /// Original names of selective items marked `pub` in the importer's
+    /// brace list. Empty for whole-module form.
     pub(super) pub_reexport_items: HashSet<String>,
+}
+
+/// What is being included — distinguishes file roots from inline DAGs and
+/// carries the kind-specific data the deferred processor needs.
+pub(super) enum DeferredDagSource {
+    /// File include — body is the dep file's full AST, with its own
+    /// transitive imports' values supplied via
+    /// [`build_dep_imported_values`].
+    File {
+        /// Canonical [`DagId`](graphcal_compiler::syntax::dag_id::DagId)
+        /// of the dep file (equal to the file's root id).
+        dep_dag_id: graphcal_compiler::syntax::dag_id::DagId,
+    },
+    /// Inline DAG include — body is the dag block's declarations, with
+    /// `import <self>.{...}` items resolved against `parent_dag_id`
+    /// (Concept 9: the file that *defined* the DAG, not the file
+    /// performing the include).
+    InlineDag {
+        /// Virtual File AST constructed from the DAG body declarations.
+        dag_body: graphcal_compiler::desugar::desugared_ast::File,
+        /// Imported names collected from `import ..` inside the DAG body.
+        dag_imported_names: ImportedValueNames,
+        /// [`DagId`](graphcal_compiler::syntax::dag_id::DagId) of the file
+        /// where this DAG was *defined*. For same-file includes this is
+        /// the importer; for cross-file qualified includes it's the target
+        /// file.
+        parent_dag_id: graphcal_compiler::syntax::dag_id::DagId,
+        /// The DAG's bare name (matches the parent file's
+        /// `LoadedDag.name`). May differ from `prefix` when the include
+        /// uses an alias.
+        dag_name: String,
+    },
 }
 
 /// Mutable state accumulated while processing import declarations.
@@ -213,8 +213,7 @@ pub(super) struct ImportContext<'a> {
     pub(super) module_map: HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
     /// Registry + `pub_names` for module-imported dependencies.
     pub(super) extra_registry_builders: Vec<(&'a Registry, &'a HashSet<String>)>,
-    pub(super) deferred_instantiated: Vec<DeferredInstantiatedImport>,
-    pub(super) deferred_inline_dags: Vec<DeferredInlineDagInclude>,
+    pub(super) deferred_dag_includes: Vec<DeferredDagInclude>,
 }
 
 /// Result of looking up a single selective import item in an `EvaluatedFile`.

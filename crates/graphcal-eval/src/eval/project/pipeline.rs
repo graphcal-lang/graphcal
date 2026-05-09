@@ -33,8 +33,7 @@ pub(super) fn compile_single_file_in_project(
         imported_type_system_names: HashMap::new(),
         module_map: HashMap::new(),
         extra_registry_builders: Vec::new(),
-        deferred_instantiated: Vec::new(),
-        deferred_inline_dags: Vec::new(),
+        deferred_dag_includes: Vec::new(),
     };
 
     // Collect inline DAG definitions from the file's AST.

@@ -243,9 +243,9 @@ pub fn preprocess_dag_body_self_imports(
 /// `parent_consts` / `parent_runtime_names` arguments of
 /// [`preprocess_dag_body_self_imports`].
 ///
-/// Used by `process_deferred_inline_dag_includes` for the include path:
-/// when the parent file's TIR isn't yet type-resolved, the AST tells us
-/// which names exist and which kind they are. Const types are
+/// Used by `process_deferred_dag_includes` for the inline-DAG include
+/// path: when the parent file's TIR isn't yet type-resolved, the AST
+/// tells us which names exist and which kind they are. Const types are
 /// placeholder `Dimensionless` — the cross-file path overrides them with
 /// real types from the parent's `EvaluatedFile.declared_types`; the
 /// same-file path lets the importer's own resolved types win at

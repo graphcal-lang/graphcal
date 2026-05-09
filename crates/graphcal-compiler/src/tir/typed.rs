@@ -2482,14 +2482,13 @@ mod tests {
 
     #[test]
     fn type_resolve_hohmann() {
-        // hohmann.gcl uses DAG+include and `import <self>.{...}` for parent
-        // consts. Project-level `graphcal check` accepts it (see the CLI
-        // tests), but single-file TIR resolution rejects it: `parse_and_type_resolve`
-        // names the source `"test"`, so `import hohmann.{...}` does not match
-        // the parent file's identity and the dag-body resolver still sees
-        // `@r_earth` as an unknown graph reference (or `@transfer` from the
-        // unexpanded include — the resolver fails on the first unresolved
-        // name it encounters, which is enough to assert `UnknownGraphRef`).
+        // hohmann.gcl uses DAG+include. Project-level `graphcal check`
+        // accepts it (see the CLI tests), but single-file TIR resolution
+        // rejects it: there's no project loader to resolve cross-DAG
+        // references like `import hohmann.{...}`, and `@transfer` from the
+        // unexpanded include surfaces as an unknown graph reference. The
+        // resolver fails on the first unresolved name it encounters, which
+        // is enough to assert `UnknownGraphRef`.
         let source = include_str!("../../../../tests/fixtures/valid/hohmann.gcl");
         let err = parse_and_type_resolve(source).unwrap_err();
         assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
