@@ -172,12 +172,9 @@
 ; ---------------------------------------------------------------
 
 
-; fn calls: sqrt(x), ln(x)
+; fn calls: sqrt(x), ln(x). Built-in only — graphcal has no
+; user-defined functions, so qualified `module.fn(...)` does not exist.
 (fn_call name: (identifier) @function.call)
-
-; qualified fn calls: module.fn_name(args)
-; (handled by `fn_call` with an optional `module` field)
-(fn_call module: (identifier) @module name: (identifier) @function.call)
 
 ; ---------------------------------------------------------------
 ; Graph references: @name, @dag(args).out, @module.dag(args).out

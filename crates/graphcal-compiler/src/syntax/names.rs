@@ -130,6 +130,123 @@ define_name_type! {
     pub struct GenericParamName;
 }
 
+// --- Module-scoped names ---
+
+/// A declaration name that may optionally be module-qualified.
+///
+/// Selective imports produce `Local` names (`x`); whole-module imports and
+/// alias-rewritten qualified references produce `Qualified` names
+/// (`module::x`). The variant carries the qualification structurally — no
+/// flat string parsing is needed to recover it.
+///
+/// The `Display` impl renders `Qualified { module: "m", member: "x" }` as
+/// `m::x`. That serialized form is for *boundary* use only (debug output,
+/// `HashMap` keys that haven't yet been re-typed). The functional core
+/// should pattern-match on the variant directly.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ScopedName {
+    /// A bare local name: `x`, `G0`, etc.
+    Local(String),
+    /// A module-qualified name: `module::x`, `constants::G0`, etc.
+    Qualified { module: String, member: String },
+}
+
+impl ScopedName {
+    /// Create a `Local` name.
+    #[must_use]
+    pub fn local(name: impl Into<String>) -> Self {
+        Self::Local(name.into())
+    }
+
+    /// Create a `Qualified` name.
+    #[must_use]
+    pub fn qualified(module: impl Into<String>, member: impl Into<String>) -> Self {
+        Self::Qualified {
+            module: module.into(),
+            member: member.into(),
+        }
+    }
+
+    /// Returns the member (leaf) part of the name.
+    ///
+    /// For `Local("x")` this returns `"x"`.
+    /// For `Qualified { module: "m", member: "x" }` this also returns `"x"`.
+    #[must_use]
+    pub fn member(&self) -> &str {
+        match self {
+            Self::Local(name) => name,
+            Self::Qualified { member, .. } => member,
+        }
+    }
+
+    /// Returns the module part, if qualified.
+    #[must_use]
+    pub fn module(&self) -> Option<&str> {
+        match self {
+            Self::Qualified { module, .. } => Some(module),
+            Self::Local(_) => None,
+        }
+    }
+
+    /// Returns whether this is a qualified name.
+    #[must_use]
+    pub const fn is_qualified(&self) -> bool {
+        matches!(self, Self::Qualified { .. })
+    }
+
+    /// Qualify a name with a prefix.
+    ///
+    /// `Local("x").with_prefix("p")` → `Qualified { module: "p", member: "x" }`.
+    /// `Qualified { module: "m", member: "x" }.with_prefix("p")` → `Qualified { module: "p", member: "x" }`.
+    #[must_use]
+    pub fn with_prefix(&self, prefix: &str) -> Self {
+        Self::Qualified {
+            module: prefix.to_string(),
+            member: self.member().to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for ScopedName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(name) => write!(f, "{name}"),
+            Self::Qualified { module, member } => write!(f, "{module}::{member}"),
+        }
+    }
+}
+
+impl From<String> for ScopedName {
+    /// Wrap a bare string as `ScopedName::Local`. This is what
+    /// [`crate::syntax::ast::Ident::into_spanned`] uses to lift parser
+    /// identifiers into the typed name; qualified forms are constructed
+    /// explicitly via [`ScopedName::qualified`].
+    fn from(s: String) -> Self {
+        Self::Local(s)
+    }
+}
+
+impl From<&ScopedName> for DeclName {
+    /// Flatten a scoped name into a single `DeclName` using the `module::member`
+    /// display form for qualified names and the bare member for locals.
+    ///
+    /// **Boundary-only.** This conversion exists for legacy `HashMap` keys
+    /// that still use `DeclName`. Inside the functional core, pattern-match
+    /// on `ScopedName` directly.
+    fn from(s: &ScopedName) -> Self {
+        Self::new(s.to_string())
+    }
+}
+
+impl From<DeclName> for ScopedName {
+    /// Wrap a `DeclName` as a `ScopedName::Local`. Use this at the resolver →
+    /// IR boundary where resolver keys (local `DeclName`s) become IR keys
+    /// (`ScopedName`s).
+    fn from(name: DeclName) -> Self {
+        Self::Local(name.into_inner())
+    }
+}
+
 // --- Qualified-variant rendering ---
 
 /// Render a qualified index variant `Index.Variant` in surface syntax.

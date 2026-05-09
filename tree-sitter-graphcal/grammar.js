@@ -46,6 +46,13 @@ module.exports = grammar({
     // (with multi-segment path before `(args)`). The disambiguator is
     // whether `(args).<out>` eventually follows the path.
     [$.graph_ref, $.inline_dag_call],
+    // `IDENT . IDENT` could be either a `qualified_variant` (variant
+    // ref or qualified const ref) or a `_primary_expr` (the leading
+    // `IDENT`) followed by a postfix `field_access`. The name resolver
+    // distinguishes them (variant when LHS is a known index, otherwise
+    // a qualified const). Both parses are accepted by the GLR parser
+    // and any downstream consumer reads `qualified_variant` when present.
+    [$.qualified_variant, $._primary_expr],
   ],
 
   rules: {
@@ -1155,14 +1162,11 @@ module.exports = grammar({
       field("variant", $.identifier),
     ),
 
-    // Function call. `name` is either a bare identifier (`f(args)`)
-    // or a dot-qualified pair (`module.fn(args)`). The qualified
-    // form lives inside `fn_call` (rather than a separate rule) and
-    // shares a `[$.fn_call, $.field_access]` GLR conflict so that
-    // `module.name` followed by `(` parses as a call while `obj.field`
-    // (no parens) falls through to `field_access`.
+    // Function call: a bare identifier (`f(args)` or `f<T>(args)`).
+    // There are no user-defined functions in graphcal, so qualified
+    // `module.fn(args)` does not exist — bare built-ins (`sqrt`,
+    // `sum`, …) are the only callable form.
     fn_call: $ => prec(PREC.CALL, seq(
-      optional(seq(field("module", $.identifier), ".")),
       field("name", $.identifier),
       optional(seq(
         "<",

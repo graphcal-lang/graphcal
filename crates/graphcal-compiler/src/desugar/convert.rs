@@ -463,12 +463,6 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
             ExprKind::LocalRef(i) => Self::LocalRef(i),
             ExprKind::UnitLiteral { value, unit } => Self::UnitLiteral { value, unit },
             ExprKind::VariantLiteral { index, variant } => Self::VariantLiteral { index, variant },
-            ExprKind::QualifiedConstRef { module, name } => {
-                Self::QualifiedConstRef { module, name }
-            }
-            ExprKind::QualifiedGraphRef { qualifier, member } => {
-                Self::QualifiedGraphRef { qualifier, member }
-            }
             ExprKind::NameRef(i) => Self::NameRef(i),
             ExprKind::QualifiedNameRef { qualifier, member } => {
                 Self::QualifiedNameRef { qualifier, member }

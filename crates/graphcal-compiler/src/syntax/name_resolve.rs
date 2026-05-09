@@ -19,7 +19,7 @@ use crate::desugar::desugared_ast::{
 };
 use crate::registry::builtins::builtin_constants;
 use crate::registry::resolve_types::is_time_scale_name;
-use crate::syntax::names::{DeclName, IndexName, Spanned, StructTypeName, VariantName};
+use crate::syntax::names::{IndexName, ScopedName, Spanned, StructTypeName, VariantName};
 
 /// Context for name resolution: what names are in scope.
 struct ResolveContext {
@@ -265,9 +265,7 @@ fn resolve_expr(expr: &mut Expr, ctx: &mut ResolveContext) {
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral { .. }
-        | ExprKind::QualifiedConstRef { .. }
-        | ExprKind::QualifiedGraphRef { .. } => return,
+        | ExprKind::VariantLiteral { .. } => return,
 
         ExprKind::InlineDagRef { args, .. } => {
             for arg in args {
@@ -457,12 +455,12 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> E
 
     // 2. Builtin constant
     if ctx.builtin_consts.contains_key(name.as_str()) {
-        return ExprKind::ConstRef(Spanned::new(DeclName::new(name), ident.span));
+        return ExprKind::ConstRef(Spanned::new(ScopedName::local(name), ident.span));
     }
 
     // 3. Time scale name
     if is_time_scale_name(name) {
-        return ExprKind::ConstRef(Spanned::new(DeclName::new(name), ident.span));
+        return ExprKind::ConstRef(Spanned::new(ScopedName::local(name), ident.span));
     }
 
     // 4. Struct/union type name → bare construction
@@ -491,15 +489,12 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> E
     ExprKind::LocalRef(ident)
 }
 
-/// Resolve a `QualifiedNameRef` (`a::b`) to a concrete [`ExprKind`].
+/// Resolve a `QualifiedNameRef` (`a.b`) to a concrete [`ExprKind`].
 ///
 /// Priority:
 /// 1. If `qualifier` is a known index name → `VariantLiteral`
-/// 2. Otherwise → `QualifiedConstRef` (module-qualified constant, validated later)
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Ident is small and consumed in some branches"
-)]
+/// 2. Otherwise → `ConstRef` carrying a `ScopedName::Qualified`
+///    (module-qualified constant, validated later)
 fn resolve_qualified_name_ref(
     qualifier: crate::syntax::ast::Ident,
     member: crate::syntax::ast::Ident,
@@ -513,9 +508,10 @@ fn resolve_qualified_name_ref(
         };
     }
 
-    // 2. Fallback: qualified const ref (e.g., module::CONST)
-    ExprKind::QualifiedConstRef {
-        module: qualifier,
-        name: Spanned::new(DeclName::new(&member.name), member.span),
-    }
+    // 2. Fallback: qualified constant reference (`module.CONST`).
+    let merged_span = qualifier.span.merge(member.span);
+    ExprKind::ConstRef(Spanned::new(
+        ScopedName::qualified(qualifier.name, member.name),
+        merged_span,
+    ))
 }

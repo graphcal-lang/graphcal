@@ -958,7 +958,10 @@ fn extract_dimension_from_expr(
     use graphcal_compiler::desugar::desugared_ast::ExprKind;
     match &expr.kind {
         ExprKind::GraphRef(name) => {
-            let dt = declared_types.get(name.value.as_str())?;
+            // Boundary: `declared_types` is keyed by the flat string form
+            // of the scoped name (`module::member` for qualified, bare for
+            // local). Stringify here for the lookup.
+            let dt = declared_types.get(name.value.to_string().as_str())?;
             dimension_label_from_declared_type(dt, registry)
         }
         ExprKind::ForComp { body, .. } => {

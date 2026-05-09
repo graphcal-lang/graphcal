@@ -730,18 +730,15 @@ inline_dag_call_suffix
 (* Dispatches based on the token(s) following the identifier:
    - IDENT<T>{ ... } or IDENT{ ... }  → struct construction
      (requires uppercase-starting identifier to avoid ambiguity)
-   - IDENT.IDENT<T>(...) or IDENT.IDENT(...)  → qualified fn call
    - IDENT.IDENT  → qualified name ref (resolved to variant or const)
-   - IDENT<T>(...) or IDENT(...)  → function call
+   - IDENT<T>(...) or IDENT(...)  → function call (built-in only)
    - IDENT  → name ref (resolved to local, const, or bare struct)
-   The qualified forms can chain into a longer dotted path; the
-   postfix `.IDENT` operator (field access) handles continuations
-   uniformly with module-path traversal. *)
+   Qualified forms can chain into a longer dotted path via the
+   postfix `.IDENT` operator (field access). User-defined functions do
+   not exist in graphcal, so there is no `module.fn(...)` qualified
+   function-call form — qualified `.fn(...)` is unparseable. *)
 ident_expr
-   = IDENT, ".", IDENT,
-     [ "<", generic_arg_list, ">" ],
-     "(", [ expr_list ], ")"                      (* qualified fn call *)
-   | IDENT, ".", IDENT                             (* qualified name ref *)
+   = IDENT, ".", IDENT                             (* qualified name ref *)
    | IDENT,
      [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ],
      "{", [ field_init, { ",", field_init }, [ "," ] ], "}"

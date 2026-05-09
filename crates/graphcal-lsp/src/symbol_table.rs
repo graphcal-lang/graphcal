@@ -954,27 +954,20 @@ fn collect_expr_refs(
 ) {
     match &expr.kind {
         ExprKind::GraphRef(name) | ExprKind::ConstRef(name) => {
+            // The typed `ScopedName` payload distinguishes bare from
+            // qualified refs; map the variant onto the corresponding
+            // `SymbolKey`.
+            use graphcal_compiler::syntax::names::ScopedName;
+            let target = match &name.value {
+                ScopedName::Local(n) => SymbolKey::TopLevel(n.clone()),
+                ScopedName::Qualified { module, member } => SymbolKey::Qualified {
+                    module: module.clone(),
+                    name: member.clone(),
+                },
+            };
             table.references.push(ReferenceInfo {
                 span: name.span,
-                target: SymbolKey::TopLevel(name.value.to_string()),
-            });
-        }
-        ExprKind::QualifiedConstRef { module, name } => {
-            table.references.push(ReferenceInfo {
-                span: name.span,
-                target: SymbolKey::Qualified {
-                    module: module.name.clone(),
-                    name: name.value.to_string(),
-                },
-            });
-        }
-        ExprKind::QualifiedGraphRef { qualifier, member } => {
-            table.references.push(ReferenceInfo {
-                span: member.span,
-                target: SymbolKey::Qualified {
-                    module: qualifier.name.clone(),
-                    name: member.value.to_string(),
-                },
+                target,
             });
         }
         ExprKind::InlineDagRef { path, args, output } => {

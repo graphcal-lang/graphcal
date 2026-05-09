@@ -206,16 +206,18 @@ impl InferCtx<'_> {
                 span: self.args[1].span.into(),
             });
         };
+        // Time scale identifiers are always bare; a qualified `mod.UTC`
+        // is necessarily not a valid time scale and is rejected here.
         let scale: crate::registry::time_scale::TimeScale = scale_ident
             .value
-            .as_str()
+            .member()
             .parse()
             .map_err(|_| GraphcalError::DimensionMismatch {
                 expected: "time scale (UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST)".to_string(),
                 found: scale_ident.value.to_string(),
                 help: format!(
                     "unknown time scale `{}`; expected one of: {}",
-                    scale_ident.value.as_str(),
+                    scale_ident.value,
                     crate::registry::time_scale::TimeScale::ALL_NAMES.join(", ")
                 ),
                 src: self.src.clone(),
