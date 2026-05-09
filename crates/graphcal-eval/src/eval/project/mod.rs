@@ -9,6 +9,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Expr, ExprKind, ModulePath};
 use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, Spanned, StructTypeName};
+use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
 
@@ -69,6 +70,70 @@ impl ExprVisitorMut<graphcal_compiler::syntax::phase::Desugared> for QualifiedRe
 /// `ConstRef("m::x")`.
 pub(super) fn rewrite_qualified_refs(expr: &mut Expr) {
     let mut rewriter = QualifiedRefRewriter;
+    let _ = rewriter.visit_expr_mut(expr);
+}
+
+/// Visitor that rewrites `FieldAccess(GraphRef(alias), field)` into a flat
+/// qualified `GraphRef("alias::field")` when `(alias, field)` matches an
+/// imported module-namespace member.
+///
+/// `@bar.field` parses as `FieldAccess(GraphRef(bar), field)`. For the
+/// `include foo() as bar;` and `import foo as bar;` namespace forms, the
+/// dependency's items are registered as `ScopedName::Qualified { module:
+/// "bar", member: "field" }` — `Display`-formatted as `"bar::field"`. This
+/// rewriter unifies the surface form with the resolver's flat-string scope
+/// so the existing graph-reference resolver finds the member.
+struct AliasFieldAccessRewriter<'a> {
+    qualified_pairs: &'a HashSet<(String, String)>,
+}
+
+impl ExprVisitorMut<Desugared> for AliasFieldAccessRewriter<'_> {
+    type Error = std::convert::Infallible;
+
+    fn visit_expr_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        // Recurse first; chained `@bar.x.y` becomes
+        // `FieldAccess(FieldAccess(GraphRef(bar), x), y)`. We rewrite the
+        // inner `FieldAccess(GraphRef(bar), x)` to `GraphRef("bar::x")`,
+        // leaving the outer `.y` as a struct-field access on the resulting
+        // qualified node value.
+        self.dispatch_mut(expr)?;
+
+        let rewrite = if let ExprKind::FieldAccess { expr: inner, field } = &expr.kind
+            && let ExprKind::GraphRef(qualifier) = &inner.kind
+        {
+            let qual = qualifier.value.as_str().to_string();
+            let field_name = field.value.as_str().to_string();
+            if self
+                .qualified_pairs
+                .contains(&(qual.clone(), field_name.clone()))
+            {
+                let span = expr.span;
+                Some(ExprKind::GraphRef(Spanned {
+                    value: DeclName::new(format!("{qual}::{field_name}")),
+                    span,
+                }))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(kind) = rewrite {
+            expr.kind = kind;
+        }
+        Ok(())
+    }
+}
+
+/// Rewrite `FieldAccess(GraphRef(alias), field)` patterns in-place.
+pub(super) fn rewrite_alias_field_access(
+    expr: &mut Expr,
+    qualified_pairs: &HashSet<(String, String)>,
+) {
+    if qualified_pairs.is_empty() {
+        return;
+    }
+    let mut rewriter = AliasFieldAccessRewriter { qualified_pairs };
     let _ = rewriter.visit_expr_mut(expr);
 }
 
@@ -230,54 +295,91 @@ pub(super) enum SelectiveImportResult {
 
 /// Rewrite qualified references in the AST when module imports are present.
 ///
-/// If there are no module imports, returns a borrowed reference to the original AST.
-/// Otherwise, clones the AST and rewrites `QualifiedGraphRef` and `QualifiedConstRef`
-/// to their flat counterparts.
+/// Two rewrites are folded into a single AST walk:
+///   1. `QualifiedConstRef { module, name }` → `ConstRef("module::name")` —
+///      flattens the `m::x` syntax that name-resolution leaves behind.
+///   2. `FieldAccess(GraphRef(alias), field)` → `GraphRef("alias::field")` —
+///      unifies the `@alias.field` namespace surface form with the
+///      resolver's flat-string scope for `include … as alias` /
+///      `import … as alias` namespace members.
+///
+/// If there are no module imports and no qualified members, returns a borrowed
+/// reference to the original AST.
 pub(super) fn rewrite_qualified_refs_in_ast<'a>(
     ast: &'a graphcal_compiler::desugar::desugared_ast::File,
     module_map: &HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
+    imported_names: &ImportedValueNames,
 ) -> std::borrow::Cow<'a, graphcal_compiler::desugar::desugared_ast::File> {
-    if module_map.is_empty() {
+    let alias_pairs = collect_qualified_pairs(imported_names);
+    if module_map.is_empty() && alias_pairs.is_empty() {
         return std::borrow::Cow::Borrowed(ast);
     }
 
     let mut ast = ast.clone();
     for decl in &mut ast.declarations {
-        match &mut decl.kind {
-            DeclKind::Param(p) => {
-                if let Some(ref mut value) = p.value {
-                    rewrite_qualified_refs(value);
-                }
-            }
-            DeclKind::Node(n) => rewrite_qualified_refs(&mut n.value),
-            DeclKind::ConstNode(c) => rewrite_qualified_refs(&mut c.value),
-            DeclKind::Assert(a) => match &mut a.body {
-                graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(e) => {
-                    rewrite_qualified_refs(e);
-                }
-                graphcal_compiler::desugar::desugared_ast::AssertBody::Tolerance {
-                    actual,
-                    expected,
-                    tolerance,
-                    ..
-                } => {
-                    rewrite_qualified_refs(actual);
-                    rewrite_qualified_refs(expected);
-                    rewrite_qualified_refs(tolerance);
-                }
-            },
-            _ => {}
-        }
-    }
-    // Also rewrite qualified refs in param binding expressions (in include declarations).
-    for decl in &mut ast.declarations {
-        if let DeclKind::Include(include_decl) = &mut decl.kind {
-            for binding in &mut include_decl.param_bindings {
-                rewrite_qualified_refs(&mut binding.value);
-            }
-        }
+        rewrite_decl_exprs(decl, &alias_pairs);
     }
     std::borrow::Cow::Owned(ast)
+}
+
+/// Collect `(module, member)` pairs from imported namespace registrations.
+///
+/// Module-form `import`/`include` registers each dep declaration as
+/// `ScopedName::Qualified { module, member }`. `@module.member` should
+/// resolve to `module::member`; bare locals (selective items) do not
+/// participate.
+fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<(String, String)> {
+    let mut pairs = HashSet::new();
+    let entries = imported
+        .const_names
+        .iter()
+        .chain(imported.param_names.iter())
+        .chain(imported.node_names.iter());
+    for (scoped, _) in entries {
+        if let ScopedName::Qualified { module, member } = scoped {
+            pairs.insert((module.clone(), member.clone()));
+        }
+    }
+    pairs
+}
+
+/// Apply both qualified-ref rewrites to a single declaration's expressions.
+fn rewrite_decl_exprs(
+    decl: &mut graphcal_compiler::desugar::desugared_ast::Declaration,
+    alias_pairs: &HashSet<(String, String)>,
+) {
+    let rewrite = |e: &mut Expr| {
+        rewrite_qualified_refs(e);
+        rewrite_alias_field_access(e, alias_pairs);
+    };
+    match &mut decl.kind {
+        DeclKind::Param(p) => {
+            if let Some(ref mut value) = p.value {
+                rewrite(value);
+            }
+        }
+        DeclKind::Node(n) => rewrite(&mut n.value),
+        DeclKind::ConstNode(c) => rewrite(&mut c.value),
+        DeclKind::Assert(a) => match &mut a.body {
+            graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(e) => rewrite(e),
+            graphcal_compiler::desugar::desugared_ast::AssertBody::Tolerance {
+                actual,
+                expected,
+                tolerance,
+                ..
+            } => {
+                rewrite(actual);
+                rewrite(expected);
+                rewrite(tolerance);
+            }
+        },
+        DeclKind::Include(include_decl) => {
+            for binding in &mut include_decl.param_bindings {
+                rewrite(&mut binding.value);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Extract the set of names visible to importers of a file.
