@@ -32,7 +32,7 @@ pub(super) fn infer_type(
     expr: &Expr,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &crate::tir::typed::DagRegistry,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -42,7 +42,7 @@ pub(super) fn infer_type(
         None,
         declared_types,
         local_types,
-        dag_tirs,
+        tir,
         registry,
         builtin_fns,
         src,
@@ -56,7 +56,7 @@ pub(super) fn infer_type_with_owner(
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &crate::tir::typed::DagRegistry,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -161,7 +161,7 @@ pub(super) fn infer_type_with_owner(
             rhs,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -172,7 +172,7 @@ pub(super) fn infer_type_with_owner(
             operand,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -186,7 +186,7 @@ pub(super) fn infer_type_with_owner(
             target,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -201,7 +201,7 @@ pub(super) fn infer_type_with_owner(
             timezone,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -216,7 +216,7 @@ pub(super) fn infer_type_with_owner(
             target_type,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -228,7 +228,7 @@ pub(super) fn infer_type_with_owner(
             args,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -245,7 +245,7 @@ pub(super) fn infer_type_with_owner(
             else_branch,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -259,7 +259,7 @@ pub(super) fn infer_type_with_owner(
             arms,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -271,7 +271,7 @@ pub(super) fn infer_type_with_owner(
             body,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -282,7 +282,7 @@ pub(super) fn infer_type_with_owner(
             entries,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -294,7 +294,7 @@ pub(super) fn infer_type_with_owner(
             args,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -314,7 +314,7 @@ pub(super) fn infer_type_with_owner(
             body,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -333,7 +333,7 @@ pub(super) fn infer_type_with_owner(
             owner_decl_name,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -344,7 +344,7 @@ pub(super) fn infer_type_with_owner(
             field,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -361,7 +361,7 @@ pub(super) fn infer_type_with_owner(
             fields,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -392,7 +392,7 @@ pub(super) fn infer_type_with_owner(
             output,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -409,7 +409,7 @@ pub(super) fn infer_type_with_owner(
 
 /// Infer the type of an inline DAG invocation `@<path>(args).<out>`.
 ///
-/// Looks up the called dag via `dag_tirs`, indexed by [`DagKey`]: the bare
+/// Looks up the called dag via `tir`, indexed by [`DagKey`]: the bare
 /// DAG name for same-file calls (`@dag(args).out`) or a `(module-alias,
 /// dag-name)` pair for cross-file qualified calls (`@module.dag(args).out`,
 /// matching the key inserted by the cross-file dag-merge step). Both
@@ -427,17 +427,16 @@ fn infer_inline_dag_ref(
     output: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
     declared_types: &HashMap<String, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
-    dag_tirs: &crate::tir::typed::DagRegistry,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let key = crate::tir::typed::DagKey::from_module_path(path);
-
-    let dag_tir = dag_tirs
-        .get(&key)
+    let display_path = path.display_path();
+    let dag_tir = tir
+        .lookup_call_target(path)
         .ok_or_else(|| GraphcalError::UnknownDag {
-            name: key.to_string(),
+            name: display_path.clone(),
             src: src.clone(),
             span: path.span.into(),
         })?;
@@ -469,7 +468,7 @@ fn infer_inline_dag_ref(
         let expected = param_decl_types.get(binding_name).ok_or_else(|| {
             GraphcalError::UnknownInlineDagParam {
                 name: binding_name.to_string(),
-                dag_name: key.to_string(),
+                dag_name: display_path.clone(),
                 src: src.clone(),
                 span: binding.name.span.into(),
             }
@@ -478,7 +477,7 @@ fn infer_inline_dag_ref(
             &binding.value,
             declared_types,
             local_types,
-            dag_tirs,
+            tir,
             registry,
             builtin_fns,
             src,
@@ -505,7 +504,7 @@ fn infer_inline_dag_ref(
         missing.sort();
         return Err(GraphcalError::MissingInlineDagBindings {
             missing,
-            dag_name: key.to_string(),
+            dag_name: display_path.clone(),
             src: src.clone(),
             span: expr.span.into(),
         });
@@ -516,7 +515,7 @@ fn infer_inline_dag_ref(
     let output_decl = node_decl_types.get(output.value.as_str()).ok_or_else(|| {
         GraphcalError::UnknownInlineDagOutput {
             name: output.value.to_string(),
-            dag_name: key.to_string(),
+            dag_name: display_path.clone(),
             src: src.clone(),
             span: output.span.into(),
         }
@@ -524,7 +523,7 @@ fn infer_inline_dag_ref(
     if !dag_tir.pub_nodes.contains(output.value.as_str()) {
         return Err(GraphcalError::ImportPrivateItem {
             name: output.value.to_string(),
-            file_path: key.to_string(),
+            file_path: display_path,
             src: src.clone(),
             span: output.span.into(),
         });

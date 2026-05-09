@@ -105,7 +105,7 @@ pub(super) fn lower_and_finalize(
     // canonical parent `DagId`). Cross-file dep dag TIRs are merged in
     // afterward by `merge_dep_dag_tirs`.
     let parent_pub_names = ir.pub_names.clone();
-    let mut tir = graphcal_compiler::tir::typed::type_resolve(ir, file_src)?;
+    let mut tir = graphcal_compiler::tir::typed::type_resolve(ir, file_dag_id.clone(), file_src)?;
     crate::inline_dag::compile_inline_dag_bodies(
         &mut tir,
         file_src,
@@ -134,7 +134,7 @@ pub(super) fn lower_and_finalize(
             override_expr,
             override_name.as_str(),
             &declared_types,
-            &tir.dags,
+            &tir,
             &tir.registry,
             file_src,
         )?;
@@ -148,39 +148,47 @@ pub(super) fn lower_and_finalize(
     })
 }
 
-/// Merge compiled dag TIRs from module-aliased dependencies into the
-/// importer's `tir.dags`, keyed by a two-segment
-/// [`DagKey::aliased(alias, dag_name)`](graphcal_compiler::tir::typed::DagKey::aliased).
+/// Merge compiled per-DAG TIRs from each module-imported dependency into
+/// the importer's flat `tir.dags`, keyed by the dep's canonical
+/// [`DagId`](graphcal_compiler::syntax::dag_id::DagId), and record the
+/// alias→DagId mapping in `tir.module_aliases` so user-typed
+/// `@alias.dag(args).out` references resolve through
+/// [`graphcal_compiler::tir::typed::TIR::lookup_call_target`].
 ///
-/// Enables cross-file qualified inline calls `@alias.dag(args).out` to
-/// resolve via the same `tir.dags` lookup used for same-file calls.
+/// Every dep `DagTIR` is brought along — the dep file's own root entry as
+/// well as its inline children — under their canonical id. Cross-file
+/// qualified calls (`@alias.dag(...)`) and bare module-path calls
+/// (`@alias.dag(...).out`) resolve through the same flat lookup as
+/// same-file calls.
 ///
-/// Only `pub` dags are exposed across the import boundary; private dags
-/// in the dep stay local (the dep's `pub_names` already filters them).
+/// Only `pub` DAGs are exposed across the import boundary; private DAGs
+/// in the dep stay local (the dep's `pub_names` filters them).
 ///
-/// Each cloned dag TIR also receives the dep-file values named by the dag
-/// body's explicit imports, so `import dep.{const as local}` resolves under
-/// the local alias at inline-call eval time.
+/// Each cloned DAG TIR also receives the dep-file values named by the
+/// DAG body's explicit imports, so `import dep.{const as local}`
+/// resolves under the local alias at inline-call eval time.
 pub(super) fn merge_dep_dag_tirs(
     tir: &mut graphcal_compiler::tir::typed::TIR,
     module_map: &HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
     evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
 ) {
     for (alias, (dep_dag_id, _)) in module_map {
+        // Record the alias → dep DagId mapping so call paths like
+        // `@alias.dag(args)` translate to `dep_dag_id.child("dag")`.
+        tir.module_aliases.insert(alias.clone(), dep_dag_id.clone());
+
         let Some(dep_eval) = evaluated_files.get(dep_dag_id) else {
             continue;
         };
-        for (dep_key, dag_tir) in &dep_eval.dag_tirs {
-            // Pre-merge dep `dag_tirs` keys are always single-segment
-            // (`DagKey::local`) — the dep file's own dag declarations.
-            // Anything else would be a cross-file merge having happened
-            // there too, which is not produced by the pipeline.
-            if !dep_key.is_local() {
-                continue;
-            }
-            let dag_name = dep_key.leaf();
-            if !dep_eval.pub_names.contains(dag_name) {
-                continue;
+        for (dep_id, dag_tir) in &dep_eval.dag_tirs {
+            // Visibility check: only carry across `pub` dags. The dep's
+            // own root is treated as accessible (it's the file itself).
+            let is_root = dep_id == dep_dag_id;
+            if !is_root {
+                let leaf = dep_id.name();
+                if !dep_eval.pub_names.contains(leaf) {
+                    continue;
+                }
             }
             let mut cloned = dag_tir.clone();
             // Inject only the values that the dag body imported from its
@@ -199,10 +207,7 @@ pub(super) fn merge_dep_dag_tirs(
                         .or_insert_with(|| (value.clone(), dt.clone()));
                 }
             }
-            tir.dags.insert(
-                graphcal_compiler::tir::typed::DagKey::aliased(alias.clone(), dag_name),
-                cloned,
-            );
+            tir.dags.insert(dep_id.clone(), cloned);
         }
     }
 }

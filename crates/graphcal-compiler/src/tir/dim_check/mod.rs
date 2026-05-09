@@ -75,7 +75,7 @@ fn check_decl_expr_type(
     type_ann_span: &crate::syntax::span::Span,
     declared_types: &HashMap<String, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
-    dag_tirs: &crate::tir::typed::DagRegistry,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -94,7 +94,7 @@ fn check_decl_expr_type(
         Some(name_str.as_str()),
         declared_types,
         empty_locals,
-        dag_tirs,
+        tir,
         registry,
         builtin_fns,
         src,
@@ -120,7 +120,7 @@ fn check_assert_body(
     span: crate::syntax::span::Span,
     declared_types: &HashMap<String, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
-    dag_tirs: &crate::tir::typed::DagRegistry,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
@@ -131,7 +131,7 @@ fn check_assert_body(
                 body_expr,
                 declared_types,
                 empty_locals,
-                dag_tirs,
+                tir,
                 registry,
                 builtin_fns,
                 src,
@@ -154,7 +154,7 @@ fn check_assert_body(
                 actual,
                 declared_types,
                 empty_locals,
-                dag_tirs,
+                tir,
                 registry,
                 builtin_fns,
                 src,
@@ -163,7 +163,7 @@ fn check_assert_body(
                 expected,
                 declared_types,
                 empty_locals,
-                dag_tirs,
+                tir,
                 registry,
                 builtin_fns,
                 src,
@@ -172,7 +172,7 @@ fn check_assert_body(
                 tolerance,
                 declared_types,
                 empty_locals,
-                dag_tirs,
+                tir,
                 registry,
                 builtin_fns,
                 src,
@@ -245,39 +245,60 @@ pub fn check_dimensions_tir(
     detect_decl_cycles(tir, src)?;
     detect_cross_dag_cycles(tir, src)?;
     let builtin_fns = builtin_functions();
-    let declared_types = tir.build_declared_types(src)?;
 
-    // Validate expressions against declared types
+    // Dim-check the file's own DAGs (root + inline children) against the
+    // file's shared registry. Dep DAGs merged in by `merge_dep_dag_tirs`
+    // were already dim-checked in their own file's pipeline, against
+    // their own registry — re-checking them here against the importer's
+    // registry would fail on types renamed by include bindings.
+    for (id, dag) in &tir.dags {
+        if id == &tir.root_dag_id || id.parent().as_ref() == Some(&tir.root_dag_id) {
+            check_dimensions_dag(dag, tir, &tir.registry, builtin_fns, src)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Dim-check a single [`DagTIR`] against the file's shared registry and
+/// the full flat dag map.
+fn check_dimensions_dag(
+    dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
+    registry: &crate::registry::types::Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let declared_types = dag.build_declared_types(src)?;
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
 
-    // Check consts, nodes, and params against their declared types
-    for entry in &tir.consts {
+    for entry in &dag.consts {
         check_decl_expr_type(
             &entry.expr,
             &entry.name,
             &entry.type_ann.span,
             &declared_types,
             &empty_locals,
-            &tir.dags,
-            &tir.registry,
+            tir,
+            registry,
             builtin_fns,
             src,
         )?;
     }
-    for entry in &tir.nodes {
+    for entry in &dag.nodes {
         check_decl_expr_type(
             &entry.expr,
             &entry.name,
             &entry.type_ann.span,
             &declared_types,
             &empty_locals,
-            &tir.dags,
-            &tir.registry,
+            tir,
+            registry,
             builtin_fns,
             src,
         )?;
     }
-    for entry in &tir.params {
+    for entry in &dag.params {
         let Some(ref value_expr) = entry.default_expr else {
             continue;
         };
@@ -287,50 +308,36 @@ pub fn check_dimensions_tir(
             &entry.type_ann.span,
             &declared_types,
             &empty_locals,
-            &tir.dags,
-            &tir.registry,
+            tir,
+            registry,
             builtin_fns,
             src,
         )?;
     }
 
-    // Validate assert bodies
-    for entry in &tir.asserts {
+    for entry in &dag.asserts {
         check_assert_body(
             &entry.body,
             entry.span,
             &declared_types,
             &empty_locals,
-            &tir.dags,
-            &tir.registry,
+            tir,
+            registry,
             builtin_fns,
             src,
         )?;
     }
 
-    // Reject domain constraints on incompatible base types (e.g. Bool, Datetime).
-    check_domain_constraint_targets(tir, src)?;
-
-    // Validate domain constraint bound expression dimensions
-    check_domain_constraint_dimensions(
-        tir,
+    check_domain_constraint_targets_dag(dag, src)?;
+    check_domain_constraint_dimensions_dag(
+        dag,
         &declared_types,
         &empty_locals,
-        &tir.dags,
+        tir,
+        registry,
         builtin_fns,
         src,
     )?;
-
-    // Recursively dim-check every compiled inline-dag body.
-    //
-    // Each dag body was compiled as a virtual file in `type_resolve`, so its
-    // own registry already contains the enclosing file's types plus any
-    // sibling dags. Checking it here catches dimension errors in dag body
-    // expressions at compile time, rather than letting them slip through to
-    // runtime on the first call site.
-    for dag_tir in tir.dags.values() {
-        check_dimensions_tir(dag_tir, src)?;
-    }
 
     Ok(())
 }
@@ -354,20 +361,21 @@ enum ExpectedBound {
 ///
 /// Other targets (e.g., `Bool`) are skipped here and handled by
 /// `validate_constraint_target` in `exec_plan` (which raises `InvalidDomainTarget`).
-fn check_domain_constraint_dimensions(
-    tir: &crate::tir::typed::TIR,
+fn check_domain_constraint_dimensions_dag(
+    dag: &crate::tir::typed::DagTIR,
     declared_types: &HashMap<String, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
-    dag_tirs: &crate::tir::typed::DagRegistry,
+    tir: &crate::tir::typed::TIR,
+    registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let decl_iter = tir
+    let decl_iter = dag
         .consts
         .iter()
         .map(|e| (&e.name, &e.type_ann))
-        .chain(tir.params.iter().map(|e| (&e.name, &e.type_ann)))
-        .chain(tir.nodes.iter().map(|e| (&e.name, &e.type_ann)));
+        .chain(dag.params.iter().map(|e| (&e.name, &e.type_ann)))
+        .chain(dag.nodes.iter().map(|e| (&e.name, &e.type_ann)));
 
     for (name, type_ann) in decl_iter {
         let bounds = extract_domain_bounds(type_ann);
@@ -375,7 +383,7 @@ fn check_domain_constraint_dimensions(
             continue;
         }
 
-        let resolved = tir.resolved_decl_types.get(name);
+        let resolved = dag.resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);
         let expected = match base_resolved {
             Some(crate::tir::typed::ResolvedTypeExpr::Scalar(dim)) => {
@@ -393,12 +401,12 @@ fn check_domain_constraint_dimensions(
                 &bound.value,
                 declared_types,
                 empty_locals,
-                dag_tirs,
-                &tir.registry,
+                tir,
+                registry,
                 builtin_fns,
                 src,
             )?;
-            check_one_bound(name, bound, &inferred, &expected, &tir.registry, src)?;
+            check_one_bound(name, bound, &inferred, &expected, registry, src)?;
         }
     }
 
@@ -462,22 +470,22 @@ fn check_one_bound(
 /// `(min: …, max: …)` bounds. The check is a pure function of the resolved
 /// declaration type — independent of any bound expression's value — so it
 /// belongs in compile-time validation rather than runtime resolution.
-fn check_domain_constraint_targets(
-    tir: &crate::tir::typed::TIR,
+fn check_domain_constraint_targets_dag(
+    dag: &crate::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let decl_iter = tir
+    let decl_iter = dag
         .consts
         .iter()
         .map(|e| (&e.name, &e.type_ann, e.span))
-        .chain(tir.params.iter().map(|e| (&e.name, &e.type_ann, e.span)))
-        .chain(tir.nodes.iter().map(|e| (&e.name, &e.type_ann, e.span)));
+        .chain(dag.params.iter().map(|e| (&e.name, &e.type_ann, e.span)))
+        .chain(dag.nodes.iter().map(|e| (&e.name, &e.type_ann, e.span)));
 
     for (name, type_ann, decl_span) in decl_iter {
         if extract_domain_bounds(type_ann).is_empty() {
             continue;
         }
-        let Some(resolved) = tir.resolved_decl_types.get(name) else {
+        let Some(resolved) = dag.resolved_decl_types.get(name) else {
             continue;
         };
         let type_kind = match strip_indexed(resolved) {
@@ -544,7 +552,7 @@ pub fn check_override_dimension(
     expr: &Expr,
     param_name: &str,
     declared_types: &HashMap<String, DeclaredType>,
-    dag_tirs: &crate::tir::typed::DagRegistry,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -561,7 +569,7 @@ pub fn check_override_dimension(
         expr,
         declared_types,
         &empty_locals,
-        dag_tirs,
+        tir,
         registry,
         builtin_fns,
         src,
@@ -594,16 +602,20 @@ pub fn check_override_dimension(
 /// cycle detection, so the same check applies whether the cycle is within
 /// a single file or spans multiple files.
 enum DagCycleFrame {
-    Enter(crate::tir::typed::DagKey),
-    Leave(crate::tir::typed::DagKey),
+    Enter(crate::syntax::dag_id::DagId),
+    Leave(crate::syntax::dag_id::DagId),
 }
 
-struct DagTargetCollector<'a> {
-    out: &'a mut std::collections::BTreeSet<crate::tir::typed::DagKey>,
+struct DagTargetCollector<'a, 'b> {
+    /// Caller TIR — used to translate user-typed call paths to canonical
+    /// [`DagId`](crate::syntax::dag_id::DagId) keys via
+    /// [`crate::tir::typed::TIR::resolve_call_path`].
+    tir: &'a crate::tir::typed::TIR,
+    out: &'b mut std::collections::BTreeSet<crate::syntax::dag_id::DagId>,
 }
 
 impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
-    for DagTargetCollector<'_>
+    for DagTargetCollector<'_, '_>
 {
     type Error = std::convert::Infallible;
 
@@ -612,9 +624,10 @@ impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
         expr: &crate::desugar::desugared_ast::Expr,
         args: &[crate::desugar::desugared_ast::ParamBinding],
     ) -> Result<(), Self::Error> {
-        if let crate::desugar::desugared_ast::ExprKind::InlineDagRef { path, .. } = &expr.kind {
-            self.out
-                .insert(crate::tir::typed::DagKey::from_module_path(path));
+        if let crate::desugar::desugared_ast::ExprKind::InlineDagRef { path, .. } = &expr.kind
+            && let Some(id) = self.tir.resolve_call_path(path)
+        {
+            self.out.insert(id);
         }
         for b in args {
             self.visit_expr(&b.value)?;
@@ -623,27 +636,29 @@ impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
     }
 }
 
-/// Collect inline dag call targets from a compiled TIR's body expressions.
+/// Collect inline dag call targets from a compiled DAG's body expressions.
 ///
-/// Walks every const/param/node RHS expression and records the target key
-/// for each `@dag(args).out` / `@mod.dag(args).out` found. Keys are
-/// [`DagKey`](crate::tir::typed::DagKey)s — single-segment for same-file
-/// calls, two-segment `(module-alias, dag-name)` for cross-file qualified
-/// calls. They match the keys installed in [`crate::tir::typed::TIR::dags`].
-fn collect_dag_call_targets_from_tir(
-    dag_tir: &crate::tir::typed::TIR,
-    out: &mut std::collections::BTreeSet<crate::tir::typed::DagKey>,
+/// Walks every const/param/node RHS expression and records the canonical
+/// [`DagId`](crate::syntax::dag_id::DagId) for each `@dag(args).out` /
+/// `@mod.dag(args).out` reference. The translation from user-typed
+/// `ModulePath` to canonical id goes through
+/// [`crate::tir::typed::TIR::resolve_call_path`] so cross-file qualified
+/// calls use the importer's `module_aliases` map.
+fn collect_dag_call_targets_from_dag(
+    tir: &crate::tir::typed::TIR,
+    dag: &crate::tir::typed::DagTIR,
+    out: &mut std::collections::BTreeSet<crate::syntax::dag_id::DagId>,
 ) {
     use crate::syntax::visitor::ExprVisitor;
 
-    let mut collector = DagTargetCollector { out };
-    for entry in &dag_tir.consts {
+    let mut collector = DagTargetCollector { tir, out };
+    for entry in &dag.consts {
         let _ = collector.visit_expr(&entry.expr);
     }
-    for entry in &dag_tir.nodes {
+    for entry in &dag.nodes {
         let _ = collector.visit_expr(&entry.expr);
     }
-    for entry in &dag_tir.params {
+    for entry in &dag.params {
         if let Some(expr) = &entry.default_expr {
             let _ = collector.visit_expr(expr);
         }
@@ -710,19 +725,21 @@ fn detect_decl_cycles(
         })
     }
 
-    check(
-        tir.consts.iter().map(|e| (&e.name, e.span)),
-        &tir.const_deps,
-        src,
-    )?;
-    check(
-        tir.params
-            .iter()
-            .map(|e| (&e.name, e.span))
-            .chain(tir.nodes.iter().map(|e| (&e.name, e.span))),
-        &tir.runtime_deps,
-        src,
-    )?;
+    for dag in tir.dags.values() {
+        check(
+            dag.consts.iter().map(|e| (&e.name, e.span)),
+            &dag.const_deps,
+            src,
+        )?;
+        check(
+            dag.params
+                .iter()
+                .map(|e| (&e.name, e.span))
+                .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
+            &dag.runtime_deps,
+            src,
+        )?;
+    }
     Ok(())
 }
 
@@ -732,21 +749,22 @@ fn detect_cross_dag_cycles(
 ) -> Result<(), GraphcalError> {
     use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-    use crate::tir::typed::DagKey;
+    use crate::syntax::dag_id::DagId;
 
-    let mut edges: BTreeMap<DagKey, BTreeSet<DagKey>> = BTreeMap::new();
-    let mut spans: HashMap<DagKey, crate::syntax::span::Span> = HashMap::new();
+    let mut edges: BTreeMap<DagId, BTreeSet<DagId>> = BTreeMap::new();
+    let mut spans: HashMap<DagId, crate::syntax::span::Span> = HashMap::new();
     for (key, dag_tir) in &tir.dags {
         let mut targets = BTreeSet::new();
-        collect_dag_call_targets_from_tir(dag_tir, &mut targets);
+        collect_dag_call_targets_from_dag(tir, dag_tir, &mut targets);
         edges.insert(key.clone(), targets);
-        // Best-effort span: prefer the registry entry (available for
-        // single-segment, same-file keys) and fall back to a zero span for
-        // cross-file merged dags.
-        let span = if key.is_local() {
+        // Best-effort span: for inline children of this file the parent's
+        // registry entry has the AST span; cross-file merged dags fall
+        // back to a zero span (no AST in the importer).
+        let parent = key.parent();
+        let span = if parent.as_ref() == Some(&tir.root_dag_id) {
             tir.registry
                 .dags
-                .get(key.leaf())
+                .get(key.name())
                 .map_or_else(|| crate::syntax::span::Span::new(0, 0), |d| d.name.span)
         } else {
             crate::syntax::span::Span::new(0, 0)
@@ -754,8 +772,8 @@ fn detect_cross_dag_cycles(
         spans.insert(key.clone(), span);
     }
 
-    let mut visited: HashSet<DagKey> = HashSet::new();
-    let mut on_stack: HashSet<DagKey> = HashSet::new();
+    let mut visited: HashSet<DagId> = HashSet::new();
+    let mut on_stack: HashSet<DagId> = HashSet::new();
 
     for start in edges.keys() {
         if visited.contains(start) {

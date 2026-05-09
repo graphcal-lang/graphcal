@@ -28,15 +28,13 @@ use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::dag_id::DagId;
 use graphcal_compiler::syntax::dimension::Dimension;
-use graphcal_compiler::tir::typed::{
-    DagKey, TIR, populate_pub_nodes, resolved_to_declared_type, type_resolve_single,
-};
+use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type, type_resolve_single};
 
 use crate::loader::LoadedDag;
 
 /// Compile each inline `dag { ... }` body lifted by the loader into a
-/// [`LoadedDag`] and insert the resulting per-dag `TIR`s into `tir.dags`,
-/// keyed by [`DagKey::local`].
+/// `DagTIR` and insert it into `tir.dags`, keyed by the loader-supplied
+/// canonical [`DagId`](DagId).
 ///
 /// `parent_pub_names` is captured from the IR before `type_resolve` consumes
 /// it. Each [`LoadedDag`] supplies the body in source order plus its
@@ -84,10 +82,9 @@ pub fn compile_inline_dag_bodies(
             src,
             parent_dag_id,
         )?;
-        let mut compiled_dag = type_resolve_single(dag_body_ir, src)?;
-        populate_pub_nodes(&mut compiled_dag, &loaded_dag.body);
-        tir.dags
-            .insert(DagKey::local(loaded_dag.name.clone()), compiled_dag);
+        let mut compiled_dag = type_resolve_single(dag_body_ir, &loaded_dag.dag_id, src)?;
+        compiled_dag.populate_pub_nodes(&loaded_dag.body);
+        tir.dags.insert(loaded_dag.dag_id.clone(), compiled_dag);
     }
 
     Ok(())
@@ -230,22 +227,23 @@ fn build_parent_value_decls(
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<String, ParentValueKind>, GraphcalError> {
     let mut out = HashMap::new();
-    for entry in &tir.consts {
-        let Some(resolved) = tir.resolved_decl_types.get(&entry.name) else {
+    let root = tir.root();
+    for entry in &root.consts {
+        let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
             continue;
         };
         let dt = resolved_to_declared_type(resolved, src)?;
         out.insert(entry.name.member().to_string(), ParentValueKind::Const(dt));
     }
-    for entry in &tir.params {
-        let Some(resolved) = tir.resolved_decl_types.get(&entry.name) else {
+    for entry in &root.params {
+        let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
             continue;
         };
         let dt = resolved_to_declared_type(resolved, src)?;
         out.insert(entry.name.member().to_string(), ParentValueKind::Param(dt));
     }
-    for entry in &tir.nodes {
-        let Some(resolved) = tir.resolved_decl_types.get(&entry.name) else {
+    for entry in &root.nodes {
+        let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
             continue;
         };
         let dt = resolved_to_declared_type(resolved, src)?;

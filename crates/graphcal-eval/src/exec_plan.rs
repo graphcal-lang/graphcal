@@ -101,6 +101,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
     let (topo_order, expressions) = build_runtime_dag(tir, src)?;
 
     let assert_bodies: Vec<AssertBodyEntry> = tir
+        .root()
         .asserts
         .iter()
         .map(|entry| AssertBodyEntry {
@@ -111,6 +112,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .collect();
 
     let plot_bodies: Vec<PlotBodyEntry> = tir
+        .root()
         .plots
         .iter()
         .map(|entry| PlotBodyEntry {
@@ -121,6 +123,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .collect();
 
     let figure_bodies: Vec<FigureBodyEntry> = tir
+        .root()
         .figures
         .iter()
         .map(|entry| FigureBodyEntry {
@@ -130,6 +133,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .collect();
 
     let layer_bodies: Vec<LayerBodyEntry> = tir
+        .root()
         .layers
         .iter()
         .map(|entry| LayerBodyEntry {
@@ -144,6 +148,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
     Ok(ExecPlan {
         const_values,
         imported_values: tir
+            .root()
             .imported_values
             .iter()
             .map(|(k, (v, _dt))| (k.clone(), v.clone()))
@@ -155,11 +160,13 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         figure_bodies,
         layer_bodies,
         assumes_map: tir
+            .root()
             .assumes_map
             .iter()
             .map(|(k, v)| (DeclName::from(k), v.iter().map(DeclName::from).collect()))
             .collect(),
         expected_fail: tir
+            .root()
             .expected_fail
             .iter()
             .map(|(k, v)| (DeclName::from(k), v.clone()))
@@ -176,7 +183,7 @@ pub fn eval_consts_from_tir(
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
-    if tir.consts.is_empty() {
+    if tir.root().consts.is_empty() {
         return Ok(HashMap::new());
     }
 
@@ -184,7 +191,7 @@ pub fn eval_consts_from_tir(
     let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
 
     // Sort consts by name for canonical tie-breaking among incomparable nodes.
-    let mut sorted_consts: Vec<&_> = tir.consts.iter().collect();
+    let mut sorted_consts: Vec<&_> = tir.root().consts.iter().collect();
     sorted_consts.sort_by(|a, b| a.name.cmp(&b.name));
     for entry in &sorted_consts {
         let name_str = entry.name.to_string();
@@ -192,8 +199,8 @@ pub fn eval_consts_from_tir(
         index_map.insert(name_str, idx);
     }
 
-    for entry in &tir.consts {
-        if let Some(deps) = tir.const_deps.get(&entry.name) {
+    for entry in &tir.root().consts {
+        if let Some(deps) = tir.root().const_deps.get(&entry.name) {
             let from = index_map[&entry.name.to_string()];
             for dep in deps {
                 let dep_str = dep.to_string();
@@ -206,6 +213,7 @@ pub fn eval_consts_from_tir(
     let sorted = toposort(&graph, None).map_err(|cycle| {
         let cycle_node = &graph[cycle.node_id()];
         let span = tir
+            .root()
             .consts
             .iter()
             .find(|e| e.name.to_string() == *cycle_node)
@@ -218,6 +226,7 @@ pub fn eval_consts_from_tir(
     })?;
 
     let const_exprs: HashMap<String, &Expr> = tir
+        .root()
         .consts
         .iter()
         .map(|entry| (entry.name.to_string(), &entry.expr))
@@ -232,7 +241,7 @@ pub fn eval_consts_from_tir(
         registry: &tir.registry,
         src,
         unfold_context: None,
-        compiled_dags: &tir.dags,
+        tir,
     };
 
     for idx in sorted {
@@ -281,10 +290,11 @@ fn build_runtime_dag(
     let mut span_by_name: HashMap<String, Span> = HashMap::new();
 
     let mut all_decls: Vec<DeclRef<'_>> = tir
+        .root()
         .params
         .iter()
         .map(DeclRef::Param)
-        .chain(tir.nodes.iter().map(DeclRef::Node))
+        .chain(tir.root().nodes.iter().map(DeclRef::Node))
         .collect();
     all_decls.sort_by(|a, b| a.name().cmp(b.name()));
 
@@ -312,7 +322,7 @@ fn build_runtime_dag(
         }
     }
 
-    for (name, deps) in &tir.runtime_deps {
+    for (name, deps) in &tir.root().runtime_deps {
         let name_str = name.to_string();
         if let Some(&to_idx) = index_map.get(&name_str) {
             for dep in deps {
@@ -374,7 +384,7 @@ pub fn resolve_domain_constraints(
         registry: &tir.registry,
         src,
         unfold_context: None,
-        compiled_dags: &tir.dags,
+        tir,
     };
 
     let mut constraints = HashMap::new();
@@ -384,16 +394,19 @@ pub fn resolve_domain_constraints(
     // compile-time value-vs-constraint check runs below; params/nodes defer
     // that check to `eval/runtime.rs`.
     let decl_iter = tir
+        .root()
         .consts
         .iter()
         .map(|e| (&e.name, &e.type_ann, e.span, true))
         .chain(
-            tir.params
+            tir.root()
+                .params
                 .iter()
                 .map(|e| (&e.name, &e.type_ann, e.span, false)),
         )
         .chain(
-            tir.nodes
+            tir.root()
+                .nodes
                 .iter()
                 .map(|e| (&e.name, &e.type_ann, e.span, false)),
         );
@@ -407,7 +420,7 @@ pub fn resolve_domain_constraints(
 
         // Validate that the base type supports constraints.
         // (Bound dimensions are validated in `dim_check::check_dimensions_tir`.)
-        let resolved = tir.resolved_decl_types.get(name);
+        let resolved = tir.root().resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);
         validate_constraint_target(&name.to_string(), base_resolved, decl_span, src)?;
 
@@ -654,7 +667,10 @@ mod tests {
         let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let src = make_src(source);
         let ir = lower(&file, &src).unwrap();
-        let tir = type_resolve(ir, &src).unwrap();
+        let dag_id = graphcal_compiler::syntax::dag_id::DagId::from_relative_path(
+            std::path::Path::new("test"),
+        );
+        let tir = type_resolve(ir, dag_id, &src).unwrap();
         compile(&tir, &src)
     }
 

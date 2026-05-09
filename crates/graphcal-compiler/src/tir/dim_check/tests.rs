@@ -20,7 +20,7 @@ fn check(source: &str) -> Result<HashMap<String, DeclaredType>, GraphcalError> {
     let ir = crate::ir::lower::lower(&file, &src)?;
     let parent_dag_id =
         crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test"));
-    let mut tir = crate::tir::typed::type_resolve(ir, &src)?;
+    let mut tir = crate::tir::typed::type_resolve(ir, parent_dag_id.clone(), &src)?;
     compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id)?;
     check_dimensions_tir(&tir, &src)?;
     tir.build_declared_types(&src)
@@ -57,10 +57,10 @@ fn compile_inline_dag_bodies_test(
             src,
             parent_dag_id,
         )?;
-        let mut compiled_dag = crate::tir::typed::type_resolve_single(dag_body_ir, src)?;
-        crate::tir::typed::populate_pub_nodes(&mut compiled_dag, &body);
-        tir.dags
-            .insert(crate::tir::typed::DagKey::local(name), compiled_dag);
+        let dag_id = parent_dag_id.child(name.as_str());
+        let mut compiled_dag = crate::tir::typed::type_resolve_single(dag_body_ir, &dag_id, src)?;
+        compiled_dag.populate_pub_nodes(&body);
+        tir.dags.insert(dag_id, compiled_dag);
     }
     Ok(())
 }

@@ -516,7 +516,12 @@ pub(super) fn compile_to_tir_project_perfile(
         }
 
         // Skip standalone evaluation for files with required params (no default).
-        let has_required_params = compiled.tir.params.iter().any(|e| e.default_expr.is_none());
+        let has_required_params = compiled
+            .tir
+            .root()
+            .params
+            .iter()
+            .any(|e| e.default_expr.is_none());
         if has_required_params {
             continue;
         }
@@ -669,10 +674,11 @@ pub(super) fn extract_runtime_values(
 
     // Return only locally-defined param/node values (not imported, not consts).
     let local_runtime_names: HashSet<String> = tir
+        .root()
         .params
         .iter()
         .map(|e| e.name.to_string())
-        .chain(tir.nodes.iter().map(|e| e.name.to_string()))
+        .chain(tir.root().nodes.iter().map(|e| e.name.to_string()))
         .collect();
 
     result
