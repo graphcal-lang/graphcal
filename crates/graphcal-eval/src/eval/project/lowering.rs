@@ -572,7 +572,7 @@ pub(super) fn merge_registry_into_builder(
 pub(super) fn merge_registry_into_builder_pub_filtered(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
-    pub_names: &HashSet<String>,
+    pub_names: &HashSet<DeclName>,
 ) {
     merge_registry_into_builder_filtered(
         builder,
@@ -590,14 +590,14 @@ pub(super) fn merge_registry_into_builder_filtered(
     index_bindings: &HashMap<IndexName, IndexName>,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
-    pub_names: Option<&HashSet<String>>,
+    pub_names: Option<&HashSet<DeclName>>,
 ) {
     // Import base dimension names (for display formatting).
     for (id, name) in dep_registry.dimensions.base_dim_names() {
         if dim_bindings.contains_key(name.as_str()) {
             continue;
         }
-        if pub_names.is_some_and(|visible| !visible.contains(name)) {
+        if pub_names.is_some_and(|visible| !visible.contains(name.as_str())) {
             continue;
         }
         builder.register_base_dimension(
@@ -921,7 +921,7 @@ fn check_generics_leakage(
     index_bindings: &HashMap<IndexName, IndexName>,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
-    importer_pub_names: &HashSet<String>,
+    importer_pub_names: &HashSet<DeclName>,
     importer_local_type_names: &HashMap<String, &'static str>,
     importer_src: &NamedSource<Arc<String>>,
     include_span: Span,

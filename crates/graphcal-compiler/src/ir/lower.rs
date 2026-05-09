@@ -27,7 +27,7 @@ use crate::registry::prelude::load_prelude;
 use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{self, Registry, RegistryBuilder, UnitScale};
 use crate::syntax::dimension::Rational;
-use crate::syntax::names::{DimName, IndexName, ScopedName, StructTypeName};
+use crate::syntax::names::{DeclName, DimName, IndexName, ScopedName, StructTypeName};
 use crate::syntax::span::Span;
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
@@ -159,7 +159,7 @@ pub struct IR {
     /// can only reach the file's `pub`-marked top-level declarations,
     /// matching the rules for cross-file imports. Implicit visibility
     /// (params are visible by default) is already baked in.
-    pub pub_names: HashSet<String>,
+    pub pub_names: HashSet<DeclName>,
 }
 
 /// Runtime source of an imported value visible inside a DAG body.
@@ -667,7 +667,7 @@ fn build_ir_from_resolved(
         imported_values,
         imported_decl_types,
         imported_value_sources,
-        pub_names: resolved.pub_names.iter().map(ToString::to_string).collect(),
+        pub_names: resolved.pub_names,
     };
 
     Ok((builder, unfrozen))
@@ -700,7 +700,7 @@ pub struct UnfrozenIR {
     // Names of declarations marked `pub`/`pub(bind)` (plus implicit-pub
     // params). Used by `preprocess_dag_body_self_imports` to enforce
     // visibility on dag-body `import <self>.{...}` items.
-    pub_names: HashSet<String>,
+    pub_names: HashSet<DeclName>,
 }
 
 impl UnfrozenIR {

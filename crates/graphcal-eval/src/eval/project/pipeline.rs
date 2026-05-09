@@ -209,7 +209,7 @@ pub(super) fn evaluate_and_store_file(
     compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
-    pub_names: HashSet<String>,
+    pub_names: HashSet<DeclName>,
     evaluated_files: &mut HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
 ) -> Result<(), CompileError> {
     let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
