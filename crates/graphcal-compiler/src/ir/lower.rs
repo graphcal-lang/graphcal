@@ -1142,6 +1142,24 @@ impl UnfrozenIR {
                 }
             }
         }
+
+        // Propagate the dep's imported-value metadata. An inline DAG body
+        // whose `import <self>.{...}` resolves to a different file leaves
+        // its parent-file value bindings on `dep.imported_values` /
+        // `dep.imported_value_sources`; merging the dag into the importer
+        // requires those entries to ride along so eval can resolve the
+        // local alias (e.g., `radius` in `prefix::result = @radius * ...`).
+        // Keys keep their original `ScopedName` (they were not in
+        // `dep_names` and therefore not prefixed in expressions).
+        for (name, value) in dep.imported_values {
+            self.imported_values.entry(name).or_insert(value);
+        }
+        for (name, dt) in dep.imported_decl_types {
+            self.imported_decl_types.entry(name).or_insert(dt);
+        }
+        for (name, source) in dep.imported_value_sources {
+            self.imported_value_sources.entry(name).or_insert(source);
+        }
         Ok(())
     }
 }

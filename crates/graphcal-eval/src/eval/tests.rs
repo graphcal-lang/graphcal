@@ -1303,6 +1303,22 @@ fn eval_qualified_inline_dag_call_imports_parent_const_with_alias() {
 }
 
 #[test]
+fn eval_inline_dag_include_cross_file_self_import() {
+    // Cross-file `include` of a DAG whose body has `import <self>.{...}`
+    // (resolved against the dag's parent file). The parent's value must
+    // flow through `merge_dependency` into the importer's IR for eval.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../tests/fixtures/valid/inline_dag_include_cross_file_self_import/src/lib/main.gcl",
+    );
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let out = find_value(&result, "out");
+    assert!(
+        (out - 3_185_500.0).abs() < 1e-10,
+        "expected 3185500.0, got {out}"
+    );
+}
+
+#[test]
 fn eval_inline_dag_call_in_for_comp_with_loop_var() {
     // Motivating shape: inline call inside a `for` whose arg references the
     // loop variable via an indexed graph ref.

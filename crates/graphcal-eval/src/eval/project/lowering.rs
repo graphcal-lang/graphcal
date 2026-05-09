@@ -81,6 +81,7 @@ pub(super) fn lower_and_finalize(
         file_src,
         file_ast,
         file_dag_id,
+        evaluated_files,
         &mut builder,
         &mut unfrozen,
     )?;
@@ -343,12 +344,21 @@ pub(super) fn process_deferred_instantiated_imports(
 /// guards re-exported decls (`pub include`/selective `{ pub name }`) still
 /// runs against the importer's visibility — it's about not leaking private
 /// importer symbols, not about resolving the body.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pipeline function threading project, importer, evaluated-deps, and IR-builder context"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "self-import preprocessing, parent-value resolution, registry merge, and IR merge form a single cohesive pipeline"
+)]
 pub(super) fn process_deferred_inline_dag_includes(
     project: &crate::loader::LoadedProject,
     deferred_dags: &[DeferredInlineDagInclude],
     file_src: &NamedSource<Arc<String>>,
     importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
     importer_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
@@ -398,6 +408,44 @@ pub(super) fn process_deferred_inline_dag_includes(
             declarations: self_imports.stripped_body,
         };
 
+        // For cross-file includes (parent != importer), fetch the parent's
+        // already-evaluated values and declared types for each self-imported
+        // name. The dag body gets merged into the importer's IR, where
+        // references to the local alias (e.g., `radius` in
+        // `prefix::result = @radius * @prefix::factor`) resolve through
+        // `imported_values` at exec_plan time and through
+        // `imported_decl_types` at dim-check time. Same-file includes leave
+        // these empty — the parent isn't in `evaluated_files` yet, and the
+        // merged refs land on names already present in the importer's own
+        // decls.
+        let mut imported_values: HashMap<
+            graphcal_compiler::ir::resolve::ScopedName,
+            (RuntimeValue, DeclaredType),
+        > = HashMap::new();
+        let mut imported_decl_types = self_imports.decl_types;
+        if &deferred.parent_dag_id != importer_dag_id
+            && let Some(parent_eval) = evaluated_files.get(&deferred.parent_dag_id)
+        {
+            for (local_name, source) in &self_imports.value_sources {
+                if source.dag_id != deferred.parent_dag_id {
+                    continue;
+                }
+                let Some(value) = parent_eval.const_values.get(&source.source_name) else {
+                    continue;
+                };
+                let Some(dt) = parent_eval.declared_types.get(&source.source_name) else {
+                    continue;
+                };
+                imported_values.insert(local_name.clone(), (value.clone(), dt.clone()));
+                // The placeholder Dimensionless from `build_importer_value_decls`
+                // is a stand-in used by the same-file path (where dim-check
+                // reads the importer's own declared types). For cross-file the
+                // alias has no importer-side decl, so install the parent's
+                // actual declared type.
+                imported_decl_types.insert(local_name.clone(), dt.clone());
+            }
+        }
+
         // Compile the DAG body to IR.
         // The DAG body is lowered as if it were a standalone file, with only
         // prelude + explicitly imported items in scope. Self-imported decl
@@ -410,8 +458,8 @@ pub(super) fn process_deferred_inline_dag_includes(
                 &stripped_body,
                 file_src,
                 &combined_names,
-                HashMap::new(),
-                self_imports.decl_types,
+                imported_values,
+                imported_decl_types,
                 self_imports.value_sources,
                 &dag_dag_id,
             )?;
