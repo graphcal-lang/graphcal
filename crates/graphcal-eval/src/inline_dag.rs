@@ -210,7 +210,7 @@ pub fn preprocess_dag_body_self_imports(
                             scoped,
                             ImportedValueSource {
                                 dag_id: parent_dag_id.clone(),
-                                source_name: orig_name.clone(),
+                                source_name: DeclName::new(orig_name),
                             },
                         );
                     } else if is_runtime {
