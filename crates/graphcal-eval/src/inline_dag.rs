@@ -32,14 +32,17 @@ use graphcal_compiler::tir::typed::{
     DagKey, TIR, populate_pub_nodes, resolved_to_declared_type, type_resolve_single,
 };
 
-/// Compile each inline `dag { ... }` body in a type-resolved [`TIR`] and
-/// insert the resulting per-dag `TIR`s into `tir.dags`, keyed by
-/// [`DagKey::local`].
+use crate::loader::LoadedDag;
+
+/// Compile each inline `dag { ... }` body lifted by the loader into a
+/// [`LoadedDag`] and insert the resulting per-dag `TIR`s into `tir.dags`,
+/// keyed by [`DagKey::local`].
 ///
 /// `parent_pub_names` is captured from the IR before `type_resolve` consumes
-/// it; `dag_body_self_imports` is the loader-computed flat set of import-path
-/// display strings inside any inline-dag body that resolve back to the file
-/// itself.
+/// it. Each [`LoadedDag`] supplies the body in source order plus its
+/// pre-resolved imports map (path display → [`DagId`]), letting
+/// [`preprocess_dag_body_self_imports`] detect self-imports by structured
+/// equality against `parent_dag_id` rather than a file-level path-set.
 ///
 /// # Errors
 ///
@@ -51,40 +54,28 @@ pub fn compile_inline_dag_bodies(
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &DagId,
     parent_pub_names: &HashSet<String>,
-    dag_body_self_imports: &HashSet<String>,
+    inline_dags: &[LoadedDag],
 ) -> Result<(), GraphcalError> {
     let parent_value_decls = build_parent_value_decls(tir, src)?;
     let parent_type_system_names = type_system_names_from_registry(&tir.registry);
 
-    let dag_names: Vec<String> = tir
-        .registry
-        .dags
-        .all_dags()
-        .map(|(name, _)| name.clone())
-        .collect();
-    for name in dag_names {
-        let body = tir
-            .registry
-            .dags
-            .get(&name)
-            .map(|d| d.body.clone())
-            .unwrap_or_default();
+    for loaded_dag in inline_dags {
         let DagBodySelfImports {
             names: imported_names,
             decl_types: imported_decl_types,
             value_sources: imported_value_sources,
             stripped_body,
         } = preprocess_dag_body_self_imports(
-            &body,
+            &loaded_dag.body,
             parent_dag_id,
             &parent_type_system_names,
             &parent_value_decls,
             parent_pub_names,
-            dag_body_self_imports,
+            &loaded_dag.resolved_imports,
             src,
         )?;
         let dag_body_ir = lower_dag_body_to_ir(
-            &name,
+            &loaded_dag.name,
             &stripped_body,
             &tir.registry,
             &imported_names,
@@ -94,8 +85,9 @@ pub fn compile_inline_dag_bodies(
             parent_dag_id,
         )?;
         let mut compiled_dag = type_resolve_single(dag_body_ir, src)?;
-        populate_pub_nodes(&mut compiled_dag, &body);
-        tir.dags.insert(DagKey::local(name), compiled_dag);
+        populate_pub_nodes(&mut compiled_dag, &loaded_dag.body);
+        tir.dags
+            .insert(DagKey::local(loaded_dag.name.clone()), compiled_dag);
     }
 
     Ok(())
@@ -103,9 +95,9 @@ pub fn compile_inline_dag_bodies(
 
 /// Pre-process `import <self>.{...}` declarations inside a dag body.
 ///
-/// A self-import is one whose `ModulePath` display string is in
-/// `self_import_paths` — pre-computed by the loader from a real path-to-
-/// canonical resolution against the file's own canonical path. For each
+/// A self-import is one whose `ModulePath` display string is keyed in
+/// `body_resolved_imports` to `parent_dag_id` — i.e. the loader resolved
+/// the path back to the dag's own enclosing parent DAG. For each
 /// self-import, every brace-list item is classified against
 /// `parent_type_system_names`, `parent_value_decls`, and `parent_pub_names`.
 ///
@@ -137,7 +129,7 @@ pub fn preprocess_dag_body_self_imports(
     parent_type_system_names: &HashSet<String>,
     parent_value_decls: &HashMap<String, ParentValueKind>,
     parent_pub_names: &HashSet<String>,
-    self_import_paths: &HashSet<String>,
+    body_resolved_imports: &HashMap<String, DagId>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagBodySelfImports, GraphcalError> {
     let mut names = ImportedValueNames::default();
@@ -151,7 +143,10 @@ pub fn preprocess_dag_body_self_imports(
             continue;
         };
 
-        if !self_import_paths.contains(&import_decl.path.display_path()) {
+        let is_self_import = body_resolved_imports
+            .get(&import_decl.path.display_path())
+            .is_some_and(|dag_id| dag_id == parent_dag_id);
+        if !is_self_import {
             stripped_body.push(decl.clone());
             continue;
         }
