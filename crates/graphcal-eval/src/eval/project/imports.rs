@@ -367,7 +367,7 @@ pub(super) fn process_instantiated_include<'a>(
                 }));
             }
             // Dimension matching for range indexes is deferred to
-            // process_deferred_instantiated_imports() where registries are available.
+            // process_deferred_dag_includes() where registries are available.
 
             index_bindings.insert(IndexName::new(binding_name), IndexName::new(rhs_name));
             continue;
@@ -501,8 +501,10 @@ pub(super) fn process_instantiated_include<'a>(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
 
-    ctx.deferred_instantiated.push(DeferredInstantiatedImport {
-        dep_dag_id: import_dag_id.clone(),
+    ctx.deferred_dag_includes.push(DeferredDagInclude {
+        source: DeferredDagSource::File {
+            dep_dag_id: import_dag_id.clone(),
+        },
         prefix,
         bindings,
         index_bindings,
@@ -684,11 +686,13 @@ pub(super) fn process_inline_dag_include(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
 
-    ctx.deferred_inline_dags.push(DeferredInlineDagInclude {
-        dag_body,
-        dag_imported_names,
-        parent_dag_id: parent_dag_id.clone(),
-        dag_name: dag_name.to_string(),
+    ctx.deferred_dag_includes.push(DeferredDagInclude {
+        source: DeferredDagSource::InlineDag {
+            dag_body,
+            dag_imported_names,
+            parent_dag_id: parent_dag_id.clone(),
+            dag_name: dag_name.to_string(),
+        },
         prefix,
         bindings,
         index_bindings,

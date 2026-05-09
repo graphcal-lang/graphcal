@@ -2736,11 +2736,10 @@ mod tests {
 
     #[test]
     fn lower_hohmann() {
-        // hohmann.gcl uses DAG+include and `import <self>.{...}` for parent
-        // consts. The full project pipeline accepts it (see the CLI tests),
-        // but single-file IR lowering rejects it: include expansion is a
-        // higher-phase concern, so `@transfer` (the include's projected
-        // node) remains unresolved at this layer.
+        // hohmann.gcl uses DAG+include. The full project pipeline accepts
+        // it (see the CLI tests), but single-file IR lowering rejects it:
+        // include expansion is a higher-phase concern, so `@transfer`
+        // (the include's projected node) remains unresolved at this layer.
         let source = include_str!("../../../../tests/fixtures/valid/hohmann.gcl");
         let err = parse_and_lower(source).unwrap_err();
         assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
