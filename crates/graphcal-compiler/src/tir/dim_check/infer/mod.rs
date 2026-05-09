@@ -142,6 +142,19 @@ pub(super) fn infer_type_with_owner(
             Ok(InferredType::from(dt))
         }
 
+        // The project pipeline flattens `QualifiedGraphRef` to a flat
+        // `GraphRef` before lowering / dim-check. Any unflattened node
+        // here is a compiler bug.
+        #[expect(
+            clippy::unreachable,
+            reason = "QualifiedGraphRef must be flattened by the project pipeline before dim-check"
+        )]
+        ExprKind::QualifiedGraphRef { .. } => {
+            unreachable!(
+                "`QualifiedGraphRef` reached dim_check without being flattened by `rewrite_qualified_refs_in_ast`"
+            )
+        }
+
         ExprKind::LocalRef(ident) => {
             local_types
                 .get(&ident.name)

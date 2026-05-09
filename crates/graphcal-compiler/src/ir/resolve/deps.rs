@@ -153,6 +153,11 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for RefCollector<'_> {
         Ok(())
     }
 
+    // `QualifiedGraphRef` is flattened to a flat `GraphRef` by the
+    // project-level rewriter before this resolver runs (see
+    // `rewrite_qualified_refs_in_ast` in graphcal-eval). The default
+    // no-op handler is therefore correct for the production pipeline.
+
     fn visit_fn_call(&mut self, expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
         if let ExprKind::FnCall { name, .. } = &expr.kind {
             self.handle_fn_call(name, args)?;

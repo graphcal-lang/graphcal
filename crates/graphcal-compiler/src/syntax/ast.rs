@@ -1154,6 +1154,16 @@ pub enum ExprKind<P: Phase = Raw> {
         module: Ident,
         name: Spanned<DeclName>,
     },
+    /// Module-qualified runtime graph reference: `@alias.member`, where
+    /// `alias` is a namespace introduced by `include path(...) as alias;`
+    /// or `import path as alias;`. Produced by the namespace-alias rewrite
+    /// pass; never emitted directly by the parser. The IR-layer flattener
+    /// turns this into a flat `GraphRef` whose `DeclName` carries the
+    /// internal `alias::member` form expected by downstream consumers.
+    QualifiedGraphRef {
+        qualifier: Ident,
+        member: Spanned<DeclName>,
+    },
     /// Unresolved bare identifier reference.
     ///
     /// Produced by the parser when the meaning of a bare identifier cannot be
@@ -1486,6 +1496,7 @@ fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
         | ExprKind::ConstRef(_)
         | ExprKind::VariantLiteral { .. }
         | ExprKind::QualifiedConstRef { .. }
+        | ExprKind::QualifiedGraphRef { .. }
         | ExprKind::NameRef(_)
         | ExprKind::QualifiedNameRef { .. }
         // TupleMatch is handled below after recursing into children.
