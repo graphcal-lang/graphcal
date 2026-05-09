@@ -52,14 +52,7 @@ pub(super) fn lower_and_finalize(
 
     // Merge type-system declarations from module-imported registries (pub items only).
     for (dep_registry, pub_names) in &ctx.extra_registry_builders {
-        merge_registry_into_builder_filtered(
-            &mut builder,
-            dep_registry,
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            Some(pub_names),
-        );
+        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names);
     }
 
     // Process every deferred DAG include (file-level instantiated, inline
@@ -570,6 +563,24 @@ pub(super) fn merge_registry_into_builder(
         type_bindings,
         dim_bindings,
         None,
+    );
+}
+
+/// Merge type-system declarations from a dependency's frozen Registry into a
+/// builder, restricted to names listed in `pub_names`. Used for module imports
+/// where only public items should cross the boundary.
+pub(super) fn merge_registry_into_builder_pub_filtered(
+    builder: &mut RegistryBuilder,
+    dep_registry: &Registry,
+    pub_names: &HashSet<String>,
+) {
+    merge_registry_into_builder_filtered(
+        builder,
+        dep_registry,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        Some(pub_names),
     );
 }
 
