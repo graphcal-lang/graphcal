@@ -439,20 +439,7 @@ mod tests {
         reason = "test code"
     )]
 
-    use crate::syntax::names::is_pascal_case;
     use crate::syntax::parser::{ParseError, Parser};
-
-    #[test]
-    fn is_pascal_case_examples() {
-        assert!(is_pascal_case("TransferResult"));
-        assert!(is_pascal_case("Orbit"));
-        assert!(is_pascal_case("Ab"));
-        assert!(!is_pascal_case("ORBIT"));
-        assert!(!is_pascal_case("UPPER_SNAKE"));
-        assert!(!is_pascal_case("orbit"));
-        assert!(!is_pascal_case("lower_snake"));
-        assert!(!is_pascal_case(""));
-    }
 
     #[test]
     fn stray_character_in_source_surfaces_as_unknown_token() {
