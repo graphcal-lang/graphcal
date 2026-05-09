@@ -109,25 +109,6 @@ impl LoadedFile {
             }
         })
     }
-
-    /// Path display strings inside any inline-dag body of this file that
-    /// resolve back to this file (i.e. dag-body `import <self>.{...}` paths).
-    ///
-    /// Derived from [`LoadedDag::resolved_imports`] across `inline_dags`.
-    /// Convenience wrapper that preserves the pre-Slice-C consumer interface
-    /// while the loader's structured `inline_dags` view becomes authoritative.
-    #[must_use]
-    pub fn dag_body_self_imports(&self) -> HashSet<String> {
-        let mut out: HashSet<String> = HashSet::new();
-        for loaded_dag in &self.inline_dags {
-            for (path, dag_id) in &loaded_dag.resolved_imports {
-                if dag_id == &self.dag_id {
-                    out.insert(path.clone());
-                }
-            }
-        }
-        out
-    }
 }
 
 /// A loaded project: a root file plus all transitively imported files.

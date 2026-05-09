@@ -121,6 +121,7 @@ pub(super) fn compile_single_file_in_project(
         imports::process_inline_dag_include(
             dag_def,
             dag_name,
+            file_dag_id,
             include_decl,
             decl,
             file_src,
@@ -174,10 +175,12 @@ pub(super) fn compile_single_file_in_project(
             })?;
 
         // Inline DAGs are strictly isolated, so same-file and cross-file
-        // share the same processing.
+        // share the same processing. The dag's `parent` is the file where it
+        // was *defined* (target_loaded), not the importing file.
         imports::process_inline_dag_include(
             target_dag_def,
             dag_name,
+            &target_loaded.dag_id,
             include_decl,
             decl,
             file_src,
