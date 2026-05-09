@@ -658,18 +658,27 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
     use std::fmt::Write as _;
     let mut out = String::new();
 
-    // Slot headers: `<kind_padded> <name:_padded> <type><sep>`
-    // Where `name:` is padded so all types line up.
-    let kind_strs: Vec<&'static str> = info
+    // Slot headers: `<vis_kind_padded> <name:_padded> <type><sep>`
+    // Where `name:` is padded so all types line up. Visibility (`pub` /
+    // `pub(bind)`) joins the kind keyword for alignment so per-slot prefixes
+    // line up with bare slots.
+    let kind_strs: Vec<String> = info
         .slots
         .iter()
-        .map(|s| match s.kind {
-            MultiSlotKind::Param => "param",
-            MultiSlotKind::Node => "node",
-            MultiSlotKind::ConstNode => "const node",
+        .map(|s| {
+            let kind = match s.kind {
+                MultiSlotKind::Param => "param",
+                MultiSlotKind::Node => "node",
+                MultiSlotKind::ConstNode => "const node",
+            };
+            match s.visibility {
+                Visibility::Private => kind.to_string(),
+                Visibility::Public => format!("pub {kind}"),
+                Visibility::PublicBind => format!("pub(bind) {kind}"),
+            }
         })
         .collect();
-    let max_kind = kind_strs.iter().map(|s| s.len()).max().unwrap_or(0);
+    let max_kind = kind_strs.iter().map(String::len).max().unwrap_or(0);
 
     let name_colon_strs: Vec<String> = info
         .slots
