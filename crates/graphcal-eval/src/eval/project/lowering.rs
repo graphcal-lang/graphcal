@@ -62,26 +62,17 @@ pub(super) fn lower_and_finalize(
         );
     }
 
-    // Process deferred instantiated imports: compile dep to IR and merge.
-    process_deferred_instantiated_imports(
+    // Process every deferred DAG include (file-level instantiated, inline
+    // DAG, qualified inline DAG) through one path: compile each source's
+    // body to IR and merge into the importer.
+    let importer_loaded = &project.files[file_dag_id];
+    process_deferred_dag_includes(
         project,
         file_dag_id,
-        &ctx.deferred_instantiated,
+        &ctx.deferred_dag_includes,
         evaluated_files,
-        file_src,
-        &mut builder,
-        &mut unfrozen,
-    )?;
-
-    // Process deferred inline DAG includes: compile DAG body to IR and merge.
-    let importer_loaded = &project.files[file_dag_id];
-    process_deferred_inline_dag_includes(
-        project,
-        &ctx.deferred_inline_dags,
         file_src,
         file_ast,
-        file_dag_id,
-        evaluated_files,
         &mut builder,
         &mut unfrozen,
     )?;
@@ -212,40 +203,172 @@ pub(super) fn merge_dep_dag_tirs(
     }
 }
 
-/// Process deferred instantiated imports by compiling each dependency to IR
-/// and merging it into the importer's IR.
-pub(super) fn process_deferred_instantiated_imports(
+/// Process every deferred DAG include (file-level instantiated, same-file
+/// inline DAG, cross-file qualified inline DAG) through one path:
+///
+/// 1. Resolve the include's source — file include reads the dep's full
+///    AST; inline DAG include reads the dag block's body and pre-processes
+///    `import <self>.{...}` against the dag's parent file (Concept 9: a
+///    DAG's `<self>` is its file of definition, regardless of where the
+///    include sits).
+/// 2. Compile the body to IR with imported names/values set up.
+/// 3. Merge the body's registry into the importer's; validate range-index
+///    dimension matching (file include only — inline DAGs share the
+///    file's registry).
+/// 4. Run `check_include_reconciles_overrides` (A8/V005) and
+///    `check_generics_leakage` (A9/V006).
+/// 5. Merge the body's IR into the importer's IR with prefix/bindings.
+/// 6. For selective includes, add `local_name = @prefix::orig_name` aliases.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pipeline function threading project, importer, evaluated-deps, and IR-builder context"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "single cohesive include pipeline: source resolution, registry merge, validation, IR merge"
+)]
+pub(super) fn process_deferred_dag_includes(
     project: &crate::loader::LoadedProject,
     importer_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
-    deferred_imports: &[DeferredInstantiatedImport],
+    deferred_dag_includes: &[DeferredDagInclude],
     evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
     importer_src: &NamedSource<Arc<String>>,
+    importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
-    let importer_ast = &project.files[importer_dag_id].ast;
     let importer_pub_names = super::extract_pub_names(importer_ast);
     let importer_local_type_names = collect_local_type_names(importer_ast);
-    for deferred in deferred_imports {
-        let dep_loaded = &project.files[&deferred.dep_dag_id];
-        let dep_src = &dep_loaded.named_source;
+    let empty_resolved: HashMap<String, graphcal_compiler::syntax::dag_id::DagId> = HashMap::new();
 
-        // Build imported values for the dependency from its own transitive imports.
-        let dep_imported =
-            build_dep_imported_values(project, &deferred.dep_dag_id, evaluated_files)?;
+    for deferred in deferred_dag_includes {
+        // ---- 1. Resolve source body + lower to IR ------------------------
+        let (dep_unfrozen, dep_registry, dep_src, body_for_leakage_check, body_decls_for_aliases) =
+            match &deferred.source {
+                DeferredDagSource::File { dep_dag_id } => {
+                    let dep_loaded = &project.files[dep_dag_id];
+                    let dep_src = &dep_loaded.named_source;
+                    let dep_imported =
+                        build_dep_imported_values(project, dep_dag_id, evaluated_files)?;
+                    let (dep_builder, dep_unfrozen) =
+                        graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
+                            &dep_loaded.ast,
+                            dep_src,
+                            &dep_imported.names,
+                            dep_imported.values,
+                            dep_dag_id,
+                        )?;
+                    let dep_registry = dep_builder.build();
+                    (
+                        dep_unfrozen,
+                        dep_registry,
+                        dep_src.clone(),
+                        &dep_loaded.ast,
+                        dep_loaded.ast.declarations.as_slice(),
+                    )
+                }
+                DeferredDagSource::InlineDag {
+                    dag_body,
+                    dag_imported_names,
+                    parent_dag_id,
+                    dag_name,
+                } => {
+                    let parent_loaded = &project.files[parent_dag_id];
+                    let parent_pub_names = super::extract_pub_names(&parent_loaded.ast);
+                    let parent_type_system_names =
+                        graphcal_compiler::ir::lower::collect_type_system_names(&parent_loaded.ast);
+                    let (parent_consts, parent_runtime_names) =
+                        crate::inline_dag::classify_value_decls_in_ast(&parent_loaded.ast);
+                    let parent_resolved_imports = parent_loaded
+                        .inline_dags
+                        .iter()
+                        .find(|d| &d.name == dag_name)
+                        .map_or(&empty_resolved, |d| &d.resolved_imports);
+                    let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
+                        &dag_body.declarations,
+                        parent_dag_id,
+                        &parent_type_system_names,
+                        &parent_consts,
+                        &parent_runtime_names,
+                        &parent_pub_names,
+                        parent_resolved_imports,
+                        importer_src,
+                    )?;
+                    let mut combined_names = dag_imported_names.clone();
+                    combined_names
+                        .const_names
+                        .extend(self_imports.names.const_names);
+                    combined_names
+                        .param_names
+                        .extend(self_imports.names.param_names);
+                    combined_names
+                        .node_names
+                        .extend(self_imports.names.node_names);
+                    combined_names
+                        .assert_names
+                        .extend(self_imports.names.assert_names);
+                    let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
+                        declarations: self_imports.stripped_body,
+                    };
 
-        // Compile the dependency to IR.
-        let (dep_builder, dep_unfrozen) =
-            graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
-                &dep_loaded.ast,
-                dep_src,
-                &dep_imported.names,
-                dep_imported.values,
-                &deferred.dep_dag_id,
-            )?;
+                    // For cross-file includes (parent != importer), fetch the
+                    // parent's already-evaluated values and declared types
+                    // for each self-imported name. Same-file includes leave
+                    // these empty — the parent isn't in `evaluated_files`
+                    // yet, and the merged refs land on names already present
+                    // in the importer's own decls.
+                    let mut imported_values: HashMap<
+                        graphcal_compiler::ir::resolve::ScopedName,
+                        (RuntimeValue, DeclaredType),
+                    > = HashMap::new();
+                    let mut imported_decl_types = self_imports.decl_types;
+                    if parent_dag_id != importer_dag_id
+                        && let Some(parent_eval) = evaluated_files.get(parent_dag_id)
+                    {
+                        for (local_name, source) in &self_imports.value_sources {
+                            if &source.dag_id != parent_dag_id {
+                                continue;
+                            }
+                            let Some(value) = parent_eval.const_values.get(&source.source_name)
+                            else {
+                                continue;
+                            };
+                            let Some(dt) = parent_eval.declared_types.get(&source.source_name)
+                            else {
+                                continue;
+                            };
+                            imported_values.insert(local_name.clone(), (value.clone(), dt.clone()));
+                            // For cross-file the alias has no importer-side
+                            // decl, so install the parent's actual declared
+                            // type (overrides the placeholder from
+                            // classify_value_decls_in_ast).
+                            imported_decl_types.insert(local_name.clone(), dt.clone());
+                        }
+                    }
 
-        // Merge the dependency's type-system declarations into the importer's registry.
-        let dep_registry = dep_builder.build();
+                    let dag_dag_id = importer_dag_id.child(deferred.prefix.as_str());
+                    let (dag_builder, dag_unfrozen) =
+                        graphcal_compiler::ir::lower::lower_to_builder_with_imported_value_decls(
+                            &stripped_body,
+                            importer_src,
+                            &combined_names,
+                            imported_values,
+                            imported_decl_types,
+                            self_imports.value_sources,
+                            &dag_dag_id,
+                        )?;
+                    let dag_registry = dag_builder.build();
+                    (
+                        dag_unfrozen,
+                        dag_registry,
+                        importer_src.clone(),
+                        dag_body,
+                        dag_body.declarations.as_slice(),
+                    )
+                }
+            };
+
+        // ---- 2. Merge dep registry into importer's --------------------
         merge_registry_into_builder(
             builder,
             &dep_registry,
@@ -254,45 +377,46 @@ pub(super) fn process_deferred_instantiated_imports(
             &deferred.dim_bindings,
         );
 
-        // Validate range index dimension matching (Phase B — requires compiled registries).
-        for (dep_idx_name, importer_idx_name) in &deferred.index_bindings {
-            if let Some(dep_idx_def) = dep_registry.indexes.get_index(dep_idx_name.as_str())
-                && let graphcal_compiler::registry::types::IndexKind::RequiredRange {
-                    dimension: dep_dim,
-                } = &dep_idx_def.kind
-                && let Some(imp_idx_def) = builder.get_index(importer_idx_name.as_str())
-                && let graphcal_compiler::registry::types::IndexKind::Range(
-                    graphcal_compiler::registry::types::RangeIndexData {
-                        dimension: imp_dim, ..
-                    },
-                )
-                | graphcal_compiler::registry::types::IndexKind::RequiredRange {
-                    dimension: imp_dim,
-                } = &imp_idx_def.kind
-                && dep_dim != imp_dim
-            {
-                return Err(CompileError::Eval(
-                    GraphcalError::IndexBindingDimensionMismatch {
-                        dep_index: dep_idx_name.as_str().to_string(),
-                        expected_dim: dep_registry.dimensions.format_dimension(dep_dim),
-                        bound_index: importer_idx_name.as_str().to_string(),
-                        found_dim: builder.format_dimension(imp_dim),
-                        src: dep_src.clone(),
-                        span: deferred.import_span.into(),
-                    },
-                ));
+        // ---- 3. Validate range-index dimension matching (file include
+        // only — inline DAGs share the file's registry, so there are no
+        // separate dep-side range indexes to reconcile). --------------------
+        if matches!(deferred.source, DeferredDagSource::File { .. }) {
+            for (dep_idx_name, importer_idx_name) in &deferred.index_bindings {
+                if let Some(dep_idx_def) = dep_registry.indexes.get_index(dep_idx_name.as_str())
+                    && let graphcal_compiler::registry::types::IndexKind::RequiredRange {
+                        dimension: dep_dim,
+                    } = &dep_idx_def.kind
+                    && let Some(imp_idx_def) = builder.get_index(importer_idx_name.as_str())
+                    && let graphcal_compiler::registry::types::IndexKind::Range(
+                        graphcal_compiler::registry::types::RangeIndexData {
+                            dimension: imp_dim,
+                            ..
+                        },
+                    )
+                    | graphcal_compiler::registry::types::IndexKind::RequiredRange {
+                        dimension: imp_dim,
+                    } = &imp_idx_def.kind
+                    && dep_dim != imp_dim
+                {
+                    return Err(CompileError::Eval(
+                        GraphcalError::IndexBindingDimensionMismatch {
+                            dep_index: dep_idx_name.as_str().to_string(),
+                            expected_dim: dep_registry.dimensions.format_dimension(dep_dim),
+                            bound_index: importer_idx_name.as_str().to_string(),
+                            found_dim: builder.format_dimension(imp_dim),
+                            src: dep_src,
+                            span: deferred.import_span.into(),
+                        },
+                    ));
+                }
             }
         }
 
-        // Collect all declaration names in the dependency (for prefix_expr_refs).
-        // These are un-prefixed member names used for containment checks.
+        // ---- 4. Validation checks -----------------------------------------
         let mut dep_names: HashSet<String> = HashSet::new();
         for (name, _) in &dep_unfrozen.source_order {
             dep_names.insert(name.member().to_string());
         }
-
-        // A8 / V005: the importer must re-bind every bindable symbol whose
-        // default mentions a nominally-tied name of an overridden bindable.
         dep_unfrozen.check_include_reconciles_overrides(
             &deferred.bindings,
             &deferred.index_bindings,
@@ -300,11 +424,8 @@ pub(super) fn process_deferred_instantiated_imports(
             importer_src,
             deferred.import_span,
         )?;
-
-        // A9 case 2 / V006: a `pub`-re-exported decl must not leak a
-        // private-at-importer symbol through its signature.
         check_generics_leakage(
-            &dep_loaded.ast,
+            body_for_leakage_check,
             deferred.pub_reexport_whole,
             &deferred.pub_reexport_items,
             &deferred.index_bindings,
@@ -316,7 +437,7 @@ pub(super) fn process_deferred_instantiated_imports(
             deferred.import_span,
         )?;
 
-        // Merge the dependency's IR into the importer's IR.
+        // ---- 5. Merge dep IR into importer's IR ---------------------------
         unfrozen.merge_dependency(
             dep_unfrozen,
             &deferred.prefix,
@@ -329,209 +450,20 @@ pub(super) fn process_deferred_instantiated_imports(
             importer_src,
         )?;
 
-        // For selective instantiated imports, add alias nodes that reference
-        // the prefixed declarations. E.g., `delta_v` → `@prefix::delta_v`.
+        // ---- 6. Add selective aliases -------------------------------------
         if let Some(selective) = &deferred.selective_names {
-            add_selective_aliases(dep_loaded, selective, deferred, unfrozen);
-        }
-    }
-    Ok(())
-}
-
-/// Process deferred inline DAG includes by compiling each DAG body to IR
-/// and merging it into the importer's IR.
-///
-/// Per Concept 9, an inline DAG's `import <self>.{...}` is resolved against
-/// the file that *defined* the DAG (its parent), not the file performing the
-/// include. For same-file includes this is a no-op (parent == importer); for
-/// cross-file qualified-DAG includes (`include pkg.lib.dag(...)`) the dag's
-/// self-imports go through the parent file's scope. The leakage check that
-/// guards re-exported decls (`pub include`/selective `{ pub name }`) still
-/// runs against the importer's visibility — it's about not leaking private
-/// importer symbols, not about resolving the body.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "pipeline function threading project, importer, evaluated-deps, and IR-builder context"
-)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "self-import preprocessing, parent-value resolution, registry merge, and IR merge form a single cohesive pipeline"
-)]
-pub(super) fn process_deferred_inline_dag_includes(
-    project: &crate::loader::LoadedProject,
-    deferred_dags: &[DeferredInlineDagInclude],
-    file_src: &NamedSource<Arc<String>>,
-    importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
-    importer_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
-    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
-    builder: &mut RegistryBuilder,
-    unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
-) -> Result<(), CompileError> {
-    let importer_pub_names = super::extract_pub_names(importer_ast);
-    let importer_local_type_names = collect_local_type_names(importer_ast);
-    let empty_resolved: HashMap<String, graphcal_compiler::syntax::dag_id::DagId> = HashMap::new();
-    for deferred in deferred_dags {
-        // Look up the dag's *parent* file (where the dag is defined). For
-        // same-file includes this is the importer; for cross-file
-        // qualified includes it's the target file.
-        let parent_loaded = &project.files[&deferred.parent_dag_id];
-        let parent_pub_names = super::extract_pub_names(&parent_loaded.ast);
-        let parent_type_system_names =
-            graphcal_compiler::ir::lower::collect_type_system_names(&parent_loaded.ast);
-        let (parent_consts, parent_runtime_names) =
-            crate::inline_dag::classify_value_decls_in_ast(&parent_loaded.ast);
-        let parent_resolved_imports = parent_loaded
-            .inline_dags
-            .iter()
-            .find(|d| d.name == deferred.dag_name)
-            .map_or(&empty_resolved, |d| &d.resolved_imports);
-
-        // Pre-process `import <self>.{...}` declarations inside the dag body
-        // so they bring parent-file consts into the resolver's scope.
-        let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
-            &deferred.dag_body.declarations,
-            &deferred.parent_dag_id,
-            &parent_type_system_names,
-            &parent_consts,
-            &parent_runtime_names,
-            &parent_pub_names,
-            parent_resolved_imports,
-            file_src,
-        )?;
-        let mut combined_names = deferred.dag_imported_names.clone();
-        combined_names
-            .const_names
-            .extend(self_imports.names.const_names);
-        combined_names
-            .param_names
-            .extend(self_imports.names.param_names);
-        combined_names
-            .node_names
-            .extend(self_imports.names.node_names);
-        combined_names
-            .assert_names
-            .extend(self_imports.names.assert_names);
-        let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
-            declarations: self_imports.stripped_body,
-        };
-
-        // For cross-file includes (parent != importer), fetch the parent's
-        // already-evaluated values and declared types for each self-imported
-        // name. The dag body gets merged into the importer's IR, where
-        // references to the local alias (e.g., `radius` in
-        // `prefix::result = @radius * @prefix::factor`) resolve through
-        // `imported_values` at exec_plan time and through
-        // `imported_decl_types` at dim-check time. Same-file includes leave
-        // these empty — the parent isn't in `evaluated_files` yet, and the
-        // merged refs land on names already present in the importer's own
-        // decls.
-        let mut imported_values: HashMap<
-            graphcal_compiler::ir::resolve::ScopedName,
-            (RuntimeValue, DeclaredType),
-        > = HashMap::new();
-        let mut imported_decl_types = self_imports.decl_types;
-        if &deferred.parent_dag_id != importer_dag_id
-            && let Some(parent_eval) = evaluated_files.get(&deferred.parent_dag_id)
-        {
-            for (local_name, source) in &self_imports.value_sources {
-                if source.dag_id != deferred.parent_dag_id {
-                    continue;
-                }
-                let Some(value) = parent_eval.const_values.get(&source.source_name) else {
-                    continue;
-                };
-                let Some(dt) = parent_eval.declared_types.get(&source.source_name) else {
-                    continue;
-                };
-                imported_values.insert(local_name.clone(), (value.clone(), dt.clone()));
-                // The placeholder Dimensionless from `build_importer_value_decls`
-                // is a stand-in used by the same-file path (where dim-check
-                // reads the importer's own declared types). For cross-file the
-                // alias has no importer-side decl, so install the parent's
-                // actual declared type.
-                imported_decl_types.insert(local_name.clone(), dt.clone());
-            }
-        }
-
-        // Compile the DAG body to IR.
-        // The DAG body is lowered as if it were a standalone file, with only
-        // prelude + explicitly imported items in scope. Self-imported decl
-        // types and value sources flow through so the resolver can see the
-        // parent file's const types and so eval can fetch the parent's value
-        // at runtime.
-        let dag_dag_id = importer_dag_id.child(deferred.prefix.as_str());
-        let (dag_builder, dag_unfrozen) =
-            graphcal_compiler::ir::lower::lower_to_builder_with_imported_value_decls(
-                &stripped_body,
-                file_src,
-                &combined_names,
-                imported_values,
-                imported_decl_types,
-                self_imports.value_sources,
-                &dag_dag_id,
-            )?;
-
-        // Per Concept 9, inline DAGs are strictly isolated: there are no
-        // parent-scope type-system declarations to register in the DAG's
-        // registry. Drop straight to merging the DAG's own registry into the
-        // importer's.
-        // Merge the DAG's type-system declarations into the importer's registry.
-        let dag_registry = dag_builder.build();
-        merge_registry_into_builder(
-            builder,
-            &dag_registry,
-            &deferred.index_bindings,
-            &deferred.type_bindings,
-            &deferred.dim_bindings,
-        );
-
-        // Collect all declaration names in the DAG body.
-        let mut dep_names: HashSet<String> = HashSet::new();
-        for (name, _) in &dag_unfrozen.source_order {
-            dep_names.insert(name.member().to_string());
-        }
-
-        // A8 / V005: the importer must re-bind every bindable symbol whose
-        // default mentions a nominally-tied name of an overridden bindable.
-        dag_unfrozen.check_include_reconciles_overrides(
-            &deferred.bindings,
-            &deferred.index_bindings,
-            &deferred.type_bindings,
-            file_src,
-            deferred.import_span,
-        )?;
-
-        // A9 case 2 / V006: a `pub`-re-exported decl must not leak a
-        // private-at-importer symbol through its signature.
-        check_generics_leakage(
-            &deferred.dag_body,
-            deferred.pub_reexport_whole,
-            &deferred.pub_reexport_items,
-            &deferred.index_bindings,
-            &deferred.type_bindings,
-            &deferred.dim_bindings,
-            &importer_pub_names,
-            &importer_local_type_names,
-            file_src,
-            deferred.import_span,
-        )?;
-
-        // Merge the DAG's IR into the importer's IR.
-        unfrozen.merge_dependency(
-            dag_unfrozen,
-            &deferred.prefix,
-            &deferred.bindings,
-            &dep_names,
-            &deferred.index_bindings,
-            &deferred.type_bindings,
-            &deferred.dim_bindings,
-            &deferred.import_item_attributes,
-            file_src,
-        )?;
-
-        // For selective imports, add alias nodes.
-        if let Some(selective) = &deferred.selective_names {
-            add_inline_dag_selective_aliases(&deferred.dag_body, selective, deferred, unfrozen);
+            add_selective_aliases_inner(
+                body_decls_for_aliases,
+                selective,
+                &deferred.prefix,
+                &AliasSubstitutions {
+                    index: &deferred.index_bindings,
+                    r#type: &deferred.type_bindings,
+                    dim: &deferred.dim_bindings,
+                },
+                deferred.import_span,
+                unfrozen,
+            );
         }
     }
     Ok(())
@@ -613,51 +545,6 @@ fn add_selective_aliases_inner(
             );
         }
     }
-}
-
-/// Add alias declarations for selective inline DAG includes.
-pub(super) fn add_inline_dag_selective_aliases(
-    dag_body: &graphcal_compiler::desugar::desugared_ast::File,
-    selective: &[(String, String)],
-    deferred: &DeferredInlineDagInclude,
-    unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
-) {
-    add_selective_aliases_inner(
-        &dag_body.declarations,
-        selective,
-        &deferred.prefix,
-        &AliasSubstitutions {
-            index: &deferred.index_bindings,
-            r#type: &deferred.type_bindings,
-            dim: &deferred.dim_bindings,
-        },
-        deferred.import_span,
-        unfrozen,
-    );
-}
-
-/// Add alias declarations for selective instantiated imports.
-///
-/// For each selected name, creates either a const or node alias in the importer's IR
-/// that references the prefixed declaration from the merged dependency.
-pub(super) fn add_selective_aliases(
-    dep_loaded: &crate::loader::LoadedFile,
-    selective: &[(String, String)],
-    deferred: &DeferredInstantiatedImport,
-    unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
-) {
-    add_selective_aliases_inner(
-        &dep_loaded.ast.declarations,
-        selective,
-        &deferred.prefix,
-        &AliasSubstitutions {
-            index: &deferred.index_bindings,
-            r#type: &deferred.type_bindings,
-            dim: &deferred.dim_bindings,
-        },
-        deferred.import_span,
-        unfrozen,
-    );
 }
 
 /// Merge type-system declarations from a dependency's frozen Registry into a builder.
