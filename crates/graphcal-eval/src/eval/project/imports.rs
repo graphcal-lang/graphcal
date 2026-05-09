@@ -903,7 +903,14 @@ pub(super) fn check_dag_recursion(
         path: &mut Vec<&'a str>,
     ) -> Option<Vec<String>> {
         if in_stack.contains(node) {
-            let cycle_start = path.iter().position(|n| *n == node).unwrap_or(0);
+            #[expect(
+                clippy::expect_used,
+                reason = "DFS invariant: in_stack ⇒ node is on path"
+            )]
+            let cycle_start = path
+                .iter()
+                .position(|n| *n == node)
+                .expect("DFS invariant: in_stack ⇒ node is on path");
             let mut cycle: Vec<String> = path[cycle_start..]
                 .iter()
                 .map(ToString::to_string)
