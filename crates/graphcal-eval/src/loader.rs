@@ -5,11 +5,36 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::eval::CompileError;
-use graphcal_compiler::desugar::desugared_ast::File;
+use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::dag_id::DagId;
 use graphcal_io::FileSystemReader;
+
+/// A single inline `dag X { ... }` block lifted out of its enclosing file.
+///
+/// Produced by the loader so that downstream stages can iterate inline DAGs
+/// uniformly with file DAGs, looking up `resolved_imports` for both the body's
+/// own imports and `import <self>.{...}` references back to the parent file.
+#[derive(Debug, Clone)]
+pub struct LoadedDag {
+    /// Abstract DAG identity for this inline dag, formed by appending the
+    /// dag's name to its parent file's `DagId`.
+    pub dag_id: DagId,
+    /// The enclosing file's `DagId`. Imports whose path resolves to this id
+    /// are dag-body self-imports (`import <self>.{...}`).
+    pub parent_dag_id: DagId,
+    /// The dag declaration's name in source.
+    pub name: String,
+    /// Raw declarations from the dag body, in source order.
+    pub body: Vec<Declaration>,
+    /// Loader-resolved DAG identities for each `import` declaration in the
+    /// body, keyed by the import path's display string. Self-imports map to
+    /// `parent_dag_id`; cross-file imports map to the dependency file's id.
+    /// Imports whose path fails to resolve at load time are absent here; the
+    /// downstream resolver surfaces a structured error for them.
+    pub resolved_imports: HashMap<String, DagId>,
+}
 
 /// A single loaded and parsed file.
 #[derive(Debug)]
@@ -29,21 +54,15 @@ pub struct LoadedFile {
     /// Produced by the loader so that downstream consumers (evaluator, LSP) can
     /// look up resolved imports without re-resolving.
     pub resolved_imports: HashMap<String, DagId>,
-    /// Set of path display strings that, when used by an `import` declaration
-    /// inside an inline `dag X { ... }` body of this file, resolve back to
-    /// this file itself (i.e. the dag is `import`-ing from its own enclosing
-    /// file).
+    /// Inline `dag X { ... }` blocks lifted from this file, with
+    /// per-dag pre-resolved imports. Order matches source order.
     ///
-    /// Computed by the loader by attempting `resolve_module_path` on each
-    /// dag-body import path and comparing the result to this file's canonical
-    /// path. Lets downstream stages identify self-imports by exact set
-    /// membership rather than re-running a path-vs-DagId suffix-match heuristic.
-    ///
-    /// Whether the path resolves to this file is a property of the file and
-    /// the package layout, not of which specific dag uses it, so a single flat
-    /// set is sufficient (and matches what `preprocess_dag_body_self_imports`
-    /// consumes).
-    pub dag_body_self_imports: HashSet<String>,
+    /// Same source as the inline-dag declarations on `ast` — they coexist
+    /// during the C1/C2 transition. Once the resolver is unified
+    /// (Slice C step 2) the AST view will stop being the authority for
+    /// dag-body compilation and `inline_dags` will be the single source of
+    /// truth.
+    pub inline_dags: Vec<LoadedDag>,
 }
 
 impl LoadedFile {
@@ -90,6 +109,25 @@ impl LoadedFile {
             }
         })
     }
+
+    /// Path display strings inside any inline-dag body of this file that
+    /// resolve back to this file (i.e. dag-body `import <self>.{...}` paths).
+    ///
+    /// Derived from [`LoadedDag::resolved_imports`] across `inline_dags`.
+    /// Convenience wrapper that preserves the pre-Slice-C consumer interface
+    /// while the loader's structured `inline_dags` view becomes authoritative.
+    #[must_use]
+    pub fn dag_body_self_imports(&self) -> HashSet<String> {
+        let mut out: HashSet<String> = HashSet::new();
+        for loaded_dag in &self.inline_dags {
+            for (path, dag_id) in &loaded_dag.resolved_imports {
+                if dag_id == &self.dag_id {
+                    out.insert(path.clone());
+                }
+            }
+        }
+        out
+    }
 }
 
 /// A loaded project: a root file plus all transitively imported files.
@@ -126,7 +164,7 @@ impl LoadedProject {
         let dag_id = DagId::from_relative_path(&path);
         // No project root or manifest in single-file mode — only the
         // file-stem self-reference (Concept 7) can be detected here.
-        let dag_body_self_imports = collect_dag_body_self_imports_by_stem(&ast, &path);
+        let inline_dags = lift_inline_dags_by_stem(&ast, &path, &dag_id);
         let loaded_file = LoadedFile {
             path,
             dag_id: dag_id.clone(),
@@ -134,7 +172,7 @@ impl LoadedProject {
             ast,
             named_source,
             resolved_imports: HashMap::new(),
-            dag_body_self_imports,
+            inline_dags,
         };
         let mut files = HashMap::new();
         files.insert(dag_id.clone(), loaded_file);
@@ -335,19 +373,21 @@ fn load_file_dfs<F: FileSystemReader>(
         })
         .collect();
 
-    // Pre-resolve `import` declarations inside inline `dag X { ... }` bodies:
-    // record which paths resolve to this file itself, so downstream stages can
-    // detect dag-body self-imports by set membership rather than path-vs-DagId
-    // heuristics. Resolution failures are silently skipped — the dag-body
-    // import resolver runs later and will surface a structured error if the
-    // path is genuinely invalid.
-    let dag_body_self_imports = collect_dag_body_self_imports(
+    // Lift inline `dag X { ... }` bodies into structured `LoadedDag` entries
+    // with per-dag pre-resolved imports. Self-imports map to this file's own
+    // `DagId`; cross-file dag-body imports map to the dependency's id (when
+    // already loaded via a file-level import). Resolution failures are
+    // silently skipped — the dag-body import resolver runs later and will
+    // surface a structured error if the path is genuinely invalid.
+    let inline_dags = lift_inline_dags(
         &ast,
+        &dag_id,
         canonical_path,
         parent_dir,
         project_root,
         &named_source,
         manifest,
+        path_to_dag_id,
         fs,
     );
 
@@ -366,76 +406,122 @@ fn load_file_dfs<F: FileSystemReader>(
             ast,
             named_source,
             resolved_imports,
-            dag_body_self_imports,
+            inline_dags,
         },
     );
 
     Ok(())
 }
 
-/// Walk inline `dag X { ... }` bodies and collect the set of import path
-/// display strings whose resolved canonical path equals `canonical_path`
-/// (i.e. they import from the dag's own enclosing file).
+/// Walk inline `dag X { ... }` bodies and lift each into a [`LoadedDag`]
+/// with pre-resolved imports. For each body `import` declaration:
 ///
-/// Resolution errors are treated as "not a self-import" and silently
-/// skipped: the dag-body import resolver runs later and will surface
-/// structured errors for paths that fail to resolve at all.
-fn collect_dag_body_self_imports<F: FileSystemReader>(
+/// - Single-segment file-stem reference (Concept 7) maps to `self_dag_id`.
+/// - A path that resolves (via the package resolver) to `canonical_path`
+///   maps to `self_dag_id` (a `import <self>.{...}` self-reference).
+/// - A path that resolves to another file already loaded by the file-level
+///   recursion maps to that file's `DagId` from `path_to_dag_id`.
+/// - Anything else (resolution failure or a cross-file dependency that
+///   wasn't pulled in at file level) is left out of `resolved_imports`;
+///   the dag-body resolver surfaces a structured error later.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "loader-side resolution needs the same context as file-level imports"
+)]
+fn lift_inline_dags<F: FileSystemReader>(
     ast: &File,
+    self_dag_id: &DagId,
     canonical_path: &Path,
     parent_dir: &Path,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
     manifest: Option<&graphcal_compiler::registry::manifest::Manifest>,
+    path_to_dag_id: &HashMap<PathBuf, DagId>,
     fs: &F,
-) -> HashSet<String> {
+) -> Vec<LoadedDag> {
     let file_stem = canonical_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("");
 
-    walk_dag_body_imports(ast, |path| {
-        // Single-segment file-stem reference (Concept 7 self-reference)
-        // bypasses path resolution: match by stem directly.
-        if path.segments.len() == 1 && path.segments[0].name == file_stem {
-            return true;
-        }
-        resolve_import_path(path, parent_dir, project_root, src, manifest, fs)
-            .is_ok_and(|resolved| resolved == canonical_path)
-    })
-}
-
-/// Stem-only variant of [`collect_dag_body_self_imports`] for the
-/// single-file [`LoadedProject::from_source`] path, where no project root
-/// or manifest is available to drive full path resolution.
-fn collect_dag_body_self_imports_by_stem(ast: &File, path: &Path) -> HashSet<String> {
-    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-
-    walk_dag_body_imports(ast, |module_path| {
-        module_path.segments.len() == 1 && module_path.segments[0].name == file_stem
-    })
-}
-
-/// Helper: walk every `import` declaration inside every inline `dag` block
-/// at file top-level, applying `is_self` to each path and collecting the
-/// display strings of paths for which `is_self` returns true.
-fn walk_dag_body_imports<F>(ast: &File, mut is_self: F) -> HashSet<String>
-where
-    F: FnMut(&graphcal_compiler::syntax::ast::ModulePath) -> bool,
-{
-    let mut out: HashSet<String> = HashSet::new();
+    let mut out: Vec<LoadedDag> = Vec::new();
     for decl in &ast.declarations {
         let DeclKind::Dag(dag) = &decl.kind else {
             continue;
         };
+        let name = dag.name.value.to_string();
+        let dag_id = self_dag_id.child(name.as_str());
+        let mut resolved_imports: HashMap<String, DagId> = HashMap::new();
         for body_decl in &dag.body {
             let DeclKind::Import(import_decl) = &body_decl.kind else {
                 continue;
             };
-            if is_self(&import_decl.path) {
-                out.insert(import_decl.path.display_path());
+            let path = &import_decl.path;
+            let display = path.display_path();
+
+            // Single-segment file-stem reference — Concept 7 self-import.
+            if path.segments.len() == 1 && path.segments[0].name == file_stem {
+                resolved_imports.insert(display, self_dag_id.clone());
+                continue;
+            }
+            let Ok(resolved) =
+                resolve_import_path(path, parent_dir, project_root, src, manifest, fs)
+            else {
+                continue;
+            };
+            if resolved == canonical_path {
+                resolved_imports.insert(display, self_dag_id.clone());
+            } else if let Some(other_dag_id) = path_to_dag_id.get(&resolved) {
+                resolved_imports.insert(display, other_dag_id.clone());
+            } else {
+                // Cross-file dag-body import to a file the loader did not
+                // recurse into (no file-level import drove its load).
+                // Leave unresolved; the dag-body resolver will surface a
+                // structured error if the path is genuinely invalid.
             }
         }
+        out.push(LoadedDag {
+            dag_id,
+            parent_dag_id: self_dag_id.clone(),
+            name,
+            body: dag.body.clone(),
+            resolved_imports,
+        });
+    }
+    out
+}
+
+/// Stem-only variant of [`lift_inline_dags`] for the single-file
+/// [`LoadedProject::from_source`] path, where no project root or manifest is
+/// available to drive full path resolution. Only the file-stem self-reference
+/// (Concept 7) can be detected.
+fn lift_inline_dags_by_stem(ast: &File, path: &Path, self_dag_id: &DagId) -> Vec<LoadedDag> {
+    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+
+    let mut out: Vec<LoadedDag> = Vec::new();
+    for decl in &ast.declarations {
+        let DeclKind::Dag(dag) = &decl.kind else {
+            continue;
+        };
+        let name = dag.name.value.to_string();
+        let dag_id = self_dag_id.child(name.as_str());
+        let mut resolved_imports: HashMap<String, DagId> = HashMap::new();
+        for body_decl in &dag.body {
+            let DeclKind::Import(import_decl) = &body_decl.kind else {
+                continue;
+            };
+            let import_path = &import_decl.path;
+            if import_path.segments.len() == 1 && import_path.segments[0].name == file_stem {
+                resolved_imports.insert(import_path.display_path(), self_dag_id.clone());
+            }
+        }
+        out.push(LoadedDag {
+            dag_id,
+            parent_dag_id: self_dag_id.clone(),
+            name,
+            body: dag.body.clone(),
+            resolved_imports,
+        });
     }
     out
 }
