@@ -378,7 +378,8 @@ pub(super) fn process_deferred_inline_dag_includes(
         let parent_pub_names = super::extract_pub_names(&parent_loaded.ast);
         let parent_type_system_names =
             graphcal_compiler::ir::lower::collect_type_system_names(&parent_loaded.ast);
-        let parent_value_decls = crate::inline_dag::build_importer_value_decls(&parent_loaded.ast);
+        let (parent_consts, parent_runtime_names) =
+            crate::inline_dag::classify_value_decls_in_ast(&parent_loaded.ast);
         let parent_resolved_imports = parent_loaded
             .inline_dags
             .iter()
@@ -391,7 +392,8 @@ pub(super) fn process_deferred_inline_dag_includes(
             &deferred.dag_body.declarations,
             &deferred.parent_dag_id,
             &parent_type_system_names,
-            &parent_value_decls,
+            &parent_consts,
+            &parent_runtime_names,
             &parent_pub_names,
             parent_resolved_imports,
             file_src,
