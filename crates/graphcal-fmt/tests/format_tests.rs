@@ -660,15 +660,15 @@ snapshot_test!(
 // module_import_alias: import with alias
 idempotency_test!(
     idempotent_multi_module_import_alias_main,
-    "invalid/multi/module_import_alias/src/constants/main.gcl"
+    "valid/multi/module_import_alias/src/constants/main.gcl"
 );
 roundtrip_test!(
     roundtrip_multi_module_import_alias_main,
-    "invalid/multi/module_import_alias/src/constants/main.gcl"
+    "valid/multi/module_import_alias/src/constants/main.gcl"
 );
 snapshot_test!(
     snapshot_multi_module_import_alias_main,
-    "invalid/multi/module_import_alias/src/constants/main.gcl"
+    "valid/multi/module_import_alias/src/constants/main.gcl"
 );
 
 // module_import_fn: qualified function call
