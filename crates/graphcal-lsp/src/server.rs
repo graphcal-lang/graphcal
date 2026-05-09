@@ -65,16 +65,19 @@ pub(crate) struct FnSignatureInfo {
 
 /// Cached analysis result for a document.
 pub(crate) struct AnalysisResult {
-    /// The raw source text.
-    pub(crate) source: String,
+    /// The raw source text. Shared via `Arc` so hover, inlay-hint, and
+    /// formatting handlers can borrow without cloning the full buffer.
+    pub(crate) source: Arc<String>,
     /// The symbol table (built from AST, enriched from TIR if available).
     pub(crate) symbol_table: SymbolTable,
     /// Definitions from imported files, keyed by symbol key.
     pub(crate) imported_definitions: HashMap<SymbolKey, ImportedDefinition>,
     /// Diagnostics to publish, grouped by the URI they belong to. The active
     /// document's URI is always present (with an empty Vec when clean) so a
-    /// previously-published diagnostic can be cleared.
-    pub(crate) diagnostics: HashMap<Url, Vec<Diagnostic>>,
+    /// previously-published diagnostic can be cleared. Shared via `Arc` so
+    /// `store_and_publish` can hand a snapshot to the publish loop without
+    /// deep-cloning the map on every analysis cycle.
+    pub(crate) diagnostics: Arc<HashMap<Url, Vec<Diagnostic>>>,
     /// Computed values from evaluation, keyed by declaration name.
     /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
     pub(crate) eval_values: HashMap<DeclName, String>,
@@ -209,14 +212,16 @@ impl Backend {
                 return;
             }
 
-            let new_diags = analysis.diagnostics.clone();
+            let new_diags = Arc::clone(&analysis.diagnostics);
             let stale_uris = collect_stale_uris(&documents, &uri, &new_diags).await;
             documents.write().await.insert(uri.clone(), analysis);
             for stale in stale_uris {
                 client.publish_diagnostics(stale, Vec::new(), None).await;
             }
-            for (target_uri, diags) in new_diags {
-                client.publish_diagnostics(target_uri, diags, None).await;
+            for (target_uri, diags) in new_diags.iter() {
+                client
+                    .publish_diagnostics(target_uri.clone(), diags.clone(), None)
+                    .await;
             }
             // Best-effort: the client may not support inlay-hint refresh.
             let _ = client.inlay_hint_refresh().await;
@@ -241,7 +246,7 @@ impl Backend {
         if !is_generation_current(&self.change_generations, &uri, generation).await {
             return;
         }
-        let new_diags = analysis.diagnostics.clone();
+        let new_diags = Arc::clone(&analysis.diagnostics);
         let stale_uris = collect_stale_uris(&self.documents, &uri, &new_diags).await;
         self.documents.write().await.insert(uri.clone(), analysis);
         for stale in stale_uris {
@@ -249,9 +254,9 @@ impl Backend {
                 .publish_diagnostics(stale, Vec::new(), None)
                 .await;
         }
-        for (target_uri, diags) in new_diags {
+        for (target_uri, diags) in new_diags.iter() {
             self.client
-                .publish_diagnostics(target_uri, diags, None)
+                .publish_diagnostics(target_uri.clone(), diags.clone(), None)
                 .await;
         }
         // Best-effort: the client may not support inlay-hint refresh.
@@ -382,10 +387,10 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri, text, &resolve);
             diagnostics.entry(uri.clone()).or_default();
             return AnalysisResult {
-                source: text.to_string(),
+                source: Arc::new(text.to_string()),
                 symbol_table: SymbolTable::default(),
                 imported_definitions: HashMap::new(),
-                diagnostics,
+                diagnostics: Arc::new(diagnostics),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
                 import_links: Vec::new(),
@@ -418,10 +423,10 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             diagnostics.entry(uri.clone()).or_default();
 
             AnalysisResult {
-                source: text.to_string(),
+                source: Arc::new(text.to_string()),
                 symbol_table,
                 imported_definitions,
-                diagnostics,
+                diagnostics: Arc::new(diagnostics),
                 eval_values,
                 fn_signatures,
                 import_links,
@@ -435,10 +440,10 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             diagnostics.entry(uri.clone()).or_default();
 
             AnalysisResult {
-                source: text.to_string(),
+                source: Arc::new(text.to_string()),
                 symbol_table,
                 imported_definitions,
-                diagnostics,
+                diagnostics: Arc::new(diagnostics),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
                 import_links,
