@@ -374,7 +374,7 @@ fn eval_inline_dag_call(
                     .imported_value_sources
                     .get(scoped)
                     .and_then(|source| {
-                        caller_values.get(&ScopedName::local(source.source_name.clone()))
+                        caller_values.get(&ScopedName::local(source.source_name.as_str()))
                     })
             });
         if let Some(value) = value {

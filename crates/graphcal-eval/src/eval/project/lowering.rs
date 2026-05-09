@@ -182,10 +182,10 @@ pub(super) fn merge_dep_dag_tirs(
                 if &source.dag_id != dep_dag_id {
                     continue;
                 }
-                if let Some(value) = dep_eval.const_values.get(&source.source_name)
+                if let Some(value) = dep_eval.const_values.get(source.source_name.as_str())
                     && let Some(dt) = dep_eval
                         .declared_types
-                        .get(&ScopedName::local(source.source_name.clone()))
+                        .get(&ScopedName::local(source.source_name.as_str()))
                 {
                     cloned
                         .imported_values
@@ -324,11 +324,12 @@ pub(super) fn process_deferred_dag_includes(
                             if &source.dag_id != parent_dag_id {
                                 continue;
                             }
-                            let Some(value) = parent_eval.const_values.get(&source.source_name)
+                            let Some(value) =
+                                parent_eval.const_values.get(source.source_name.as_str())
                             else {
                                 continue;
                             };
-                            let parent_key = ScopedName::local(source.source_name.clone());
+                            let parent_key = ScopedName::local(source.source_name.as_str());
                             let Some(dt) = parent_eval.declared_types.get(&parent_key) else {
                                 continue;
                             };

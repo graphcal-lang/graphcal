@@ -168,7 +168,7 @@ pub struct ImportedValueSource {
     /// DAG that owns the original declaration.
     pub dag_id: crate::syntax::dag_id::DagId,
     /// Original declaration name in the owning DAG.
-    pub source_name: String,
+    pub source_name: DeclName,
 }
 
 /// Convert a resolver dep map (whose value sets are `HashSet`) into the
