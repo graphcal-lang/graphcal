@@ -736,7 +736,7 @@ inline_dag_call_suffix
    Qualified forms can chain into a longer dotted path via the
    postfix `.IDENT` operator (field access). User-defined functions do
    not exist in graphcal, so there is no `module.fn(...)` qualified
-   function-call form — qualified `.fn(...)` is unparseable. *)
+   function-call form — qualified `.fn(...)` is unparsable. *)
 ident_expr
    = IDENT, ".", IDENT                             (* qualified name ref *)
    | IDENT,
