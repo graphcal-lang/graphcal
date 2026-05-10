@@ -2280,24 +2280,22 @@ fn check_failure_implies_eval_failure() {
 ///
 /// Format: `(relative_path, expected_category, actual_category, reason)`.
 const KNOWN_MISCLASSIFIED: &[(&str, &str, &str, &str)] = &[
-    // Regression introduced by PR #570: dim_check reports
-    // `D002: declared as Dimensionless` for top-level `pub const node`
+    // Tracked in #572 — dim_check regression introduced by PR #570:
+    // D002 'declared as Dimensionless' on top-level `pub const node`
     // declarations that share a file with an inline `dag` block whose
-    // `import <self>.{...}` re-imports them. Minimal repro:
-    //   pub const node r_earth: Length = 6371.0 km;
-    //   dag d { import <file>.{r_earth}; node r1: Length = @r_earth; }
-    //   include d().{ r1 as r1_out };
+    // `import <self>.{...}` re-imports them. Remove these entries when
+    // #572 is fixed.
     (
         "valid/hohmann.gcl",
         "valid",
         "invalid",
-        "PR #570 dim_check regression: D002 on parent const re-imported by inline dag",
+        "#572: dim_check regression on parent const re-imported by inline dag",
     ),
     (
         "valid/inline_dag_import_parent/main.gcl",
         "valid",
         "invalid",
-        "PR #570 dim_check regression: D002 on parent const re-imported by inline dag",
+        "#572: dim_check regression on parent const re-imported by inline dag",
     ),
 ];
 
