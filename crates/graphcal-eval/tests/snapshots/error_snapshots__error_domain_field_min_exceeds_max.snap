@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 471
+expression: rendered
+---
+domain constraint on `Foo.x`: min (100 kg) exceeds max (50 kg)
+    Diagnostic severity: error
+Begin snippet for domain_field_min_exceeds_max.gcl starting at line 1, column 1
+
+snippet line 1: // domain_field_min_exceeds_max.gcl -- min > max on a struct field
+snippet line 2: type Foo { x: Mass(min: 100.0 kg, max: 50.0 kg) }
+    label at line 2, columns 20 to 46: min > max
+diagnostic help: the min bound must be less than or equal to the max bound
+diagnostic code: graphcal::C003

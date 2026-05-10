@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 514
+expression: rendered
+---
+domain constraints are not supported on generic type arguments
+    Diagnostic severity: error
+Begin snippet for domain_generic_arg_constraint.gcl starting at line 4, column 1
+
+snippet line 4: 
+snippet line 5: param p: Vec3<Length(min: 0.0 m), Eci> = Vec3<Length, Eci> { x: 1.0 m, y: 2.0 m, z: 3.0 m };
+    label at line 5, columns 22 to 31: constraint not allowed here
+diagnostic help: put the constraint on the field in the struct definition, not on the generic type argument
+diagnostic code: graphcal::C006

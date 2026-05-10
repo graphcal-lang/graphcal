@@ -210,21 +210,52 @@ param delta_v: Velocity(min: 0.0 m/s, max: 10000.0 m/s)[Maneuver] = {
 
 Each entry in the indexed value is independently checked against the constraint bounds.
 
+### Struct and Union Member Field Constraints
+
+Constraints can also annotate the field types in `type` declarations and union member shapes:
+
+```
+type SatelliteSpec {
+    mass: Mass(min: 100.0 kg, max: 2000.0 kg),
+    altitude: Length(min: 200.0 km),
+}
+
+pub type Burn { dv: Velocity(min: 0.0 m/s, max: 10.0 km/s), duration: Time(min: 0.0 s) }
+pub type Coast {}
+pub type ManeuverResult = Burn | Coast;
+```
+
+Field constraints fire at **construction time** for each `T { ... }` literal:
+
+- For a `const node` whose value is a struct literal, violations are caught at compile time as `DomainViolation`.
+- For a `param` or `node` that constructs a struct at runtime, a violation is reported as a per-node `EvalFailed` error keyed to the constructed type and field (e.g., `field SatelliteSpec.mass above maximum (2000 kg)`).
+
+### Generic Type Arguments
+
+Domain constraints are **not** allowed on generic type arguments — they have no enforcement site after type erasure and ambiguous semantics. Put the constraint on the field in the struct definition instead:
+
+```
+// REJECTED at compile time:
+pub type Vec3<D: Dim> { x: D, y: D, z: D }
+param p: Vec3<Length(min: 0.0 m)> = ...;
+
+// Use a non-generic field constraint instead:
+pub type SignedLength { value: Length(min: 0.0 m) }
+```
+
 ### Runtime Checking
 
-Domain constraints are checked at **runtime** after evaluation. They are not enforced at compile time because parameter values are not known until runtime.
-
-- If a value violates its constraint, it is reported as a per-node error (similar to division by zero or other runtime errors).
-- The constraint check occurs after the value is computed, before it is used by downstream nodes.
+Domain constraints on `param` and `node` declarations are checked at **runtime** after evaluation: a violation produces a per-node error and downstream nodes receive a `DependencyFailed`. Constraints on `const node` declarations and on struct/union member fields constructed inside a `const` are checked at compile time, since the values are known statically.
 
 ### Compile-Time Validation
 
-The following are caught at compile time:
+The following are always caught at compile time, regardless of where the constraint sits (top-level decl or struct field):
 
 - **Invalid target type**: Constraint on an unsupported type (e.g., `Bool(min: 0)`)
 - **Invalid key**: Unknown constraint key (e.g., `Mass(step: 10)` — only `min` and `max` are valid)
 - **Min exceeds max**: When both bounds are specified and `min > max`
 - **Dimension mismatch**: When the bound's dimension doesn't match the type's dimension (e.g., `Mass(min: 1.0 m)`)
+- **Generic type-arg constraint**: A constraint placed on a `TypeApplication` argument like `Vec3<Length(min: 0.0 m)>`
 
 ### Use Cases
 

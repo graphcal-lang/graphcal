@@ -1029,6 +1029,20 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("domain constraints are not supported on generic type arguments")]
+    #[diagnostic(
+        code(graphcal::C006),
+        help(
+            "put the constraint on the field in the struct definition, not on the generic type argument"
+        )
+    )]
+    GenericTypeArgDomainConstraint {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("constraint not allowed here")]
+        span: SourceSpan,
+    },
+
     // --- Visibility errors ---
     /// Attempting to import a private (non-`pub`) item from another file.
     #[error("cannot import private item `{name}` from `{file_path}`")]

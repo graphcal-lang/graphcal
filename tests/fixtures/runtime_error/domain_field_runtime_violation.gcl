@@ -1,0 +1,11 @@
+// domain_field_runtime_violation.gcl -- runtime field constraint violation
+type SatelliteSpec {
+    mass: Mass(min: 100.0 kg, max: 2000.0 kg),
+    altitude: Length(min: 200.0 km),
+}
+
+param x: Mass = 5000.0 kg;
+node SAT: SatelliteSpec = SatelliteSpec {
+    mass: @x,
+    altitude: 300.0 km,
+};

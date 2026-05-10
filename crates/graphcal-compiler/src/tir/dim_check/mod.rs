@@ -255,6 +255,23 @@ pub fn check_dimensions_tir(
         }
     }
 
+    // Validate domain constraints on struct/union member fields. The check
+    // walks the registry's `TypeDef`s once per file. Types reachable through
+    // dep imports were already validated in their defining file's pipeline,
+    // so the redundant pass is idempotent. (#450 Position 1+2.)
+    let declared_types = tir.build_declared_types(src)?;
+    let empty_locals: HashMap<String, InferredType> = HashMap::new();
+    check_no_constraints_on_generic_type_args(tir, src)?;
+    check_field_domain_constraint_targets(tir, src)?;
+    check_field_domain_constraint_dimensions(
+        tir,
+        &declared_types,
+        &empty_locals,
+        &tir.registry,
+        builtin_fns,
+        src,
+    )?;
+
     Ok(())
 }
 
@@ -524,6 +541,294 @@ fn extract_domain_bounds(
         return &base.constraints;
     }
     &[]
+}
+
+/// Reject domain constraints on struct/union fields whose target type
+/// cannot carry numeric `(min: …, max: …)` bounds (Bool, Datetime, Label,
+/// nested struct/union). Mirrors [`check_domain_constraint_targets_dag`]
+/// for top-level decls.
+///
+/// Scans every `TypeDef` in the file's registry. Generic-param fields are
+/// skipped (we don't know their concrete type at definition time).
+fn check_field_domain_constraint_targets(
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    for type_def in tir.registry.types.all_types() {
+        let fields: Box<dyn Iterator<Item = &crate::registry::types::StructField>> =
+            match &type_def.kind {
+                crate::registry::types::TypeDefKind::Record { fields } => Box::new(fields.iter()),
+                crate::registry::types::TypeDefKind::Union { .. }
+                | crate::registry::types::TypeDefKind::Unit => Box::new(std::iter::empty()),
+            };
+        for field in fields {
+            if extract_domain_bounds(&field.type_ann).is_empty() {
+                continue;
+            }
+            let kind = field_constraint_target_kind(&field.type_ann, &tir.registry);
+            if let Some(type_kind) = kind {
+                return Err(GraphcalError::InvalidDomainTarget {
+                    type_kind,
+                    src: src.clone(),
+                    span: field.type_ann.span.into(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Classify a field's `TypeExpr` as either constraint-compatible (returns
+/// `None`) or constraint-incompatible (returns `Some(kind_str)` describing
+/// why it's incompatible). Strips an outer `Indexed` wrapper before
+/// classifying — a `Velocity(min: 0)[Maneuver]` field is constraint-
+/// compatible because the base `Velocity` is scalar.
+fn field_constraint_target_kind(
+    type_ann: &crate::desugar::desugared_ast::TypeExpr,
+    registry: &Registry,
+) -> Option<String> {
+    use crate::desugar::desugared_ast::TypeExprKind;
+    let base = match &type_ann.kind {
+        TypeExprKind::Indexed { base, .. } => base.as_ref(),
+        _ => type_ann,
+    };
+    match &base.kind {
+        TypeExprKind::Bool => Some("Bool".to_string()),
+        TypeExprKind::Datetime => Some("Datetime".to_string()),
+        TypeExprKind::TypeApplication { name, .. } => Some(format!("struct `{}`", name.name)),
+        // The outer `Indexed` wrapper was stripped above; a nested indexed
+        // type at this depth is unusual but constraint-compatible (the base
+        // dim is what carries the constraint).
+        TypeExprKind::Dimensionless | TypeExprKind::Int | TypeExprKind::Indexed { .. } => None,
+        TypeExprKind::DimExpr(dim_expr) => {
+            // A bare single-name DimExpr could be a struct, an index label, or a
+            // dimension. The registry distinguishes them: dim → constraint-
+            // compatible scalar; struct → reject; index → reject as a label.
+            if dim_expr.terms.len() == 1
+                && dim_expr.terms[0].term.power.is_none()
+                && let Some(item) = dim_expr.terms.first()
+            {
+                let name = item.term.name.name.as_str();
+                if registry.dimensions.get_dimension(name).is_some() {
+                    None
+                } else if registry.types.get_type(name).is_some() {
+                    Some(format!("struct `{name}`"))
+                } else if registry.indexes.get_index(name).is_some() {
+                    Some(format!("Label({name})"))
+                } else {
+                    // Generic dim param or unknown name — skip; an unknown name
+                    // would already error in type resolution.
+                    None
+                }
+            } else {
+                // Compound dim expression like `Length / Time` → constraint-
+                // compatible scalar.
+                None
+            }
+        }
+    }
+}
+
+/// Check that domain bound expressions on struct/union fields have the
+/// correct type. Mirrors [`check_domain_constraint_dimensions_dag`] for
+/// top-level decls.
+fn check_field_domain_constraint_dimensions(
+    tir: &crate::tir::typed::TIR,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    empty_locals: &HashMap<String, InferredType>,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    for type_def in tir.registry.types.all_types() {
+        let fields: Box<dyn Iterator<Item = &crate::registry::types::StructField>> =
+            match &type_def.kind {
+                crate::registry::types::TypeDefKind::Record { fields } => Box::new(fields.iter()),
+                crate::registry::types::TypeDefKind::Union { .. }
+                | crate::registry::types::TypeDefKind::Unit => Box::new(std::iter::empty()),
+            };
+        for field in fields {
+            let bounds = extract_domain_bounds(&field.type_ann);
+            if bounds.is_empty() {
+                continue;
+            }
+            let Some(expected) = field_expected_bound(&field.type_ann, registry) else {
+                continue;
+            };
+            let display_name = format!("{}.{}", type_def.name, field.name);
+            for bound in bounds {
+                let inferred = infer_type(
+                    &bound.value,
+                    declared_types,
+                    empty_locals,
+                    tir,
+                    registry,
+                    builtin_fns,
+                    src,
+                )?;
+                check_one_bound_with_display_name(
+                    &display_name,
+                    bound,
+                    &inferred,
+                    &expected,
+                    registry,
+                    src,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Compute the [`ExpectedBound`] for a struct field's `TypeExpr`. Returns
+/// `None` when the field's base type isn't `Scalar`/`Dimensionless`/`Int`
+/// (in which case the target check has already rejected it, or it's a
+/// generic param to be checked at instantiation).
+fn field_expected_bound(
+    type_ann: &crate::desugar::desugared_ast::TypeExpr,
+    registry: &Registry,
+) -> Option<ExpectedBound> {
+    use crate::desugar::desugared_ast::TypeExprKind;
+    let base = match &type_ann.kind {
+        TypeExprKind::Indexed { base, .. } => base.as_ref(),
+        _ => type_ann,
+    };
+    match &base.kind {
+        TypeExprKind::Dimensionless => Some(ExpectedBound::Scalar(Dimension::dimensionless())),
+        TypeExprKind::Int => Some(ExpectedBound::Int),
+        TypeExprKind::DimExpr(_) => registry
+            .dimensions
+            .resolve_type_expr(base)
+            .map(ExpectedBound::Scalar),
+        _ => None,
+    }
+}
+
+/// Variant of [`check_one_bound`] that takes a pre-formatted display name
+/// for the constrained target (e.g. `"SatelliteSpec.mass"`) so a single
+/// helper can serve both top-level decls and struct fields.
+fn check_one_bound_with_display_name(
+    display_name: &str,
+    bound: &crate::desugar::desugared_ast::DomainBound,
+    inferred: &InferredType,
+    expected: &ExpectedBound,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    match expected {
+        ExpectedBound::Scalar(target_dim) => {
+            let ok = match inferred {
+                InferredType::Scalar(d) => d == target_dim,
+                InferredType::Int => target_dim.is_dimensionless(),
+                _ => false,
+            };
+            if ok {
+                return Ok(());
+            }
+            let bound_dim_str = match inferred {
+                InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
+                other => format_inferred_type(other, registry),
+            };
+            Err(GraphcalError::DomainDimensionMismatch {
+                name: display_name.to_string(),
+                type_dim: registry.dimensions.format_dimension(target_dim),
+                bound_name: bound.kind.to_string(),
+                bound_dim: bound_dim_str,
+                src: src.clone(),
+                span: bound.span.into(),
+            })
+        }
+        ExpectedBound::Int => {
+            let ok = match inferred {
+                InferredType::Int => true,
+                InferredType::Scalar(d) => d.is_dimensionless(),
+                _ => false,
+            };
+            if ok {
+                return Ok(());
+            }
+            Err(GraphcalError::IntDomainBoundNotUnitless {
+                name: display_name.to_string(),
+                bound_name: bound.kind.to_string(),
+                bound_type: format_inferred_type(inferred, registry),
+                src: src.clone(),
+                span: bound.span.into(),
+            })
+        }
+    }
+}
+
+/// Reject domain constraints on generic type-application arguments.
+///
+/// Generic args are erased at runtime, so a constraint on `D` in
+/// `Vec3<Length(min: 0.0 m)>` has no enforcement site and unclear
+/// semantics. Issue #450 Position 4: surface a clear compile-time error
+/// directing the user to put the constraint on the field instead.
+///
+/// Walks every `TypeExpr` reachable through declarations and type-defs
+/// in the file. (Type-args themselves can be `TypeApplication`s nested
+/// inside other applications, so the walk recurses.)
+fn check_no_constraints_on_generic_type_args(
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let walk = |type_expr: &crate::desugar::desugared_ast::TypeExpr| -> Result<(), GraphcalError> {
+        check_type_expr_for_generic_arg_constraints(type_expr, src)
+    };
+    for (id, dag) in &tir.dags {
+        if id != &tir.root_dag_id && id.parent().as_ref() != Some(&tir.root_dag_id) {
+            continue;
+        }
+        for entry in &dag.consts {
+            walk(&entry.type_ann)?;
+        }
+        for entry in &dag.params {
+            walk(&entry.type_ann)?;
+        }
+        for entry in &dag.nodes {
+            walk(&entry.type_ann)?;
+        }
+    }
+    for type_def in tir.registry.types.all_types() {
+        for field in type_def.fields() {
+            walk(&field.type_ann)?;
+        }
+    }
+    Ok(())
+}
+
+/// Recurse through a `TypeExpr` and reject any `DomainBound` found on a
+/// `TypeApplication` argument. The outermost `TypeExpr` may itself carry
+/// constraints (the legitimate placement); only constraints under a
+/// `TypeApplication.type_args` slot are rejected.
+fn check_type_expr_for_generic_arg_constraints(
+    type_expr: &crate::desugar::desugared_ast::TypeExpr,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    use crate::desugar::desugared_ast::TypeExprKind;
+    match &type_expr.kind {
+        TypeExprKind::Indexed { base, .. } => {
+            check_type_expr_for_generic_arg_constraints(base, src)
+        }
+        TypeExprKind::TypeApplication { type_args, .. } => {
+            for arg in type_args {
+                if let Some(bound) = arg.constraints.first() {
+                    return Err(GraphcalError::GenericTypeArgDomainConstraint {
+                        src: src.clone(),
+                        span: bound.span.into(),
+                    });
+                }
+                // Recurse so nested generics are checked too.
+                check_type_expr_for_generic_arg_constraints(arg, src)?;
+            }
+            Ok(())
+        }
+        TypeExprKind::Dimensionless
+        | TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime
+        | TypeExprKind::DimExpr(_) => Ok(()),
+    }
 }
 
 /// Strip `Indexed` wrappers to get the base resolved type.
