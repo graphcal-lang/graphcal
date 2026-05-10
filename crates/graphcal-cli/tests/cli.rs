@@ -2200,11 +2200,12 @@ fn fixture_entry_points() -> Vec<PathBuf> {
 }
 
 /// Collect `(category, entry_path)` pairs for every fixture entry point under
-/// `tests/fixtures/{valid,runtime_error,invalid}`, sorted by path.
+/// `tests/fixtures/{valid,valid_library,runtime_error,invalid}`, sorted by
+/// path.
 fn fixture_entry_points_by_category() -> Vec<(&'static str, PathBuf)> {
     let root = fixtures_root();
     let mut entries: Vec<(&'static str, PathBuf)> = Vec::new();
-    for cat in ["valid", "runtime_error", "invalid"] {
+    for cat in ["valid", "valid_library", "runtime_error", "invalid"] {
         let mut cat_entries = Vec::new();
         collect_entry_points(&root.join(cat), &mut cat_entries);
         for path in cat_entries {
@@ -2261,6 +2262,10 @@ fn check_failure_implies_eval_failure() {
 // Categorization: each fixture must live under the directory whose name
 // matches its actual `check`/`eval` outcome:
 //   tests/fixtures/valid/         → check passes, eval passes
+//   tests/fixtures/valid_library/ → check passes (eval may pass or fail —
+//                                   library files aren't designed to be
+//                                   evaluated standalone, so eval result is
+//                                   not load-bearing for this category)
 //   tests/fixtures/runtime_error/ → check passes, eval fails
 //   tests/fixtures/invalid/       → check fails
 // Without this guard, fixtures can drift into the wrong bucket as language
@@ -2269,22 +2274,12 @@ fn check_failure_implies_eval_failure() {
 // ---------------------------------------------------------------------------
 
 /// Fixtures that are placed in the wrong category but kept there because
-/// the source-of-truth intent (e.g. "this is a valid library") matters more
-/// than the current `check`/`eval` outcome. Each entry MUST also carry a
-/// tracking issue so the allowlist shrinks over time.
+/// the source-of-truth intent matters more than the current `check`/`eval`
+/// outcome. Each entry MUST carry a tracking issue so the allowlist shrinks
+/// over time.
 ///
 /// Format: `(relative_path, expected_category, actual_category, reason)`.
 const KNOWN_MISCLASSIFIED: &[(&str, &str, &str, &str)] = &[
-    // Library file: passes `check` standalone, fails `eval` because
-    // required indexes are unbound. Library validity is the property under
-    // test; the eval failure is incidental. Move here when we add a
-    // dedicated `library/` category, or wrap with a binding harness.
-    (
-        "valid/required_indexes.gcl",
-        "valid",
-        "runtime_error",
-        "library file with unbound required indexes — eval failure is by design",
-    ),
     // Regression introduced by PR #570: dim_check reports
     // `D002: declared as Dimensionless` for top-level `pub const node`
     // declarations that share a file with an inline `dag` block whose
@@ -2305,6 +2300,15 @@ const KNOWN_MISCLASSIFIED: &[(&str, &str, &str, &str)] = &[
         "PR #570 dim_check regression: D002 on parent const re-imported by inline dag",
     ),
 ];
+
+/// Outcomes that a fixture's directory placement can accept. `valid_library`
+/// is intentionally lenient on `eval` — see the comment block above.
+fn category_accepts(expected: &str, actual: &str) -> bool {
+    match expected {
+        "valid_library" => actual == "valid" || actual == "runtime_error",
+        _ => expected == actual,
+    }
+}
 
 #[test]
 fn fixtures_match_their_category() {
@@ -2341,7 +2345,8 @@ fn fixtures_match_their_category() {
         let allowlisted = KNOWN_MISCLASSIFIED
             .iter()
             .find(|(p, _, _, _)| *p == rel_str);
-        match (actual == *expected, allowlisted) {
+        let accepted = category_accepts(expected, actual);
+        match (accepted, allowlisted) {
             (true, None) => {}
             (true, Some((_, _, _, reason))) => {
                 stale_allowlist.push(format!("{rel_str}: now categorized correctly ({reason})"));
