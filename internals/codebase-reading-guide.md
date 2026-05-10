@@ -476,10 +476,13 @@ The `insta` crate is used extensively:
 - **Error output**: `crates/graphcal-eval/tests/snapshots/`
 - **Formatter**: `crates/graphcal-fmt/tests/snapshots/`
 
-Fixture files live in `tests/fixtures/`, organized into three top-level
+Fixture files live in `tests/fixtures/`, organized into four top-level
 categories by their expected outcome:
 
 - `tests/fixtures/valid/` -- passes `graphcal check` and evaluates cleanly.
+- `tests/fixtures/valid_library/` -- passes `graphcal check` but is not
+  designed to be evaluated standalone (e.g. declares `pub(bind)` required
+  indexes that need binding via parameterized include). `eval` may fail.
 - `tests/fixtures/runtime_error/` -- passes `graphcal check` but fails at
   evaluation (e.g. assertion failures, division by zero, domain violations).
 - `tests/fixtures/invalid/` -- fails `graphcal check` (parse, type, or
@@ -487,6 +490,9 @@ categories by their expected outcome:
 
 Each category preserves a `multi/` subdirectory for multi-file fixture
 projects.
+
+The categorization is enforced by the `fixtures_match_their_category` test
+in `crates/graphcal-cli/tests/cli.rs`.
 
 ### Integration Tests
 
