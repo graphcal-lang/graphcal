@@ -2193,12 +2193,25 @@ fn collect_entry_points(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn fixture_entry_points() -> Vec<PathBuf> {
+    fixture_entry_points_by_category()
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect()
+}
+
+/// Collect `(category, entry_path)` pairs for every fixture entry point under
+/// `tests/fixtures/{valid,runtime_error,invalid}`, sorted by path.
+fn fixture_entry_points_by_category() -> Vec<(&'static str, PathBuf)> {
     let root = fixtures_root();
-    let mut entries = Vec::new();
+    let mut entries: Vec<(&'static str, PathBuf)> = Vec::new();
     for cat in ["valid", "runtime_error", "invalid"] {
-        collect_entry_points(&root.join(cat), &mut entries);
+        let mut cat_entries = Vec::new();
+        collect_entry_points(&root.join(cat), &mut cat_entries);
+        for path in cat_entries {
+            entries.push((cat, path));
+        }
     }
-    entries.sort();
+    entries.sort_by(|a, b| a.1.cmp(&b.1));
     entries
 }
 
@@ -2241,5 +2254,126 @@ fn check_failure_implies_eval_failure() {
         "{} fixture(s) failed `check` but passed `eval` — invariant violated:\n{}",
         violations.len(),
         violations.join("\n")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Categorization: each fixture must live under the directory whose name
+// matches its actual `check`/`eval` outcome:
+//   tests/fixtures/valid/         → check passes, eval passes
+//   tests/fixtures/runtime_error/ → check passes, eval fails
+//   tests/fixtures/invalid/       → check fails
+// Without this guard, fixtures can drift into the wrong bucket as language
+// semantics change, silently weakening the implicit contract that snapshot
+// and integration tests rely on.
+// ---------------------------------------------------------------------------
+
+/// Fixtures that are placed in the wrong category but kept there because
+/// the source-of-truth intent (e.g. "this is a valid library") matters more
+/// than the current `check`/`eval` outcome. Each entry MUST also carry a
+/// tracking issue so the allowlist shrinks over time.
+///
+/// Format: `(relative_path, expected_category, actual_category, reason)`.
+const KNOWN_MISCLASSIFIED: &[(&str, &str, &str, &str)] = &[
+    // Library file: passes `check` standalone, fails `eval` because
+    // required indexes are unbound. Library validity is the property under
+    // test; the eval failure is incidental. Move here when we add a
+    // dedicated `library/` category, or wrap with a binding harness.
+    (
+        "valid/required_indexes.gcl",
+        "valid",
+        "runtime_error",
+        "library file with unbound required indexes — eval failure is by design",
+    ),
+    // Regression introduced by PR #570: dim_check reports
+    // `D002: declared as Dimensionless` for top-level `pub const node`
+    // declarations that share a file with an inline `dag` block whose
+    // `import <self>.{...}` re-imports them. Minimal repro:
+    //   pub const node r_earth: Length = 6371.0 km;
+    //   dag d { import <file>.{r_earth}; node r1: Length = @r_earth; }
+    //   include d().{ r1 as r1_out };
+    (
+        "valid/hohmann.gcl",
+        "valid",
+        "invalid",
+        "PR #570 dim_check regression: D002 on parent const re-imported by inline dag",
+    ),
+    (
+        "valid/inline_dag_import_parent/main.gcl",
+        "valid",
+        "invalid",
+        "PR #570 dim_check regression: D002 on parent const re-imported by inline dag",
+    ),
+];
+
+#[test]
+fn fixtures_match_their_category() {
+    let entries = fixture_entry_points_by_category();
+    assert!(
+        entries.len() >= 100,
+        "found only {} entry points",
+        entries.len()
+    );
+
+    let root = fixtures_root();
+    let mut new_violations: Vec<String> = Vec::new();
+    let mut stale_allowlist: Vec<String> = Vec::new();
+    for (expected, path) in &entries {
+        let check = graphcal_bin()
+            .args(["check", path.to_str().unwrap()])
+            .output()
+            .expect("graphcal check failed to spawn");
+        let actual = if check.status.success() {
+            let eval = graphcal_bin()
+                .args(["eval", path.to_str().unwrap()])
+                .output()
+                .expect("graphcal eval failed to spawn");
+            if eval.status.success() {
+                "valid"
+            } else {
+                "runtime_error"
+            }
+        } else {
+            "invalid"
+        };
+        let rel = path.strip_prefix(&root).unwrap_or(path);
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        let allowlisted = KNOWN_MISCLASSIFIED
+            .iter()
+            .find(|(p, _, _, _)| *p == rel_str);
+        match (actual == *expected, allowlisted) {
+            (true, None) => {}
+            (true, Some((_, _, _, reason))) => {
+                stale_allowlist.push(format!("{rel_str}: now categorized correctly ({reason})"));
+            }
+            (false, Some((_, exp, act, _))) if expected == exp && actual == *act => {}
+            (false, Some((_, exp, act, _))) => {
+                new_violations.push(format!(
+                    "{rel_str}: allowlist says expected `{exp}` actual `{act}`, \
+                     but observed expected `{expected}` actual `{actual}`"
+                ));
+            }
+            (false, None) => {
+                new_violations.push(format!(
+                    "{rel_str}: expected `{expected}`, actual `{actual}`"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        new_violations.is_empty(),
+        "{} fixture(s) misclassified — move each to the matching directory, \
+         fix the underlying regression, or add to KNOWN_MISCLASSIFIED with a \
+         tracking note:\n{}",
+        new_violations.len(),
+        new_violations.join("\n")
+    );
+    assert!(
+        stale_allowlist.is_empty(),
+        "{} fixture(s) on KNOWN_MISCLASSIFIED now match their category — \
+         remove them from the allowlist:\n{}",
+        stale_allowlist.len(),
+        stale_allowlist.join("\n")
     );
 }
