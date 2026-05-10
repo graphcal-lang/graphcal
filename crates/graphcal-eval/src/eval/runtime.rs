@@ -215,6 +215,7 @@ pub(super) fn run_eval_loop(
             src,
             unfold_context: Some(unfold_ctx),
             tir,
+            struct_field_constraints: Some(&plan.struct_field_constraints),
         };
 
         let result = eval_expr(expr, &values, &empty_locals, &ctx);
@@ -274,6 +275,7 @@ pub(super) fn evaluate_plan(
         src,
         unfold_context: None,
         tir,
+        struct_field_constraints: Some(&plan.struct_field_constraints),
     };
 
     let EvalLoopResult { values, errors } =

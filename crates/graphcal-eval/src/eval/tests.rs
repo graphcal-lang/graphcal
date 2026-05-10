@@ -1510,6 +1510,182 @@ node out_b: Length = @doubler(v: @dist).result[Region.B];
     assert!((b - 6.0).abs() < 1e-10, "expected 6.0, got {b}");
 }
 
+// ---- Domain constraints on struct/union member fields (#450 Pos 1+2) ----
+
+#[test]
+fn struct_field_within_bounds_passes() {
+    let source = include_str!("../../../../tests/fixtures/valid/domain_field_within_bounds.gcl");
+    let result = compile_and_eval(source).unwrap();
+    let (_, val) = result
+        .consts
+        .iter()
+        .find(|(n, _)| n.as_str() == "SAT")
+        .expect("SAT not found");
+    matches!(val, Value::Struct { .. });
+}
+
+#[test]
+fn struct_field_const_violation_is_compile_time() {
+    let source = "
+type Spec { mass: Mass(min: 100.0 kg, max: 2000.0 kg) }
+const node SAT: Spec = Spec { mass: 5000.0 kg };
+";
+    let err = compile_and_eval(source).unwrap_err();
+    let CompileError::Eval(GraphcalError::DomainViolation {
+        name, violation, ..
+    }) = err
+    else {
+        panic!("expected DomainViolation, got {err:?}");
+    };
+    assert_eq!(name, "SAT.mass");
+    assert!(
+        violation.contains("above maximum"),
+        "violation = {violation}"
+    );
+}
+
+#[test]
+fn struct_field_runtime_violation_is_per_node_error() {
+    let source = "
+type Spec { mass: Mass(min: 100.0 kg, max: 2000.0 kg) }
+param x: Mass = 5000.0 kg;
+node SAT: Spec = Spec { mass: @x };
+";
+    let result = compile_and_eval(source).unwrap();
+    let (_, sat_result, _) = result
+        .all
+        .iter()
+        .find(|(n, _, _)| n.as_str() == "SAT")
+        .expect("SAT not found");
+    let err = sat_result.as_ref().unwrap_err();
+    let NodeError::EvalFailed { message } = err else {
+        panic!("expected EvalFailed, got {err:?}");
+    };
+    assert!(
+        message.contains("Spec.mass") && message.contains("above maximum"),
+        "message = {message}"
+    );
+}
+
+#[test]
+fn union_member_field_violation() {
+    let source = "
+pub dim Velocity = Length / Time;
+pub type Burn { dv: Velocity(max: 10.0 km/s) }
+pub type Coast {}
+pub type Result = Burn | Coast;
+node R: Result = Burn { dv: 50.0 km/s };
+";
+    let result = compile_and_eval(source).unwrap();
+    let (_, r_result, _) = result
+        .all
+        .iter()
+        .find(|(n, _, _)| n.as_str() == "R")
+        .expect("R not found");
+    let err = r_result.as_ref().unwrap_err();
+    let NodeError::EvalFailed { message } = err else {
+        panic!("expected EvalFailed, got {err:?}");
+    };
+    assert!(
+        message.contains("Burn.dv") && message.contains("above maximum"),
+        "message = {message}"
+    );
+}
+
+#[test]
+fn struct_field_min_exceeds_max_at_compile_time() {
+    let source = "type Foo { x: Mass(min: 100.0 kg, max: 50.0 kg) }";
+    let err = compile_and_eval(source).unwrap_err();
+    let CompileError::Eval(GraphcalError::DomainMinExceedsMax { name, .. }) = err else {
+        panic!("expected DomainMinExceedsMax, got {err:?}");
+    };
+    assert_eq!(name, "Foo.x");
+}
+
+#[test]
+fn struct_field_invalid_target_at_compile_time() {
+    let source = "type Foo { x: Bool(min: 0.0) }";
+    let err = compile_and_eval(source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CompileError::Eval(GraphcalError::InvalidDomainTarget { .. })
+        ),
+        "expected InvalidDomainTarget, got {err:?}"
+    );
+}
+
+#[test]
+fn struct_field_dim_mismatch_at_compile_time() {
+    let source = "type Foo { x: Length(min: 1.0 s) }";
+    let err = compile_and_eval(source).unwrap_err();
+    let CompileError::Eval(GraphcalError::DomainDimensionMismatch { name, .. }) = err else {
+        panic!("expected DomainDimensionMismatch, got {err:?}");
+    };
+    assert_eq!(name, "Foo.x");
+}
+
+// ---- Position 4: domain constraint on a generic type argument ----
+
+#[test]
+fn generic_type_arg_constraint_rejected() {
+    let source = "
+pub type Eci {}
+pub type Vec3<D: Dim, F: Type> { x: D, y: D, z: D }
+param p: Vec3<Length(min: 0.0 m), Eci> = Vec3<Length, Eci> { x: 1.0 m, y: 2.0 m, z: 3.0 m };
+";
+    let err = compile_and_eval(source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CompileError::Eval(GraphcalError::GenericTypeArgDomainConstraint { .. })
+        ),
+        "expected GenericTypeArgDomainConstraint, got {err:?}"
+    );
+}
+
+// ---- Position 3: regression — include'd DAG already validates ----
+
+#[test]
+fn included_dag_param_constraint_runtime_violation() {
+    let source = "
+pub dim Velocity = Length / Time;
+dag bumper {
+    param v: Velocity(max: 100.0 m/s);
+    pub node out: Velocity = @v * 2.0;
+}
+param speed: Velocity = 1000.0 m/s;
+include bumper(v: @speed).{ out as doubled };
+";
+    let result = compile_and_eval(source).unwrap();
+    let (_, v_result, _) = result
+        .all
+        .iter()
+        .find(|(n, _, _)| n.as_str() == "v")
+        .expect("v not found");
+    assert!(v_result.is_err(), "v should violate domain constraint");
+}
+
+#[test]
+fn included_dag_param_constraint_dim_mismatch() {
+    let source = "
+pub dim Velocity = Length / Time;
+dag bumper {
+    param v: Velocity(min: 1.0 kg);
+    pub node out: Velocity = @v;
+}
+include bumper(v: 5.0 m/s).{ out };
+";
+    let err = compile_and_eval(source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CompileError::Eval(GraphcalError::DomainDimensionMismatch { .. })
+        ),
+        "expected DomainDimensionMismatch, got {err:?}"
+    );
+}
+
 #[test]
 fn eval_inline_dag_call_const_node_in_body() {
     // `const node` inside a dag body should participate in the same

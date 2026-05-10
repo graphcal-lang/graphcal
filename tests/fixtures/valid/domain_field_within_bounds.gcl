@@ -1,0 +1,10 @@
+// domain_field_within_bounds.gcl -- struct field constraints satisfied
+type SatelliteSpec {
+    mass: Mass(min: 100.0 kg, max: 2000.0 kg),
+    altitude: Length(min: 200.0 km),
+}
+
+const node SAT: SatelliteSpec = SatelliteSpec {
+    mass: 500.0 kg,
+    altitude: 600.0 km,
+};

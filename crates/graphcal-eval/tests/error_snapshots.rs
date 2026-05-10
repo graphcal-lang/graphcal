@@ -454,6 +454,61 @@ fn error_domain_invalid_key() {
     insta::assert_snapshot!(rendered);
 }
 
+// --- Struct/union member field domain constraint errors (#450 Pos 1+2) ---
+
+#[test]
+fn error_domain_field_on_bool() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_field_on_bool.gcl");
+    let rendered = render_error(source, "domain_field_on_bool.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_field_min_exceeds_max() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_field_min_exceeds_max.gcl");
+    let rendered = render_error(source, "domain_field_min_exceeds_max.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_field_dim_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_field_dim_mismatch.gcl");
+    let rendered = render_error(source, "domain_field_dim_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_field_const_violation() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_field_const_violation.gcl");
+    let rendered = render_error(source, "domain_field_const_violation.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_field_runtime_violation() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/domain_field_runtime_violation.gcl");
+    let rendered = render_node_error(source, "domain_field_runtime_violation.gcl", "SAT");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_union_member_violation() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/domain_union_member_violation.gcl");
+    let rendered = render_node_error(source, "domain_union_member_violation.gcl", "R");
+    insta::assert_snapshot!(rendered);
+}
+
+// --- Position 4: domain constraint on a generic type argument ---
+
+#[test]
+fn error_domain_generic_arg_constraint() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_generic_arg_constraint.gcl");
+    let rendered = render_error(source, "domain_generic_arg_constraint.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
 #[test]
 fn error_variant_literal_in_node() {
     let source = include_str!("../../../tests/fixtures/invalid/variant_literal_in_node.gcl");

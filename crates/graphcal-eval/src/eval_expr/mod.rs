@@ -14,12 +14,13 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind, MulDivOp, UnitExpr};
-use graphcal_compiler::syntax::names::ScopedName;
+use graphcal_compiler::syntax::names::{FieldName, ScopedName, StructTypeName};
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{Registry, UnitScale};
+use graphcal_compiler::tir::typed::ResolvedDomainConstraint;
 
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
@@ -45,6 +46,13 @@ pub struct EvalContext<'a> {
     /// reach the file's flat per-DAG body map. Shared across nested inline
     /// calls so a dag body invoking another dag can still resolve it.
     pub tir: &'a graphcal_compiler::tir::typed::TIR,
+    /// Resolved domain constraints declared on struct/union member fields,
+    /// keyed by `(struct type name, field name)`. Looked up at every
+    /// `ExprKind::StructConstruction` to validate field values immediately.
+    /// `None` means "skip the check" (used by paths that haven't resolved
+    /// constraints yet, e.g. const-bound evaluation inside `exec_plan`).
+    pub struct_field_constraints:
+        Option<&'a HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>>,
 }
 
 /// Context required to evaluate an `unfold(...)` expression inline.
@@ -254,6 +262,27 @@ pub fn eval_expr(
                             )
                         })?
                 };
+                // Validate against any field-level domain constraint declared
+                // on `<type_name>.<field_name>`. The check fires at the field's
+                // span so the diagnostic points at the offending value.
+                if let Some(field_constraints) = ctx.struct_field_constraints
+                    && let Some(constraint) = field_constraints
+                        .get(&(type_name.value.clone(), field_init.name.value.clone()))
+                    && let Err(violation) =
+                        crate::domain_check::check_domain_constraint(&val, constraint)
+                {
+                    let span = field_init
+                        .value
+                        .as_ref()
+                        .map_or(field_init.name.span, |e| e.span);
+                    return Err(ctx.eval_error(
+                        format!(
+                            "field `{}.{}` {}",
+                            type_name.value, field_init.name.value, violation.message
+                        ),
+                        span,
+                    ));
+                }
                 field_map.insert(field_init.name.value.clone(), val);
             }
             Ok(RuntimeValue::Struct {
@@ -393,6 +422,7 @@ fn eval_inline_dag_call(
         src: ctx.src,
         unfold_context: None,
         tir: ctx.tir,
+        struct_field_constraints: ctx.struct_field_constraints,
     };
 
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();

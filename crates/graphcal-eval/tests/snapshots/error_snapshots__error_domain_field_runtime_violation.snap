@@ -1,0 +1,6 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 495
+expression: rendered
+---
+field `SatelliteSpec.mass` above maximum (2000 kg)

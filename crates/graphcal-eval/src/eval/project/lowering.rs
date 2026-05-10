@@ -109,6 +109,14 @@ pub(super) fn lower_and_finalize(
     {
         let const_values = crate::exec_plan::eval_consts_from_tir(&tir, file_src)?;
         let _ = crate::exec_plan::resolve_domain_constraints(&tir, &const_values, file_src)?;
+        let field_constraints =
+            crate::exec_plan::resolve_struct_field_constraints(&tir, &const_values, file_src)?;
+        crate::exec_plan::check_const_struct_field_constraints_at_compile_time(
+            &tir,
+            &const_values,
+            &field_constraints,
+            file_src,
+        )?;
     }
 
     let declared_types = tir.build_declared_types(file_src)?;

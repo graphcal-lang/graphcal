@@ -1,0 +1,2 @@
+// domain_field_dim_mismatch.gcl -- field bound has wrong dimension
+type Foo { x: Length(min: 1.0 s) }

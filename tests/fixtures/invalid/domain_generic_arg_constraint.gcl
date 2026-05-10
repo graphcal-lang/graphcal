@@ -1,0 +1,5 @@
+// domain_generic_arg_constraint.gcl -- constraint on a generic type argument
+pub type Eci {}
+pub type Vec3<D: Dim, F: Type> { x: D, y: D, z: D }
+
+param p: Vec3<Length(min: 0.0 m), Eci> = Vec3<Length, Eci> { x: 1.0 m, y: 2.0 m, z: 3.0 m };

@@ -1,0 +1,8 @@
+// domain_union_member_violation.gcl -- union member field constraint violation
+pub dim Velocity = Length / Time;
+
+pub type Burn { dv: Velocity(min: 0.0 m/s, max: 10.0 km/s), duration: Time(min: 0.0 s) }
+pub type Coast {}
+pub type ManeuverResult = Burn | Coast;
+
+node R: ManeuverResult = Burn { dv: 50.0 km/s, duration: 1.0 s };

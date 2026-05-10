@@ -11,7 +11,7 @@ use miette::NamedSource;
 use graphcal_compiler::desugar::desugared_ast::{
     AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl,
 };
-use graphcal_compiler::syntax::names::ScopedName;
+use graphcal_compiler::syntax::names::{FieldName, ScopedName, StructTypeName};
 use graphcal_compiler::syntax::span::Span;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
@@ -84,6 +84,11 @@ pub struct ExecPlan {
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
     /// Key-lookup only, order irrelevant.
     pub(crate) domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>,
+    /// Resolved domain constraints for struct/union member fields, keyed by
+    /// `(struct type name, field name)`. Looked up at every
+    /// `ExprKind::StructConstruction` evaluation to validate field values.
+    pub(crate) struct_field_constraints:
+        HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>,
 }
 
 /// Compile a TIR into an execution plan.
@@ -144,6 +149,20 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
 
     // Resolve domain constraints from type annotations.
     let domain_constraints = resolve_domain_constraints(tir, &const_values, src)?;
+    // Resolve domain constraints declared on struct/union member fields.
+    let struct_field_constraints = resolve_struct_field_constraints(tir, &const_values, src)?;
+
+    // Validate struct field constraints against const struct values. Const
+    // evaluation runs before field constraints are resolved (the constraint
+    // bound exprs themselves need const values), so the violation check is
+    // deferred to here. Top-level struct-typed consts that violate any field
+    // constraint produce a compile-time `DomainViolation`.
+    check_const_struct_field_constraints_at_compile_time(
+        tir,
+        &const_values,
+        &struct_field_constraints,
+        src,
+    )?;
 
     Ok(ExecPlan {
         const_values,
@@ -162,6 +181,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         assumes_map: tir.root().assumes_map.clone(),
         expected_fail: tir.root().expected_fail.clone(),
         domain_constraints,
+        struct_field_constraints,
     })
 }
 
@@ -230,6 +250,7 @@ pub fn eval_consts_from_tir(
         src,
         unfold_context: None,
         tir,
+        struct_field_constraints: None,
     };
 
     for idx in sorted {
@@ -371,6 +392,7 @@ pub fn resolve_domain_constraints(
         src,
         unfold_context: None,
         tir,
+        struct_field_constraints: None,
     };
 
     let mut constraints = HashMap::new();
@@ -496,6 +518,198 @@ pub fn resolve_domain_constraints(
     }
 
     Ok(constraints)
+}
+
+/// Resolve domain constraints declared on struct/union member fields.
+///
+/// For every `TypeDef` in the registry, evaluates each constrained field's
+/// `min`/`max` bound expressions to SI scalars, validates `min ≤ max`, and
+/// stores the result keyed by `(struct type name, field name)`.
+///
+/// Bound dimensions and target compatibility are validated earlier in
+/// `dim_check::check_field_domain_constraint_*`. This pass focuses on the
+/// runtime-relevant pieces: bound evaluation, `min ≤ max`, and storage.
+pub fn resolve_struct_field_constraints(
+    tir: &TIR,
+    const_values: &HashMap<ScopedName, RuntimeValue>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>, GraphcalError> {
+    let builtin_consts = builtin_constants();
+    let builtin_fns = builtin_functions();
+    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+
+    let ctx = EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+        tir,
+        struct_field_constraints: None,
+    };
+
+    let mut constraints = HashMap::new();
+
+    for type_def in tir.registry.types.all_types() {
+        for field in type_def.fields() {
+            let domain_bounds = extract_domain_bounds(&field.type_ann);
+            if domain_bounds.is_empty() {
+                continue;
+            }
+
+            let mut min_val: Option<f64> = None;
+            let mut max_val: Option<f64> = None;
+            let mut min_display: Option<String> = None;
+            let mut max_display: Option<String> = None;
+            let mut constraint_span = domain_bounds[0].span;
+            let display_name = format!("{}.{}", type_def.name, field.name);
+
+            for bound in domain_bounds {
+                let rv = eval_expr(&bound.value, const_values, &empty_locals, &ctx)?;
+                let si_value = match &rv {
+                    RuntimeValue::Scalar(v) => *v,
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "domain bound integers are small"
+                    )]
+                    RuntimeValue::Int(i) => *i as f64,
+                    _ => {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "domain constraint `{}` on field `{display_name}` must evaluate to a scalar value",
+                                bound.kind,
+                            ),
+                            src: src.clone(),
+                            span: bound.value.span.into(),
+                        });
+                    }
+                };
+
+                let display_text = format_bound_display(&bound.value, si_value);
+                constraint_span = constraint_span.merge(bound.span);
+
+                match bound.kind {
+                    graphcal_compiler::desugar::desugared_ast::DomainBoundKind::Min => {
+                        min_val = Some(si_value);
+                        min_display = Some(display_text);
+                    }
+                    graphcal_compiler::desugar::desugared_ast::DomainBoundKind::Max => {
+                        max_val = Some(si_value);
+                        max_display = Some(display_text);
+                    }
+                }
+            }
+
+            if let (Some(min), Some(max)) = (min_val, max_val)
+                && min > max
+            {
+                return Err(GraphcalError::DomainMinExceedsMax {
+                    name: display_name,
+                    min: min_display.unwrap_or_else(|| format!("{min}")),
+                    max: max_display.unwrap_or_else(|| format!("{max}")),
+                    src: src.clone(),
+                    span: constraint_span.into(),
+                });
+            }
+
+            constraints.insert(
+                (type_def.name.clone(), field.name.clone()),
+                ResolvedDomainConstraint {
+                    min: min_val,
+                    max: max_val,
+                    min_display,
+                    max_display,
+                    span: constraint_span,
+                },
+            );
+        }
+    }
+
+    Ok(constraints)
+}
+
+/// Walk every top-level const value and validate it against resolved
+/// struct-field constraints. Used both inside [`compile`] and from the
+/// `check`-only path in `eval/project/lowering.rs` so that struct-field
+/// violations on const nodes surface under `graphcal check`, not only
+/// during full evaluation.
+///
+/// # Errors
+///
+/// Returns the first [`GraphcalError::DomainViolation`] encountered.
+pub fn check_const_struct_field_constraints_at_compile_time(
+    tir: &TIR,
+    const_values: &HashMap<ScopedName, RuntimeValue>,
+    field_constraints: &HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    for entry in &tir.root().consts {
+        if let Some(value) = const_values.get(&entry.name) {
+            check_const_struct_field_constraints(
+                value,
+                entry.name.member(),
+                entry.span,
+                field_constraints,
+                src,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Recursively validate a const value against resolved struct-field
+/// constraints. For `RuntimeValue::Struct`, looks up each field's
+/// `(struct, field)` constraint and emits `DomainViolation` on the first
+/// violation. Indexed values recurse element-wise; nested structs recurse
+/// field-wise. Other variants short-circuit to `Ok(())`.
+fn check_const_struct_field_constraints(
+    value: &RuntimeValue,
+    decl_name: &str,
+    decl_span: Span,
+    field_constraints: &HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    match value {
+        RuntimeValue::Struct { type_name, fields } => {
+            for (field_name, field_value) in fields {
+                let key = (type_name.clone(), field_name.clone());
+                if let Some(constraint) = field_constraints.get(&key)
+                    && let Err(violation) =
+                        crate::domain_check::check_domain_constraint(field_value, constraint)
+                {
+                    return Err(GraphcalError::DomainViolation {
+                        name: format!("{decl_name}.{field_name}"),
+                        value: format_runtime_value(field_value),
+                        violation: violation.message,
+                        src: src.clone(),
+                        span: decl_span.into(),
+                    });
+                }
+                // Recurse for nested struct fields.
+                check_const_struct_field_constraints(
+                    field_value,
+                    &format!("{decl_name}.{field_name}"),
+                    decl_span,
+                    field_constraints,
+                    src,
+                )?;
+            }
+            Ok(())
+        }
+        RuntimeValue::Indexed { entries, .. } => {
+            for (variant, entry) in entries {
+                check_const_struct_field_constraints(
+                    entry,
+                    &format!("{decl_name}.{variant}"),
+                    decl_span,
+                    field_constraints,
+                    src,
+                )?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Format a runtime value for inclusion in a `DomainViolation` error message.

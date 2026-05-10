@@ -138,6 +138,7 @@ fn resolve_display_unit_scale(
         src: &empty_src,
         unfold_context: None,
         tir: &stub_tir,
+        struct_field_constraints: None,
     };
     let empty_locals = HashMap::new();
     crate::eval_expr::resolve_unit_scale(unit, values, &empty_locals, &ctx).ok()
