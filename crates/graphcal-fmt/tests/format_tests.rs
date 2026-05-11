@@ -322,6 +322,50 @@ fn format_no_unnecessary_parens() {
     );
 }
 
+// Issue #575: load-bearing parens around a binary-op operand of unary `!` or
+// around the lhs of `^` must survive the formatter.
+
+#[test]
+fn format_keeps_parens_around_not_of_and() {
+    let source = "param a: Bool = true;\nparam b: Bool = false;\nnode x: Bool = !(@a && @b);\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("!(@a && @b)"),
+        "load-bearing parens around `&&` operand of `!` were stripped: {formatted}"
+    );
+}
+
+#[test]
+fn format_keeps_parens_around_not_of_or() {
+    let source = "param a: Bool = true;\nparam b: Bool = false;\nnode x: Bool = !(@a || @b);\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("!(@a || @b)"),
+        "load-bearing parens around `||` operand of `!` were stripped: {formatted}"
+    );
+}
+
+#[test]
+fn format_keeps_parens_around_neg_in_pow_lhs() {
+    let source = "param n: Int = 3;\nnode y: Int = (-@n) ^ 2;\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("(-@n) ^ 2"),
+        "load-bearing parens around `-` lhs of `^` were stripped: {formatted}"
+    );
+}
+
+#[test]
+fn format_pow_with_signed_literal_rhs_no_parens() {
+    // `x ^ -2` is unambiguous because `^` is right-assoc; no parens needed.
+    let source = "param x: Dimensionless = 2.0;\nnode y: Dimensionless = @x ^ -2.0;\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("@x ^ -2.0"),
+        "rhs of `^` should not gain parens around a unary literal: {formatted}"
+    );
+}
+
 #[test]
 fn format_attribute_no_args() {
     let source = "#[lazy]\nnode x: Dimensionless = 1.0;\n";
