@@ -2279,25 +2279,7 @@ fn check_failure_implies_eval_failure() {
 /// over time.
 ///
 /// Format: `(relative_path, expected_category, actual_category, reason)`.
-const KNOWN_MISCLASSIFIED: &[(&str, &str, &str, &str)] = &[
-    // Tracked in #572 — dim_check regression introduced by PR #570:
-    // D002 'declared as Dimensionless' on top-level `pub const node`
-    // declarations that share a file with an inline `dag` block whose
-    // `import <self>.{...}` re-imports them. Remove these entries when
-    // #572 is fixed.
-    (
-        "valid/hohmann.gcl",
-        "valid",
-        "invalid",
-        "#572: dim_check regression on parent const re-imported by inline dag",
-    ),
-    (
-        "valid/inline_dag_import_parent/main.gcl",
-        "valid",
-        "invalid",
-        "#572: dim_check regression on parent const re-imported by inline dag",
-    ),
-];
+const KNOWN_MISCLASSIFIED: &[(&str, &str, &str, &str)] = &[];
 
 /// Outcomes that a fixture's directory placement can accept. `valid_library`
 /// is intentionally lenient on `eval` — see the comment block above.

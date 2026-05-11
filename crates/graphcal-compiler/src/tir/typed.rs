@@ -844,6 +844,12 @@ impl DagTIR {
         src: &NamedSource<Arc<String>>,
     ) -> Result<HashMap<ScopedName, crate::registry::declared_type::DeclaredType>, GraphcalError>
     {
+        // Layer the sources so the most authoritative wins on key collisions:
+        //   builtins  <  imported_decl_types  <  imported_values  <  resolved_decl_types
+        // A DAG's own resolved decls always shadow imports of the same name —
+        // necessary because `merge_dependency` may propagate placeholder
+        // imported decl types from an inline DAG's self-import back onto the
+        // importer for names the importer already declares itself.
         let mut declared_types = HashMap::new();
         for name in crate::registry::builtins::builtin_constants().keys() {
             declared_types.insert(
@@ -851,15 +857,15 @@ impl DagTIR {
                 crate::registry::declared_type::DeclaredType::Scalar(Dimension::dimensionless()),
             );
         }
-        for (name, resolved) in &self.resolved_decl_types {
-            let dt = resolved_to_declared_type(resolved, src)?;
-            declared_types.insert(name.clone(), dt);
+        for (name, dt) in &self.imported_decl_types {
+            declared_types.insert(name.clone(), dt.clone());
         }
         for (name, (_rv, dt)) in &self.imported_values {
             declared_types.insert(name.clone(), dt.clone());
         }
-        for (name, dt) in &self.imported_decl_types {
-            declared_types.insert(name.clone(), dt.clone());
+        for (name, resolved) in &self.resolved_decl_types {
+            let dt = resolved_to_declared_type(resolved, src)?;
+            declared_types.insert(name.clone(), dt);
         }
         Ok(declared_types)
     }
