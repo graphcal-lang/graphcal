@@ -1,0 +1,4 @@
+// int_overflow_add.gcl -- i64::MAX + 1 must surface as a runtime error
+// (not silent wrap-around).
+param a: Int = 9223372036854775807;
+node b: Int = @a + 1;

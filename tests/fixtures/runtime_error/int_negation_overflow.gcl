@@ -1,0 +1,6 @@
+// int_negation_overflow.gcl -- -(i64::MIN) cannot be represented as i64.
+// Must surface as a runtime error rather than silently wrapping.
+param a: Int = 9223372036854775807;
+node b: Int = -@a;
+node c: Int = @b - 1;
+node d: Int = -@c;

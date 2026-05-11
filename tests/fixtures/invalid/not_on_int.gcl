@@ -1,0 +1,3 @@
+// error: logical NOT requires a Bool operand
+param a: Int = 5;
+node bad: Bool = !@a;

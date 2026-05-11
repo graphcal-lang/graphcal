@@ -1,0 +1,4 @@
+// error: `->` is non-chaining; `expr -> u1 -> u2` must be rejected.
+// Documented in expressions.md: "an expression carries at most one of [-> | as]".
+param a: Length = 1500.0 m;
+node bad: Length = @a -> km -> mm;

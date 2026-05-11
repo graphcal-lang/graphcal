@@ -1,0 +1,16 @@
+// numeric_underscores.gcl -- Pin support for `_` digit separators in numeric literals
+//
+// Grammar allows `_` between digits in both Int and Float mantissa parts.
+// (Underscores in the exponent part of `1.0e10` are currently NOT supported
+// by the lexer even though the EBNF allows them; that gap is captured as a
+// separate report.)
+param i: Int = 1_000_000;
+param f: Dimensionless = 1_234.567_8;
+
+// Underscores work inside the integer part of a unit literal too.
+param mass: Mass = 12_345.0 kg;
+
+// Sanity arithmetic to confirm the underscores didn't change the value.
+node i_plus_one: Int = @i + 1;
+node twice_f: Dimensionless = @f * 2.0;
+node mass_t: Mass = @mass -> kg;

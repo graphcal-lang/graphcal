@@ -1,0 +1,2 @@
+// error: Feb 30 is not a valid Gregorian date; const-evaluated datetime fails at check time.
+const node bad: Datetime = datetime("2023-02-30T00:00:00Z");

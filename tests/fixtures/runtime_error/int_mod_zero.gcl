@@ -1,0 +1,4 @@
+// int_mod_zero.gcl -- Integer modulo by zero is a runtime error.
+param x: Int = 5;
+param y: Int = 0;
+node z: Int = @x % @y;

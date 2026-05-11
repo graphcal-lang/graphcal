@@ -1,0 +1,39 @@
+// math_rounding.gcl -- round / floor / ceil / trunc / sign / abs / hypot
+//
+// Rounding behavior at half-values and across the sign boundary differs by
+// language; pin Graphcal's choices so a libm or backend swap can't silently
+// change them. Also exercises sqrt/cbrt/hypot dimension halving/cubing.
+const node round_half_pos: Dimensionless = round(2.5);
+const node round_half_neg: Dimensionless = round(-2.5);
+const node round_under: Dimensionless = round(2.4);
+
+const node floor_pos: Dimensionless = floor(2.7);
+const node floor_neg: Dimensionless = floor(-2.7);
+
+const node ceil_pos: Dimensionless = ceil(2.3);
+const node ceil_neg: Dimensionless = ceil(-2.3);
+
+const node trunc_pos: Dimensionless = trunc(2.7);
+const node trunc_neg: Dimensionless = trunc(-2.7);
+
+// to_int truncates toward zero on both signs.
+const node to_int_pos: Int = to_int(3.7);
+const node to_int_neg: Int = to_int(-3.7);
+
+// abs preserves the dimension.
+const node abs_neg_len: Length = abs(-5.0 m);
+
+// hypot: dimension preserved, sqrt(3^2 + 4^2) = 5.
+const node hyp_3_4: Length = hypot(3.0 m, 4.0 m);
+
+// sqrt halves the dimension; cbrt divides it by three.
+const node sqrt_area: Length = sqrt(16.0 m^2);
+const node cbrt_volume: Length = cbrt(27.0 m^3);
+
+// log family identities.
+const node log_8_2: Dimensionless = log(8.0, 2.0);
+const node log2_8: Dimensionless = log2(8.0);
+const node log10_1000: Dimensionless = log10(1000.0);
+const node ln_e: Dimensionless = ln(E);
+const node expm1_zero: Dimensionless = expm1(0.0);
+const node log1p_zero: Dimensionless = log1p(0.0);

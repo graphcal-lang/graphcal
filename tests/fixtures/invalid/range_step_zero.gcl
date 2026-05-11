@@ -1,0 +1,2 @@
+// error: linspace step must be > 0
+index TimeStep = linspace(0.0 s, 1.0 s, step: 0.0 s);

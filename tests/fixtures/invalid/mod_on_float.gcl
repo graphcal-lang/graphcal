@@ -1,0 +1,4 @@
+// error: % requires Int operands; Dimensionless (Float) is rejected.
+param a: Dimensionless = 7.5;
+param b: Dimensionless = 3.0;
+node bad: Dimensionless = @a % @b;

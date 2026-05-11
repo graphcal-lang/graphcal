@@ -1,0 +1,6 @@
+// error: comparison operators are non-chaining (a < b < c is rejected by the parser).
+// Documented as "Non-chaining" in the operator precedence table.
+param a: Int = 1;
+param b: Int = 2;
+param c: Int = 3;
+node bad: Bool = @a < @b < @c;

@@ -1,0 +1,37 @@
+// logical_ops.gcl -- Logical operators (!, &&, ||) and their precedence
+//
+// Coverage gap fix: no other fixture exercises the unary `!` operator,
+// and the docs spell out a fixed precedence (`||` < `&&` < unary `!`)
+// that should be guarded against parser regressions.
+param a: Bool = true;
+param b: Bool = false;
+param c: Bool = true;
+
+// Unary NOT
+node not_a: Bool = !@a;
+node not_b: Bool = !@b;
+
+// Double negation
+node not_not_a: Bool = !!@a;
+
+// Binary &&, ||
+node and_ab: Bool = @a && @b;
+node or_ab: Bool = @a || @b;
+
+// && binds tighter than ||  ->  parses as (a || (b && c))
+//   = true || (false && true) = true || false = true
+node mixed_or_and: Bool = @a || @b && @c;
+
+// Forced grouping: (a || b) && c = true && true = true
+node grouped_or_and: Bool = (@a || @b) && @c;
+
+// ! binds tighter than && and ||  ->  parses as ((!a) && b) = (false && false) = false
+node not_then_and: Bool = !@a && @b;
+
+// Forced grouping: !(a && b) = !(true && false) = !false = true
+node not_grouped_and: Bool = !(@a && @b);
+
+// De Morgan check: !(a || b) == (!a && !b)
+node demorgan_lhs: Bool = !(@a || @b);
+node demorgan_rhs: Bool = !@a && !@b;
+node demorgan_eq: Bool = @demorgan_lhs == @demorgan_rhs;
