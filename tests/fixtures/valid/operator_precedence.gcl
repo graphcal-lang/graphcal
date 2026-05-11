@@ -13,6 +13,9 @@ node neg_pow_x: Dimensionless = -@x ^ 2.0;
 
 // `^` right-associativity: 2 ^ 3 ^ 2 = 2 ^ (3^2) = 2 ^ 9 = 512 (not (2^3)^2 = 64).
 node pow_chain: Dimensionless = 2.0 ^ 3.0 ^ 2.0;
+// Same chain on Int — accepted because the dim-check constant-folds the
+// non-literal exponent expression (issue #578).
+node pow_chain_int: Int = 2 ^ 3 ^ 2;
 
 // `^` binds tighter than `/`: a / b ^ 2 = a / (b^2) = 12 / 4 = 3 (not (12/2)^2 = 36).
 node div_then_pow: Dimensionless = @z / @y ^ 2.0;
