@@ -402,7 +402,18 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
     m.insert(
         "clamp",
         BuiltinFunction {
-            eval: |a| a[0].clamp(a[1], a[2]),
+            // Avoid `f64::clamp`, which panics when min > max or either bound is NaN.
+            // Returning NaN routes the failure through the same `check_finite` path
+            // used by sqrt/asin/ln so the user sees a runtime diagnostic instead of
+            // a Rust backtrace.
+            eval: |a| {
+                let (x, lo, hi) = (a[0], a[1], a[2]);
+                if lo.is_nan() || hi.is_nan() || lo > hi {
+                    f64::NAN
+                } else {
+                    x.max(lo).min(hi)
+                }
+            },
             dim_sig: DimSignature::same_dim(&["x", "min", "max"]),
         },
     );
@@ -546,6 +557,21 @@ mod tests {
         assert!(((f.eval)(&[5.0, 0.0, 10.0]) - 5.0).abs() < f64::EPSILON);
         assert!(((f.eval)(&[-1.0, 0.0, 10.0]) - 0.0).abs() < f64::EPSILON);
         assert!(((f.eval)(&[15.0, 0.0, 10.0]) - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn builtin_clamp_min_exceeds_max_returns_nan() {
+        let fns = builtin_functions();
+        let f = &fns["clamp"];
+        assert!((f.eval)(&[5.0, 10.0, 0.0]).is_nan());
+    }
+
+    #[test]
+    fn builtin_clamp_nan_bound_returns_nan() {
+        let fns = builtin_functions();
+        let f = &fns["clamp"];
+        assert!((f.eval)(&[5.0, f64::NAN, 1.0]).is_nan());
+        assert!((f.eval)(&[5.0, 0.0, f64::NAN]).is_nan());
     }
 
     #[test]
