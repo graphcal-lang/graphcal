@@ -44,6 +44,41 @@ fn literal_exponent(expr: &Expr) -> Option<LiteralExponent> {
     }
 }
 
+/// Constant-fold an `Int`-valued exponent expression to an `i64`.
+///
+/// Symmetrizes the `^` chain behavior between Int and Float: `2.0 ^ 3.0 ^ 2.0`
+/// already type-checks because the inner Pow infers to `Scalar(Dimensionless)`,
+/// but the Int branch of the dim-check only inspects the rhs's syntactic shape
+/// and so rejected `2 ^ 3 ^ 2` as a non-literal exponent (issue #578).
+///
+/// Mirrors the runtime rules in `eval_int_binop` (checked arithmetic, no
+/// negative `^` exponents, no integer overflow), so a fold succeeding here is
+/// sufficient to guarantee the runtime evaluation also succeeds with the same
+/// value.
+fn try_const_int(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::Integer(n) => Some(*n),
+        ExprKind::UnaryOp {
+            op: UnaryOp::Neg,
+            operand,
+        } => try_const_int(operand)?.checked_neg(),
+        ExprKind::BinOp { op, lhs, rhs } => {
+            let l = try_const_int(lhs)?;
+            let r = try_const_int(rhs)?;
+            match op {
+                BinOp::Add => l.checked_add(r),
+                BinOp::Sub => l.checked_sub(r),
+                BinOp::Mul => l.checked_mul(r),
+                BinOp::Div if r != 0 => l.checked_div(r),
+                BinOp::Mod if r != 0 => l.checked_rem(r),
+                BinOp::Pow if r >= 0 => u32::try_from(r).ok().and_then(|e| l.checked_pow(e)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Infer the type of a binary operation expression.
 #[expect(
     clippy::too_many_lines,

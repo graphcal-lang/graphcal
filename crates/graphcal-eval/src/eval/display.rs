@@ -11,7 +11,7 @@ use crate::eval_expr::RuntimeValue;
 use graphcal_compiler::registry::types::Registry;
 
 use super::types::{DisplayUnit, Value};
-use graphcal_compiler::registry::format::{format_number, format_unit_expr};
+use graphcal_compiler::registry::format::{format_number, format_unit_expr_canonical};
 
 pub(super) fn attach_display_units(
     value: &mut Value,
@@ -87,7 +87,7 @@ pub(super) fn resolve_unit_to_display(
 ) -> Option<DisplayUnit> {
     let scale = resolve_display_unit_scale(unit, registry, values)?;
     Some(DisplayUnit {
-        label: format_unit_expr(unit),
+        label: format_unit_expr_canonical(unit),
         scale,
     })
 }
