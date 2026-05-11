@@ -1,0 +1,2 @@
+param x: Dimensionless = 5.0;
+node y: Dimensionless = clamp(@x, 10.0, 0.0);
