@@ -6,6 +6,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{BinOp, Expr, ExprKind};
+use crate::syntax::ast::UnaryOp;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{GenericParamName, ScopedName, UnitName};
 
@@ -15,6 +16,33 @@ use crate::registry::types::Registry;
 use super::super::helpers::{expect_scalar, format_inferred_type};
 use super::super::{DeclaredType, InferredType};
 use super::infer_type;
+
+/// A compile-time-known numeric exponent extracted from an `^` rhs.
+///
+/// Captures both the bare-literal forms (`2`, `2.0`) and a leading unary `-`
+/// applied to a literal (`-2`, `-2.0`) — the parser builds the negated form as
+/// `UnaryOp(Neg, IntLit/Number)`, but for D005 purposes both shapes denote
+/// the same compile-time constant.
+enum LiteralExponent {
+    Int(i64),
+    Float(f64),
+}
+
+fn literal_exponent(expr: &Expr) -> Option<LiteralExponent> {
+    match &expr.kind {
+        ExprKind::Integer(n) => Some(LiteralExponent::Int(*n)),
+        ExprKind::Number(n) => Some(LiteralExponent::Float(*n)),
+        ExprKind::UnaryOp {
+            op: UnaryOp::Neg,
+            operand,
+        } => match &operand.kind {
+            ExprKind::Integer(n) => Some(LiteralExponent::Int(n.wrapping_neg())),
+            ExprKind::Number(n) => Some(LiteralExponent::Float(-*n)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
 
 /// Infer the type of a binary operation expression.
 #[expect(
@@ -253,10 +281,14 @@ pub(super) fn infer_binop(
             })
         }
         BinOp::Pow => {
+            // Accept a leading unary `-` on an integer/float literal as a
+            // signed literal exponent — `x ^ -2` is structurally
+            // `Unary(Neg, IntLit(2))`, which is still compile-time-known.
+            let rhs_lit = literal_exponent(rhs);
             // Int/Fin ^ Int (literal non-negative) -> Int
             if lhs_type.is_int_like() {
-                if let ExprKind::Integer(n) = &rhs.kind {
-                    if *n >= 0 {
+                if let Some(LiteralExponent::Int(n)) = rhs_lit {
+                    if n >= 0 {
                         return Ok(InferredType::Int);
                     }
                     return Err(GraphcalError::DimensionMismatch {
@@ -275,21 +307,41 @@ pub(super) fn infer_binop(
             // Scalar ^ ... (existing logic)
             let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
             let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-            if let ExprKind::Number(n) = &rhs.kind {
-                if n.fract() == 0.0 {
+            match rhs_lit {
+                Some(LiteralExponent::Float(n)) => {
+                    if n.fract() == 0.0 {
+                        #[expect(
+                            clippy::cast_possible_truncation,
+                            reason = "guarded by fract() == 0.0 check"
+                        )]
+                        let exp = n as i32;
+                        Ok(InferredType::Scalar(lhs_dim.pow(Rational::from_int(exp))))
+                    } else {
+                        #[expect(
+                            clippy::float_cmp,
+                            reason = "checking exact 0.5 literal for square-root exponent"
+                        )]
+                        if n == 0.5 {
+                            Ok(InferredType::Scalar(lhs_dim.pow(Rational::HALF)))
+                        } else {
+                            Err(GraphcalError::NonLiteralExponent {
+                                src: src.clone(),
+                                span: rhs.span.into(),
+                            })
+                        }
+                    }
+                }
+                Some(LiteralExponent::Int(n)) => {
                     #[expect(
                         clippy::cast_possible_truncation,
-                        reason = "guarded by fract() == 0.0 check"
+                        reason = "exponent values are small integers"
                     )]
-                    let exp = *n as i32;
+                    let exp = n as i32;
                     Ok(InferredType::Scalar(lhs_dim.pow(Rational::from_int(exp))))
-                } else {
-                    #[expect(
-                        clippy::float_cmp,
-                        reason = "checking exact 0.5 literal for square-root exponent"
-                    )]
-                    if *n == 0.5 {
-                        Ok(InferredType::Scalar(lhs_dim.pow(Rational::HALF)))
+                }
+                None => {
+                    if rhs_dim.is_dimensionless() && lhs_dim.is_dimensionless() {
+                        Ok(InferredType::Scalar(Dimension::dimensionless()))
                     } else {
                         Err(GraphcalError::NonLiteralExponent {
                             src: src.clone(),
@@ -297,28 +349,6 @@ pub(super) fn infer_binop(
                         })
                     }
                 }
-            } else if let ExprKind::Integer(n) = &rhs.kind {
-                // Scalar ^ integer_literal
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "exponent values are small integers"
-                )]
-                let exp = *n as i32;
-                Ok(InferredType::Scalar(lhs_dim.pow(Rational::from_int(exp))))
-            } else if rhs_dim.is_dimensionless() {
-                if lhs_dim.is_dimensionless() {
-                    Ok(InferredType::Scalar(Dimension::dimensionless()))
-                } else {
-                    Err(GraphcalError::NonLiteralExponent {
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    })
-                }
-            } else {
-                Err(GraphcalError::NonLiteralExponent {
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                })
             }
         }
     }
