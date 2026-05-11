@@ -1,0 +1,11 @@
+// Issue #579: a leading unary `-` on an integer or float literal is a
+// compile-time-known signed literal exponent for `^` and must pass D005.
+
+pub dim InvLengthSquared = Length ^ -2;
+
+param x: Dimensionless = 2.0;
+param length: Length = 2.0 m;
+
+node inv_square: Dimensionless = @x ^ -2.0;
+node inv_length_sq: InvLengthSquared = @length ^ -2.0;
+node neg_one: Dimensionless = @x ^ -1.0;

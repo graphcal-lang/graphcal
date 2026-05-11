@@ -507,6 +507,38 @@ node bad: Dimensionless = @x ^ @n;";
     );
 }
 
+#[test]
+fn check_power_signed_integer_literal_exponent() {
+    // x ^ -2 with a dimensioned base should be accepted: `-2` is a
+    // compile-time-known signed literal even though it parses as
+    // `Unary(Neg, IntLit(2))`. (Issue #579.)
+    let source = "\
+pub dim InvLengthSquared = Length ^ -2;
+param x: Length = 2.0 m;
+node y: InvLengthSquared = @x ^ -2.0;";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_power_signed_float_literal_exponent() {
+    // Same as above but with a float literal: `-2.0`.
+    let source = "param x: Dimensionless = 2.0;\nnode y: Dimensionless = @x ^ -2.0;";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_power_int_signed_negative_literal_exponent_rejected_with_int_message() {
+    // `Int ^ -2` is still rejected (Int^negative would not be Int), but the
+    // diagnostic should now be the clearer "non-negative Int exponent" rather
+    // than "non-literal exponent". (Issue #579.)
+    let source = "param x: Int = 2;\nnode y: Int = @x ^ -2;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
 // --- If condition must be dimensionless ---
 
 #[test]
