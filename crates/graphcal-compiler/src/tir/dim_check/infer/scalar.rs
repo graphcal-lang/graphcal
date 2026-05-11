@@ -285,9 +285,15 @@ pub(super) fn infer_binop(
             // signed literal exponent — `x ^ -2` is structurally
             // `Unary(Neg, IntLit(2))`, which is still compile-time-known.
             let rhs_lit = literal_exponent(rhs);
-            // Int/Fin ^ Int (literal non-negative) -> Int
+            // Int/Fin ^ Int (literal or constant-foldable, non-negative) -> Int
             if lhs_type.is_int_like() {
-                if let Some(LiteralExponent::Int(n)) = rhs_lit {
+                let int_exp = match rhs_lit {
+                    Some(LiteralExponent::Int(n)) => Some(n),
+                    // Constant-fold Int^Int chains so `2 ^ 3 ^ 2` symmetrizes
+                    // with the de facto Float behavior (issue #578).
+                    _ => try_const_int(rhs),
+                };
+                if let Some(n) = int_exp {
                     if n >= 0 {
                         return Ok(InferredType::Int);
                     }

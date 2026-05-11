@@ -527,6 +527,26 @@ fn check_power_signed_float_literal_exponent() {
 }
 
 #[test]
+fn check_power_int_chain_constant_folds() {
+    // `2 ^ 3 ^ 2` parses right-assoc as `2 ^ (3 ^ 2)`. Float chains were
+    // already accepted via the dimensionless ^ dimensionless rule; the Int
+    // branch now constant-folds the rhs to `9` so the Int chain symmetrizes.
+    // (Issue #578.)
+    check("const node i: Int = 2 ^ 3 ^ 2;").unwrap();
+}
+
+#[test]
+fn check_power_int_chain_with_negative_constant_exponent_rejected() {
+    // Constant-folding produces a negative exponent — should be rejected
+    // with the Int-specific "non-negative" diagnostic, not "non-literal".
+    let err = check("const node bad: Int = 2 ^ (3 - 5);").unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
 fn check_power_int_signed_negative_literal_exponent_rejected_with_int_message() {
     // `Int ^ -2` is still rejected (Int^negative would not be Int), but the
     // diagnostic should now be the clearer "non-negative Int exponent" rather

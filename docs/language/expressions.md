@@ -41,7 +41,7 @@ left.
 | `-a` | Negation | Negation | Dimension preserved |
 
 !!! note "Exponent restriction"
-    The exponent in `^` must be a **literal** number (integer or float). Variable exponents are not allowed because the resulting dimension would not be known at compile time.
+    The exponent in `^` must be **compile-time-known** so the resulting dimension can be resolved before evaluation. In practice that means a numeric literal (integer or float, optionally with a leading unary `-`); for `Int ^ Int`, any expression that constant-folds to a non-negative integer is also accepted (e.g., `2 ^ 3 ^ 2` parses as `2 ^ (3 ^ 2)` and folds to `2 ^ 9 = 512`). Variable exponents whose value would only be known at runtime are not allowed.
 
 ## Comparison Operators
 
