@@ -36,7 +36,7 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
                 UnaryOp::Neg => "-",
                 UnaryOp::Not => "!",
             };
-            RcDoc::text(op_str).append(format_expr(fmt, operand))
+            RcDoc::text(op_str).append(format_unary_operand(fmt, operand))
         }
         ExprKind::FnCall {
             name,
@@ -144,6 +144,10 @@ fn format_scoped_surface(scoped: &ScopedName) -> String {
 }
 
 /// Operator precedence (higher = binds tighter).
+///
+/// Unary `!`/`-` sits at [`UNARY_PREC`] (7). `^` is intentionally above the
+/// unary level so paren-elision around `(-x) ^ 2` stays semantics-preserving:
+/// without the parens, `-x ^ 2` reparses as `-(x^2)` (issue #575).
 const fn precedence(op: BinOp) -> u8 {
     match op {
         BinOp::Or => 1,
@@ -152,9 +156,13 @@ const fn precedence(op: BinOp) -> u8 {
         BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => 4,
         BinOp::Add | BinOp::Sub => 5,
         BinOp::Mul | BinOp::Div | BinOp::Mod => 6,
-        BinOp::Pow => 7,
+        BinOp::Pow => 8,
     }
 }
+
+/// Precedence of unary `!` and `-`. Sits between the multiplicative operators
+/// and `^` (per `docs/language/expressions.md`).
+const UNARY_PREC: u8 = 7;
 
 const fn op_str(op: BinOp) -> &'static str {
     match op {
@@ -183,23 +191,46 @@ fn format_binop_child(
     parent_op: BinOp,
     is_right: bool,
 ) -> RcDoc<'static> {
-    if let ExprKind::BinOp { op: child_op, .. } = &child.kind {
-        let child_prec = precedence(*child_op);
-        let parent_prec = precedence(parent_op);
-        // Need parens if:
-        // 1. child has lower precedence than parent, or
-        // 2. child has same precedence and is on the "wrong" side for associativity
-        //    (all left-associative except Pow which is right-associative)
-        let needs_parens = child_prec < parent_prec
-            || (child_prec == parent_prec && is_right && parent_op != BinOp::Pow)
-            || (child_prec == parent_prec && !is_right && parent_op == BinOp::Pow);
-        if needs_parens {
-            return RcDoc::text("(")
-                .append(format_expr(fmt, child))
-                .append(RcDoc::text(")"));
+    let parent_prec = precedence(parent_op);
+    let needs_parens = match &child.kind {
+        ExprKind::BinOp { op: child_op, .. } => {
+            let child_prec = precedence(*child_op);
+            // Lower precedence wraps; equal-precedence wraps on the
+            // "wrong" associativity side (all left-associative except `^`).
+            child_prec < parent_prec
+                || (child_prec == parent_prec && is_right && parent_op != BinOp::Pow)
+                || (child_prec == parent_prec && !is_right && parent_op == BinOp::Pow)
         }
+        // A bare unary on the lhs of a higher-binding operator must be
+        // parenthesized: stripping `(-x) ^ 2` to `-x ^ 2` reparses as
+        // `-(x^2)` because `^` binds tighter than unary `-` (issue #575).
+        // Symmetric on the rhs would be redundant — `^` is right-assoc, so
+        // `x ^ -2` is unambiguous and parses as intended.
+        ExprKind::UnaryOp { .. } if !is_right && parent_prec > UNARY_PREC => true,
+        _ => false,
+    };
+    if needs_parens {
+        return RcDoc::text("(")
+            .append(format_expr(fmt, child))
+            .append(RcDoc::text(")"));
     }
     format_expr(fmt, child)
+}
+
+/// Format the operand of a unary `!`/`-`, adding parens if the operand is a
+/// binary expression that binds looser than the unary itself.
+///
+/// Without this, `!(a && b)` collapses to `!a && b` — which reparses as
+/// `(!a) && b` because `!` binds tighter than `&&` (issue #575).
+fn format_unary_operand(fmt: &mut Formatter<'_>, operand: &Expr) -> RcDoc<'static> {
+    if let ExprKind::BinOp { op: child_op, .. } = &operand.kind
+        && precedence(*child_op) < UNARY_PREC
+    {
+        return RcDoc::text("(")
+            .append(format_expr(fmt, operand))
+            .append(RcDoc::text(")"));
+    }
+    format_expr(fmt, operand)
 }
 
 fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> RcDoc<'static> {
