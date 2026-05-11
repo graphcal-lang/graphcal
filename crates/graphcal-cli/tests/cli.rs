@@ -2362,3 +2362,152 @@ fn fixtures_match_their_category() {
         stale_allowlist.join("\n")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Eval-idempotence: `graphcal format` must preserve `graphcal eval` output
+// for every `valid/` fixture.
+//
+// The existing `idempotent_*` macros only check `format(format(x)) ==
+// format(x)`; they happily accept a formatter that consistently changes
+// semantics (issue #575 was exactly that). This stronger property test
+// guards against any future paren-elision regression.
+// ---------------------------------------------------------------------------
+
+/// Walk up from `entry` until we hit either a directory containing
+/// `graphcal.toml` (the package root for multi-file fixtures) or the
+/// `valid/` parent (single-file fixture). Returns `(root_path,
+/// entry_relative_to_root)` so the caller can mirror the structure into
+/// a temp dir and re-run `graphcal eval` against the same logical entry.
+fn fixture_format_scope(entry: &Path) -> (PathBuf, PathBuf) {
+    let valid_root = fixtures_root().join("valid");
+    let mut dir = entry.parent().expect("entry has parent").to_path_buf();
+    while dir != valid_root {
+        if dir.join("graphcal.toml").exists() {
+            let rel = entry.strip_prefix(&dir).unwrap().to_path_buf();
+            return (dir, rel);
+        }
+        let Some(parent) = dir.parent() else {
+            break;
+        };
+        if parent == valid_root {
+            // Single-file or single-dir fixture sitting directly under valid/.
+            let rel = entry.strip_prefix(&dir).unwrap().to_path_buf();
+            return (dir, rel);
+        }
+        dir = parent.to_path_buf();
+    }
+    // Single file directly under valid/.
+    (
+        entry.to_path_buf(),
+        PathBuf::from(entry.file_name().unwrap()),
+    )
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).expect("create dst dir");
+    for entry in std::fs::read_dir(src).expect("read src dir") {
+        let entry = entry.expect("dir entry");
+        let path = entry.path();
+        let target = dst.join(path.file_name().unwrap());
+        if path.is_dir() {
+            copy_dir_recursive(&path, &target);
+        } else {
+            std::fs::copy(&path, &target).expect("copy file");
+        }
+    }
+}
+
+#[test]
+fn eval_idempotent_under_format() {
+    let entries = fixture_entry_points_by_category();
+    let valid_entries: Vec<&PathBuf> = entries
+        .iter()
+        .filter_map(|(cat, p)| (*cat == "valid").then_some(p))
+        .collect();
+    assert!(
+        valid_entries.len() >= 40,
+        "expected many valid entry points, got {}",
+        valid_entries.len()
+    );
+
+    let temp_root = std::env::temp_dir().join("graphcal_eval_idempotent");
+    let _ = std::fs::remove_dir_all(&temp_root);
+    std::fs::create_dir_all(&temp_root).expect("create temp root");
+
+    let mut failures: Vec<String> = Vec::new();
+    for (idx, entry) in valid_entries.iter().enumerate() {
+        let original = graphcal_bin()
+            .args(["eval", entry.to_str().unwrap()])
+            .output()
+            .expect("eval original");
+        if !original.status.success() {
+            // `valid` fixtures should eval cleanly; if not, the
+            // categorization test catches it. Skip here so this property
+            // test stays focused on its own invariant.
+            continue;
+        }
+
+        let (scope_root, entry_rel) = fixture_format_scope(entry);
+        let target_root = temp_root.join(format!("scope_{idx}"));
+        let _ = std::fs::remove_dir_all(&target_root);
+        if scope_root.is_file() {
+            std::fs::create_dir_all(&target_root).expect("create scope dir");
+            let target_file = target_root.join(scope_root.file_name().unwrap());
+            std::fs::copy(&scope_root, &target_file).expect("copy single-file scope");
+        } else {
+            copy_dir_recursive(&scope_root, &target_root);
+        }
+
+        let format_target = if scope_root.is_file() {
+            target_root.join(scope_root.file_name().unwrap())
+        } else {
+            target_root.clone()
+        };
+        let format_out = graphcal_bin()
+            .args(["format", format_target.to_str().unwrap()])
+            .output()
+            .expect("graphcal format");
+        if !format_out.status.success() {
+            failures.push(format!(
+                "{}: format failed: {}",
+                entry.display(),
+                String::from_utf8_lossy(&format_out.stderr)
+            ));
+            continue;
+        }
+
+        let new_entry = if scope_root.is_file() {
+            target_root.join(scope_root.file_name().unwrap())
+        } else {
+            target_root.join(&entry_rel)
+        };
+        let after = graphcal_bin()
+            .args(["eval", new_entry.to_str().unwrap()])
+            .output()
+            .expect("eval formatted");
+        if !after.status.success() {
+            failures.push(format!(
+                "{}: eval-after-format failed: {}",
+                entry.display(),
+                String::from_utf8_lossy(&after.stderr)
+            ));
+            continue;
+        }
+
+        if original.stdout != after.stdout {
+            failures.push(format!(
+                "{}: eval output diverged after format",
+                entry.display()
+            ));
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&temp_root);
+    assert!(
+        failures.is_empty(),
+        "{} fixture(s) had eval output that differs after `graphcal format` \
+         — formatter is not eval-idempotent:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
