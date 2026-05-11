@@ -1,0 +1,5 @@
+// int_div_zero.gcl -- Integer division by zero is a runtime error
+// (existing division_by_zero.gcl covers Float division).
+param x: Int = 5;
+param y: Int = 0;
+node z: Int = @x / @y;

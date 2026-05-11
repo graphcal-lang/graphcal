@@ -1,0 +1,4 @@
+// log_negative.gcl -- ln(-1) yields NaN, which Graphcal reports as
+// "invalid argument" rather than silently propagating NaN.
+param x: Dimensionless = -1.0;
+node bad: Dimensionless = ln(@x);

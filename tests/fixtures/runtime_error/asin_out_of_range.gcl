@@ -1,0 +1,4 @@
+// asin_out_of_range.gcl -- asin's domain is [-1, 1]; outside that the result
+// is NaN and Graphcal must report it as a runtime error.
+param x: Dimensionless = 2.0;
+node bad: Angle = asin(@x);

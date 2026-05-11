@@ -1,0 +1,24 @@
+// hyperbolic_functions.gcl -- Cover the hyperbolic builtins
+//
+// The hyperbolic family (sinh, cosh, tanh, asinh, acosh, atanh) is listed
+// in the prelude but had no test fixture, so a stub-out or signature change
+// would have gone undetected.
+const node sinh1: Dimensionless = sinh(1.0);
+const node cosh1: Dimensionless = cosh(1.0);
+const node tanh1: Dimensionless = tanh(1.0);
+
+// Round-trips through inverse pairs
+const node asinh_id: Dimensionless = asinh(sinh(1.0));
+const node acosh_id: Dimensionless = acosh(cosh(1.0));
+const node atanh_id: Dimensionless = atanh(tanh(0.5));
+
+// Identity sanity checks at zero
+const node sinh0: Dimensionless = sinh(0.0);
+const node cosh0: Dimensionless = cosh(0.0);
+const node tanh0: Dimensionless = tanh(0.0);
+const node asinh0: Dimensionless = asinh(0.0);
+const node acosh1_eq0: Dimensionless = acosh(1.0);
+const node atanh0: Dimensionless = atanh(0.0);
+
+// Algebraic identity: cosh(x)^2 - sinh(x)^2 == 1
+const node identity: Dimensionless = cosh(2.0) ^ 2.0 - sinh(2.0) ^ 2.0;

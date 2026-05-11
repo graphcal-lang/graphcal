@@ -1,0 +1,5 @@
+// error: both branches of if/else must share a dimension
+param cond: Bool = true;
+param a: Length = 5.0 m;
+param b: Time = 3.0 s;
+node bad: Length = if @cond { @a } else { @b };

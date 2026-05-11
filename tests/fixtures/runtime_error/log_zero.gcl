@@ -1,0 +1,4 @@
+// log_zero.gcl -- ln(0) yields -infinity, which Graphcal reports as
+// "infinite result" rather than silently propagating Inf into downstream nodes.
+param x: Dimensionless = 0.0;
+node bad: Dimensionless = ln(@x);

@@ -1,0 +1,24 @@
+// datetime_leap_year.gcl -- Leap-year corners for datetime parsing & extraction
+//
+// existing datetime_extract.gcl exercises year/month/day on a generic timestamp;
+// this fixture pins down the leap-year edges (Feb 29 and day_of_year 366) so a
+// regression in calendar logic surfaces immediately.
+const node feb29: Datetime = datetime("2020-02-29T00:00:00Z");
+const node feb29_y: Int = year(@feb29);
+const node feb29_m: Int = month(@feb29);
+const node feb29_d: Int = day(@feb29);
+
+// 2024 is a leap year (divisible by 4, not by 100).
+const node leap_doy: Int = day_of_year(datetime("2024-12-31T00:00:00Z"));
+
+// 2023 is not a leap year.
+const node nonleap_doy: Int = day_of_year(datetime("2023-12-31T00:00:00Z"));
+
+// 2000 IS a leap year (divisible by 400).
+const node y2000_doy: Int = day_of_year(datetime("2000-12-31T00:00:00Z"));
+
+// 1900 is NOT a leap year (divisible by 100, not by 400).
+const node y1900_doy: Int = day_of_year(datetime("1900-12-31T00:00:00Z"));
+
+// Unix epoch sanity: 1970-01-01T00:00:00Z corresponds to unix=0.
+const node epoch_unix: Dimensionless = to_unix(datetime("1970-01-01T00:00:00Z"));

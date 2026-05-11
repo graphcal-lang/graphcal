@@ -1,0 +1,41 @@
+// integer_arithmetic.gcl -- Integer-specific arithmetic edge cases
+//
+// integers.gcl already covers the happy path; this fixture pins down
+// the sign behavior of `/` and `%` (which differ between languages),
+// negation of negatives, and chained Int comparisons.
+param a: Int = -7;
+param b: Int = 3;
+param c: Int = 4;
+
+// Truncation toward zero (Rust semantics): -7 / 3 = -2 (not -3 as in floor-div).
+node div_neg: Int = @a / @b;
+
+// Modulo follows the sign of the dividend: -7 % 3 = -1.
+node mod_neg_dividend: Int = @a % @b;
+
+// Modulo with negative divisor: -7 % -3 = -1, 7 % -3 = 1.
+node mod_neg_divisor: Int = @a % -@b;
+node mod_pos_neg_divisor: Int = -@a % -@b;
+
+// Double negation
+node neg_neg: Int = -(-@a);
+
+// Subtracting a negative
+node sub_neg: Int = @c - @a;
+
+// Power on Int with literal exponent: doc table says "Not supported" but the
+// implementation accepts a literal exponent. Pin it so we notice if behavior changes.
+node pow_int: Int = @b ^ 3;
+node pow_zero: Int = @b ^ 0;
+node pow_one: Int = @b ^ 1;
+
+// Power on a negative base: `(-3)^2 = 9`, `(-3)^3 = -27`.
+node neg_base_even: Int = (-@b) ^ 2;
+node neg_base_odd: Int = (-@b) ^ 3;
+
+// Comparison combinations -- all return Bool.
+node lt: Bool = @a < @b;
+node le: Bool = @a <= @a;
+node gt: Bool = @c > @b;
+node ge: Bool = @c >= @c;
+node ne: Bool = @a != @b;

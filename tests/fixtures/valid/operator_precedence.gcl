@@ -1,0 +1,41 @@
+// operator_precedence.gcl -- Pin the parser's operator precedence rules
+//
+// The docs spell out a precedence table; if a future parser refactor accidentally
+// changes associativity (e.g., makes `^` left-assoc, or lifts unary `-` above `^`),
+// these node values will move and the regression will surface immediately.
+param x: Dimensionless = 3.0;
+param y: Dimensionless = 2.0;
+param z: Dimensionless = 12.0;
+
+// `^` is right-associative AND has higher precedence than unary `-`.
+// So `-x ^ 2.0` parses as `-(x^2)` = -(9) = -9   (not (-3)^2 = 9).
+node neg_pow_x: Dimensionless = -@x ^ 2.0;
+
+// `^` right-associativity: 2 ^ 3 ^ 2 = 2 ^ (3^2) = 2 ^ 9 = 512 (not (2^3)^2 = 64).
+node pow_chain: Dimensionless = 2.0 ^ 3.0 ^ 2.0;
+
+// `^` binds tighter than `/`: a / b ^ 2 = a / (b^2) = 12 / 4 = 3 (not (12/2)^2 = 36).
+node div_then_pow: Dimensionless = @z / @y ^ 2.0;
+
+// `*` and `/` are left-associative: 12 / 2 * 3 = (12/2)*3 = 18 (not 12/(2*3) = 2).
+node div_mul_left: Dimensionless = @z / @y * @x;
+
+// Subtraction is left-associative: 12 - 2 - 3 = (12-2)-3 = 7 (not 12-(2-3) = 13).
+node sub_left: Dimensionless = @z - @y - @x;
+
+// `+`/`-` lower than `*`/`/`: 12 + 2 * 3 = 18 (not (12+2)*3 = 42).
+node add_then_mul: Dimensionless = @z + @y * @x;
+
+// Comparison binds lower than arithmetic: 12 - 2 == 10 parses as (12-2) == 10 (true).
+param ten: Dimensionless = 10.0;
+node cmp_after_sub: Bool = @z - @y == @ten;
+
+// `!` binds tighter than `==`: !true == false  parses as (!true) == false  =>  false == false = true.
+param bt: Bool = true;
+param bf: Bool = false;
+node not_then_eq: Bool = !@bt == @bf;
+
+// Unary `-` and `^` on Int with a literal exponent: same precedence story.
+param i: Int = 3;
+node neg_pow_i: Int = -@i ^ 2;
+node paren_neg_pow_i: Int = (-@i) ^ 2;
