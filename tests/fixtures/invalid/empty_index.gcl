@@ -1,0 +1,4 @@
+// Issue #580: a finite index must declare at least one variant. The parser
+// rejects `index Foo = {};` so that aggregation builtins never need an
+// empty-set semantics; this fixture pins that decision.
+pub index Empty = {};
