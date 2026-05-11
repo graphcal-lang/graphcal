@@ -407,6 +407,9 @@ fn format_import_or_include_kind(
                     for attr in &item.attributes {
                         doc = doc.append(format_attribute(attr)).append(RcDoc::text(" "));
                     }
+                    if item.is_pub {
+                        doc = doc.append(RcDoc::text("pub "));
+                    }
                     doc = doc.append(RcDoc::text(item.name.name.clone()));
                     if let Some(ref alias) = item.alias {
                         doc = doc

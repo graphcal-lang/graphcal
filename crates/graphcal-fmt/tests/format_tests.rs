@@ -110,6 +110,22 @@ idempotency_test!(
 idempotency_test!(idempotent_domain_scalar, "valid/domain_scalar.gcl");
 idempotency_test!(idempotent_domain_indexed, "valid/domain_indexed.gcl");
 
+// Issue #576: now that #575 preserves load-bearing parens, the operator
+// fixtures from PR #582 also format-idempotently.
+idempotency_test!(idempotent_logical_ops, "valid/logical_ops.gcl");
+idempotency_test!(
+    idempotent_integer_arithmetic,
+    "valid/integer_arithmetic.gcl"
+);
+idempotency_test!(
+    idempotent_operator_precedence,
+    "valid/operator_precedence.gcl"
+);
+idempotency_test!(
+    idempotent_format_paren_preservation,
+    "valid/format_paren_preservation.gcl"
+);
+
 // ---------------------------------------------------------------------------
 // Round-trip: parse(format(x)) succeeds for all fixtures
 // ---------------------------------------------------------------------------
@@ -203,6 +219,16 @@ roundtrip_test!(
 );
 roundtrip_test!(roundtrip_domain_scalar, "valid/domain_scalar.gcl");
 roundtrip_test!(roundtrip_domain_indexed, "valid/domain_indexed.gcl");
+roundtrip_test!(roundtrip_logical_ops, "valid/logical_ops.gcl");
+roundtrip_test!(roundtrip_integer_arithmetic, "valid/integer_arithmetic.gcl");
+roundtrip_test!(
+    roundtrip_operator_precedence,
+    "valid/operator_precedence.gcl"
+);
+roundtrip_test!(
+    roundtrip_format_paren_preservation,
+    "valid/format_paren_preservation.gcl"
+);
 
 // ---------------------------------------------------------------------------
 // Comment preservation

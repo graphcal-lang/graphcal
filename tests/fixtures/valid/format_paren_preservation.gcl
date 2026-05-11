@@ -1,0 +1,19 @@
+// Issue #576: every unary-precedence corner the #575 regression touched.
+// The matching tests assert (a) the formatter is idempotent on this file and
+// (b) `graphcal eval` produces the same output before and after `format`.
+param a: Bool = true;
+param b: Bool = false;
+param n: Int = 3;
+
+// `!` binds tighter than `&&` / `||`, so the parens are load-bearing.
+node not_and: Bool = !(@a && @b);
+node not_or: Bool = !(@a || @b);
+
+// `^` binds tighter than unary `-`, so `-x ^ k` reparses as `-(x^k)`
+// without the parens.
+node neg_pow_even: Int = (-@n) ^ 2;
+node neg_pow_odd: Int = (-@n) ^ 3;
+
+// Cosmetic: doubled unary `-` is semantically `-(-n)` either way; the
+// formatter renders this as `--@n`.
+node double_neg: Int = --@n;
