@@ -22,11 +22,15 @@ File<Raw>  (surface AST: still carries multi-decl / table-literal sugar)
   |  [Desugaring]  crates/graphcal-compiler/src/desugar/   +
   |                crates/graphcal-compiler/src/syntax/desugar.rs
   v
-File<Desugared>  (canonical AST: Sugar slots become Infallible)
+File<Desugared>  (canonical AST: surface-sugar slots become Infallible;
+                  `ExprKind::UnresolvedRef` still inhabited by `NameRef` /
+                  `QualifiedNameRef` produced by the parser)
   |
   |  [Name Resolution]  crates/graphcal-compiler/src/syntax/name_resolve.rs
   v
-File<Desugared>  (NameRef / QualifiedNameRef rewritten to concrete refs)
+File<Resolved>  (every phase slot is Infallible: no unresolved refs survive;
+                 `resolve_name_refs` consumes File<Desugared> and returns
+                 a new File<Resolved> — no in-place mutation)
   |
   |  [IR Lowering]  crates/graphcal-compiler/src/ir/
   v
@@ -49,14 +53,30 @@ Each stage is **strictly forward**: no backtracking to a previous stage.
 Errors at any stage halt the pipeline and produce rich diagnostics via `miette`.
 
 The AST is parameterized over a `Phase` marker (see
-`crates/graphcal-compiler/src/syntax/phase.rs`):
+`crates/graphcal-compiler/src/syntax/phase.rs`). The trait carries three
+associated types — `DeclSugar`, `ExprSugar`, and `RefSugar` — and three
+phases tighten them progressively:
 
 - `File<Raw>` is what the parser produces and what the formatter consumes.
-  Surface sugar (`RawDeclSugar::Multi`, `RawExprSugar::TableLiteral`) is
-  representable here.
-- `File<Desugared>` is what every downstream stage (name resolution, IR, TIR,
-  evaluation) consumes. The `Sugar` payload is `core::convert::Infallible`,
-  so the sugar variants vanish from the type system entirely.
+  Surface sugar (`RawDeclSugar::Multi`, `RawExprSugar::TableLiteral`) and
+  unresolved references (`UnresolvedRef::{NameRef, QualifiedNameRef}`) are
+  all representable here.
+- `File<Desugared>` is what name resolution consumes. `DeclSugar` and
+  `ExprSugar` are `Infallible` (surface sugar gone); `RefSugar` is still
+  `UnresolvedRef` because name resolution has not yet run.
+- `File<Resolved>` is what every downstream stage (IR, TIR, evaluation)
+  consumes. Every phase slot is `Infallible` — no sugar and no unresolved
+  refs survive. Code paths that match on `ExprKind::UnresolvedRef(s)` use
+  `match *s {}` (the `never` helper) to discharge the uninhabited payload.
+
+Type aliases pinning AST nodes to their phase live in
+`crates/graphcal-compiler/src/desugar/`:
+
+- `desugared_ast.rs` — pins to `Desugared`; used by the loader (storing
+  `LoadedFile.ast`) and the LSP symbol-table only briefly, since the loader
+  itself ultimately stores a `Resolved` form.
+- `resolved_ast.rs` — pins to `Resolved`; used by IR lowering, TIR, exec
+  plan, evaluation, the LSP symbol-table walk, and `LoadedFile.ast`.
 
 ### 1.1 Lexer -> Tokens
 
@@ -93,11 +113,14 @@ The walker is generic: each surface sugar implements `DesugarSugar` (see
 `desugar/convert.rs` dispatches `Sugar(_)` arms to the appropriate transform
 while rebuilding every other node phase-by-phase.
 
-### 1.4 Name Resolution -> resolved `File<Desugared>`
+### 1.4 Name Resolution -> `File<Resolved>`
 
 Handled in `syntax/name_resolve.rs`. After parsing + desugaring, the AST still
-contains `NameRef` / `QualifiedNameRef` nodes for bare and dotted identifiers.
-This pass rewrites them into concrete expression kinds, resolving against:
+carries `ExprKind::UnresolvedRef` payloads (`UnresolvedRef::NameRef` /
+`UnresolvedRef::QualifiedNameRef`) for bare and dotted identifiers. This pass
+is a pure consume-and-return transformation (`File<Desugared> -> File<Resolved>`,
+no in-place mutation) that rewrites them into concrete expression kinds,
+resolving against:
 
 - Builtin constants (PI, E, TAU, SQRT2, LN2, LN10).
 - Time scale names (UTC, TAI, TT, …) for `Datetime` literals.
@@ -106,7 +129,10 @@ This pass rewrites them into concrete expression kinds, resolving against:
 - Index names and their variants.
 - Module aliases from `import` declarations.
 
-After this pass, no `NameRef` / `QualifiedNameRef` nodes remain.
+After this pass, no `UnresolvedRef` nodes remain — `RefSugar = Infallible`
+in the `Resolved` phase makes that property a compile-time guarantee, so
+downstream stages no longer need runtime `unreachable!()` panics for the
+NameRef / QualifiedNameRef cases.
 
 ### 1.5 IR Lowering -> IR
 

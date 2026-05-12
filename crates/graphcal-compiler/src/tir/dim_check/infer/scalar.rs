@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::{BinOp, Expr, ExprKind};
+use crate::desugar::resolved_ast::{BinOp, Expr, ExprKind};
 use crate::syntax::ast::UnaryOp;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{GenericParamName, ScopedName, UnitName};
@@ -397,7 +397,7 @@ pub(super) fn infer_binop(
 
 /// Infer the type of a unary operation expression.
 pub(super) fn infer_unary(
-    op: &crate::desugar::desugared_ast::UnaryOp,
+    op: &crate::desugar::resolved_ast::UnaryOp,
     operand: &Expr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
@@ -416,7 +416,7 @@ pub(super) fn infer_unary(
         src,
     )?;
     match op {
-        crate::desugar::desugared_ast::UnaryOp::Not => {
+        crate::desugar::resolved_ast::UnaryOp::Not => {
             if operand_type != InferredType::Bool {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Bool".to_string(),
@@ -428,7 +428,7 @@ pub(super) fn infer_unary(
             }
             Ok(InferredType::Bool)
         }
-        crate::desugar::desugared_ast::UnaryOp::Neg => {
+        crate::desugar::resolved_ast::UnaryOp::Neg => {
             if operand_type == InferredType::Bool {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "numeric type".to_string(),
@@ -449,7 +449,7 @@ pub(super) fn infer_unary(
 /// Infer the type of a unit conversion expression.
 pub(super) fn infer_convert(
     inner: &Expr,
-    target: &crate::desugar::desugared_ast::UnitExpr,
+    target: &crate::desugar::resolved_ast::UnitExpr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
@@ -544,7 +544,7 @@ pub(super) fn infer_display_timezone(
 pub(super) fn infer_as_cast(
     expr: &Expr,
     inner: &Expr,
-    target_type: &crate::desugar::desugared_ast::TypeExpr,
+    target_type: &crate::desugar::resolved_ast::TypeExpr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,

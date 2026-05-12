@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::desugar::desugared_ast::{Expr, ExprKind, ParamBinding};
+use crate::desugar::resolved_ast::{Expr, ExprKind, ParamBinding};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{classify_special_fn, is_aggregation_fn, is_time_scale_name};
 use crate::syntax::names::{DeclName, ScopedName};
@@ -133,7 +133,7 @@ impl RefCollector<'_> {
     }
 }
 
-impl ExprVisitor<crate::syntax::phase::Desugared> for RefCollector<'_> {
+impl ExprVisitor<crate::syntax::phase::Resolved> for RefCollector<'_> {
     type Error = GraphcalError;
 
     fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
@@ -175,7 +175,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for RefCollector<'_> {
         &mut self,
         _expr: &Expr,
         _scrutinees: &[Expr],
-        _arms: &[crate::desugar::desugared_ast::TupleMatchArm],
+        _arms: &[crate::desugar::resolved_ast::TupleMatchArm],
     ) -> Result<(), Self::Error> {
         // TupleMatch is desugared before resolution.
         #[expect(clippy::unreachable, reason = "invariant: desugared before resolution")]
@@ -279,7 +279,7 @@ impl<S: GraphRefSink> GraphRefVisitor<'_, S> {
     }
 }
 
-impl<S: GraphRefSink> ExprVisitor<crate::syntax::phase::Desugared> for GraphRefVisitor<'_, S> {
+impl<S: GraphRefSink> ExprVisitor<crate::syntax::phase::Resolved> for GraphRefVisitor<'_, S> {
     type Error = std::convert::Infallible;
 
     fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {

@@ -463,10 +463,9 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
             ExprKind::LocalRef(i) => Self::LocalRef(i),
             ExprKind::UnitLiteral { value, unit } => Self::UnitLiteral { value, unit },
             ExprKind::VariantLiteral { index, variant } => Self::VariantLiteral { index, variant },
-            ExprKind::NameRef(i) => Self::NameRef(i),
-            ExprKind::QualifiedNameRef { qualifier, member } => {
-                Self::QualifiedNameRef { qualifier, member }
-            }
+            // `RefSugar` payload is `UnresolvedRef` in both `Raw` and
+            // `Desugared` phases, so this is a direct rebind.
+            ExprKind::UnresolvedRef(r) => Self::UnresolvedRef(r),
             // Recursive — convert children.
             ExprKind::BinOp { op, lhs, rhs } => Self::BinOp {
                 op,

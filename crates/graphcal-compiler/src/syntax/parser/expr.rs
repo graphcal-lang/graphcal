@@ -594,10 +594,10 @@ impl Parser<'_> {
             let member_ident = self.parse_any_ident()?;
             let full_span = span.merge(member_ident.span);
             Ok(Expr::new(
-                ExprKind::QualifiedNameRef {
+                ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::QualifiedNameRef {
                     qualifier: crate::syntax::ast::Ident { name, span },
                     member: member_ident,
-                },
+                }),
                 full_span,
             ))
         } else if self.lexer.peek() == Some(&Token::LParen)
@@ -624,7 +624,9 @@ impl Parser<'_> {
         } else {
             // Bare identifier → NameRef (resolved later by name resolution pass)
             Ok(Expr::new(
-                ExprKind::NameRef(crate::syntax::ast::Ident { name, span }),
+                ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::NameRef(
+                    crate::syntax::ast::Ident { name, span },
+                )),
                 span,
             ))
         }
@@ -719,7 +721,9 @@ impl Parser<'_> {
         let expr = self.parse_expr()?;
 
         // If it's a bare name reference, use IndexArg::Var for backward compatibility
-        if let ExprKind::NameRef(ident) = expr.kind {
+        if let ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::NameRef(ident)) =
+            expr.kind
+        {
             Ok(IndexArg::Var(ident))
         } else {
             Ok(IndexArg::Expr(Box::new(expr)))
@@ -1091,7 +1095,11 @@ mod tests {
     fn parse_name_ref() {
         let expr = parse_node_expr("PI * 2.0");
         if let ExprKind::BinOp { lhs, .. } = &expr.kind {
-            assert!(matches!(&lhs.kind, ExprKind::NameRef(id) if id.name.as_str() == "PI"));
+            assert!(matches!(
+                &lhs.kind,
+                ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::NameRef(id))
+                    if id.name.as_str() == "PI"
+            ));
         } else {
             panic!("expected BinOp");
         }
@@ -1566,7 +1574,10 @@ mod tests {
             panic!("expected Node");
         };
         match &node.value.kind {
-            ExprKind::QualifiedNameRef { qualifier, member } => {
+            ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::QualifiedNameRef {
+                qualifier,
+                member,
+            }) => {
                 assert_eq!(qualifier.name, "constants");
                 assert_eq!(member.name.as_str(), "G0");
             }

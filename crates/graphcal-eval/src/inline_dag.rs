@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration};
+use graphcal_compiler::desugar::resolved_ast::{DeclKind, Declaration};
 use graphcal_compiler::ir::lower::{
     DagBodySelfImports, ImportedValueSource, lower_dag_body_to_ir, type_system_names_from_registry,
 };
@@ -252,7 +252,7 @@ pub fn preprocess_dag_body_self_imports(
 /// same-file path lets the importer's own resolved types win at
 /// dim-check time.
 pub fn classify_value_decls_in_ast(
-    ast: &graphcal_compiler::desugar::desugared_ast::File,
+    ast: &graphcal_compiler::desugar::resolved_ast::File,
 ) -> (HashMap<String, DeclaredType>, HashSet<String>) {
     let placeholder =
         || DeclaredType::Scalar(graphcal_compiler::syntax::dimension::Dimension::dimensionless());

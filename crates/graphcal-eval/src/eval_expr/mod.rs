@@ -13,7 +13,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind, MulDivOp, UnitExpr};
+use graphcal_compiler::desugar::resolved_ast::{Expr, ExprKind, MulDivOp, UnitExpr};
 use graphcal_compiler::syntax::names::{FieldName, ScopedName, StructTypeName};
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
@@ -303,22 +303,17 @@ pub fn eval_expr(
         #[expect(clippy::unreachable, reason = "invariant: desugared before eval")]
         ExprKind::TupleMatch { .. } => unreachable!("TupleMatch should be desugared before eval"),
 
-        // NameRef/QualifiedNameRef are resolved before evaluation.
-        #[expect(clippy::unreachable, reason = "invariant: resolved before eval")]
-        ExprKind::NameRef(_) | ExprKind::QualifiedNameRef { .. } => {
-            unreachable!("NameRef/QualifiedNameRef should be resolved before eval")
-        }
-
         ExprKind::InlineDagRef { path, args, output } => {
             eval_inline_dag_call(expr, path, args, output, values, local_values, ctx)
         }
 
-        // `Sugar(_)` carries `Infallible` for `Desugared` — unreachable.
+        // `Sugar` and `UnresolvedRef` payloads are `Infallible` in `Resolved`
+        // — both arms are statically unreachable.
         #[expect(
             clippy::uninhabited_references,
-            reason = "Sugar(Infallible) — proof of unreachability"
+            reason = "Sugar/UnresolvedRef(Infallible) — proof of unreachability"
         )]
-        ExprKind::Sugar(s) => match *s {},
+        ExprKind::Sugar(s) | ExprKind::UnresolvedRef(s) => match *s {},
     }
 }
 
@@ -347,7 +342,7 @@ pub fn eval_expr(
 fn eval_inline_dag_call(
     _call_expr: &Expr,
     path: &graphcal_compiler::syntax::ast::ModulePath,
-    args: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
+    args: &[graphcal_compiler::desugar::resolved_ast::ParamBinding],
     output: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
     caller_values: &HashMap<ScopedName, RuntimeValue>,
     caller_locals: &HashMap<String, RuntimeValue>,

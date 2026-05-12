@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::{MulDivOp, TypeExpr, TypeExprKind};
+use crate::desugar::resolved_ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{DimName, GenericParamName, IndexName, StructTypeName};
 use crate::syntax::span::Span;
@@ -499,11 +499,11 @@ impl std::fmt::Display for NatPolyForm {
 /// All variables referenced must be Nat generic parameters in scope.
 /// Returns an error if a variable is not a known Nat param.
 pub fn normalize_nat_expr(
-    expr: &crate::desugar::desugared_ast::NatExpr,
+    expr: &crate::desugar::resolved_ast::NatExpr,
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<NatPolyForm, GraphcalError> {
-    use crate::desugar::desugared_ast::NatExpr;
+    use crate::desugar::resolved_ast::NatExpr;
     match expr {
         NatExpr::Literal(n, _) => Ok(NatPolyForm::from_constant(*n)),
         NatExpr::Var(ident) => {
@@ -871,8 +871,8 @@ impl DagTIR {
     }
 
     /// Populate this DAG's `pub_nodes` set from its source body.
-    pub fn populate_pub_nodes(&mut self, body: &[crate::desugar::desugared_ast::Declaration]) {
-        use crate::desugar::desugared_ast::DeclKind;
+    pub fn populate_pub_nodes(&mut self, body: &[crate::desugar::resolved_ast::Declaration]) {
+        use crate::desugar::resolved_ast::DeclKind;
 
         for decl in body {
             if !decl.visibility.is_public() {
@@ -1822,17 +1822,17 @@ pub fn resolve_type_expr(
             let mut resolved_indexes = Vec::with_capacity(indexes.len());
             for idx in indexes {
                 match idx {
-                    crate::desugar::desugared_ast::IndexExpr::NatLiteral(n, span) => {
+                    crate::desugar::resolved_ast::IndexExpr::NatLiteral(n, span) => {
                         resolved_indexes.push(ResolvedIndex::NatExpr(
                             NatPolyForm::from_constant(*n),
                             *span,
                         ));
                     }
-                    crate::desugar::desugared_ast::IndexExpr::NatExpr(nat_expr) => {
+                    crate::desugar::resolved_ast::IndexExpr::NatExpr(nat_expr) => {
                         let form = normalize_nat_expr(nat_expr, nat_params, src)?;
                         resolved_indexes.push(ResolvedIndex::NatExpr(form, nat_expr.span()));
                     }
-                    crate::desugar::desugared_ast::IndexExpr::Name(ident) => {
+                    crate::desugar::resolved_ast::IndexExpr::Name(ident) => {
                         let idx_name = &ident.name;
                         if let Some(gp) = nat_params.iter().find(|p| p.as_str() == idx_name) {
                             // Generic nat param in index position: `D[N]` where `N: Nat`
@@ -1889,7 +1889,7 @@ pub fn resolve_type_expr(
 /// struct types, and generic dimension parameters. Multi-term expressions with
 /// generic params become `GenericDimExpr`; fully concrete expressions become `Scalar`.
 fn resolve_dim_expr(
-    dim_expr: &crate::desugar::desugared_ast::DimExpr,
+    dim_expr: &crate::desugar::resolved_ast::DimExpr,
     registry: &Registry,
     dim_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
@@ -1994,7 +1994,7 @@ fn resolve_dim_expr(
 )]
 fn resolve_type_application(
     type_ann: &TypeExpr,
-    name: &crate::desugar::desugared_ast::Ident,
+    name: &crate::desugar::resolved_ast::Ident,
     type_args: &[TypeExpr],
     registry: &Registry,
     dim_params: &[GenericParamName],
@@ -2132,14 +2132,14 @@ mod tests {
     }
 
     /// Create a simple dimension `TypeExpr` from a name string like `"Velocity"`.
-    fn make_dim_type_expr(name: &str) -> crate::desugar::desugared_ast::TypeExpr {
-        crate::desugar::desugared_ast::TypeExpr {
-            kind: crate::desugar::desugared_ast::TypeExprKind::DimExpr(
-                crate::desugar::desugared_ast::DimExpr {
-                    terms: vec![crate::desugar::desugared_ast::DimExprItem {
-                        op: crate::desugar::desugared_ast::MulDivOp::Mul,
-                        term: crate::desugar::desugared_ast::DimTerm {
-                            name: crate::desugar::desugared_ast::Ident {
+    fn make_dim_type_expr(name: &str) -> crate::desugar::resolved_ast::TypeExpr {
+        crate::desugar::resolved_ast::TypeExpr {
+            kind: crate::desugar::resolved_ast::TypeExprKind::DimExpr(
+                crate::desugar::resolved_ast::DimExpr {
+                    terms: vec![crate::desugar::resolved_ast::DimExprItem {
+                        op: crate::desugar::resolved_ast::MulDivOp::Mul,
+                        term: crate::desugar::resolved_ast::DimTerm {
+                            name: crate::desugar::resolved_ast::Ident {
                                 name: name.to_string(),
                                 span: Span::new(0, 0),
                             },
@@ -2201,9 +2201,11 @@ mod tests {
         // Wrap in a param declaration so the parser can handle it
         let full = format!("param x: {source} = 0.0;");
         let raw_file = Parser::new(&full).parse_file().unwrap();
-        let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let mut desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        crate::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
         match &file.declarations[0].kind {
-            crate::desugar::desugared_ast::DeclKind::Param(p) => p.type_ann.clone(),
+            crate::desugar::resolved_ast::DeclKind::Param(p) => p.type_ann.clone(),
             _ => panic!("expected param"),
         }
     }
@@ -2408,7 +2410,9 @@ mod tests {
     /// fall out of the unprocessed body).
     fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
-        let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let mut desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        crate::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
         let src = NamedSource::new("test", Arc::new(source.to_string()));
         let ir = crate::ir::lower::lower(&file, &src)?;
         let parent_dag_id =

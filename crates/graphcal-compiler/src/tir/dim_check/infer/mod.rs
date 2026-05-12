@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::{Expr, ExprKind};
+use crate::desugar::resolved_ast::{Expr, ExprKind};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
@@ -378,15 +378,6 @@ pub(super) fn infer_type_with_owner(
             unreachable!("TupleMatch should be desugared before dim-checking")
         }
 
-        // NameRef/QualifiedNameRef are resolved before dim-checking.
-        #[expect(
-            clippy::unreachable,
-            reason = "invariant: resolved before dim-checking"
-        )]
-        ExprKind::NameRef(_) | ExprKind::QualifiedNameRef { .. } => {
-            unreachable!("NameRef/QualifiedNameRef should be resolved before dim-checking")
-        }
-
         ExprKind::InlineDagRef { path, args, output } => infer_inline_dag_ref(
             expr,
             path,
@@ -400,12 +391,13 @@ pub(super) fn infer_type_with_owner(
             src,
         ),
 
-        // `Sugar(_)` carries `Infallible` for `Desugared` — unreachable.
+        // `Sugar` and `UnresolvedRef` payloads are `Infallible` in `Resolved`
+        // — both arms are statically unreachable.
         #[expect(
             clippy::uninhabited_references,
-            reason = "Sugar(Infallible) — proof of unreachability"
+            reason = "Sugar/UnresolvedRef(Infallible) — proof of unreachability"
         )]
-        ExprKind::Sugar(s) => match *s {},
+        ExprKind::Sugar(s) | ExprKind::UnresolvedRef(s) => match *s {},
     }
 }
 
@@ -425,7 +417,7 @@ pub(super) fn infer_type_with_owner(
 fn infer_inline_dag_ref(
     expr: &Expr,
     path: &crate::syntax::ast::ModulePath,
-    args: &[crate::desugar::desugared_ast::ParamBinding],
+    args: &[crate::desugar::resolved_ast::ParamBinding],
     output: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,

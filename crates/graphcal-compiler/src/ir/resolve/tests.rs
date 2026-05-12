@@ -12,9 +12,11 @@ fn make_src(source: &str) -> NamedSource<Arc<String>> {
     NamedSource::new("test", Arc::new(source.to_string()))
 }
 
-fn parse_and_desugar(source: &str) -> crate::desugar::desugared_ast::File {
+fn parse_and_desugar(source: &str) -> crate::desugar::resolved_ast::File {
     let raw_file = Parser::new(source).parse_file().unwrap();
-    crate::syntax::desugar::desugar_multi_decls_in_file(raw_file)
+    let mut desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    crate::syntax::ast::desugar_tuple_matches(&mut desugared);
+    crate::syntax::name_resolve::resolve_name_refs(desugared)
 }
 
 fn parse_and_resolve(source: &str) -> Result<ResolvedFile, GraphcalError> {

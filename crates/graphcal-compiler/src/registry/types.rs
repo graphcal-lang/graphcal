@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use crate::desugar::desugared_ast::{
+use crate::desugar::resolved_ast::{
     DagDecl, DimExpr, Expr, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
 };
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational};
@@ -116,7 +116,7 @@ pub struct TypeGenericParam {
     pub name: GenericParamName,
     pub constraint: TypeGenericConstraint,
     /// Optional default type expression, e.g. `F: Type = Unframed`.
-    pub default: Option<crate::desugar::desugared_ast::TypeExpr>,
+    pub default: Option<crate::desugar::resolved_ast::TypeExpr>,
 }
 
 /// A type definition: unit type, record type, or union type.

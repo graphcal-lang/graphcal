@@ -240,7 +240,11 @@ fn parse_unit_decl_with_paren_expr() {
             match &def.scale_expr.kind {
                 ExprKind::BinOp { op, lhs, rhs } => {
                     assert!(matches!(op, crate::syntax::ast::BinOp::Div));
-                    assert!(matches!(&lhs.kind, ExprKind::NameRef(c) if c.name.as_str() == "PI"));
+                    assert!(matches!(
+                        &lhs.kind,
+                        ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::NameRef(c))
+                            if c.name.as_str() == "PI"
+                    ));
                     assert!(matches!(&rhs.kind, ExprKind::Integer(180)));
                 }
                 other => panic!("expected BinOp, got {other:?}"),

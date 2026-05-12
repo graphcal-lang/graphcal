@@ -29,7 +29,13 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             format_inline_dag_ref(fmt, path, args, output.value.as_str())
         }
         ExprKind::ConstRef(name) => RcDoc::text(format_scoped_surface(&name.value)),
-        ExprKind::LocalRef(ident) | ExprKind::NameRef(ident) => RcDoc::text(ident.name.clone()),
+        ExprKind::LocalRef(ident)
+        | ExprKind::UnresolvedRef(graphcal_compiler::syntax::phase::UnresolvedRef::NameRef(
+            ident,
+        )) => RcDoc::text(ident.name.clone()),
+        ExprKind::UnresolvedRef(
+            graphcal_compiler::syntax::phase::UnresolvedRef::QualifiedNameRef { qualifier, member },
+        ) => RcDoc::text(format!("{}.{}", qualifier.name, member.name)),
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
             let op_str = match op {
@@ -124,9 +130,6 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::TupleMatch { scrutinees, arms } => format_tuple_match(fmt, scrutinees, arms),
         ExprKind::VariantLiteral { index, variant } => {
             RcDoc::text(format!("{}.{}", index.value, variant.value))
-        }
-        ExprKind::QualifiedNameRef { qualifier, member } => {
-            RcDoc::text(format!("{}.{}", qualifier.name, member.name))
         }
     }
 }

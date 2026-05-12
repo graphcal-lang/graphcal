@@ -183,10 +183,7 @@ fn report_override_error(e: &OverrideParseError) -> ! {
 fn handle_eval(
     file: &Path,
     format: &OutputFormat,
-    overrides: &std::collections::HashMap<
-        DeclName,
-        graphcal_compiler::desugar::desugared_ast::Expr,
-    >,
+    overrides: &std::collections::HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
     root: Option<&Path>,
     plot_output: Option<&PlotOutput>,
 ) {
