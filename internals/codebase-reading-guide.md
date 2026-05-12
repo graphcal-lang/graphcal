@@ -17,15 +17,24 @@ Token Stream  (Token + Span pairs)
   |
   |  [Parser]  crates/graphcal-compiler/src/syntax/parser/
   v
-AST  (File -> Vec<Declaration>, each containing Expr trees)
+File<Raw>  (surface AST: still carries multi-decl / table-literal sugar)
   |
-  |  [Name Resolution + IR Lowering]  crates/graphcal-compiler/src/ir/
+  |  [Desugaring]  crates/graphcal-compiler/src/desugar/   +
+  |                crates/graphcal-compiler/src/syntax/desugar.rs
+  v
+File<Desugared>  (canonical AST: Sugar slots become Infallible)
+  |
+  |  [Name Resolution]  crates/graphcal-compiler/src/syntax/name_resolve.rs
+  v
+File<Desugared>  (NameRef / QualifiedNameRef rewritten to concrete refs)
+  |
+  |  [IR Lowering]  crates/graphcal-compiler/src/ir/
   v
 IR  (resolved names, dependency graphs, Registry of types/units/dims)
   |
   |  [Type Resolution + Dimension Checking]  crates/graphcal-compiler/src/tir/
   v
-TIR  (fully typed IR with concrete Dimensions on every declaration)
+TIR  (Registry + DagRegistry: one DagTIR per file root and per inline `dag`)
   |
   |  [Execution Plan Compilation]  crates/graphcal-eval/src/exec_plan.rs
   v
@@ -38,6 +47,16 @@ EvalResult  (HashMap<DeclName, Value> with display units attached)
 
 Each stage is **strictly forward**: no backtracking to a previous stage.
 Errors at any stage halt the pipeline and produce rich diagnostics via `miette`.
+
+The AST is parameterized over a `Phase` marker (see
+`crates/graphcal-compiler/src/syntax/phase.rs`):
+
+- `File<Raw>` is what the parser produces and what the formatter consumes.
+  Surface sugar (`RawDeclSugar::Multi`, `RawExprSugar::TableLiteral`) is
+  representable here.
+- `File<Desugared>` is what every downstream stage (name resolution, IR, TIR,
+  evaluation) consumes. The `Sugar` payload is `core::convert::Infallible`,
+  so the sugar variants vanish from the type system entirely.
 
 ### 1.1 Lexer -> Tokens
 
@@ -56,7 +75,40 @@ Errors at any stage halt the pipeline and produce rich diagnostics via `miette`.
 - Output is `File { declarations: Vec<Declaration> }` where each `Declaration`
   carries attributes, an `is_pub` visibility flag, a `DeclKind`, and a `Span`.
 
-### 1.3 Name Resolution + IR Lowering -> IR
+### 1.3 Desugaring -> `File<Desugared>`
+
+Handled in `desugar/` (generic walker + `DesugarSugar` trait) plus
+`syntax/desugar.rs` (the multi-decl expander):
+
+- **Multi-declarations** — `param a: T[I], const node b: U[I, J] = table[…]{…};` —
+  are expanded into N parallel ordinary declarations sharing one synthesized
+  `table[…]{…}` initializer. Source spans on each synthesized declaration point
+  back at the slot header, name, type annotation, and table body so diagnostics
+  still land on the surface form.
+- **Table literals** desugar to `ExprKind::MapLiteral`; the `table` keyword and
+  axis metadata exist only in `Raw`.
+
+The walker is generic: each surface sugar implements `DesugarSugar` (see
+`desugar/mod.rs`), and the `File<Raw> -> File<Desugared>` `From` impl in
+`desugar/convert.rs` dispatches `Sugar(_)` arms to the appropriate transform
+while rebuilding every other node phase-by-phase.
+
+### 1.4 Name Resolution -> resolved `File<Desugared>`
+
+Handled in `syntax/name_resolve.rs`. After parsing + desugaring, the AST still
+contains `NameRef` / `QualifiedNameRef` nodes for bare and dotted identifiers.
+This pass rewrites them into concrete expression kinds, resolving against:
+
+- Builtin constants (PI, E, TAU, SQRT2, LN2, LN10).
+- Time scale names (UTC, TAI, TT, …) for `Datetime` literals.
+- Local scope (for/scan/unfold/match bindings).
+- Struct and union type names declared in the file.
+- Index names and their variants.
+- Module aliases from `import` declarations.
+
+After this pass, no `NameRef` / `QualifiedNameRef` nodes remain.
+
+### 1.5 IR Lowering -> IR
 
 Handled in `ir/resolve/` and `ir/lower.rs`:
 
@@ -64,7 +116,7 @@ Handled in `ir/resolve/` and `ir/lower.rs`:
 2. **Duplicate / casing checks**: params, nodes, and const nodes must be
    `lower_snake_case`; `UPPER_SNAKE_CASE` is reserved for built-in constants
    (PI, E, TAU).
-3. **Visibility validation**: required params and indexes must be `pub`;
+3. **Visibility validation**: required params and indexes must be `pub(bind)`;
    private items cannot be imported across files.
 4. **Scope validation**: const node bodies cannot contain `@` references to
    runtime params/nodes; assert bodies cannot reference other asserts.
@@ -74,34 +126,48 @@ Handled in `ir/resolve/` and `ir/lower.rs`:
    functions (builtins + user-defined).
 
 The result is the `IR` struct, which bundles resolved entries, a frozen `Registry`,
-and dependency maps.
+and dependency maps. One `IR` corresponds to one DAG body (file root or inline
+`dag` block); the project pipeline lowers each DAG body separately. Inline
+`dag` bodies are compiled via `lower_dag_body_to_ir` (compiler) +
+`graphcal-eval/src/inline_dag.rs` (project glue).
 
-### 1.4 Type Resolution + Dimension Checking -> TIR
+### 1.6 Type Resolution + Dimension Checking -> TIR
 
 Handled in `tir/typed.rs` and `tir/dim_check/`:
 
 1. **Resolve type annotations**: convert AST type names into `ResolvedTypeExpr`
    (concrete `Dimension` values, struct types, generics).
-2. **Dimension inference**: Hindley-Milner-like constraint generation + unification
-   for each expression.
+2. **Dimension inference**: Hindley-Milner-like constraint generation +
+   unification for each expression (`tir/dim_check/infer/`).
 3. **Type matching**: verify inferred type against declared type for every
    param (default), node, const node, and assert.
 
 Dimensions are represented as `BTreeMap<BaseDimId, Rational>` (exponent map over
 7 SI base dimensions). Dimension algebra (mul, div, pow) is closed and exact.
 
-### 1.5 ExecPlan Compilation
+A TIR carries a `DagRegistry` (`HashMap<DagId, DagTIR>`): one `DagTIR` per file
+root plus one per inline `dag { ... }` block, plus merged entries for DAGs
+included from dependency files. The file's own root is reachable via
+`TIR::root()` / `TIR::root_mut()`. `TIR::module_aliases` maps each `import`
+alias to its target file's canonical `DagId`, so user-typed
+`@alias.dag(args)` calls resolve through the same registry as same-file inline
+calls.
+
+### 1.7 ExecPlan Compilation
 
 `exec_plan::compile()` does two topological sorts:
 
 1. **Const sort**: order const nodes by `const_deps`, evaluate each in sequence via
-   `eval_expr`, store results in `const_values`.
-2. **Runtime sort**: order params + nodes by `runtime_deps`, producing `topo_order`.
+   `eval_expr`, store results in `const_values` (keyed by `ScopedName`).
+2. **Runtime sort**: order params + nodes by `runtime_deps`, producing
+   `topo_order` (also `ScopedName`-keyed).
 
 It also resolves domain constraints (min/max bounds from type annotations)
-using the now-known const values.
+using the now-known const values. Domain checks themselves live in
+`graphcal-eval/src/domain_check.rs` and run both at compile time
+(`exec_plan`) and at runtime (`eval/runtime.rs`).
 
-### 1.6 Runtime Evaluation
+### 1.8 Runtime Evaluation
 
 `eval::runtime::run_eval_loop()` iterates `topo_order`:
 
@@ -138,42 +204,62 @@ graphcal-lsp          (binary: Language Server)
 
 The core language crate. Contains everything up to and including TIR.
 
-| Module                | Purpose                                                                       |
-| --------------------- | ----------------------------------------------------------------------------- |
-| `syntax/lexer.rs`     | Tokenizer (logos-based, 2-token lookahead)                                    |
-| `syntax/token.rs`     | `Token` enum definition                                                       |
-| `syntax/parser/`      | Recursive-descent parser producing AST                                        |
-| `syntax/ast.rs`       | AST node types (`File`, `Declaration`, `Expr`, `TypeExpr`)                    |
-| `syntax/names.rs`     | Newtype wrappers: `DeclName`, `DimName`, `UnitName`, etc.                     |
-| `syntax/dimension.rs` | `BaseDimId`, `Dimension`, `Rational` (dimension algebra)                      |
-| `syntax/span.rs`      | Byte-offset source locations                                                  |
-| `syntax/visitor.rs`   | Visitor pattern for AST traversal                                             |
-| `syntax/comments.rs`  | Comment extraction for the formatter                                          |
-| `ir/lower.rs`         | `IR` struct, `lower()` function (AST -> IR)                                   |
-| `ir/resolve/`         | Name resolution, scope checking, visibility, dependency extraction            |
-| `tir/typed.rs`        | `TIR` struct, `resolve()` function (IR -> TIR)                                |
-| `tir/dim_check/`      | Dimension inference and type matching                                         |
-| `registry/types.rs`   | Core registry struct and type definitions                                     |
-| `registry/`           | Type system: dimensions, units, indexes, structs, functions, builtins, errors |
+| Module                       | Purpose                                                                            |
+| ---------------------------- | ---------------------------------------------------------------------------------- |
+| `syntax/lexer.rs`            | Tokenizer (logos-based, 2-token lookahead)                                         |
+| `syntax/token.rs`            | `Token` enum definition                                                            |
+| `syntax/parser/`             | Recursive-descent parser producing `File<Raw>`; `decl/` per declaration form       |
+| `syntax/ast.rs`              | AST node types (`File<P>`, `Declaration<P>`, `Expr<P>`, `TypeExpr<P>`)             |
+| `syntax/phase.rs`            | AST phase parameter: `Raw` vs `Desugared`; `RawDeclSugar`, `RawExprSugar`          |
+| `syntax/desugar.rs`          | Multi-decl expansion (the per-sugar producer of `File<Desugared>`)                 |
+| `syntax/name_resolve.rs`     | `NameRef` / `QualifiedNameRef` rewrite pass                                        |
+| `syntax/names.rs`            | Newtype wrappers: `DeclName`, `DimName`, `UnitName`, `ScopedName`, …               |
+| `syntax/dag_id.rs`           | `DagId` — filesystem-independent module/DAG identifier                             |
+| `syntax/dimension.rs`        | `BaseDimId`, `Dimension`, `Rational` (dimension algebra)                           |
+| `syntax/span.rs`             | Byte-offset source locations                                                       |
+| `syntax/visitor.rs`          | Visitor pattern for AST traversal (`ExprVisitor`, `ExprVisitorMut`)                |
+| `syntax/comments.rs`         | Comment extraction for the formatter                                               |
+| `desugar/mod.rs`             | Generic walker + `DesugarSugar` trait                                              |
+| `desugar/convert.rs`         | `From<File<Raw>> for File<Desugared>` impl that drives the walker                  |
+| `desugar/desugared_ast.rs`   | Re-exports / type aliases for the post-desugar AST                                 |
+| `ir/lower.rs`                | `IR` struct, `lower()` function, plus `lower_dag_body_to_ir` for inline DAGs       |
+| `ir/resolve/`                | Name resolution (`names`, `scope`, `deps`), visibility, dependency extraction      |
+| `tir/typed.rs`               | `TIR`, `DagTIR`, `DagRegistry`, `ResolvedTypeExpr`, `type_resolve`                 |
+| `tir/dim_check/`             | Dimension inference + type matching (`infer/scalar`, `control`, `collections`, …)  |
+| `registry/types.rs`          | `Registry` struct: dimensions, units, indexes, struct types, functions             |
+| `registry/builtins.rs`       | Builtin constants and functions                                                    |
+| `registry/declared_type.rs`  | `DeclaredType` — concrete user-facing type carried alongside values                |
+| `registry/runtime_value.rs`  | `RuntimeValue` enum (Scalar/Bool/Int/Label/Struct/Indexed/Datetime)                |
+| `registry/resolve_types.rs`  | Resolve `TypeExpr` against the registry                                            |
+| `registry/format.rs`         | Number / unit-expression formatting helpers (re-exported via `eval`)               |
+| `registry/manifest.rs`       | `graphcal.toml` parsing                                                            |
+| `registry/prelude.rs`        | Prelude of built-in dimensions, units, and constants                               |
+| `registry/time_scale.rs`     | `TimeScale` (UTC, TAI, TT, …) for `Datetime`                                       |
+| `registry/error.rs`          | `GraphcalError` variants + miette annotations                                      |
 
 ### 2.2 graphcal-eval
 
 Evaluation engine. Depends on `graphcal-compiler` and re-exports most of its types.
 
-| Module                     | Purpose                                                                |
-| -------------------------- | ---------------------------------------------------------------------- |
-| `eval/mod.rs`              | Public API: `compile_and_eval`, `compile_to_tir_project`, etc.         |
-| `eval/runtime.rs`          | Core eval loop, `RuntimeValue` -> `Value` conversion                   |
-| `eval/display.rs`          | Display unit extraction and attachment                                 |
-| `eval/types.rs`            | `Value`, `EvalResult`, `DisplayUnit` definitions                       |
-| `eval/format.rs`           | Output formatting helpers                                              |
-| `eval/project/`            | Multi-file project compilation (split into submodules)                 |
-| `eval/project/imports.rs`  | Import and include processing                                          |
-| `eval/project/lowering.rs` | IR lowering and registry merging                                       |
-| `eval/project/pipeline.rs` | Evaluation orchestration                                               |
-| `eval_expr/`               | Expression evaluator: arithmetic, control flow, functions, collections |
-| `exec_plan.rs`             | `ExecPlan` struct, topological sorts, const evaluation                 |
-| `loader.rs`                | Project loading with circular import detection                         |
+| Module                     | Purpose                                                                    |
+| -------------------------- | -------------------------------------------------------------------------- |
+| `eval/mod.rs`              | Public API: `compile_and_eval`, `compile_to_tir_from_project`, …           |
+| `eval/runtime.rs`          | Core eval loop, `RuntimeValue` -> `Value` conversion                       |
+| `eval/display.rs`          | Display unit extraction and attachment                                     |
+| `eval/types.rs`            | `Value`, `EvalResult`, `DisplayUnit`, `AssertResult`, `NodeError` types    |
+| `eval/project/mod.rs`      | Multi-file orchestration: alias rewrites, `pub_names` extraction, glue     |
+| `eval/project/imports.rs`  | `import` / `include` processing (selective, module, parameterized)         |
+| `eval/project/lowering.rs` | IR lowering + registry merging across dep files                            |
+| `eval/project/pipeline.rs` | Top-level per-file evaluation orchestration                                |
+| `eval_expr/mod.rs`         | Dispatch + `EvalContext`; re-exports `RuntimeValue`                        |
+| `eval_expr/arithmetic.rs`  | Numeric / scalar / dimension arithmetic                                    |
+| `eval_expr/collections.rs` | `Indexed`, `Struct`, table / map literals, projections                     |
+| `eval_expr/control.rs`     | `if`/`else`, `match`, `for`, `scan`, `unfold`                              |
+| `eval_expr/functions.rs`   | Function calls (builtin + user-defined)                                    |
+| `exec_plan.rs`             | `ExecPlan` struct, topological sorts, const evaluation                     |
+| `inline_dag.rs`            | Compile inline `dag { ... }` bodies into per-DAG `DagTIR`s                 |
+| `domain_check.rs`          | `DomainViolation` checks for resolved domain constraints                   |
+| `loader.rs`                | `LoadedProject` / `LoadedFile` / `LoadedDag` + circular-import detection   |
 
 ### 2.3 graphcal-fmt
 
@@ -245,55 +331,85 @@ Understanding these types is essential before diving into any crate.
 ### 3.1 AST Layer
 
 ```text
-File
-  declarations: Vec<Declaration>
+File<P: Phase = Raw>
+  declarations: Vec<Declaration<P>>
 
-Declaration
-  attributes: Vec<Attribute>    // #[assumes(...)], etc.
+Declaration<P>
+  attributes: Vec<Attribute>    // #[assumes(...)], #[expected_fail(...)], etc.
   visibility: Visibility        // Private | Public | PublicBind
-  kind: DeclKind                // Param | Node | ConstNode | Dimension | Unit | ...
+  kind: DeclKind<P>             // Param | Node | ConstNode | ... | Sugar(P::DeclSugar)
   span: Span
 
-Expr
-  kind: ExprKind                // Number | BinOp | FnCall | GraphRef(@name) | ...
+Expr<P>
+  kind: ExprKind<P>             // Number | BinOp | FnCall | GraphRef(@name) | ... | Sugar(P::ExprSugar)
   span: Span
 
-TypeExpr                        // Dimensionless | Bool | Scalar(DimExpr) | Indexed(...) | ...
+TypeExpr<P>                     // Dimensionless | Bool | Scalar(DimExpr) | Indexed(...) | ...
 ```
+
+`P = Raw` is the parser/formatter view (sugar variants are reachable).
+`P = Desugared` is what every semantic stage consumes — `Sugar(_)` payloads
+are `core::convert::Infallible`, so `match` arms over them are statically
+unreachable (use `crate::syntax::phase::never(x)` to discharge them).
 
 ### 3.2 IR Layer
 
 ```text
-IR
+IR                              // One IR ⇔ one DAG body (file root OR inline `dag`)
   registry: Registry            // Frozen type system
   consts: Vec<ConstEntry>       // Const declarations
   params: Vec<ParamEntry>       // Param declarations
   nodes: Vec<NodeEntry>         // Node declarations
   asserts: Vec<AssertEntry>
-  plots, figures, layers: ...
-  runtime_deps: HashMap<ScopedName, HashSet<ScopedName>>   // @ references
-  const_deps: HashMap<ScopedName, HashSet<ScopedName>>
+  plots, figures, layers: Vec<...Entry>
+  runtime_deps: HashMap<ScopedName, BTreeSet<ScopedName>>   // @ references
+  const_deps: HashMap<ScopedName, BTreeSet<ScopedName>>
   source_order: Vec<(ScopedName, DeclCategory)>
+  assumes_map, expected_fail: HashMap<ScopedName, ...>
   imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>
+  imported_decl_types: HashMap<ScopedName, DeclaredType>     // values supplied later
+  imported_value_sources: HashMap<ScopedName, ImportedValueSource>
+  pub_names: HashSet<DeclName>
 ```
 
 ### 3.3 TIR Layer
 
-Same shape as IR but with:
+The TIR is **not** flat — one file produces one `TIR` containing many
+`DagTIR`s (file root + each inline `dag` + merged dep DAGs):
 
-- `resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>` -- every declaration
-  has a concrete type with resolved dimensions.
-- `domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>` -- min/max bounds.
+```text
+TIR
+  registry: Registry                                       // Shared by every DAG in the file
+  root_dag_id: DagId                                       // Key for the file's own body
+  dags: DagRegistry = HashMap<DagId, DagTIR>
+  module_aliases: HashMap<String, DagId>                   // import alias → dep DagId
+
+DagTIR
+  dag_id: DagId
+  consts, params, nodes, asserts, plots, figures, layers   // Same shape as IR
+  runtime_deps, const_deps, source_order
+  assert_names, assumes_map, expected_fail
+  resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>
+  domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>
+  imported_values, imported_decl_types, imported_value_sources
+  pub_nodes: HashSet<String>                               // Cross-file visibility proxy
+```
+
+`TIR::is_library()` returns true when any required `param` or required `index`
+is present; the LSP uses this to suppress unbound-param diagnostics on files
+intended to be consumed via parameterized include.
 
 ### 3.4 ExecPlan
 
 ```text
 ExecPlan
-  const_values: HashMap<DeclName, RuntimeValue>   // Pre-evaluated at compile time
-  topo_order: Vec<DeclName>                        // Runtime evaluation order
-  expressions: HashMap<DeclName, Expr>             // Unevaluated runtime exprs
-  assert_bodies, plot_bodies, ...
-  domain_constraints: HashMap<DeclName, ResolvedDomainConstraint>
+  const_values: HashMap<ScopedName, RuntimeValue>   // Pre-evaluated at compile time
+  imported_values: HashMap<ScopedName, RuntimeValue>
+  topo_order: Vec<ScopedName>                       // Runtime evaluation order
+  expressions: HashMap<ScopedName, Expr>            // Unevaluated runtime exprs
+  assert_bodies, plot_bodies, figure_bodies, layer_bodies
+  assumes_map: HashMap<ScopedName, Vec<ScopedName>>
+  domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>
 ```
 
 ### 3.5 Runtime Values
@@ -532,23 +648,34 @@ builds understanding incrementally:
 
 1. **`syntax/token.rs`** and **`syntax/ast.rs`** -- understand the token and AST
    vocabularies. These are the "alphabet" of everything downstream.
-2. **`syntax/lexer.rs`** -- short file; see how tokens are produced.
-3. **`syntax/parser/expr.rs`** -- expression parsing shows the precedence
+2. **`syntax/phase.rs`** -- the `Raw` / `Desugared` phase split and the
+   `Sugar` slots; the type-level mechanism that keeps surface sugar out of the
+   semantic core.
+3. **`syntax/lexer.rs`** -- short file; see how tokens are produced.
+4. **`syntax/parser/expr.rs`** -- expression parsing shows the precedence
    hierarchy and how AST nodes are constructed.
-4. **`syntax/parser/decl/value.rs`** -- how param/node/const declarations are
+5. **`syntax/parser/decl/value.rs`** -- how param/node/const declarations are
    parsed.
-5. **`ir/resolve/mod.rs`** and **`ir/resolve/deps.rs`** -- name resolution and
+6. **`desugar/mod.rs`** and **`syntax/desugar.rs`** -- how multi-decl /
+   table-literal sugar is expanded into the canonical AST.
+7. **`syntax/name_resolve.rs`** -- the bare-identifier rewrite pass.
+8. **`ir/resolve/mod.rs`** and **`ir/resolve/deps.rs`** -- name resolution and
    dependency extraction.
-6. **`ir/lower.rs`** -- the `lower()` function ties parsing and resolution together.
-7. **`registry/types.rs`** -- how dimensions, units, and types are registered.
-8. **`tir/typed.rs`** -- type resolution.
-9. **`tir/dim_check/infer/mod.rs`** -- dimension inference (the most
-   intellectually interesting part of the compiler).
-10. **`exec_plan.rs`** -- how TIR becomes an executable plan.
-11. **`eval/runtime.rs`** -- the evaluation loop.
-12. **`eval_expr/mod.rs`** -- expression evaluation dispatch.
-13. **`eval/types.rs`** -- `Value` and `EvalResult` definitions.
-14. **`graphcal-cli/src/main.rs`** -- see how the full pipeline is invoked.
+9. **`ir/lower.rs`** -- the `lower()` function ties parsing and resolution together.
+10. **`registry/types.rs`** -- how dimensions, units, and types are registered.
+11. **`syntax/dag_id.rs`** -- the abstract DAG identity used to address file
+    roots and inline DAGs uniformly.
+12. **`tir/typed.rs`** -- type resolution; pay attention to the `TIR` /
+    `DagTIR` / `DagRegistry` split.
+13. **`tir/dim_check/infer/mod.rs`** -- dimension inference (the most
+    intellectually interesting part of the compiler).
+14. **`exec_plan.rs`** -- how TIR becomes an executable plan.
+15. **`eval/runtime.rs`** -- the evaluation loop.
+16. **`eval_expr/mod.rs`** -- expression evaluation dispatch.
+17. **`eval/project/pipeline.rs`** -- per-file evaluation orchestration in
+    multi-file projects.
+18. **`eval/types.rs`** -- `Value` and `EvalResult` definitions.
+19. **`graphcal-cli/src/main.rs`** -- see how the full pipeline is invoked.
 
 After this pass, the LSP and formatter can be read independently
 as they are self-contained consumers of the compiler/eval APIs.
