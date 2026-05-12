@@ -8,9 +8,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::desugared_ast::{
-    AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl,
-};
+use graphcal_compiler::desugar::resolved_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
 use graphcal_compiler::syntax::names::{FieldName, ScopedName, StructTypeName};
 use graphcal_compiler::syntax::span::Span;
 use petgraph::algo::toposort;
@@ -467,11 +465,11 @@ pub fn resolve_domain_constraints(
             constraint_span = constraint_span.merge(bound.span);
 
             match bound.kind {
-                graphcal_compiler::desugar::desugared_ast::DomainBoundKind::Min => {
+                graphcal_compiler::desugar::resolved_ast::DomainBoundKind::Min => {
                     min_val = Some(si_value);
                     min_display = Some(display_text);
                 }
-                graphcal_compiler::desugar::desugared_ast::DomainBoundKind::Max => {
+                graphcal_compiler::desugar::resolved_ast::DomainBoundKind::Max => {
                     max_val = Some(si_value);
                     max_display = Some(display_text);
                 }
@@ -589,11 +587,11 @@ pub fn resolve_struct_field_constraints(
                 constraint_span = constraint_span.merge(bound.span);
 
                 match bound.kind {
-                    graphcal_compiler::desugar::desugared_ast::DomainBoundKind::Min => {
+                    graphcal_compiler::desugar::resolved_ast::DomainBoundKind::Min => {
                         min_val = Some(si_value);
                         min_display = Some(display_text);
                     }
-                    graphcal_compiler::desugar::desugared_ast::DomainBoundKind::Max => {
+                    graphcal_compiler::desugar::resolved_ast::DomainBoundKind::Max => {
                         max_val = Some(si_value);
                         max_display = Some(display_text);
                     }
@@ -734,13 +732,13 @@ fn format_runtime_value(rv: &RuntimeValue) -> String {
 /// For `Velocity(min: 0)[Maneuver]`, the constraints are on the base `Velocity`,
 /// not on the outer `Indexed` wrapper.
 fn extract_domain_bounds(
-    type_ann: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
-) -> &[graphcal_compiler::desugar::desugared_ast::DomainBound] {
+    type_ann: &graphcal_compiler::desugar::resolved_ast::TypeExpr,
+) -> &[graphcal_compiler::desugar::resolved_ast::DomainBound] {
     if !type_ann.constraints.is_empty() {
         return &type_ann.constraints;
     }
     // For indexed types, check the base type's constraints.
-    if let graphcal_compiler::desugar::desugared_ast::TypeExprKind::Indexed { base, .. } =
+    if let graphcal_compiler::desugar::resolved_ast::TypeExprKind::Indexed { base, .. } =
         &type_ann.kind
     {
         return &base.constraints;
@@ -821,10 +819,10 @@ fn validate_constraint_target(
 /// original syntactic form is preserved. For complex expressions, the
 /// pre-evaluated SI value is displayed as a fallback — no re-evaluation needed.
 fn format_bound_display(
-    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
+    expr: &graphcal_compiler::desugar::resolved_ast::Expr,
     si_value: f64,
 ) -> String {
-    use graphcal_compiler::desugar::desugared_ast::ExprKind;
+    use graphcal_compiler::desugar::resolved_ast::ExprKind;
     match &expr.kind {
         ExprKind::Number(n) => graphcal_compiler::registry::format::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
@@ -834,7 +832,7 @@ fn format_bound_display(
             format!("{val_str} {unit_str}")
         }
         ExprKind::UnaryOp {
-            op: graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg,
+            op: graphcal_compiler::desugar::resolved_ast::UnaryOp::Neg,
             operand,
         } => {
             format!("-{}", format_bound_display(operand, -si_value))
@@ -864,7 +862,10 @@ mod tests {
 
     fn compile_source(source: &str) -> Result<ExecPlan, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
-        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let mut desugared =
+            graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
         let src = make_src(source);
         let ir = lower(&file, &src).unwrap();
         let dag_id = graphcal_compiler::syntax::dag_id::DagId::from_relative_path(

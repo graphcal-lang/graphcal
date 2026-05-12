@@ -1161,24 +1161,20 @@ pub enum ExprKind<P: Phase = Raw> {
         /// Projected output node name (after the closing paren `.`).
         output: Spanned<DeclName>,
     },
-    /// Unresolved bare identifier reference.
+    /// Unresolved reference produced by the parser.
     ///
-    /// Produced by the parser when the meaning of a bare identifier cannot be
-    /// determined from syntax alone. A name-resolution pass rewrites this to
-    /// one of `ConstRef`, `LocalRef`, or `StructConstruction` (bare variant).
-    NameRef(Ident),
-    /// Unresolved qualified reference: `a.b`.
-    ///
-    /// Produced by the parser when `ident.ident` appears at atom position
-    /// without a following `(`. A name-resolution pass rewrites this to
-    /// `VariantLiteral` or `QualifiedConstRef` based on what `a` resolves to.
-    QualifiedNameRef { qualifier: Ident, member: Ident },
+    /// Carries [`crate::syntax::phase::UnresolvedRef`] in [`Raw`] and
+    /// [`crate::syntax::phase::Desugared`], with `NameRef`/`QualifiedNameRef`
+    /// sub-variants. In [`crate::syntax::phase::Resolved`] the payload is
+    /// [`core::convert::Infallible`] — the variant is statically unreachable
+    /// after the name-resolution pass has run.
+    UnresolvedRef(P::RefSugar),
     /// Phase-specific expression sugar.
     ///
     /// In [`Raw`], this is [`crate::syntax::phase::RawExprSugar`] and carries
     /// surface forms like `TableLiteral` that are eliminated by the desugar
-    /// pass. In `Desugared`, the payload is [`core::convert::Infallible`] —
-    /// the variant is statically unreachable.
+    /// pass. In `Desugared` and `Resolved`, the payload is
+    /// [`core::convert::Infallible`] — the variant is statically unreachable.
     Sugar(P::ExprSugar),
 }
 
@@ -1492,8 +1488,7 @@ fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::VariantLiteral { .. }
-        | ExprKind::NameRef(_)
-        | ExprKind::QualifiedNameRef { .. }
+        | ExprKind::UnresolvedRef(_)
         // TupleMatch is handled below after recursing into children.
         | ExprKind::TupleMatch { .. } => {}
         ExprKind::InlineDagRef { args, .. } => {

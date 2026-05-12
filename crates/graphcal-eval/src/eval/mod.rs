@@ -49,7 +49,7 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
 pub fn compile_and_eval_with_overrides(
     source: &str,
     name: &str,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
     let project = crate::loader::LoadedProject::from_source(source, name)?;
     compile_and_eval_from_project(&project, overrides)

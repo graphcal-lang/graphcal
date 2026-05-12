@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::desugared_ast::{DeclKind, Expr, ExprKind, ModulePath};
+use graphcal_compiler::desugar::resolved_ast::{DeclKind, Expr, ExprKind, ModulePath};
 use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, Spanned, StructTypeName};
-use graphcal_compiler::syntax::phase::Desugared;
+use graphcal_compiler::syntax::phase::Resolved;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
 
@@ -55,7 +55,7 @@ struct AliasFieldAccessRewriter<'a> {
     qualified_pairs: &'a HashSet<(String, String)>,
 }
 
-impl ExprVisitorMut<Desugared> for AliasFieldAccessRewriter<'_> {
+impl ExprVisitorMut<Resolved> for AliasFieldAccessRewriter<'_> {
     type Error = std::convert::Infallible;
 
     fn visit_expr_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
@@ -187,7 +187,7 @@ pub(super) struct DeferredDagInclude {
     /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on
     /// included assertions). Key = original name in dep.
     pub(super) import_item_attributes:
-        HashMap<String, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
+        HashMap<String, Vec<graphcal_compiler::desugar::resolved_ast::Attribute>>,
     /// Whether this include carries a leading `pub` (whole-module re-export).
     pub(super) pub_reexport_whole: bool,
     /// Original names of selective items marked `pub` in the importer's
@@ -212,7 +212,7 @@ pub(super) enum DeferredDagSource {
     /// performing the include).
     InlineDag {
         /// Virtual File AST constructed from the DAG body declarations.
-        dag_body: graphcal_compiler::desugar::desugared_ast::File,
+        dag_body: graphcal_compiler::desugar::resolved_ast::File,
         /// Imported names collected from `import ..` inside the DAG body.
         dag_imported_names: ImportedValueNames,
         /// [`DagId`](graphcal_compiler::syntax::dag_id::DagId) of the file
@@ -266,10 +266,10 @@ pub(super) enum SelectiveImportResult {
 /// If there are no module imports and no qualified members, returns a
 /// borrowed reference to the original AST.
 pub(super) fn rewrite_qualified_refs_in_ast<'a>(
-    ast: &'a graphcal_compiler::desugar::desugared_ast::File,
+    ast: &'a graphcal_compiler::desugar::resolved_ast::File,
     module_map: &HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
     imported_names: &ImportedValueNames,
-) -> std::borrow::Cow<'a, graphcal_compiler::desugar::desugared_ast::File> {
+) -> std::borrow::Cow<'a, graphcal_compiler::desugar::resolved_ast::File> {
     let alias_pairs = collect_qualified_pairs(imported_names);
     if module_map.is_empty() && alias_pairs.is_empty() {
         return std::borrow::Cow::Borrowed(ast);
@@ -305,7 +305,7 @@ fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<(String, St
 
 /// Apply the alias-field-access rewrite to a single declaration's expressions.
 fn rewrite_decl_exprs(
-    decl: &mut graphcal_compiler::desugar::desugared_ast::Declaration,
+    decl: &mut graphcal_compiler::desugar::resolved_ast::Declaration,
     alias_pairs: &HashSet<(String, String)>,
 ) {
     let rewrite = |e: &mut Expr| {
@@ -320,8 +320,8 @@ fn rewrite_decl_exprs(
         DeclKind::Node(n) => rewrite(&mut n.value),
         DeclKind::ConstNode(c) => rewrite(&mut c.value),
         DeclKind::Assert(a) => match &mut a.body {
-            graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(e) => rewrite(e),
-            graphcal_compiler::desugar::desugared_ast::AssertBody::Tolerance {
+            graphcal_compiler::desugar::resolved_ast::AssertBody::Expr(e) => rewrite(e),
+            graphcal_compiler::desugar::resolved_ast::AssertBody::Tolerance {
                 actual,
                 expected,
                 tolerance,
@@ -355,7 +355,7 @@ fn rewrite_decl_exprs(
 /// (the enumeration requires X's own `pub_names`, which this pure AST
 /// walk does not have), so it is not expanded here.
 pub(super) fn extract_pub_names(
-    file: &graphcal_compiler::desugar::desugared_ast::File,
+    file: &graphcal_compiler::desugar::resolved_ast::File,
 ) -> HashSet<DeclName> {
     let mut pub_names = HashSet::new();
     for decl in &file.declarations {
@@ -363,7 +363,7 @@ pub(super) fn extract_pub_names(
         if !decl.is_pub() && !implicitly_visible {
             match &decl.kind {
                 DeclKind::Import(d) => {
-                    if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
+                    if let graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) =
                         &d.kind
                     {
                         for item in items {
@@ -374,7 +374,7 @@ pub(super) fn extract_pub_names(
                     }
                 }
                 DeclKind::Include(d) => {
-                    if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
+                    if let graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) =
                         &d.kind
                     {
                         for item in items {
@@ -418,7 +418,7 @@ pub(super) fn extract_pub_names(
 /// local declaration when a downstream importer asks "does this file have
 /// `name`?".
 pub(super) fn file_has_declaration(
-    file: &graphcal_compiler::desugar::desugared_ast::File,
+    file: &graphcal_compiler::desugar::resolved_ast::File,
     name: &str,
 ) -> bool {
     file.declarations.iter().any(|decl| match &decl.kind {
@@ -438,12 +438,12 @@ pub(super) fn file_has_declaration(
         DeclKind::Dag(d) => d.name.value.as_str() == name,
         DeclKind::Import(d) => matches!(
             &d.kind,
-            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items)
+            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
                 if items.iter().any(|it| it.is_pub && it.local_name() == name)
         ),
         DeclKind::Include(d) => matches!(
             &d.kind,
-            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items)
+            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
                 if items.iter().any(|it| it.is_pub && it.local_name() == name)
         ),
         DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
@@ -461,7 +461,7 @@ pub(super) fn resolve_field_declared_type(
     registry: &Registry,
 ) -> Option<DeclaredType> {
     // Check if the field type is a bare generic param reference (e.g., `D`)
-    if let graphcal_compiler::desugar::desugared_ast::TypeExprKind::DimExpr(dim_expr) =
+    if let graphcal_compiler::desugar::resolved_ast::TypeExprKind::DimExpr(dim_expr) =
         &field.type_ann.kind
         && dim_expr.terms.len() == 1
         && dim_expr.terms[0].term.power.is_none()
@@ -481,7 +481,7 @@ pub(super) fn resolve_field_declared_type(
 /// Validate and apply parameter overrides to an IR.
 pub(super) fn apply_overrides(
     ir: &mut graphcal_compiler::ir::lower::IR,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
 ) -> Result<(), CompileError> {
     for (override_name, override_expr) in overrides {
         let name_str = override_name.as_str();
@@ -560,7 +560,7 @@ pub fn compile_to_tir_from_project(
 )]
 pub fn compile_and_eval_from_project(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
     pipeline::evaluate_project_perfile(project, overrides)
 }
@@ -581,7 +581,7 @@ pub fn compile_and_eval_from_project(
 )]
 pub fn compile_and_eval_project<F: graphcal_io::FileSystemReader>(
     root_path: &Path,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
     project_root: Option<&Path>,
     fs: &F,
 ) -> Result<EvalResult, CompileError> {

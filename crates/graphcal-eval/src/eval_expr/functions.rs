@@ -4,7 +4,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind};
+use graphcal_compiler::desugar::resolved_ast::{Expr, ExprKind};
 use graphcal_compiler::syntax::names::{ScopedName, VariantName};
 
 use graphcal_compiler::registry::error::GraphcalError;

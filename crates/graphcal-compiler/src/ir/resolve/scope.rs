@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::desugar::desugared_ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
+use crate::desugar::resolved_ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
 use crate::registry::error::GraphcalError;
 use crate::syntax::names::{DeclName, ScopedName};
 use crate::syntax::span::Span;
@@ -23,7 +23,7 @@ struct ForbiddenGraphRefChecker<'a, S, F> {
     make_error: F,
 }
 
-impl<S, F> ExprVisitor<crate::syntax::phase::Desugared> for ForbiddenGraphRefChecker<'_, S, F>
+impl<S, F> ExprVisitor<crate::syntax::phase::Resolved> for ForbiddenGraphRefChecker<'_, S, F>
 where
     S: Eq + Hash + Borrow<ScopedName>,
     F: Fn(&ScopedName, &NamedSource<Arc<String>>, Span) -> GraphcalError,
@@ -80,7 +80,7 @@ pub(super) fn check_no_assert_graph_refs(
         src: &'a NamedSource<Arc<String>>,
     }
 
-    impl ExprVisitor<crate::syntax::phase::Desugared> for AssertChecker<'_> {
+    impl ExprVisitor<crate::syntax::phase::Resolved> for AssertChecker<'_> {
         type Error = GraphcalError;
 
         fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
@@ -114,7 +114,7 @@ struct VariantLiteralChecker<'a, F> {
     src: &'a NamedSource<Arc<String>>,
 }
 
-impl<F> ExprVisitor<crate::syntax::phase::Desugared> for VariantLiteralChecker<'_, F>
+impl<F> ExprVisitor<crate::syntax::phase::Resolved> for VariantLiteralChecker<'_, F>
 where
     F: Fn(&str, &str, Span, &NamedSource<Arc<String>>) -> Result<(), GraphcalError>,
 {

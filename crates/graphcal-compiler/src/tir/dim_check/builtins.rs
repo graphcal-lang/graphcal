@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::Expr;
+use crate::desugar::resolved_ast::Expr;
 use crate::registry::builtins::{DimSignature, ParamDim, ResultDim};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;

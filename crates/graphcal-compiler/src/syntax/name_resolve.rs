@@ -1,8 +1,13 @@
-//! Name resolution pass: rewrites [`ExprKind::NameRef`] and [`ExprKind::QualifiedNameRef`]
-//! into concrete expression kinds.
+//! Name resolution pass.
 //!
-//! This pass runs after parsing and desugaring but before the rest of the compilation
-//! pipeline. It resolves bare identifiers and qualified references using:
+//! Rewrites [`UnresolvedRef`] payloads in `ExprKind::UnresolvedRef` into
+//! concrete expression kinds, producing a
+//! [`File<Resolved>`](crate::syntax::ast::File) in which the unresolved-ref
+//! slot is `Infallible` (so unresolved references are statically impossible
+//! to construct downstream).
+//!
+//! Runs after parsing and desugaring but before the rest of the compilation
+//! pipeline. Resolves bare identifiers and qualified references using:
 //!
 //! - Builtin constants (PI, E, TAU, etc.)
 //! - Time scale names (UTC, TAI, etc.)
@@ -10,16 +15,21 @@
 //! - Struct/union type names (declared in the file)
 //! - Index names and their variants (declared in the file)
 //!
-//! After this pass, no `NameRef` or `QualifiedNameRef` nodes remain in the AST.
+//! The pass is a pure transformation from
+//! [`crate::desugar::desugared_ast::File`] (= `File<Desugared>`) to
+//! [`crate::desugar::resolved_ast::File`] (= `File<Resolved>`) — the input
+//! is consumed and a new value is returned. Mutation in place is intentionally
+//! avoided so name resolution behaves as a functional core transform.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::desugar::desugared_ast::{
-    AssertBody, DagDecl, DeclKind, Expr, ExprKind, File, IndexArg, IndexDeclKind,
-};
+use crate::desugar::desugared_ast as src_ast;
+use crate::desugar::resolved_ast as dst_ast;
 use crate::registry::builtins::builtin_constants;
 use crate::registry::resolve_types::is_time_scale_name;
+use crate::syntax::ast::ImportKind;
 use crate::syntax::names::{IndexName, ScopedName, Spanned, StructTypeName, VariantName};
+use crate::syntax::phase::{UnresolvedRef, never};
 
 /// Context for name resolution: what names are in scope.
 struct ResolveContext {
@@ -49,20 +59,44 @@ impl ResolveContext {
     }
 }
 
-/// Resolve all `NameRef` and `QualifiedNameRef` nodes in a file.
+/// Resolve a standalone expression with no file-level scope.
 ///
-/// Operates on a [`File<Desugared>`](crate::syntax::ast::File) — multi-decl
-/// sugar expansion is the caller's responsibility (in the loader,
-/// `crate::syntax::desugar::desugar_multi_decls_in_file` runs first). After
-/// this function returns, no `NameRef` or `QualifiedNameRef` nodes remain.
-pub fn resolve_name_refs(file: &mut File) {
+/// Used for inputs that the CLI parses outside of any file context — e.g.
+/// `--set name=expr` override values. Bare identifiers resolve only against
+/// builtin constants and time-scale names; everything else falls back to
+/// `LocalRef`. Qualified `a.b` references resolve to module-qualified
+/// `ConstRef` (there are no in-scope indexes to disambiguate against).
+///
+/// For expressions that need a file's resolution context (e.g. references to
+/// an index variant declared in the target file), feed them through a
+/// synthetic file and call [`resolve_name_refs`] instead.
+#[must_use]
+pub fn resolve_standalone_expr(expr: src_ast::Expr) -> dst_ast::Expr {
+    let mut ctx = ResolveContext {
+        builtin_consts: builtin_constants(),
+        type_names: HashSet::new(),
+        index_variants: HashMap::new(),
+        module_names: HashSet::new(),
+        local_scopes: Vec::new(),
+    };
+    lift_expr(expr, &mut ctx)
+}
+
+/// Resolve all unresolved-ref nodes in a file.
+///
+/// Consumes a [`File<Desugared>`](src_ast::File) and produces a
+/// [`File<Resolved>`](dst_ast::File). The returned file has no
+/// `ExprKind::UnresolvedRef` nodes (`RefSugar = Infallible` for `Resolved`),
+/// so downstream consumers — IR lowering, TIR, evaluation — can assume the
+/// AST is free of unresolved references at the type level.
+#[must_use]
+pub fn resolve_name_refs(file: src_ast::File) -> dst_ast::File {
     let builtin_consts = builtin_constants();
 
-    // Scan declarations to build context
+    // First pass: scan declarations to build the resolution context.
     let mut type_names = HashSet::new();
     let mut index_variants: HashMap<String, HashSet<String>> = HashMap::new();
     let mut module_names = HashSet::new();
-
     collect_names_from_decls(
         &file.declarations,
         &mut type_names,
@@ -78,33 +112,37 @@ pub fn resolve_name_refs(file: &mut File) {
         local_scopes: Vec::new(),
     };
 
-    for decl in &mut file.declarations {
-        resolve_decl(decl, &mut ctx);
-    }
+    // Second pass: lift every declaration into the resolved AST.
+    let declarations = file
+        .declarations
+        .into_iter()
+        .map(|decl| lift_decl(decl, &mut ctx))
+        .collect();
+
+    dst_ast::File { declarations }
 }
 
 /// Collect type names, index variants, and module names from declarations.
 fn collect_names_from_decls(
-    decls: &[crate::desugar::desugared_ast::Declaration],
+    decls: &[src_ast::Declaration],
     type_names: &mut HashSet<String>,
     index_variants: &mut HashMap<String, HashSet<String>>,
     module_names: &mut HashSet<String>,
 ) {
     for decl in decls {
         match &decl.kind {
-            DeclKind::Type(t) => {
+            src_ast::DeclKind::Type(t) => {
                 type_names.insert(t.name.value.to_string());
             }
-            DeclKind::UnionType(u) => {
+            src_ast::DeclKind::UnionType(u) => {
                 type_names.insert(u.name.value.to_string());
-                // Union members are also valid type names for bare construction
                 for member in &u.members {
                     type_names.insert(member.name.value.to_string());
                 }
             }
-            DeclKind::Index(idx) => {
+            src_ast::DeclKind::Index(idx) => {
                 let idx_name = idx.name.value.to_string();
-                if let IndexDeclKind::Named { variants } = &idx.kind {
+                if let src_ast::IndexDeclKind::Named { variants } = &idx.kind {
                     let variant_set: HashSet<String> =
                         variants.iter().map(|v| v.value.to_string()).collect();
                     index_variants.insert(idx_name, variant_set);
@@ -112,36 +150,32 @@ fn collect_names_from_decls(
                     index_variants.insert(idx_name, HashSet::new());
                 }
             }
-            DeclKind::Import(import) => {
-                if let crate::syntax::ast::ImportKind::Module { alias: Some(alias) } = &import.kind
-                {
+            src_ast::DeclKind::Import(import) => {
+                if let ImportKind::Module { alias: Some(alias) } = &import.kind {
                     module_names.insert(alias.name.clone());
                 }
-                // Selective imports may bring in types/indexes — add them
-                if let crate::syntax::ast::ImportKind::Selective(items) = &import.kind {
+                if let ImportKind::Selective(items) = &import.kind {
                     for item in items {
                         let local = item.local_name().to_string();
-                        // We don't know if it's a type or index without resolving the import,
-                        // so we add it to both sets optimistically. The resolve pass will
-                        // validate later.
+                        // Without resolving imports we don't know type vs index;
+                        // err on the side of recognizing it as a type so that
+                        // bare references parse as struct construction.
                         type_names.insert(local);
                     }
                 }
             }
-            DeclKind::Include(include) => {
-                if let crate::syntax::ast::ImportKind::Module { alias: Some(alias) } = &include.kind
-                {
+            src_ast::DeclKind::Include(include) => {
+                if let ImportKind::Module { alias: Some(alias) } = &include.kind {
                     module_names.insert(alias.name.clone());
                 }
-                if let crate::syntax::ast::ImportKind::Selective(items) = &include.kind {
+                if let ImportKind::Selective(items) = &include.kind {
                     for item in items {
                         let local = item.local_name().to_string();
                         type_names.insert(local);
                     }
                 }
             }
-            DeclKind::Dag(dag) => {
-                // Recurse into dag body
+            src_ast::DeclKind::Dag(dag) => {
                 collect_names_from_decls(&dag.body, type_names, index_variants, module_names);
             }
             _ => {}
@@ -149,81 +183,195 @@ fn collect_names_from_decls(
     }
 }
 
-/// Resolve names in a single declaration.
-fn resolve_decl(decl: &mut crate::desugar::desugared_ast::Declaration, ctx: &mut ResolveContext) {
-    match &mut decl.kind {
-        DeclKind::Param(p) => {
-            if let Some(v) = &mut p.value {
-                resolve_expr(v, ctx);
-            }
-        }
-        DeclKind::Node(n) => resolve_expr(&mut n.value, ctx),
-        DeclKind::ConstNode(c) => resolve_expr(&mut c.value, ctx),
-        DeclKind::Unit(u) => {
-            if let Some(def) = &mut u.definition {
-                resolve_expr(&mut def.scale_expr, ctx);
-            }
-        }
-        DeclKind::Assert(a) => match &mut a.body {
-            AssertBody::Expr(e) => resolve_expr(e, ctx),
-            AssertBody::Tolerance {
-                actual,
-                expected,
-                tolerance,
-                ..
-            } => {
-                resolve_expr(actual, ctx);
-                resolve_expr(expected, ctx);
-                resolve_expr(tolerance, ctx);
-            }
-        },
-        DeclKind::Plot(p) => {
-            for encoding in &mut p.encodings {
-                resolve_expr(&mut encoding.value, ctx);
-            }
-            for prop in &mut p.mark.properties {
-                resolve_expr(&mut prop.value, ctx);
-            }
-            for prop in &mut p.properties {
-                resolve_expr(&mut prop.value, ctx);
-            }
-        }
-        DeclKind::Figure(f) => {
-            for field in &mut f.fields {
-                resolve_expr(&mut field.value, ctx);
-            }
-        }
-        DeclKind::Layer(l) => {
-            for field in &mut l.fields {
-                resolve_expr(&mut field.value, ctx);
-            }
-        }
-        DeclKind::Dag(dag) => resolve_dag(dag, ctx),
-        DeclKind::Index(idx) => {
-            // Linspace index has expressions
-            if let IndexDeclKind::Range { start, end, step } = &mut idx.kind {
-                resolve_expr(start, ctx);
-                resolve_expr(end, ctx);
-                resolve_expr(step, ctx);
-            }
-        }
-        DeclKind::Include(include) => {
-            for binding in &mut include.param_bindings {
-                resolve_expr(&mut binding.value, ctx);
-            }
-        }
-        DeclKind::BaseDimension(_)
-        | DeclKind::Dimension(_)
-        | DeclKind::Type(_)
-        | DeclKind::UnionType(_)
-        | DeclKind::Import(_) => {}
-        DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+// ---------------------------------------------------------------------------
+// Declaration lifting
+// ---------------------------------------------------------------------------
+
+fn lift_decl(decl: src_ast::Declaration, ctx: &mut ResolveContext) -> dst_ast::Declaration {
+    dst_ast::Declaration {
+        attributes: decl.attributes,
+        visibility: decl.visibility,
+        kind: lift_decl_kind(decl.kind, ctx),
+        span: decl.span,
     }
 }
 
-/// Resolve names in a dag block.
-fn resolve_dag(dag: &mut DagDecl, ctx: &mut ResolveContext) {
-    // Dag body may introduce its own types/indexes
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive DeclKind match across every variant"
+)]
+fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast::DeclKind {
+    match kind {
+        src_ast::DeclKind::Param(p) => dst_ast::DeclKind::Param(dst_ast::ParamDecl {
+            name: p.name,
+            type_ann: lift_type_expr(p.type_ann, ctx),
+            value: p.value.map(|v| lift_expr(v, ctx)),
+        }),
+        src_ast::DeclKind::Node(n) => dst_ast::DeclKind::Node(dst_ast::NodeDecl {
+            name: n.name,
+            type_ann: lift_type_expr(n.type_ann, ctx),
+            value: lift_expr(n.value, ctx),
+        }),
+        src_ast::DeclKind::ConstNode(c) => dst_ast::DeclKind::ConstNode(dst_ast::ConstNodeDecl {
+            name: c.name,
+            type_ann: lift_type_expr(c.type_ann, ctx),
+            value: lift_expr(c.value, ctx),
+        }),
+        src_ast::DeclKind::BaseDimension(d) => dst_ast::DeclKind::BaseDimension(d),
+        src_ast::DeclKind::Dimension(d) => dst_ast::DeclKind::Dimension(d),
+        src_ast::DeclKind::Unit(u) => dst_ast::DeclKind::Unit(dst_ast::UnitDecl {
+            name: u.name,
+            dim_type: u.dim_type,
+            definition: u.definition.map(|def| dst_ast::UnitDef {
+                scale_expr: lift_expr(def.scale_expr, ctx),
+                unit_expr: def.unit_expr,
+                span: def.span,
+            }),
+        }),
+        src_ast::DeclKind::Type(t) => dst_ast::DeclKind::Type(dst_ast::TypeDecl {
+            name: t.name,
+            generic_params: t
+                .generic_params
+                .into_iter()
+                .map(|g| lift_generic_param(g, ctx))
+                .collect(),
+            fields: t.fields.map(|fs| {
+                fs.into_iter()
+                    .map(|f| dst_ast::FieldDecl {
+                        name: f.name,
+                        type_ann: lift_type_expr(f.type_ann, ctx),
+                    })
+                    .collect()
+            }),
+        }),
+        src_ast::DeclKind::UnionType(u) => dst_ast::DeclKind::UnionType(dst_ast::UnionTypeDecl {
+            name: u.name,
+            generic_params: u
+                .generic_params
+                .into_iter()
+                .map(|g| lift_generic_param(g, ctx))
+                .collect(),
+            members: u
+                .members
+                .into_iter()
+                .map(|m| dst_ast::UnionMember {
+                    name: m.name,
+                    type_args: m
+                        .type_args
+                        .into_iter()
+                        .map(|t| lift_type_expr(t, ctx))
+                        .collect(),
+                    span: m.span,
+                })
+                .collect(),
+        }),
+        src_ast::DeclKind::Index(i) => dst_ast::DeclKind::Index(dst_ast::IndexDecl {
+            name: i.name,
+            kind: match i.kind {
+                src_ast::IndexDeclKind::Named { variants } => {
+                    dst_ast::IndexDeclKind::Named { variants }
+                }
+                src_ast::IndexDeclKind::Range { start, end, step } => {
+                    dst_ast::IndexDeclKind::Range {
+                        start: Box::new(lift_expr(*start, ctx)),
+                        end: Box::new(lift_expr(*end, ctx)),
+                        step: Box::new(lift_expr(*step, ctx)),
+                    }
+                }
+                src_ast::IndexDeclKind::RequiredNamed => dst_ast::IndexDeclKind::RequiredNamed,
+                src_ast::IndexDeclKind::RequiredRange { dimension } => {
+                    dst_ast::IndexDeclKind::RequiredRange { dimension }
+                }
+            },
+        }),
+        src_ast::DeclKind::Import(i) => dst_ast::DeclKind::Import(i),
+        src_ast::DeclKind::Include(i) => dst_ast::DeclKind::Include(dst_ast::IncludeDecl {
+            path: i.path,
+            param_bindings: i
+                .param_bindings
+                .into_iter()
+                .map(|b| dst_ast::ParamBinding {
+                    name: b.name,
+                    value: lift_expr(b.value, ctx),
+                    span: b.span,
+                })
+                .collect(),
+            kind: i.kind,
+        }),
+        src_ast::DeclKind::Dag(d) => dst_ast::DeclKind::Dag(lift_dag(d, ctx)),
+        src_ast::DeclKind::Assert(a) => dst_ast::DeclKind::Assert(dst_ast::AssertDecl {
+            name: a.name,
+            body: match a.body {
+                src_ast::AssertBody::Expr(e) => dst_ast::AssertBody::Expr(lift_expr(e, ctx)),
+                src_ast::AssertBody::Tolerance {
+                    actual,
+                    expected,
+                    tolerance,
+                    is_relative,
+                } => dst_ast::AssertBody::Tolerance {
+                    actual: Box::new(lift_expr(*actual, ctx)),
+                    expected: Box::new(lift_expr(*expected, ctx)),
+                    tolerance: Box::new(lift_expr(*tolerance, ctx)),
+                    is_relative,
+                },
+            },
+        }),
+        src_ast::DeclKind::Plot(p) => dst_ast::DeclKind::Plot(dst_ast::PlotDecl {
+            name: p.name,
+            mark: dst_ast::MarkSpec {
+                mark_type: p.mark.mark_type,
+                mark_type_span: p.mark.mark_type_span,
+                properties: p
+                    .mark
+                    .properties
+                    .into_iter()
+                    .map(|f| lift_plot_field(f, ctx))
+                    .collect(),
+                span: p.mark.span,
+            },
+            encodings: p
+                .encodings
+                .into_iter()
+                .map(|e| dst_ast::Encoding {
+                    channel: e.channel,
+                    channel_span: e.channel_span,
+                    value: lift_expr(e.value, ctx),
+                    span: e.span,
+                })
+                .collect(),
+            properties: p
+                .properties
+                .into_iter()
+                .map(|f| lift_plot_field(f, ctx))
+                .collect(),
+        }),
+        src_ast::DeclKind::Figure(f) => dst_ast::DeclKind::Figure(dst_ast::FigureDecl {
+            name: f.name,
+            plot_names: f.plot_names,
+            fields: f
+                .fields
+                .into_iter()
+                .map(|fld| lift_plot_field(fld, ctx))
+                .collect(),
+        }),
+        src_ast::DeclKind::Layer(l) => dst_ast::DeclKind::Layer(dst_ast::LayerDecl {
+            name: l.name,
+            plot_names: l.plot_names,
+            fields: l
+                .fields
+                .into_iter()
+                .map(|fld| lift_plot_field(fld, ctx))
+                .collect(),
+        }),
+        // `DeclKind::Sugar(_)` payload is `Infallible` in `Desugared` —
+        // statically unreachable.
+        src_ast::DeclKind::Sugar(s) => never(s),
+    }
+}
+
+fn lift_dag(dag: src_ast::DagDecl, ctx: &mut ResolveContext) -> dst_ast::DagDecl {
+    // The dag body may introduce its own types/indexes/module aliases that
+    // are in scope only inside the body.
     let mut inner_types = HashSet::new();
     let mut inner_indexes = HashMap::new();
     let mut inner_modules = HashSet::new();
@@ -234,7 +382,6 @@ fn resolve_dag(dag: &mut DagDecl, ctx: &mut ResolveContext) {
         &mut inner_modules,
     );
 
-    // Temporarily extend context
     let orig_types = ctx.type_names.clone();
     let orig_indexes = ctx.index_variants.clone();
     let orig_modules = ctx.module_names.clone();
@@ -242,201 +389,328 @@ fn resolve_dag(dag: &mut DagDecl, ctx: &mut ResolveContext) {
     ctx.index_variants.extend(inner_indexes);
     ctx.module_names.extend(inner_modules);
 
-    for decl in &mut dag.body {
-        resolve_decl(decl, ctx);
-    }
+    let body = dag.body.into_iter().map(|d| lift_decl(d, ctx)).collect();
 
-    // Restore context
     ctx.type_names = orig_types;
     ctx.index_variants = orig_indexes;
     ctx.module_names = orig_modules;
+
+    dst_ast::DagDecl {
+        name: dag.name,
+        body,
+        span: dag.span,
+    }
 }
 
-/// Resolve names in an expression tree (recursive).
+fn lift_plot_field(f: src_ast::PlotField, ctx: &mut ResolveContext) -> dst_ast::PlotField {
+    dst_ast::PlotField {
+        name: f.name,
+        value: lift_expr(f.value, ctx),
+        span: f.span,
+    }
+}
+
+fn lift_generic_param(g: src_ast::GenericParam, ctx: &mut ResolveContext) -> dst_ast::GenericParam {
+    dst_ast::GenericParam {
+        name: g.name,
+        constraint: g.constraint,
+        default: g.default.map(|t| lift_type_expr(t, ctx)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Type expressions
+// ---------------------------------------------------------------------------
+
+fn lift_type_expr(t: src_ast::TypeExpr, ctx: &mut ResolveContext) -> dst_ast::TypeExpr {
+    dst_ast::TypeExpr {
+        kind: lift_type_expr_kind(t.kind, ctx),
+        constraints: t
+            .constraints
+            .into_iter()
+            .map(|c| dst_ast::DomainBound {
+                kind: c.kind,
+                kind_span: c.kind_span,
+                value: lift_expr(c.value, ctx),
+                span: c.span,
+            })
+            .collect(),
+        span: t.span,
+    }
+}
+
+fn lift_type_expr_kind(
+    k: src_ast::TypeExprKind,
+    ctx: &mut ResolveContext,
+) -> dst_ast::TypeExprKind {
+    match k {
+        src_ast::TypeExprKind::Dimensionless => dst_ast::TypeExprKind::Dimensionless,
+        src_ast::TypeExprKind::Bool => dst_ast::TypeExprKind::Bool,
+        src_ast::TypeExprKind::Int => dst_ast::TypeExprKind::Int,
+        src_ast::TypeExprKind::Datetime => dst_ast::TypeExprKind::Datetime,
+        src_ast::TypeExprKind::DimExpr(d) => dst_ast::TypeExprKind::DimExpr(d),
+        src_ast::TypeExprKind::Indexed { base, indexes } => dst_ast::TypeExprKind::Indexed {
+            base: Box::new(lift_type_expr(*base, ctx)),
+            indexes,
+        },
+        src_ast::TypeExprKind::TypeApplication { name, type_args } => {
+            dst_ast::TypeExprKind::TypeApplication {
+                name,
+                type_args: type_args
+                    .into_iter()
+                    .map(|t| lift_type_expr(t, ctx))
+                    .collect(),
+            }
+        }
+    }
+}
+
+fn lift_generic_arg(g: src_ast::GenericArg, ctx: &mut ResolveContext) -> dst_ast::GenericArg {
+    match g {
+        src_ast::GenericArg::Type(t) => dst_ast::GenericArg::Type(lift_type_expr(t, ctx)),
+        src_ast::GenericArg::Nat(n) => dst_ast::GenericArg::Nat(n),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Expressions
+// ---------------------------------------------------------------------------
+
+fn lift_expr(e: src_ast::Expr, ctx: &mut ResolveContext) -> dst_ast::Expr {
+    let span = e.span;
+    dst_ast::Expr::new(lift_expr_kind(e.kind, ctx, span), span)
+}
+
 #[expect(clippy::too_many_lines, reason = "exhaustive ExprKind match")]
-fn resolve_expr(expr: &mut Expr, ctx: &mut ResolveContext) {
-    // First, recurse into children (some introduce scopes)
-    match &mut expr.kind {
-        ExprKind::Number(_)
-        | ExprKind::Integer(_)
-        | ExprKind::Bool(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::UnitLiteral { .. }
-        | ExprKind::GraphRef(_)
-        | ExprKind::ConstRef(_)
-        | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral { .. } => return,
+fn lift_expr_kind(
+    k: src_ast::ExprKind,
+    ctx: &mut ResolveContext,
+    span: crate::syntax::span::Span,
+) -> dst_ast::ExprKind {
+    use src_ast::ExprKind as S;
 
-        ExprKind::InlineDagRef { args, .. } => {
-            for arg in args {
-                resolve_expr(&mut arg.value, ctx);
-            }
-            return;
+    match k {
+        S::Number(n) => dst_ast::ExprKind::Number(n),
+        S::Integer(n) => dst_ast::ExprKind::Integer(n),
+        S::Bool(b) => dst_ast::ExprKind::Bool(b),
+        S::StringLiteral(s) => dst_ast::ExprKind::StringLiteral(s),
+        S::GraphRef(r) => dst_ast::ExprKind::GraphRef(r),
+        S::ConstRef(r) => dst_ast::ExprKind::ConstRef(r),
+        S::LocalRef(i) => dst_ast::ExprKind::LocalRef(i),
+        S::UnitLiteral { value, unit } => dst_ast::ExprKind::UnitLiteral { value, unit },
+        S::VariantLiteral { index, variant } => {
+            dst_ast::ExprKind::VariantLiteral { index, variant }
         }
-
-        // NameRef and QualifiedNameRef are handled below after this match
-        ExprKind::NameRef(_) | ExprKind::QualifiedNameRef { .. } => {}
-
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            resolve_expr(lhs, ctx);
-            resolve_expr(rhs, ctx);
-            return;
-        }
-        ExprKind::UnaryOp { operand, .. } => {
-            resolve_expr(operand, ctx);
-            return;
-        }
-        ExprKind::FnCall { args, .. } => {
-            for arg in args {
-                resolve_expr(arg, ctx);
-            }
-            return;
-        }
-        ExprKind::If {
+        S::BinOp { op, lhs, rhs } => dst_ast::ExprKind::BinOp {
+            op,
+            lhs: Box::new(lift_expr(*lhs, ctx)),
+            rhs: Box::new(lift_expr(*rhs, ctx)),
+        },
+        S::UnaryOp { op, operand } => dst_ast::ExprKind::UnaryOp {
+            op,
+            operand: Box::new(lift_expr(*operand, ctx)),
+        },
+        S::FnCall {
+            name,
+            type_args,
+            args,
+        } => dst_ast::ExprKind::FnCall {
+            name,
+            type_args: type_args
+                .into_iter()
+                .map(|t| lift_generic_arg(t, ctx))
+                .collect(),
+            args: args.into_iter().map(|a| lift_expr(a, ctx)).collect(),
+        },
+        S::If {
             condition,
             then_branch,
             else_branch,
-        } => {
-            resolve_expr(condition, ctx);
-            resolve_expr(then_branch, ctx);
-            resolve_expr(else_branch, ctx);
-            return;
-        }
-        ExprKind::Convert { expr: inner, .. }
-        | ExprKind::DisplayTimezone { expr: inner, .. }
-        | ExprKind::AsCast { expr: inner, .. }
-        | ExprKind::FieldAccess { expr: inner, .. } => {
-            resolve_expr(inner, ctx);
-            return;
-        }
-        ExprKind::IndexAccess {
-            expr: inner, args, ..
-        } => {
-            resolve_expr(inner, ctx);
-            for arg in args {
-                if let IndexArg::Expr(e) = arg {
-                    resolve_expr(e, ctx);
-                }
-            }
-            return;
-        }
-        ExprKind::StructConstruction { fields, .. } => {
-            for field in fields {
-                if let Some(v) = &mut field.value {
-                    resolve_expr(v, ctx);
-                }
-            }
-            return;
-        }
-        ExprKind::MapLiteral { entries } => {
-            for entry in entries {
-                resolve_expr(&mut entry.value, ctx);
-            }
-            return;
-        }
-        ExprKind::ForComp { bindings, body } => {
+        } => dst_ast::ExprKind::If {
+            condition: Box::new(lift_expr(*condition, ctx)),
+            then_branch: Box::new(lift_expr(*then_branch, ctx)),
+            else_branch: Box::new(lift_expr(*else_branch, ctx)),
+        },
+        S::Convert { expr, target } => dst_ast::ExprKind::Convert {
+            expr: Box::new(lift_expr(*expr, ctx)),
+            target,
+        },
+        S::DisplayTimezone { expr, timezone } => dst_ast::ExprKind::DisplayTimezone {
+            expr: Box::new(lift_expr(*expr, ctx)),
+            timezone,
+        },
+        S::AsCast { expr, target_type } => dst_ast::ExprKind::AsCast {
+            expr: Box::new(lift_expr(*expr, ctx)),
+            target_type: lift_type_expr(target_type, ctx),
+        },
+        S::FieldAccess { expr, field } => dst_ast::ExprKind::FieldAccess {
+            expr: Box::new(lift_expr(*expr, ctx)),
+            field,
+        },
+        S::StructConstruction {
+            type_name,
+            type_args,
+            fields,
+        } => dst_ast::ExprKind::StructConstruction {
+            type_name,
+            type_args: type_args
+                .into_iter()
+                .map(|t| lift_type_expr(t, ctx))
+                .collect(),
+            fields: fields
+                .into_iter()
+                .map(|f| dst_ast::FieldInit {
+                    name: f.name,
+                    value: f.value.map(|v| lift_expr(v, ctx)),
+                })
+                .collect(),
+        },
+        S::MapLiteral { entries } => dst_ast::ExprKind::MapLiteral {
+            entries: entries
+                .into_iter()
+                .map(|e| dst_ast::MapEntry {
+                    keys: e.keys,
+                    value: lift_expr(e.value, ctx),
+                })
+                .collect(),
+        },
+        S::IndexAccess { expr, args } => dst_ast::ExprKind::IndexAccess {
+            expr: Box::new(lift_expr(*expr, ctx)),
+            args: args
+                .into_iter()
+                .map(|a| match a {
+                    src_ast::IndexArg::Variant { index, variant } => {
+                        dst_ast::IndexArg::Variant { index, variant }
+                    }
+                    src_ast::IndexArg::Var(i) => dst_ast::IndexArg::Var(i),
+                    src_ast::IndexArg::Expr(e) => {
+                        dst_ast::IndexArg::Expr(Box::new(lift_expr(*e, ctx)))
+                    }
+                })
+                .collect(),
+        },
+        S::ForComp { bindings, body } => {
             let mut scope = HashSet::new();
-            for binding in bindings.iter() {
+            for binding in &bindings {
                 scope.insert(binding.var.name.clone());
             }
             ctx.push_scope(scope);
-            resolve_expr(body, ctx);
+            let body = Box::new(lift_expr(*body, ctx));
             ctx.pop_scope();
-            return;
+            dst_ast::ExprKind::ForComp { bindings, body }
         }
-        ExprKind::Scan {
+        S::Scan {
             source,
             init,
             acc_name,
             val_name,
             body,
         } => {
-            resolve_expr(source, ctx);
-            resolve_expr(init, ctx);
+            let source = Box::new(lift_expr(*source, ctx));
+            let init = Box::new(lift_expr(*init, ctx));
             let scope = HashSet::from([acc_name.name.clone(), val_name.name.clone()]);
             ctx.push_scope(scope);
-            resolve_expr(body, ctx);
+            let body = Box::new(lift_expr(*body, ctx));
             ctx.pop_scope();
-            return;
+            dst_ast::ExprKind::Scan {
+                source,
+                init,
+                acc_name,
+                val_name,
+                body,
+            }
         }
-        ExprKind::Unfold {
+        S::Unfold {
             init,
             prev_name,
             curr_name,
             body,
         } => {
-            resolve_expr(init, ctx);
+            let init = Box::new(lift_expr(*init, ctx));
             let scope = HashSet::from([prev_name.name.clone(), curr_name.name.clone()]);
             ctx.push_scope(scope);
-            resolve_expr(body, ctx);
+            let body = Box::new(lift_expr(*body, ctx));
             ctx.pop_scope();
-            return;
+            dst_ast::ExprKind::Unfold {
+                init,
+                prev_name,
+                curr_name,
+                body,
+            }
         }
-        ExprKind::Match { scrutinee, arms } => {
-            resolve_expr(scrutinee, ctx);
-            for arm in arms {
-                let mut scope = HashSet::new();
-                for binding in &arm.pattern.bindings {
-                    match binding {
-                        crate::syntax::ast::PatternBinding::Bind { var, .. } => {
+        S::Match { scrutinee, arms } => {
+            let scrutinee = Box::new(lift_expr(*scrutinee, ctx));
+            let arms = arms
+                .into_iter()
+                .map(|arm| {
+                    let mut scope = HashSet::new();
+                    for binding in &arm.pattern.bindings {
+                        if let crate::syntax::ast::PatternBinding::Bind { var, .. } = binding {
                             scope.insert(var.name.clone());
                         }
-                        crate::syntax::ast::PatternBinding::Wildcard { .. } => {}
                     }
-                }
-                ctx.push_scope(scope);
-                resolve_expr(&mut arm.body, ctx);
-                ctx.pop_scope();
-            }
-            return;
-        }
-        // `Sugar(_)` carries `Infallible` for `Desugared` — unreachable.
-        #[expect(
-            clippy::uninhabited_references,
-            reason = "Sugar(Infallible) — proof of unreachability"
-        )]
-        ExprKind::Sugar(s) => match *s {},
-        ExprKind::TupleMatch { scrutinees, arms } => {
-            for s in scrutinees {
-                resolve_expr(s, ctx);
-            }
-            for arm in arms {
-                if let Some(patterns) = &mut arm.patterns {
-                    for p in patterns {
-                        resolve_expr(p, ctx);
+                    ctx.push_scope(scope);
+                    let body = lift_expr(arm.body, ctx);
+                    ctx.pop_scope();
+                    dst_ast::MatchArm {
+                        pattern: arm.pattern,
+                        body,
+                        span: arm.span,
                     }
-                }
-                resolve_expr(&mut arm.body, ctx);
-            }
-            return;
+                })
+                .collect();
+            dst_ast::ExprKind::Match { scrutinee, arms }
         }
+        S::TupleMatch { scrutinees, arms } => dst_ast::ExprKind::TupleMatch {
+            scrutinees: scrutinees.into_iter().map(|s| lift_expr(s, ctx)).collect(),
+            arms: arms
+                .into_iter()
+                .map(|arm| dst_ast::TupleMatchArm {
+                    patterns: arm
+                        .patterns
+                        .map(|ps| ps.into_iter().map(|p| lift_expr(p, ctx)).collect()),
+                    body: lift_expr(arm.body, ctx),
+                    span: arm.span,
+                })
+                .collect(),
+        },
+        S::InlineDagRef { path, args, output } => dst_ast::ExprKind::InlineDagRef {
+            path,
+            args: args
+                .into_iter()
+                .map(|b| dst_ast::ParamBinding {
+                    name: b.name,
+                    value: lift_expr(b.value, ctx),
+                    span: b.span,
+                })
+                .collect(),
+            output,
+        },
+        S::UnresolvedRef(r) => resolve_unresolved_ref(r, ctx, span),
+        // `ExprSugar(_)` payload is `Infallible` in `Desugared` — statically
+        // unreachable.
+        S::Sugar(s) => never(s),
     }
-
-    // Resolve NameRef / QualifiedNameRef at this node. Other variants are
-    // already handled above; leave them untouched.
-    if !matches!(
-        &expr.kind,
-        ExprKind::NameRef(_) | ExprKind::QualifiedNameRef { .. }
-    ) {
-        return;
-    }
-    // Take ownership of the target variant so the resolver functions can
-    // consume the identifier. The placeholder is overwritten unconditionally
-    // below.
-    let taken = std::mem::replace(&mut expr.kind, ExprKind::Bool(false));
-    expr.kind = match taken {
-        ExprKind::NameRef(ident) => resolve_name_ref(ident, ctx),
-        ExprKind::QualifiedNameRef { qualifier, member } => {
-            resolve_qualified_name_ref(qualifier, member, ctx)
-        }
-        // The `matches!` guard above eliminates all other variants. We can't
-        // use `unreachable!()` here because clippy's lint forbids it in
-        // non-test code — restore the taken value instead.
-        other => other,
-    };
 }
 
-/// Resolve a bare `NameRef` to a concrete [`ExprKind`].
+// ---------------------------------------------------------------------------
+// Actual unresolved-ref resolution
+// ---------------------------------------------------------------------------
+
+fn resolve_unresolved_ref(
+    r: UnresolvedRef,
+    ctx: &ResolveContext,
+    _span: crate::syntax::span::Span,
+) -> dst_ast::ExprKind {
+    match r {
+        UnresolvedRef::NameRef(ident) => resolve_name_ref(ident, ctx),
+        UnresolvedRef::QualifiedNameRef { qualifier, member } => {
+            resolve_qualified_name_ref(qualifier, member, ctx)
+        }
+    }
+}
+
+/// Resolve a bare `NameRef` to a concrete [`dst_ast::ExprKind`].
 ///
 /// Priority:
 /// 1. Local scope (for/scan/unfold/match bindings) → `LocalRef`
@@ -445,38 +719,32 @@ fn resolve_expr(expr: &mut Expr, ctx: &mut ResolveContext) {
 /// 4. Struct/union type names → `StructConstruction` (bare, no fields)
 /// 5. Index variant names → `StructConstruction` (bare, for backward compat)
 /// 6. Fallback → `LocalRef` (will be caught later by semantic validation)
-fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> ExprKind {
+fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
     let name = &ident.name;
 
-    // 1. Local scope takes priority (shadowing)
     if ctx.is_local(name) {
-        return ExprKind::LocalRef(ident);
+        return dst_ast::ExprKind::LocalRef(ident);
     }
 
-    // 2. Builtin constant
     if ctx.builtin_consts.contains_key(name.as_str()) {
-        return ExprKind::ConstRef(Spanned::new(ScopedName::local(name), ident.span));
+        return dst_ast::ExprKind::ConstRef(Spanned::new(ScopedName::local(name), ident.span));
     }
 
-    // 3. Time scale name
     if is_time_scale_name(name) {
-        return ExprKind::ConstRef(Spanned::new(ScopedName::local(name), ident.span));
+        return dst_ast::ExprKind::ConstRef(Spanned::new(ScopedName::local(name), ident.span));
     }
 
-    // 4. Struct/union type name → bare construction
     if ctx.type_names.contains(name.as_str()) {
-        return ExprKind::StructConstruction {
+        return dst_ast::ExprKind::StructConstruction {
             type_name: Spanned::new(StructTypeName::new(name), ident.span),
             type_args: Vec::new(),
             fields: Vec::new(),
         };
     }
 
-    // 5. Check if it's a known index variant name (bare variant, e.g., `Nominal`)
     for variants in ctx.index_variants.values() {
         if variants.contains(name.as_str()) {
-            // Treat as bare struct construction (same as current PascalCase behavior)
-            return ExprKind::StructConstruction {
+            return dst_ast::ExprKind::StructConstruction {
                 type_name: Spanned::new(StructTypeName::new(name), ident.span),
                 type_args: Vec::new(),
                 fields: Vec::new(),
@@ -484,12 +752,10 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> E
         }
     }
 
-    // 6. Fallback: treat as local ref (include aliases, etc.)
-    // Semantic validation in resolve/deps will catch truly unknown names.
-    ExprKind::LocalRef(ident)
+    dst_ast::ExprKind::LocalRef(ident)
 }
 
-/// Resolve a `QualifiedNameRef` (`a.b`) to a concrete [`ExprKind`].
+/// Resolve a `QualifiedNameRef` (`a.b`) to a concrete [`dst_ast::ExprKind`].
 ///
 /// Priority:
 /// 1. If `qualifier` is a known index name → `VariantLiteral`
@@ -499,18 +765,16 @@ fn resolve_qualified_name_ref(
     qualifier: crate::syntax::ast::Ident,
     member: crate::syntax::ast::Ident,
     ctx: &ResolveContext,
-) -> ExprKind {
-    // 1. Known index → variant literal
+) -> dst_ast::ExprKind {
     if ctx.index_variants.contains_key(qualifier.name.as_str()) {
-        return ExprKind::VariantLiteral {
+        return dst_ast::ExprKind::VariantLiteral {
             index: Spanned::new(IndexName::new(&qualifier.name), qualifier.span),
             variant: Spanned::new(VariantName::new(&member.name), member.span),
         };
     }
 
-    // 2. Fallback: qualified constant reference (`module.CONST`).
     let merged_span = qualifier.span.merge(member.span);
-    ExprKind::ConstRef(Spanned::new(
+    dst_ast::ExprKind::ConstRef(Spanned::new(
         ScopedName::qualified(qualifier.name, member.name),
         merged_span,
     ))

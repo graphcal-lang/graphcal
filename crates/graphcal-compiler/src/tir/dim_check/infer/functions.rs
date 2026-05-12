@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::{Expr, ExprKind};
+use crate::desugar::resolved_ast::{Expr, ExprKind};
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{FnName, ScopedName};
 

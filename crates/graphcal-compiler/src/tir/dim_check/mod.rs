@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::Expr;
+use crate::desugar::resolved_ast::Expr;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{IndexName, ScopedName, StructTypeName};
 
@@ -114,7 +114,7 @@ fn check_decl_expr_type(
 /// verifies actual/expected have matching dimensions and tolerance is compatible.
 #[expect(clippy::too_many_arguments, reason = "passes compilation context")]
 fn check_assert_body(
-    body: &crate::desugar::desugared_ast::AssertBody,
+    body: &crate::desugar::resolved_ast::AssertBody,
     span: crate::syntax::span::Span,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     empty_locals: &HashMap<String, InferredType>,
@@ -124,7 +124,7 @@ fn check_assert_body(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match body {
-        crate::desugar::desugared_ast::AssertBody::Expr(body_expr) => {
+        crate::desugar::resolved_ast::AssertBody::Expr(body_expr) => {
             let inferred = infer_type(
                 body_expr,
                 declared_types,
@@ -142,7 +142,7 @@ fn check_assert_body(
                 });
             }
         }
-        crate::desugar::desugared_ast::AssertBody::Tolerance {
+        crate::desugar::resolved_ast::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
@@ -430,7 +430,7 @@ fn check_domain_constraint_dimensions_dag(
 
 fn check_one_bound(
     name: &crate::syntax::names::ScopedName,
-    bound: &crate::desugar::desugared_ast::DomainBound,
+    bound: &crate::desugar::resolved_ast::DomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
     registry: &Registry,
@@ -532,12 +532,12 @@ fn check_domain_constraint_targets_dag(
 /// For `Velocity(min: 0)[Maneuver]`, the constraints are on the base `Velocity`,
 /// not on the outer `Indexed` wrapper.
 fn extract_domain_bounds(
-    type_ann: &crate::desugar::desugared_ast::TypeExpr,
-) -> &[crate::desugar::desugared_ast::DomainBound] {
+    type_ann: &crate::desugar::resolved_ast::TypeExpr,
+) -> &[crate::desugar::resolved_ast::DomainBound] {
     if !type_ann.constraints.is_empty() {
         return &type_ann.constraints;
     }
-    if let crate::desugar::desugared_ast::TypeExprKind::Indexed { base, .. } = &type_ann.kind {
+    if let crate::desugar::resolved_ast::TypeExprKind::Indexed { base, .. } = &type_ann.kind {
         return &base.constraints;
     }
     &[]
@@ -584,10 +584,10 @@ fn check_field_domain_constraint_targets(
 /// classifying — a `Velocity(min: 0)[Maneuver]` field is constraint-
 /// compatible because the base `Velocity` is scalar.
 fn field_constraint_target_kind(
-    type_ann: &crate::desugar::desugared_ast::TypeExpr,
+    type_ann: &crate::desugar::resolved_ast::TypeExpr,
     registry: &Registry,
 ) -> Option<String> {
-    use crate::desugar::desugared_ast::TypeExprKind;
+    use crate::desugar::resolved_ast::TypeExprKind;
     let base = match &type_ann.kind {
         TypeExprKind::Indexed { base, .. } => base.as_ref(),
         _ => type_ann,
@@ -685,10 +685,10 @@ fn check_field_domain_constraint_dimensions(
 /// (in which case the target check has already rejected it, or it's a
 /// generic param to be checked at instantiation).
 fn field_expected_bound(
-    type_ann: &crate::desugar::desugared_ast::TypeExpr,
+    type_ann: &crate::desugar::resolved_ast::TypeExpr,
     registry: &Registry,
 ) -> Option<ExpectedBound> {
-    use crate::desugar::desugared_ast::TypeExprKind;
+    use crate::desugar::resolved_ast::TypeExprKind;
     let base = match &type_ann.kind {
         TypeExprKind::Indexed { base, .. } => base.as_ref(),
         _ => type_ann,
@@ -709,7 +709,7 @@ fn field_expected_bound(
 /// helper can serve both top-level decls and struct fields.
 fn check_one_bound_with_display_name(
     display_name: &str,
-    bound: &crate::desugar::desugared_ast::DomainBound,
+    bound: &crate::desugar::resolved_ast::DomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
     registry: &Registry,
@@ -772,7 +772,7 @@ fn check_no_constraints_on_generic_type_args(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let walk = |type_expr: &crate::desugar::desugared_ast::TypeExpr| -> Result<(), GraphcalError> {
+    let walk = |type_expr: &crate::desugar::resolved_ast::TypeExpr| -> Result<(), GraphcalError> {
         check_type_expr_for_generic_arg_constraints(type_expr, src)
     };
     for (id, dag) in &tir.dags {
@@ -802,10 +802,10 @@ fn check_no_constraints_on_generic_type_args(
 /// constraints (the legitimate placement); only constraints under a
 /// `TypeApplication.type_args` slot are rejected.
 fn check_type_expr_for_generic_arg_constraints(
-    type_expr: &crate::desugar::desugared_ast::TypeExpr,
+    type_expr: &crate::desugar::resolved_ast::TypeExpr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    use crate::desugar::desugared_ast::TypeExprKind;
+    use crate::desugar::resolved_ast::TypeExprKind;
     match &type_expr.kind {
         TypeExprKind::Indexed { base, .. } => {
             check_type_expr_for_generic_arg_constraints(base, src)
@@ -920,17 +920,17 @@ struct DagTargetCollector<'a, 'b> {
     out: &'b mut std::collections::BTreeSet<crate::syntax::dag_id::DagId>,
 }
 
-impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
+impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Resolved>
     for DagTargetCollector<'_, '_>
 {
     type Error = std::convert::Infallible;
 
     fn visit_inline_dag_ref(
         &mut self,
-        expr: &crate::desugar::desugared_ast::Expr,
-        args: &[crate::desugar::desugared_ast::ParamBinding],
+        expr: &crate::desugar::resolved_ast::Expr,
+        args: &[crate::desugar::resolved_ast::ParamBinding],
     ) -> Result<(), Self::Error> {
-        if let crate::desugar::desugared_ast::ExprKind::InlineDagRef { path, .. } = &expr.kind
+        if let crate::desugar::resolved_ast::ExprKind::InlineDagRef { path, .. } = &expr.kind
             && let Some(id) = self.tir.resolve_call_path(path)
         {
             self.out.insert(id);

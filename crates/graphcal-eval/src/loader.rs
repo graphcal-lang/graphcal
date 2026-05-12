@@ -5,7 +5,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::eval::CompileError;
-use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
+use graphcal_compiler::desugar::resolved_ast::{Declaration, File};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::dag_id::DagId;
@@ -72,7 +72,7 @@ impl LoadedFile {
         &self,
     ) -> impl Iterator<
         Item = (
-            &graphcal_compiler::desugar::desugared_ast::Declaration,
+            &graphcal_compiler::desugar::resolved_ast::Declaration,
             &graphcal_compiler::syntax::ast::ImportDecl,
             &DagId,
         ),
@@ -94,8 +94,8 @@ impl LoadedFile {
         &self,
     ) -> impl Iterator<
         Item = (
-            &graphcal_compiler::desugar::desugared_ast::Declaration,
-            &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
+            &graphcal_compiler::desugar::resolved_ast::Declaration,
+            &graphcal_compiler::desugar::resolved_ast::IncludeDecl,
             &DagId,
         ),
     > {
@@ -138,9 +138,10 @@ impl LoadedProject {
         let named_source = graphcal_compiler::syntax::named_source(name, Arc::clone(&source));
         let raw_ast =
             graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
-        let mut ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
-        graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
-        graphcal_compiler::syntax::name_resolve::resolve_name_refs(&mut ast);
+        let mut desugared =
+            graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+        graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
         let path = PathBuf::from(name);
         let dag_id = DagId::from_relative_path(&path);
         // No project root or manifest in single-file mode — only the
@@ -275,9 +276,9 @@ fn load_file_dfs<F: FileSystemReader>(
     let named_source = graphcal_compiler::syntax::named_source(&name, Arc::clone(&source));
     let raw_ast =
         graphcal_compiler::syntax::parser::Parser::with_name(&source, &name).parse_file()?;
-    let mut ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
-    graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut ast);
-    graphcal_compiler::syntax::name_resolve::resolve_name_refs(&mut ast);
+    let mut desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+    graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
+    let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
 
     // Collect inline DAG names so we can skip includes that reference them.
     let dag_names: HashSet<String> = ast

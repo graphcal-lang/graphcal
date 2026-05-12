@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use graphcal_compiler::desugar::desugared_ast::Expr;
+use graphcal_compiler::desugar::resolved_ast::Expr;
 use graphcal_compiler::syntax::names::DeclName;
 use graphcal_compiler::syntax::parser::ParseError;
 use miette::Diagnostic;
@@ -148,8 +148,14 @@ pub fn parse_overrides(
                 source: Box::new(e),
             })?;
         // Override expressions are user-provided literals — they never carry
-        // sugar variants, so the `Raw → Desugared` lift is a structural rebind.
-        overrides.insert(DeclName::new(name), Expr::from(raw_expr));
+        // sugar variants, so the `Raw → Desugared` lift is a structural
+        // rebind, and resolution happens with no file scope (only builtins
+        // and time-scale names visible).
+        let desugared: graphcal_compiler::desugar::desugared_ast::Expr = raw_expr.into();
+        overrides.insert(
+            DeclName::new(name),
+            graphcal_compiler::syntax::name_resolve::resolve_standalone_expr(desugared),
+        );
     }
 
     if let Some(input_path) = input {
@@ -183,7 +189,10 @@ pub fn parse_overrides(
             }
         })?;
         for (name, expr) in json_overrides {
-            overrides.entry(name).or_insert_with(|| Expr::from(expr));
+            overrides.entry(name).or_insert_with(|| {
+                let desugared: graphcal_compiler::desugar::desugared_ast::Expr = expr.into();
+                graphcal_compiler::syntax::name_resolve::resolve_standalone_expr(desugared)
+            });
         }
     }
 

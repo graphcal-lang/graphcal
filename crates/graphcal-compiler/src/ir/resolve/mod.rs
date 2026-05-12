@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::{AssertBody, DeclKind, Expr, ExprKind, File, TypeExpr};
+use crate::desugar::resolved_ast::{AssertBody, DeclKind, Expr, ExprKind, File, TypeExpr};
 use crate::registry::builtins::{builtin_constants, builtin_functions};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{
@@ -707,9 +707,7 @@ fn validate_private_in_public(
     src: &NamedSource<Arc<String>>,
     pub_names: &HashSet<DeclName>,
 ) -> Result<(), GraphcalError> {
-    use crate::desugar::desugared_ast::{
-        DimExpr, IndexDeclKind, IndexExpr, TypeExpr, TypeExprKind,
-    };
+    use crate::desugar::resolved_ast::{DimExpr, IndexDeclKind, IndexExpr, TypeExpr, TypeExprKind};
 
     // Collect all locally-declared type-system names (dims, indexes, types) with their spans.
     let mut local_type_names: HashMap<String, Span> = HashMap::new();
@@ -923,11 +921,6 @@ pub(crate) fn resolve_with_imports(
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
 ) -> Result<ResolvedFile, GraphcalError> {
-    // Ensure NameRef/QualifiedNameRef are resolved before proceeding.
-    let mut file = file.clone();
-    crate::syntax::name_resolve::resolve_name_refs(&mut file);
-    let file = &file;
-
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 
@@ -1097,12 +1090,6 @@ pub(crate) fn resolve_with_imported_values(
     src: &NamedSource<Arc<String>>,
     imported: &ImportedValueNames,
 ) -> Result<ResolvedFile, GraphcalError> {
-    // Ensure NameRef/QualifiedNameRef are resolved before proceeding.
-    // This is idempotent if already resolved by the loader.
-    let mut file = file.clone();
-    crate::syntax::name_resolve::resolve_name_refs(&mut file);
-    let file = &file;
-
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
 

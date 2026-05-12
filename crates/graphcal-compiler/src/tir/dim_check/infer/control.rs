@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::{Expr, MatchArm};
+use crate::desugar::resolved_ast::{Expr, MatchArm};
 use crate::syntax::names::{FieldName, IndexName, ScopedName, StructTypeName};
 
 use crate::registry::error::GraphcalError;
@@ -278,7 +278,7 @@ pub(super) fn infer_match(
                 let mut arm_locals = local_types.clone();
                 for binding in &arm.pattern.bindings {
                     match binding {
-                        crate::desugar::desugared_ast::PatternBinding::Bind { field, var } => {
+                        crate::desugar::resolved_ast::PatternBinding::Bind { field, var } => {
                             let field_def = member_type_def
                                 .fields()
                                 .iter()
@@ -298,7 +298,7 @@ pub(super) fn infer_match(
                             )?;
                             arm_locals.insert(var.name.clone(), field_type);
                         }
-                        crate::desugar::desugared_ast::PatternBinding::Wildcard { .. } => {
+                        crate::desugar::resolved_ast::PatternBinding::Wildcard { .. } => {
                             // Wildcard: no binding needed
                         }
                     }

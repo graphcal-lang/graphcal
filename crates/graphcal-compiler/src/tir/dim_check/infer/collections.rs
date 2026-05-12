@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::{
+use crate::desugar::resolved_ast::{
     BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, IndexArg, NatExpr,
 };
 use crate::syntax::names::{FieldName, GenericParamName, IndexName, ScopedName, StructTypeName};
@@ -137,7 +137,7 @@ pub(super) fn infer_for_comp(
 )]
 pub(super) fn infer_map_or_table_literal(
     expr: &Expr,
-    entries: &[crate::desugar::desugared_ast::MapEntry],
+    entries: &[crate::desugar::resolved_ast::MapEntry],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
@@ -697,8 +697,8 @@ fn fin_plus_literal(
 pub(super) fn infer_scan(
     source: &Expr,
     init: &Expr,
-    acc_name: &crate::desugar::desugared_ast::Ident,
-    val_name: &crate::desugar::desugared_ast::Ident,
+    acc_name: &crate::desugar::resolved_ast::Ident,
+    val_name: &crate::desugar::resolved_ast::Ident,
     body: &Expr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
@@ -776,8 +776,8 @@ pub(super) fn infer_scan(
 /// owning declaration's type, rather than scanning all declared types.
 pub(super) fn infer_unfold(
     init: &Expr,
-    prev_name: &crate::desugar::desugared_ast::Ident,
-    curr_name: &crate::desugar::desugared_ast::Ident,
+    prev_name: &crate::desugar::resolved_ast::Ident,
+    curr_name: &crate::desugar::resolved_ast::Ident,
     body: &Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -947,8 +947,8 @@ pub(super) fn infer_field_access(
 pub(super) fn infer_struct_construction(
     expr: &Expr,
     type_name: &crate::syntax::names::Spanned<StructTypeName>,
-    constructor_type_args: &[crate::desugar::desugared_ast::TypeExpr],
-    fields: &[crate::desugar::desugared_ast::FieldInit],
+    constructor_type_args: &[crate::desugar::resolved_ast::TypeExpr],
+    fields: &[crate::desugar::resolved_ast::FieldInit],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,

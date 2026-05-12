@@ -41,8 +41,7 @@ pub(crate) trait ExprVisitor<P: Phase> {
             | ExprKind::UnitLiteral { .. }
             | ExprKind::LocalRef(_)
             | ExprKind::VariantLiteral { .. }
-            | ExprKind::NameRef(_)
-            | ExprKind::QualifiedNameRef { .. } => self.visit_leaf(expr),
+            | ExprKind::UnresolvedRef(_) => self.visit_leaf(expr),
 
             ExprKind::GraphRef(_) => self.visit_graph_ref(expr),
             ExprKind::ConstRef(_) => self.visit_const_ref(expr),
@@ -275,8 +274,7 @@ pub trait ExprVisitorMut<P: Phase> {
             | ExprKind::StringLiteral(_)
             | ExprKind::UnitLiteral { .. }
             | ExprKind::LocalRef(_)
-            | ExprKind::NameRef(_)
-            | ExprKind::QualifiedNameRef { .. } => Ok(()),
+            | ExprKind::UnresolvedRef(_) => Ok(()),
 
             ExprKind::VariantLiteral { .. } => self.visit_variant_literal_mut(expr),
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use graphcal_compiler::desugar::desugared_ast::{Expr, MatchArm};
+use graphcal_compiler::desugar::resolved_ast::{Expr, MatchArm};
 use graphcal_compiler::syntax::names::ScopedName;
 
 use graphcal_compiler::registry::error::GraphcalError;
@@ -69,7 +69,7 @@ pub(super) fn eval_match(
             let mut arm_locals = local_values.clone();
             for binding in &matched_arm.pattern.bindings {
                 match binding {
-                    graphcal_compiler::desugar::desugared_ast::PatternBinding::Bind {
+                    graphcal_compiler::desugar::resolved_ast::PatternBinding::Bind {
                         field,
                         var,
                     } => {
@@ -82,7 +82,7 @@ pub(super) fn eval_match(
                             })?;
                         arm_locals.insert(var.name.clone(), field_val.clone());
                     }
-                    graphcal_compiler::desugar::desugared_ast::PatternBinding::Wildcard {
+                    graphcal_compiler::desugar::resolved_ast::PatternBinding::Wildcard {
                         ..
                     } => {}
                 }

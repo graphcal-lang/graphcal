@@ -39,6 +39,7 @@
 
 pub mod convert;
 pub mod desugared_ast;
+pub mod resolved_ast;
 
 /// Single-node desugaring step.
 ///
