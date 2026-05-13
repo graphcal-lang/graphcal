@@ -726,7 +726,7 @@ impl TIR {
     /// [`Self::lookup_call_target`] on it always returns `None`.
     #[must_use]
     pub fn empty_for_eval_helpers(registry: Registry) -> Self {
-        let root_dag_id = crate::syntax::dag_id::DagId::new(["<eval-helper>"]);
+        let root_dag_id = crate::syntax::dag_id::DagId::root("<eval-helper>");
         let mut dags = DagRegistry::new();
         dags.insert(
             root_dag_id.clone(),
@@ -2416,7 +2416,7 @@ mod tests {
         let src = NamedSource::new("test", Arc::new(source.to_string()));
         let ir = crate::ir::lower::lower(&file, &src)?;
         let parent_dag_id =
-            crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test"));
+            crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test")).unwrap();
         let mut tir = type_resolve(ir, parent_dag_id.clone(), &src)?;
         compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id)?;
         Ok(tir)

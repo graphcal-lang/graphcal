@@ -143,7 +143,15 @@ impl LoadedProject {
         graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
         let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
         let path = PathBuf::from(name);
-        let dag_id = DagId::from_relative_path(&path);
+        let dag_id = DagId::from_relative_path(&path).map_err(|e| {
+            CompileError::Eval(
+                graphcal_compiler::registry::error::GraphcalError::EvalError {
+                    message: format!("invalid source name `{name}`: {e}"),
+                    src: named_source.clone(),
+                    span: graphcal_compiler::syntax::span::Span::new(0, 0).into(),
+                },
+            )
+        })?;
         // No project root or manifest in single-file mode — only the
         // file-stem self-reference (Concept 7) can be detected here.
         let inline_dags = lift_inline_dags_by_stem(&ast, &path, &dag_id);
@@ -344,7 +352,15 @@ fn load_file_dfs<F: FileSystemReader>(
     let relative_path = canonical_path
         .strip_prefix(project_root)
         .unwrap_or(canonical_path);
-    let dag_id = DagId::from_relative_path(relative_path);
+    let dag_id = DagId::from_relative_path(relative_path).map_err(|e| {
+        CompileError::Eval(
+            graphcal_compiler::registry::error::GraphcalError::EvalError {
+                message: format!("invalid module path `{}`: {e}", relative_path.display()),
+                src: named_source.clone(),
+                span: graphcal_compiler::syntax::span::Span::new(0, 0).into(),
+            },
+        )
+    })?;
 
     // Convert resolved import paths to DagIds.
     let resolved_imports: HashMap<String, DagId> = resolved_imports_paths
@@ -829,8 +845,8 @@ mod tests {
         assert_eq!(project.files.len(), 2);
         assert_eq!(project.load_order.len(), 2);
         // helper.lib should be loaded before main (topological order)
-        let lib_dag_id = DagId::new(["src", "helper", "lib"]);
-        let main_dag_id = DagId::new(["src", "helper", "main"]);
+        let lib_dag_id = DagId::new("src", ["helper", "lib"]);
+        let main_dag_id = DagId::new("src", ["helper", "main"]);
         assert_eq!(project.load_order[0], lib_dag_id);
         assert_eq!(project.load_order[1], main_dag_id);
     }
@@ -946,7 +962,7 @@ mod tests {
         assert_eq!(root_file.source.as_str(), overlay_source);
 
         // Helper.lib file should use disk content
-        let lib_dag_id = DagId::new(["src", "helper", "lib"]);
+        let lib_dag_id = DagId::new("src", ["helper", "lib"]);
         let lib_file = &project.files[&lib_dag_id];
         assert_eq!(lib_file.source.as_str(), "param y: Dimensionless = 2.0;");
     }
@@ -997,7 +1013,7 @@ mod tests {
         let project = load_project(&dir.path().join("graph/a.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 4);
         // d should appear first in load order
-        let d_dag_id = DagId::new(["graph", "d"]);
+        let d_dag_id = DagId::new("graph", ["d"]);
         assert_eq!(project.load_order[0], d_dag_id);
     }
 

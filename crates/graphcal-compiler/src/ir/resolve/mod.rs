@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::resolved_ast::{AssertBody, DeclKind, Expr, ExprKind, File, TypeExpr};
+use crate::desugar::resolved_ast::{
+    AssertBody, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeExpr, TypeExprKind,
+};
 use crate::registry::builtins::{builtin_constants, builtin_functions};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{
@@ -698,16 +700,12 @@ fn validate_attributes(
 /// Built-in type-system items (prelude dimensions like `Length`, and
 /// built-in types `Bool`, `Int`, `Dimensionless`, `Datetime`) are
 /// always considered visible.
-#[expect(
-    clippy::too_many_lines,
-    reason = "per-kind signature extraction for every declaration kind"
-)]
 fn validate_private_in_public(
     file: &File,
     src: &NamedSource<Arc<String>>,
     pub_names: &HashSet<DeclName>,
 ) -> Result<(), GraphcalError> {
-    use crate::desugar::resolved_ast::{DimExpr, IndexDeclKind, IndexExpr, TypeExpr, TypeExprKind};
+    use crate::desugar::resolved_ast::IndexDeclKind;
 
     // Collect all locally-declared type-system names (dims, indexes, types) with their spans.
     let mut local_type_names: HashMap<String, Span> = HashMap::new();
@@ -726,72 +724,6 @@ fn validate_private_in_public(
     // If there are no local type-system names, nothing to check.
     if local_type_names.is_empty() {
         return Ok(());
-    }
-
-    // Recursively collect type-system references from a `TypeExpr`.
-    #[expect(
-        clippy::items_after_statements,
-        reason = "helper function scoped to this validation"
-    )]
-    fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(String, Span)>) {
-        match &type_expr.kind {
-            TypeExprKind::DimExpr(dim_expr) => collect_dim_refs(dim_expr, refs),
-            TypeExprKind::Indexed { base, indexes } => {
-                collect_type_refs(base, refs);
-                for idx in indexes {
-                    if let IndexExpr::Name(ident) = idx {
-                        refs.push((ident.name.clone(), ident.span));
-                    }
-                }
-            }
-            TypeExprKind::TypeApplication { name, type_args } => {
-                refs.push((name.name.clone(), name.span));
-                for arg in type_args {
-                    collect_type_refs(arg, refs);
-                }
-            }
-            TypeExprKind::Dimensionless
-            | TypeExprKind::Bool
-            | TypeExprKind::Int
-            | TypeExprKind::Datetime => {}
-        }
-    }
-
-    #[expect(
-        clippy::items_after_statements,
-        reason = "helper function scoped to this validation"
-    )]
-    fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(String, Span)>) {
-        for item in &dim_expr.terms {
-            refs.push((item.term.name.name.clone(), item.term.span));
-        }
-    }
-
-    // Classify the owning declaration of a referenced name for the error
-    // message.
-    #[expect(
-        clippy::items_after_statements,
-        reason = "helper function scoped to this validation"
-    )]
-    fn ref_kind_for(file: &File, ref_name: &str) -> &'static str {
-        match file
-            .declarations
-            .iter()
-            .find(|d| match &d.kind {
-                DeclKind::BaseDimension(bd) => bd.name.value.as_str() == ref_name,
-                DeclKind::Dimension(d) => d.name.value.as_str() == ref_name,
-                DeclKind::Index(idx) => idx.name.value.as_str() == ref_name,
-                DeclKind::Type(t) => t.name.value.as_str() == ref_name,
-                DeclKind::UnionType(u) => u.name.value.as_str() == ref_name,
-                _ => false,
-            })
-            .map(|d| &d.kind)
-        {
-            Some(DeclKind::BaseDimension(_) | DeclKind::Dimension(_)) => "dim",
-            Some(DeclKind::Index(_)) => "index",
-            Some(DeclKind::Type(_) | DeclKind::UnionType(_)) => "type",
-            _ => "item",
-        }
     }
 
     let emit = |pub_kind: &str,
@@ -879,6 +811,60 @@ fn validate_private_in_public(
         emit(kind, name, decl.span, &refs)?;
     }
     Ok(())
+}
+
+/// Recursively collect type-system references from a [`TypeExpr`].
+fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(String, Span)>) {
+    match &type_expr.kind {
+        TypeExprKind::DimExpr(dim_expr) => collect_dim_refs(dim_expr, refs),
+        TypeExprKind::Indexed { base, indexes } => {
+            collect_type_refs(base, refs);
+            for idx in indexes {
+                if let IndexExpr::Name(ident) = idx {
+                    refs.push((ident.name.clone(), ident.span));
+                }
+            }
+        }
+        TypeExprKind::TypeApplication { name, type_args } => {
+            refs.push((name.name.clone(), name.span));
+            for arg in type_args {
+                collect_type_refs(arg, refs);
+            }
+        }
+        TypeExprKind::Dimensionless
+        | TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime => {}
+    }
+}
+
+/// Collect every term name in a [`DimExpr`] as a `(name, span)` reference.
+fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(String, Span)>) {
+    for item in &dim_expr.terms {
+        refs.push((item.term.name.name.clone(), item.term.span));
+    }
+}
+
+/// Classify the owning declaration of a referenced name for diagnostic messages.
+fn ref_kind_for(file: &File, ref_name: &str) -> &'static str {
+    match file
+        .declarations
+        .iter()
+        .find(|d| match &d.kind {
+            DeclKind::BaseDimension(bd) => bd.name.value.as_str() == ref_name,
+            DeclKind::Dimension(d) => d.name.value.as_str() == ref_name,
+            DeclKind::Index(idx) => idx.name.value.as_str() == ref_name,
+            DeclKind::Type(t) => t.name.value.as_str() == ref_name,
+            DeclKind::UnionType(u) => u.name.value.as_str() == ref_name,
+            _ => false,
+        })
+        .map(|d| &d.kind)
+    {
+        Some(DeclKind::BaseDimension(_) | DeclKind::Dimension(_)) => "dim",
+        Some(DeclKind::Index(_)) => "index",
+        Some(DeclKind::Type(_) | DeclKind::UnionType(_)) => "type",
+        _ => "item",
+    }
 }
 
 /// Declarations imported from other files, to be injected into the resolve scope.

@@ -398,14 +398,7 @@ pub(super) fn infer_fn_call(
     match classify_special_fn(name.value.as_str()) {
         Some(SpecialFnKind::Aggregation(_)) if args.len() == 1 => ctx.infer_aggregation_fn_call(),
         Some(SpecialFnKind::TypeConversion(kind)) => ctx.infer_type_conversion_fn_call_typed(kind),
-        Some(SpecialFnKind::TimeScaleConversion) => {
-            #[expect(
-                clippy::expect_used,
-                reason = "TimeScaleConversion variant guarantees a valid time scale name"
-            )]
-            let target_scale =
-                crate::registry::time_scale::time_scale_from_conversion_fn(name.value.as_str())
-                    .expect("TimeScaleConversion variant guarantees a valid time scale name");
+        Some(SpecialFnKind::TimeScaleConversion(target_scale)) => {
             ctx.infer_timescale_fn_call(target_scale)
         }
         Some(SpecialFnKind::Constructor(kind)) => ctx.infer_datetime_constructor_call_typed(kind),

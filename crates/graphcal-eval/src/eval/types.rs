@@ -134,9 +134,7 @@ impl Value {
                 si_value,
                 display_unit,
                 ..
-            } => Ok(display_unit
-                .as_ref()
-                .map_or(*si_value, |du| *si_value / du.scale)),
+            } => Ok(scalar_display_value(*si_value, display_unit.as_ref())),
             other => Err(ValueError {
                 actual: other.variant_description(),
             }),
@@ -195,21 +193,16 @@ impl Value {
                 variant,
             } => graphcal_compiler::syntax::names::fmt_qualified_variant(index_name, variant),
             Self::Struct { type_name, .. } => type_name.as_str().to_string(),
-            Self::Datetime { .. } =>
-            {
-                #[expect(
-                    clippy::expect_used,
-                    reason = "format_datetime always returns Some for Datetime variant"
-                )]
-                self.format_datetime().expect("self is Datetime")
-            }
-            Self::Scalar { .. } => {
-                #[expect(
-                    clippy::expect_used,
-                    reason = "display_value always returns Ok for Scalar variant"
-                )]
+            Self::Datetime {
+                epoch, display_tz, ..
+            } => format_epoch_with_tz(epoch, display_tz.as_deref()),
+            Self::Scalar {
+                si_value,
+                display_unit,
+                ..
+            } => {
                 let formatted = graphcal_compiler::registry::format::format_number(
-                    self.display_value().expect("self is Scalar"),
+                    scalar_display_value(*si_value, display_unit.as_ref()),
                 );
                 match symbols.and_then(|s| self.display_label(s)) {
                     Some(label) => format!("{formatted} [{label}]"),
@@ -237,6 +230,15 @@ impl Value {
         };
         Some(format_epoch_with_tz(epoch, display_tz.as_deref()))
     }
+}
+
+/// Compute the displayed scalar value from its SI value and optional display unit.
+///
+/// Returns `si_value` directly when no display unit is set; otherwise scales it
+/// by the unit's conversion factor (`display_value = si_value / scale`).
+#[must_use]
+pub fn scalar_display_value(si_value: f64, display_unit: Option<&DisplayUnit>) -> f64 {
+    display_unit.map_or(si_value, |du| si_value / du.scale)
 }
 
 /// Format an `hifitime::Epoch` with an optional IANA timezone.

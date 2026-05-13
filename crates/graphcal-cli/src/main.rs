@@ -1,3 +1,13 @@
+// The CLI is the imperative shell — writing to stdout/stderr is the binary's
+// whole purpose. Suppress both lints crate-wide so that library crates keep
+// the workspace-level warning while this binary doesn't need per-call-site
+// `#[expect]` blocks.
+#![expect(
+    clippy::print_stderr,
+    clippy::print_stdout,
+    reason = "CLI binary; stdout/stderr are the user-facing output channels"
+)]
+
 mod display;
 mod json_input;
 mod overrides;
@@ -29,10 +39,6 @@ const fn is_assert_failure(r: &graphcal_eval::eval::AssertResult) -> bool {
 
 /// Print `prefix: {err}` to stderr and exit with the given non-zero code.
 /// Used to keep the plot pipeline's "could not X" branches one-line each.
-#[expect(
-    clippy::print_stderr,
-    reason = "CLI binary, stderr output is expected for errors"
-)]
 fn bail_with(prefix: &str, err: impl std::fmt::Display, exit_code: i32) -> ! {
     eprintln!("error: {prefix}: {err}");
     process::exit(exit_code);
@@ -161,25 +167,13 @@ fn main() {
 
 /// Print an override-parse error and exit with code 2.
 ///
-/// Kept separate so both the return type (`!`) and the `print_stderr` lint
-/// suppression stay out of the happy path in `main`.
-#[expect(
-    clippy::print_stderr,
-    reason = "CLI binary, stderr output is expected for errors"
-)]
+/// Kept separate so that the return type (`!`) stays out of the happy path
+/// in `main`.
 fn report_override_error(e: &OverrideParseError) -> ! {
     eprintln!("error: {e}");
     process::exit(2);
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "CLI binary, stderr output is expected for errors"
-)]
-#[expect(
-    clippy::print_stdout,
-    reason = "CLI binary, stdout output is expected for --plot json"
-)]
 fn handle_eval(
     file: &Path,
     format: &OutputFormat,
@@ -310,11 +304,6 @@ fn resolve_target_files(paths: &[PathBuf]) -> Vec<PathBuf> {
     }
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "CLI binary, stderr output is expected for errors"
-)]
-#[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
 fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
     let targets = resolve_target_files(paths);
 
@@ -343,11 +332,6 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
     }
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "CLI binary, stderr output is expected for errors"
-)]
-#[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
 fn run_format(paths: &[PathBuf], check: bool) {
     let targets = resolve_target_files(paths);
 
@@ -415,7 +399,6 @@ const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".build", "__pyca
 /// Traversal errors (permission denied, transient I/O) are logged to stderr
 /// rather than silently dropped so users know when `format` only saw part of
 /// the tree.
-#[expect(clippy::print_stderr, reason = "CLI binary, stderr output for errors")]
 fn collect_gcl_files(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = Vec::new();
     for entry in walkdir::WalkDir::new(dir)
@@ -454,8 +437,6 @@ fn collect_gcl_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-#[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
-#[expect(clippy::print_stderr, reason = "CLI binary, stderr output for errors")]
 fn print_text(result: &EvalResult) {
     use graphcal_eval::eval::Value;
 
@@ -475,13 +456,17 @@ fn print_text(result: &EvalResult) {
                             eprintln!("{name:width$} = ERROR: {err}");
                         }
                         display::FlatEntry::Value(name, value) => {
-                            if let Value::Scalar { .. } = value {
-                                #[expect(
-                                    clippy::expect_used,
-                                    reason = "display_value always returns Ok for Scalar variant"
-                                )]
+                            if let Value::Scalar {
+                                si_value,
+                                display_unit,
+                                ..
+                            } = value
+                            {
                                 let formatted =
-                                    format_number(value.display_value().expect("value is Scalar"));
+                                    format_number(graphcal_eval::eval::scalar_display_value(
+                                        *si_value,
+                                        display_unit.as_ref(),
+                                    ));
                                 if let Some(label) = value.display_label(&result.base_dim_symbols) {
                                     println!("{name:width$} = {formatted} {label}");
                                 } else {
@@ -569,7 +554,6 @@ fn format_assertion_line(
     }
 }
 
-#[expect(clippy::print_stdout, reason = "CLI binary, stdout output is expected")]
 #[expect(
     clippy::too_many_lines,
     reason = "JSON output formatting is clearest as a single function"
@@ -593,11 +577,7 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
                 let mut map = serde_json::Map::new();
                 map.insert("si_value".to_string(), serde_json::json!(si_value));
                 if let Some(du) = display_unit {
-                    #[expect(
-                        clippy::expect_used,
-                        reason = "display_value always returns Ok for Scalar variant"
-                    )]
-                    let dv = v.display_value().expect("value is Scalar");
+                    let dv = graphcal_eval::eval::scalar_display_value(*si_value, Some(du));
                     map.insert("display_value".to_string(), serde_json::json!(dv));
                     map.insert("unit".to_string(), serde_json::json!(du.label));
                 } else if let Some(si_unit) = v.display_label(symbols) {

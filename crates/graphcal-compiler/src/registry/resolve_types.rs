@@ -217,8 +217,7 @@ pub enum SpecialFnKind {
     /// Type conversion functions: `to_float`, `to_int`.
     TypeConversion(TypeConversionFn),
     /// Time-scale conversion functions: `to_utc`, `to_tai`, etc.
-    /// These are further resolved by [`crate::registry::time_scale::time_scale_from_conversion_fn`].
-    TimeScaleConversion,
+    TimeScaleConversion(crate::registry::time_scale::TimeScale),
     /// Constructor functions: `datetime`, `epoch`.
     Constructor(ConstructorFn),
     /// Datetime extraction functions: `year`, `month`, `day`, etc.
@@ -240,8 +239,8 @@ pub fn classify_special_fn(name: &str) -> Option<SpecialFnKind> {
     if let Some(f) = TypeConversionFn::parse(name) {
         return Some(SpecialFnKind::TypeConversion(f));
     }
-    if crate::registry::time_scale::time_scale_from_conversion_fn(name).is_some() {
-        return Some(SpecialFnKind::TimeScaleConversion);
+    if let Some(scale) = crate::registry::time_scale::time_scale_from_conversion_fn(name) {
+        return Some(SpecialFnKind::TimeScaleConversion(scale));
     }
     if let Some(f) = ConstructorFn::parse(name) {
         return Some(SpecialFnKind::Constructor(f));
