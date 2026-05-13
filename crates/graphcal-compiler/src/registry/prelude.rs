@@ -1,4 +1,4 @@
-use crate::syntax::dimension::Dimension;
+use crate::syntax::dimension::{Dimension, RationalError};
 use crate::syntax::names::{DimName, UnitName};
 
 use crate::registry::types::RegistryBuilder;
@@ -19,11 +19,12 @@ struct BaseDimIds {
 }
 
 /// Load all built-in dimensions and units into the registry builder.
-pub(crate) fn load_prelude(builder: &mut RegistryBuilder) {
+pub(crate) fn load_prelude(builder: &mut RegistryBuilder) -> Result<(), RationalError> {
     let ids = load_base_dimensions(builder);
-    load_derived_dimensions(builder, &ids);
+    load_derived_dimensions(builder, &ids)?;
     load_base_units(builder, &ids);
-    load_derived_units(builder, &ids);
+    load_derived_units(builder, &ids)?;
+    Ok(())
 }
 
 fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
@@ -82,16 +83,18 @@ fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
     }
 }
 
-fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) {
-    let velocity = &ids.length / &ids.time;
-    let acceleration = &ids.length / &ids.time.pow_int(2);
-    let force = &ids.mass * &acceleration;
-    let energy = &force * &ids.length;
-    let power = &energy / &ids.time;
-    let frequency = Dimension::dimensionless() / ids.time.clone();
-    let pressure = &force / &ids.length.pow_int(2);
-    let area = ids.length.pow_int(2);
-    let volume = ids.length.pow_int(3);
+fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RationalError> {
+    let velocity = (&ids.length / &ids.time)?;
+    let time_squared = ids.time.pow_int(2)?;
+    let acceleration = (&ids.length / &time_squared)?;
+    let force = (&ids.mass * &acceleration)?;
+    let energy = (&force * &ids.length)?;
+    let power = (&energy / &ids.time)?;
+    let frequency = (Dimension::dimensionless() / ids.time.clone())?;
+    let length_squared = ids.length.pow_int(2)?;
+    let pressure = (&force / &length_squared)?;
+    let area = ids.length.pow_int(2)?;
+    let volume = ids.length.pow_int(3)?;
 
     r.register_dimension(DimName::new("Velocity"), velocity);
     r.register_dimension(DimName::new("Acceleration"), acceleration);
@@ -102,6 +105,7 @@ fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) {
     r.register_dimension(DimName::new("Pressure"), pressure);
     r.register_dimension(DimName::new("Area"), area);
     r.register_dimension(DimName::new("Volume"), volume);
+    Ok(())
 }
 
 fn load_base_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
@@ -115,12 +119,15 @@ fn load_base_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
     r.register_unit(UnitName::new("rad"), ids.angle.clone(), 1.0);
 }
 
-fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
-    let force = &ids.mass * &ids.length / ids.time.pow_int(2);
-    let energy = &force * &ids.length;
-    let power = &energy / &ids.time;
-    let pressure = &force / &ids.length.pow_int(2);
-    let frequency = Dimension::dimensionless() / ids.time.clone();
+fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RationalError> {
+    let mass_length = (&ids.mass * &ids.length)?;
+    let time_squared = ids.time.pow_int(2)?;
+    let force = (mass_length / time_squared)?;
+    let energy = (&force * &ids.length)?;
+    let power = (&energy / &ids.time)?;
+    let length_squared = ids.length.pow_int(2)?;
+    let pressure = (&force / &length_squared)?;
+    let frequency = (Dimension::dimensionless() / ids.time.clone())?;
 
     // Length
     r.register_unit(UnitName::new("km"), ids.length.clone(), 1000.0);
@@ -160,6 +167,7 @@ fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
 
     // Frequency
     r.register_unit(UnitName::new("Hz"), frequency, 1.0);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -189,7 +197,7 @@ mod tests {
     #[test]
     fn prelude_loads_all_base_dims() {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         let r = b.build();
         for name in [
             "Length",
@@ -211,7 +219,7 @@ mod tests {
     #[test]
     fn prelude_loads_all_derived_dims() {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         let r = b.build();
         for name in [
             "Velocity",
@@ -234,7 +242,7 @@ mod tests {
     #[test]
     fn prelude_force_dimension_is_correct() {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         let r = b.build();
         let force = r.dimensions.get_dimension("Force").unwrap();
         // Force = Mass * Length / Time^2
@@ -246,7 +254,7 @@ mod tests {
     #[test]
     fn prelude_newton_matches_force_dim() {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         let r = b.build();
         let force_dim = r.dimensions.get_dimension("Force").unwrap().clone();
         let newton = r.units.get_unit("N").unwrap();
@@ -257,7 +265,7 @@ mod tests {
     #[test]
     fn prelude_km_scale_correct() {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         let r = b.build();
         let km = r.units.get_unit("km").unwrap();
         assert!((km.scale.as_static().unwrap() - 1000.0).abs() < f64::EPSILON);
@@ -266,7 +274,7 @@ mod tests {
     #[test]
     fn prelude_deg_scale_correct() {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         let r = b.build();
         let deg = r.units.get_unit("deg").unwrap();
         assert!((deg.scale.as_static().unwrap() - std::f64::consts::PI / 180.0).abs() < 1e-15);
@@ -275,7 +283,7 @@ mod tests {
     #[test]
     fn prelude_base_dim_names_registered() {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         let r = b.build();
         let names = r.dimensions.base_dim_names();
         assert_eq!(names.len(), 8);
@@ -286,7 +294,7 @@ mod tests {
     #[test]
     fn prelude_base_dim_symbols_registered() {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         let r = b.build();
         let symbols = r.dimensions.base_dim_symbols();
         assert_eq!(symbols.len(), 8);

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use crate::desugar::resolved_ast::{
     DagDecl, DimExpr, Expr, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
 };
-use crate::syntax::dimension::{BaseDimId, Dimension, Rational};
+use crate::syntax::dimension::{BaseDimId, Dimension, Rational, RationalError};
 use crate::syntax::names::{
     DimName, FieldName, GenericParamName, IndexName, StructTypeName, UnitName, VariantName,
 };
@@ -219,8 +219,10 @@ pub enum IndexKind {
     ///
     /// Created synthetically for integer literals in index position (e.g., `D[3]`).
     NatRange {
-        /// The size of the range (number of elements).
-        size: u64,
+        /// The size of the range (number of elements). Stored as `usize`
+        /// because it bounds in-memory variant tables; AST-level Nat
+        /// literals are converted at the registry boundary.
+        size: usize,
     },
 }
 
@@ -259,15 +261,11 @@ impl IndexDef {
     ///
     /// Returns 0 for required indexes (no variants until bound).
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "NatRange size u64 -> usize: practically bounded by registry validation"
-    )]
     pub fn step_count(&self) -> usize {
         match &self.kind {
             IndexKind::Named { variants } => variants.len(),
             IndexKind::Range(data) => data.step_count(),
-            IndexKind::NatRange { size } => *size as usize,
+            IndexKind::NatRange { size } => *size,
             IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => 0,
         }
     }
@@ -309,7 +307,7 @@ impl IndexDef {
     #[must_use]
     pub const fn nat_range_size(&self) -> Option<u64> {
         match &self.kind {
-            IndexKind::NatRange { size } => Some(*size),
+            IndexKind::NatRange { size } => Some(*size as u64),
             _ => None,
         }
     }
@@ -351,31 +349,33 @@ pub fn parse_nat_range_index_name(name: &str) -> Option<u64> {
 fn resolve_dim_expr_impl(
     dimensions: &HashMap<DimName, Dimension>,
     expr: &DimExpr,
-) -> Option<Dimension> {
-    expr.terms
-        .iter()
-        .try_fold(Dimension::dimensionless(), |result, item| {
-            let base = dimensions.get(item.term.name.name.as_str())?;
-            let exp = item.term.power.unwrap_or(1);
-            let powered = base.pow(Rational::from_int(exp));
-            Some(match item.op {
-                MulDivOp::Mul => result * powered,
-                MulDivOp::Div => result / powered,
-            })
-        })
+) -> Result<Option<Dimension>, RationalError> {
+    let mut result = Dimension::dimensionless();
+    for item in &expr.terms {
+        let Some(base) = dimensions.get(item.term.name.name.as_str()) else {
+            return Ok(None);
+        };
+        let exp = item.term.power.unwrap_or(1);
+        let powered = base.pow(Rational::from_int(exp))?;
+        result = match item.op {
+            MulDivOp::Mul => (result * powered)?,
+            MulDivOp::Div => (result / powered)?,
+        };
+    }
+    Ok(Some(result))
 }
 
 /// Shared implementation for resolving a `TypeExpr` to a concrete `Dimension`.
 fn resolve_type_expr_impl(
     dimensions: &HashMap<DimName, Dimension>,
     type_expr: &TypeExpr,
-) -> Option<Dimension> {
+) -> Result<Option<Dimension>, RationalError> {
     match &type_expr.kind {
-        TypeExprKind::Dimensionless => Some(Dimension::dimensionless()),
+        TypeExprKind::Dimensionless => Ok(Some(Dimension::dimensionless())),
         TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime
-        | TypeExprKind::TypeApplication { .. } => None,
+        | TypeExprKind::TypeApplication { .. } => Ok(None),
         TypeExprKind::DimExpr(dim_expr) => resolve_dim_expr_impl(dimensions, dim_expr),
         TypeExprKind::Indexed { base, .. } => resolve_type_expr_impl(dimensions, base),
     }
@@ -383,44 +383,59 @@ fn resolve_type_expr_impl(
 
 /// Shared implementation for resolving a `UnitExpr` to its dimension and static scale factor.
 ///
-/// Returns `None` if any unit name is unknown or if any unit has a dynamic scale.
+/// Returns `Ok(None)` if any unit name is unknown or if any unit has a dynamic
+/// scale, and `Err` if dimension arithmetic overflows.
 fn resolve_unit_expr_impl(
     units: &HashMap<UnitName, UnitInfo>,
     expr: &UnitExpr,
-) -> Option<(Dimension, f64)> {
-    expr.terms
-        .iter()
-        .try_fold((Dimension::dimensionless(), 1.0), |(dim, scale), item| {
-            let info = units.get(item.name.value.as_str())?;
-            let exp = item.power.unwrap_or(1);
-            let powered_dim = info.dimension.pow(Rational::from_int(exp));
-            let static_scale = info.scale.as_static()?;
-            let powered_scale = static_scale.powi(exp);
-            Some(match item.op {
-                MulDivOp::Mul => (dim * powered_dim, scale * powered_scale),
-                MulDivOp::Div => (dim / powered_dim, scale / powered_scale),
-            })
-        })
+) -> Result<Option<(Dimension, f64)>, RationalError> {
+    let mut dim = Dimension::dimensionless();
+    let mut scale = 1.0_f64;
+    for item in &expr.terms {
+        let Some(info) = units.get(item.name.value.as_str()) else {
+            return Ok(None);
+        };
+        let exp = item.power.unwrap_or(1);
+        let powered_dim = info.dimension.pow(Rational::from_int(exp))?;
+        let Some(static_scale) = info.scale.as_static() else {
+            return Ok(None);
+        };
+        let powered_scale = static_scale.powi(exp);
+        match item.op {
+            MulDivOp::Mul => {
+                dim = (dim * powered_dim)?;
+                scale *= powered_scale;
+            }
+            MulDivOp::Div => {
+                dim = (dim / powered_dim)?;
+                scale /= powered_scale;
+            }
+        }
+    }
+    Ok(Some((dim, scale)))
 }
 
 /// Shared implementation for resolving a `UnitExpr` to its dimension only (ignoring scales).
 ///
-/// Works for both static and dynamic units. Returns `None` if any unit name is unknown.
+/// Works for both static and dynamic units. Returns `Ok(None)` if any unit
+/// name is unknown, and `Err` if dimension arithmetic overflows.
 fn resolve_unit_dimension_impl(
     units: &HashMap<UnitName, UnitInfo>,
     expr: &UnitExpr,
-) -> Option<Dimension> {
-    expr.terms
-        .iter()
-        .try_fold(Dimension::dimensionless(), |dim, item| {
-            let info = units.get(item.name.value.as_str())?;
-            let exp = item.power.unwrap_or(1);
-            let powered_dim = info.dimension.pow(Rational::from_int(exp));
-            Some(match item.op {
-                MulDivOp::Mul => dim * powered_dim,
-                MulDivOp::Div => dim / powered_dim,
-            })
-        })
+) -> Result<Option<Dimension>, RationalError> {
+    let mut dim = Dimension::dimensionless();
+    for item in &expr.terms {
+        let Some(info) = units.get(item.name.value.as_str()) else {
+            return Ok(None);
+        };
+        let exp = item.power.unwrap_or(1);
+        let powered_dim = info.dimension.pow(Rational::from_int(exp))?;
+        dim = match item.op {
+            MulDivOp::Mul => (dim * powered_dim)?,
+            MulDivOp::Div => (dim / powered_dim)?,
+        };
+    }
+    Ok(Some(dim))
 }
 
 // ---------------------------------------------------------------------------
@@ -472,17 +487,20 @@ impl DimensionRegistry {
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
     ///
-    /// Returns `None` if any dimension name is unknown.
-    #[must_use]
-    pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Option<Dimension> {
+    /// Returns `Ok(None)` if any dimension name is unknown, and `Err` if
+    /// dimension exponent arithmetic overflows `i32`.
+    pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RationalError> {
         resolve_dim_expr_impl(&self.dimensions, expr)
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
     ///
-    /// Returns `None` if the type references unknown dimensions.
-    #[must_use]
-    pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Option<Dimension> {
+    /// Returns `Ok(None)` if the type references unknown dimensions, and
+    /// `Err` if dimension exponent arithmetic overflows `i32`.
+    pub fn resolve_type_expr(
+        &self,
+        type_expr: &TypeExpr,
+    ) -> Result<Option<Dimension>, RationalError> {
         resolve_type_expr_impl(&self.dimensions, type_expr)
     }
 }
@@ -509,17 +527,24 @@ impl UnitRegistry {
 
     /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
     ///
-    /// Returns `None` if any unit name is unknown or if any unit has a dynamic scale.
-    #[must_use]
-    pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Option<(Dimension, f64)> {
+    /// Returns `Ok(None)` if any unit name is unknown or has a dynamic scale,
+    /// and `Err` if dimension exponent arithmetic overflows `i32`.
+    pub fn resolve_unit_expr(
+        &self,
+        expr: &UnitExpr,
+    ) -> Result<Option<(Dimension, f64)>, RationalError> {
         resolve_unit_expr_impl(&self.units, expr)
     }
 
     /// Resolve a `UnitExpr` to its dimension only (ignoring scales).
     ///
-    /// Works for both static and dynamic units. Returns `None` if any unit name is unknown.
-    #[must_use]
-    pub fn resolve_unit_dimension(&self, expr: &UnitExpr) -> Option<Dimension> {
+    /// Works for both static and dynamic units. Returns `Ok(None)` if any
+    /// unit name is unknown, and `Err` if dimension exponent arithmetic
+    /// overflows `i32`.
+    pub fn resolve_unit_dimension(
+        &self,
+        expr: &UnitExpr,
+    ) -> Result<Option<Dimension>, RationalError> {
         resolve_unit_dimension_impl(&self.units, expr)
     }
 }
@@ -811,8 +836,12 @@ impl RegistryBuilder {
     ///
     /// Returns the synthetic index name (e.g., `__nat_range_3`).
     /// If the index already exists, this is a no-op.
-    pub fn ensure_nat_range_index(&mut self, size: u64) -> IndexName {
-        let name = IndexName::new(nat_range_index_name(size));
+    ///
+    /// `size` is `usize` because the registry stores variant tables in
+    /// memory; AST-level `u64` literals must be checked at the boundary
+    /// before reaching this entry point.
+    pub fn ensure_nat_range_index(&mut self, size: usize) -> IndexName {
+        let name = IndexName::new(nat_range_index_name(size as u64));
         self.indexes
             .entry(name.clone())
             .or_insert_with(|| IndexDef {
@@ -875,33 +904,43 @@ impl RegistryBuilder {
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
     ///
-    /// Returns `None` if any dimension name is unknown.
-    #[must_use]
-    pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Option<Dimension> {
+    /// Returns `Ok(None)` if any dimension name is unknown, and `Err` if
+    /// dimension exponent arithmetic overflows `i32`.
+    pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RationalError> {
         resolve_dim_expr_impl(&self.dimensions, expr)
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
     ///
-    /// Returns `None` if the type references unknown dimensions.
-    #[must_use]
-    pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Option<Dimension> {
+    /// Returns `Ok(None)` if the type references unknown dimensions, and
+    /// `Err` if dimension exponent arithmetic overflows `i32`.
+    pub fn resolve_type_expr(
+        &self,
+        type_expr: &TypeExpr,
+    ) -> Result<Option<Dimension>, RationalError> {
         resolve_type_expr_impl(&self.dimensions, type_expr)
     }
 
     /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
     ///
-    /// Returns `None` if any unit name is unknown or if any unit has a dynamic scale.
-    #[must_use]
-    pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Option<(Dimension, f64)> {
+    /// Returns `Ok(None)` if any unit name is unknown or has a dynamic scale,
+    /// and `Err` if dimension exponent arithmetic overflows `i32`.
+    pub fn resolve_unit_expr(
+        &self,
+        expr: &UnitExpr,
+    ) -> Result<Option<(Dimension, f64)>, RationalError> {
         resolve_unit_expr_impl(&self.units, expr)
     }
 
     /// Resolve a `UnitExpr` to its dimension only (ignoring scales).
     ///
-    /// Works for both static and dynamic units. Returns `None` if any unit name is unknown.
-    #[must_use]
-    pub fn resolve_unit_dimension(&self, expr: &UnitExpr) -> Option<Dimension> {
+    /// Works for both static and dynamic units. Returns `Ok(None)` if any
+    /// unit name is unknown, and `Err` if dimension exponent arithmetic
+    /// overflows `i32`.
+    pub fn resolve_unit_dimension(
+        &self,
+        expr: &UnitExpr,
+    ) -> Result<Option<Dimension>, RationalError> {
         resolve_unit_dimension_impl(&self.units, expr)
     }
 }
@@ -935,7 +974,7 @@ mod tests {
 
     fn make_registry() -> Registry {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         b.build()
     }
 
@@ -991,7 +1030,7 @@ mod tests {
     fn registry_derived_dimensions() {
         let r = make_registry();
         let velocity = r.dimensions.get_dimension("Velocity").unwrap();
-        let expected = Dimension::base(length_id()) / Dimension::base(time_id());
+        let expected = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         assert_eq!(*velocity, expected);
     }
 
@@ -1036,8 +1075,8 @@ mod tests {
             ],
             span: Span::new(0, 0),
         };
-        let dim = r.dimensions.resolve_dim_expr(&expr).unwrap();
-        let expected = Dimension::base(length_id()) / Dimension::base(time_id());
+        let dim = r.dimensions.resolve_dim_expr(&expr).unwrap().unwrap();
+        let expected = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         assert_eq!(dim, expected);
     }
 
@@ -1060,8 +1099,10 @@ mod tests {
             ],
             span: Span::new(0, 0),
         };
-        let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap();
-        let expected_dim = Dimension::base(length_id()) / Dimension::base(time_id()).pow_int(2);
+        let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap().unwrap();
+        let expected_dim = (Dimension::base(length_id())
+            / Dimension::base(time_id()).pow_int(2).unwrap())
+        .unwrap();
         assert_eq!(dim, expected_dim);
         assert!((scale - 1.0).abs() < f64::EPSILON);
     }
@@ -1085,8 +1126,8 @@ mod tests {
             ],
             span: Span::new(0, 0),
         };
-        let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap();
-        let expected_dim = Dimension::base(length_id()) / Dimension::base(time_id());
+        let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap().unwrap();
+        let expected_dim = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         assert_eq!(dim, expected_dim);
         // km/hour = 1000 m / 3600 s ≈ 0.2778 m/s
         assert!((scale - 1000.0 / 3600.0).abs() < 1e-10);
@@ -1095,7 +1136,7 @@ mod tests {
     #[test]
     fn registry_type_register_and_lookup() {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         b.register_type(TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
@@ -1113,7 +1154,7 @@ mod tests {
             },
         });
         let r = b.build();
-        let velocity_dim = Dimension::base(length_id()) / Dimension::base(time_id());
+        let velocity_dim = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         let def = r.types.get_type("TransferResult").unwrap();
         assert_eq!(def.name.as_str(), "TransferResult");
         assert!(def.is_record());
@@ -1122,7 +1163,7 @@ mod tests {
         assert_eq!(fields[0].name.as_str(), "dv1");
         assert_eq!(
             r.dimensions.resolve_type_expr(&fields[0].type_ann),
-            Some(velocity_dim)
+            Ok(Some(velocity_dim))
         );
         assert!(r.types.get_type("NonExistent").is_none());
     }
@@ -1130,7 +1171,7 @@ mod tests {
     #[test]
     fn registry_index_register_and_lookup() {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         b.register_index(IndexDef {
             name: IndexName::new("Maneuver"),
             kind: IndexKind::Named {
@@ -1153,7 +1194,7 @@ mod tests {
     #[test]
     fn register_user_defined_base_dimension() {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         let info_id = BaseDimId::UserDefined {
             dag: crate::syntax::dag_id::DagId::root("test"),
             name: "Information".to_string(),

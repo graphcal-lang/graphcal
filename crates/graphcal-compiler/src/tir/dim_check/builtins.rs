@@ -75,7 +75,12 @@ pub(super) fn infer_fn_dim(
             Ok(lookup_binding(&bindings, name.as_str(), fn_name, src, result_span)?.clone())
         }
         ResultDim::VarPow(name, power) => {
-            Ok(lookup_binding(&bindings, name.as_str(), fn_name, src, result_span)?.pow(*power))
+            lookup_binding(&bindings, name.as_str(), fn_name, src, result_span)?
+                .pow(*power)
+                .map_err(|_| GraphcalError::DimensionOverflow {
+                    src: src.clone(),
+                    span: result_span.into(),
+                })
         }
     }
 }

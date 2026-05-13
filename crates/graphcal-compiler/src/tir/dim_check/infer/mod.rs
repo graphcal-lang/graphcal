@@ -101,22 +101,29 @@ pub(super) fn infer_type_with_owner(
         }
 
         ExprKind::UnitLiteral { unit, .. } => {
-            let dim = registry.units.resolve_unit_dimension(unit).ok_or_else(|| {
-                for item in &unit.terms {
-                    if registry.units.get_unit(item.name.value.as_str()).is_none() {
-                        return GraphcalError::UnknownUnit {
-                            name: item.name.value.clone(),
-                            src: src.clone(),
-                            span: item.name.span.into(),
-                        };
-                    }
-                }
-                GraphcalError::UnknownUnit {
-                    name: UnitName::new("unknown"),
+            let dim = registry
+                .units
+                .resolve_unit_dimension(unit)
+                .map_err(|_| GraphcalError::DimensionOverflow {
                     src: src.clone(),
                     span: unit.span.into(),
-                }
-            })?;
+                })?
+                .ok_or_else(|| {
+                    for item in &unit.terms {
+                        if registry.units.get_unit(item.name.value.as_str()).is_none() {
+                            return GraphcalError::UnknownUnit {
+                                name: item.name.value.clone(),
+                                src: src.clone(),
+                                span: item.name.span.into(),
+                            };
+                        }
+                    }
+                    GraphcalError::UnknownUnit {
+                        name: UnitName::new("unknown"),
+                        src: src.clone(),
+                        span: unit.span.into(),
+                    }
+                })?;
             Ok(InferredType::Scalar(dim))
         }
 
