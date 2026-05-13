@@ -870,7 +870,8 @@ mod tests {
         let ir = lower(&file, &src).unwrap();
         let dag_id = graphcal_compiler::syntax::dag_id::DagId::from_relative_path(
             std::path::Path::new("test"),
-        );
+        )
+        .unwrap();
         let tir = type_resolve(ir, dag_id, &src).unwrap();
         compile(&tir, &src)
     }

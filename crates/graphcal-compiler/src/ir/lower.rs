@@ -194,7 +194,12 @@ fn wrap_dep_map(
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
 pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalError> {
-    let dag_id = crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()));
+    let dag_id = crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()))
+        .map_err(|e| GraphcalError::EvalError {
+            message: format!("invalid source name `{}`: {e}", src.name()),
+            src: src.clone(),
+            span: crate::syntax::span::Span::new(0, 0).into(),
+        })?;
     lower_with_imports(ast, src, &ImportedNames::default(), &dag_id)
 }
 

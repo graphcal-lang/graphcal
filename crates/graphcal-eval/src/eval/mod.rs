@@ -17,7 +17,7 @@ pub use project::{
 pub use types::{
     AssertResult, AxisMeta, CompileError, CompositionProperty, DeclType, DisplayUnit, EvalResult,
     FigureSpec, LayerSpec, MarkProperty, NodeError, PlotFieldValue, PlotProperty, PlotSpec, Value,
-    ValueError, format_epoch_with_tz,
+    ValueError, format_epoch_with_tz, scalar_display_value,
 };
 
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {

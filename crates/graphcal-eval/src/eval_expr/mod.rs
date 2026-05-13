@@ -1,7 +1,3 @@
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "evaluation functions pass compilation context through EvalContext"
-)]
 mod arithmetic;
 mod collections;
 mod control;
@@ -162,10 +158,10 @@ pub fn eval_expr(
 
         // --- Arithmetic (delegated) ---
         ExprKind::BinOp { op, lhs, rhs } => {
-            arithmetic::eval_binop_expr(expr, op, lhs, rhs, values, local_values, ctx)
+            arithmetic::eval_binop_expr(expr, *op, lhs, rhs, values, local_values, ctx)
         }
         ExprKind::UnaryOp { op, operand } => {
-            arithmetic::eval_unaryop_expr(expr, op, operand, values, local_values, ctx)
+            arithmetic::eval_unaryop_expr(expr, *op, operand, values, local_values, ctx)
         }
 
         // --- Function calls (delegated) ---

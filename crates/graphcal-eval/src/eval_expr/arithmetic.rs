@@ -17,7 +17,7 @@ use super::eval_expr;
 )]
 pub(super) fn eval_binop_expr(
     expr: &Expr,
-    op: &BinOp,
+    op: BinOp,
     lhs: &Expr,
     rhs: &Expr,
     values: &std::collections::HashMap<ScopedName, RuntimeValue>,
@@ -52,7 +52,7 @@ pub(super) fn eval_binop_expr(
         BinOp::Eq | BinOp::Ne => {
             let l = eval_expr(lhs, values, local_values, ctx)?;
             let r = eval_expr(rhs, values, local_values, ctx)?;
-            let is_eq = *op == BinOp::Eq;
+            let is_eq = op == BinOp::Eq;
             let eq = match (&l, &r) {
                 (RuntimeValue::Bool(lb), RuntimeValue::Bool(rb)) => lb == rb,
                 (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => li == ri,
@@ -78,7 +78,7 @@ pub(super) fn eval_binop_expr(
                         .expect_scalar("comparison operand")
                         .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
                     return Ok(RuntimeValue::Bool(eval_comparison(
-                        *op, lv, rv, ctx, expr.span,
+                        op, lv, rv, ctx, expr.span,
                     )?));
                 }
             };
@@ -89,14 +89,19 @@ pub(super) fn eval_binop_expr(
         // else falls through to the scalar path which handles Scalar/Int
         // mixing and dimension checks.
         BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+            // `op` is statically one of the four ordering variants because of
+            // the match arm above; `OrderingOp::from_binop` makes that fact
+            // visible to the type system so `apply_ordering` cannot panic.
+            let ord_op = OrderingOp::from_binop(op)
+                .ok_or_else(|| ctx.internal_error(format!("non-ordering op {op:?}"), expr.span))?;
             let l = eval_expr(lhs, values, local_values, ctx)?;
             let r = eval_expr(rhs, values, local_values, ctx)?;
             match (&l, &r) {
                 (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
-                    Ok(RuntimeValue::Bool(apply_ordering(*op, li, ri)))
+                    Ok(RuntimeValue::Bool(apply_ordering(ord_op, li, ri)))
                 }
                 (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
-                    Ok(RuntimeValue::Bool(apply_ordering(*op, le, re)))
+                    Ok(RuntimeValue::Bool(apply_ordering(ord_op, le, re)))
                 }
                 _ => {
                     let lv = l
@@ -106,7 +111,7 @@ pub(super) fn eval_binop_expr(
                         .expect_scalar("comparison operand")
                         .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
                     Ok(RuntimeValue::Bool(eval_comparison(
-                        *op, lv, rv, ctx, expr.span,
+                        op, lv, rv, ctx, expr.span,
                     )?))
                 }
             }
@@ -117,14 +122,14 @@ pub(super) fn eval_binop_expr(
             let r = eval_expr(rhs, values, local_values, ctx)?;
             if let (RuntimeValue::Int(li), RuntimeValue::Int(ri)) = (&l, &r) {
                 return Ok(RuntimeValue::Int(eval_int_binop(
-                    *op, *li, *ri, ctx, expr.span,
+                    op, *li, *ri, ctx, expr.span,
                 )?));
             }
             // Datetime point-vs-vector arithmetic
             match (&l, &r) {
                 (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
                     // Datetime - Datetime -> Scalar(Time in seconds)
-                    if *op == BinOp::Sub {
+                    if op == BinOp::Sub {
                         return Ok(RuntimeValue::Scalar((*le - *re).to_seconds()));
                     }
                     return Err(ctx.eval_error("cannot add two datetimes", expr.span));
@@ -143,7 +148,7 @@ pub(super) fn eval_binop_expr(
                 }
                 (RuntimeValue::Scalar(secs), RuntimeValue::Datetime(e)) => {
                     // Scalar(Time) + Datetime -> Datetime
-                    if *op == BinOp::Add {
+                    if op == BinOp::Add {
                         let duration = hifitime::Duration::from_seconds(*secs);
                         return Ok(RuntimeValue::Datetime(*e + duration));
                     }
@@ -160,7 +165,7 @@ pub(super) fn eval_binop_expr(
                 .expect_scalar("binary operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             Ok(RuntimeValue::Scalar(eval_scalar_binop(
-                *op, lv, rv, ctx, expr.span,
+                op, lv, rv, ctx, expr.span,
             )?))
         }
     }
@@ -169,7 +174,7 @@ pub(super) fn eval_binop_expr(
 /// Evaluate a `UnaryOp` expression.
 pub(super) fn eval_unaryop_expr(
     expr: &Expr,
-    op: &UnaryOp,
+    op: UnaryOp,
     operand: &Expr,
     values: &std::collections::HashMap<ScopedName, RuntimeValue>,
     local_values: &std::collections::HashMap<String, RuntimeValue>,
@@ -245,22 +250,40 @@ pub(super) fn check_finite(
     }
 }
 
+/// Restriction of [`BinOp`] to the four ordering comparison operators.
+///
+/// Carrying this typed subset lets [`apply_ordering`] dispatch without an
+/// "impossible" arm — the type system forbids non-ordering ops at the call
+/// site rather than checking at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OrderingOp {
+    Lt,
+    Gt,
+    Le,
+    Ge,
+}
+
+impl OrderingOp {
+    /// Narrow a [`BinOp`] to an ordering operator, or `None` for the other variants.
+    const fn from_binop(op: BinOp) -> Option<Self> {
+        match op {
+            BinOp::Lt => Some(Self::Lt),
+            BinOp::Gt => Some(Self::Gt),
+            BinOp::Le => Some(Self::Le),
+            BinOp::Ge => Some(Self::Ge),
+            _ => None,
+        }
+    }
+}
+
 /// Dispatch an ordering operator (`<`, `>`, `<=`, `>=`) to the `Ord`-derived
-/// comparison on any two homogeneous operands. Panics are impossible because
-/// the caller has already narrowed the operator to the four ordering
-/// variants — a debug assertion would fire on misuse but no caller does.
-fn apply_ordering<T: Ord + ?Sized>(op: BinOp, lhs: &T, rhs: &T) -> bool {
+/// comparison on any two homogeneous operands.
+fn apply_ordering<T: Ord + ?Sized>(op: OrderingOp, lhs: &T, rhs: &T) -> bool {
     match op {
-        BinOp::Lt => lhs < rhs,
-        BinOp::Gt => lhs > rhs,
-        BinOp::Le => lhs <= rhs,
-        BinOp::Ge => lhs >= rhs,
-        // Callers guarantee `op` is one of the ordering operators.
-        #[expect(
-            clippy::unreachable,
-            reason = "invariant: caller matches only Lt/Gt/Le/Ge"
-        )]
-        _ => unreachable!("apply_ordering called with non-ordering operator {op:?}"),
+        OrderingOp::Lt => lhs < rhs,
+        OrderingOp::Gt => lhs > rhs,
+        OrderingOp::Le => lhs <= rhs,
+        OrderingOp::Ge => lhs >= rhs,
     }
 }
 

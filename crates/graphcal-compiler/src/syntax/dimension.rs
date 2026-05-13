@@ -696,7 +696,7 @@ mod tests {
     fn dimension_user_defined_base() {
         // User-defined base dimension gets a new ID
         let info_id = BaseDimId::UserDefined {
-            dag: crate::syntax::dag_id::DagId::new(["test"]),
+            dag: crate::syntax::dag_id::DagId::root("test"),
             name: "Information".to_string(),
         };
         let information = Dimension::base(info_id.clone());

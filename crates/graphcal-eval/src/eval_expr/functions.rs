@@ -42,17 +42,7 @@ pub(super) fn eval_fn_call(
         Some(SpecialFnKind::TypeConversion(kind)) => {
             eval_conversion_fn(kind, expr, name, args, values, local_values, ctx)
         }
-        Some(SpecialFnKind::TimeScaleConversion) => {
-            #[expect(
-                clippy::expect_used,
-                reason = "TimeScaleConversion variant guarantees a valid time scale name"
-            )]
-            let scale = graphcal_compiler::registry::time_scale::time_scale_from_conversion_fn(
-                name.value.as_str(),
-            )
-            .expect("TimeScaleConversion variant guarantees a valid time scale name");
-            fn_ctx.dispatch_timescale(scale)
-        }
+        Some(SpecialFnKind::TimeScaleConversion(scale)) => fn_ctx.dispatch_timescale(scale),
         Some(SpecialFnKind::Constructor(kind)) => {
             eval_datetime_constructor(kind, expr, name, args, ctx.src)
         }

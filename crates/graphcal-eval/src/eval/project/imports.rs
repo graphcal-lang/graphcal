@@ -555,7 +555,7 @@ pub(super) fn process_inline_dag_include(
     // Check for duplicate module names.
     // We use a sentinel DagId for inline DAGs in the module_map.
     let sentinel_dag_id =
-        graphcal_compiler::syntax::dag_id::DagId::new([format!("<dag:{dag_name}>")]);
+        graphcal_compiler::syntax::dag_id::DagId::root(format!("<dag:{dag_name}>"));
     if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
         return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
             name: prefix,
