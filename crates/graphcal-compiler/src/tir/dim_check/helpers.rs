@@ -132,6 +132,10 @@ pub(super) fn resolve_field_type(
         let dim = registry
             .dimensions
             .resolve_type_expr(field_type_ann)
+            .map_err(|_| GraphcalError::DimensionOverflow {
+                src: src.clone(),
+                span: field_type_ann.span.into(),
+            })?
             .ok_or_else(|| GraphcalError::EvalError {
                 message: "cannot resolve field type expression".to_string(),
                 src: src.clone(),

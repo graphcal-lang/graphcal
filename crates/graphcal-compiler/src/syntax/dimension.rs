@@ -88,16 +88,23 @@ impl Rational {
     }
 }
 
-/// Error from `Rational` construction.
+/// Error from `Rational` construction or arithmetic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RationalError {
+    /// The denominator was zero.
     ZeroDenominator,
+    /// The reduced numerator or denominator did not fit in `i32`.
+    ///
+    /// Dimension exponents are stored as `i32`; an operation produced a
+    /// reduced value outside that range.
+    Overflow,
 }
 
 impl fmt::Display for RationalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ZeroDenominator => write!(f, "denominator must not be zero"),
+            Self::Overflow => write!(f, "dimension exponent overflowed i32"),
         }
     }
 }
@@ -106,14 +113,14 @@ impl std::error::Error for RationalError {}
 
 /// Compute `num / den` in `i64` with GCD reduction, then narrow back to `i32`.
 ///
-/// # Panics
-///
-/// Panics if the reduced result does not fit in `i32` (extremely unlikely for
-/// dimension exponents) or if `den` is zero.
-fn reduce_i64(num: i64, den: i64) -> (i32, i32) {
-    assert!(den != 0, "denominator must not be zero in reduce_i64");
+/// Returns `Err(RationalError::Overflow)` if the reduced result does not fit
+/// in `i32`, and `Err(RationalError::ZeroDenominator)` if `den` is zero.
+fn reduce_i64(num: i64, den: i64) -> Result<(i32, i32), RationalError> {
+    if den == 0 {
+        return Err(RationalError::ZeroDenominator);
+    }
     if num == 0 {
-        return (0, 1);
+        return Ok((0, 1));
     }
     let g = gcd64(num.unsigned_abs(), den.unsigned_abs()).cast_signed();
     let (mut n, mut d) = (num / g, den / g);
@@ -121,36 +128,31 @@ fn reduce_i64(num: i64, den: i64) -> (i32, i32) {
         n = -n;
         d = -d;
     }
-    #[expect(
-        clippy::expect_used,
-        reason = "overflow of dimension exponents after GCD reduction is practically impossible"
-    )]
-    (
-        i32::try_from(n).expect("dimension exponent numerator overflow"),
-        i32::try_from(d).expect("dimension exponent denominator overflow"),
-    )
+    let num = i32::try_from(n).map_err(|_| RationalError::Overflow)?;
+    let den = i32::try_from(d).map_err(|_| RationalError::Overflow)?;
+    Ok((num, den))
 }
 
 impl std::ops::Add for Rational {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self {
+    type Output = Result<Self, RationalError>;
+    fn add(self, rhs: Self) -> Self::Output {
         // Widen to i64 to avoid intermediate overflow
         let num =
             i64::from(self.num) * i64::from(rhs.den) + i64::from(rhs.num) * i64::from(self.den);
         let den = i64::from(self.den) * i64::from(rhs.den);
-        let (n, d) = reduce_i64(num, den);
-        Self { num: n, den: d }
+        let (n, d) = reduce_i64(num, den)?;
+        Ok(Self { num: n, den: d })
     }
 }
 
 impl std::ops::Sub for Rational {
-    type Output = Self;
-    fn sub(self, rhs: Self) -> Self {
+    type Output = Result<Self, RationalError>;
+    fn sub(self, rhs: Self) -> Self::Output {
         let num =
             i64::from(self.num) * i64::from(rhs.den) - i64::from(rhs.num) * i64::from(self.den);
         let den = i64::from(self.den) * i64::from(rhs.den);
-        let (n, d) = reduce_i64(num, den);
-        Self { num: n, den: d }
+        let (n, d) = reduce_i64(num, den)?;
+        Ok(Self { num: n, den: d })
     }
 }
 
@@ -165,12 +167,12 @@ impl std::ops::Neg for Rational {
 }
 
 impl std::ops::Mul for Rational {
-    type Output = Self;
-    fn mul(self, rhs: Self) -> Self {
+    type Output = Result<Self, RationalError>;
+    fn mul(self, rhs: Self) -> Self::Output {
         let num = i64::from(self.num) * i64::from(rhs.num);
         let den = i64::from(self.den) * i64::from(rhs.den);
-        let (n, d) = reduce_i64(num, den);
-        Self { num: n, den: d }
+        let (n, d) = reduce_i64(num, den)?;
+        Ok(Self { num: n, den: d })
     }
 }
 
@@ -293,23 +295,28 @@ impl Dimension {
     }
 
     /// Raise a dimension to a rational power (multiply all exponents).
-    #[must_use]
-    pub fn pow(&self, exp: Rational) -> Self {
+    ///
+    /// Returns `Err(RationalError::Overflow)` if any exponent multiplication
+    /// produces a reduced value outside the `i32` range.
+    pub fn pow(&self, exp: Rational) -> Result<Self, RationalError> {
         if exp.is_zero() {
-            return Self::dimensionless();
+            return Ok(Self::dimensionless());
         }
-        let exponents = self
-            .exponents
-            .iter()
-            .map(|(id, &e)| (id.clone(), e * exp))
-            .filter(|(_, e)| !e.is_zero())
-            .collect();
-        Self { exponents }
+        let mut exponents = BTreeMap::new();
+        for (id, &e) in &self.exponents {
+            let new_exp = (e * exp)?;
+            if !new_exp.is_zero() {
+                exponents.insert(id.clone(), new_exp);
+            }
+        }
+        Ok(Self { exponents })
     }
 
     /// Raise a dimension to an integer power.
-    #[must_use]
-    pub fn pow_int(&self, n: i32) -> Self {
+    ///
+    /// Returns `Err(RationalError::Overflow)` if any exponent multiplication
+    /// overflows `i32`.
+    pub fn pow_int(&self, n: i32) -> Result<Self, RationalError> {
         self.pow(Rational::from_int(n))
     }
 
@@ -426,48 +433,48 @@ enum CombineOp {
 
 impl Dimension {
     /// Combine two dimensions by adding or subtracting exponents.
-    fn combine(self, other: &Self, op: CombineOp) -> Self {
+    fn combine(self, other: &Self, op: CombineOp) -> Result<Self, RationalError> {
         let mut exponents = self.exponents;
         for (id, exp) in &other.exponents {
             let entry = exponents.entry(id.clone()).or_insert(Rational::ZERO);
             *entry = match op {
-                CombineOp::Add => *entry + *exp,
-                CombineOp::Sub => *entry - *exp,
+                CombineOp::Add => (*entry + *exp)?,
+                CombineOp::Sub => (*entry - *exp)?,
             };
             if entry.is_zero() {
                 exponents.remove(id);
             }
         }
-        Self { exponents }
+        Ok(Self { exponents })
     }
 }
 
 impl std::ops::Mul for Dimension {
-    type Output = Self;
+    type Output = Result<Self, RationalError>;
     /// Multiply two dimensions (add exponents).
-    fn mul(self, other: Self) -> Self {
+    fn mul(self, other: Self) -> Self::Output {
         self.combine(&other, CombineOp::Add)
     }
 }
 
 impl std::ops::Div for Dimension {
-    type Output = Self;
+    type Output = Result<Self, RationalError>;
     /// Divide two dimensions (subtract exponents).
-    fn div(self, other: Self) -> Self {
+    fn div(self, other: Self) -> Self::Output {
         self.combine(&other, CombineOp::Sub)
     }
 }
 
 impl std::ops::Mul for &Dimension {
-    type Output = Dimension;
-    fn mul(self, other: Self) -> Dimension {
+    type Output = Result<Dimension, RationalError>;
+    fn mul(self, other: Self) -> Self::Output {
         self.clone().combine(other, CombineOp::Add)
     }
 }
 
 impl std::ops::Div for &Dimension {
-    type Output = Dimension;
-    fn div(self, other: Self) -> Dimension {
+    type Output = Result<Dimension, RationalError>;
+    fn div(self, other: Self) -> Self::Output {
         self.clone().combine(other, CombineOp::Sub)
     }
 }
@@ -544,15 +551,15 @@ mod tests {
         let third = r(1, 3);
 
         // 1/2 + 1/3 = 5/6
-        let sum = half + third;
+        let sum = (half + third).unwrap();
         assert_eq!(sum, r(5, 6));
 
         // 1/2 - 1/3 = 1/6
-        let diff = half - third;
+        let diff = (half - third).unwrap();
         assert_eq!(diff, r(1, 6));
 
         // 1/2 * 1/3 = 1/6
-        let prod = half * third;
+        let prod = (half * third).unwrap();
         assert_eq!(prod, r(1, 6));
 
         // -1/2
@@ -585,7 +592,7 @@ mod tests {
         // Velocity = Length / Time
         let l = Dimension::base(length());
         let t = Dimension::base(time());
-        let velocity = l / t;
+        let velocity = (l / t).unwrap();
 
         assert_eq!(velocity.get_exponent(&length()), Rational::ONE);
         assert_eq!(velocity.get_exponent(&time()), Rational::from_int(-1));
@@ -596,7 +603,7 @@ mod tests {
         // Acceleration = Length / Time^2
         let l = Dimension::base(length());
         let t = Dimension::base(time());
-        let accel = l / t.pow_int(2);
+        let accel = (l / t.pow_int(2).unwrap()).unwrap();
 
         assert_eq!(accel.get_exponent(&length()), Rational::ONE);
         assert_eq!(accel.get_exponent(&time()), Rational::from_int(-2));
@@ -608,7 +615,7 @@ mod tests {
         let m = Dimension::base(mass());
         let l = Dimension::base(length());
         let t = Dimension::base(time());
-        let force = m * l / t.pow_int(2);
+        let force = ((m * l).unwrap() / t.pow_int(2).unwrap()).unwrap();
 
         assert_eq!(force.get_exponent(&mass()), Rational::ONE);
         assert_eq!(force.get_exponent(&length()), Rational::ONE);
@@ -618,8 +625,8 @@ mod tests {
     #[test]
     fn dimension_sqrt() {
         // sqrt(Area) = sqrt(Length^2) = Length
-        let area = Dimension::base(length()).pow_int(2);
-        let sqrt_area = area.pow(Rational::HALF);
+        let area = Dimension::base(length()).pow_int(2).unwrap();
+        let sqrt_area = area.pow(Rational::HALF).unwrap();
         assert_eq!(sqrt_area, Dimension::base(length()));
     }
 
@@ -627,20 +634,20 @@ mod tests {
     fn dimension_mul_div_inverse() {
         let l = Dimension::base(length());
         let t = Dimension::base(time());
-        let velocity = l.clone() / t.clone();
+        let velocity = (l.clone() / t.clone()).unwrap();
 
         // velocity * time = length
-        assert_eq!(velocity.clone() * t.clone(), l);
+        assert_eq!((velocity.clone() * t.clone()).unwrap(), l);
 
         // length / velocity = time
-        assert_eq!(l / velocity, t);
+        assert_eq!((l / velocity).unwrap(), t);
     }
 
     #[test]
     fn dimension_dimensionless_mul() {
         let l = Dimension::base(length());
-        assert_eq!(Dimension::dimensionless() * l.clone(), l);
-        assert_eq!(l.clone() * Dimension::dimensionless(), l);
+        assert_eq!((Dimension::dimensionless() * l.clone()).unwrap(), l);
+        assert_eq!((l.clone() * Dimension::dimensionless()).unwrap(), l);
     }
 
     #[test]
@@ -659,7 +666,7 @@ mod tests {
     #[test]
     fn dimension_display_velocity() {
         let names = test_names();
-        let velocity = Dimension::base(length()) / Dimension::base(time());
+        let velocity = (Dimension::base(length()) / Dimension::base(time())).unwrap();
         assert_eq!(
             format!("{}", velocity.display_with(&names)),
             "Length / Time"
@@ -669,8 +676,9 @@ mod tests {
     #[test]
     fn dimension_display_force() {
         let names = test_names();
-        let force = Dimension::base(mass()) * Dimension::base(length())
-            / Dimension::base(time()).pow_int(2);
+        let force = ((Dimension::base(mass()) * Dimension::base(length())).unwrap()
+            / Dimension::base(time()).pow_int(2).unwrap())
+        .unwrap();
         assert_eq!(
             format!("{}", force.display_with(&names)),
             "Length * Mass / Time^2"
@@ -680,7 +688,7 @@ mod tests {
     #[test]
     fn dimension_display_area() {
         let names = test_names();
-        let area = Dimension::base(length()).pow_int(2);
+        let area = Dimension::base(length()).pow_int(2).unwrap();
         assert_eq!(format!("{}", area.display_with(&names)), "Length^2");
     }
 
@@ -688,7 +696,7 @@ mod tests {
     fn dimension_display_frequency() {
         let names = test_names();
         // Frequency = Time^-1 (only negative exponent)
-        let freq = Dimension::dimensionless() / Dimension::base(time());
+        let freq = (Dimension::dimensionless() / Dimension::base(time())).unwrap();
         assert_eq!(format!("{}", freq.display_with(&names)), "Time^-1");
     }
 
@@ -701,7 +709,7 @@ mod tests {
         };
         let information = Dimension::base(info_id.clone());
         let t = Dimension::base(time());
-        let bandwidth = information / t;
+        let bandwidth = (information / t).unwrap();
 
         assert_eq!(bandwidth.get_exponent(&info_id), Rational::ONE);
         assert_eq!(bandwidth.get_exponent(&time()), Rational::from_int(-1));
@@ -719,8 +727,8 @@ mod tests {
     fn dimension_hash_consistency() {
         use std::collections::hash_map::DefaultHasher;
 
-        let a = Dimension::base(length()) / Dimension::base(time());
-        let b = Dimension::base(length()) / Dimension::base(time());
+        let a = (Dimension::base(length()) / Dimension::base(time())).unwrap();
+        let b = (Dimension::base(length()) / Dimension::base(time())).unwrap();
         assert_eq!(a, b);
 
         let mut ha = DefaultHasher::new();
@@ -787,60 +795,60 @@ mod tests {
 
             #[test]
             fn rational_add_commutative(a in arb_rational(), b in arb_rational()) {
-                prop_assert_eq!(a + b, b + a);
+                prop_assert_eq!((a + b).unwrap(), (b + a).unwrap());
             }
 
             #[test]
             fn rational_mul_commutative(a in arb_rational(), b in arb_rational()) {
-                prop_assert_eq!(a * b, b * a);
+                prop_assert_eq!((a * b).unwrap(), (b * a).unwrap());
             }
 
             #[test]
             fn rational_additive_identity(a in arb_rational()) {
-                prop_assert_eq!(a + Rational::ZERO, a);
+                prop_assert_eq!((a + Rational::ZERO).unwrap(), a);
             }
 
             #[test]
             fn rational_multiplicative_identity(a in arb_rational()) {
-                prop_assert_eq!(a * Rational::ONE, a);
+                prop_assert_eq!((a * Rational::ONE).unwrap(), a);
             }
 
             #[test]
             fn rational_additive_inverse(a in arb_rational()) {
-                prop_assert_eq!(a + (-a), Rational::ZERO);
+                prop_assert_eq!((a + (-a)).unwrap(), Rational::ZERO);
             }
 
             #[test]
             fn rational_sub_self_is_zero(a in arb_rational()) {
-                prop_assert_eq!(a - a, Rational::ZERO);
+                prop_assert_eq!((a - a).unwrap(), Rational::ZERO);
             }
 
             // --- Dimension invariants ---
 
             #[test]
             fn dimension_mul_commutative(a in arb_dimension(), b in arb_dimension()) {
-                prop_assert_eq!(a.clone() * b.clone(), b * a);
+                prop_assert_eq!((a.clone() * b.clone()).unwrap(), (b * a).unwrap());
             }
 
             #[test]
             fn dimension_dimensionless_is_mul_identity(a in arb_dimension()) {
-                prop_assert_eq!(a.clone() * Dimension::dimensionless(), a);
+                prop_assert_eq!((a.clone() * Dimension::dimensionless()).unwrap(), a);
             }
 
             #[test]
             fn dimension_self_div_is_dimensionless(a in arb_dimension()) {
-                prop_assert_eq!(a.clone() / a, Dimension::dimensionless());
+                prop_assert_eq!((a.clone() / a).unwrap(), Dimension::dimensionless());
             }
 
             #[test]
             fn dimension_div_inverse(a in arb_dimension(), b in arb_dimension()) {
                 // (a / b) * b == a
-                prop_assert_eq!((a.clone() / b.clone()) * b, a);
+                prop_assert_eq!(((a.clone() / b.clone()).unwrap() * b).unwrap(), a);
             }
 
             #[test]
             fn dimension_pow_int_consistent_with_pow(a in arb_dimension(), n in -3i32..=3) {
-                prop_assert_eq!(a.pow_int(n), a.pow(Rational::from_int(n)));
+                prop_assert_eq!(a.pow_int(n).unwrap(), a.pow(Rational::from_int(n)).unwrap());
             }
 
             #[test]
@@ -850,7 +858,10 @@ mod tests {
                 r in arb_rational(),
             ) {
                 // (a * b).pow(r) == a.pow(r) * b.pow(r)
-                prop_assert_eq!((a.clone() * b.clone()).pow(r), a.pow(r) * b.pow(r));
+                prop_assert_eq!(
+                    (a.clone() * b.clone()).unwrap().pow(r).unwrap(),
+                    (a.pow(r).unwrap() * b.pow(r).unwrap()).unwrap(),
+                );
             }
         }
     }

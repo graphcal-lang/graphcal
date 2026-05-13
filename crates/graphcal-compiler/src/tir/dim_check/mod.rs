@@ -652,7 +652,7 @@ fn check_field_domain_constraint_dimensions(
             if bounds.is_empty() {
                 continue;
             }
-            let Some(expected) = field_expected_bound(&field.type_ann, registry) else {
+            let Some(expected) = field_expected_bound(&field.type_ann, registry, src)? else {
                 continue;
             };
             let display_name = format!("{}.{}", type_def.name, field.name);
@@ -681,26 +681,32 @@ fn check_field_domain_constraint_dimensions(
 }
 
 /// Compute the [`ExpectedBound`] for a struct field's `TypeExpr`. Returns
-/// `None` when the field's base type isn't `Scalar`/`Dimensionless`/`Int`
+/// `Ok(None)` when the field's base type isn't `Scalar`/`Dimensionless`/`Int`
 /// (in which case the target check has already rejected it, or it's a
-/// generic param to be checked at instantiation).
+/// generic param to be checked at instantiation), and `Err` if dimension
+/// arithmetic overflows.
 fn field_expected_bound(
     type_ann: &crate::desugar::resolved_ast::TypeExpr,
     registry: &Registry,
-) -> Option<ExpectedBound> {
+    src: &NamedSource<Arc<String>>,
+) -> Result<Option<ExpectedBound>, GraphcalError> {
     use crate::desugar::resolved_ast::TypeExprKind;
     let base = match &type_ann.kind {
         TypeExprKind::Indexed { base, .. } => base.as_ref(),
         _ => type_ann,
     };
     match &base.kind {
-        TypeExprKind::Dimensionless => Some(ExpectedBound::Scalar(Dimension::dimensionless())),
-        TypeExprKind::Int => Some(ExpectedBound::Int),
-        TypeExprKind::DimExpr(_) => registry
+        TypeExprKind::Dimensionless => Ok(Some(ExpectedBound::Scalar(Dimension::dimensionless()))),
+        TypeExprKind::Int => Ok(Some(ExpectedBound::Int)),
+        TypeExprKind::DimExpr(_) => Ok(registry
             .dimensions
             .resolve_type_expr(base)
-            .map(ExpectedBound::Scalar),
-        _ => None,
+            .map_err(|_| GraphcalError::DimensionOverflow {
+                src: src.clone(),
+                span: base.span.into(),
+            })?
+            .map(ExpectedBound::Scalar)),
+        _ => Ok(None),
     }
 }
 

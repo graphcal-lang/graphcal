@@ -181,6 +181,18 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("dimension exponent overflow")]
+    #[diagnostic(
+        code(graphcal::D010),
+        help("dimension exponents are stored as `i32`; reduce the magnitude of the exponent")
+    )]
+    DimensionOverflow {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("overflow here")]
+        span: SourceSpan,
+    },
+
     #[error("dimension mismatch: expected {expected}, found {found}")]
     #[diagnostic(code(graphcal::D001))]
     DimensionMismatch {

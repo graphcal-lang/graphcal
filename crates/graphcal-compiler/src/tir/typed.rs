@@ -1580,7 +1580,12 @@ pub fn unify_resolved_type(
                             src: src.clone(),
                             span: span.into(),
                         })?;
-                    actual_dim.pow(exponent)
+                    actual_dim
+                        .pow(exponent)
+                        .map_err(|_| GraphcalError::DimensionOverflow {
+                            src: src.clone(),
+                            span: span.into(),
+                        })?
                 };
                 bind_or_check(dim_sub, gp.clone(), bound_dim, |prev, new| {
                     GraphcalError::DimensionMismatch {
@@ -1601,15 +1606,20 @@ pub fn unify_resolved_type(
             // General case: compute expected dimension from already-bound generics + concrete terms
             let mut expected_dim = Dimension::dimensionless();
             for term in terms {
+                let overflow_err = || GraphcalError::DimensionOverflow {
+                    src: src.clone(),
+                    span: span.into(),
+                };
                 let term_dim = match term {
-                    ResolvedDimTerm::Concrete { dim, power, .. } => {
-                        dim.pow(Rational::from_int(*power))
-                    }
+                    ResolvedDimTerm::Concrete { dim, power, .. } => dim
+                        .pow(Rational::from_int(*power))
+                        .map_err(|_| overflow_err())?,
                     ResolvedDimTerm::GenericParam {
                         name: gp, power, ..
                     } => {
                         if let Some(prev) = dim_sub.get(gp) {
                             prev.pow(Rational::from_int(*power))
+                                .map_err(|_| overflow_err())?
                         } else {
                             return Err(GraphcalError::DimensionMismatch {
                                 expected: format!("generic `{gp}` (unresolved)"),
@@ -1624,8 +1634,8 @@ pub fn unify_resolved_type(
                     }
                 };
                 expected_dim = match term.op() {
-                    MulDivOp::Mul => expected_dim * term_dim,
-                    MulDivOp::Div => expected_dim / term_dim,
+                    MulDivOp::Mul => (expected_dim * term_dim).map_err(|_| overflow_err())?,
+                    MulDivOp::Div => (expected_dim / term_dim).map_err(|_| overflow_err())?,
                 };
             }
 
@@ -1653,6 +1663,10 @@ pub fn unify_resolved_type(
 #[expect(
     clippy::implicit_hasher,
     reason = "always called with standard HashMap"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "single dispatch over ResolvedTypeExpr variants with per-variant generic-substitution + dimension-arithmetic overflow handling"
 )]
 pub fn substitute_resolved_type(
     resolved: &ResolvedTypeExpr,
@@ -1694,13 +1708,17 @@ pub fn substitute_resolved_type(
             |dim| Ok(InferredType::Scalar(dim.clone())),
         ),
 
-        ResolvedTypeExpr::GenericDimExpr { terms, span: _ } => {
+        ResolvedTypeExpr::GenericDimExpr { terms, span } => {
+            let overflow_err = || GraphcalError::DimensionOverflow {
+                src: src.clone(),
+                span: (*span).into(),
+            };
             let mut result = Dimension::dimensionless();
             for term in terms {
                 let term_dim = match term {
-                    ResolvedDimTerm::Concrete { dim, power, .. } => {
-                        dim.pow(Rational::from_int(*power))
-                    }
+                    ResolvedDimTerm::Concrete { dim, power, .. } => dim
+                        .pow(Rational::from_int(*power))
+                        .map_err(|_| overflow_err())?,
                     ResolvedDimTerm::GenericParam {
                         name: gp,
                         power,
@@ -1713,11 +1731,12 @@ pub fn substitute_resolved_type(
                             span: (*term_span).into(),
                         })?;
                         base.pow(Rational::from_int(*power))
+                            .map_err(|_| overflow_err())?
                     }
                 };
                 result = match term.op() {
-                    MulDivOp::Mul => result * term_dim,
-                    MulDivOp::Div => result / term_dim,
+                    MulDivOp::Mul => (result * term_dim).map_err(|_| overflow_err())?,
+                    MulDivOp::Div => (result / term_dim).map_err(|_| overflow_err())?,
                 };
             }
             Ok(InferredType::Scalar(result))
@@ -1973,10 +1992,16 @@ fn resolve_dim_expr(
                 }
             })?;
             let exp = item.term.power.unwrap_or(1);
-            let powered = base.pow(Rational::from_int(exp));
+            let overflow_err = || GraphcalError::DimensionOverflow {
+                src: src.clone(),
+                span: item.term.span.into(),
+            };
+            let powered = base
+                .pow(Rational::from_int(exp))
+                .map_err(|_| overflow_err())?;
             result = match item.op {
-                MulDivOp::Mul => result * powered,
-                MulDivOp::Div => result / powered,
+                MulDivOp::Mul => (result * powered).map_err(|_| overflow_err())?,
+                MulDivOp::Div => (result / powered).map_err(|_| overflow_err())?,
             };
         }
         Ok(ResolvedTypeExpr::Scalar(result))
@@ -2127,7 +2152,7 @@ mod tests {
 
     fn make_registry() -> Registry {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         b.build()
     }
 
@@ -2157,7 +2182,7 @@ mod tests {
 
     fn make_registry_with_struct() -> Registry {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         b.register_type(crate::registry::types::TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
@@ -2179,7 +2204,7 @@ mod tests {
 
     fn make_registry_with_index() -> Registry {
         let mut b = RegistryBuilder::new();
-        load_prelude(&mut b);
+        load_prelude(&mut b).unwrap();
         b.register_index(crate::registry::types::IndexDef {
             name: IndexName::new("Maneuver"),
             kind: crate::registry::types::IndexKind::Named {
@@ -2250,8 +2275,11 @@ mod tests {
         let r = make_registry();
         let te = parse_type("Length / Time^2");
         let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
-        let expected = Dimension::base(BaseDimId::Prelude("Length".to_string()))
-            / Dimension::base(BaseDimId::Prelude("Time".to_string())).pow_int(2);
+        let expected = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
+            / Dimension::base(BaseDimId::Prelude("Time".to_string()))
+                .pow_int(2)
+                .unwrap())
+        .unwrap();
         assert_eq!(resolved, ResolvedTypeExpr::Scalar(expected));
     }
 
@@ -2396,8 +2424,9 @@ mod tests {
         let r = make_registry();
         let te = parse_type("Velocity");
         let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
-        let expected = Dimension::base(BaseDimId::Prelude("Length".to_string()))
-            / Dimension::base(BaseDimId::Prelude("Time".to_string()));
+        let expected = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
+            / Dimension::base(BaseDimId::Prelude("Time".to_string())))
+        .unwrap();
         assert_eq!(resolved, ResolvedTypeExpr::Scalar(expected));
     }
 

@@ -436,6 +436,12 @@ pub(super) fn eval_for_comp(
     } else if let Some(size) =
         graphcal_compiler::registry::types::parse_nat_range_index_name(idx_name.as_str())
     {
+        let size = usize::try_from(size).map_err(|_| {
+            ctx.eval_error(
+                format!("nat range size {size} does not fit in usize on this target"),
+                error_span,
+            )
+        })?;
         dynamic_nat_def = graphcal_compiler::registry::types::IndexDef {
             name: idx_name.clone(),
             kind: graphcal_compiler::registry::types::IndexKind::NatRange { size },

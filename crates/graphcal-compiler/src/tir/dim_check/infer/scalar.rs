@@ -289,7 +289,11 @@ pub(super) fn infer_binop(
             }
             let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
             let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-            Ok(InferredType::Scalar(lhs_dim * rhs_dim))
+            let dim = (lhs_dim * rhs_dim).map_err(|_| GraphcalError::DimensionOverflow {
+                src: src.clone(),
+                span: expr.span.into(),
+            })?;
+            Ok(InferredType::Scalar(dim))
         }
         BinOp::Div => {
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
@@ -297,7 +301,11 @@ pub(super) fn infer_binop(
             }
             let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
             let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-            Ok(InferredType::Scalar(lhs_dim / rhs_dim))
+            let dim = (lhs_dim / rhs_dim).map_err(|_| GraphcalError::DimensionOverflow {
+                src: src.clone(),
+                span: expr.span.into(),
+            })?;
+            Ok(InferredType::Scalar(dim))
         }
         BinOp::Mod => {
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
@@ -356,14 +364,26 @@ pub(super) fn infer_binop(
                             reason = "guarded by fract() == 0.0 check"
                         )]
                         let exp = n as i32;
-                        Ok(InferredType::Scalar(lhs_dim.pow(Rational::from_int(exp))))
+                        let dim = lhs_dim.pow(Rational::from_int(exp)).map_err(|_| {
+                            GraphcalError::DimensionOverflow {
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            }
+                        })?;
+                        Ok(InferredType::Scalar(dim))
                     } else {
                         #[expect(
                             clippy::float_cmp,
                             reason = "checking exact 0.5 literal for square-root exponent"
                         )]
                         if n == 0.5 {
-                            Ok(InferredType::Scalar(lhs_dim.pow(Rational::HALF)))
+                            let dim = lhs_dim.pow(Rational::HALF).map_err(|_| {
+                                GraphcalError::DimensionOverflow {
+                                    src: src.clone(),
+                                    span: expr.span.into(),
+                                }
+                            })?;
+                            Ok(InferredType::Scalar(dim))
                         } else {
                             Err(GraphcalError::NonLiteralExponent {
                                 src: src.clone(),
@@ -378,7 +398,13 @@ pub(super) fn infer_binop(
                         reason = "exponent values are small integers"
                     )]
                     let exp = n as i32;
-                    Ok(InferredType::Scalar(lhs_dim.pow(Rational::from_int(exp))))
+                    let dim = lhs_dim.pow(Rational::from_int(exp)).map_err(|_| {
+                        GraphcalError::DimensionOverflow {
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        }
+                    })?;
+                    Ok(InferredType::Scalar(dim))
                 }
                 None => {
                     if rhs_dim.is_dimensionless() && lhs_dim.is_dimensionless() {
@@ -470,6 +496,10 @@ pub(super) fn infer_convert(
     let target_dim = registry
         .units
         .resolve_unit_dimension(target)
+        .map_err(|_| GraphcalError::DimensionOverflow {
+            src: src.clone(),
+            span: target.span.into(),
+        })?
         .ok_or_else(|| {
             for item in &target.terms {
                 if registry.units.get_unit(item.name.value.as_str()).is_none() {

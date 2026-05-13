@@ -471,10 +471,15 @@ pub(super) fn resolve_field_declared_type(
             return Some((*concrete).clone());
         }
     }
-    // Non-generic: resolve directly from the registry
+    // Non-generic: resolve directly from the registry. Overflow in dimension
+    // arithmetic is treated as "no declared type info" here — the value will
+    // render as a raw scalar, and dim_check would have already flagged the
+    // overflow as a real error during compilation.
     registry
         .dimensions
         .resolve_type_expr(&field.type_ann)
+        .ok()
+        .flatten()
         .map(DeclaredType::Scalar)
 }
 

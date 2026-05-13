@@ -542,7 +542,11 @@ fn build_ir_from_resolved(
     // type annotations and dynamic-unit dep augmentation see the enclosing
     // file's type system.
     let mut builder = RegistryBuilder::new();
-    load_prelude(&mut builder);
+    load_prelude(&mut builder).map_err(|e| GraphcalError::EvalError {
+        message: format!("internal: prelude failed to load: {e}"),
+        src: src.clone(),
+        span: Span::new(0, 0).into(),
+    })?;
     if let Some(parent) = parent_registry {
         builder.merge_from_registry(parent);
     }
@@ -1916,18 +1920,18 @@ fn register_declarations_impl(
     for decl in &file.declarations {
         match &decl.kind {
             DeclKind::Param(d) => {
-                collect_nat_ranges_from_type_expr(&d.type_ann, registry);
+                collect_nat_ranges_from_type_expr(&d.type_ann, registry, src)?;
                 if let Some(ref value) = d.value {
-                    collect_nat_ranges_from_expr(value, registry);
+                    collect_nat_ranges_from_expr(value, registry, src)?;
                 }
             }
             DeclKind::Node(d) => {
-                collect_nat_ranges_from_type_expr(&d.type_ann, registry);
-                collect_nat_ranges_from_expr(&d.value, registry);
+                collect_nat_ranges_from_type_expr(&d.type_ann, registry, src)?;
+                collect_nat_ranges_from_expr(&d.value, registry, src)?;
             }
             DeclKind::ConstNode(d) => {
-                collect_nat_ranges_from_type_expr(&d.type_ann, registry);
-                collect_nat_ranges_from_expr(&d.value, registry);
+                collect_nat_ranges_from_type_expr(&d.type_ann, registry, src)?;
+                collect_nat_ranges_from_expr(&d.value, registry, src)?;
             }
             _ => {}
         }
@@ -2074,14 +2078,17 @@ fn register_dimension_decl(
     let Some(definition) = d.definition.as_ref() else {
         return Ok(());
     };
-    let dim =
-        registry
-            .resolve_dim_expr(definition)
-            .ok_or_else(|| GraphcalError::UnknownDimension {
-                name: d.name.value.clone(),
-                src: src.clone(),
-                span: d.name.span.into(),
-            })?;
+    let dim = registry
+        .resolve_dim_expr(definition)
+        .map_err(|_| GraphcalError::DimensionOverflow {
+            src: src.clone(),
+            span: d.name.span.into(),
+        })?
+        .ok_or_else(|| GraphcalError::UnknownDimension {
+            name: d.name.value.clone(),
+            src: src.clone(),
+            span: d.name.span.into(),
+        })?;
     registry.register_dimension(d.name.value.clone(), dim);
     Ok(())
 }
@@ -2108,14 +2115,17 @@ fn register_unit_decl(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let dim =
-        registry
-            .resolve_dim_expr(&u.dim_type)
-            .ok_or_else(|| GraphcalError::UnknownDimension {
-                name: DimName::new(u.name.value.as_str()),
-                src: src.clone(),
-                span: u.name.span.into(),
-            })?;
+    let dim = registry
+        .resolve_dim_expr(&u.dim_type)
+        .map_err(|_| GraphcalError::DimensionOverflow {
+            src: src.clone(),
+            span: u.name.span.into(),
+        })?
+        .ok_or_else(|| GraphcalError::UnknownDimension {
+            name: DimName::new(u.name.value.as_str()),
+            src: src.clone(),
+            span: u.name.span.into(),
+        })?;
     let scale = if let Some(def) = &u.definition {
         if contains_graph_ref(&def.scale_expr) {
             // Dynamic unit: scale depends on runtime values (e.g., `(@rate) USD`).
@@ -2127,13 +2137,16 @@ fn register_unit_decl(
             }
         } else {
             // Static unit: scale is a compile-time constant.
-            let (_unit_dim, base_scale) =
-                registry.resolve_unit_expr(&def.unit_expr).ok_or_else(|| {
-                    GraphcalError::UnknownUnit {
-                        name: u.name.value.clone(),
-                        src: src.clone(),
-                        span: def.span.into(),
-                    }
+            let (_unit_dim, base_scale) = registry
+                .resolve_unit_expr(&def.unit_expr)
+                .map_err(|_| GraphcalError::DimensionOverflow {
+                    src: src.clone(),
+                    span: def.span.into(),
+                })?
+                .ok_or_else(|| GraphcalError::UnknownUnit {
+                    name: u.name.value.clone(),
+                    src: src.clone(),
+                    span: def.span.into(),
                 })?;
             UnitScale::Static(eval_scale_expr(&def.scale_expr, src)? * base_scale)
         }
@@ -2167,14 +2180,17 @@ fn resolve_base_unit_static_scale(
     unit_expr: &crate::desugar::resolved_ast::UnitExpr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<f64, GraphcalError> {
-    let (_dim, base_scale) =
-        registry
-            .resolve_unit_expr(unit_expr)
-            .ok_or_else(|| GraphcalError::UnknownUnit {
-                name: format_unit_expr(unit_expr).into(),
-                src: src.clone(),
-                span: unit_expr.span.into(),
-            })?;
+    let (_dim, base_scale) = registry
+        .resolve_unit_expr(unit_expr)
+        .map_err(|_| GraphcalError::DimensionOverflow {
+            src: src.clone(),
+            span: unit_expr.span.into(),
+        })?
+        .ok_or_else(|| GraphcalError::UnknownUnit {
+            name: format_unit_expr(unit_expr).into(),
+            src: src.clone(),
+            span: unit_expr.span.into(),
+        })?;
     Ok(base_scale)
 }
 
@@ -2294,21 +2310,38 @@ fn collect_dynamic_unit_deps_from_expr(
     extra_deps
 }
 
+/// Convert an AST-level `u64` nat literal to the `usize` size the registry
+/// stores, raising a graceful runtime error if the value doesn't fit in
+/// `usize` on the current target (e.g., a > 4G literal on a 32-bit build).
+fn nat_size_to_usize(
+    n: u64,
+    span: Span,
+    src: &NamedSource<Arc<String>>,
+) -> Result<usize, GraphcalError> {
+    usize::try_from(n).map_err(|_| GraphcalError::EvalError {
+        message: format!("nat range size {n} does not fit in usize on this target"),
+        src: src.clone(),
+        span: span.into(),
+    })
+}
+
 /// Recursively scan a type expression for nat literals in index position
 /// and register the corresponding synthetic nat range indexes in the registry.
 fn collect_nat_ranges_from_type_expr(
     type_expr: &crate::desugar::resolved_ast::TypeExpr,
     registry: &mut RegistryBuilder,
-) {
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
     if let crate::desugar::resolved_ast::TypeExprKind::Indexed { base, indexes } = &type_expr.kind {
-        collect_nat_ranges_from_type_expr(base, registry);
+        collect_nat_ranges_from_type_expr(base, registry, src)?;
         for idx in indexes {
             match idx {
-                crate::desugar::resolved_ast::IndexExpr::NatLiteral(n, _) => {
-                    registry.ensure_nat_range_index(*n);
+                crate::desugar::resolved_ast::IndexExpr::NatLiteral(n, span) => {
+                    let size = nat_size_to_usize(*n, *span, src)?;
+                    registry.ensure_nat_range_index(size);
                 }
                 crate::desugar::resolved_ast::IndexExpr::NatExpr(nat_expr) => {
-                    collect_nat_range_literals_from_nat_expr(nat_expr, registry);
+                    collect_nat_range_literals_from_nat_expr(nat_expr, registry, src)?;
                 }
                 crate::desugar::resolved_ast::IndexExpr::Name(_) => {}
             }
@@ -2318,9 +2351,10 @@ fn collect_nat_ranges_from_type_expr(
         &type_expr.kind
     {
         for arg in type_args {
-            collect_nat_ranges_from_type_expr(arg, registry);
+            collect_nat_ranges_from_type_expr(arg, registry, src)?;
         }
     }
+    Ok(())
 }
 
 /// Collect nat range literal values from a `NatExpr` tree.
@@ -2330,18 +2364,21 @@ fn collect_nat_ranges_from_type_expr(
 fn collect_nat_range_literals_from_nat_expr(
     expr: &crate::desugar::resolved_ast::NatExpr,
     registry: &mut RegistryBuilder,
-) {
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
     use crate::desugar::resolved_ast::NatExpr;
     match expr {
-        NatExpr::Literal(n, _) => {
-            registry.ensure_nat_range_index(*n);
+        NatExpr::Literal(n, span) => {
+            let size = nat_size_to_usize(*n, *span, src)?;
+            registry.ensure_nat_range_index(size);
         }
         NatExpr::Var(_) => {}
         NatExpr::Add(lhs, rhs, _) | NatExpr::Mul(lhs, rhs, _) => {
-            collect_nat_range_literals_from_nat_expr(lhs, registry);
-            collect_nat_range_literals_from_nat_expr(rhs, registry);
+            collect_nat_range_literals_from_nat_expr(lhs, registry, src)?;
+            collect_nat_range_literals_from_nat_expr(rhs, registry, src)?;
         }
     }
+    Ok(())
 }
 
 /// Recursively scan an expression for `for i: range(N)` and register
@@ -2349,12 +2386,14 @@ fn collect_nat_range_literals_from_nat_expr(
 fn collect_nat_ranges_from_expr(
     expr: &crate::desugar::resolved_ast::Expr,
     registry: &mut RegistryBuilder,
-) {
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
     use crate::desugar::resolved_ast::{ExprKind, ForBindingIndex};
 
     // Use the visitor trait to walk all sub-expressions
     struct NatRangeCollector<'a> {
         registry: &'a mut RegistryBuilder,
+        src: &'a NamedSource<Arc<String>>,
     }
 
     impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Resolved> for NatRangeCollector<'_> {
@@ -2368,7 +2407,7 @@ fn collect_nat_ranges_from_expr(
                 ExprKind::ForComp { bindings, .. } => {
                     for binding in bindings {
                         if let ForBindingIndex::Range { arg, .. } = &binding.index {
-                            collect_nat_range_literals_from_nat_expr(arg, self.registry);
+                            collect_nat_range_literals_from_nat_expr(arg, self.registry, self.src)?;
                         }
                     }
                 }
@@ -2382,7 +2421,8 @@ fn collect_nat_ranges_from_expr(
                             if let Some(n) = crate::registry::types::parse_nat_range_index_name(
                                 key.index.value.as_str(),
                             ) {
-                                self.registry.ensure_nat_range_index(n);
+                                let size = nat_size_to_usize(n, key.index.span, self.src)?;
+                                self.registry.ensure_nat_range_index(size);
                             }
                         }
                     }
@@ -2393,8 +2433,8 @@ fn collect_nat_ranges_from_expr(
         }
     }
 
-    let mut collector = NatRangeCollector { registry };
-    let _ = collector.visit_expr(expr);
+    let mut collector = NatRangeCollector { registry, src };
+    collector.visit_expr(expr)
 }
 
 fn register_index_decl(
@@ -2426,13 +2466,17 @@ fn register_index_decl(
             types::IndexKind::RequiredNamed
         }
         crate::desugar::resolved_ast::IndexDeclKind::RequiredRange { dimension } => {
-            let dim = registry.resolve_dim_expr(dimension).ok_or_else(|| {
-                GraphcalError::UnknownDimension {
+            let dim = registry
+                .resolve_dim_expr(dimension)
+                .map_err(|_| GraphcalError::DimensionOverflow {
+                    src: src.clone(),
+                    span: dimension.span.into(),
+                })?
+                .ok_or_else(|| GraphcalError::UnknownDimension {
                     name: crate::syntax::names::DimName::new(idx.name.value.as_str()),
                     src: src.clone(),
                     span: dimension.span.into(),
-                }
-            })?;
+                })?;
             types::IndexKind::RequiredRange { dimension: dim }
         }
     };
@@ -2581,14 +2625,17 @@ fn eval_range_expr(
     match &expr.kind {
         ExprKind::Number(n) => Ok((*n, Dimension::dimensionless())),
         ExprKind::UnitLiteral { value, unit } => {
-            let (dim, scale) =
-                registry
-                    .resolve_unit_expr(unit)
-                    .ok_or_else(|| GraphcalError::EvalError {
-                        message: "unknown unit in range expression".to_string(),
-                        src: src.clone(),
-                        span: unit.span.into(),
-                    })?;
+            let (dim, scale) = registry
+                .resolve_unit_expr(unit)
+                .map_err(|_| GraphcalError::DimensionOverflow {
+                    src: src.clone(),
+                    span: unit.span.into(),
+                })?
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: "unknown unit in range expression".to_string(),
+                    src: src.clone(),
+                    span: unit.span.into(),
+                })?;
             Ok((*value * scale, dim))
         }
         ExprKind::UnaryOp {
@@ -2655,10 +2702,14 @@ fn lower_range_index(
     // Extract display unit from the start expression's unit annotation.
     let (display_label, display_scale) = match &start_expr.kind {
         ExprKind::UnitLiteral { unit, .. } => {
-            if let Some((_dim, scale)) = registry.resolve_unit_expr(unit) {
-                (Some(format_unit_expr(unit)), scale)
-            } else {
-                (None, 1.0)
+            match registry.resolve_unit_expr(unit).map_err(|_| {
+                GraphcalError::DimensionOverflow {
+                    src: src.clone(),
+                    span: unit.span.into(),
+                }
+            })? {
+                Some((_dim, scale)) => (Some(format_unit_expr(unit)), scale),
+                None => (None, 1.0),
             }
         }
         _ => (None, 1.0),

@@ -100,8 +100,9 @@ fn check_length_unit_literal() {
 fn check_velocity_from_division() {
     let source = "param dist: Length = 100.0 km;\nparam time: Time = 2.0 hour;\nnode speed: Velocity = @dist / @time;";
     let types = check(source).unwrap();
-    let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
-        / Dimension::base(BaseDimId::Prelude("Time".to_string()));
+    let velocity = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        / Dimension::base(BaseDimId::Prelude("Time".to_string())))
+    .unwrap();
     assert_eq!(
         types[&ScopedName::local("speed")],
         DeclaredType::Scalar(velocity)
@@ -130,8 +131,9 @@ fn check_conversion_same_dimension() {
     let source =
         "param speed: Velocity = 100.0 m / s;\nnode speed_kmh: Velocity = @speed -> km / hour;";
     let types = check(source).unwrap();
-    let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
-        / Dimension::base(BaseDimId::Prelude("Time".to_string()));
+    let velocity = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        / Dimension::base(BaseDimId::Prelude("Time".to_string())))
+    .unwrap();
     assert_eq!(
         types[&ScopedName::local("speed_kmh")],
         DeclaredType::Scalar(velocity)
@@ -214,8 +216,9 @@ Maneuver.Correction: 0.5 km / s,
 Maneuver.Insertion: 1.8 km / s,
 };";
     let types = check(source).unwrap();
-    let velocity = Dimension::base(BaseDimId::Prelude("Length".to_string()))
-        / Dimension::base(BaseDimId::Prelude("Time".to_string()));
+    let velocity = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        / Dimension::base(BaseDimId::Prelude("Time".to_string())))
+    .unwrap();
     assert_eq!(
         types[&ScopedName::local("dv")],
         DeclaredType::Indexed {
