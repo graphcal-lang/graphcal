@@ -572,36 +572,20 @@ impl Parser<'_> {
     /// Parse an identifier-based expression.
     ///
     /// Dispatches on following tokens (syntax-based disambiguation):
-    /// - `ident<T>{ ... }` → struct construction with type args
-    /// - `ident{ ... }` → struct construction
     /// - `ident::member<T>(...)` or `ident::member(...)` → qualified function call
     /// - `ident::member` → `QualifiedNameRef` (resolved later to variant or const)
-    /// - `ident<T>(...)` or `ident(...)` → function call
-    /// - bare `ident` → `NameRef` (resolved later to const, local, or bare struct)
+    /// - `ident<T>(args)` or `ident(args)` — disambiguated structurally
+    ///   by the first argument's shape: `IDENT :` → constructor call,
+    ///   otherwise → function call
+    /// - bare `ident` → `NameRef` (resolved later to const, local, or unit constructor)
+    ///
+    /// The legacy brace-form construction `Name { field: val }` is no
+    /// longer accepted — constructor calls use parens.
     fn parse_identifier_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, span) = self.advance()?;
         let name = self.lexer.slice_at(span).to_string();
 
-        // Use uppercase-starting as a convention-based hint: `Name { ... }` and `Name<T>{ ... }`
-        // are parsed as struct construction only when the identifier starts with an uppercase
-        // letter. This avoids ambiguity with `if cond { ... }` where a lowercase variable
-        // precedes a block delimiter.
-        let starts_upper = name.starts_with(|c: char| c.is_ascii_uppercase());
-
-        if starts_upper
-            && self.lexer.peek() == Some(&Token::Lt)
-            && self.is_type_args_followed_by_brace()
-        {
-            // Generic struct construction: Name<T> { ... }
-            let type_args = self.parse_type_arg_list()?;
-            self.parse_struct_construction_with_type_args(
-                Spanned::new(StructTypeName::new(name), span),
-                type_args,
-            )
-        } else if starts_upper && self.lexer.peek() == Some(&Token::LBrace) {
-            // Struct/variant construction with fields: TypeName { field1: expr, field2 }
-            self.parse_struct_construction(Spanned::new(StructTypeName::new(name), span))
-        } else if self.peek_dot_then_ident() {
+        if self.peek_dot_then_ident() {
             // Qualified reference: `ident.member`. After the alpha-4 module
             // redesign there are no user-defined functions, so a `module.fn(...)`
             // form has no resolution path; we always parse `ident.ident` (no
@@ -805,13 +789,6 @@ impl Parser<'_> {
             pos += 1;
         }
         false
-    }
-
-    /// Look ahead to check if `<...>` is followed by `{`.
-    /// Used to disambiguate `Vec3<Length, ECI> { ... }` (struct construction with type args)
-    /// from `Foo < bar` (comparison).
-    pub(super) fn is_type_args_followed_by_brace(&mut self) -> bool {
-        self.is_type_args_followed_by(b'{')
     }
 
     /// Look ahead to check if the next token is `.` followed by an identifier.

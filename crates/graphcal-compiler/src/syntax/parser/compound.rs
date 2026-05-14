@@ -1,9 +1,8 @@
-use crate::syntax::ast::TypeExpr;
 use crate::syntax::ast::{
-    Expr, ExprKind, FieldInit, ForBinding, ForBindingIndex, MatchArm, MatchPattern, NatExpr,
-    PatternBinding, TupleMatchArm,
+    Expr, ExprKind, ForBinding, ForBindingIndex, MatchArm, MatchPattern, NatExpr, PatternBinding,
+    TupleMatchArm,
 };
-use crate::syntax::names::{FieldName, IndexName, Spanned, StructTypeName, VariantName};
+use crate::syntax::names::{FieldName, IndexName, Spanned, VariantName};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
@@ -234,50 +233,6 @@ impl Parser<'_> {
         }
     }
 
-    // --- Struct construction ---
-
-    pub(super) fn parse_struct_construction(
-        &mut self,
-        type_name: Spanned<StructTypeName>,
-    ) -> Result<Expr, ParseError> {
-        self.parse_struct_construction_with_type_args(type_name, Vec::new())
-    }
-
-    /// Parse struct construction with explicit type args: `Vec3<Length, ECI> { x: 1 km, ... }`
-    /// Called after the type args have already been parsed.
-    pub(super) fn parse_struct_construction_with_type_args(
-        &mut self,
-        type_name: Spanned<StructTypeName>,
-        type_args: Vec<TypeExpr>,
-    ) -> Result<Expr, ParseError> {
-        self.expect(Token::LBrace)?;
-        let fields = self.parse_comma_separated(Token::RBrace, |p| {
-            let field_name = p.parse_any_ident()?.into_spanned::<FieldName>();
-            // Check for `:` (explicit value) or shorthand (just name)
-            let value = if p.lexer.peek() == Some(&Token::Colon) {
-                p.lexer.next_token(); // consume ':'
-                Some(p.parse_expr()?)
-            } else {
-                None // shorthand: field name matches variable name
-            };
-            Ok(FieldInit {
-                name: field_name,
-                value,
-            })
-        })?;
-
-        let (_, end_span) = self.expect(Token::RBrace)?;
-        let span = type_name.span.merge(end_span);
-        Ok(Expr::new(
-            ExprKind::StructConstruction {
-                type_name,
-                type_args,
-                fields,
-            },
-            span,
-        ))
-    }
-
     // --- For comprehension ---
 
     /// Parse a for comprehension: `for m: Maneuver, i: range(3) { expr }`
@@ -491,8 +446,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_struct_construction_explicit_fields() {
-        let source = "node t: Dimensionless = TransferResult { dv1: @a + @b, dv2: @c };";
+    fn parse_constructor_call_explicit_fields() {
+        // Construction always uses the parens form `Ctor(field: expr, ...)`.
+        let source = "node t: Dimensionless = TransferResult(dv1: @a + @b, dv2: @c);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
@@ -513,8 +469,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_struct_construction_trailing_comma() {
-        let source = "node t: Dimensionless = TransferResult { dv1: 1.0, dv2: 2.0, };";
+    fn parse_constructor_call_trailing_comma() {
+        let source = "node t: Dimensionless = TransferResult(dv1: 1.0, dv2: 2.0,);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
@@ -528,8 +484,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_generic_struct_construction() {
-        let source = "node v: Vec3<Length, ECI> = Vec3<Length, ECI> { x: 1.0, y: 2.0, z: 3.0 };";
+    fn parse_generic_constructor_call() {
+        let source = "node v: Vec3<Length, ECI> = Vec3<Length, ECI>(x: 1.0, y: 2.0, z: 3.0);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
@@ -551,24 +507,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_non_generic_struct_construction_still_works() {
+    fn parse_brace_form_construction_rejected() {
+        // The legacy brace-form `Ctor { field: val }` no longer parses.
         let source = "node t: Dimensionless = TransferResult { dv1: 1.0, dv2: 2.0 };";
-        let file = Parser::new(source).parse_file().unwrap();
-        match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::StructConstruction {
-                    type_name,
-                    type_args,
-                    fields,
-                } => {
-                    assert_eq!(type_name.value.as_str(), "TransferResult");
-                    assert!(type_args.is_empty());
-                    assert_eq!(fields.len(), 2);
-                }
-                other => panic!("expected StructConstruction, got {other:?}"),
-            },
-            _ => panic!("expected node"),
-        }
+        assert!(Parser::new(source).parse_file().is_err());
     }
 
     #[test]
