@@ -126,6 +126,16 @@ define_name_type! {
 }
 
 define_name_type! {
+    /// Name of a tagged-union constructor (e.g., `"LowThrust"`, `"Coast"`).
+    ///
+    /// Constructors live in a *separate namespace* from types: a single
+    /// lexeme can name both a type and a constructor (and will, once the
+    /// single-variant sugar lands). Keeping these as distinct newtypes
+    /// enforces the namespace boundary at the type level.
+    pub struct ConstructorName;
+}
+
+define_name_type! {
     /// Name of a generic type parameter (e.g., `"D"`, `"I"`).
     pub struct GenericParamName;
 }

@@ -256,11 +256,14 @@ fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast:
                 .into_iter()
                 .map(|m| dst_ast::UnionMember {
                     name: m.name,
-                    type_args: m
-                        .type_args
-                        .into_iter()
-                        .map(|t| lift_type_expr(t, ctx))
-                        .collect(),
+                    payload: m.payload.map(|fs| {
+                        fs.into_iter()
+                            .map(|f| dst_ast::FieldDecl {
+                                name: f.name,
+                                type_ann: lift_type_expr(f.type_ann, ctx),
+                            })
+                            .collect()
+                    }),
                     span: m.span,
                 })
                 .collect(),

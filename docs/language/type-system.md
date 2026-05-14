@@ -140,15 +140,26 @@ type Vec3<D: Dim, Frame: Type> {
 }
 ```
 
-#### Union Types
+#### Tagged Unions
 
-A union type is a sum type that combines multiple existing types. Each member is defined as its own type first, then combined with the `=` and `|` syntax. Members can be unit types (no fields) or struct types.
+A tagged union is a sum type whose **constructors** are listed inline
+inside the braced body of a `type` declaration. Each constructor has an
+optional record-shaped payload (declared with parens or braces) or is a
+bare unit constructor. Constructors are not standalone types — they are
+constructors of the union itself.
 
 ```
-type Impulsive { delta_v: Velocity }
-type LowThrust { thrust: Force, duration: Time }
-type ManeuverKind = Impulsive | LowThrust;
+type ManeuverKind {
+    Impulsive(delta_v: Velocity),
+    LowThrust(thrust: Force, duration: Time),
+    Coast,
+}
 ```
+
+The same braced body must be either *all* fields (record form) or *all*
+constructors (union form). The parser disambiguates structurally — by
+the token after each entry's identifier — and never by identifier
+casing.
 
 ### Declaration Types (Level 3)
 
@@ -220,9 +231,10 @@ type SatelliteSpec {
     altitude: Length(min: 200.0 km),
 }
 
-pub type Burn { dv: Velocity(min: 0.0 m/s, max: 10.0 km/s), duration: Time(min: 0.0 s) }
-pub type Coast {}
-pub type ManeuverResult = Burn | Coast;
+pub type ManeuverResult {
+    Burn(dv: Velocity(min: 0.0 m/s, max: 10.0 km/s), duration: Time(min: 0.0 s)),
+    Coast,
+}
 ```
 
 Field constraints fire at **construction time** for each `T { ... }` literal:
@@ -293,7 +305,7 @@ Named index labels are proper runtime values within expressions:
 
 However, labels cannot be the type of a `param`, `node`, or `const node` declaration — they exist only within expression contexts.
 
-A regular fieldless union type (`type Foo = A | B;`) is NOT automatically an index. The `index` keyword explicitly marks it as usable in `T[I]`, preventing accidental use of marker types as collection axes.
+A fieldless tagged union (e.g., `type Foo { A, B }`) is NOT automatically an index. The `index` keyword explicitly marks an enumeration as usable in `T[I]`, preventing accidental use of marker types as collection axes.
 
 ### Range Index
 

@@ -1571,10 +1571,11 @@ node SAT: Spec = Spec { mass: @x };
 fn union_member_field_violation() {
     let source = "
 pub dim Velocity = Length / Time;
-pub type Burn { dv: Velocity(max: 10.0 km/s) }
-pub type Coast {}
-pub type Result = Burn | Coast;
-node R: Result = Burn { dv: 50.0 km/s };
+pub type Result {
+    Burn(dv: Velocity(max: 10.0 km/s)),
+    Coast,
+}
+node R: Result = Burn(dv: 50.0 km/s);
 ";
     let result = compile_and_eval(source).unwrap();
     let (_, r_result, _) = result

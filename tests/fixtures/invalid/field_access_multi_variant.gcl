@@ -1,12 +1,11 @@
 // Error: field access on multi-variant type (should use match instead)
 pub dim Velocity = Length / Time;
 
-pub type Impulsive {
-    delta_v: Velocity,
+pub type ManeuverKind {
+    Impulsive(delta_v: Velocity),
+    Coasting,
 }
-pub type Coasting {}
-pub type ManeuverKind = Impulsive | Coasting;
 
-param m: ManeuverKind = Coasting { };
+param m: ManeuverKind = Coasting;
 
 node v: Velocity = @m.delta_v;

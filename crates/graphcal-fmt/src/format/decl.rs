@@ -213,7 +213,8 @@ fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
     }
 }
 
-/// `type Name = A | B | C;` or `type Name<D: Dim> = Ok<D> | Err;`
+/// `type Name { Ctor(field: Type, ...), Ctor, ... }` — the constructor-list
+/// form of a tagged union.
 fn format_union_type_decl(fmt: &mut Formatter<'_>, d: &UnionTypeDecl) -> RcDoc<'static> {
     let mut header = RcDoc::text("type ").append(RcDoc::text(d.name.value.as_str().to_string()));
 
@@ -221,30 +222,39 @@ fn format_union_type_decl(fmt: &mut Formatter<'_>, d: &UnionTypeDecl) -> RcDoc<'
         header = header.append(format_generic_params(fmt, &d.generic_params));
     }
 
+    if d.members.is_empty() {
+        return header.append(RcDoc::text(" {}"));
+    }
+
     let member_docs: Vec<RcDoc<'static>> = d
         .members
         .iter()
         .map(|m| {
             let mut doc = RcDoc::text(m.name.value.as_str().to_string());
-            if !m.type_args.is_empty() {
-                let args: Vec<RcDoc<'static>> = m
-                    .type_args
-                    .iter()
-                    .map(|a| format_type_expr_inline(fmt, a))
-                    .collect();
-                doc = doc
-                    .append(RcDoc::text("<"))
-                    .append(RcDoc::intersperse(args, RcDoc::text(", ")))
-                    .append(RcDoc::text(">"));
+            if let Some(fields) = &m.payload {
+                if fields.is_empty() {
+                    doc = doc.append(RcDoc::text("()"));
+                } else {
+                    let field_docs: Vec<RcDoc<'static>> = fields
+                        .iter()
+                        .map(|f| format_single_field_decl(fmt, f))
+                        .collect();
+                    doc = doc
+                        .append(RcDoc::text("("))
+                        .append(RcDoc::intersperse(field_docs, RcDoc::text(", ")))
+                        .append(RcDoc::text(")"));
+                }
             }
-            doc
+            doc.append(RcDoc::text(","))
         })
         .collect();
 
+    let body = RcDoc::intersperse(member_docs, RcDoc::hardline());
     header
-        .append(RcDoc::text(" = "))
-        .append(RcDoc::intersperse(member_docs, RcDoc::text(" | ")))
-        .append(RcDoc::text(";"))
+        .append(RcDoc::text(" {"))
+        .append(RcDoc::hardline().append(body).nest(INDENT))
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("}"))
 }
 
 fn format_field_decls(fmt: &mut Formatter<'_>, fields: &[FieldDecl]) -> RcDoc<'static> {

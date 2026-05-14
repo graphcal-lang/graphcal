@@ -1,13 +1,12 @@
 // Error: match arms return different types
 pub dim Velocity = Length / Time;
 
-pub type Impulsive {
-    delta_v: Velocity,
+pub type ManeuverKind {
+    Impulsive(delta_v: Velocity),
+    Coasting,
 }
-pub type Coasting {}
-pub type ManeuverKind = Impulsive | Coasting;
 
-param m: ManeuverKind = Coasting { };
+param m: ManeuverKind = Coasting;
 
 node result: Velocity = match @m {
     Impulsive { delta_v } => delta_v,

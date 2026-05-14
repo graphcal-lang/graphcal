@@ -2537,14 +2537,30 @@ fn register_union_type_decl(
         })
         .collect();
 
-    let members = t
-        .members
-        .iter()
-        .map(|m| types::UnionMemberDef {
-            name: m.name.value.clone(),
-            type_args: m.type_args.clone(),
-        })
-        .collect();
+    // Each variant becomes (a) a member of the union and (b) a synthesized
+    // record `TypeDef` keyed by the variant's name. The synthesized record
+    // is what the rest of the compiler — struct construction, field
+    // access, pattern matching — looks up. Unit variants synthesize an
+    // empty record.
+    let mut members: Vec<types::UnionMemberDef> = Vec::with_capacity(t.members.len());
+    for m in &t.members {
+        let variant_name = StructTypeName::new(m.name.value.as_str());
+        let fields = m.payload.as_ref().map_or_else(Vec::new, |fs| {
+            fs.iter()
+                .map(|f| types::StructField {
+                    name: f.name.value.clone(),
+                    type_ann: f.type_ann.clone(),
+                })
+                .collect()
+        });
+        let variant_kind = types::TypeDefKind::Record { fields };
+        registry.register_type(types::TypeDef {
+            name: variant_name.clone(),
+            generic_params: vec![],
+            kind: variant_kind,
+        });
+        members.push(types::UnionMemberDef { name: variant_name });
+    }
 
     registry.register_type(types::TypeDef {
         name: t.name.value.clone(),

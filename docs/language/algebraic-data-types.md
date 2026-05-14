@@ -62,37 +62,43 @@ Unit types are useful as marker types for phantom type parameters (e.g., referen
 > *required* type that importers must bind. See
 > [Multi-File Projects → Visibility and Bindability](multi-file.md#visibility-and-bindability).
 
-## Union Types
+## Tagged Unions
 
-Union types combine multiple existing types into a sum type. First, define each member as its own type, then combine them with the `=` and `|` syntax:
+Tagged unions list their **constructors** inline inside the braced body of
+a `type` declaration. Each constructor has an optional record-shaped
+payload (declared with parens or braces) or is a bare unit constructor:
 
 ```
 dim Force = Mass * Length / Time^2;
 
-type Impulsive { delta_v: Velocity }
-type LowThrust { thrust: Force, duration: Time }
-type ManeuverKind = Impulsive | LowThrust;
+type ManeuverKind {
+    Impulsive(delta_v: Velocity),
+    LowThrust(thrust: Force, duration: Time),
+    Coast,
+}
 ```
 
-Members can be unit types (no fields) or struct types:
+Constructors live in a namespace that is distinct from the type
+namespace — a single lexeme can name both a type and a constructor
+without ambiguity. (A future single-variant sugar will let
+`type Position { x: Length, y: Length }` desugar to
+`type Position { Position(x: Length, y: Length) }`; today the explicit
+form is required if you want a constructor.)
 
-```
-type Nominal {}
-type Warning { code: Dimensionless }
-type Status = Nominal | Warning;
-```
+The same body must be either *all* fields (record form) or *all*
+constructors (union form). Mixing the two is a parse error: graphcal
+disambiguates structurally — by the token after each entry's
+identifier — and never by identifier casing.
 
 ### Constructing Union Values
 
-Construct a value by its member type name:
+Construct a variant by its constructor name. The parens-with-named-args
+form is the canonical syntax:
 
 ```
-node maneuver: ManeuverKind = LowThrust {
-    thrust: 0.5 N,
-    duration: 3600.0 s,
-};
+node maneuver: ManeuverKind = LowThrust(thrust: 0.5 N, duration: 3600.0 s);
 
-node status: Status = Nominal;
+node coast: ManeuverKind = Coast;
 ```
 
 ## Match Expressions
@@ -112,9 +118,14 @@ node fuel_proxy: Force = match @maneuver {
 
 ### Exhaustiveness Checking
 
-The compiler requires that all members are covered:
+The compiler requires that all constructors are covered:
 
 ```
+type Status {
+    Nominal,
+    Warning(code: Dimensionless),
+}
+
 // ERROR: non-exhaustive -- missing `Warning` arm
 node code: Dimensionless = match @status {
     Nominal => 0.0,
@@ -128,7 +139,7 @@ All match arms must produce the same type and dimension:
 ```
 // ERROR: arms have different dimensions (Force vs Velocity)
 node bad: Force = match @maneuver {
-    Impulsive { delta_v } => delta_v,      // Velocity
+    Impulsive { delta_v } => delta_v,             // Velocity
     LowThrust { thrust, duration: _ } => thrust,  // Force
 };
 ```

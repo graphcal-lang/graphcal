@@ -283,8 +283,11 @@ module.exports = grammar({
     // type TransferResult { dv1: Velocity, dv2: Velocity }  -- record type
     // type Eci {}                                            -- empty record / marker
     // type Element;                                          -- required type (bound via include)
-    // type ManeuverKind = Impulsive | Coasting;              -- union type
-    // type Result<D: Dim> = Ok<D> | Err;                     -- generic union type
+    // type Maneuver {                                        -- tagged union (issue #601)
+    //   Impulsive(delta_v: Velocity),
+    //   LowThrust(thrust: Force, duration: Time),
+    //   Coast,
+    // }
     type_declaration: $ => seq(
       repeat($.attribute),
       optional($.visibility),
@@ -292,7 +295,52 @@ module.exports = grammar({
       field("name", $.identifier),
       optional(field("generics", $.generic_params)),
       choice(
-        // Record type: type Foo { field: Type, ... } or type Foo {}
+        // Unified body: record fields or constructor list. The choice is
+        // syntactically structural — the parser disambiguates by the
+        // token after each entry's identifier (`:` → field; `(`, `{`,
+        // or end-of-entry → constructor).
+        seq(
+          "{",
+          optional(choice($.field_declaration_list, $.constructor_list)),
+          "}",
+        ),
+        // Required type: type Foo;
+        ";",
+      ),
+    ),
+
+    field_declaration_list: $ => seq(
+      $.field_declaration,
+      repeat(seq(",", $.field_declaration)),
+      optional(","),
+    ),
+
+    field_declaration: $ => seq(
+      field("name", $.identifier),
+      ":",
+      field("type", $.type_expr),
+    ),
+
+    constructor_list: $ => seq(
+      $.constructor_declaration,
+      repeat(seq(",", $.constructor_declaration)),
+      optional(","),
+    ),
+
+    // A single constructor: bare identifier, parens-payload, or
+    // brace-payload form. Both payload spellings are accepted.
+    constructor_declaration: $ => seq(
+      field("name", $.identifier),
+      optional(choice(
+        seq(
+          "(",
+          optional(seq(
+            $.field_declaration,
+            repeat(seq(",", $.field_declaration)),
+            optional(","),
+          )),
+          ")",
+        ),
         seq(
           "{",
           optional(seq(
@@ -302,34 +350,6 @@ module.exports = grammar({
           )),
           "}",
         ),
-        // Unit type: type Foo;
-        ";",
-        // Union type: type Foo = A | B | C;
-        seq("=", $.union_members, ";"),
-      ),
-    ),
-
-    field_declaration: $ => seq(
-      field("name", $.identifier),
-      ":",
-      field("type", $.type_expr),
-    ),
-
-    // Union members: A | B or A<D> | B
-    union_members: $ => seq(
-      $.union_member,
-      repeat1(seq("|", $.union_member)),
-    ),
-
-    // A single union member, optionally with type arguments: Ok<D>
-    union_member: $ => seq(
-      field("name", $.identifier),
-      optional(seq(
-        "<",
-        field("type_arg", $.type_expr),
-        repeat(seq(",", field("type_arg", $.type_expr))),
-        optional(","),
-        ">",
       )),
     ),
 

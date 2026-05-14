@@ -526,16 +526,91 @@ fn parse_type_decl_generic_single_type_param() {
 }
 
 #[test]
-fn parse_union_type_decl() {
-    let source = "type ManeuverKind = Impulsive | Coasting;";
+fn parse_union_type_decl_unit_variants() {
+    let source = "type ManeuverKind { Impulsive, Coasting }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::UnionType(u) => {
             assert_eq!(u.name.value.as_str(), "ManeuverKind");
             assert_eq!(u.members.len(), 2);
+            assert_eq!(u.members[0].name.value.as_str(), "Impulsive");
+            assert!(u.members[0].payload.is_none());
+            assert_eq!(u.members[1].name.value.as_str(), "Coasting");
+            assert!(u.members[1].payload.is_none());
         }
         _ => panic!("expected union type declaration"),
     }
+}
+
+#[test]
+fn parse_union_type_decl_with_payload() {
+    let source = "\
+type Maneuver {
+  Impulsive(delta_v: Velocity),
+  LowThrust(thrust: Force, duration: Time),
+  Coast,
+}
+";
+    let file = Parser::new(source).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.name.value.as_str(), "Maneuver");
+            assert_eq!(u.members.len(), 3);
+            // Impulsive has one field
+            assert_eq!(u.members[0].name.value.as_str(), "Impulsive");
+            let p0 = u.members[0].payload.as_ref().expect("payload");
+            assert_eq!(p0.len(), 1);
+            assert_eq!(p0[0].name.value.as_str(), "delta_v");
+            // LowThrust has two
+            let p1 = u.members[1].payload.as_ref().expect("payload");
+            assert_eq!(p1.len(), 2);
+            // Coast is unit
+            assert_eq!(u.members[2].name.value.as_str(), "Coast");
+            assert!(u.members[2].payload.is_none());
+        }
+        _ => panic!("expected union type declaration"),
+    }
+}
+
+#[test]
+fn parse_union_type_decl_brace_payload() {
+    let source = "type Status { Active { since: Time }, Idle }";
+    let file = Parser::new(source).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.members.len(), 2);
+            assert_eq!(u.members[0].name.value.as_str(), "Active");
+            assert_eq!(u.members[0].payload.as_ref().expect("payload").len(), 1);
+            assert!(u.members[1].payload.is_none());
+        }
+        _ => panic!("expected union type declaration"),
+    }
+}
+
+#[test]
+fn parse_type_decl_record_form_still_works() {
+    let source = "type Position { x: Length, y: Length }";
+    let file = Parser::new(source).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Type(t) => {
+            assert_eq!(t.name.value.as_str(), "Position");
+            let fields = t.fields.as_ref().expect("fields");
+            assert_eq!(fields.len(), 2);
+            assert_eq!(fields[0].name.value.as_str(), "x");
+            assert_eq!(fields[1].name.value.as_str(), "y");
+        }
+        _ => panic!("expected record type declaration"),
+    }
+}
+
+#[test]
+fn parse_type_decl_rejects_mixed_body() {
+    // Record field first, then a constructor-shape entry → reject.
+    let source = "type Mixed { x: Length, Coast }";
+    assert!(Parser::new(source).parse_file().is_err());
+    // Constructor first, then a record-shape field → reject.
+    let source = "type Mixed { Coast, x: Length }";
+    assert!(Parser::new(source).parse_file().is_err());
 }
 
 #[test]

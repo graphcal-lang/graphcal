@@ -635,16 +635,22 @@ fn resolve_pub_type_with_private_field_type_fires_v003() {
 }
 
 #[test]
-fn resolve_pub_union_type_with_private_member_fires_v003() {
+fn resolve_pub_union_type_with_private_payload_type_fires_v003() {
+    // Under the constructor-list union design, variants no longer
+    // reference other types by name in the union signature. The A9
+    // dependency from a `pub` union to a private type now flows through
+    // a variant's payload field type. (See issue #601.)
     let source = r"
-        pub type Ok {}
-        type Err {}
-        pub type Result = Ok | Err;
+        type Inner {}
+        pub type Result {
+          Ok,
+          Err(detail: Inner),
+        }
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
-            if pub_kind == "type" && ref_name == "Err")
+            if pub_kind == "type" && ref_name == "Inner")
     );
 }
 

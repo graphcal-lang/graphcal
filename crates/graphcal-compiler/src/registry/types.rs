@@ -68,11 +68,23 @@ pub struct StructField {
     pub type_ann: TypeExpr,
 }
 
-/// A member of a union type, with optional type arguments for generic members.
+/// A member (constructor) of a tagged-union type.
+///
+/// Each variant has an optional record-shaped payload. Unit constructors
+/// carry `payload: None`. Generic variants (`Ok<D>`) are no longer
+/// supported under the constructor-list design — the union itself takes
+/// generics; variants are constructors of the parameterized union, not
+/// standalone types.
 #[derive(Debug, Clone)]
 pub struct UnionMemberDef {
+    /// Constructor name. We carry it as `StructTypeName` rather than the
+    /// dedicated `ConstructorName` newtype: under the hood, every variant
+    /// is synthesized as a record `TypeDef` keyed by this name so that
+    /// existing TIR / eval paths (struct construction, field access,
+    /// pattern matching) keep working without a parallel registry. Once
+    /// the constructor namespace is split out from the type namespace,
+    /// this field will move to `ConstructorName`.
     pub name: StructTypeName,
-    pub type_args: Vec<TypeExpr>,
 }
 
 /// The kind of a type definition.
@@ -82,7 +94,7 @@ pub enum TypeDefKind {
     Unit,
     /// A record type with fields: `type TransferResult { dv1: Velocity, dv2: Velocity }`
     Record { fields: Vec<StructField> },
-    /// A union type: `type ManeuverKind = Impulsive | Coasting;`
+    /// A tagged union: `type Maneuver { Impulsive(delta_v: Velocity), Coast }`.
     Union { members: Vec<UnionMemberDef> },
 }
 

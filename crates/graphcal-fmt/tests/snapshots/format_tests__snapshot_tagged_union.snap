@@ -1,25 +1,19 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 469
 expression: formatted
 ---
-// tagged_union.gcl -- Union types and match expressions
+// tagged_union.gcl -- Union types and match expressions (issue #601 syntax)
 pub dim Velocity = Length / Time;
 pub dim Force = Mass * Length / Time^2;
 
-// Record types (members of the union)
-pub type Impulsive {
-    delta_v: Velocity,
-}
-pub type LowThrust {
-    thrust: Force,
-    duration: Time,
+// Tagged union: variants are constructors of the union.
+pub type ManeuverKind {
+    Impulsive(delta_v: Velocity),
+    LowThrust(thrust: Force, duration: Time),
 }
 
-// Union type
-pub type ManeuverKind = Impulsive | LowThrust;
-
-// Single-variant (struct sugar) -- existing syntax, should still work
+// Record type (still record syntax — the single-variant sugar is not
+// implemented yet, so records use the field form directly).
 pub type TransferResult {
     dv1: Velocity,
     dv2: Velocity,
@@ -28,29 +22,28 @@ pub type TransferResult {
 param thrust_level: Force = 0.5 N;
 param burn_duration: Time = 3600.0 s;
 
-// Construct a member type
+// Construct a variant with the parens constructor-call form.
 node maneuver: ManeuverKind = LowThrust { thrust: @thrust_level, duration: @burn_duration};
 
-// Match expression to extract data from a union type
+// Match on the union — patterns are still brace-style today.
 node fuel_proxy: Force = match @maneuver {
     Impulsive { delta_v: _ } => 0.0 N,
     LowThrust { thrust, duration: _ } => thrust,
 };
 
-// Struct sugar construction (unchanged)
+// Records still use the brace construction form for now.
 node transfer: TransferResult = TransferResult { dv1: 100.0 m/s, dv2: 200.0 m/s};
 
-// Field access on struct sugar (unchanged)
+// Field access on a record (unchanged).
 node total_dv: Velocity = @transfer.dv1 + @transfer.dv2;
 
-// Unit type and union with bare variant (no fields)
-pub type Nominal {}
-pub type Warning {
-    code: Dimensionless,
+// Mixed union: unit + payload-bearing constructors.
+pub type Status {
+    Nominal,
+    Warning(code: Dimensionless),
 }
-pub type Status = Nominal | Warning;
 
-node current_status: Status = Nominal { };
+node current_status: Status = Nominal;
 
 node status_code: Dimensionless = match @current_status {
     Nominal => 0.0,
