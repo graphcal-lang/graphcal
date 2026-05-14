@@ -1,7 +1,6 @@
 // Issue #579: a leading unary `-` on an integer or float literal is a
 // compile-time-known signed literal exponent for `^` and must pass D005.
-
-pub dim InvLengthSquared = Length ^ -2;
+pub dim InvLengthSquared = Length^-2;
 
 param x: Dimensionless = 2.0;
 param length: Length = 2.0 m;

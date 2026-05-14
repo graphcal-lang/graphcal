@@ -9,34 +9,34 @@ In this step, you'll learn to group related values into struct types.
 ## Struct Types
 
 When a calculation produces multiple related values, group them into a
-struct:
+struct. In graphcal every `type` is an n-variant tagged union — a
+struct is just a single-variant union whose sole constructor's name
+matches the type's name:
 
 ```
 dim Velocity = Length / Time;
 dim GravParam = Length^3 / Time^2;
 
 type TransferResult {
-    dv1: Velocity,
-    dv2: Velocity,
-    total_dv: Velocity,
-    tof: Time,
+    TransferResult(dv1: Velocity, dv2: Velocity, total_dv: Velocity, tof: Time),
 }
 ```
 
-A `type` declaration with a single set of fields defines a struct. Each
-field has a name and a type annotation.
+A future syntax sugar will accept the shorter
+`type TransferResult { dv1: Velocity, ... }`; until then the explicit
+form is required.
 
 ## Constructing a Struct
 
-Build a struct value with `TypeName { field: value, ... }`:
+Build a struct value by calling its constructor:
 
 ```
-node result: TransferResult = TransferResult {
+node result: TransferResult = TransferResult(
     dv1: 100.0 m/s,
     dv2: 200.0 m/s,
     total_dv: 300.0 m/s,
     tof: 3600.0 s,
-};
+);
 ```
 
 When a node or local variable shares a name with a struct field, you can
@@ -47,12 +47,8 @@ node dv1: Velocity = 100.0 m/s;
 node dv2: Velocity = 200.0 m/s;
 node total_dv: Velocity = @dv1 + @dv2;
 
-node result: TransferResult = TransferResult {
-    dv1: @dv1,
-    dv2: @dv2,
-    total_dv: @total_dv,
-    tof: 3600.0 s,
-};
+node result: TransferResult =
+    TransferResult(dv1, dv2, total_dv, tof: 3600.0 s);
 ```
 
 ## Field Access
@@ -75,10 +71,7 @@ dim Velocity = Length / Time;
 dim GravParam = Length^3 / Time^2;
 
 type TransferResult {
-    dv1: Velocity,
-    dv2: Velocity,
-    total_dv: Velocity,
-    tof: Time,
+    TransferResult(dv1: Velocity, dv2: Velocity, total_dv: Velocity, tof: Time),
 }
 
 const node r_earth: Length = 6371.0 km;
@@ -96,12 +89,12 @@ node v2: Velocity = sqrt(@gm_earth / @r2);
 node dv1: Velocity = sqrt(2.0 * @gm_earth * @r2 / (@r1 * (@r1 + @r2))) - @v1;
 node dv2: Velocity = @v2 - sqrt(2.0 * @gm_earth * @r1 / (@r2 * (@r1 + @r2)));
 
-node transfer: TransferResult = TransferResult {
+node transfer: TransferResult = TransferResult(
     dv1: @dv1,
     dv2: @dv2,
     total_dv: @dv1 + @dv2,
     tof: PI * sqrt(@a ^ 3.0 / @gm_earth),
-};
+);
 
 node total_dv: Velocity = @transfer.total_dv;
 node tof_hours: Time = @transfer.tof -> hour;
@@ -117,7 +110,8 @@ this graph into a reusable, parameterized `dag` block.
 
 ## What You Learned
 
-- **`type`** declarations for struct types with typed fields
-- **Struct construction** with `TypeName { field: value, ... }` and field
-  shorthand
-- **Field access** with `.` on struct-typed values
+- **`type`** declarations as n-variant tagged unions (single-variant
+  for record-shaped data)
+- **Struct construction** with the constructor-call form
+  `TypeName(field: value, ...)` and field shorthand
+- **Field access** with `.` on values of single-variant unions

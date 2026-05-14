@@ -2,39 +2,38 @@
 source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
-// tagged_union.gcl -- Union types and match expressions (issue #601 syntax)
+// tagged_union.gcl -- Tagged union types and match expressions (issue #601 syntax)
 pub dim Velocity = Length / Time;
 pub dim Force = Mass * Length / Time^2;
 
-// Tagged union: variants are constructors of the union.
+// Multi-variant tagged union.
 pub type ManeuverKind {
     Impulsive(delta_v: Velocity),
     LowThrust(thrust: Force, duration: Time),
 }
 
-// Record type (still record syntax — the single-variant sugar is not
-// implemented yet, so records use the field form directly).
+// Record-shaped types are single-variant tagged unions whose sole
+// constructor's name matches the type's name (record sugar pending).
 pub type TransferResult {
-    dv1: Velocity,
-    dv2: Velocity,
+    TransferResult(dv1: Velocity, dv2: Velocity),
 }
 
 param thrust_level: Force = 0.5 N;
 param burn_duration: Time = 3600.0 s;
 
-// Construct a variant with the parens constructor-call form.
-node maneuver: ManeuverKind = LowThrust { thrust: @thrust_level, duration: @burn_duration};
+// Construct a variant via the parens constructor-call form.
+node maneuver: ManeuverKind = LowThrust(thrust: @thrust_level, duration: @burn_duration);
 
-// Match on the union — patterns are still brace-style today.
+// Match on the union — pattern bindings are still brace-style.
 node fuel_proxy: Force = match @maneuver {
     Impulsive { delta_v: _ } => 0.0 N,
     LowThrust { thrust, duration: _ } => thrust,
 };
 
-// Records still use the brace construction form for now.
-node transfer: TransferResult = TransferResult { dv1: 100.0 m/s, dv2: 200.0 m/s};
+// Construct the single-variant union with the same parens form.
+node transfer: TransferResult = TransferResult(dv1: 100.0 m/s, dv2: 200.0 m/s);
 
-// Field access on a record (unchanged).
+// Field access on a single-variant union works as if it were a record.
 node total_dv: Velocity = @transfer.dv1 + @transfer.dv2;
 
 // Mixed union: unit + payload-bearing constructors.

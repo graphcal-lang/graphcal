@@ -2,6 +2,7 @@
 // Expected diagnostic: `graphcal.G003` — unknown param in inline dag call.
 dag id_len {
     param v: Length;
+    
     node result: Length = @v;
 }
 

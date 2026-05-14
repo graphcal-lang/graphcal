@@ -4,9 +4,9 @@ expression: rendered
 ---
 unknown field `nonexistent` on struct `Transfer`
     Diagnostic severity: error
-Begin snippet for unknown_struct_field.gcl starting at line 10, column 1
+Begin snippet for unknown_struct_field.gcl starting at line 9, column 1
 
-snippet line 10: node transfer: Transfer = Transfer { dv1: @v, dv2: @v};
-snippet line 11: node bad: Velocity = @transfer.nonexistent;
-    label at line 11, columns 32 to 42: no such field
+snippet line 9: node transfer: Transfer = Transfer(dv1: @v, dv2: @v);
+snippet line 10: node bad: Velocity = @transfer.nonexistent;
+    label at line 10, columns 32 to 42: no such field
 diagnostic code: graphcal::S003

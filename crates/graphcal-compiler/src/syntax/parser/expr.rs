@@ -1086,8 +1086,8 @@ mod tests {
     #[test]
     fn parse_as_cast() {
         let source = r"
-        type Eci {}
-        type Vec3<D: Dim, F: Type> { x: D, y: D, z: D, }
+        type Eci { Eci }
+        type Vec3<D: Dim, F: Type> { Vec3(x: D, y: D, z: D) }
         node x: Vec3<Length, Eci> = @v as Vec3<Length, Eci>;
     ";
         let file = Parser::new(source).parse_file().unwrap();
@@ -1112,8 +1112,8 @@ mod tests {
     #[test]
     fn parse_as_cast_binds_loosely() {
         let source = r"
-        type Eci {}
-        type Vec3<D: Dim, F: Type> { x: D, y: D, z: D, }
+        type Eci { Eci }
+        type Vec3<D: Dim, F: Type> { Vec3(x: D, y: D, z: D) }
         node x: Vec3<Length, Eci> = @a + @b as Vec3<Length, Eci>;
     ";
         let file = Parser::new(source).parse_file().unwrap();

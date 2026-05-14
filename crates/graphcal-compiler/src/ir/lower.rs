@@ -2498,28 +2498,16 @@ fn register_type_decl(t: &crate::desugar::resolved_ast::TypeDecl, registry: &mut
         })
         .collect();
 
-    // Required types (`type T;` with no body) are treated like opaque
-    // unit types at the library level; include-time substitution rewires
-    // references through the importer's type bindings (see plan §C1).
-    let kind = match &t.fields {
-        None => types::TypeDefKind::Unit,
-        Some(fields) if fields.is_empty() => types::TypeDefKind::Unit,
-        Some(fields) => {
-            let fields = fields
-                .iter()
-                .map(|f| types::StructField {
-                    name: f.name.value.clone(),
-                    type_ann: f.type_ann.clone(),
-                })
-                .collect();
-            types::TypeDefKind::Record { fields }
-        }
-    };
-
+    // `DeclKind::Type` is reserved for the required-type stub
+    // (`type Element;`); record-shaped declarations parse as
+    // `DeclKind::UnionType` with a single-variant collision. The
+    // `fields` field on `TypeDecl` is preserved as `Option` only to
+    // keep phase-conversion plumbing uniform — the parser never
+    // populates it.
     registry.register_type(types::TypeDef {
         name: t.name.value.clone(),
         generic_params,
-        kind,
+        kind: types::TypeDefKind::Unit,
     });
 }
 
@@ -2537,11 +2525,9 @@ fn register_union_type_decl(
         })
         .collect();
 
-    // Each variant becomes (a) a member of the union and (b) a synthesized
-    // record `TypeDef` keyed by the variant's name. The synthesized record
-    // is what the rest of the compiler — struct construction, field
-    // access, pattern matching — looks up. Unit variants synthesize an
-    // empty record.
+    // Every variant carries its payload inline; no per-variant TypeDef
+    // is synthesized. The constructor namespace lives on the registry
+    // and points back to this union.
     let mut members: Vec<types::UnionMemberDef> = Vec::with_capacity(t.members.len());
     for m in &t.members {
         let variant_name = StructTypeName::new(m.name.value.as_str());
@@ -2553,13 +2539,10 @@ fn register_union_type_decl(
                 })
                 .collect()
         });
-        let variant_kind = types::TypeDefKind::Record { fields };
-        registry.register_type(types::TypeDef {
-            name: variant_name.clone(),
-            generic_params: vec![],
-            kind: variant_kind,
+        members.push(types::UnionMemberDef {
+            name: variant_name,
+            fields,
         });
-        members.push(types::UnionMemberDef { name: variant_name });
     }
 
     registry.register_type(types::TypeDef {

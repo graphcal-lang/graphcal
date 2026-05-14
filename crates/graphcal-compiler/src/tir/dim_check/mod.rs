@@ -97,7 +97,7 @@ fn check_decl_expr_type(
         builtin_fns,
         src,
     )?;
-    if !types_match(declared, &inferred, registry) {
+    if !types_match(declared, &inferred) {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_declared_type(declared, registry),
             inferred: format_inferred_type(&inferred, registry),
@@ -555,13 +555,11 @@ fn check_field_domain_constraint_targets(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for type_def in tir.registry.types.all_types() {
-        let fields: Box<dyn Iterator<Item = &crate::registry::types::StructField>> =
-            match &type_def.kind {
-                crate::registry::types::TypeDefKind::Record { fields } => Box::new(fields.iter()),
-                crate::registry::types::TypeDefKind::Union { .. }
-                | crate::registry::types::TypeDefKind::Unit => Box::new(std::iter::empty()),
-            };
-        for field in fields {
+        // Iterate over every variant's payload fields — the n-variant
+        // model puts payload fields on the union's members.
+        let members: &[crate::registry::types::UnionMemberDef] =
+            type_def.union_members().unwrap_or(&[]);
+        for field in members.iter().flat_map(|m| m.fields.iter()) {
             if extract_domain_bounds(&field.type_ann).is_empty() {
                 continue;
             }
@@ -641,13 +639,12 @@ fn check_field_domain_constraint_dimensions(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for type_def in tir.registry.types.all_types() {
-        let fields: Box<dyn Iterator<Item = &crate::registry::types::StructField>> =
-            match &type_def.kind {
-                crate::registry::types::TypeDefKind::Record { fields } => Box::new(fields.iter()),
-                crate::registry::types::TypeDefKind::Union { .. }
-                | crate::registry::types::TypeDefKind::Unit => Box::new(std::iter::empty()),
-            };
-        for field in fields {
+        let members: &[crate::registry::types::UnionMemberDef] =
+            type_def.union_members().unwrap_or(&[]);
+        for (variant, field) in members
+            .iter()
+            .flat_map(|m| m.fields.iter().map(move |f| (m, f)))
+        {
             let bounds = extract_domain_bounds(&field.type_ann);
             if bounds.is_empty() {
                 continue;
@@ -655,7 +652,15 @@ fn check_field_domain_constraint_dimensions(
             let Some(expected) = field_expected_bound(&field.type_ann, registry, src)? else {
                 continue;
             };
-            let display_name = format!("{}.{}", type_def.name, field.name);
+            // For a single-variant collision (record-shape) the display
+            // name is `Type.field`; for a true multi-variant union it's
+            // `Type.Variant.field` so diagnostics disambiguate which
+            // constructor a violating bound belongs to.
+            let display_name = if variant.name.as_str() == type_def.name.as_str() {
+                format!("{}.{}", type_def.name, field.name)
+            } else {
+                format!("{}.{}.{}", type_def.name, variant.name, field.name)
+            };
             for bound in bounds {
                 let inferred = infer_type(
                     &bound.value,
@@ -887,7 +892,7 @@ pub fn check_override_dimension(
         src,
     )?;
 
-    if !types_match(declared, &inferred, registry) {
+    if !types_match(declared, &inferred) {
         return Err(GraphcalError::DimensionMismatch {
             expected: format_declared_type(declared, registry),
             found: format_inferred_type(&inferred, registry),

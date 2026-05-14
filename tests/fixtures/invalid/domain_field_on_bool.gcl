@@ -1,2 +1,4 @@
 // domain_field_on_bool.gcl -- field constraint on unsupported type
-type Foo { x: Bool(min: 0.0) }
+type Foo {
+    Foo(x: Bool(min: 0.0)),
+}

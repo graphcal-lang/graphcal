@@ -11,7 +11,7 @@ pub type ManeuverKind {
     LowThrust(thrust: Force, duration: Time),
 }
 
-param maneuver: ManeuverKind = LowThrust { thrust: 0.5 N, duration: 3600.0 s};
+param maneuver: ManeuverKind = LowThrust(thrust: 0.5 N, duration: 3600.0 s);
 
 node fuel_proxy: Force = match @maneuver {
     Impulsive { delta_v: _ } => 0.0 N,

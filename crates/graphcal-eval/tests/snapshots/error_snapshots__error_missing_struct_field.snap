@@ -4,10 +4,10 @@ expression: rendered
 ---
 missing field(s) ["dv2"] in construction of `Transfer`
     Diagnostic severity: error
-Begin snippet for missing_struct_field.gcl starting at line 9, column 1
+Begin snippet for missing_struct_field.gcl starting at line 8, column 1
 
-snippet line 9: param v: Velocity = 100.0 m/s;
-snippet line 10: node bad: Transfer = Transfer { dv1: @v};
-    label at line 10, columns 22 to 40: incomplete construction
+snippet line 8: param v: Velocity = 100.0 m/s;
+snippet line 9: node bad: Transfer = Transfer(dv1: @v);
+    label at line 9, columns 22 to 38: incomplete construction
 diagnostic help: all fields are required when constructing a struct
 diagnostic code: graphcal::S004

@@ -1,26 +1,28 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 462
 expression: formatted
 ---
 // generics.gcl -- Generic structs with phantom type parameters
 pub dim Velocity = Length / Time;
 
-// Marker types for reference frames
-pub type Eci {}
-pub type Body {}
+// Marker types for reference frames — single unit constructor.
+pub type Eci {
+    Eci,
+}
+pub type Body {
+    Body,
+}
 
-// Generic struct with dim param and phantom type param
+// Generic struct with dim param and phantom type param — single-variant
+// tagged union form (record sugar pending).
 pub type Vec3<D: Dim, F: Type> {
-    x: D,
-    y: D,
-    z: D,
+    Vec3(x: D, y: D, z: D),
 }
 
 // Construction with explicit type args
-param pos_eci: Vec3<Length, Eci> = Vec3<Length, Eci> { x: 6878.0 km, y: 0.0 km, z: 0.0 km};
+param pos_eci: Vec3<Length, Eci> = Vec3<Length, Eci>(x: 6878.0 km, y: 0.0 km, z: 0.0 km);
 
-param vel_eci: Vec3<Velocity, Eci> = Vec3<Velocity, Eci> { x: 0.0 m/s, y: 7.67 km/s, z: 0.0 m/s};
+param vel_eci: Vec3<Velocity, Eci> = Vec3<Velocity, Eci>(x: 0.0 m/s, y: 7.67 km/s, z: 0.0 m/s);
 
 // Field access on generic struct
 node x_pos: Length = @pos_eci.x;
@@ -28,20 +30,20 @@ node y_vel: Velocity = @vel_eci.y;
 
 // --- Default type parameters ---
 // Unframed marker type
-pub type Unframed {}
+pub type Unframed {
+    Unframed,
+}
 
 // Generic struct with default type param: F defaults to Unframed
 pub type Pos3<D: Dim, F: Type = Unframed> {
-    x: D,
-    y: D,
-    z: D,
+    Pos3(x: D, y: D, z: D),
 }
 
 // Use with all args explicitly
-param pos3_eci: Pos3<Length, Eci> = Pos3<Length, Eci> { x: 100.0 km, y: 200.0 km, z: 300.0 km};
+param pos3_eci: Pos3<Length, Eci> = Pos3<Length, Eci>(x: 100.0 km, y: 200.0 km, z: 300.0 km);
 
 // Use with default (omit F, gets Unframed)
-param pos3_default: Pos3<Length> = Pos3<Length> { x: 10.0 km, y: 20.0 km, z: 30.0 km};
+param pos3_default: Pos3<Length> = Pos3<Length>(x: 10.0 km, y: 20.0 km, z: 30.0 km);
 
 node pos3_eci_x: Length = @pos3_eci.x;
 node pos3_default_y: Length = @pos3_default.y;
@@ -53,9 +55,8 @@ node pos_body_x: Length = @pos_body.x;
 
 // Non-generic struct still works alongside generics
 pub type TransferResult {
-    dv1: Velocity,
-    dv2: Velocity,
+    TransferResult(dv1: Velocity, dv2: Velocity),
 }
 
-node transfer: TransferResult = TransferResult { dv1: 100.0 m/s, dv2: 200.0 m/s};
+node transfer: TransferResult = TransferResult(dv1: 100.0 m/s, dv2: 200.0 m/s);
 node total_dv: Velocity = @transfer.dv1 + @transfer.dv2;

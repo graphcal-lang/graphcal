@@ -280,14 +280,20 @@ module.exports = grammar({
       ),
     ),
 
-    // type TransferResult { dv1: Velocity, dv2: Velocity }  -- record type
-    // type Eci {}                                            -- empty record / marker
-    // type Element;                                          -- required type (bound via include)
-    // type Maneuver {                                        -- tagged union (issue #601)
-    //   Impulsive(delta_v: Velocity),
-    //   LowThrust(thrust: Force, duration: Time),
-    //   Coast,
-    // }
+    // Every `type T { … }` is an n-variant tagged union. Record-
+    // shaped types are written as a single-variant union whose sole
+    // constructor's name matches the type's name:
+    //   type Position { Position(x: Length, y: Length) }
+    // A unit marker:
+    //   type Eci { Eci }
+    // A required type stub:
+    //   type Element;
+    // A multi-variant union:
+    //   type Maneuver {
+    //     Impulsive(delta_v: Velocity),
+    //     LowThrust(thrust: Force, duration: Time),
+    //     Coast,
+    //   }
     type_declaration: $ => seq(
       repeat($.attribute),
       optional($.visibility),
@@ -295,24 +301,9 @@ module.exports = grammar({
       field("name", $.identifier),
       optional(field("generics", $.generic_params)),
       choice(
-        // Unified body: record fields or constructor list. The choice is
-        // syntactically structural — the parser disambiguates by the
-        // token after each entry's identifier (`:` → field; `(`, `{`,
-        // or end-of-entry → constructor).
-        seq(
-          "{",
-          optional(choice($.field_declaration_list, $.constructor_list)),
-          "}",
-        ),
-        // Required type: type Foo;
+        seq("{", $.constructor_list, "}"),
         ";",
       ),
-    ),
-
-    field_declaration_list: $ => seq(
-      $.field_declaration,
-      repeat(seq(",", $.field_declaration)),
-      optional(","),
     ),
 
     field_declaration: $ => seq(

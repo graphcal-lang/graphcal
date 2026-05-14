@@ -283,52 +283,43 @@ unit_scale
 (* The parenthesized form is evaluated at compile time. Only constant
    expressions are allowed: numbers, PI, E, and arithmetic operators. *)
 (* --- type --- *)
-(* Three forms of type declaration:
-   1. Required type (no body):     type Element;        (must be bound via include)
-   2. Record type (with fields):   type Orbit { sma: Length, ecc: Dimensionless }
-      or empty record / marker:    type Eci {}
-   3. Tagged union (constructor list):
-                                   type Maneuver {
-                                     Impulsive(delta_v: Velocity),
-                                     LowThrust(thrust: Force, duration: Time),
-                                     Coast,
-                                   }
+(* Two forms of type declaration:
+   1. Required type (no body):  type Element;     (must be bound via include)
+   2. Tagged union (constructor list):
+                                type Maneuver {
+                                  Impulsive(delta_v: Velocity),
+                                  LowThrust(thrust: Force, duration: Time),
+                                  Coast,
+                                }
 
-   The braced body is disambiguated structurally — by the token that
-   immediately follows each entry's identifier — never by identifier
-   casing:
-     `ident : Type`     → field (record form)
-     `ident ( ... )`    → constructor with payload (union form)
-     `ident { ... }`    → constructor with struct-like payload (union form)
-     `ident` then `,`|`}` → unit constructor (union form)
+   Every `type T { … }` declaration is an n-variant tagged union.
+   A record-shaped type is a single-variant union whose sole
+   constructor's name matches the type's name:
 
-   All body entries must agree on form. Mixing fields and constructors
-   in the same body is a syntax error.
+       type Position { Position(x: Length, y: Length) }
+
+   The future syntax sugar will let `type Position { x: Length,
+   y: Length }` desugar to that explicit form. Until that lands, the
+   field-only body is a parse error; authors must spell out the
+   constructor name.
+
+   An empty body `type T {}` is also a parse error — there is no
+   zero-variant tagged union. A unit marker is written
+   `type Eci { Eci }`; a required type stub is written `type T;`.
+
+   The body is a constructor list. Each entry is disambiguated
+   structurally — by the token after the constructor's identifier —
+   never by identifier casing:
+     `ident ( ... )`    → constructor with payload (parens form)
+     `ident { ... }`    → constructor with struct-like payload (brace form)
+     `ident` then `,`|`}` → unit constructor
 *)
 type_decl
    = "type", IDENT, [ generic_params ], type_decl_body;
 
 type_decl_body
    = ";"                                              (* required type *)
-   | "{", [ type_body_entries ], "}";                 (* record OR union *)
-
-(* The body of a type-decl is either a list of fields (record form) or
-   a list of constructors (union form). The two forms are mutually
-   exclusive within a single declaration. *)
-type_body_entries
-   = field_list                                       (* record form *)
-   | constructor_list;                                (* union form *)
-
-field_list
-   = field_decl, { ",", field_decl }, [ "," ];
-
-field_decl
-   = IDENT, ":", type_expr;
-
-(* Semantic constraint: struct field types must be ValueTypes
-   (type_expr_base), not indexed DeclTypes. You cannot put
-   Velocity[Maneuver] inside a struct field. To index structured
-   data, index the struct itself: Vec3<Velocity, ECI>[Maneuver]. *)
+   | "{", constructor_list, "}";                      (* n-variant union *)
 
 constructor_list
    = constructor_decl, { ",", constructor_decl }, [ "," ];
@@ -340,11 +331,18 @@ constructor_payload
    = "(", [ field_list ], ")"                         (* parens form *)
    | "{", [ field_list ], "}";                        (* brace form *)
 
+field_list
+   = field_decl, { ",", field_decl }, [ "," ];
+
+field_decl
+   = IDENT, ":", type_expr;
+
+(* Semantic constraint: payload field types must be ValueTypes
+   (type_expr_base), not indexed DeclTypes. You cannot put
+   Velocity[Maneuver] inside a payload field. To index structured
+   data, index the type itself: Vec3<Velocity, ECI>[Maneuver]. *)
 (* Constructors live in a separate namespace from types — the same
-   lexeme may name both, enabling the future single-variant sugar
-   (`type Position { x: Length, y: Length }` ≡ explicit
-   `type Position { Position(x: Length, y: Length) }`). The sugar is
-   not implemented yet; the explicit form is required. *)
+   lexeme may name both. *)
 
 generic_params
    = "<", generic_param, { ",", generic_param }, [ "," ], ">";

@@ -4,9 +4,9 @@ expression: rendered
 ---
 field `a` of `Pair`: expected dimension Length, found Mass
     Diagnostic severity: error
-Begin snippet for struct_field_dim_mismatch.gcl starting at line 8, column 1
+Begin snippet for struct_field_dim_mismatch.gcl starting at line 7, column 1
 
-snippet line 8: 
-snippet line 9: node bad: Pair = Pair { a: 1.0 kg, b: 100.0 m/s};
-    label at line 9, column 25: has dimension Mass
+snippet line 7: 
+snippet line 8: node bad: Pair = Pair(a: 1.0 kg, b: 100.0 m/s);
+    label at line 8, column 23: has dimension Mass
 diagnostic code: graphcal::S006

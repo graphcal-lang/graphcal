@@ -6,7 +6,7 @@ pub const node gm: GravParam = 3.986004418e14 m^3/s^2;
 pub const node r_earth: Length = 6371000.0 m;
 
 dag circular_velocity {
-    import main.{gm, r_earth};
+    import main.{ gm, r_earth };
     
     param alt: Length;
     

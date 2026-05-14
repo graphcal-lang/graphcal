@@ -18,7 +18,7 @@ node mod_neg_divisor: Int = @a % -@b;
 node mod_pos_neg_divisor: Int = -@a % -@b;
 
 // Double negation
-node neg_neg: Int = -(-@a);
+node neg_neg: Int = --@a;
 
 // Subtracting a negative
 node sub_neg: Int = @c - @a;

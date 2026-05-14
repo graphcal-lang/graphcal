@@ -1177,25 +1177,8 @@
                   "value": "{"
                 },
                 {
-                  "type": "CHOICE",
-                  "members": [
-                    {
-                      "type": "CHOICE",
-                      "members": [
-                        {
-                          "type": "SYMBOL",
-                          "name": "field_declaration_list"
-                        },
-                        {
-                          "type": "SYMBOL",
-                          "name": "constructor_list"
-                        }
-                      ]
-                    },
-                    {
-                      "type": "BLANK"
-                    }
-                  ]
+                  "type": "SYMBOL",
+                  "name": "constructor_list"
                 },
                 {
                   "type": "STRING",
@@ -1206,43 +1189,6 @@
             {
               "type": "STRING",
               "value": ";"
-            }
-          ]
-        }
-      ]
-    },
-    "field_declaration_list": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "SYMBOL",
-          "name": "field_declaration"
-        },
-        {
-          "type": "REPEAT",
-          "content": {
-            "type": "SEQ",
-            "members": [
-              {
-                "type": "STRING",
-                "value": ","
-              },
-              {
-                "type": "SYMBOL",
-                "name": "field_declaration"
-              }
-            ]
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "STRING",
-              "value": ","
-            },
-            {
-              "type": "BLANK"
             }
           ]
         }

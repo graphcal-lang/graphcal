@@ -43,7 +43,7 @@ pub index OrbitCondition = {
 pub index Limit = { Min, Max };
 
 param temp_limits: Temperature[ThermalNode, Limit] = table[ThermalNode, Limit] {
-                     :    Min,     Max;
+                   :      Min,     Max;
     SolarPanelPosX:  -150.0 K, 120.0 K;
     SolarPanelNegX:  -150.0 K, 120.0 K;
     RadiatorPosY:    -100.0 K,  60.0 K;

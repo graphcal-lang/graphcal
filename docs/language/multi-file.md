@@ -286,7 +286,7 @@ extending the path:
 ```graphcal
 // orbit_analysis.gcl  (virtual package: orbit_analysis)
 dag analyze {
-    type IntermediateResult { value: Length };
+    type IntermediateResult { IntermediateResult(value: Length) };
 
     dag deeper {
         import orbit_analysis.analyze.{IntermediateResult};
@@ -333,7 +333,7 @@ In a virtual package, the file stem is the package name:
 
 ```graphcal
 // dynamics.gcl  (virtual package: dynamics)
-type OrbitType { sma: Length, ecc: Dimensionless };
+type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) };
 const earth_mu: GravParam = 3.986e5 km^3/s^2;
 
 dag analyze {
@@ -350,7 +350,7 @@ In a real package, the same reference uses the full package path:
 ```graphcal
 // On disk: src/nasa/rocket/dynamics.gcl
 // Source address: nasa.rocket.dynamics
-type OrbitType { sma: Length, ecc: Dimensionless };
+type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) };
 
 dag analyze {
     dag energy {
@@ -374,7 +374,7 @@ either be declared inside it or imported by it explicitly.
 
 ```graphcal
 // dynamics.gcl
-type OrbitType { sma: Length, ecc: Dimensionless };
+type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) };
 
 dag analyze {
     // ERROR: `OrbitType` is not visible here without an import.
@@ -607,15 +607,15 @@ consumers would see a symbol they cannot name. That's error `V006`:
 ```graphcal
 // container.gcl
 pub(bind) type Element;
-pub type Widget { item: Element }
+pub type Widget { Widget(item: Element) }
 
 // main.gcl
-type Inner {}                         // private at the importer
+type Inner { Inner }                  // private at the importer
 // ERROR: re-exported type `Widget`'s signature references private type `Inner`
 pub include container(Element: Inner) as c;
 
 // Fix: make the substituted name visible too.
-pub type Inner {}
+pub type Inner { Inner }
 pub include container(Element: Inner) as c;
 ```
 

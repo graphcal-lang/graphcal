@@ -1312,21 +1312,6 @@
     }
   },
   {
-    "type": "field_declaration_list",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "field_declaration",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "field_init",
     "named": true,
     "fields": {
@@ -6317,10 +6302,6 @@
         },
         {
           "type": "constructor_list",
-          "named": true
-        },
-        {
-          "type": "field_declaration_list",
           "named": true
         },
         {

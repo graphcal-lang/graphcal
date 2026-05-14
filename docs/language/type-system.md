@@ -120,33 +120,38 @@ See [Built-in Reference](built-ins.md#datetime-functions) for the full list of d
 
 ### Value Types (Level 2)
 
-A ValueType is a single logical value: a primitive, a struct instance, or a union type member. All struct fields and union type member fields must themselves be ValueTypes.
+A ValueType is a single logical value: a primitive or an instance of a
+tagged union. Every `type` declaration in graphcal is an n-variant
+tagged union — record-shaped types are simply single-variant unions
+whose sole constructor's name matches the type's name. The functional
+core distinguishes only "required type stub" from "n-variant union";
+there is no separate record kind.
 
-#### Structs
+Constructor payload fields must themselves be ValueTypes — you cannot
+put an indexed type like `Velocity[Maneuver]` inside a constructor's
+payload. To index structured data, index the type itself:
+`Vec3<Velocity, ECI>[Maneuver]`.
 
-A struct is a product type with named fields. All fields must be ValueTypes -- you cannot put an indexed type like `Velocity[Maneuver]` inside a struct field. To index structured data, index the struct itself: `Vec3<Velocity, ECI>[Maneuver]`.
+#### Single-Variant Unions (Records)
 
 ```
 type Orbit {
-    sma: Length,
-    ecc: Dimensionless,
-    inc: Angle,
+    Orbit(sma: Length, ecc: Dimensionless, inc: Angle),
 }
 
 type Vec3<D: Dim, Frame: Type> {
-    x: D,
-    y: D,
-    z: D,
+    Vec3(x: D, y: D, z: D),
 }
 ```
 
-#### Tagged Unions
+A future syntax sugar will let `type Position { x: Length, y: Length }`
+desugar to `type Position { Position(x: Length, y: Length) }`; today
+the explicit form is required.
 
-A tagged union is a sum type whose **constructors** are listed inline
-inside the braced body of a `type` declaration. Each constructor has an
-optional record-shaped payload (declared with parens or braces) or is a
-bare unit constructor. Constructors are not standalone types — they are
-constructors of the union itself.
+#### Multi-Variant Unions
+
+A multi-variant union has more than one constructor. Each constructor
+carries its own payload (or is a bare unit constructor):
 
 ```
 type ManeuverKind {
@@ -156,10 +161,8 @@ type ManeuverKind {
 }
 ```
 
-The same braced body must be either *all* fields (record form) or *all*
-constructors (union form). The parser disambiguates structurally — by
-the token after each entry's identifier — and never by identifier
-casing.
+Field access (`@v.field`) is rejected on multi-variant unions —
+destructure through `match` instead.
 
 ### Declaration Types (Level 3)
 
@@ -221,14 +224,17 @@ param delta_v: Velocity(min: 0.0 m/s, max: 10000.0 m/s)[Maneuver] = {
 
 Each entry in the indexed value is independently checked against the constraint bounds.
 
-### Struct and Union Member Field Constraints
+### Constructor Payload Field Constraints
 
-Constraints can also annotate the field types in `type` declarations and union member shapes:
+Constraints can also annotate the payload field types of a
+constructor:
 
 ```
 type SatelliteSpec {
-    mass: Mass(min: 100.0 kg, max: 2000.0 kg),
-    altitude: Length(min: 200.0 km),
+    SatelliteSpec(
+        mass: Mass(min: 100.0 kg, max: 2000.0 kg),
+        altitude: Length(min: 200.0 km),
+    ),
 }
 
 pub type ManeuverResult {
@@ -237,22 +243,23 @@ pub type ManeuverResult {
 }
 ```
 
-Field constraints fire at **construction time** for each `T { ... }` literal:
+Field constraints fire at **construction time** for each
+`Ctor(field: ...)` call:
 
-- For a `const node` whose value is a struct literal, violations are caught at compile time as `DomainViolation`.
-- For a `param` or `node` that constructs a struct at runtime, a violation is reported as a per-node `EvalFailed` error keyed to the constructed type and field (e.g., `field SatelliteSpec.mass above maximum (2000 kg)`).
+- For a `const node` whose value is a constructor call, violations are caught at compile time as `DomainViolation`.
+- For a `param` or `node` that constructs a value at runtime, a violation is reported as a per-node `EvalFailed` error keyed to the constructor and field (e.g., `field SatelliteSpec.mass above maximum (2000 kg)`).
 
 ### Generic Type Arguments
 
-Domain constraints are **not** allowed on generic type arguments — they have no enforcement site after type erasure and ambiguous semantics. Put the constraint on the field in the struct definition instead:
+Domain constraints are **not** allowed on generic type arguments — they have no enforcement site after type erasure and ambiguous semantics. Put the constraint on the payload field of the constructor instead:
 
 ```
 // REJECTED at compile time:
-pub type Vec3<D: Dim> { x: D, y: D, z: D }
+pub type Vec3<D: Dim> { Vec3(x: D, y: D, z: D) }
 param p: Vec3<Length(min: 0.0 m)> = ...;
 
 // Use a non-generic field constraint instead:
-pub type SignedLength { value: Length(min: 0.0 m) }
+pub type SignedLength { SignedLength(value: Length(min: 0.0 m)) }
 ```
 
 ### Runtime Checking
@@ -301,7 +308,7 @@ Named index labels are proper runtime values within expressions:
 - Store in nodes: `node x: Maneuver = Maneuver.Departure` works.
 - Compare: `m == Maneuver.Departure` works.
 - Pattern match: `match m { Maneuver.Departure => ..., ... }` works.
-- Use in struct fields: `type Config { phase: Phase, maneuver: Maneuver }` works.
+- Use in constructor payloads: `type Config { Config(phase: Phase, maneuver: Maneuver) }` works.
 
 However, labels cannot be the type of a `param`, `node`, or `const node` declaration — they exist only within expression contexts.
 

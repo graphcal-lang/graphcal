@@ -1,6 +1,6 @@
 // lib.gcl -- defines a reusable DAG
 pub dag double {
     param x: Dimensionless;
-
+    
     pub node result: Dimensionless = @x * 2.0;
 }

@@ -1,5 +1,7 @@
 // lib.gcl -- library with a bindable type
-pub type Widget { size: Length }
+pub type Widget {
+    Widget(size: Length),
+}
 
-pub const node origin: Widget = Widget { size: 1.0 m };
+pub const node origin: Widget = Widget(size: 1.0 m);
 pub const node origin_size: Length = @origin.size;

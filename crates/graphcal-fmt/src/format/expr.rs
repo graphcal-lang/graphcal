@@ -370,11 +370,16 @@ pub fn format_struct_construction(
     let trailing_comma = RcDoc::text(",").flat_alt(RcDoc::nil());
     let inner = RcDoc::intersperse(field_docs, sep).append(trailing_comma);
 
+    // Canonical construction form: `Ctor(field: val, ...)`. Both
+    // `Ctor(...)` and `Ctor { ... }` parse to the same
+    // `StructConstruction` node — the formatter normalizes to parens
+    // because the unified type model treats every value type as an
+    // n-variant union (and constructor calls are paren-syntax).
     header
-        .append(RcDoc::text(" {"))
-        .append(RcDoc::line().append(inner).nest(INDENT).group())
+        .append(RcDoc::text("("))
+        .append(RcDoc::line_().append(inner).nest(INDENT).group())
         .append(RcDoc::line_())
-        .append(RcDoc::text("}"))
+        .append(RcDoc::text(")"))
         .group()
 }
 

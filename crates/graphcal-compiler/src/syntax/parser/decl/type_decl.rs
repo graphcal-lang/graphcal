@@ -61,52 +61,36 @@ impl Parser<'_> {
         generic_params: Vec<crate::syntax::ast::GenericParam>,
         start_span: Span,
     ) -> Result<Declaration, ParseError> {
-        // Empty body: `type T {}` — treat as an empty record (existing
-        // behavior, unchanged).
+        // The body of a `type T { ... }` must be a constructor list:
+        // every entry is a constructor of an n-variant tagged union.
+        // The record sugar — `type T { x: U }` ≡ `type T { T(x: U) }`
+        // — is reserved for a future PR; until then the explicit
+        // single-variant form is required.
         if self.lexer.peek() == Some(&Token::RBrace) {
-            let (_, end_span) = self.expect(Token::RBrace)?;
-            let span = start_span.merge(end_span);
-            return Ok(Declaration {
-                attributes: vec![],
-                visibility: Visibility::Private,
-                kind: DeclKind::Type(TypeDecl {
-                    name,
-                    generic_params,
-                    fields: Some(vec![]),
-                }),
-                span,
-            });
+            // `type T {}` is rejected: there is no zero-variant tagged
+            // union (it has no inhabitants and no purpose). The author
+            // either meant `type T { T }` (single unit constructor) or
+            // `type T;` (required, awaits include binding).
+            let (_, end_span) = self.advance()?;
+            return Err(self.unexpected_token(
+                "at least one constructor (`type T { T }` for a unit marker, `type T;` for a required type)",
+                "empty body",
+                start_span.merge(end_span),
+            ));
         }
 
-        // Consume the first identifier and peek at what follows to decide
-        // record-form vs union-form.
         let first_ident = self.parse_any_ident()?;
         match self.lexer.peek() {
             Some(&Token::Colon) => {
-                // Record form: `ident : Type, ...`
-                self.lexer.next_token(); // consume `:`
-                let first_type = self.parse_type_expr()?;
-                let first_field = FieldDecl {
-                    name: Spanned::new(FieldName::new(&first_ident.name), first_ident.span),
-                    type_ann: first_type,
-                };
-                let fields = self.continue_field_list(first_field)?;
-                let (_, end_span) = self.expect(Token::RBrace)?;
-                let span = start_span.merge(end_span);
-                Ok(Declaration {
-                    attributes: vec![],
-                    visibility: Visibility::Private,
-                    kind: DeclKind::Type(TypeDecl {
-                        name,
-                        generic_params,
-                        fields: Some(fields),
-                    }),
-                    span,
-                })
+                // Record-shaped entry. Reject with a precise diagnostic
+                // pointing at the explicit single-variant form.
+                Err(self.unexpected_token(
+                    "a constructor (the record sugar is not implemented yet — write `type T { T(x: U, ...) }` instead)",
+                    "record-style field",
+                    first_ident.span,
+                ))
             }
             Some(&Token::LParen | &Token::LBrace | &Token::Comma | &Token::RBrace) => {
-                // Union form. Build the first constructor from `first_ident`,
-                // then continue parsing the constructor list.
                 let first_ctor = self.parse_constructor_tail(&first_ident)?;
                 let members = self.continue_constructor_list(first_ctor)?;
                 let (_, end_span) = self.expect(Token::RBrace)?;
@@ -125,50 +109,12 @@ impl Parser<'_> {
             _ => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token(
-                    "':' (record field), '(' or '{' (constructor payload), or ',' / '}' (unit constructor)",
+                    "'(' or '{' (constructor payload), or ',' / '}' (unit constructor)",
                     &tok.to_string(),
                     span,
                 ))
             }
         }
-    }
-
-    /// Parse the rest of a `FieldDecl` list after the first field has been
-    /// parsed. Trailing comma allowed.
-    fn continue_field_list(&mut self, first: FieldDecl) -> Result<Vec<FieldDecl>, ParseError> {
-        let mut fields = vec![first];
-        while self.lexer.peek() == Some(&Token::Comma) {
-            self.lexer.next_token();
-            // Trailing comma — body ends here.
-            if self.lexer.peek() == Some(&Token::RBrace) {
-                break;
-            }
-            // The remaining entries must be record-form fields. If we see
-            // a constructor-shape entry here, reject with a precise error.
-            let ident = self.parse_any_ident()?;
-            match self.lexer.peek() {
-                Some(&Token::Colon) => {
-                    self.lexer.next_token();
-                    let type_ann = self.parse_type_expr()?;
-                    fields.push(FieldDecl {
-                        name: Spanned::new(FieldName::new(&ident.name), ident.span),
-                        type_ann,
-                    });
-                }
-                Some(&Token::LParen | &Token::LBrace | &Token::Comma | &Token::RBrace) => {
-                    return Err(self.unexpected_token(
-                        "':' (this body started as a record, every entry must be a field)",
-                        "constructor-shaped entry",
-                        ident.span,
-                    ));
-                }
-                _ => {
-                    let (tok, span) = self.advance()?;
-                    return Err(self.unexpected_token("':'", &tok.to_string(), span));
-                }
-            }
-        }
-        Ok(fields)
     }
 
     /// Parse the payload (if any) following a constructor's identifier,

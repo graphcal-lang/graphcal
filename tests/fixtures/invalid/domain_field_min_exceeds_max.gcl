@@ -1,2 +1,4 @@
 // domain_field_min_exceeds_max.gcl -- min > max on a struct field
-type Foo { x: Mass(min: 100.0 kg, max: 50.0 kg) }
+type Foo {
+    Foo(x: Mass(min: 100.0 kg, max: 50.0 kg)),
+}

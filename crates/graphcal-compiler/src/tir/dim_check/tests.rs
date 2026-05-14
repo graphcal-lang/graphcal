@@ -589,8 +589,8 @@ fn check_unknown_dimension_in_type() {
 #[test]
 fn check_struct_in_arithmetic() {
     let source = "\
-pub type Orbit { altitude: Length, speed: Velocity }
-param o: Orbit = Orbit { altitude: 400.0 km, speed: 7.6 km / s };
+pub type Orbit { Orbit(altitude: Length, speed: Velocity) }
+param o: Orbit = Orbit(altitude: 400.0 km, speed: 7.6 km / s);
 node bad: Length = @o + 1.0 m;";
     let err = check(source).unwrap_err();
     assert!(
@@ -618,8 +618,8 @@ node bad: Length = @x.foo;";
 #[test]
 fn check_struct_extra_fields() {
     let source = "\
-type Orbit { altitude: Length, speed: Velocity }
-node o: Orbit = Orbit { altitude: 400.0 km, speed: 7.6 km / s, bonus: 1.0 };";
+type Orbit { Orbit(altitude: Length, speed: Velocity) }
+node o: Orbit = Orbit(altitude: 400.0 km, speed: 7.6 km / s, bonus: 1.0);";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::ExtraFields { .. }),
@@ -635,7 +635,7 @@ node o: Orbit = Orbit { altitude: 400.0 km, speed: 7.6 km / s, bonus: 1.0 };";
 fn check_types_match_struct_vs_scalar() {
     // Declared as a struct type but expression evaluates to scalar → mismatch
     let source = "\
-type Orbit { altitude: Length, speed: Velocity }
+type Orbit { Orbit(altitude: Length, speed: Velocity) }
 param x: Dimensionless = 1.0;
 node o: Orbit = @x;";
     let err = check(source).unwrap_err();
@@ -828,7 +828,7 @@ node bad: Length = (1.0 foobar) -> m;";
 #[test]
 fn check_field_access_error_in_inner() {
     let source = "\
-type Orbit { altitude: Length, speed: Velocity }
+type Orbit { Orbit(altitude: Length, speed: Velocity) }
 node bad: Length = (1.0 foobar).altitude;";
     let err = check(source).unwrap_err();
     assert!(
@@ -842,8 +842,8 @@ node bad: Length = (1.0 foobar).altitude;";
 #[test]
 fn check_struct_construction_error_in_field_value() {
     let source = "\
-type Orbit { altitude: Length, speed: Velocity }
-node o: Orbit = Orbit { altitude: 1.0 foobar, speed: 7.6 km / s };";
+type Orbit { Orbit(altitude: Length, speed: Velocity) }
+node o: Orbit = Orbit(altitude: 1.0 foobar, speed: 7.6 km / s);";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::UnknownUnit { .. }),

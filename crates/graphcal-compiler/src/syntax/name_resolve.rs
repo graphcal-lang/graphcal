@@ -140,6 +140,19 @@ fn collect_names_from_decls(
                     type_names.insert(member.name.value.to_string());
                 }
             }
+            // Dim names are recognized so that a bare `Velocity` in an
+            // include-binding RHS (`Speed: Velocity`) lowers to a
+            // placeholder `StructConstruction` — the same shape the
+            // binding-extraction path already accepts for index/type
+            // bindings. Resolving "Velocity" elsewhere as a struct
+            // construction is benign — downstream type checking
+            // rejects the misuse with a precise diagnostic.
+            src_ast::DeclKind::BaseDimension(d) => {
+                type_names.insert(d.name.value.to_string());
+            }
+            src_ast::DeclKind::Dimension(d) => {
+                type_names.insert(d.name.value.to_string());
+            }
             src_ast::DeclKind::Index(idx) => {
                 let idx_name = idx.name.value.to_string();
                 if let src_ast::IndexDeclKind::Named { variants } = &idx.kind {
@@ -738,6 +751,19 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> d
     }
 
     if ctx.type_names.contains(name.as_str()) {
+        return dst_ast::ExprKind::StructConstruction {
+            type_name: Spanned::new(StructTypeName::new(name), ident.span),
+            type_args: Vec::new(),
+            fields: Vec::new(),
+        };
+    }
+
+    // Bare index name in expression position. Used by include bindings
+    // (`include lib(Phase: MyPhase, ...)`) to pass an index by name.
+    // Lowered to a zero-field `StructConstruction` so the existing
+    // binding-extraction path (which already accepts that shape for
+    // index/type bindings) keeps working without a new variant.
+    if ctx.index_variants.contains_key(name.as_str()) {
         return dst_ast::ExprKind::StructConstruction {
             type_name: Spanned::new(StructTypeName::new(name), ident.span),
             type_args: Vec::new(),

@@ -70,31 +70,38 @@ pub struct StructField {
 
 /// A member (constructor) of a tagged-union type.
 ///
-/// Each variant has an optional record-shaped payload. Unit constructors
-/// carry `payload: None`. Generic variants (`Ok<D>`) are no longer
-/// supported under the constructor-list design — the union itself takes
-/// generics; variants are constructors of the parameterized union, not
-/// standalone types.
+/// The compiler treats every `type T { ... }` declaration as an n-variant
+/// tagged union — including single-variant cases (which the future
+/// `type Position { x: Length, ... }` sugar will desugar to
+/// `type Position { Position(x: Length, ...) }`). Each variant carries
+/// its payload fields inline; there are no per-variant standalone types.
 #[derive(Debug, Clone)]
 pub struct UnionMemberDef {
-    /// Constructor name. We carry it as `StructTypeName` rather than the
-    /// dedicated `ConstructorName` newtype: under the hood, every variant
-    /// is synthesized as a record `TypeDef` keyed by this name so that
-    /// existing TIR / eval paths (struct construction, field access,
-    /// pattern matching) keep working without a parallel registry. Once
-    /// the constructor namespace is split out from the type namespace,
-    /// this field will move to `ConstructorName`.
+    /// Constructor name. Tracked as `StructTypeName` for now — once the
+    /// constructor namespace is fully split out, this will become a
+    /// `ConstructorName` newtype.
     pub name: StructTypeName,
+    /// Payload fields for this constructor. An empty `Vec` means a unit
+    /// constructor (`Coast`).
+    pub fields: Vec<StructField>,
 }
 
 /// The kind of a type definition.
+///
+/// The functional core only distinguishes two shapes: a *required* type
+/// stub (no body, awaits binding via include) and an *n-variant union*
+/// — single-variant or multi-variant alike. Record-shaped types
+/// (`type Position { x: Length, y: Length }`) are represented as a
+/// single-variant union whose sole constructor's name matches the
+/// type's name.
 #[derive(Debug, Clone)]
 pub enum TypeDefKind {
-    /// A unit type with no fields: `type Coasting;`
+    /// A required type with no body: `type Element;`. Bound from outside
+    /// via parameterized include.
     Unit,
-    /// A record type with fields: `type TransferResult { dv1: Velocity, dv2: Velocity }`
-    Record { fields: Vec<StructField> },
-    /// A tagged union: `type Maneuver { Impulsive(delta_v: Velocity), Coast }`.
+    /// A tagged union: `type Maneuver { Impulsive(delta_v: Velocity), Coast }`
+    /// or, as a single-variant special case,
+    /// `type Position { Position(x: Length, y: Length) }`.
     Union { members: Vec<UnionMemberDef> },
 }
 
@@ -140,40 +147,57 @@ pub struct TypeDef {
 }
 
 impl TypeDef {
-    /// Returns the fields if this is a record type.
-    #[must_use]
-    pub fn fields(&self) -> &[StructField] {
-        match &self.kind {
-            TypeDefKind::Record { fields } => fields,
-            TypeDefKind::Unit | TypeDefKind::Union { .. } => &[],
-        }
-    }
-
-    /// Returns the union members if this is a union type.
+    /// Returns the union members if this is a tagged union.
+    ///
+    /// Returns `None` only for a required (unbound) type stub.
     #[must_use]
     pub fn union_members(&self) -> Option<&[UnionMemberDef]> {
         match &self.kind {
             TypeDefKind::Union { members } => Some(members),
-            TypeDefKind::Unit | TypeDefKind::Record { .. } => None,
+            TypeDefKind::Unit => None,
         }
     }
 
-    /// Returns true if this is a union type.
+    /// Returns `true` if this is a tagged union — single-variant or
+    /// multi-variant.
     #[must_use]
     pub const fn is_union(&self) -> bool {
         matches!(self.kind, TypeDefKind::Union { .. })
     }
 
-    /// Returns true if this is a record type (has fields).
+    /// Returns `true` if this is a required type stub awaiting binding.
     #[must_use]
-    pub const fn is_record(&self) -> bool {
-        matches!(self.kind, TypeDefKind::Record { .. })
+    pub const fn is_required(&self) -> bool {
+        matches!(self.kind, TypeDefKind::Unit)
     }
 
-    /// Returns true if this is a unit type (no fields, no members).
+    /// If this is a single-variant union whose sole constructor's name
+    /// equals the type's name, returns that variant's payload fields.
+    /// This is the record-like shape: field access and brace
+    /// construction work directly on it.
+    ///
+    /// For multi-variant unions or single-variant unions whose
+    /// constructor name differs from the type name, returns `None` —
+    /// callers must dispatch through the constructor namespace and / or
+    /// `match`.
     #[must_use]
-    pub const fn is_unit(&self) -> bool {
-        matches!(self.kind, TypeDefKind::Unit)
+    pub fn record_fields(&self) -> Option<&[StructField]> {
+        let TypeDefKind::Union { members } = &self.kind else {
+            return None;
+        };
+        let [only] = members.as_slice() else {
+            return None;
+        };
+        (only.name.as_str() == self.name.as_str()).then_some(only.fields.as_slice())
+    }
+
+    /// Backward-compatible accessor that returns the record-shaped
+    /// fields (empty when the type is multi-variant or a required
+    /// stub). Prefer [`record_fields`](Self::record_fields) at new call
+    /// sites — it makes the single-variant precondition explicit.
+    #[must_use]
+    pub fn fields(&self) -> &[StructField] {
+        self.record_fields().unwrap_or(&[])
     }
 }
 
@@ -561,12 +585,21 @@ impl UnitRegistry {
     }
 }
 
-/// Type registry: maps type names to `TypeDef` and provides union membership lookup.
+/// Type registry: maps type names to `TypeDef` and provides
+/// constructor-namespace lookup.
+///
+/// The constructor namespace is *separate from* the type namespace: a
+/// single lexeme can name both a type (`Position` — the n-variant
+/// union) and a constructor (`Position` — the sole constructor of that
+/// union). [`lookup_ctor`](Self::lookup_ctor) walks the constructor
+/// side; [`get_type`](Self::get_type) walks the type side.
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
     types: HashMap<StructTypeName, TypeDef>,
-    /// Reverse lookup: member type name → union type names it belongs to.
-    type_to_unions: HashMap<StructTypeName, Vec<StructTypeName>>,
+    /// Constructor namespace: each constructor name resolves to the
+    /// union it belongs to. With no module system, the namespace is
+    /// flat; collisions are rejected at registry construction time.
+    ctors: HashMap<StructTypeName, StructTypeName>,
 }
 
 impl TypeRegistry {
@@ -576,20 +609,16 @@ impl TypeRegistry {
         self.types.get(name)
     }
 
-    /// Check if `member_name` is a member of the union type `union_name`.
+    /// Look up the union that owns a constructor name, plus the
+    /// constructor's payload fields. Returns `None` if the name is not
+    /// a registered constructor.
     #[must_use]
-    pub fn is_member_of_union(&self, member_name: &str, union_name: &str) -> bool {
-        self.type_to_unions
-            .get(member_name)
-            .is_some_and(|unions| unions.iter().any(|u| u.as_str() == union_name))
-    }
-
-    /// Get the union types that `member_name` belongs to.
-    #[must_use]
-    pub fn get_unions_for_type(&self, member_name: &str) -> &[StructTypeName] {
-        self.type_to_unions
-            .get(member_name)
-            .map_or(&[], Vec::as_slice)
+    pub fn lookup_ctor(&self, ctor: &str) -> Option<(&TypeDef, &UnionMemberDef)> {
+        let union_name = self.ctors.get(ctor)?;
+        let td = self.types.get(union_name)?;
+        let members = td.union_members()?;
+        let member = members.iter().find(|m| m.name.as_str() == ctor)?;
+        Some((td, member))
     }
 
     /// Iterate over all registered type definitions.
@@ -674,7 +703,7 @@ pub struct RegistryBuilder {
     dimensions: HashMap<DimName, Dimension>,
     units: HashMap<UnitName, UnitInfo>,
     types: HashMap<StructTypeName, TypeDef>,
-    type_to_unions: HashMap<StructTypeName, Vec<StructTypeName>>,
+    ctors: HashMap<StructTypeName, StructTypeName>,
     indexes: HashMap<IndexName, IndexDef>,
     dags: HashMap<String, DagDecl>,
 }
@@ -697,7 +726,7 @@ impl RegistryBuilder {
             units: UnitRegistry { units: self.units },
             types: TypeRegistry {
                 types: self.types,
-                type_to_unions: self.type_to_unions,
+                ctors: self.ctors,
             },
             indexes: IndexRegistry {
                 indexes: self.indexes,
@@ -747,10 +776,10 @@ impl RegistryBuilder {
                 .entry(name.clone())
                 .or_insert_with(|| def.clone());
         }
-        for (member, unions) in &parent.types.type_to_unions {
-            self.type_to_unions
-                .entry(member.clone())
-                .or_insert_with(|| unions.clone());
+        for (ctor, union_name) in &parent.types.ctors {
+            self.ctors
+                .entry(ctor.clone())
+                .or_insert_with(|| union_name.clone());
         }
         for (name, def) in &parent.indexes.indexes {
             self.indexes
@@ -826,14 +855,21 @@ impl RegistryBuilder {
         self.units.insert(name, UnitInfo { dimension, scale });
     }
 
-    /// Register a type definition (single-variant struct sugar or multi-variant tagged union).
+    /// Register a type definition.
+    ///
+    /// For tagged unions (the common case), also populates the
+    /// constructor namespace: each variant's name resolves back to the
+    /// union it belongs to. Constructor collisions are detected here —
+    /// the prelude is loaded first, so any later user-defined
+    /// constructor that collides with a prelude or sibling type's
+    /// constructor is silently ignored on the *second* registration
+    /// (consistent with the type-name "first wins" behavior).
     pub fn register_type(&mut self, def: TypeDef) {
         if let TypeDefKind::Union { ref members } = def.kind {
             for member in members {
-                self.type_to_unions
+                self.ctors
                     .entry(member.name.clone())
-                    .or_default()
-                    .push(def.name.clone());
+                    .or_insert_with(|| def.name.clone());
             }
         }
         self.types.insert(def.name.clone(), def);
@@ -1149,28 +1185,33 @@ mod tests {
     fn registry_type_register_and_lookup() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
+        // Record-shaped types are single-variant unions whose sole
+        // constructor's name matches the type's name.
         b.register_type(TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
-            kind: TypeDefKind::Record {
-                fields: vec![
-                    StructField {
-                        name: FieldName::new("dv1"),
-                        type_ann: make_dim_type_expr("Velocity"),
-                    },
-                    StructField {
-                        name: FieldName::new("dv2"),
-                        type_ann: make_dim_type_expr("Velocity"),
-                    },
-                ],
+            kind: TypeDefKind::Union {
+                members: vec![UnionMemberDef {
+                    name: StructTypeName::new("TransferResult"),
+                    fields: vec![
+                        StructField {
+                            name: FieldName::new("dv1"),
+                            type_ann: make_dim_type_expr("Velocity"),
+                        },
+                        StructField {
+                            name: FieldName::new("dv2"),
+                            type_ann: make_dim_type_expr("Velocity"),
+                        },
+                    ],
+                }],
             },
         });
         let r = b.build();
         let velocity_dim = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         let def = r.types.get_type("TransferResult").unwrap();
         assert_eq!(def.name.as_str(), "TransferResult");
-        assert!(def.is_record());
-        let fields = def.fields();
+        assert!(def.is_union());
+        let fields = def.record_fields().expect("single-variant collision");
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name.as_str(), "dv1");
         assert_eq!(
