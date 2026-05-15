@@ -592,7 +592,9 @@ fn field_constraint_target_kind(
     };
     match &base.kind {
         TypeExprKind::Bool => Some("Bool".to_string()),
-        TypeExprKind::Datetime => Some("Datetime".to_string()),
+        TypeExprKind::Datetime | TypeExprKind::DatetimeApplication { .. } => {
+            Some("Datetime".to_string())
+        }
         TypeExprKind::TypeApplication { name, .. } => Some(format!("struct `{}`", name.name)),
         // The outer `Indexed` wrapper was stripped above; a nested indexed
         // type at this depth is unusual but constraint-compatible (the base
@@ -821,7 +823,8 @@ fn check_type_expr_for_generic_arg_constraints(
         TypeExprKind::Indexed { base, .. } => {
             check_type_expr_for_generic_arg_constraints(base, src)
         }
-        TypeExprKind::TypeApplication { type_args, .. } => {
+        TypeExprKind::TypeApplication { type_args, .. }
+        | TypeExprKind::DatetimeApplication { type_args } => {
             for arg in type_args {
                 if let Some(bound) = arg.constraints.first() {
                     return Err(GraphcalError::GenericTypeArgDomainConstraint {

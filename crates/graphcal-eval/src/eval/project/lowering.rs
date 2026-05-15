@@ -903,6 +903,12 @@ fn collect_type_expr_names(
                 collect_type_expr_names(arg, refs);
             }
         }
+        TypeExprKind::DatetimeApplication { type_args } => {
+            // `Datetime` is a built-in — no top-level name to push.
+            for arg in type_args {
+                collect_type_expr_names(arg, refs);
+            }
+        }
         TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int

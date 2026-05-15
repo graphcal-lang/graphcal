@@ -1206,6 +1206,12 @@ impl OverrideReconciliationChecker<'_> {
                 }
                 Ok(())
             }
+            TypeExprKind::DatetimeApplication { type_args } => {
+                for arg in type_args {
+                    self.check_type_expr(arg)?;
+                }
+                Ok(())
+            }
             TypeExprKind::Indexed { base, .. } => self.check_type_expr(base),
             TypeExprKind::Dimensionless
             | TypeExprKind::Bool
@@ -1554,7 +1560,8 @@ pub fn substitute_type_expr_index_names(
             }
             substitute_type_expr_index_names(base, bindings);
         }
-        TypeExprKind::TypeApplication { type_args, .. } => {
+        TypeExprKind::TypeApplication { type_args, .. }
+        | TypeExprKind::DatetimeApplication { type_args } => {
             for arg in type_args {
                 substitute_type_expr_index_names(arg, bindings);
             }
@@ -1603,6 +1610,13 @@ where
             if let Some(new_name) = bindings.get(name.name.as_str()) {
                 name.name = new_name.as_ref().to_string();
             }
+            for arg in type_args {
+                substitute_type_expr_nominal_names(arg, bindings);
+            }
+        }
+        TypeExprKind::DatetimeApplication { type_args } => {
+            // The built-in `Datetime` name is fixed; only the type args can
+            // carry user-bindable nominal names.
             for arg in type_args {
                 substitute_type_expr_nominal_names(arg, bindings);
             }
@@ -2334,7 +2348,8 @@ fn collect_nat_ranges_from_type_expr(
             }
         }
     }
-    if let crate::desugar::resolved_ast::TypeExprKind::TypeApplication { type_args, .. } =
+    if let crate::desugar::resolved_ast::TypeExprKind::TypeApplication { type_args, .. }
+    | crate::desugar::resolved_ast::TypeExprKind::DatetimeApplication { type_args } =
         &type_expr.kind
     {
         for arg in type_args {

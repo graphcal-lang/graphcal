@@ -834,6 +834,14 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(String, Span)>) {
                 collect_type_refs(arg, refs);
             }
         }
+        TypeExprKind::DatetimeApplication { type_args } => {
+            // No top-level name to record — `Datetime` is built-in. Recurse
+            // into the args so any user-defined name reachable from the time
+            // scale expression is still collected.
+            for arg in type_args {
+                collect_type_refs(arg, refs);
+            }
+        }
         TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int

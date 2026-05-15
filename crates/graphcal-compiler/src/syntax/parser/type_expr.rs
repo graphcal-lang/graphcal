@@ -40,15 +40,13 @@ impl Parser<'_> {
             } else if text == "Datetime" {
                 let ident = self.parse_any_ident()?;
                 if self.is_lt_after_ident(ident.span) {
-                    // Datetime<TT> — parse as TypeApplication
+                    // Datetime<TT> — built-in parameterized type, kept in its
+                    // own variant so TIR resolution doesn't need to string-match.
                     let type_args = self.parse_type_arg_list()?;
                     let end_span = type_args.last().map_or(ident.span, |a| a.span);
                     let span = ident.span.merge(end_span);
                     TypeExpr {
-                        kind: TypeExprKind::TypeApplication {
-                            name: ident,
-                            type_args,
-                        },
+                        kind: TypeExprKind::DatetimeApplication { type_args },
                         constraints: vec![],
                         span,
                     }
@@ -692,6 +690,41 @@ mod tests {
                 }
                 other => panic!("expected TypeApplication, got {other:?}"),
             },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_datetime_application_uses_dedicated_variant() {
+        // The built-in `Datetime<...>` must not lower to `TypeApplication` —
+        // downstream resolution dispatches on the variant rather than on the
+        // type name string.
+        let source = "param t: Datetime<TT> = 0.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::DatetimeApplication { type_args } => {
+                    assert_eq!(type_args.len(), 1);
+                    assert_eq!(dim_expr_name(&type_args[0]), "TT");
+                }
+                TypeExprKind::TypeApplication { name, .. } => panic!(
+                    "Datetime<...> must parse as DatetimeApplication, not TypeApplication (got name `{}`)",
+                    name.name,
+                ),
+                other => panic!("expected DatetimeApplication, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_bare_datetime_stays_bare() {
+        let source = "param t: Datetime = 0.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => {
+                assert!(matches!(&p.type_ann.kind, TypeExprKind::Datetime));
+            }
             _ => panic!("expected param"),
         }
     }

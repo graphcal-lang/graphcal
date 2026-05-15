@@ -928,6 +928,11 @@ pub enum TypeExprKind<P: Phase = Raw> {
     Int,
     /// `Datetime` (bare, without time scale parameter — defaults to UTC)
     Datetime,
+    /// `Datetime<TimeScale>` — built-in datetime type parameterized by a time
+    /// scale. Kept separate from [`Self::TypeApplication`] so downstream
+    /// resolution dispatches on the variant rather than string-matching the
+    /// built-in name.
+    DatetimeApplication { type_args: Vec<TypeExpr<P>> },
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
     DimExpr(DimExpr),
     /// An indexed type like `Velocity[Maneuver]`, `Dimensionless[3, 4]`, or `D[M, N]`
@@ -935,7 +940,9 @@ pub enum TypeExprKind<P: Phase = Raw> {
         base: Box<TypeExpr<P>>,
         indexes: Vec<IndexExpr>,
     },
-    /// A generic type application like `Vec3<Length, ECI>` or `Timestamp<UTC>`
+    /// A user-defined generic type application like `Vec3<Length, ECI>`.
+    /// Built-in parameterized types (currently only `Datetime<...>`) have their
+    /// own variants instead — see [`Self::DatetimeApplication`].
     TypeApplication {
         name: Ident,
         type_args: Vec<TypeExpr<P>>,
