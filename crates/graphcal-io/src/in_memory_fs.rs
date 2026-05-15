@@ -8,8 +8,12 @@ use crate::FileSystemReader;
 
 /// In-memory filesystem for tests and WASM environments.
 ///
-/// Paths are stored exactly as inserted — [`canonicalize`](FileSystemReader::canonicalize)
-/// returns the path unchanged if the file exists.
+/// All paths must be absolute. [`canonicalize`](FileSystemReader::canonicalize)
+/// returns the stored path unchanged when it exists; relative inputs are
+/// rejected with `ErrorKind::InvalidInput` because an in-memory filesystem
+/// has no current-directory context against which to resolve them. This
+/// matches the absolute-path guarantee that `std::fs::canonicalize` upholds
+/// on the real filesystem, so test and production behavior stay aligned.
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryFileSystem {
     files: HashMap<PathBuf, String>,
@@ -22,8 +26,14 @@ impl InMemoryFileSystem {
         Self::default()
     }
 
-    /// Insert a file with the given path and content.
+    /// Insert a file with the given path and content. `path` must be absolute
+    /// — see the type-level invariant.
     pub fn add_file(&mut self, path: PathBuf, content: String) {
+        debug_assert!(
+            path.is_absolute(),
+            "InMemoryFileSystem requires absolute paths, got `{}`",
+            path.display()
+        );
         self.files.insert(path, content);
     }
 
@@ -42,8 +52,15 @@ impl FileSystemReader for InMemoryFileSystem {
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
-        // In-memory: if the path exists (as a file or directory), return it
-        // as-is (already "canonical"). Otherwise, propagate NotFound.
+        if !path.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "InMemoryFileSystem::canonicalize requires an absolute path, got `{}`",
+                    path.display()
+                ),
+            ));
+        }
         if self.files.contains_key(path) || self.is_dir(path) {
             return Ok(path.to_path_buf());
         }
@@ -106,6 +123,17 @@ mod tests {
     fn in_memory_canonicalize_missing() {
         let fs = InMemoryFileSystem::new();
         assert!(fs.canonicalize(Path::new("/missing")).is_err());
+    }
+
+    #[test]
+    fn in_memory_canonicalize_rejects_relative_path() {
+        // The real `std::fs::canonicalize` resolves relative paths against the
+        // process CWD and always returns an absolute result. The in-memory FS
+        // has no CWD, so accepting a relative input would silently produce a
+        // non-canonical answer and let mock/real divergence slip through.
+        let fs = InMemoryFileSystem::new();
+        let err = fs.canonicalize(Path::new("./rel.gcl")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
