@@ -56,24 +56,7 @@ pub fn compile_inline_dag_bodies(
     // Read parent's value decls directly from the (already type-resolved)
     // root DagTIR. With the flat registry, `tir.root()` IS the parent
     // file's body — no separate `ParentValueKind` table needed.
-    let root = tir.root();
-    let mut parent_consts: HashMap<String, DeclaredType> = HashMap::new();
-    for entry in &root.consts {
-        let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
-            continue;
-        };
-        parent_consts.insert(
-            entry.name.member().to_string(),
-            resolved_to_declared_type(resolved, src)?,
-        );
-    }
-    let mut parent_runtime_names: HashSet<String> = HashSet::new();
-    for entry in &root.params {
-        parent_runtime_names.insert(entry.name.member().to_string());
-    }
-    for entry in &root.nodes {
-        parent_runtime_names.insert(entry.name.member().to_string());
-    }
+    let (parent_consts, parent_runtime_names) = classify_value_decls_in_tir(tir, src)?;
     let parent_type_system_names = type_system_names_from_registry(&tir.registry);
 
     for loaded_dag in inline_dags {
@@ -242,7 +225,8 @@ pub fn preprocess_dag_body_self_imports(
 
 /// Classify the value-kind decls in a file's AST for use as the
 /// `parent_consts` / `parent_runtime_names` arguments of
-/// [`preprocess_dag_body_self_imports`].
+/// [`preprocess_dag_body_self_imports`]. Pairs with
+/// [`classify_value_decls_in_tir`] — same shape, different input source.
 ///
 /// Used by `process_deferred_dag_includes` for the inline-DAG include
 /// path: when the parent file's TIR isn't yet type-resolved, the AST
@@ -273,4 +257,40 @@ pub fn classify_value_decls_in_ast(
         }
     }
     (consts, runtime_names)
+}
+
+/// Classify the value-kind decls of a type-resolved root [`TIR`] into the
+/// same `(consts, runtime_names)` shape returned by
+/// [`classify_value_decls_in_ast`]. Pairs with that helper — TIR-stage
+/// callers (where the parent file is already type-resolved) get real
+/// declared types from `resolved_decl_types` instead of the AST-side
+/// `Dimensionless` placeholders.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] if any resolved const type cannot be lowered
+/// back to a [`DeclaredType`].
+fn classify_value_decls_in_tir(
+    tir: &TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(HashMap<String, DeclaredType>, HashSet<String>), GraphcalError> {
+    let root = tir.root();
+    let mut consts: HashMap<String, DeclaredType> = HashMap::new();
+    for entry in &root.consts {
+        let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
+            continue;
+        };
+        consts.insert(
+            entry.name.member().to_string(),
+            resolved_to_declared_type(resolved, src)?,
+        );
+    }
+    let mut runtime_names: HashSet<String> = HashSet::new();
+    for entry in &root.params {
+        runtime_names.insert(entry.name.member().to_string());
+    }
+    for entry in &root.nodes {
+        runtime_names.insert(entry.name.member().to_string());
+    }
+    Ok((consts, runtime_names))
 }
