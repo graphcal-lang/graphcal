@@ -425,7 +425,7 @@ impl Parser<'_> {
                     let variant_span = hash_span.merge(num_span);
                     keys.push(MapEntryKey {
                         index: Spanned::new(IndexName::new(nat_range_index_name(*n)), *sp),
-                        variant: Spanned::new(VariantName::new(format!("#{value}")), variant_span),
+                        variant: Spanned::new(VariantName::range_step(value), variant_span),
                     });
                 }
             }

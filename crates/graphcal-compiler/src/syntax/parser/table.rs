@@ -85,7 +85,7 @@ impl Parser<'_> {
 
     /// Synthetic variant name `#i` for a `NatRange` axis.
     fn nat_range_variant_spanned(i: u64, span: Span) -> Spanned<VariantName> {
-        Spanned::new(VariantName::new(format!("#{i}")), span)
+        Spanned::new(VariantName::range_step(i), span)
     }
 
     /// Parse a 1D table body.
@@ -335,10 +335,7 @@ impl Parser<'_> {
                         let variant_span = hash_span.merge(num_span);
                         prefix_keys.push(MapEntryKey {
                             index: Self::nat_range_index_spanned(*n, *sp),
-                            variant: Spanned::new(
-                                VariantName::new(format!("#{value}")),
-                                variant_span,
-                            ),
+                            variant: Spanned::new(VariantName::range_step(value), variant_span),
                         });
                     }
                 }

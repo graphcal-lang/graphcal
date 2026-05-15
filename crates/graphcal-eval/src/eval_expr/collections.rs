@@ -91,11 +91,11 @@ pub(super) fn eval_index_access(
                     RuntimeValue::Label { variant, .. } => variant.clone(),
                     RuntimeValue::Struct { type_name, .. } => VariantName::new(type_name.as_str()),
                     RuntimeValue::RangeLabel { step_index, .. } => {
-                        VariantName::new(format!("#{step_index}"))
+                        VariantName::range_step(step_index)
                     }
                     RuntimeValue::Int(n) => {
                         // Nat range loop variable: integer value maps to #N variant
-                        VariantName::new(format!("#{n}"))
+                        VariantName::range_step(n)
                     }
                     _ => {
                         return Err(ctx.eval_error(
@@ -115,7 +115,7 @@ pub(super) fn eval_index_access(
                                 index_expr.span,
                             ));
                         }
-                        VariantName::new(format!("#{n}"))
+                        VariantName::range_step(n)
                     }
                     _ => {
                         return Err(ctx.eval_error(
