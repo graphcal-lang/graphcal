@@ -114,11 +114,12 @@ fn build_dep_decl_index(
 
 /// Classified param bindings: each entry routes to one of the four binding
 /// maps based on what the dependency declares the binding name as.
-pub(super) struct ClassifiedBindings {
-    pub(super) params: HashMap<String, graphcal_compiler::desugar::resolved_ast::Expr>,
-    pub(super) indexes: HashMap<IndexName, IndexName>,
-    pub(super) types: HashMap<StructTypeName, StructTypeName>,
-    pub(super) dims: HashMap<DimName, DimName>,
+pub(in crate::eval::project) struct ClassifiedBindings {
+    pub(in crate::eval::project) params:
+        HashMap<String, graphcal_compiler::desugar::resolved_ast::Expr>,
+    pub(in crate::eval::project) indexes: HashMap<IndexName, IndexName>,
+    pub(in crate::eval::project) types: HashMap<StructTypeName, StructTypeName>,
+    pub(in crate::eval::project) dims: HashMap<DimName, DimName>,
 }
 
 /// Classify each param binding against the dep's declaration index, returning
@@ -207,7 +208,7 @@ fn classify_param_bindings(
     clippy::too_many_arguments,
     reason = "needs access to project, importer, dep, and context"
 )]
-pub(super) fn process_instantiated_include<'a>(
+pub(in crate::eval::project) fn process_instantiated_include<'a>(
     project: &'a crate::loader::LoadedProject,
     importer_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     import_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
@@ -496,7 +497,7 @@ pub(super) fn process_instantiated_include<'a>(
     clippy::too_many_lines,
     reason = "binding validation, scope registration, and deferred include setup form a single cohesive pipeline"
 )]
-pub(super) fn process_inline_dag_include(
+pub(in crate::eval::project) fn process_inline_dag_include(
     dag_def: &graphcal_compiler::desugar::resolved_ast::DagDecl,
     dag_name: &str,
     parent_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
@@ -679,7 +680,7 @@ pub(super) fn process_inline_dag_include(
 ///
 /// For example, `include pkg.lib.double(...)` where `pkg/lib.gcl` defines
 /// `dag double { ... }`.
-pub(super) fn is_bare_module_dag_ref(
+pub(in crate::eval::project) fn is_bare_module_dag_ref(
     import_path: &ModulePath,
     resolved_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     project: &crate::loader::LoadedProject,
@@ -718,7 +719,7 @@ pub(super) fn is_bare_module_dag_ref(
     clippy::too_many_lines,
     reason = "visibility check adds necessary logic to the import processing"
 )]
-pub(super) fn process_non_instantiated_import<'a>(
+pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
     project: &crate::loader::LoadedProject,
     import_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     import_path: &graphcal_compiler::desugar::resolved_ast::ModulePath,
@@ -855,7 +856,7 @@ pub(super) fn process_non_instantiated_import<'a>(
 ///
 /// Builds a dependency graph of inline DAGs and detects cycles.
 /// Returns an error if a DAG directly or indirectly includes itself.
-pub(super) fn check_dag_recursion(
+pub(in crate::eval::project) fn check_dag_recursion(
     dag_definitions: &HashMap<String, &graphcal_compiler::desugar::resolved_ast::DagDecl>,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
@@ -938,7 +939,7 @@ pub(super) fn check_dag_recursion(
 ///
 /// Handles `const_values` and values (params/nodes).
 /// Returns what was found so the caller can handle assert and type-system fallbacks.
-pub(super) fn import_selective_item(
+pub(in crate::eval::project) fn import_selective_item(
     dep: &EvaluatedFile,
     orig_name: &str,
     local_name: &str,
@@ -995,7 +996,7 @@ pub(super) fn import_selective_item(
 /// When `const_only` is `true`, only `const_values` are imported; runtime values
 /// (params/nodes) are silently skipped. This is used for `import` statements which
 /// only allow compile-time items.
-pub(super) fn import_module_values(
+pub(in crate::eval::project) fn import_module_values(
     dep: &EvaluatedFile,
     module_name: &str,
     import_span: Span,

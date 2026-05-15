@@ -13,7 +13,7 @@ use super::*;
     clippy::too_many_arguments,
     reason = "pipeline function threading project context through IR lowering stages"
 )]
-pub(super) fn lower_and_finalize(
+pub(in crate::eval::project) fn lower_and_finalize(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
@@ -159,7 +159,7 @@ pub(super) fn lower_and_finalize(
 /// Each cloned DAG TIR also receives the dep-file values named by the
 /// DAG body's explicit imports, so `import dep.{const as local}`
 /// resolves under the local alias at inline-call eval time.
-pub(super) fn merge_dep_dag_tirs(
+pub(in crate::eval::project) fn merge_dep_dag_tirs(
     tir: &mut graphcal_compiler::tir::typed::TIR,
     module_map: &HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
     evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
@@ -230,7 +230,7 @@ pub(super) fn merge_dep_dag_tirs(
     clippy::too_many_lines,
     reason = "single cohesive include pipeline: source resolution, registry merge, validation, IR merge"
 )]
-pub(super) fn process_deferred_dag_includes(
+pub(in crate::eval::project) fn process_deferred_dag_includes(
     project: &crate::loader::LoadedProject,
     importer_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     deferred_dag_includes: &[DeferredDagInclude],
@@ -479,7 +479,7 @@ pub(super) fn process_deferred_dag_includes(
 /// Bindings that an alias's type annotation must be rewritten through before
 /// it is registered in the importer's IR. Shared by both inline-DAG and
 /// file-include alias paths so their type-substitution stays in lock-step.
-pub(super) struct AliasSubstitutions<'a> {
+pub(in crate::eval::project) struct AliasSubstitutions<'a> {
     pub index: &'a HashMap<IndexName, IndexName>,
     pub r#type: &'a HashMap<StructTypeName, StructTypeName>,
     pub dim: &'a HashMap<DimName, DimName>,
@@ -561,7 +561,7 @@ fn add_selective_aliases_inner(
 ///
 /// This imports dimensions, units, indexes, and struct types so that the
 /// importing file can reference them.
-pub(super) fn merge_registry_into_builder(
+pub(in crate::eval::project) fn merge_registry_into_builder(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
     index_bindings: &HashMap<IndexName, IndexName>,
@@ -581,7 +581,7 @@ pub(super) fn merge_registry_into_builder(
 /// Merge type-system declarations from a dependency's frozen Registry into a
 /// builder, restricted to names listed in `pub_names`. Used for module imports
 /// where only public items should cross the boundary.
-pub(super) fn merge_registry_into_builder_pub_filtered(
+pub(in crate::eval::project) fn merge_registry_into_builder_pub_filtered(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
     pub_names: &HashSet<DeclName>,
@@ -596,7 +596,7 @@ pub(super) fn merge_registry_into_builder_pub_filtered(
     );
 }
 
-pub(super) fn merge_registry_into_builder_filtered(
+pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
     index_bindings: &HashMap<IndexName, IndexName>,
@@ -671,7 +671,7 @@ pub(super) fn merge_registry_into_builder_filtered(
 /// (with empty `fields`/`type_args`) for bare `PascalCase` identifiers in
 /// expression position, because it cannot distinguish a bare type name from an
 /// index name at parse time.
-pub(super) fn extract_index_name_from_binding_expr(
+pub(in crate::eval::project) fn extract_index_name_from_binding_expr(
     expr: &Expr,
     dep_index_name: &str,
     file_src: &NamedSource<Arc<String>>,
@@ -698,7 +698,7 @@ pub(super) fn extract_index_name_from_binding_expr(
 /// Type bindings use the form `DepType: ImporterType` — the RHS is a bare
 /// `PascalCase` identifier, which the parser produces as a zero-arg
 /// `StructConstruction` (same shape as the index-binding RHS).
-pub(super) fn extract_type_name_from_binding_expr(
+pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
     expr: &Expr,
     dep_type_name: &str,
     file_src: &NamedSource<Arc<String>>,
@@ -725,7 +725,7 @@ pub(super) fn extract_type_name_from_binding_expr(
 /// This mirrors the import-processing logic in `compile_single_file_in_project` but
 /// only for non-instantiated imports (the dependency's own transitive deps are already
 /// evaluated and stored in `evaluated_files`).
-pub(super) fn build_dep_imported_values(
+pub(in crate::eval::project) fn build_dep_imported_values(
     project: &crate::loader::LoadedProject,
     dep_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
@@ -800,7 +800,7 @@ pub(super) fn build_dep_imported_values(
 /// Helper: import values from a dependency according to the import kind.
 ///
 /// When `is_import` is `true`, runtime values are skipped (import semantics).
-pub(super) fn build_dep_import_values_for_kind(
+pub(in crate::eval::project) fn build_dep_import_values_for_kind(
     import_path: &ModulePath,
     import_kind: &graphcal_compiler::desugar::resolved_ast::ImportKind,
     trans_dep: &EvaluatedFile,
