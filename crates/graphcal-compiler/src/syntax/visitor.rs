@@ -60,7 +60,6 @@ pub(crate) trait ExprVisitor<P: Phase> {
 
             ExprKind::Convert { expr: inner, .. }
             | ExprKind::DisplayTimezone { expr: inner, .. }
-            | ExprKind::AsCast { expr: inner, .. }
             | ExprKind::FieldAccess { expr: inner, .. } => self.visit_single_child(expr, inner),
 
             ExprKind::IndexAccess {
@@ -171,7 +170,7 @@ pub(crate) trait ExprVisitor<P: Phase> {
         self.visit_expr(else_branch)
     }
 
-    /// Called for `Convert`, `DisplayTimezone`, `AsCast`, `FieldAccess`, `IndexAccess`.
+    /// Called for `Convert`, `DisplayTimezone`, `FieldAccess`, `IndexAccess`.
     fn visit_single_child(&mut self, _expr: &Expr<P>, inner: &Expr<P>) -> Result<(), Self::Error> {
         self.visit_expr(inner)
     }
@@ -300,7 +299,6 @@ pub trait ExprVisitorMut<P: Phase> {
             }
             ExprKind::Convert { expr: inner, .. }
             | ExprKind::DisplayTimezone { expr: inner, .. }
-            | ExprKind::AsCast { expr: inner, .. }
             | ExprKind::FieldAccess { expr: inner, .. } => self.visit_expr_mut(inner),
 
             ExprKind::IndexAccess { .. } => self.visit_index_access_mut(expr),

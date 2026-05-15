@@ -163,16 +163,23 @@ type Vec3<D: Dim, F: Type> {
 }
 ```
 
-### Phantom Type Cast with `as`
+### Changing a Phantom Type Parameter
 
-Cast between phantom type instantiations using `as`:
+There is no phantom-type cast operator. To change a phantom type parameter
+(for example, to re-label a reference frame), construct a new instance and
+assign each field explicitly:
 
 ```
 node pos_eci: Vec3<Length, Eci> = Vec3<Length, Eci>(x: 7000.0 km, y: 0.0 km, z: 0.0 km);
-node pos_body: Vec3<Length, Body> = @pos_eci as Vec3<Length, Body>;
+node pos_body: Vec3<Length, Body> = Vec3<Length, Body>(
+    x: @pos_eci.x,
+    y: @pos_eci.y,
+    z: @pos_eci.z,
+);
 ```
 
-The `as` operator only changes the phantom type parameter; the underlying data is unchanged.
+The verbosity is intentional: a re-labeling is a deliberate, field-by-field
+act, visible at the call site — not a silent reinterpretation of opaque data.
 
 ### Default Type Parameters
 

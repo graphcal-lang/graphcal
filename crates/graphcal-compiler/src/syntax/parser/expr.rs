@@ -90,17 +90,6 @@ impl Parser<'_> {
                 },
                 span,
             ))
-        } else if self.lexer.peek() == Some(&Token::As) {
-            self.lexer.next_token();
-            let target_type = self.parse_type_expr()?;
-            let span = expr.span.merge(target_type.span);
-            Ok(Expr::new(
-                ExprKind::AsCast {
-                    expr: Box::new(expr),
-                    target_type,
-                },
-                span,
-            ))
         } else {
             Ok(expr)
         }
@@ -971,7 +960,7 @@ mod tests {
     )]
 
     use super::*;
-    use crate::syntax::ast::{BinOp, DeclKind, ExprKind, TypeExprKind, UnaryOp};
+    use crate::syntax::ast::{BinOp, DeclKind, ExprKind, UnaryOp};
 
     fn parse_node_expr(input: &str) -> crate::syntax::ast::Expr {
         let full = format!("node x: Dimensionless = {input};");
@@ -1055,57 +1044,6 @@ mod tests {
                     assert_eq!(target.terms[0].name.value.as_str(), "km");
                 }
                 _ => panic!("expected Convert"),
-            },
-            _ => panic!("expected node"),
-        }
-    }
-
-    #[test]
-    fn parse_as_cast() {
-        let source = r"
-        type Eci { Eci }
-        type Vec3<D: Dim, F: Type> { Vec3(x: D, y: D, z: D) }
-        node x: Vec3<Length, Eci> = @v as Vec3<Length, Eci>;
-    ";
-        let file = Parser::new(source).parse_file().unwrap();
-        match &file.declarations[2].kind {
-            DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::AsCast { expr, target_type } => {
-                    assert!(matches!(expr.kind, ExprKind::GraphRef(_)));
-                    match &target_type.kind {
-                        TypeExprKind::TypeApplication { name, type_args } => {
-                            assert_eq!(name.name.as_str(), "Vec3");
-                            assert_eq!(type_args.len(), 2);
-                        }
-                        other => panic!("expected TypeApplication, got {other:?}"),
-                    }
-                }
-                other => panic!("expected AsCast, got {other:?}"),
-            },
-            _ => panic!("expected node"),
-        }
-    }
-
-    #[test]
-    fn parse_as_cast_binds_loosely() {
-        let source = r"
-        type Eci { Eci }
-        type Vec3<D: Dim, F: Type> { Vec3(x: D, y: D, z: D) }
-        node x: Vec3<Length, Eci> = @a + @b as Vec3<Length, Eci>;
-    ";
-        let file = Parser::new(source).parse_file().unwrap();
-        match &file.declarations[2].kind {
-            DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::AsCast { expr, target_type } => {
-                    assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
-                    match &target_type.kind {
-                        TypeExprKind::TypeApplication { name, .. } => {
-                            assert_eq!(name.name.as_str(), "Vec3");
-                        }
-                        other => panic!("expected TypeApplication, got {other:?}"),
-                    }
-                }
-                other => panic!("expected AsCast, got {other:?}"),
             },
             _ => panic!("expected node"),
         }

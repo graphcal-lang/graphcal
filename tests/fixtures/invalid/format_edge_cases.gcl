@@ -110,8 +110,8 @@ param initial_state: StateVec<Length, Velocity, Eci> = StateVec<Length, Velocity
 node initial_pos_x: Length = @initial_state.pos_x;
 node initial_vel_y: Velocity = @initial_state.vel_y;
 
-// Phantom cast with long type name
-node state_body: StateVec<Length, Velocity, Body> = @initial_state as StateVec<Length, Velocity, Body>;
+// Phantom-param change via explicit reconstruction with long type name
+node state_body: StateVec<Length, Velocity, Body> = StateVec<Length, Velocity, Body>(pos_x: @initial_state.pos_x, pos_y: @initial_state.pos_y, pos_z: @initial_state.pos_z, vel_x: @initial_state.vel_x, vel_y: @initial_state.vel_y, vel_z: @initial_state.vel_z);
 node body_pos_x: Length = @state_body.pos_x;
 
 // Long binary expression chains

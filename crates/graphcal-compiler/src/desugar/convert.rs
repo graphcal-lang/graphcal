@@ -502,10 +502,6 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
                 expr: Box::new((*expr).into()),
                 timezone,
             },
-            ExprKind::AsCast { expr, target_type } => Self::AsCast {
-                expr: Box::new((*expr).into()),
-                target_type: target_type.into(),
-            },
             ExprKind::FieldAccess { expr, field } => Self::FieldAccess {
                 expr: Box::new((*expr).into()),
                 field,

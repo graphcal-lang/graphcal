@@ -440,7 +440,7 @@ Graphcal has **no implicit type conversions**. You must use explicit conversion 
 | `to_tai(x)` | `Datetime(any)` | `Datetime<TAI>` | Time scale conversion |
 | `to_tt(x)` | `Datetime(any)` | `Datetime<TT>` | Time scale conversion |
 
-`to_int` truncates toward zero (like Rust's `as` cast). Time scale conversion functions (`to_utc`, `to_tai`, `to_tt`, `to_tdb`, `to_et`, `to_gpst`, `to_gst`, `to_bdt`, `to_qzsst`) convert between time scales without changing the physical instant.
+`to_int` truncates toward zero. Time scale conversion functions (`to_utc`, `to_tai`, `to_tt`, `to_tdb`, `to_et`, `to_gpst`, `to_gst`, `to_bdt`, `to_qzsst`) convert between time scales without changing the physical instant.
 
 ## Dimension Algebra
 
@@ -494,16 +494,25 @@ Built-in math functions have specific dimension constraints:
 | `min(a, b)`, `max(a, b)` | Both same `D` | `D` |
 | `floor(x)`, `ceil(x)`, `round(x)` | `Dimensionless` | `Dimensionless` |
 
-## Unit Conversion and Cast
+## Unit Conversion
 
-The `->` operator converts between units of the same dimension. The `as` operator casts to a type (stripping or reinterpreting type information). Both bind at the lowest precedence.
+The `->` operator converts between units of the same dimension. It binds at the lowest precedence.
 
 ```
-node speed_kmh: Velocity = @speed -> km/hour;    // unit conversion
-node raw: Vec3<Length, Unframed> = @v as Vec3<Length, Unframed>;  // type cast
+node speed_kmh: Velocity = @speed -> km/hour;
 ```
 
-These are mutually exclusive: an expression can have `->` or `as`, not both.
+There is no type-cast operator. To change a value's phantom type parameter (e.g., re-label a reference frame), construct a new instance and assign each field explicitly:
+
+```
+node pos_body: Vec3<Length, Body> = Vec3<Length, Body>(
+    x: @pos_eci.x,
+    y: @pos_eci.y,
+    z: @pos_eci.z,
+);
+```
+
+The verbosity is intentional: every relabeling is a deliberate, field-by-field act, visible at the call site.
 
 ## Typing Rules for Expressions
 

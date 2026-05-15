@@ -12,7 +12,7 @@ From lowest to highest precedence:
 
 | Precedence | Operator | Description | Associativity |
 |-----------|----------|-------------|---------------|
-| 0 | `->` `as` | Unit conversion / phantom type cast (mutually exclusive) | n/a |
+| 0 | `->` | Unit conversion | n/a |
 | 1 | `if`/`else` | Conditional expression | Right |
 | 2 | `\|\|` | Logical OR | Left |
 | 3 | `&&` | Logical AND | Left |
@@ -23,9 +23,8 @@ From lowest to highest precedence:
 | 8 | `^` | Exponentiation | Right |
 | 9 | `.` `[...]` | Field access, index access | Left |
 
-Parentheses `()` can be used to override precedence. `->` and `as` bind at
-the lowest level: an expression carries at most one of them, so the
-trailing form (`expr -> unit` or `expr as Type`) wraps everything to its
+Parentheses `()` can be used to override precedence. `->` binds at the
+lowest level, so the trailing form `expr -> unit` wraps everything to its
 left.
 
 ## Arithmetic Operators
@@ -80,13 +79,21 @@ node alt_m: Length = @altitude -> m;
 node time_h: Time = @duration -> hour;
 ```
 
-## Phantom Type Cast (`as`)
+## Phantom Type Change (Explicit Reconstruction)
 
-Cast between different phantom type instantiations:
+There is no phantom-type cast operator. To change a phantom type parameter,
+construct a new instance and assign each field explicitly:
 
 ```
-node pos_body: Vec3<Length, Body> = @pos_eci as Vec3<Length, Body>;
+node pos_body: Vec3<Length, Body> = Vec3<Length, Body>(
+    x: @pos_eci.x,
+    y: @pos_eci.y,
+    z: @pos_eci.z,
+);
 ```
+
+The verbosity is intentional: re-labeling (e.g., changing a reference frame) is a
+deliberate, field-by-field act, not a silent reinterpretation.
 
 ## Field Access (`.`)
 

@@ -1,4 +1,4 @@
-//! Type inference for scalar operations: BinOp, UnaryOp, Convert, DisplayTimezone, AsCast.
+//! Type inference for scalar operations: BinOp, UnaryOp, Convert, DisplayTimezone.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use miette::NamedSource;
 use crate::desugar::resolved_ast::{BinOp, Expr, ExprKind};
 use crate::syntax::ast::UnaryOp;
 use crate::syntax::dimension::{Dimension, Rational};
-use crate::syntax::names::{GenericParamName, ScopedName, UnitName};
+use crate::syntax::names::{ScopedName, UnitName};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
@@ -568,101 +568,4 @@ pub(super) fn infer_display_timezone(
         });
     }
     Ok(inner_type)
-}
-
-/// Infer the type of an `as` cast expression.
-pub(super) fn infer_as_cast(
-    expr: &Expr,
-    inner: &Expr,
-    target_type: &crate::desugar::resolved_ast::TypeExpr,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HashMap<String, InferredType>,
-    tir: &crate::tir::typed::TIR,
-    registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let inner_type = infer_type(
-        inner,
-        declared_types,
-        local_types,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-    )?;
-    // Resolve the target type
-    let no_dim_params: &[GenericParamName] = &[];
-    let no_index_params: &[GenericParamName] = &[];
-    let no_nat_params: &[GenericParamName] = &[];
-    let resolved_target = crate::tir::typed::resolve_type_expr(
-        target_type,
-        registry,
-        no_dim_params,
-        no_index_params,
-        no_nat_params,
-        src,
-    )?;
-    let target_declared = crate::tir::typed::resolved_to_declared_type(&resolved_target, src)?;
-    let target_inferred = InferredType::from(&target_declared);
-
-    // Both must be structs with the same name
-    let InferredType::Struct(source_name, source_args) = &inner_type else {
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "`as` cast requires a struct type, got {}",
-                format_inferred_type(&inner_type, registry)
-            ),
-            src: src.clone(),
-            span: inner.span.into(),
-        });
-    };
-    let InferredType::Struct(target_name, target_args) = &target_inferred else {
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "`as` cast target must be a struct type, got {}",
-                format_inferred_type(&target_inferred, registry)
-            ),
-            src: src.clone(),
-            span: target_type.span.into(),
-        });
-    };
-    if source_name != target_name {
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "`as` cast requires same struct type, got `{source_name}` and `{target_name}`"
-            ),
-            src: src.clone(),
-            span: expr.span.into(),
-        });
-    }
-    // Verify non-phantom type args are identical (Dim and Index params must match)
-    let type_def = registry
-        .types
-        .get_type(source_name.as_str())
-        .ok_or_else(|| GraphcalError::UnknownStructType {
-            name: source_name.clone(),
-            src: src.clone(),
-            span: inner.span.into(),
-        })?;
-    for (i, param) in type_def.generic_params.iter().enumerate() {
-        if param.constraint != crate::registry::types::TypeGenericConstraint::Unconstrained {
-            // Non-phantom param — must match exactly
-            if i < source_args.len() && i < target_args.len() && source_args[i] != target_args[i] {
-                return Err(GraphcalError::EvalError {
-                    message: format!(
-                        "`as` cast can only change phantom (Type) parameters; \
-                         parameter `{}` (constraint {:?}) differs: {} vs {}",
-                        param.name,
-                        param.constraint,
-                        format_inferred_type(&source_args[i], registry),
-                        format_inferred_type(&target_args[i], registry),
-                    ),
-                    src: src.clone(),
-                    span: expr.span.into(),
-                });
-            }
-        }
-    }
-    Ok(target_inferred)
 }

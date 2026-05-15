@@ -1046,10 +1046,6 @@ fn collect_expr_refs(
         ExprKind::DisplayTimezone { expr, .. } => {
             collect_expr_refs(expr, table, scopes);
         }
-        ExprKind::AsCast { expr, target_type } => {
-            collect_expr_refs(expr, table, scopes);
-            collect_type_expr_refs(target_type, table);
-        }
         ExprKind::FieldAccess { expr, field } => {
             collect_expr_refs(expr, table, scopes);
             // Field reference -- target is approximate without type info.

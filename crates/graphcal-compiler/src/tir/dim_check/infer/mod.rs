@@ -216,21 +216,6 @@ pub(super) fn infer_type_with_owner(
             src,
         ),
 
-        ExprKind::AsCast {
-            expr: inner,
-            target_type,
-        } => scalar::infer_as_cast(
-            expr,
-            inner,
-            target_type,
-            declared_types,
-            local_types,
-            tir,
-            registry,
-            builtin_fns,
-            src,
-        ),
-
         // --- Function calls ---
         ExprKind::FnCall { name, args, .. } => functions::infer_fn_call(
             name,

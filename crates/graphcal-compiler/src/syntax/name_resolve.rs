@@ -555,10 +555,6 @@ fn lift_expr_kind(
             expr: Box::new(lift_expr(*expr, ctx)),
             timezone,
         },
-        S::AsCast { expr, target_type } => dst_ast::ExprKind::AsCast {
-            expr: Box::new(lift_expr(*expr, ctx)),
-            target_type: lift_type_expr(target_type, ctx),
-        },
         S::FieldAccess { expr, field } => dst_ast::ExprKind::FieldAccess {
             expr: Box::new(lift_expr(*expr, ctx)),
             field,

@@ -214,10 +214,10 @@ pub fn eval_expr(
             ctx,
         ),
 
-        // --- Passthrough (unit/display/cast annotations are handled at the type level) ---
-        ExprKind::Convert { expr: inner, .. }
-        | ExprKind::DisplayTimezone { expr: inner, .. }
-        | ExprKind::AsCast { expr: inner, .. } => eval_expr(inner, values, local_values, ctx),
+        // --- Passthrough (unit/display annotations are handled at the type level) ---
+        ExprKind::Convert { expr: inner, .. } | ExprKind::DisplayTimezone { expr: inner, .. } => {
+            eval_expr(inner, values, local_values, ctx)
+        }
 
         // --- Field access ---
         ExprKind::FieldAccess { expr: inner, field } => {

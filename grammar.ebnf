@@ -112,7 +112,6 @@ NUMBER
 (* Logical:     "&&" "||" "!"                               *)
 (* Assignment:  "="                                         *)
 (* Conversion:  "->"                                        *)
-(* Cast:        "as"                                        *)
 (* Match:       "=>"                                        *)
 (* Tolerance:   "~=" "+/-"                                  *)
 (* Closure:     "|"                                         *)
@@ -630,7 +629,7 @@ unit_term
 (* 6. Expressions                                                     *)
 (* ================================================================== *)
 (* Expression precedence, from lowest to highest:
-   0. Conversion  ->  / Cast  as    (mutually exclusive)
+   0. Conversion  ->
    1. Conditional  if/else
    2. Logical OR   ||                (left-associative)
    3. Logical AND  &&                (left-associative)
@@ -645,8 +644,7 @@ expr
    = convert_expr;
 
 convert_expr
-   = conditional_expr, [ "->", unit_expr ]
-   | conditional_expr, [ "as", type_expr ];
+   = conditional_expr, [ "->", unit_expr ];
 
 conditional_expr
    = "if", expr, "{", expr, "}", "else", "{", expr, "}"
@@ -950,7 +948,7 @@ unfold_expr
 (* ================================================================== *)
 (* Precedence  Operator(s)                Associativity               *)
 (* ---------  --------------------------  -----------                 *)
-(* 0 (lowest) ->  as                      n/a (mutually exclusive)    *)
+(* 0 (lowest) ->                          n/a                         *)
 (* 1          if/else                     right                       *)
 (* 2          ||                          left                        *)
 (* 3          &&                          left                        *)
