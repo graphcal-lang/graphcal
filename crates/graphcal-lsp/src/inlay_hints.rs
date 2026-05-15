@@ -23,7 +23,7 @@ pub fn inlay_hints(analysis: &AnalysisResult, range: Range) -> Option<Vec<InlayH
             continue;
         }
 
-        let Some(def) = analysis.symbol_table.definitions.get(&entry.key) else {
+        let Some(def) = analysis.symbol_table.definitions.get(entry.key.as_ref()) else {
             continue;
         };
 
