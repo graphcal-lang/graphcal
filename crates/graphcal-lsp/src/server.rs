@@ -378,14 +378,34 @@ fn build_source_resolver(project: &LoadedProject) -> impl Fn(&str) -> Option<(Ur
 
 /// Fallback resolver used when no project loaded: resolve the diagnostic's
 /// source name as a sibling of the active URI's file. Reads the file off
-/// disk to recover the source text. Returns None if the file can't be read.
+/// disk to recover the source text. Returns None if the file can't be read
+/// or if it would escape the active file's directory.
 ///
 /// This exists so that an unparsable imported file still routes its
 /// diagnostic to the right URI even when `load_project` itself failed.
+///
+/// # Sandboxing
+///
+/// The candidate path (canonicalized) must stay under the active file's
+/// canonicalized parent directory. This rejects `..` traversal and absolute
+/// `name` inputs even when no `graphcal.toml` is in play, matching the
+/// function's "sibling" intent rather than allowing arbitrary disk reads.
 fn sibling_file_resolver(active_uri: &Url) -> impl Fn(&str) -> Option<(Url, String)> + '_ {
     move |name: &str| {
         let active_path = active_uri.to_file_path().ok()?;
-        let candidate = active_path.parent()?.join(name);
+        let parent = active_path.parent()?;
+        let candidate = parent.join(name);
+
+        // Canonical forms gate the sandbox check; the read and the resulting
+        // URI keep the un-canonicalized form so URIs stay byte-identical to
+        // what the loader and downstream resolvers produce (no surprise
+        // /private/var prefix on macOS, no symlink resolution).
+        let canonical_parent = parent.canonicalize().ok()?;
+        let canonical_candidate = candidate.canonicalize().ok()?;
+        if !canonical_candidate.starts_with(&canonical_parent) {
+            return None;
+        }
+
         let source = std::fs::read_to_string(&candidate).ok()?;
         let uri = Url::from_file_path(&candidate).ok()?;
         Some((uri, source))
@@ -1570,5 +1590,34 @@ node bad: Mass = mass + length;
             "expected imported definition keyed by local alias `renamed`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
+    }
+
+    #[test]
+    fn sibling_file_resolver_resolves_siblings() {
+        let dir = write_project(&[("main.gcl", "ok"), ("helper.gcl", "helper-content")]);
+        let main_uri = Url::from_file_path(dir.path().join("main.gcl")).unwrap();
+        let resolve = sibling_file_resolver(&main_uri);
+        let (uri, source) = resolve("helper.gcl").expect("sibling should resolve");
+        assert_eq!(source, "helper-content");
+        assert_eq!(
+            uri.to_file_path().unwrap().canonicalize().unwrap(),
+            dir.path().join("helper.gcl").canonicalize().unwrap(),
+        );
+    }
+
+    #[test]
+    fn sibling_file_resolver_rejects_parent_traversal() {
+        // A `..`-traversal in the source name must not let the resolver read
+        // arbitrary files off disk. The candidate path canonicalizes outside
+        // the active file's parent and is rejected.
+        let outer = tempfile::tempdir().unwrap();
+        std::fs::write(outer.path().join("secret"), "secret-content").unwrap();
+        let inner = outer.path().join("project");
+        std::fs::create_dir(&inner).unwrap();
+        std::fs::write(inner.join("main.gcl"), "ok").unwrap();
+
+        let main_uri = Url::from_file_path(inner.join("main.gcl")).unwrap();
+        let resolve = sibling_file_resolver(&main_uri);
+        assert!(resolve("../secret").is_none());
     }
 }
