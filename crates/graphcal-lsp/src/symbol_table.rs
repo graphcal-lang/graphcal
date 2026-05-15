@@ -1394,6 +1394,14 @@ fn collect_type_expr_refs(
                 collect_type_expr_refs(arg, table);
             }
         }
+        TypeExprKind::DatetimeApplication { type_args } => {
+            // `Datetime` is a built-in; no top-level reference to record.
+            // Recurse into args so any user-defined names reachable from the
+            // time-scale expression are still picked up by go-to-definition.
+            for arg in type_args {
+                collect_type_expr_refs(arg, table);
+            }
+        }
     }
     // Collect references from domain constraint bound expressions (e.g., unit names in `100 kg`).
     for bound in &type_expr.constraints {

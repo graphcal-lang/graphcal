@@ -51,6 +51,16 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
             }
             doc
         }
+        TypeExprKind::DatetimeApplication { type_args } => {
+            let arg_docs: Vec<RcDoc<'static>> = type_args
+                .iter()
+                .map(|a| format_type_expr_inline(fmt, a))
+                .collect();
+            RcDoc::text("Datetime")
+                .append(RcDoc::text("<"))
+                .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
+                .append(RcDoc::text(">"))
+        }
     };
 
     if te.constraints.is_empty() {

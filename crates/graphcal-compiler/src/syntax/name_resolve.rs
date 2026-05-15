@@ -478,6 +478,14 @@ fn lift_type_expr_kind(
                     .collect(),
             }
         }
+        src_ast::TypeExprKind::DatetimeApplication { type_args } => {
+            dst_ast::TypeExprKind::DatetimeApplication {
+                type_args: type_args
+                    .into_iter()
+                    .map(|t| lift_type_expr(t, ctx))
+                    .collect(),
+            }
+        }
     }
 }
 

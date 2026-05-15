@@ -1834,6 +1834,9 @@ pub fn resolve_type_expr(
         TypeExprKind::Bool => Ok(ResolvedTypeExpr::Bool),
         TypeExprKind::Int => Ok(ResolvedTypeExpr::Int),
         TypeExprKind::Datetime => Ok(ResolvedTypeExpr::Datetime(TimeScale::UTC)),
+        TypeExprKind::DatetimeApplication { type_args } => {
+            resolve_datetime_application(type_ann, type_args, src)
+        }
 
         TypeExprKind::Indexed { base, indexes } => {
             let resolved_base =
@@ -2008,11 +2011,60 @@ fn resolve_dim_expr(
     }
 }
 
-/// Resolve a `TypeApplication` (e.g., `Datetime<TT>`, `Vec3<Length, ECI>`) to a
-/// [`ResolvedTypeExpr`].
+/// Resolve a `Datetime<TimeScale>` application to a [`ResolvedTypeExpr::Datetime`].
 ///
-/// Handles the special case of `Datetime<TimeScale>` separately, then falls
-/// through to generic struct resolution with default parameter filling.
+/// The argument list is expected to hold exactly one type argument that
+/// parses as a [`TimeScale`] identifier (`UTC`, `TAI`, `TT`, …). Surfaced as
+/// a dedicated helper rather than living inside [`resolve_type_application`]
+/// so the dispatch in [`resolve_type_expr`] is on the AST variant rather than
+/// a string compare of the built-in name.
+fn resolve_datetime_application(
+    type_ann: &TypeExpr,
+    type_args: &[TypeExpr],
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    if type_args.len() != 1 {
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "type `Datetime` expects 0 or 1 type argument(s), got {}",
+                type_args.len()
+            ),
+            src: src.clone(),
+            span: type_ann.span.into(),
+        });
+    }
+    let arg = &type_args[0];
+    let scale_name = match &arg.kind {
+        TypeExprKind::DimExpr(dim_expr)
+            if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() =>
+        {
+            &dim_expr.terms[0].term.name.name
+        }
+        _ => {
+            return Err(GraphcalError::EvalError {
+                message: "expected a time scale name (e.g., UTC, TAI, TT, TDB, GPST)".to_string(),
+                src: src.clone(),
+                span: arg.span.into(),
+            });
+        }
+    };
+    let scale: TimeScale = scale_name.parse().map_err(|_| GraphcalError::EvalError {
+        message: format!(
+            "unknown time scale `{scale_name}`; \
+                     expected one of: UTC, TAI, TT, TDB, ET, GPST, GST, BDT"
+        ),
+        src: src.clone(),
+        span: arg.span.into(),
+    })?;
+    Ok(ResolvedTypeExpr::Datetime(scale))
+}
+
+/// Resolve a user-defined type application like `Vec3<Length, ECI>` to a
+/// [`ResolvedTypeExpr`] by looking the name up in the type registry and
+/// substituting defaults for any trailing optional parameters.
+///
+/// Built-in parameterized types (`Datetime<...>`) reach [`resolve_type_expr`]
+/// through their own AST variant and never enter this function.
 #[expect(
     clippy::too_many_arguments,
     reason = "passes full type resolution context from resolve_type_expr"
@@ -2028,45 +2080,6 @@ fn resolve_type_application(
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
     let type_name = &name.name;
-
-    // Special case: Datetime<TimeScale>
-    if type_name == "Datetime" {
-        if type_args.len() != 1 {
-            return Err(GraphcalError::EvalError {
-                message: format!(
-                    "type `Datetime` expects 0 or 1 type argument(s), got {}",
-                    type_args.len()
-                ),
-                src: src.clone(),
-                span: type_ann.span.into(),
-            });
-        }
-        let arg = &type_args[0];
-        let scale_name = match &arg.kind {
-            TypeExprKind::DimExpr(dim_expr)
-                if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() =>
-            {
-                &dim_expr.terms[0].term.name.name
-            }
-            _ => {
-                return Err(GraphcalError::EvalError {
-                    message: "expected a time scale name (e.g., UTC, TAI, TT, TDB, GPST)"
-                        .to_string(),
-                    src: src.clone(),
-                    span: arg.span.into(),
-                });
-            }
-        };
-        let scale: TimeScale = scale_name.parse().map_err(|_| GraphcalError::EvalError {
-            message: format!(
-                "unknown time scale `{scale_name}`; \
-                         expected one of: UTC, TAI, TT, TDB, ET, GPST, GST, BDT"
-            ),
-            src: src.clone(),
-            span: arg.span.into(),
-        })?;
-        return Ok(ResolvedTypeExpr::Datetime(scale));
-    }
 
     // Verify this is a known generic type
     let type_def =

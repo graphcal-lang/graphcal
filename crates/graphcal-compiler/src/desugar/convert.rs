@@ -412,6 +412,9 @@ impl From<TypeExprKind<Raw>> for TypeExprKind<Desugared> {
                 name,
                 type_args: type_args.into_iter().map(Into::into).collect(),
             },
+            TypeExprKind::DatetimeApplication { type_args } => Self::DatetimeApplication {
+                type_args: type_args.into_iter().map(Into::into).collect(),
+            },
         }
     }
 }
