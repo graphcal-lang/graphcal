@@ -67,41 +67,66 @@ impl InferredType {
     }
 }
 
+/// Per-DAG context bundle threaded through the dimension-check passes.
+///
+/// Bundles the read-only inputs that every per-declaration check needs
+/// (declared types, the locals scope, TIR, registry, builtins, source)
+/// so individual helpers take a single `&DimCheckContext` instead of
+/// six positional arguments.
+struct DimCheckContext<'a> {
+    declared_types: &'a HashMap<ScopedName, DeclaredType>,
+    empty_locals: &'a HashMap<String, InferredType>,
+    tir: &'a crate::tir::typed::TIR,
+    registry: &'a Registry,
+    builtin_fns: &'a HashMap<&'a str, crate::registry::builtins::BuiltinFunction>,
+    src: &'a NamedSource<Arc<String>>,
+}
+
+impl DimCheckContext<'_> {
+    /// Infer the type of `expr` using this context's bindings.
+    fn infer(&self, expr: &Expr) -> Result<InferredType, GraphcalError> {
+        infer_type(
+            expr,
+            self.declared_types,
+            self.empty_locals,
+            self.tir,
+            self.registry,
+            self.builtin_fns,
+            self.src,
+        )
+    }
+}
+
 /// Check that a declaration's expression type matches its declared type annotation.
-#[expect(clippy::too_many_arguments, reason = "passes compilation context")]
 fn check_decl_expr_type(
+    ctx: &DimCheckContext<'_>,
     expr: &Expr,
     name: &crate::syntax::names::ScopedName,
     type_ann_span: &crate::syntax::span::Span,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    empty_locals: &HashMap<String, InferredType>,
-    tir: &crate::tir::typed::TIR,
-    registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let declared = declared_types
+    let declared = ctx
+        .declared_types
         .get(name)
         .ok_or_else(|| GraphcalError::InternalError {
             message: format!("no declared type recorded for `{name}`"),
-            src: src.clone(),
+            src: ctx.src.clone(),
             span: (*type_ann_span).into(),
         })?;
     let inferred = infer_type_with_owner(
         expr,
         Some(name.member()),
-        declared_types,
-        empty_locals,
-        tir,
-        registry,
-        builtin_fns,
-        src,
+        ctx.declared_types,
+        ctx.empty_locals,
+        ctx.tir,
+        ctx.registry,
+        ctx.builtin_fns,
+        ctx.src,
     )?;
     if !types_match(declared, &inferred) {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
-            declared: format_declared_type(declared, registry),
-            inferred: format_inferred_type(&inferred, registry),
-            src: src.clone(),
+            declared: format_declared_type(declared, ctx.registry),
+            inferred: format_inferred_type(&inferred, ctx.registry),
+            src: ctx.src.clone(),
             span: (*type_ann_span).into(),
         });
     }
@@ -112,28 +137,16 @@ fn check_decl_expr_type(
 ///
 /// For expression asserts, verifies the body is boolean. For tolerance asserts,
 /// verifies actual/expected have matching dimensions and tolerance is compatible.
-#[expect(clippy::too_many_arguments, reason = "passes compilation context")]
 fn check_assert_body(
+    ctx: &DimCheckContext<'_>,
     body: &crate::desugar::resolved_ast::AssertBody,
     span: crate::syntax::span::Span,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    empty_locals: &HashMap<String, InferredType>,
-    tir: &crate::tir::typed::TIR,
-    registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
+    let registry = ctx.registry;
+    let src = ctx.src;
     match body {
         crate::desugar::resolved_ast::AssertBody::Expr(body_expr) => {
-            let inferred = infer_type(
-                body_expr,
-                declared_types,
-                empty_locals,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )?;
+            let inferred = ctx.infer(body_expr)?;
             if !is_bool_type(&inferred) {
                 return Err(GraphcalError::AssertBodyNotBool {
                     found: format_inferred_type(&inferred, registry),
@@ -148,33 +161,9 @@ fn check_assert_body(
             tolerance,
             is_relative,
         } => {
-            let actual_type = infer_type(
-                actual,
-                declared_types,
-                empty_locals,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )?;
-            let expected_type = infer_type(
-                expected,
-                declared_types,
-                empty_locals,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )?;
-            let tolerance_type = infer_type(
-                tolerance,
-                declared_types,
-                empty_locals,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )?;
+            let actual_type = ctx.infer(actual)?;
+            let expected_type = ctx.infer(expected)?;
+            let tolerance_type = ctx.infer(tolerance)?;
 
             // actual and expected must have the same dimension
             let actual_dim = expect_scalar(&actual_type, registry, src, actual.span)?;
@@ -286,61 +275,30 @@ fn check_dimensions_dag(
 ) -> Result<(), GraphcalError> {
     let declared_types = dag.build_declared_types(src)?;
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
+    let ctx = DimCheckContext {
+        declared_types: &declared_types,
+        empty_locals: &empty_locals,
+        tir,
+        registry,
+        builtin_fns,
+        src,
+    };
 
     for entry in &dag.consts {
-        check_decl_expr_type(
-            &entry.expr,
-            &entry.name,
-            &entry.type_ann.span,
-            &declared_types,
-            &empty_locals,
-            tir,
-            registry,
-            builtin_fns,
-            src,
-        )?;
+        check_decl_expr_type(&ctx, &entry.expr, &entry.name, &entry.type_ann.span)?;
     }
     for entry in &dag.nodes {
-        check_decl_expr_type(
-            &entry.expr,
-            &entry.name,
-            &entry.type_ann.span,
-            &declared_types,
-            &empty_locals,
-            tir,
-            registry,
-            builtin_fns,
-            src,
-        )?;
+        check_decl_expr_type(&ctx, &entry.expr, &entry.name, &entry.type_ann.span)?;
     }
     for entry in &dag.params {
         let Some(ref value_expr) = entry.default_expr else {
             continue;
         };
-        check_decl_expr_type(
-            value_expr,
-            &entry.name,
-            &entry.type_ann.span,
-            &declared_types,
-            &empty_locals,
-            tir,
-            registry,
-            builtin_fns,
-            src,
-        )?;
+        check_decl_expr_type(&ctx, value_expr, &entry.name, &entry.type_ann.span)?;
     }
 
     for entry in &dag.asserts {
-        check_assert_body(
-            &entry.body,
-            entry.span,
-            &declared_types,
-            &empty_locals,
-            tir,
-            registry,
-            builtin_fns,
-            src,
-        )?;
+        check_assert_body(&ctx, &entry.body, entry.span)?;
     }
 
     check_domain_constraint_targets_dag(dag, src)?;
