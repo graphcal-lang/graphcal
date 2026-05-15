@@ -2,7 +2,7 @@
 
 use tower_lsp::lsp_types::{Location, Url};
 
-use crate::convert::span_to_range;
+use crate::convert::LineIndex;
 use crate::resolve::{SymbolLocation, definition_location, resolve_symbol_at};
 use crate::server::AnalysisResult;
 
@@ -25,13 +25,14 @@ pub fn references(
 
     let target_key = &resolved.key;
 
+    let lines = LineIndex::new(&analysis.source);
     let mut locations: Vec<Location> = analysis
         .symbol_table
         .find_all_references(target_key)
         .into_iter()
         .map(|r| Location {
             uri: uri.clone(),
-            range: span_to_range(&analysis.source, r.span),
+            range: lines.span_to_range(r.span),
         })
         .collect();
 

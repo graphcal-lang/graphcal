@@ -3,7 +3,7 @@
 use graphcal_compiler::syntax::span::Span;
 use tower_lsp::lsp_types::{Location, Url};
 
-use crate::convert::span_to_range;
+use crate::convert::LineIndex;
 use crate::server::{AnalysisResult, ImportedDefinition};
 use crate::symbol_table::{DefinitionInfo, SymbolKey};
 
@@ -39,12 +39,13 @@ pub fn definition_location(
     match location {
         SymbolLocation::Local(def) => def.is_navigable().then(|| Location {
             uri: active_uri.clone(),
-            range: span_to_range(active_source, def.name_span),
+            range: LineIndex::new(active_source).span_to_range(def.name_span),
         }),
         SymbolLocation::Imported(imported) => {
             imported.definition.is_navigable().then(|| Location {
                 uri: imported.uri.clone(),
-                range: span_to_range(&imported.source, imported.definition.name_span),
+                range: LineIndex::new(&imported.source)
+                    .span_to_range(imported.definition.name_span),
             })
         }
     }

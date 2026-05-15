@@ -3,7 +3,7 @@
 use graphcal_compiler::desugar::resolved_ast::Visibility;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
-use crate::convert::span_to_range;
+use crate::convert::LineIndex;
 use crate::resolve::{SymbolLocation, resolve_symbol_at};
 use crate::server::AnalysisResult;
 use crate::symbol_table::{DefinitionInfo, SymbolCategory};
@@ -21,7 +21,7 @@ pub fn hover(analysis: &AnalysisResult, offset: usize) -> Option<Hover> {
             kind: MarkupKind::Markdown,
             value: content,
         }),
-        range: Some(span_to_range(&analysis.source, resolved.cursor_span)),
+        range: Some(LineIndex::new(&analysis.source).span_to_range(resolved.cursor_span)),
     })
 }
 
