@@ -21,7 +21,7 @@ use graphcal_compiler::syntax::names::DeclName;
 use graphcal_eval::eval::{
     EvalResult, compile_and_eval_project, compile_to_tir_project, format_number,
 };
-use graphcal_io::RealFileSystem;
+use graphcal_eval::loader::build_rooted_filesystem;
 
 use crate::display::{OutputBlock, build_output_blocks, format_indexed_table, max_flat_name_len};
 use crate::overrides::{OverrideParseError, parse_overrides};
@@ -184,8 +184,8 @@ fn handle_eval(
     // Rooted sandbox: derive the project root from the loader's rules and
     // confine reads to it. `root` (the user's explicit --root) takes
     // precedence; otherwise walk up from `file`'s parent looking for
-    // `graphcal.toml`, falling back to `file`'s parent.
-    let fs = build_rooted_fs(file, root);
+    // `graphcal.toml`, falling back to an unrooted FS for loose files.
+    let fs = build_rooted_filesystem(file, root);
     match compile_and_eval_project(file, overrides, root, &fs) {
         Ok(result) => {
             match format {
@@ -253,37 +253,6 @@ fn handle_eval(
     }
 }
 
-/// Build a [`RealFileSystem`] sandboxed to the project root, if one can be
-/// determined.
-///
-/// Resolution order mirrors `graphcal_eval::loader::resolve_project_root`:
-/// 1. Explicit `--root` (canonicalized).
-/// 2. Walk up from `file`'s parent looking for `graphcal.toml`.
-/// 3. Fall back to the unrooted form so CLI one-shots of single loose files
-///    keep working exactly as before.
-fn build_rooted_fs(file: &Path, root_override: Option<&Path>) -> RealFileSystem {
-    if let Some(explicit) = root_override
-        && let Ok(canonical) = explicit.canonicalize()
-    {
-        return RealFileSystem::rooted(canonical);
-    }
-
-    let Ok(canonical_file) = file.canonicalize() else {
-        return RealFileSystem::default();
-    };
-    let mut dir = canonical_file.parent().unwrap_or(&canonical_file);
-    loop {
-        if dir.join("graphcal.toml").is_file() {
-            return RealFileSystem::rooted(dir.to_path_buf());
-        }
-        match dir.parent() {
-            Some(parent) => dir = parent,
-            None => break,
-        }
-    }
-    RealFileSystem::default()
-}
-
 /// Resolve CLI path arguments to a list of `.gcl` files.
 ///
 /// If `paths` is empty, collects all `.gcl` files from the current directory.
@@ -314,7 +283,7 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
 
     let mut error_count = 0;
     for file in &targets {
-        let fs = build_rooted_fs(file, project_root);
+        let fs = build_rooted_filesystem(file, project_root);
         match compile_to_tir_project(file, project_root, &fs) {
             Ok(_) => {
                 println!("ok: {}", file.display());
