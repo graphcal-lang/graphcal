@@ -1,11 +1,10 @@
 // Error: duplicate match arm
-pub type Nominal {}
-pub type Warning {
-    code: Dimensionless,
+pub type Status {
+    Nominal,
+    Warning(code: Dimensionless),
 }
-pub type Status = Nominal | Warning;
 
-param s: Status = Nominal { };
+param s: Status = Nominal;
 
 node result: Dimensionless = match @s {
     Nominal => 0.0,

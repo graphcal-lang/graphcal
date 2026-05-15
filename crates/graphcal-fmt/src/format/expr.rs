@@ -370,11 +370,14 @@ pub fn format_struct_construction(
     let trailing_comma = RcDoc::text(",").flat_alt(RcDoc::nil());
     let inner = RcDoc::intersperse(field_docs, sep).append(trailing_comma);
 
+    // Construction is always a constructor call — parens with named
+    // args. There is no brace-form construction; the parser rejects
+    // `Ctor { field: val }` outright.
     header
-        .append(RcDoc::text(" {"))
-        .append(RcDoc::line().append(inner).nest(INDENT).group())
+        .append(RcDoc::text("("))
+        .append(RcDoc::line_().append(inner).nest(INDENT).group())
         .append(RcDoc::line_())
-        .append(RcDoc::text("}"))
+        .append(RcDoc::text(")"))
         .group()
 }
 

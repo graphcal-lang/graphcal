@@ -1929,7 +1929,7 @@ fn resolve_dim_expr(
             return Ok(ResolvedTypeExpr::Label(IndexName::new(name), span));
         }
 
-        // Check type (struct sugar or tagged union) first
+        // Check tagged-union types first
         if registry.types.get_type(name).is_some() {
             return Ok(ResolvedTypeExpr::Struct(StructTypeName::new(name), span));
         }
@@ -2186,17 +2186,20 @@ mod tests {
         b.register_type(crate::registry::types::TypeDef {
             name: StructTypeName::new("TransferResult"),
             generic_params: vec![],
-            kind: crate::registry::types::TypeDefKind::Record {
-                fields: vec![
-                    crate::registry::types::StructField {
-                        name: crate::syntax::names::FieldName::new("dv1"),
-                        type_ann: make_dim_type_expr("Velocity"),
-                    },
-                    crate::registry::types::StructField {
-                        name: crate::syntax::names::FieldName::new("dv2"),
-                        type_ann: make_dim_type_expr("Velocity"),
-                    },
-                ],
+            kind: crate::registry::types::TypeDefKind::Union {
+                members: vec![crate::registry::types::UnionMemberDef {
+                    name: StructTypeName::new("TransferResult"),
+                    fields: vec![
+                        crate::registry::types::StructField {
+                            name: crate::syntax::names::FieldName::new("dv1"),
+                            type_ann: make_dim_type_expr("Velocity"),
+                        },
+                        crate::registry::types::StructField {
+                            name: crate::syntax::names::FieldName::new("dv2"),
+                            type_ann: make_dim_type_expr("Velocity"),
+                        },
+                    ],
+                }],
             },
         });
         b.build()

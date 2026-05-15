@@ -4,11 +4,11 @@ expression: rendered
 ---
 dimension mismatch: expected Length / Time, found Dimensionless
     Diagnostic severity: error
-Begin snippet for match_arm_type_mismatch.gcl starting at line 13, column 1
+Begin snippet for match_arm_type_mismatch.gcl starting at line 12, column 1
 
-snippet line 13:     Impulsive { delta_v } => delta_v,
-snippet line 14:     Coasting => 0.0,
-    label at line 14, columns 17 to 19: has dimension Dimensionless
-snippet line 15: };
+snippet line 12:     Impulsive { delta_v } => delta_v,
+snippet line 13:     Coasting => 0.0,
+    label at line 13, columns 17 to 19: has dimension Dimensionless
+snippet line 14: };
 diagnostic help: all match arms must return the same type
 diagnostic code: graphcal::D001

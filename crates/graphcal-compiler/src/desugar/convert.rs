@@ -208,7 +208,7 @@ impl From<UnionMember<Raw>> for UnionMember<Desugared> {
     fn from(u: UnionMember<Raw>) -> Self {
         Self {
             name: u.name,
-            type_args: u.type_args.into_iter().map(Into::into).collect(),
+            payload: u.payload.map(|fs| fs.into_iter().map(Into::into).collect()),
             span: u.span,
         }
     }

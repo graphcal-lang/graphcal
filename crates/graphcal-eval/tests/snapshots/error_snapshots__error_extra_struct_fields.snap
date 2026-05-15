@@ -4,10 +4,10 @@ expression: rendered
 ---
 extra field(s) ["bonus"] in construction of `Orbit`
     Diagnostic severity: error
-Begin snippet for extra_struct_fields.gcl starting at line 4, column 1
+Begin snippet for extra_struct_fields.gcl starting at line 5, column 1
 
-snippet line 4: }
-snippet line 5: node o: Orbit = Orbit { altitude: 400.0 km, speed: 7.6 km/s, bonus: 1.0};
-    label at line 5, columns 17 to 72: unexpected fields
+snippet line 5: }
+snippet line 6: node o: Orbit = Orbit(altitude: 400.0 km, speed: 7.6 km/s, bonus: 1.0);
+    label at line 6, columns 17 to 70: unexpected fields
 diagnostic help: only fields declared in the struct type are allowed
 diagnostic code: graphcal::S005

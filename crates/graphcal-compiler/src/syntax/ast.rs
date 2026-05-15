@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 
 use crate::syntax::names::{
-    DeclName, DimName, FieldName, FnName, GenericParamName, IndexName, ScopedName, Spanned,
-    StructTypeName, UnitName, VariantName,
+    ConstructorName, DeclName, DimName, FieldName, FnName, GenericParamName, IndexName, ScopedName,
+    Spanned, StructTypeName, UnitName, VariantName,
 };
 use crate::syntax::phase::{Phase, Raw};
 use crate::syntax::span::Span;
@@ -681,9 +681,10 @@ pub struct TypeDecl<P: Phase = Raw> {
     pub fields: Option<Vec<FieldDecl<P>>>,
 }
 
-/// Union type declaration: `type ManeuverKind = Impulsive | Coasting;`
+/// Union type declaration: `type Maneuver { Impulsive(delta_v: Velocity), Coast }`
 ///
-/// Members must reference previously defined record or unit types.
+/// Each member is a *constructor* of the union, not a standalone type. The
+/// variant's payload (if any) is a record-shaped field list declared inline.
 #[derive(Debug, Clone)]
 pub struct UnionTypeDecl<P: Phase = Raw> {
     pub name: Spanned<StructTypeName>,
@@ -691,13 +692,22 @@ pub struct UnionTypeDecl<P: Phase = Raw> {
     pub members: Vec<UnionMember<P>>,
 }
 
-/// A member of a union type, optionally with type arguments.
+/// A member of a union type: a constructor with an optional payload.
 ///
-/// E.g., `Ok<D>` in `type Result<D: Dim> = Ok<D> | Err;`
+/// Forms:
+/// - Unit: `Coast` — `payload` is `None`.
+/// - Record-payload (parens): `Impulsive(delta_v: Velocity)` —
+///   `payload` is `Some(vec![…])`.
+/// - Record-payload (braces): `LowThrust { thrust: Force, duration: Time }`
+///   — `payload` is `Some(vec![…])`. The brace/paren choice is purely
+///   surface syntax; both produce the same AST.
 #[derive(Debug, Clone)]
 pub struct UnionMember<P: Phase = Raw> {
-    pub name: Spanned<StructTypeName>,
-    pub type_args: Vec<TypeExpr<P>>,
+    /// The constructor's name. Lives in the constructor namespace —
+    /// distinct from the type namespace.
+    pub name: Spanned<ConstructorName>,
+    /// Inline payload fields, or `None` for unit constructors.
+    pub payload: Option<Vec<FieldDecl<P>>>,
     pub span: Span,
 }
 

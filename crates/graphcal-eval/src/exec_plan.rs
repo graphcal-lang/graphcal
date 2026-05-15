@@ -549,7 +549,17 @@ pub fn resolve_struct_field_constraints(
     let mut constraints = HashMap::new();
 
     for type_def in tir.registry.types.all_types() {
-        for field in type_def.fields() {
+        // Walk every variant's payload fields. The constraint registry
+        // is keyed by `(constructor_name, field_name)` — for the
+        // single-variant record-shape this is `(Type, field)`; for a
+        // true multi-variant union it's `(Variant, field)`.
+        let Some(members) = type_def.union_members() else {
+            continue;
+        };
+        for (variant, field) in members
+            .iter()
+            .flat_map(|m| m.fields.iter().map(move |f| (m, f)))
+        {
             let domain_bounds = extract_domain_bounds(&field.type_ann);
             if domain_bounds.is_empty() {
                 continue;
@@ -560,7 +570,9 @@ pub fn resolve_struct_field_constraints(
             let mut min_display: Option<String> = None;
             let mut max_display: Option<String> = None;
             let mut constraint_span = domain_bounds[0].span;
-            let display_name = format!("{}.{}", type_def.name, field.name);
+            // Display name uses the constructor's name (matches what
+            // appears in the runtime value's `type_name`).
+            let display_name = format!("{}.{}", variant.name, field.name);
 
             for bound in domain_bounds {
                 let rv = eval_expr(&bound.value, const_values, &empty_locals, &ctx)?;
@@ -611,7 +623,7 @@ pub fn resolve_struct_field_constraints(
             }
 
             constraints.insert(
-                (type_def.name.clone(), field.name.clone()),
+                (variant.name.clone(), field.name.clone()),
                 ResolvedDomainConstraint {
                     min: min_val,
                     max: max_val,

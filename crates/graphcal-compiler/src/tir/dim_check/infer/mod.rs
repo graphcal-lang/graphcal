@@ -486,7 +486,7 @@ fn infer_inline_dag_ref(
             builtin_fns,
             src,
         )?;
-        if !super::helpers::types_match(expected, &found, registry) {
+        if !super::helpers::types_match(expected, &found) {
             return Err(GraphcalError::InlineDagArgDimensionMismatch {
                 param_name: binding_name.to_string(),
                 expected: super::helpers::format_declared_type(expected, registry),

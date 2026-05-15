@@ -4,10 +4,10 @@ expression: rendered
 ---
 duplicate match arm for `Nominal`
     Diagnostic severity: error
-Begin snippet for duplicate_match_arm.gcl starting at line 11, column 1
+Begin snippet for duplicate_match_arm.gcl starting at line 10, column 1
 
-snippet line 11:     Nominal => 0.0,
-snippet line 12:     Nominal => 1.0,
-    label at line 12, columns 5 to 11: error here
-snippet line 13:     Warning { code } => code,
+snippet line 10:     Nominal => 0.0,
+snippet line 11:     Nominal => 1.0,
+    label at line 11, columns 5 to 11: error here
+snippet line 12:     Warning { code } => code,
 diagnostic code: graphcal::E001

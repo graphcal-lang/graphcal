@@ -1,4 +1,5 @@
 pub dag scale {
     param v: Length;
+    
     pub node result: Length = @v;
 }

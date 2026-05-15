@@ -1,5 +1,7 @@
 // main.gcl -- rebinds the lib's Widget type to MyWidget
-type MyWidget { size: Length }
+type MyWidget {
+    MyWidget(size: Length),
+}
 
 include lib.lib(Widget: MyWidget).{ origin_size };
 

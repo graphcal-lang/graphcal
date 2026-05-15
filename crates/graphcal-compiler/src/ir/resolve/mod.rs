@@ -788,10 +788,13 @@ fn validate_private_in_public(
                 ("type", t.name.value.to_string())
             }
             DeclKind::UnionType(u) => {
+                // Each variant's payload field types are part of the
+                // union's signature for A9 dependency tracking.
                 for member in &u.members {
-                    refs.push((member.name.value.to_string(), member.name.span));
-                    for arg in &member.type_args {
-                        collect_type_refs(arg, &mut refs);
+                    if let Some(fields) = &member.payload {
+                        for field in fields {
+                            collect_type_refs(&field.type_ann, &mut refs);
+                        }
                     }
                 }
                 ("type", u.name.value.to_string())

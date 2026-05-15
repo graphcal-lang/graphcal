@@ -2,8 +2,7 @@
 dim Velocity = Length / Time;
 
 type Pair {
-    a: Length,
-    b: Velocity,
+    Pair(a: Length, b: Velocity),
 }
 
-node bad: Pair = Pair { a: 1.0 kg, b: 100.0 m/s};
+node bad: Pair = Pair(a: 1.0 kg, b: 100.0 m/s);

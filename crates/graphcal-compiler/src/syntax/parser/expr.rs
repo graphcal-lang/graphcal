@@ -1,4 +1,6 @@
-use crate::syntax::ast::{BinOp, Expr, ExprKind, Ident, IndexArg, ModulePath, UnaryOp};
+use crate::syntax::ast::{
+    BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, ModulePath, TypeExpr, UnaryOp,
+};
 use crate::syntax::names::{
     DeclName, FieldName, FnName, IndexName, ScopedName, Spanned, StructTypeName, VariantName,
 };
@@ -42,6 +44,21 @@ impl Parser<'_> {
     /// Supports trailing commas.
     fn parse_arg_list(&mut self) -> Result<Vec<Expr>, ParseError> {
         self.parse_comma_separated(Token::RParen, Self::parse_expr)
+    }
+
+    /// Parse a single named field initializer for a constructor call:
+    /// `field: expr`, or shorthand `field` (referring to a same-name
+    /// variable). Used inside the paren-form `Ctor(field: expr, ...)`.
+    pub(super) fn parse_named_field_init(&mut self) -> Result<FieldInit, ParseError> {
+        let ident = self.parse_any_ident()?;
+        let name = Spanned::new(FieldName::new(&ident.name), ident.span);
+        let value = if self.lexer.peek() == Some(&Token::Colon) {
+            self.lexer.next_token();
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        Ok(FieldInit { name, value })
     }
 
     /// Parse conversion: `expr -> unit_expr` (lowest precedence).
@@ -555,36 +572,20 @@ impl Parser<'_> {
     /// Parse an identifier-based expression.
     ///
     /// Dispatches on following tokens (syntax-based disambiguation):
-    /// - `ident<T>{ ... }` → struct construction with type args
-    /// - `ident{ ... }` → struct construction
     /// - `ident::member<T>(...)` or `ident::member(...)` → qualified function call
     /// - `ident::member` → `QualifiedNameRef` (resolved later to variant or const)
-    /// - `ident<T>(...)` or `ident(...)` → function call
-    /// - bare `ident` → `NameRef` (resolved later to const, local, or bare struct)
+    /// - `ident<T>(args)` or `ident(args)` — disambiguated structurally
+    ///   by the first argument's shape: `IDENT :` → constructor call,
+    ///   otherwise → function call
+    /// - bare `ident` → `NameRef` (resolved later to const, local, or unit constructor)
+    ///
+    /// The legacy brace-form construction `Name { field: val }` is no
+    /// longer accepted — constructor calls use parens.
     fn parse_identifier_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, span) = self.advance()?;
         let name = self.lexer.slice_at(span).to_string();
 
-        // Use uppercase-starting as a convention-based hint: `Name { ... }` and `Name<T>{ ... }`
-        // are parsed as struct construction only when the identifier starts with an uppercase
-        // letter. This avoids ambiguity with `if cond { ... }` where a lowercase variable
-        // precedes a block delimiter.
-        let starts_upper = name.starts_with(|c: char| c.is_ascii_uppercase());
-
-        if starts_upper
-            && self.lexer.peek() == Some(&Token::Lt)
-            && self.is_type_args_followed_by_brace()
-        {
-            // Generic struct construction: Name<T> { ... }
-            let type_args = self.parse_type_arg_list()?;
-            self.parse_struct_construction_with_type_args(
-                Spanned::new(StructTypeName::new(name), span),
-                type_args,
-            )
-        } else if starts_upper && self.lexer.peek() == Some(&Token::LBrace) {
-            // Struct/variant construction with fields: TypeName { field1: expr, field2 }
-            self.parse_struct_construction(Spanned::new(StructTypeName::new(name), span))
-        } else if self.peek_dot_then_ident() {
+        if self.peek_dot_then_ident() {
             // Qualified reference: `ident.member`. After the alpha-4 module
             // redesign there are no user-defined functions, so a `module.fn(...)`
             // form has no resolution path; we always parse `ident.ident` (no
@@ -603,12 +604,41 @@ impl Parser<'_> {
         } else if self.lexer.peek() == Some(&Token::LParen)
             || (self.lexer.peek() == Some(&Token::Lt) && self.is_type_args_followed_by_paren())
         {
-            // Function call: name(args...) or name<TypeArgs>(args...)
+            // `IDENT(args)` or `IDENT<T>(args)`. Disambiguate constructor
+            // calls (named args, `Ctor(field: expr, ...)`) from function
+            // calls (positional args) purely structurally — by whether
+            // the first argument starts with `IDENT :`. The same surface
+            // form serves both; name resolution decides which binding
+            // the identifier refers to.
             let type_args = if self.lexer.peek() == Some(&Token::Lt) {
                 self.parse_generic_arg_list()?
             } else {
                 vec![]
             };
+            if self.is_named_arg_call() {
+                // Constructor call: `IDENT(field: expr, field: expr, ...)`
+                self.lexer.next_token(); // consume `(`
+                let fields =
+                    self.parse_comma_separated(Token::RParen, Self::parse_named_field_init)?;
+                let (_, rparen_span) = self.expect(Token::RParen)?;
+                let call_span = span.merge(rparen_span);
+                let type_args_te: Vec<TypeExpr> = type_args
+                    .into_iter()
+                    .filter_map(|ga| match ga {
+                        crate::syntax::ast::GenericArg::Type(te) => Some(te),
+                        crate::syntax::ast::GenericArg::Nat(_) => None,
+                    })
+                    .collect();
+                return Ok(Expr::new(
+                    ExprKind::StructConstruction {
+                        type_name: Spanned::new(StructTypeName::new(name), span),
+                        type_args: type_args_te,
+                        fields,
+                    },
+                    call_span,
+                ));
+            }
+            // Function call: name(args...) or name<TypeArgs>(args...)
             self.lexer.next_token(); // consume '('
             let args = self.parse_arg_list()?;
             let (_, rparen_span) = self.expect(Token::RParen)?;
@@ -761,13 +791,6 @@ impl Parser<'_> {
         false
     }
 
-    /// Look ahead to check if `<...>` is followed by `{`.
-    /// Used to disambiguate `Vec3<Length, ECI> { ... }` (struct construction with type args)
-    /// from `Foo < bar` (comparison).
-    pub(super) fn is_type_args_followed_by_brace(&mut self) -> bool {
-        self.is_type_args_followed_by(b'{')
-    }
-
     /// Look ahead to check if the next token is `.` followed by an identifier.
     ///
     /// Used to distinguish `IDENT.IDENT` (a qualified-reference candidate) from
@@ -846,6 +869,61 @@ impl Parser<'_> {
     /// from `f < x` (comparison).
     pub(super) fn is_type_args_followed_by_paren(&mut self) -> bool {
         self.is_type_args_followed_by(b'(')
+    }
+
+    /// After peeking `(`, look ahead to decide whether the parenthesized
+    /// argument list is a *constructor call* (named args, `field: expr,
+    /// ...`) or a *function call* (positional args). Returns `true` if
+    /// the first argument is of the form `IDENT :` — the constructor
+    /// form. Pure byte scan; the lexer is not advanced.
+    ///
+    /// Empty `()` is treated as a function call (returns `false`) — a
+    /// unit constructor is written `Ctor`, not `Ctor()`. A `Ctor()` call
+    /// site with empty parens parses as a zero-arg function call and
+    /// later fails at name-resolution time if no such function exists.
+    pub(super) fn is_named_arg_call(&mut self) -> bool {
+        let Some((&Token::LParen, lp_span)) = self.lexer.peek_with_span() else {
+            return false;
+        };
+        let bytes = self.source.as_bytes();
+        let mut pos = lp_span.offset() + lp_span.len();
+
+        // Skip whitespace and line comments.
+        loop {
+            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+            if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'/' {
+                while pos < bytes.len() && bytes[pos] != b'\n' {
+                    pos += 1;
+                }
+                continue;
+            }
+            break;
+        }
+        if pos >= bytes.len() {
+            return false;
+        }
+
+        // First char of the first arg must be an identifier-start.
+        if !bytes[pos].is_ascii_alphabetic() && bytes[pos] != b'_' {
+            return false;
+        }
+        while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
+            pos += 1;
+        }
+        // Skip whitespace.
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        if pos >= bytes.len() {
+            return false;
+        }
+        // `:` (single colon) — but not `::` (legacy qualified path)
+        // signals a named argument. Graphcal's surface module path uses
+        // `.`, not `::`, so a `::` here would be a stray token; either
+        // way, we only commit to the named-arg path on a lone `:`.
+        bytes[pos] == b':' && bytes.get(pos + 1).is_none_or(|c| *c != b':')
     }
 
     /// Parse a generic argument list: `<GenericArg, GenericArg, ...>`
@@ -985,8 +1063,8 @@ mod tests {
     #[test]
     fn parse_as_cast() {
         let source = r"
-        type Eci {}
-        type Vec3<D: Dim, F: Type> { x: D, y: D, z: D, }
+        type Eci { Eci }
+        type Vec3<D: Dim, F: Type> { Vec3(x: D, y: D, z: D) }
         node x: Vec3<Length, Eci> = @v as Vec3<Length, Eci>;
     ";
         let file = Parser::new(source).parse_file().unwrap();
@@ -1011,8 +1089,8 @@ mod tests {
     #[test]
     fn parse_as_cast_binds_loosely() {
         let source = r"
-        type Eci {}
-        type Vec3<D: Dim, F: Type> { x: D, y: D, z: D, }
+        type Eci { Eci }
+        type Vec3<D: Dim, F: Type> { Vec3(x: D, y: D, z: D) }
         node x: Vec3<Length, Eci> = @a + @b as Vec3<Length, Eci>;
     ";
         let file = Parser::new(source).parse_file().unwrap();

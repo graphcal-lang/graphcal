@@ -226,8 +226,8 @@
 ; Qualified variant: Maneuver.Departure
 (qualified_variant index: (identifier) @type variant: (identifier) @constant)
 
-; Union member names: type Foo = A | B;
-(union_member name: (identifier) @type)
+; Tagged-union constructor names: type Foo { A(...), B }
+(constructor_declaration name: (identifier) @type)
 
 ; Index declaration variants: { Departure, Correction, Insertion }
 (variant (identifier) @constant)

@@ -671,15 +671,17 @@ fn collect_union_type_decl(
         None,
         visibility,
     );
-    // Register each union member as a reference to the member type.
+    // Each constructor refers to itself (the synthesized record type), and
+    // its payload field types are followed for cross-references.
     for member in &u.members {
         table.references.push(ReferenceInfo {
             span: member.name.span,
             target: SymbolKey::TopLevel(member.name.value.to_string()),
         });
-        // Walk type arguments in the member.
-        for type_arg in &member.type_args {
-            collect_type_expr_refs(type_arg, table);
+        if let Some(fields) = &member.payload {
+            for field in fields {
+                collect_type_expr_refs(&field.type_ann, table);
+            }
         }
     }
 }

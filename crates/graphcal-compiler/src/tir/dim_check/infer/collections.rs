@@ -904,23 +904,23 @@ pub(super) fn infer_field_access(
                     span: inner.span.into(),
                 }
             })?;
-            // Field access is only allowed on record types (not union or unit types)
-            if type_def.is_union() {
-                return Err(GraphcalError::NotAStruct {
-                    name: format!("union type `{type_name}` (use `match` to access fields)"),
+            // Field access is only valid on the record-shape: a single
+            // -variant union whose sole constructor's name equals the
+            // type's name. Multi-variant unions must be destructured
+            // via `match`; required type stubs carry no fields.
+            let fields = type_def.record_fields().ok_or_else(|| {
+                let detail = if type_def.is_required() {
+                    format!("required type `{type_name}` has no fields")
+                } else {
+                    format!("union type `{type_name}` (use `match` to access fields)")
+                };
+                GraphcalError::NotAStruct {
+                    name: detail,
                     src: src.clone(),
                     span: inner.span.into(),
-                });
-            }
-            if type_def.is_unit() {
-                return Err(GraphcalError::NotAStruct {
-                    name: format!("unit type `{type_name}` has no fields"),
-                    src: src.clone(),
-                    span: inner.span.into(),
-                });
-            }
-            let field_def = type_def
-                .fields()
+                }
+            })?;
+            let field_def = fields
                 .iter()
                 .find(|f| f.name.as_str() == field.value.as_str())
                 .ok_or_else(|| GraphcalError::UnknownField {
@@ -956,23 +956,20 @@ pub(super) fn infer_struct_construction(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    // Look up by type name — must be a record or unit type (not a union)
-    let type_def = registry
+    // Resolve the constructor through the constructor namespace. With
+    // every type stored as an n-variant union, struct construction
+    // always names a constructor — not a type. The union the
+    // constructor belongs to becomes the value's type.
+    let (type_def, variant) = registry
         .types
-        .get_type(type_name.value.as_str())
+        .lookup_ctor(type_name.value.as_str())
         .ok_or_else(|| GraphcalError::UnknownStructType {
             name: type_name.value.clone(),
             src: src.clone(),
             span: type_name.span.into(),
         })?;
-    if type_def.is_union() {
-        return Err(GraphcalError::UnknownStructType {
-            name: type_name.value.clone(),
-            src: src.clone(),
-            span: type_name.span.into(),
-        });
-    }
     let owning_type_name = type_def.name.clone();
+    let variant_fields: &[crate::registry::types::StructField] = &variant.fields;
 
     // Resolve constructor type args for generic structs
     let resolved_type_args: Vec<InferredType> = if constructor_type_args.is_empty()
@@ -1055,7 +1052,7 @@ pub(super) fn infer_struct_construction(
 
     // Check for extra fields
     let def_field_names: std::collections::HashSet<&str> =
-        type_def.fields().iter().map(|f| f.name.as_str()).collect();
+        variant_fields.iter().map(|f| f.name.as_str()).collect();
     let provided_names: Vec<&str> = fields.iter().map(|f| f.name.value.as_str()).collect();
     let extra: Vec<FieldName> = provided_names
         .iter()
@@ -1073,8 +1070,7 @@ pub(super) fn infer_struct_construction(
 
     // Check for missing fields
     let provided_set: std::collections::HashSet<&str> = provided_names.iter().copied().collect();
-    let missing: Vec<FieldName> = type_def
-        .fields()
+    let missing: Vec<FieldName> = variant_fields
         .iter()
         .filter(|f| !provided_set.contains(f.name.as_str()))
         .map(|f| f.name.clone())
@@ -1090,8 +1086,7 @@ pub(super) fn infer_struct_construction(
 
     // Type-check each field's value
     for field_init in fields {
-        let field_def = type_def
-            .fields()
+        let field_def = variant_fields
             .iter()
             .find(|f| f.name.as_str() == field_init.name.value.as_str())
             .ok_or_else(|| GraphcalError::EvalError {

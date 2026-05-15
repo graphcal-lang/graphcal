@@ -1,14 +1,11 @@
 // Error: non-exhaustive match — missing variant
-pub type Nominal {}
-pub type Warning {
-    code: Dimensionless,
+pub type Status {
+    Nominal,
+    Warning(code: Dimensionless),
+    Critical(code: Dimensionless),
 }
-pub type Critical {
-    code: Dimensionless,
-}
-pub type Status = Nominal | Warning | Critical;
 
-param s: Status = Nominal { };
+param s: Status = Nominal;
 
 node result: Dimensionless = match @s {
     Nominal => 0.0,

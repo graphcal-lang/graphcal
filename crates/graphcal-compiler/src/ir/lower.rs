@@ -2498,28 +2498,16 @@ fn register_type_decl(t: &crate::desugar::resolved_ast::TypeDecl, registry: &mut
         })
         .collect();
 
-    // Required types (`type T;` with no body) are treated like opaque
-    // unit types at the library level; include-time substitution rewires
-    // references through the importer's type bindings (see plan §C1).
-    let kind = match &t.fields {
-        None => types::TypeDefKind::Unit,
-        Some(fields) if fields.is_empty() => types::TypeDefKind::Unit,
-        Some(fields) => {
-            let fields = fields
-                .iter()
-                .map(|f| types::StructField {
-                    name: f.name.value.clone(),
-                    type_ann: f.type_ann.clone(),
-                })
-                .collect();
-            types::TypeDefKind::Record { fields }
-        }
-    };
-
+    // `DeclKind::Type` is reserved for the required-type stub
+    // (`type Element;`); record-shaped declarations parse as
+    // `DeclKind::UnionType` with a single-variant collision. The
+    // `fields` field on `TypeDecl` is preserved as `Option` only to
+    // keep phase-conversion plumbing uniform — the parser never
+    // populates it.
     registry.register_type(types::TypeDef {
         name: t.name.value.clone(),
         generic_params,
-        kind,
+        kind: types::TypeDefKind::Unit,
     });
 }
 
@@ -2537,14 +2525,25 @@ fn register_union_type_decl(
         })
         .collect();
 
-    let members = t
-        .members
-        .iter()
-        .map(|m| types::UnionMemberDef {
-            name: m.name.value.clone(),
-            type_args: m.type_args.clone(),
-        })
-        .collect();
+    // Every variant carries its payload inline; no per-variant TypeDef
+    // is synthesized. The constructor namespace lives on the registry
+    // and points back to this union.
+    let mut members: Vec<types::UnionMemberDef> = Vec::with_capacity(t.members.len());
+    for m in &t.members {
+        let variant_name = StructTypeName::new(m.name.value.as_str());
+        let fields = m.payload.as_ref().map_or_else(Vec::new, |fs| {
+            fs.iter()
+                .map(|f| types::StructField {
+                    name: f.name.value.clone(),
+                    type_ann: f.type_ann.clone(),
+                })
+                .collect()
+        });
+        members.push(types::UnionMemberDef {
+            name: variant_name,
+            fields,
+        });
+    }
 
     registry.register_type(types::TypeDef {
         name: t.name.value.clone(),

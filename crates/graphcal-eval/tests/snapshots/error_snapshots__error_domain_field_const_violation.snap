@@ -1,18 +1,13 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
-assertion_line: 486
 expression: rendered
 ---
 domain violation: `SAT.mass` value 5000 is above maximum (2000 kg)
     Diagnostic severity: error
-Begin snippet for domain_field_const_violation.gcl starting at line 6, column 1
+Begin snippet for domain_field_const_violation.gcl starting at line 5, column 1
 
-snippet line 6: 
-snippet line 7: const node SAT: SatelliteSpec = SatelliteSpec {
-    label starting at line 7, column 1: value out of declared domain
-snippet line 8:     mass: 5000.0 kg,
-snippet line 9:     altitude: 50.0 km,
-snippet line 10: };
-    label ending at line 10, column 2: value out of declared domain
+snippet line 5: 
+snippet line 6: const node SAT: SatelliteSpec = SatelliteSpec(mass: 5000.0 kg, altitude: 50.0 km);
+    label at line 6, columns 1 to 82: value out of declared domain
 diagnostic help: the value must satisfy the domain constraints declared on the type
 diagnostic code: graphcal::C001

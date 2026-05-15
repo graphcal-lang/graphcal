@@ -990,8 +990,10 @@ fn check_generics_leakage(
             }
             DeclKind::UnionType(u) => {
                 for member in &u.members {
-                    for arg in &member.type_args {
-                        collect_type_expr_names(arg, &mut refs);
+                    if let Some(fields) = &member.payload {
+                        for field in fields {
+                            collect_type_expr_names(&field.type_ann, &mut refs);
+                        }
                     }
                 }
             }

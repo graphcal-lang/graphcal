@@ -283,19 +283,51 @@ unit_scale
 (* The parenthesized form is evaluated at compile time. Only constant
    expressions are allowed: numbers, PI, E, and arithmetic operators. *)
 (* --- type --- *)
-(* Three forms of type declaration:
-   1. Required type (no body):     type Element;        (must be bound via include)
-   2. Record type (with fields):   type Orbit { sma: Length, ecc: Dimensionless }
-      or empty record / marker:    type Eci {}
-   3. Union type (sum of types):   type ManeuverKind = Impulsive | LowThrust;
+(* Two forms of type declaration:
+   1. Required type (no body):  type Element;     (must be bound via include)
+   2. Tagged union (constructor list):
+                                type Maneuver {
+                                  Impulsive(delta_v: Velocity),
+                                  LowThrust(thrust: Force, duration: Time),
+                                  Coast,
+                                }
+
+   Every `type T { … }` declaration is an n-variant tagged union.
+   A record-shaped type is a single-variant union whose sole
+   constructor's name matches the type's name:
+
+       type Position { Position(x: Length, y: Length) }
+
+   A field-only body `type T { x: U, ... }` is a parse error —
+   authors must spell out the constructor name.
+
+   An empty body `type T {}` is also a parse error — there is no
+   zero-variant tagged union. A unit marker is written
+   `type Eci { Eci }`; a required type stub is written `type T;`.
+
+   The body is a constructor list. Each entry is disambiguated
+   structurally — by the token after the constructor's identifier —
+   never by identifier casing:
+     `ident ( ... )`    → constructor with payload (parens form)
+     `ident { ... }`    → constructor with struct-like payload (brace form)
+     `ident` then `,`|`}` → unit constructor
 *)
 type_decl
    = "type", IDENT, [ generic_params ], type_decl_body;
 
 type_decl_body
    = ";"                                              (* required type *)
-   | "{", [ field_list ], "}"                         (* record type *)
-   | "=", union_member_list, ";";                     (* union type *)
+   | "{", constructor_list, "}";                      (* n-variant union *)
+
+constructor_list
+   = constructor_decl, { ",", constructor_decl }, [ "," ];
+
+constructor_decl
+   = IDENT, [ constructor_payload ];
+
+constructor_payload
+   = "(", [ field_list ], ")"                         (* parens form *)
+   | "{", [ field_list ], "}";                        (* brace form *)
 
 field_list
    = field_decl, { ",", field_decl }, [ "," ];
@@ -303,19 +335,12 @@ field_list
 field_decl
    = IDENT, ":", type_expr;
 
-(* Semantic constraint: struct field types must be ValueTypes
+(* Semantic constraint: payload field types must be ValueTypes
    (type_expr_base), not indexed DeclTypes. You cannot put
-   Velocity[Maneuver] inside a struct field. To index structured
-   data, index the struct itself: Vec3<Velocity, ECI>[Maneuver]. *)
-
-union_member_list
-   = union_member, { "|", union_member };
-
-union_member
-   = IDENT, [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ];
-
-(* Union members can carry type arguments for generic unions:
-   type Result<D: Dim> = Ok<D> | Err; *)
+   Velocity[Maneuver] inside a payload field. To index structured
+   data, index the type itself: Vec3<Velocity, ECI>[Maneuver]. *)
+(* Constructors live in a separate namespace from types — the same
+   lexeme may name both. *)
 
 generic_params
    = "<", generic_param, { ",", generic_param }, [ "," ], ">";
@@ -731,8 +756,12 @@ inline_dag_call_suffix
    - IDENT<T>{ ... } or IDENT{ ... }  → struct construction
      (requires uppercase-starting identifier to avoid ambiguity)
    - IDENT.IDENT  → qualified name ref (resolved to variant or const)
-   - IDENT<T>(...) or IDENT(...)  → function call (built-in only)
-   - IDENT  → name ref (resolved to local, const, or bare struct)
+   - IDENT<T>(...) or IDENT(...)  → call expression: either a built-in
+     function call or a tagged-union constructor call (parens-with-
+     named-args, `Ctor(field: expr, ...)`). The two are distinguished
+     at name-resolution time: the same surface form parses identically.
+   - IDENT  → name ref (resolved to local, const, bare struct, or a
+     unit-constructor of a tagged union)
    Qualified forms can chain into a longer dotted path via the
    postfix `.IDENT` operator (field access). User-defined functions do
    not exist in graphcal, so there is no `module.fn(...)` qualified
@@ -745,8 +774,21 @@ ident_expr
                                                     (* struct construction *)
    | IDENT,
      [ "<", generic_arg_list, ">" ],
-     "(", [ expr_list ], ")"                       (* function call *)
+     "(", [ call_arg_list ], ")"                   (* function call or
+                                                       constructor call *)
    | IDENT;                                        (* bare name ref *)
+
+(* The argument list of a call expression accepts both positional
+   args (function-call form: `sqrt(x)`) and named args (constructor-call
+   form: `LowThrust(thrust: 0.5 N, duration: 3600.0 s)`). Mixing
+   positional and named in the same call is rejected at name-resolution
+   time. *)
+call_arg_list
+   = call_arg, { ",", call_arg }, [ "," ];
+
+call_arg
+   = IDENT, ":", expr           (* named arg (constructor-call form) *)
+   | expr;                      (* positional arg (function-call form) *)
 
 generic_arg_list
    = generic_arg, { ",", generic_arg }, [ "," ];

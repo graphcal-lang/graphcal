@@ -2,10 +2,9 @@
 pub dim Velocity = Length / Time;
 
 pub type Transfer {
-    dv1: Velocity,
-    dv2: Velocity,
+    Transfer(dv1: Velocity, dv2: Velocity),
 }
 
 param v: Velocity = 100.0 m/s;
-node transfer: Transfer = Transfer { dv1: @v, dv2: @v};
+node transfer: Transfer = Transfer(dv1: @v, dv2: @v);
 node bad: Velocity = @transfer.nonexistent;

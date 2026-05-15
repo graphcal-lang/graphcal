@@ -1,14 +1,14 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
-assertion_line: 478
 expression: rendered
 ---
 domain bound dimension mismatch on `Foo.x`: type has dimension Length, but min bound has dimension Time
     Diagnostic severity: error
-Begin snippet for domain_field_dim_mismatch.gcl starting at line 1, column 1
+Begin snippet for domain_field_dim_mismatch.gcl starting at line 2, column 1
 
-snippet line 1: // domain_field_dim_mismatch.gcl -- field bound has wrong dimension
-snippet line 2: type Foo { x: Length(min: 1.0 s) }
-    label at line 2, columns 22 to 31: dimension mismatch in domain bound
+snippet line 2: type Foo {
+snippet line 3:     Foo(x: Length(min: 1.0 s)),
+    label at line 3, columns 19 to 28: dimension mismatch in domain bound
+snippet line 4: }
 diagnostic help: domain bounds must have the same dimension as the constrained type
 diagnostic code: graphcal::C002

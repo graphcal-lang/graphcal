@@ -728,6 +728,47 @@
     }
   },
   {
+    "type": "constructor_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "field_declaration",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "constructor_list",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "constructor_declaration",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "convert_expr",
     "named": true,
     "fields": {
@@ -6260,11 +6301,7 @@
           "named": true
         },
         {
-          "type": "field_declaration",
-          "named": true
-        },
-        {
-          "type": "union_members",
+          "type": "constructor_list",
           "named": true
         },
         {
@@ -6655,47 +6692,6 @@
           }
         ]
       }
-    }
-  },
-  {
-    "type": "union_member",
-    "named": true,
-    "fields": {
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "type_arg": {
-        "multiple": true,
-        "required": false,
-        "types": [
-          {
-            "type": "type_expr",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
-    "type": "union_members",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "union_member",
-          "named": true
-        }
-      ]
     }
   },
   {

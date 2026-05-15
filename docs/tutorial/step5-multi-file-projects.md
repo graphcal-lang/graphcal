@@ -154,7 +154,7 @@ self-reference path:
 
 ```graphcal
 // rocket.gcl  (standalone script, no graphcal.toml)
-type OrbitType { sma: Length, ecc: Dimensionless };
+type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) };
 
 dag analyze {
     import rocket.{OrbitType};   // file's own name

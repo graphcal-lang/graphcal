@@ -353,63 +353,77 @@ node speed_kmh: Velocity = @speed -> km/hour;
 
 #[test]
 fn parse_type_decl_single_field() {
-    let source = "type Orbit { sma: Length }";
+    // Record-shaped types are written as a single-variant tagged
+    // union whose sole constructor's name matches the type's name.
+    let source = "type Orbit { Orbit(sma: Length) }";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            assert_eq!(t.name.value.as_str(), "Orbit");
-            let fields = t.fields.as_ref().expect("record type has fields");
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.name.value.as_str(), "Orbit");
+            assert_eq!(u.members.len(), 1);
+            let fields = u.members[0].payload.as_ref().expect("payload");
             assert_eq!(fields.len(), 1);
             assert_eq!(fields[0].name.value.as_str(), "sma");
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected single-variant tagged union"),
     }
 }
 
 #[test]
 fn parse_type_decl_multiple_fields() {
-    let source = "type TransferResult { dv1: Velocity, dv2: Velocity }";
+    let source = "type TransferResult { TransferResult(dv1: Velocity, dv2: Velocity) }";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            assert_eq!(t.name.value.as_str(), "TransferResult");
-            let fields = t.fields.as_ref().expect("record type has fields");
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.name.value.as_str(), "TransferResult");
+            assert_eq!(u.members.len(), 1);
+            let fields = u.members[0].payload.as_ref().expect("payload");
             assert_eq!(fields.len(), 2);
             assert_eq!(fields[0].name.value.as_str(), "dv1");
             assert_eq!(fields[1].name.value.as_str(), "dv2");
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected single-variant tagged union"),
     }
 }
 
 #[test]
 fn parse_type_decl_trailing_comma() {
-    let source = "type TransferResult { dv1: Velocity, dv2: Velocity, }";
+    let source = "type TransferResult { TransferResult(dv1: Velocity, dv2: Velocity,), }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            let fields = t.fields.as_ref().expect("record type has fields");
+        DeclKind::UnionType(u) => {
+            let fields = u.members[0].payload.as_ref().expect("payload");
             assert_eq!(fields.len(), 2);
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected tagged union"),
     }
 }
 
 #[test]
-fn parse_type_decl_empty_type() {
-    // Post-A3: `type Eci {}` is an empty record (unit-like marker).
-    let source = "type Eci {}";
+fn parse_type_decl_unit_marker() {
+    // Empty body `{}` is rejected (no zero-variant tagged union).
+    // Unit markers use an explicit single unit constructor.
+    let source = "type Eci { Eci }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            assert_eq!(t.name.value.as_str(), "Eci");
-            let fields = t.fields.as_ref().expect("empty record has Some(vec![])");
-            assert_eq!(fields.len(), 0);
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.name.value.as_str(), "Eci");
+            assert_eq!(u.members.len(), 1);
+            assert_eq!(u.members[0].name.value.as_str(), "Eci");
+            assert!(u.members[0].payload.is_none());
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected unit-marker tagged union"),
     }
+}
+
+#[test]
+fn parse_type_decl_empty_body_rejected() {
+    // `type Eci {}` no longer parses: there is no zero-variant tagged
+    // union. The author either meant `type Eci { Eci }` (unit marker)
+    // or `type Eci;` (required, awaits include binding).
+    assert!(Parser::new("type Eci {}").parse_file().is_err());
 }
 
 #[test]
@@ -428,35 +442,33 @@ fn parse_type_decl_required() {
 
 #[test]
 fn parse_type_decl_uppercase_name() {
-    let source = "type ORBIT { sma: Length }";
+    let source = "type ORBIT { ORBIT(sma: Length) }";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
 }
 
 #[test]
 fn parse_type_decl_lowercase_name() {
-    let source = "type orbit { sma: Length }";
+    let source = "type orbit { orbit(sma: Length) }";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
 }
 
 #[test]
 fn parse_type_decl_with_dim_expr_field() {
-    let source = "type TransferResult { dv: Length / Time }";
+    let source = "type TransferResult { TransferResult(dv: Length / Time) }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            let fields = t.fields.as_ref().expect("record type has fields");
+        DeclKind::UnionType(u) => {
+            let fields = u.members[0].payload.as_ref().expect("payload");
             assert_eq!(fields.len(), 1);
             assert_eq!(fields[0].name.value.as_str(), "dv");
             match &fields[0].type_ann.kind {
                 TypeExprKind::DimExpr(_) => {}
-                other => {
-                    panic!("expected DimExpr, got {other:?}")
-                }
+                other => panic!("expected DimExpr, got {other:?}"),
             }
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected single-variant tagged union"),
     }
 }
 
@@ -464,124 +476,182 @@ fn parse_type_decl_with_dim_expr_field() {
 fn parse_type_decl_mixed_with_other_decls() {
     let source = r"
 dim Velocity = Length / Time;
-type TransferResult { dv1: Velocity, dv2: Velocity }
+type TransferResult { TransferResult(dv1: Velocity, dv2: Velocity) }
 param alt: Length = 400.0 km;
 ";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 3);
     assert!(matches!(&file.declarations[0].kind, DeclKind::Dimension(_)));
-    assert!(matches!(&file.declarations[1].kind, DeclKind::Type(_)));
+    assert!(matches!(&file.declarations[1].kind, DeclKind::UnionType(_)));
     assert!(matches!(&file.declarations[2].kind, DeclKind::Param(_)));
 }
 
 #[test]
 fn parse_type_decl_generic_params() {
-    let source = "type Vec3<D: Dim, F: Type> { x: D, y: D, z: D }";
+    let source = "type Vec3<D: Dim, F: Type> { Vec3(x: D, y: D, z: D) }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            assert_eq!(t.name.value.as_str(), "Vec3");
-            assert_eq!(t.generic_params.len(), 2);
-            assert_eq!(t.generic_params[0].name.value.as_str(), "D");
-            assert_eq!(t.generic_params[0].constraint, GenericConstraint::Dim);
-            assert_eq!(t.generic_params[1].name.value.as_str(), "F");
-            assert_eq!(t.generic_params[1].constraint, GenericConstraint::Type);
-            let fields = t.fields.as_ref().expect("record type has fields");
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.name.value.as_str(), "Vec3");
+            assert_eq!(u.generic_params.len(), 2);
+            assert_eq!(u.generic_params[0].name.value.as_str(), "D");
+            assert_eq!(u.generic_params[0].constraint, GenericConstraint::Dim);
+            assert_eq!(u.generic_params[1].name.value.as_str(), "F");
+            assert_eq!(u.generic_params[1].constraint, GenericConstraint::Type);
+            let fields = u.members[0].payload.as_ref().expect("payload");
             assert_eq!(fields.len(), 3);
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected single-variant tagged union"),
     }
 }
 
 #[test]
-fn parse_type_decl_no_generics_empty() {
-    let source = "type Eci {}";
+fn parse_type_decl_no_generics_unit_marker() {
+    let source = "type Eci { Eci }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            assert_eq!(t.name.value.as_str(), "Eci");
-            assert!(t.generic_params.is_empty());
-            let fields = t.fields.as_ref().expect("empty record has Some(vec![])");
-            assert_eq!(fields.len(), 0);
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.name.value.as_str(), "Eci");
+            assert!(u.generic_params.is_empty());
+            assert_eq!(u.members.len(), 1);
+            assert!(u.members[0].payload.is_none());
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected single-variant tagged union"),
     }
 }
 
 #[test]
 fn parse_type_decl_generic_single_type_param() {
-    let source = "type Timestamp<TZ: Type> { epoch_seconds: Time }";
+    let source = "type Timestamp<TZ: Type> { Timestamp(epoch_seconds: Time) }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            assert_eq!(t.name.value.as_str(), "Timestamp");
-            assert_eq!(t.generic_params.len(), 1);
-            assert_eq!(t.generic_params[0].name.value.as_str(), "TZ");
-            assert_eq!(t.generic_params[0].constraint, GenericConstraint::Type);
-            let fields = t.fields.as_ref().expect("record type has fields");
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.name.value.as_str(), "Timestamp");
+            assert_eq!(u.generic_params.len(), 1);
+            assert_eq!(u.generic_params[0].name.value.as_str(), "TZ");
+            assert_eq!(u.generic_params[0].constraint, GenericConstraint::Type);
+            let fields = u.members[0].payload.as_ref().expect("payload");
             assert_eq!(fields.len(), 1);
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected single-variant tagged union"),
     }
 }
 
 #[test]
-fn parse_union_type_decl() {
-    let source = "type ManeuverKind = Impulsive | Coasting;";
+fn parse_union_type_decl_unit_variants() {
+    let source = "type ManeuverKind { Impulsive, Coasting }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::UnionType(u) => {
             assert_eq!(u.name.value.as_str(), "ManeuverKind");
             assert_eq!(u.members.len(), 2);
+            assert_eq!(u.members[0].name.value.as_str(), "Impulsive");
+            assert!(u.members[0].payload.is_none());
+            assert_eq!(u.members[1].name.value.as_str(), "Coasting");
+            assert!(u.members[1].payload.is_none());
         }
         _ => panic!("expected union type declaration"),
     }
 }
 
 #[test]
-fn parse_type_decl_generic_default_type_param() {
-    let source = "type Vec3<D: Dim, F: Type = Unframed> { x: D, y: D, z: D }";
+fn parse_union_type_decl_with_payload() {
+    let source = "\
+type Maneuver {
+  Impulsive(delta_v: Velocity),
+  LowThrust(thrust: Force, duration: Time),
+  Coast,
+}
+";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            assert_eq!(t.name.value.as_str(), "Vec3");
-            assert_eq!(t.generic_params.len(), 2);
-            assert_eq!(t.generic_params[0].name.value.as_str(), "D");
-            assert_eq!(t.generic_params[0].constraint, GenericConstraint::Dim);
-            assert!(t.generic_params[0].default.is_none());
-            assert_eq!(t.generic_params[1].name.value.as_str(), "F");
-            assert_eq!(t.generic_params[1].constraint, GenericConstraint::Type);
-            let default = t.generic_params[1].default.as_ref().unwrap();
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.name.value.as_str(), "Maneuver");
+            assert_eq!(u.members.len(), 3);
+            // Impulsive has one field
+            assert_eq!(u.members[0].name.value.as_str(), "Impulsive");
+            let p0 = u.members[0].payload.as_ref().expect("payload");
+            assert_eq!(p0.len(), 1);
+            assert_eq!(p0[0].name.value.as_str(), "delta_v");
+            // LowThrust has two
+            let p1 = u.members[1].payload.as_ref().expect("payload");
+            assert_eq!(p1.len(), 2);
+            // Coast is unit
+            assert_eq!(u.members[2].name.value.as_str(), "Coast");
+            assert!(u.members[2].payload.is_none());
+        }
+        _ => panic!("expected union type declaration"),
+    }
+}
+
+#[test]
+fn parse_union_type_decl_brace_payload() {
+    let source = "type Status { Active { since: Time }, Idle }";
+    let file = Parser::new(source).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.members.len(), 2);
+            assert_eq!(u.members[0].name.value.as_str(), "Active");
+            assert_eq!(u.members[0].payload.as_ref().expect("payload").len(), 1);
+            assert!(u.members[1].payload.is_none());
+        }
+        _ => panic!("expected union type declaration"),
+    }
+}
+
+#[test]
+fn parse_type_decl_record_form_rejected() {
+    // A field-only body is not a valid n-variant tagged union; the
+    // record-shaped form requires the explicit single-variant
+    // spelling `type Position { Position(x: Length, y: Length) }`.
+    let source = "type Position { x: Length, y: Length }";
+    assert!(Parser::new(source).parse_file().is_err());
+}
+
+#[test]
+fn parse_type_decl_generic_default_type_param() {
+    let source = "type Vec3<D: Dim, F: Type = Unframed> { Vec3(x: D, y: D, z: D) }";
+    let file = Parser::new(source).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.name.value.as_str(), "Vec3");
+            assert_eq!(u.generic_params.len(), 2);
+            assert_eq!(u.generic_params[0].name.value.as_str(), "D");
+            assert_eq!(u.generic_params[0].constraint, GenericConstraint::Dim);
+            assert!(u.generic_params[0].default.is_none());
+            assert_eq!(u.generic_params[1].name.value.as_str(), "F");
+            assert_eq!(u.generic_params[1].constraint, GenericConstraint::Type);
+            let default = u.generic_params[1].default.as_ref().unwrap();
             assert_eq!(dim_expr_name(default), "Unframed");
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected single-variant tagged union"),
     }
 }
 
 #[test]
 fn parse_type_decl_generic_no_default() {
-    let source = "type Pair<A: Dim, B: Dim> { a: A, b: B }";
+    let source = "type Pair<A: Dim, B: Dim> { Pair(a: A, b: B) }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            assert_eq!(t.generic_params.len(), 2);
-            assert!(t.generic_params[0].default.is_none());
-            assert!(t.generic_params[1].default.is_none());
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.generic_params.len(), 2);
+            assert!(u.generic_params[0].default.is_none());
+            assert!(u.generic_params[1].default.is_none());
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected single-variant tagged union"),
     }
 }
 
 #[test]
 fn parse_type_decl_no_attributes() {
-    let source = "type Eci {}";
+    let source = "type Eci { Eci }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Type(t) => {
-            let fields = t.fields.as_ref().expect("empty record has Some(vec![])");
-            assert!(fields.is_empty());
+        DeclKind::UnionType(u) => {
+            assert_eq!(u.members.len(), 1);
+            assert!(u.members[0].payload.is_none());
         }
-        _ => panic!("expected type declaration"),
+        _ => panic!("expected unit-marker tagged union"),
     }
 }
 

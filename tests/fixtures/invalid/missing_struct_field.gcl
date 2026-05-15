@@ -2,9 +2,8 @@
 pub dim Velocity = Length / Time;
 
 pub type Transfer {
-    dv1: Velocity,
-    dv2: Velocity,
+    Transfer(dv1: Velocity, dv2: Velocity),
 }
 
 param v: Velocity = 100.0 m/s;
-node bad: Transfer = Transfer { dv1: @v};
+node bad: Transfer = Transfer(dv1: @v);

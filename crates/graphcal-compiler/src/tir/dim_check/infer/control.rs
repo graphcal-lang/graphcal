@@ -239,31 +239,27 @@ pub(super) fn infer_match(
                     });
                 }
 
-                // Check variant/member belongs to this type
-                let member_type_def = if type_def.is_union() {
-                    // Union type: look up the member type
-                    if !registry
-                        .types
-                        .is_member_of_union(variant_name_str, type_name.as_str())
-                    {
-                        return Err(GraphcalError::UnknownField {
-                            type_name: type_name.clone(),
-                            field_name: FieldName::new(variant_name_str),
-                            src: src.clone(),
-                            span: arm.pattern.variant_name.span.into(),
-                        });
-                    }
-                    registry.types.get_type(variant_name_str).ok_or_else(|| {
-                        GraphcalError::UnknownStructType {
-                            name: StructTypeName::new(variant_name_str),
-                            src: src.clone(),
-                            span: arm.pattern.variant_name.span.into(),
-                        }
-                    })?
-                } else {
-                    // Non-union struct: the only valid pattern is the type itself
-                    type_def
-                };
+                // The match pattern names a constructor of `type_def`.
+                // Resolve it in the union's member list directly — there
+                // are no per-variant TypeDefs.
+                let members = type_def
+                    .union_members()
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: format!(
+                            "internal: cannot match on required (unbound) type `{type_name}`"
+                        ),
+                        src: src.clone(),
+                        span: arm.pattern.span.into(),
+                    })?;
+                let variant_def = members
+                    .iter()
+                    .find(|m| m.name.as_str() == variant_name_str)
+                    .ok_or_else(|| GraphcalError::UnknownField {
+                        type_name: type_name.clone(),
+                        field_name: FieldName::new(variant_name_str),
+                        src: src.clone(),
+                        span: arm.pattern.variant_name.span.into(),
+                    })?;
 
                 // Check for duplicate arms
                 if !covered.insert(variant_name_str.to_string()) {
@@ -279,8 +275,8 @@ pub(super) fn infer_match(
                 for binding in &arm.pattern.bindings {
                     match binding {
                         crate::desugar::resolved_ast::PatternBinding::Bind { field, var } => {
-                            let field_def = member_type_def
-                                .fields()
+                            let field_def = variant_def
+                                .fields
                                 .iter()
                                 .find(|f| f.name.as_str() == field.value.as_str())
                                 .ok_or_else(|| GraphcalError::UnknownField {

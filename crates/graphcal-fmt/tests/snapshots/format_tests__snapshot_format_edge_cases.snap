@@ -8,22 +8,19 @@ dim Acceleration = Length / Time^2;
 dim Frequency = Time^-1;
 dim GravParam = Length^3 / Time^2;
 
-type Eci {}
-type Body {}
+type Eci {
+    Eci,
+}
+type Body {
+    Body,
+}
 
 type Vec3<D: Dim, F: Type> {
-    x: D,
-    y: D,
-    z: D,
+    Vec3(x: D, y: D, z: D),
 }
 
 type StateVec<D: Dim, V: Dim, F: Type> {
-    pos_x: D,
-    pos_y: D,
-    pos_z: D,
-    vel_x: V,
-    vel_y: V,
-    vel_z: V,
+    StateVec(pos_x: D, pos_y: D, pos_z: D, vel_x: V, vel_y: V, vel_z: V),
 }
 
 index Phase = { Launch, Coast, Burn, Insertion, Deorbit };
@@ -104,14 +101,14 @@ param maneuver_dv: Velocity[Phase, Maneuver] = for p: Phase, m: Maneuver {
 };
 
 // Struct construction with many fields and long expressions
-param initial_state: StateVec<Length, Velocity, Eci> = StateVec<Length, Velocity, Eci> {
+param initial_state: StateVec<Length, Velocity, Eci> = StateVec<Length, Velocity, Eci>(
     pos_x: @r_earth + 200.0 km,
     pos_y: 0.0 km,
     pos_z: 0.0 km,
     vel_x: 0.0 m/s,
     vel_y: sqrt(@gm_earth / (@r_earth + 200.0 km)),
     vel_z: 0.0 m/s,
-};
+);
 
 // Field access chains
 node initial_pos_x: Length = @initial_state.pos_x;

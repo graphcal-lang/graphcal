@@ -3,9 +3,7 @@ dim Velocity = Length / Time;
 dim GravParam = Length^3 / Time^2;
 
 type TransferResult {
-    dv1: Velocity,
-    dv2: Velocity,
-    total_dv: Velocity,
+    TransferResult(dv1: Velocity, dv2: Velocity, total_dv: Velocity),
 }
 
 const node r_earth: Length = 6371.0 km;
@@ -38,7 +36,7 @@ dag hohmann_dv {
     
     node dv2: Velocity = @v2 - sqrt(2.0 * @gm * @r1 / (@r2 * (@r1 + @r2)));
     
-    node result: TransferResult = TransferResult { dv1: @dv1, dv2: @dv2, total_dv: @dv1 + @dv2};
+    node result: TransferResult = TransferResult(dv1: @dv1, dv2: @dv2, total_dv: @dv1 + @dv2);
 }
 
 param parking_alt: Length = 200.0 km;

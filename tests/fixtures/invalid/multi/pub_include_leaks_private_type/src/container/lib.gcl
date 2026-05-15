@@ -1,4 +1,4 @@
 // container.gcl -- generic library with a bindable element type.
-pub(bind) type Element { size: Length }
+pub(bind) type Element { Element(size: Length) }
 
-pub const node origin: Element = Element { size: 1.0 m };
+pub const node origin: Element = Element(size: 1.0 m);
