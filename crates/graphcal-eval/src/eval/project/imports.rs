@@ -250,144 +250,108 @@ pub(super) fn process_instantiated_include<'a>(
         (import_dag_id.clone(), include_decl.path.span()),
     );
 
-    // Classify and validate bindings against the dependency's AST.
-    // Each binding is either a param binding (name targets a `param`), an
-    // index binding (name targets a `cat`/`range` index), a type binding
-    // (name targets a `type`), or a dim binding (name targets a `dim`).
-    let mut bindings = HashMap::new();
-    let mut index_bindings: HashMap<IndexName, IndexName> = HashMap::new();
-    let mut type_bindings: HashMap<StructTypeName, StructTypeName> = HashMap::new();
-    let mut dim_bindings: HashMap<DimName, DimName> = HashMap::new();
+    // Classify and validate bindings against the dependency's AST. Each
+    // binding lands in one of params/types/dims/indexes, or is rejected as
+    // an unknown / non-bindable name. Caller-specific cross-checks (importer
+    // scope for index bindings) layer on top of the shared classification.
+    let dep_path_display = include_decl.path.display_path();
+    let ClassifiedBindings {
+        params: bindings,
+        indexes: index_bindings,
+        types: type_bindings,
+        dims: dim_bindings,
+    } = classify_param_bindings(
+        &include_decl.param_bindings,
+        &dep_index,
+        file_src,
+        &dep_path_display,
+    )?;
+
+    // File includes additionally require each index binding's RHS to
+    // resolve to an index already visible to the importer (in its own AST
+    // or in a previously-evaluated dep's registry), and the dep/importer
+    // kinds (named vs range) to agree. Inline-DAG includes share the
+    // file's registry and skip this pass.
     for binding in &include_decl.param_bindings {
         let binding_name = &binding.name.name;
-
-        // Check if the binding name is a param in the dependency.
-        if dep_index.params.contains(binding_name.as_str()) {
-            bindings.insert(binding_name.clone(), binding.value.clone());
+        let Some(dep_idx) = dep_index.indexes.get(binding_name.as_str()).copied() else {
             continue;
+        };
+        // classify_param_bindings inserts an entry for every accepted index
+        // binding; the let-else is a no-panic safety net rather than a real
+        // branch — a `continue` here is unreachable under that invariant.
+        let Some(rhs_name) = index_bindings.get(binding_name.as_str()) else {
+            continue;
+        };
+        let rhs_name = rhs_name.as_str().to_string();
+
+        // Validate the RHS resolves to an index in the importer's scope.
+        // Check 1: importer's own AST.
+        let importer_idx_ast =
+            importer_loaded
+                .ast
+                .declarations
+                .iter()
+                .find_map(|d| match &d.kind {
+                    DeclKind::Index(idx) if idx.name.value.as_str() == rhs_name => Some(idx),
+                    _ => None,
+                });
+        // Check 2: already-evaluated dependency registries.
+        let importer_idx_from_registry = if importer_idx_ast.is_none() {
+            ctx.extra_registry_builders
+                .iter()
+                .find_map(|(reg, _)| reg.indexes.get_index(&rhs_name))
+                .or_else(|| {
+                    evaluated_files
+                        .values()
+                        .find_map(|ef| ef.registry.indexes.get_index(&rhs_name))
+                })
+        } else {
+            None
+        };
+
+        if importer_idx_ast.is_none() && importer_idx_from_registry.is_none() {
+            return Err(CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
+                dep_index: binding_name.clone(),
+                value: rhs_name,
+                src: file_src.clone(),
+                span: binding.value.span.into(),
+            }));
         }
 
-        // Check if it's a type in the dependency.
-        if dep_index.types.contains(binding_name.as_str()) {
-            let rhs_name = lowering::extract_type_name_from_binding_expr(
-                &binding.value,
-                binding_name,
-                file_src,
-            )?;
-            type_bindings.insert(
-                StructTypeName::new(binding_name),
-                StructTypeName::new(rhs_name),
-            );
-            continue;
-        }
-
-        // Check if it's a dimension in the dependency.
-        if dep_index.dims.contains(binding_name.as_str()) {
-            let rhs_name = lowering::extract_type_name_from_binding_expr(
-                &binding.value,
-                binding_name,
-                file_src,
-            )?;
-            dim_bindings.insert(DimName::new(binding_name), DimName::new(rhs_name));
-            continue;
-        }
-
-        // Check if it's an index in the dependency.
-        if let Some(dep_idx) = dep_index.indexes.get(binding_name.as_str()).copied() {
-            // Index binding: extract the RHS index name from the expression.
-            let rhs_name = lowering::extract_index_name_from_binding_expr(
-                &binding.value,
-                binding_name,
-                file_src,
-            )?;
-
-            // Validate the RHS resolves to an index in the importer's scope.
-            // Check 1: importer's own AST.
-            let importer_idx_ast =
-                importer_loaded
-                    .ast
-                    .declarations
-                    .iter()
-                    .find_map(|d| match &d.kind {
-                        DeclKind::Index(idx) if idx.name.value.as_str() == rhs_name => Some(idx),
-                        _ => None,
-                    });
-            // Check 2: already-evaluated dependency registries.
-            let importer_idx_from_registry = if importer_idx_ast.is_none() {
-                ctx.extra_registry_builders
-                    .iter()
-                    .find_map(|(reg, _)| reg.indexes.get_index(&rhs_name))
-                    .or_else(|| {
-                        evaluated_files
-                            .values()
-                            .find_map(|ef| ef.registry.indexes.get_index(&rhs_name))
-                    })
-            } else {
-                None
-            };
-
-            if importer_idx_ast.is_none() && importer_idx_from_registry.is_none() {
-                return Err(CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
-                    dep_index: binding_name.clone(),
-                    value: rhs_name,
-                    src: file_src.clone(),
-                    span: binding.value.span.into(),
-                }));
-            }
-
-            // Validate kind matching (named-to-named, range-to-range).
-            let dep_is_named = matches!(
-                dep_idx.kind,
-                graphcal_compiler::desugar::resolved_ast::IndexDeclKind::Named { .. }
-                    | graphcal_compiler::desugar::resolved_ast::IndexDeclKind::RequiredNamed
-            );
-            let imp_is_named = importer_idx_ast.map_or_else(
-                || {
-                    importer_idx_from_registry
-                        .map(graphcal_compiler::registry::types::IndexDef::is_named)
-                },
-                |imp_idx| {
-                    Some(matches!(
-                        imp_idx.kind,
-                        graphcal_compiler::desugar::resolved_ast::IndexDeclKind::Named { .. }
-                            | graphcal_compiler::desugar::resolved_ast::IndexDeclKind::RequiredNamed
-                    ))
-                },
-            );
-            if let Some(imp_named) = imp_is_named
-                && dep_is_named != imp_named
-            {
-                return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
-                    dep_index: binding_name.clone(),
-                    dep_kind: if dep_is_named { "named" } else { "range" }.to_string(),
-                    bound_index: rhs_name,
-                    bound_kind: if imp_named { "named" } else { "range" }.to_string(),
-                    src: file_src.clone(),
-                    span: binding.name.span.into(),
-                }));
-            }
-            // Dimension matching for range indexes is deferred to
-            // process_deferred_dag_includes() where registries are available.
-
-            index_bindings.insert(IndexName::new(binding_name), IndexName::new(rhs_name));
-            continue;
-        }
-
-        // Check if it's some other kind of declaration.
-        if let Some(kind) = dep_index.other.get(binding_name.as_str()) {
-            return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
-                name: binding_name.clone(),
-                actual_kind: kind.as_str().to_string(),
+        // Validate kind matching (named-to-named, range-to-range).
+        let dep_is_named = matches!(
+            dep_idx.kind,
+            graphcal_compiler::desugar::resolved_ast::IndexDeclKind::Named { .. }
+                | graphcal_compiler::desugar::resolved_ast::IndexDeclKind::RequiredNamed
+        );
+        let imp_is_named = importer_idx_ast.map_or_else(
+            || {
+                importer_idx_from_registry
+                    .map(graphcal_compiler::registry::types::IndexDef::is_named)
+            },
+            |imp_idx| {
+                Some(matches!(
+                    imp_idx.kind,
+                    graphcal_compiler::desugar::resolved_ast::IndexDeclKind::Named { .. }
+                        | graphcal_compiler::desugar::resolved_ast::IndexDeclKind::RequiredNamed
+                ))
+            },
+        );
+        if let Some(imp_named) = imp_is_named
+            && dep_is_named != imp_named
+        {
+            return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
+                dep_index: binding_name.clone(),
+                dep_kind: if dep_is_named { "named" } else { "range" }.to_string(),
+                bound_index: rhs_name,
+                bound_kind: if imp_named { "named" } else { "range" }.to_string(),
                 src: file_src.clone(),
                 span: binding.name.span.into(),
             }));
         }
-        return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
-            name: binding_name.clone(),
-            file_path: include_decl.path.display_path(),
-            src: file_src.clone(),
-            span: binding.name.span.into(),
-        }));
+        // Dimension matching for range indexes is deferred to
+        // process_deferred_dag_includes() where registries are available.
     }
 
     // Register the dependency's declaration names in the importer's scope
