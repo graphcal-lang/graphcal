@@ -37,14 +37,20 @@ pub enum SymbolKey {
     /// Top-level declaration: param, node, const, dim, unit, type, index,
     /// assert, plot, figure, builtins.
     TopLevel(String),
-    /// Module-qualified reference: e.g., `@params::dry_mass` or `math::PI`.
-    /// Preserves the module namespace so that two modules exporting the same
-    /// member name are distinguished.
-    Qualified { module: String, name: String },
+    /// Module-qualified reference: e.g., `@params::dry_mass` or `a.b.c::PI`.
+    /// `module` carries the structured path segments rather than a flat
+    /// formatted string, so two callers that build the same logical path
+    /// always produce equal keys without depending on a shared join format.
+    Qualified { module: Vec<String>, name: String },
     /// Variant of a type or index: e.g., `Season::Winter`.
     Variant { parent: String, variant: String },
-    /// Field reference: e.g., `field::thrust`.
-    Field(String),
+    /// Field of a struct or union variant. `struct_name` distinguishes two
+    /// fields with the same name across different types (without it, hover
+    /// and goto-def could resolve to the wrong field).
+    Field {
+        struct_name: String,
+        field_name: String,
+    },
     /// Expression-scoped local variable (block, for, scan, unfold, match).
     ExprScoped {
         kind: ExprScopeKind,
@@ -57,9 +63,20 @@ impl std::fmt::Display for SymbolKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TopLevel(name) => write!(f, "{name}"),
-            Self::Qualified { module, name } => write!(f, "{module}::{name}"),
+            Self::Qualified { module, name } => {
+                for (i, seg) in module.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(".")?;
+                    }
+                    f.write_str(seg)?;
+                }
+                write!(f, "::{name}")
+            }
             Self::Variant { parent, variant } => write!(f, "{parent}::{variant}"),
-            Self::Field(name) => write!(f, "field::{name}"),
+            Self::Field {
+                struct_name,
+                field_name,
+            } => write!(f, "{struct_name}::{field_name}"),
             Self::ExprScoped {
                 kind,
                 offset,
@@ -862,7 +879,7 @@ fn collect_dag_decl(d: &DagDecl, decl_span: Span, visibility: Visibility, table:
         };
         table.insert_definition(
             SymbolKey::Qualified {
-                module: dag_name.clone(),
+                module: vec![dag_name.clone()],
                 name: member_name.clone(),
             },
             DefinitionInfo {
@@ -963,7 +980,10 @@ fn collect_expr_refs(
             let target = match &name.value {
                 ScopedName::Local(n) => SymbolKey::TopLevel(n.clone()),
                 ScopedName::Qualified { module, member } => SymbolKey::Qualified {
-                    module: module.clone(),
+                    // ScopedName::module is still a single flat-string segment
+                    // (a wider typing pass is tracked separately); wrap it
+                    // into the structured form at this boundary.
+                    module: vec![module.clone()],
                     name: member.clone(),
                 },
             };
@@ -993,7 +1013,7 @@ fn collect_expr_refs(
             table.references.push(ReferenceInfo {
                 span: output.span,
                 target: SymbolKey::Qualified {
-                    module: path.display_path(),
+                    module: path.segments.iter().map(|s| s.name.clone()).collect(),
                     name: output.value.to_string(),
                 },
             });
@@ -1046,13 +1066,15 @@ fn collect_expr_refs(
         ExprKind::DisplayTimezone { expr, .. } => {
             collect_expr_refs(expr, table, scopes);
         }
-        ExprKind::FieldAccess { expr, field } => {
+        ExprKind::FieldAccess { expr, field: _ } => {
             collect_expr_refs(expr, table, scopes);
-            // Field reference -- target is approximate without type info.
-            table.references.push(ReferenceInfo {
-                span: field.span,
-                target: SymbolKey::Field(field.value.to_string()),
-            });
+            // Field references on bare `expr.field` would need TIR-level type
+            // info to know which struct the field belongs to. We deliberately
+            // record nothing here rather than emit an `unresolved`-field key
+            // that would resolve to the first struct registering a field with
+            // the same name. Pattern bindings (which carry variant context)
+            // and the registry-driven definition pass below still record
+            // precisely-keyed `Field { struct_name, field_name }` entries.
         }
         ExprKind::StructConstruction {
             type_name,
@@ -1295,7 +1317,10 @@ fn collect_expr_refs(
                         PatternBinding::Bind { field, var } => {
                             table.references.push(ReferenceInfo {
                                 span: field.span,
-                                target: SymbolKey::Field(field.value.to_string()),
+                                target: SymbolKey::Field {
+                                    struct_name: variant_name.clone(),
+                                    field_name: field.value.to_string(),
+                                },
                             });
                             let var_key = SymbolKey::ExprScoped {
                                 kind: ExprScopeKind::Match,
@@ -1319,7 +1344,10 @@ fn collect_expr_refs(
                         PatternBinding::Wildcard { field, .. } => {
                             table.references.push(ReferenceInfo {
                                 span: field.span,
-                                target: SymbolKey::Field(field.value.to_string()),
+                                target: SymbolKey::Field {
+                                    struct_name: variant_name.clone(),
+                                    field_name: field.value.to_string(),
+                                },
                             });
                         }
                     }
@@ -1663,11 +1691,16 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
         }
     }
 
-    // Register field definitions from struct types so that `field::name`
-    // references resolve to a definition with hover info.
+    // Register field definitions from struct types under their struct-qualified
+    // keys so that pattern bindings (`@s match { Variant { field: v } => …}`)
+    // resolve to the field of the right struct/variant, even when two structs
+    // share a field name.
     for type_def in registry.types.all_types() {
         for field in type_def.fields() {
-            let field_key = SymbolKey::Field(field.name.to_string());
+            let field_key = SymbolKey::Field {
+                struct_name: type_def.name.to_string(),
+                field_name: field.name.to_string(),
+            };
             if !table.definitions.contains_key(&field_key) {
                 table.insert_definition(
                     field_key,
@@ -1801,7 +1834,14 @@ param q: Int[I]
             SymbolKey::TopLevel("x".to_string()).top_level_name(),
             Some("x")
         );
-        assert_eq!(SymbolKey::Field("x".to_string()).top_level_name(), None);
+        assert_eq!(
+            SymbolKey::Field {
+                struct_name: "Rocket".to_string(),
+                field_name: "x".to_string(),
+            }
+            .top_level_name(),
+            None
+        );
     }
     // --- Inline DAG invocation LSP coverage (issue #451) ---
 }
