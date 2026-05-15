@@ -75,12 +75,6 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         } => format_expr(fmt, inner)
             .append(RcDoc::text(" -> "))
             .append(RcDoc::text(format!("\"{timezone}\""))),
-        ExprKind::AsCast {
-            expr: inner,
-            target_type,
-        } => format_expr(fmt, inner)
-            .append(RcDoc::text(" as "))
-            .append(format_type_expr_inline(fmt, target_type)),
         ExprKind::FieldAccess { expr: inner, field } => format_expr(fmt, inner)
             .append(RcDoc::text("."))
             .append(RcDoc::text(field.value.as_str().to_string())),

@@ -1235,30 +1235,24 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
     }
 
     fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
-        match &expr.kind {
-            ExprKind::IndexAccess { args, .. } => {
-                for arg in args {
-                    if let crate::desugar::resolved_ast::IndexArg::Variant { index, variant } = arg
-                        && self.index_bindings.contains_key(index.value.as_str())
-                    {
-                        return Err(self.orphan_error(
-                            "index",
-                            index.value.as_ref(),
-                            format!(
-                                "`{}`",
-                                crate::syntax::names::fmt_qualified_variant(
-                                    &index.value,
-                                    &variant.value
-                                )
-                            ),
-                        ));
-                    }
+        if let ExprKind::IndexAccess { args, .. } = &expr.kind {
+            for arg in args {
+                if let crate::desugar::resolved_ast::IndexArg::Variant { index, variant } = arg
+                    && self.index_bindings.contains_key(index.value.as_str())
+                {
+                    return Err(self.orphan_error(
+                        "index",
+                        index.value.as_ref(),
+                        format!(
+                            "`{}`",
+                            crate::syntax::names::fmt_qualified_variant(
+                                &index.value,
+                                &variant.value
+                            )
+                        ),
+                    ));
                 }
             }
-            ExprKind::AsCast { target_type, .. } => {
-                self.check_type_expr(target_type)?;
-            }
-            _ => {}
         }
         self.visit_expr(inner)
     }
@@ -1623,8 +1617,8 @@ where
 /// Rewrite struct-type names within an expression according to a binding map.
 ///
 /// Covers `StructConstruction.type_name`, `StructConstruction.type_args`,
-/// `AsCast.target_type`, and `FnCall.type_args`. Recurses through child
-/// expressions so nested struct constructions are also rewritten.
+/// and `FnCall.type_args`. Recurses through child expressions so nested
+/// struct constructions are also rewritten.
 #[expect(
     clippy::too_many_lines,
     reason = "single recursion covering every ExprKind variant"
@@ -1673,13 +1667,6 @@ pub(crate) fn substitute_type_names_in_expr(
             }
         }
 
-        ExprKind::AsCast {
-            expr: inner,
-            target_type,
-        } => {
-            substitute_type_expr_nominal_names(target_type, bindings);
-            substitute_type_names_in_expr(inner, bindings);
-        }
         ExprKind::FnCall {
             type_args, args, ..
         } => {

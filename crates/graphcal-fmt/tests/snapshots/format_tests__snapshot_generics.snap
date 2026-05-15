@@ -49,9 +49,11 @@ param pos3_default: Pos3<Length> = Pos3<Length>(x: 10.0 km, y: 20.0 km, z: 30.0 
 node pos3_eci_x: Length = @pos3_eci.x;
 node pos3_default_y: Length = @pos3_default.y;
 
-// --- as cast (phantom type parameter change) ---
-// Cast a Vec3 from Eci frame to Body frame (phantom param only)
-node pos_body: Vec3<Length, Body> = @pos_eci as Vec3<Length, Body>;
+// --- Phantom type parameter change via explicit reconstruction ---
+// Re-frame a Vec3 from Eci to Body by spelling out each field. There is
+// no `as` cast: changing a phantom parameter is a deliberate, field-by-
+// field act, visible at the call site.
+node pos_body: Vec3<Length, Body> = Vec3<Length, Body>(x: @pos_eci.x, y: @pos_eci.y, z: @pos_eci.z);
 node pos_body_x: Length = @pos_body.x;
 
 // Non-generic struct still works alongside generics

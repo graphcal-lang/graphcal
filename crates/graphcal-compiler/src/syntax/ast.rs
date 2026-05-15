@@ -1076,11 +1076,6 @@ pub enum ExprKind<P: Phase = Raw> {
         expr: Box<Expr<P>>,
         timezone: String,
     },
-    /// Phantom type cast: `expr as TypeExpr`
-    AsCast {
-        expr: Box<Expr<P>>,
-        target_type: TypeExpr<P>,
-    },
     /// Local variable reference (loop variable, function parameter, match binding, etc.)
     LocalRef(Ident),
     /// Field access: `@transfer.dv1`, `@mission.transfer.dv1`
@@ -1527,7 +1522,6 @@ fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
         }
         ExprKind::Convert { expr: inner, .. }
         | ExprKind::DisplayTimezone { expr: inner, .. }
-        | ExprKind::AsCast { expr: inner, .. }
         | ExprKind::FieldAccess { expr: inner, .. }
         | ExprKind::IndexAccess { expr: inner, .. } => desugar_expr(inner),
         ExprKind::StructConstruction { fields, .. } => {

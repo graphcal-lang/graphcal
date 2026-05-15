@@ -863,7 +863,6 @@ module.exports = grammar({
       $.binary_expr,
       $.unary_expr,
       $.convert_expr,
-      $.as_cast_expr,
       $.if_expr,
       $.match_expr,
       $.for_expr,
@@ -878,42 +877,6 @@ module.exports = grammar({
       field("value", $._expr),
       "->",
       field("target", $.unit_expr),
-    )),
-
-    // Phantom type cast: expr as TypeExpr
-    // Uses _type_expr_base (not type_expr) to avoid ambiguity with index_access [...]
-    //
-    // Two forms:
-    // 1. Generic: `expr as Vec3<Length, Body>` — the `as` keyword followed by
-    //    `Ident <` is always parsed as a type_application (not comparison).
-    //    This is safe because comparison after `as` makes no semantic sense.
-    // 2. Non-generic: `expr as SomeType`
-    as_cast_expr: $ => choice(
-      // Generic type target — inlined type_application sequence after `as`
-      // so that `<` is unambiguously part of the type, not a comparison.
-      prec.left(PREC.CONVERT, seq(
-        field("value", $._expr),
-        "as",
-        field("target_type", alias($.as_type_application, $.type_application)),
-      )),
-      // Non-generic type target
-      prec.left(PREC.CONVERT, seq(
-        field("value", $._expr),
-        "as",
-        field("target_type", choice($.dimensionless, $.bool_type, $.int_type, $.dim_expr)),
-      )),
-    ),
-
-    // Type application used exclusively in as-cast context.
-    // Uses high precedence to ensure the parser prefers shifting `<` as part
-    // of the type application rather than reducing identifier → dim_term.
-    as_type_application: $ => prec(PREC.POWER + 2, seq(
-      field("name", $.identifier),
-      "<",
-      field("type_arg", $.type_expr),
-      repeat(seq(",", field("type_arg", $.type_expr))),
-      optional(","),
-      ">",
     )),
 
     binary_expr: $ => choice(
