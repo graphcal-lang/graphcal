@@ -885,7 +885,10 @@ fn collect_imported_definitions(
                 for (key, def) in &imported_table.definitions {
                     let qualified_key = match key {
                         SymbolKey::TopLevel(name) => SymbolKey::Qualified {
-                            module: module_name.clone(),
+                            // The module alias here is a single identifier
+                            // segment; lift it into the structured form to
+                            // match other Qualified construction sites.
+                            module: vec![module_name.clone()],
                             name: name.clone(),
                         },
                         other => other.clone(),
