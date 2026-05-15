@@ -16,7 +16,7 @@ use super::*;
     clippy::too_many_lines,
     reason = "import processing, inline DAG handling, and cross-file DAG handling form a cohesive pipeline"
 )]
-pub(super) fn compile_single_file_in_project(
+pub(in crate::eval::project) fn compile_single_file_in_project(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
@@ -205,7 +205,7 @@ pub(super) fn compile_single_file_in_project(
 }
 
 /// Evaluate and store a non-root file, producing an [`EvaluatedFile`] for downstream imports.
-pub(super) fn evaluate_and_store_file(
+pub(in crate::eval::project) fn evaluate_and_store_file(
     compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
@@ -258,7 +258,7 @@ pub(super) fn evaluate_and_store_file(
     clippy::too_many_lines,
     reason = "sequential per-file evaluation steps"
 )]
-pub(super) fn evaluate_project_perfile(
+pub(in crate::eval::project) fn evaluate_project_perfile(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
@@ -444,7 +444,7 @@ pub(super) fn evaluate_project_perfile(
 /// Transitive imports inherit the root-level import span of the direct import
 /// that started the chain. When a transitive dependency is reachable from multiple
 /// root imports, the first root import in source order wins.
-pub(super) fn build_dep_import_spans(
+pub(in crate::eval::project) fn build_dep_import_spans(
     project: &crate::loader::LoadedProject,
 ) -> HashMap<graphcal_compiler::syntax::dag_id::DagId, Span> {
     let root_file = &project.files[&project.root];
@@ -496,7 +496,7 @@ pub(super) fn build_dep_import_spans(
 ///
 /// Non-root files are fully evaluated to produce `RuntimeValue`s for downstream
 /// imports. The root file stops at TIR and returns it.
-pub(super) fn compile_to_tir_project_perfile(
+pub(in crate::eval::project) fn compile_to_tir_project_perfile(
     project: &crate::loader::LoadedProject,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
     let empty_overrides = HashMap::new();
@@ -552,7 +552,7 @@ pub(super) fn compile_to_tir_project_perfile(
 ///
 /// Returns a map: `override_name` → (`owning_dag_id`, `original_param_name`).
 /// The `original_param_name` may differ from `override_name` when an alias is used.
-pub(super) fn route_overrides_to_files(
+pub(in crate::eval::project) fn route_overrides_to_files(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
 ) -> Result<HashMap<DeclName, (graphcal_compiler::syntax::dag_id::DagId, DeclName)>, CompileError> {
