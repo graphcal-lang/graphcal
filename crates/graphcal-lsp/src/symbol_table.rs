@@ -1,6 +1,7 @@
 //! Symbol table for LSP features: maps source locations to definitions and references.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use graphcal_compiler::desugar::resolved_ast::{
     AssertDecl, BaseDimDecl, DagDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind,
@@ -180,8 +181,10 @@ pub struct ReferenceInfo {
 /// every request.
 #[derive(Debug, Clone)]
 pub struct InlayHintEntry {
-    /// Key into [`SymbolTable::definitions`] for this declaration.
-    pub key: SymbolKey,
+    /// Key into [`SymbolTable::definitions`] for this declaration. Shared
+    /// via `Rc` with [`SymbolTable::defs_by_name_span`] so each key is
+    /// allocated once and refcounted across the two sorted indices.
+    pub key: Arc<SymbolKey>,
     /// LSP position of the declaration's name start.
     pub name_start: Position,
     /// LSP position of the declaration's name end (where the hint is placed).
@@ -201,12 +204,14 @@ pub struct SymbolTable {
     /// instead of a linear reverse scan.
     name_span_to_key: HashMap<usize, SymbolKey>,
     /// Definition name-spans sorted by offset, each paired with the entry's
-    /// `SymbolKey`. Used by `find_definition_at` for O(log n) lookup instead
-    /// of scanning every definition on every hover/goto/rename request.
+    /// `SymbolKey` (refcounted — shared with [`Self::inlay_hint_entries`] so
+    /// the keys are allocated once at finalize time). Used by
+    /// `find_definition_at` for O(log n) lookup instead of scanning every
+    /// definition on every hover/goto/rename request.
     ///
     /// Populated by [`SymbolTable::finalize`]; definitions added after
     /// `finalize` is called will not appear here until it is called again.
-    defs_by_name_span: Vec<(Span, SymbolKey)>,
+    defs_by_name_span: Vec<(Span, Arc<SymbolKey>)>,
     /// Precomputed inlay-hint candidates, sorted by name-start line/column.
     ///
     /// Only `Param`, `Node`, and `Const` declarations with non-empty name
@@ -261,7 +266,7 @@ impl SymbolTable {
             })
             .ok()?;
         let key = &self.defs_by_name_span[idx].1;
-        self.definitions.get(key)
+        self.definitions.get(key.as_ref())
     }
 
     /// Build the sorted `defs_by_name_span` index and precompute inlay-hint
@@ -271,40 +276,36 @@ impl SymbolTable {
     /// time, so the inlay-hint request path avoids O(source) scans per
     /// declaration.
     fn finalize(&mut self, source: &str) {
-        self.defs_by_name_span = self
-            .definitions
-            .iter()
-            .filter(|(_, d)| !d.name_span.is_empty())
-            .map(|(k, d)| (d.name_span, k.clone()))
-            .collect();
-        self.defs_by_name_span
-            .sort_by_key(|(span, _)| span.offset());
-
-        // Precompute inlay-hint entries: only the categories the handler
-        // actually emits hints for, and only non-empty spans (skipping
-        // builtins and synthetic defs). Position is computed once via a
-        // shared line-starts cache so the request path is O(log n + col).
+        // Build sorted-by-name-span and inlay-hint indices in one pass,
+        // sharing each key via `Arc` so a definition's `SymbolKey` is
+        // allocated once and refcounted across the two sorted views.
+        // `Arc` (not `Rc`) because `AnalysisResult` lives in an
+        // `Arc<RwLock<…>>` and must be `Send + Sync` for the LSP runtime.
         let lines = LineIndex::new(source);
-        self.inlay_hint_entries = self
-            .definitions
-            .iter()
-            .filter(|(_, d)| {
-                !d.name_span.is_empty()
-                    && matches!(
-                        d.category,
-                        SymbolCategory::Param | SymbolCategory::Node | SymbolCategory::Const
-                    )
-            })
-            .map(|(k, d)| {
-                let start = d.name_span.offset();
-                let end = start + d.name_span.len();
-                InlayHintEntry {
-                    key: k.clone(),
+        let mut span_index: Vec<(Span, Arc<SymbolKey>)> = Vec::new();
+        let mut hint_entries: Vec<InlayHintEntry> = Vec::new();
+        for (key, def) in &self.definitions {
+            if def.name_span.is_empty() {
+                continue;
+            }
+            let shared = Arc::new(key.clone());
+            span_index.push((def.name_span, Arc::clone(&shared)));
+            if matches!(
+                def.category,
+                SymbolCategory::Param | SymbolCategory::Node | SymbolCategory::Const
+            ) {
+                let start = def.name_span.offset();
+                let end = start + def.name_span.len();
+                hint_entries.push(InlayHintEntry {
+                    key: shared,
                     name_start: lines.position(start),
                     name_end: lines.position(end),
-                }
-            })
-            .collect();
+                });
+            }
+        }
+        span_index.sort_by_key(|(span, _)| span.offset());
+        self.defs_by_name_span = span_index;
+        self.inlay_hint_entries = hint_entries;
         self.inlay_hint_entries
             .sort_by_key(|e| (e.name_start.line, e.name_start.character));
     }
