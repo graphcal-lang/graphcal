@@ -3,26 +3,49 @@
 use graphcal_compiler::syntax::span::Span;
 use tower_lsp::lsp_types::{Position, Range};
 
-/// Convert a byte offset in `source` to an LSP `Position` (0-based line and UTF-16 character offset).
+/// Per-handler cache of line-start byte offsets paired with the source text.
 ///
-/// LSP positions use UTF-16 code units for the character offset, so characters
-/// outside the Basic Multilingual Plane (e.g., emoji, some CJK) count as 2.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "char::len_utf16() returns 1 or 2, never truncates to u32"
-)]
-pub fn byte_offset_to_position(source: &str, offset: usize) -> Position {
-    let offset = offset.min(source.len());
-    let (line, col) = source.char_indices().take_while(|(i, _)| *i < offset).fold(
-        (0u32, 0u32),
-        |(line, col), (_, ch)| match ch {
-            '\n' => (line + 1, 0),
-            _ => (line, col + ch.len_utf16() as u32),
-        },
-    );
-    Position {
-        line,
-        character: col,
+/// All offset → [`Position`] / [`Span`] → [`Range`] conversions in the LSP
+/// go through this type. Construct once at the top of each handler that
+/// answers more than one position query, then reuse for every conversion —
+/// each call is O(log lines + col) instead of O(n).
+pub struct LineIndex<'src> {
+    source: &'src str,
+    /// Sorted byte offsets where each line starts. Always starts with `0`
+    /// and has one entry per line.
+    line_starts: Vec<usize>,
+}
+
+impl<'src> LineIndex<'src> {
+    /// Build a `LineIndex` for `source`. Scans the source once.
+    #[must_use]
+    pub fn new(source: &'src str) -> Self {
+        Self {
+            source,
+            line_starts: compute_line_starts(source),
+        }
+    }
+
+    /// Convert a byte offset to an LSP `Position` (0-based line and UTF-16
+    /// character offset).
+    #[must_use]
+    pub fn position(&self, offset: usize) -> Position {
+        byte_offset_to_position_cached(&self.line_starts, self.source, offset)
+    }
+
+    /// Convert a `Span` to an LSP `Range`.
+    #[must_use]
+    pub fn span_to_range(&self, span: Span) -> Range {
+        self.offset_len_to_range(span.offset(), span.len())
+    }
+
+    /// Convert a byte offset and length to an LSP `Range`.
+    #[must_use]
+    pub fn offset_len_to_range(&self, offset: usize, len: usize) -> Range {
+        Range {
+            start: self.position(offset),
+            end: self.position(offset + len),
+        }
     }
 }
 
@@ -33,7 +56,7 @@ pub fn byte_offset_to_position(source: &str, offset: usize) -> Position {
 ///
 /// The returned vector always starts with `0` (the first line starts at the
 /// beginning of the source) and has one entry per line.
-pub fn compute_line_starts(source: &str) -> Vec<usize> {
+fn compute_line_starts(source: &str) -> Vec<usize> {
     let mut starts = Vec::with_capacity(source.bytes().filter(|&b| b == b'\n').count() + 1);
     starts.push(0);
     for (i, byte) in source.bytes().enumerate() {
@@ -49,18 +72,11 @@ pub fn compute_line_starts(source: &str) -> Vec<usize> {
 /// `line_starts` must be the output of [`compute_line_starts`] for the same
 /// `source` being queried. The line lookup is O(log lines); the column
 /// computation is O(col) (UTF-16 widths on the one line the offset sits in).
-///
-/// This is the hot-path variant called by inlay hints, which answers many
-/// position queries per request.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "char::len_utf16() returns 1 or 2, never truncates to u32; line count fits in u32 for any realistic source"
 )]
-pub fn byte_offset_to_position_cached(
-    line_starts: &[usize],
-    source: &str,
-    offset: usize,
-) -> Position {
+fn byte_offset_to_position_cached(line_starts: &[usize], source: &str, offset: usize) -> Position {
     let offset = offset.min(source.len());
     // Find the line whose start is <= offset. `partition_point` returns the
     // first index where the predicate is false, so we subtract 1.
@@ -137,19 +153,6 @@ fn line_start_offset(source: &str, line: u32) -> usize {
     source.len()
 }
 
-/// Convert a `Span` to an LSP `Range`.
-pub fn span_to_range(source: &str, span: Span) -> Range {
-    offset_len_to_range(source, span.offset(), span.len())
-}
-
-/// Convert a byte offset and length to an LSP `Range`.
-pub fn offset_len_to_range(source: &str, offset: usize, len: usize) -> Range {
-    Range {
-        start: byte_offset_to_position(source, offset),
-        end: byte_offset_to_position(source, offset + len),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -165,7 +168,7 @@ mod tests {
     #[test]
     fn position_at_start() {
         let source = "hello\nworld";
-        let pos = byte_offset_to_position(source, 0);
+        let pos = LineIndex::new(source).position(0);
         assert_eq!(pos.line, 0);
         assert_eq!(pos.character, 0);
     }
@@ -173,7 +176,7 @@ mod tests {
     #[test]
     fn position_mid_first_line() {
         let source = "hello\nworld";
-        let pos = byte_offset_to_position(source, 3);
+        let pos = LineIndex::new(source).position(3);
         assert_eq!(pos.line, 0);
         assert_eq!(pos.character, 3);
     }
@@ -181,7 +184,7 @@ mod tests {
     #[test]
     fn position_start_second_line() {
         let source = "hello\nworld";
-        let pos = byte_offset_to_position(source, 6);
+        let pos = LineIndex::new(source).position(6);
         assert_eq!(pos.line, 1);
         assert_eq!(pos.character, 0);
     }
@@ -189,7 +192,7 @@ mod tests {
     #[test]
     fn position_mid_second_line() {
         let source = "hello\nworld";
-        let pos = byte_offset_to_position(source, 8);
+        let pos = LineIndex::new(source).position(8);
         assert_eq!(pos.line, 1);
         assert_eq!(pos.character, 2);
     }
@@ -197,7 +200,7 @@ mod tests {
     #[test]
     fn position_past_end_clamps() {
         let source = "hi";
-        let pos = byte_offset_to_position(source, 100);
+        let pos = LineIndex::new(source).position(100);
         assert_eq!(pos.line, 0);
         assert_eq!(pos.character, 2);
     }
@@ -205,8 +208,9 @@ mod tests {
     #[test]
     fn offset_round_trip() {
         let source = "hello\nworld\nfoo";
+        let lines = LineIndex::new(source);
         (0..source.len()).for_each(|offset| {
-            let pos = byte_offset_to_position(source, offset);
+            let pos = lines.position(offset);
             let back = position_to_byte_offset(source, pos);
             assert_eq!(back, offset, "round-trip failed for offset {offset}");
         });
@@ -215,7 +219,7 @@ mod tests {
     #[test]
     fn span_to_range_basic() {
         let source = "hello\nworld";
-        let range = span_to_range(source, Span::new(6, 5));
+        let range = LineIndex::new(source).span_to_range(Span::new(6, 5));
         assert_eq!(range.start.line, 1);
         assert_eq!(range.start.character, 0);
         assert_eq!(range.end.line, 1);
@@ -318,11 +322,12 @@ mod tests {
     #[test]
     fn round_trip_with_non_bmp_characters() {
         let source = "a🙂\nb🎉c";
+        let lines = LineIndex::new(source);
         for offset in 0..=source.len() {
             if !source.is_char_boundary(offset) {
                 continue;
             }
-            let pos = byte_offset_to_position(source, offset);
+            let pos = lines.position(offset);
             let back = position_to_byte_offset(source, pos);
             assert_eq!(
                 back, offset,
@@ -345,35 +350,9 @@ mod tests {
     }
 
     #[test]
-    fn cached_matches_uncached_ascii() {
-        let source = "hello\nworld\nfoo bar\nbaz";
-        let starts = compute_line_starts(source);
-        for offset in 0..=source.len() {
-            let a = byte_offset_to_position(source, offset);
-            let b = byte_offset_to_position_cached(&starts, source, offset);
-            assert_eq!(a, b, "mismatch at offset {offset}");
-        }
-    }
-
-    #[test]
-    fn cached_matches_uncached_non_bmp() {
-        let source = "a🙂\nb🎉c\nend";
-        let starts = compute_line_starts(source);
-        for offset in 0..=source.len() {
-            if !source.is_char_boundary(offset) {
-                continue;
-            }
-            let a = byte_offset_to_position(source, offset);
-            let b = byte_offset_to_position_cached(&starts, source, offset);
-            assert_eq!(a, b, "mismatch at offset {offset}");
-        }
-    }
-
-    #[test]
-    fn cached_clamps_past_end() {
+    fn line_index_clamps_past_end() {
         let source = "hi";
-        let starts = compute_line_starts(source);
-        let pos = byte_offset_to_position_cached(&starts, source, 100);
+        let pos = LineIndex::new(source).position(100);
         assert_eq!(pos.line, 0);
         assert_eq!(pos.character, 2);
     }

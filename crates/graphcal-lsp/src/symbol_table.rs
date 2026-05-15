@@ -17,7 +17,7 @@ use graphcal_compiler::tir::typed::{ResolvedIndex, ResolvedTypeExpr, TIR};
 use graphcal_eval::eval::format_number;
 use tower_lsp::lsp_types::Position;
 
-use crate::convert::{byte_offset_to_position_cached, compute_line_starts};
+use crate::convert::LineIndex;
 
 /// The kind of expression scope that introduces local variables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -284,7 +284,7 @@ impl SymbolTable {
         // actually emits hints for, and only non-empty spans (skipping
         // builtins and synthetic defs). Position is computed once via a
         // shared line-starts cache so the request path is O(log n + col).
-        let line_starts = compute_line_starts(source);
+        let lines = LineIndex::new(source);
         self.inlay_hint_entries = self
             .definitions
             .iter()
@@ -300,8 +300,8 @@ impl SymbolTable {
                 let end = start + d.name_span.len();
                 InlayHintEntry {
                     key: k.clone(),
-                    name_start: byte_offset_to_position_cached(&line_starts, source, start),
-                    name_end: byte_offset_to_position_cached(&line_starts, source, end),
+                    name_start: lines.position(start),
+                    name_end: lines.position(end),
                 }
             })
             .collect();

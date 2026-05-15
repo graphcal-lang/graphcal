@@ -9,7 +9,7 @@ use tower_lsp::lsp_types::{
 
 use graphcal_eval::eval::CompileError;
 
-use crate::convert::{offset_len_to_range, span_to_range};
+use crate::convert::LineIndex;
 use crate::symbol_table::{SymbolKey, SymbolTable};
 
 /// Convert per-node runtime errors and assertion failures in an `EvalResult` to LSP diagnostics.
@@ -22,6 +22,7 @@ pub fn eval_result_to_diagnostics(
     source: &str,
     symbol_table: &SymbolTable,
 ) -> Vec<Diagnostic> {
+    let lines = LineIndex::new(source);
     // Node/param evaluation errors
     let mut diagnostics: Vec<Diagnostic> = result
         .all
@@ -31,7 +32,7 @@ pub fn eval_result_to_diagnostics(
                 let range = symbol_table
                     .definitions
                     .get(&SymbolKey::TopLevel(name.as_str().to_string()))
-                    .map_or_else(Range::default, |def| span_to_range(source, def.name_span));
+                    .map_or_else(Range::default, |def| lines.span_to_range(def.name_span));
                 Some(Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::WARNING),
@@ -75,7 +76,7 @@ pub fn eval_result_to_diagnostics(
                 };
 
                 Some(Diagnostic {
-                    range: span_to_range(source, *span),
+                    range: lines.span_to_range(*span),
                     severity: Some(severity),
                     code: Some(NumberOrString::String("graphcal::A001".to_string())),
                     source: Some("graphcal".to_string()),
@@ -154,7 +155,8 @@ fn compile_error_to_diagnostics_in_source(
         let labels: Vec<_> = labels.collect();
 
         if let Some(primary) = labels.first() {
-            let primary_range = offset_len_to_range(source, primary.offset(), primary.len());
+            let lines = LineIndex::new(source);
+            let primary_range = lines.offset_len_to_range(primary.offset(), primary.len());
 
             let primary_msg = primary.label().map_or_else(
                 || format!("{message}{help_suffix}"),
@@ -166,7 +168,7 @@ fn compile_error_to_diagnostics_in_source(
                 .map(|label| DiagnosticRelatedInformation {
                     location: Location {
                         uri: uri.clone(),
-                        range: offset_len_to_range(source, label.offset(), label.len()),
+                        range: lines.offset_len_to_range(label.offset(), label.len()),
                     },
                     message: label.label().unwrap_or("related location").to_string(),
                 })

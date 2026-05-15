@@ -2,7 +2,7 @@
 
 use tower_lsp::lsp_types::{Position, Range, TextEdit};
 
-use crate::convert::byte_offset_to_position;
+use crate::convert::LineIndex;
 
 /// Format a graphcal source string, returning a single whole-document [`TextEdit`]
 /// if the formatted output differs from the original.
@@ -19,7 +19,7 @@ pub fn format_document(source: &str) -> Option<Vec<TextEdit>> {
         return None;
     }
 
-    let end = byte_offset_to_position(source, source.len());
+    let end = LineIndex::new(source).position(source.len());
     let range = Range::new(Position::new(0, 0), end);
 
     Some(vec![TextEdit {

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
 
-use crate::convert::span_to_range;
+use crate::convert::LineIndex;
 use crate::server::AnalysisResult;
 use crate::symbol_table::{SymbolCategory, SymbolKey};
 
@@ -15,6 +15,7 @@ use crate::symbol_table::{SymbolCategory, SymbolKey};
 )]
 pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> {
     let mut symbols = Vec::new();
+    let lines = LineIndex::new(&analysis.source);
 
     // Pre-group variants by their parent name so `collect_children` is O(variants)
     // per call rather than re-scanning all definitions (O(N*M) in total).
@@ -45,11 +46,11 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
             | SymbolCategory::BuiltinConst => continue,
         };
 
-        let range = span_to_range(&analysis.source, def.decl_span);
-        let selection_range = span_to_range(&analysis.source, def.name_span);
+        let range = lines.span_to_range(def.decl_span);
+        let selection_range = lines.span_to_range(def.name_span);
 
         // Collect children (variants for indexes and tagged unions).
-        let children = collect_children(analysis, &variants_by_parent, &def.name);
+        let children = collect_children(&lines, &variants_by_parent, &def.name);
 
         symbols.push(DocumentSymbol {
             name: def.name.clone(),
@@ -97,7 +98,7 @@ fn build_variants_index(
     reason = "DocumentSymbol::deprecated field is deprecated but required by the type"
 )]
 fn collect_children(
-    analysis: &AnalysisResult,
+    lines: &LineIndex<'_>,
     variants_by_parent: &HashMap<&str, Vec<&crate::symbol_table::DefinitionInfo>>,
     parent_name: &str,
 ) -> Vec<DocumentSymbol> {
@@ -108,8 +109,8 @@ fn collect_children(
     let mut children: Vec<DocumentSymbol> = defs
         .iter()
         .map(|def| {
-            let range = span_to_range(&analysis.source, def.decl_span);
-            let selection_range = span_to_range(&analysis.source, def.name_span);
+            let range = lines.span_to_range(def.decl_span);
+            let selection_range = lines.span_to_range(def.name_span);
             DocumentSymbol {
                 name: def.name.clone(),
                 detail: def.detail.clone(),

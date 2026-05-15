@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use tower_lsp::lsp_types::{PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};
 
-use crate::convert::span_to_range;
+use crate::convert::LineIndex;
 use crate::resolve::{ResolvedSymbol, SymbolLocation, resolve_symbol_at};
 use crate::server::AnalysisResult;
 use crate::symbol_table::SymbolCategory;
@@ -51,7 +51,7 @@ pub fn prepare_rename(analysis: &AnalysisResult, offset: usize) -> Option<Prepar
         .to_string();
 
     Some(PrepareRenameResponse::RangeWithPlaceholder {
-        range: span_to_range(&analysis.source, span),
+        range: LineIndex::new(&analysis.source).span_to_range(span),
         placeholder,
     })
 }
@@ -75,19 +75,20 @@ pub fn rename(
         return None;
     };
 
+    let lines = LineIndex::new(&analysis.source);
     let mut current_file_edits: Vec<TextEdit> = analysis
         .symbol_table
         .find_all_references(&resolved.key)
         .into_iter()
         .map(|r| TextEdit {
-            range: span_to_range(&analysis.source, r.span),
+            range: lines.span_to_range(r.span),
             new_text: new_name.to_string(),
         })
         .collect();
 
     if !def.name_span.is_empty() {
         current_file_edits.push(TextEdit {
-            range: span_to_range(&analysis.source, def.name_span),
+            range: lines.span_to_range(def.name_span),
             new_text: new_name.to_string(),
         });
     }
