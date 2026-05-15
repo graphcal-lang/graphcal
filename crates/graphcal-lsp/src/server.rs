@@ -100,7 +100,7 @@ const DEBOUNCE_DELAY_MS: u64 = 300;
 const ANALYSIS_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The LSP server backend.
-#[derive(Debug)]
+#[cfg_attr(test, derive(Debug))]
 pub struct Backend {
     client: Client,
     /// Per-document analysis results, keyed by URI.
@@ -119,6 +119,10 @@ impl AnalysisResult {
     }
 }
 
+// `AnalysisResult`'s custom `Debug` shape (counts, not contents) is useful only
+// inside test assertion messages; gating it behind `cfg(test)` keeps the
+// release binary from carrying an impl no production code path can call.
+#[cfg(test)]
 impl std::fmt::Debug for AnalysisResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnalysisResult")

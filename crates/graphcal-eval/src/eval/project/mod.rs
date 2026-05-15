@@ -30,6 +30,13 @@ mod pipeline;
 // Project-based compilation: `LoadedProject` → TIR / EvalResult
 // ---------------------------------------------------------------------------
 
+/// A binding map whose **key** is the dependency-side name and whose **value**
+/// is the importer-side name the dep name resolves to. Used for index, type,
+/// and dim bindings on instantiated includes. The aliased name keeps the
+/// directional convention discoverable everywhere the map shape appears in a
+/// signature.
+pub(in crate::eval::project) type DepToImporter<T> = HashMap<T, T>;
+
 /// Derive a module name (the leaf segment) from a `ModulePath`.
 ///
 /// Used as the include-instance alias for the bare `include path(args);`
@@ -185,11 +192,11 @@ pub(in crate::eval::project) struct DeferredDagInclude {
     /// Param bindings: `param_name` → binding expression.
     pub(in crate::eval::project) bindings: HashMap<String, Expr>,
     /// Index bindings: `dep_index_name` → `importer_index_name`.
-    pub(in crate::eval::project) index_bindings: HashMap<IndexName, IndexName>,
+    pub(in crate::eval::project) index_bindings: DepToImporter<IndexName>,
     /// Type bindings: `dep_type_name` → `importer_type_name`.
-    pub(in crate::eval::project) type_bindings: HashMap<StructTypeName, StructTypeName>,
+    pub(in crate::eval::project) type_bindings: DepToImporter<StructTypeName>,
     /// Dimension bindings: `dep_dim_name` → `importer_dim_name`.
-    pub(in crate::eval::project) dim_bindings: HashMap<DimName, DimName>,
+    pub(in crate::eval::project) dim_bindings: DepToImporter<DimName>,
     /// For selective includes: the selected names and their local aliases.
     /// `None` for module-form includes (all names accessible via `prefix::`).
     pub(in crate::eval::project) selective_names: Option<Vec<(String, String)>>,
