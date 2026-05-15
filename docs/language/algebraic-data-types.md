@@ -28,10 +28,7 @@ type ManeuverKind {
 
 Constructors live in a namespace that is distinct from the type
 namespace — a single lexeme can name both a type and a constructor
-without ambiguity. A future syntax sugar will let
-`type Position { x: Length, y: Length }` desugar to
-`type Position { Position(x: Length, y: Length) }`; until then the
-explicit form is required.
+without ambiguity.
 
 ## Records (Single-Variant Unions)
 

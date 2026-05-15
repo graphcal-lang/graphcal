@@ -13,8 +13,9 @@ pub type Body {
     Body,
 }
 
-// Generic struct with dim param and phantom type param — single-variant
-// tagged union form (record sugar pending).
+// Generic struct with dim param and phantom type param — a
+// single-variant tagged union whose sole constructor's name matches
+// the type's name.
 pub type Vec3<D: Dim, F: Type> {
     Vec3(x: D, y: D, z: D),
 }

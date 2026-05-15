@@ -1929,7 +1929,7 @@ fn resolve_dim_expr(
             return Ok(ResolvedTypeExpr::Label(IndexName::new(name), span));
         }
 
-        // Check type (struct sugar or tagged union) first
+        // Check tagged-union types first
         if registry.types.get_type(name).is_some() {
             return Ok(ResolvedTypeExpr::Struct(StructTypeName::new(name), span));
         }

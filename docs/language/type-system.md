@@ -144,10 +144,6 @@ type Vec3<D: Dim, Frame: Type> {
 }
 ```
 
-A future syntax sugar will let `type Position { x: Length, y: Length }`
-desugar to `type Position { Position(x: Length, y: Length) }`; today
-the explicit form is required.
-
 #### Multi-Variant Unions
 
 A multi-variant union has more than one constructor. Each constructor

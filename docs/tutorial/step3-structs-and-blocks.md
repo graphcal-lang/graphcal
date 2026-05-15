@@ -22,10 +22,6 @@ type TransferResult {
 }
 ```
 
-A future syntax sugar will accept the shorter
-`type TransferResult { dv1: Velocity, ... }`; until then the explicit
-form is required.
-
 ## Constructing a Struct
 
 Build a struct value by calling its constructor:

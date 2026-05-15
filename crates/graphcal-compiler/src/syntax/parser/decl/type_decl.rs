@@ -62,10 +62,10 @@ impl Parser<'_> {
         start_span: Span,
     ) -> Result<Declaration, ParseError> {
         // The body of a `type T { ... }` must be a constructor list:
-        // every entry is a constructor of an n-variant tagged union.
-        // The record sugar — `type T { x: U }` ≡ `type T { T(x: U) }`
-        // — is reserved for a future PR; until then the explicit
-        // single-variant form is required.
+        // every entry is a constructor of an n-variant tagged union. A
+        // record-shaped declaration is written as a single-variant
+        // tagged union whose sole constructor's name matches the
+        // type's name (`type Position { Position(x: Length, ...) }`).
         if self.lexer.peek() == Some(&Token::RBrace) {
             // `type T {}` is rejected: there is no zero-variant tagged
             // union (it has no inhabitants and no purpose). The author
@@ -85,7 +85,7 @@ impl Parser<'_> {
                 // Record-shaped entry. Reject with a precise diagnostic
                 // pointing at the explicit single-variant form.
                 Err(self.unexpected_token(
-                    "a constructor (the record sugar is not implemented yet — write `type T { T(x: U, ...) }` instead)",
+                    "a constructor — write `type T { T(x: U, ...) }` instead of a field list",
                     "record-style field",
                     first_ident.span,
                 ))

@@ -298,10 +298,8 @@ unit_scale
 
        type Position { Position(x: Length, y: Length) }
 
-   The future syntax sugar will let `type Position { x: Length,
-   y: Length }` desugar to that explicit form. Until that lands, the
-   field-only body is a parse error; authors must spell out the
-   constructor name.
+   A field-only body `type T { x: U, ... }` is a parse error —
+   authors must spell out the constructor name.
 
    An empty body `type T {}` is also a parse error — there is no
    zero-variant tagged union. A unit marker is written

@@ -9,7 +9,7 @@ pub type ManeuverKind {
 }
 
 // Record-shaped types are single-variant tagged unions whose sole
-// constructor's name matches the type's name (record sugar pending).
+// constructor's name matches the type's name.
 pub type TransferResult {
     TransferResult(dv1: Velocity, dv2: Velocity),
 }

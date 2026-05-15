@@ -71,9 +71,7 @@ pub struct StructField {
 /// A member (constructor) of a tagged-union type.
 ///
 /// The compiler treats every `type T { ... }` declaration as an n-variant
-/// tagged union — including single-variant cases (which the future
-/// `type Position { x: Length, ... }` sugar will desugar to
-/// `type Position { Position(x: Length, ...) }`). Each variant carries
+/// tagged union — including single-variant cases. Each variant carries
 /// its payload fields inline; there are no per-variant standalone types.
 #[derive(Debug, Clone)]
 pub struct UnionMemberDef {
@@ -90,10 +88,10 @@ pub struct UnionMemberDef {
 ///
 /// The functional core only distinguishes two shapes: a *required* type
 /// stub (no body, awaits binding via include) and an *n-variant union*
-/// — single-variant or multi-variant alike. Record-shaped types
-/// (`type Position { x: Length, y: Length }`) are represented as a
-/// single-variant union whose sole constructor's name matches the
-/// type's name.
+/// — single-variant or multi-variant alike. Record-shaped types are
+/// represented as a single-variant union whose sole constructor's name
+/// matches the type's name (e.g.,
+/// `type Position { Position(x: Length, y: Length) }`).
 #[derive(Debug, Clone)]
 pub enum TypeDefKind {
     /// A required type with no body: `type Element;`. Bound from outside

@@ -403,8 +403,8 @@ fn parse_type_decl_trailing_comma() {
 
 #[test]
 fn parse_type_decl_unit_marker() {
-    // The record sugar is not implemented yet; an empty body `{}` is
-    // rejected. Unit markers use an explicit single unit constructor.
+    // Empty body `{}` is rejected (no zero-variant tagged union).
+    // Unit markers use an explicit single unit constructor.
     let source = "type Eci { Eci }";
     let file = Parser::new(source).parse_file().unwrap();
     match &file.declarations[0].kind {
@@ -601,9 +601,9 @@ fn parse_union_type_decl_brace_payload() {
 
 #[test]
 fn parse_type_decl_record_form_rejected() {
-    // The record sugar — `type Position { x: Length, y: Length }` —
-    // is reserved for a future PR; today's grammar requires the
-    // explicit single-variant form.
+    // A field-only body is not a valid n-variant tagged union; the
+    // record-shaped form requires the explicit single-variant
+    // spelling `type Position { Position(x: Length, y: Length) }`.
     let source = "type Position { x: Length, y: Length }";
     assert!(Parser::new(source).parse_file().is_err());
 }
