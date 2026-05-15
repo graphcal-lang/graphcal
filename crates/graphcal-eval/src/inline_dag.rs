@@ -151,7 +151,7 @@ pub fn preprocess_dag_body_self_imports(
     parent_consts: &HashMap<String, DeclaredType>,
     parent_runtime_names: &HashSet<String>,
     parent_pub_names: &HashSet<DeclName>,
-    body_resolved_imports: &HashMap<String, DagId>,
+    body_resolved_imports: &HashMap<crate::loader::ModulePathKey, DagId>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagBodySelfImports, GraphcalError> {
     let mut names = ImportedValueNames::default();
@@ -166,7 +166,7 @@ pub fn preprocess_dag_body_self_imports(
         };
 
         let is_self_import = body_resolved_imports
-            .get(&import_decl.path.display_path())
+            .get(&crate::loader::ModulePathKey::from_path(&import_decl.path))
             .is_some_and(|dag_id| dag_id == parent_dag_id);
         if !is_self_import {
             stripped_body.push(decl.clone());

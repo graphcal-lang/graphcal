@@ -11,6 +11,43 @@ use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::dag_id::DagId;
 use graphcal_io::{FileSystemReader, RealFileSystem};
 
+/// Span-free identity for an `import`/`include` path.
+///
+/// Used as a `HashMap` key in [`LoadedFile::resolved_imports`] /
+/// [`LoadedDag::resolved_imports`] so that two equal logical paths always
+/// produce equal keys without depending on a shared join format
+/// (e.g. `.` vs `/`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ModulePathKey(Vec<String>);
+
+impl ModulePathKey {
+    /// Build a key from a parsed [`ModulePath`] AST node. Segment names are
+    /// cloned and spans are dropped — span-aware lookup is never useful at
+    /// this layer.
+    #[must_use]
+    pub fn from_path(path: &ModulePath) -> Self {
+        Self(path.segments.iter().map(|s| s.name.clone()).collect())
+    }
+
+    /// Segments in order, without separators.
+    #[must_use]
+    pub fn segments(&self) -> &[String] {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ModulePathKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, seg) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(".")?;
+            }
+            f.write_str(seg)?;
+        }
+        Ok(())
+    }
+}
+
 /// A single inline `dag X { ... }` block lifted out of its enclosing file.
 ///
 /// Produced by the loader so that downstream stages can iterate inline DAGs
@@ -33,7 +70,7 @@ pub struct LoadedDag {
     /// `parent_dag_id`; cross-file imports map to the dependency file's id.
     /// Imports whose path fails to resolve at load time are absent here; the
     /// downstream resolver surfaces a structured error for them.
-    pub resolved_imports: HashMap<String, DagId>,
+    pub resolved_imports: HashMap<ModulePathKey, DagId>,
 }
 
 /// A single loaded and parsed file.
@@ -53,7 +90,7 @@ pub struct LoadedFile {
     /// import path's display string (e.g. `"./lib.gcl"` or `"nasa/rocket"`).
     /// Produced by the loader so that downstream consumers (evaluator, LSP) can
     /// look up resolved imports without re-resolving.
-    pub resolved_imports: HashMap<String, DagId>,
+    pub resolved_imports: HashMap<ModulePathKey, DagId>,
     /// Inline `dag X { ... }` blocks lifted from this file, with
     /// per-dag pre-resolved imports. Order matches source order.
     ///
@@ -80,7 +117,7 @@ impl LoadedFile {
         self.ast.declarations.iter().filter_map(|decl| {
             if let DeclKind::Import(import_decl) = &decl.kind {
                 self.resolved_imports
-                    .get(&import_decl.path.display_path())
+                    .get(&ModulePathKey::from_path(&import_decl.path))
                     .map(|dag_id| (decl, import_decl, dag_id))
             } else {
                 None
@@ -102,7 +139,7 @@ impl LoadedFile {
         self.ast.declarations.iter().filter_map(|decl| {
             if let DeclKind::Include(include_decl) = &decl.kind {
                 self.resolved_imports
-                    .get(&include_decl.path.display_path())
+                    .get(&ModulePathKey::from_path(&include_decl.path))
                     .map(|dag_id| (decl, include_decl, dag_id))
             } else {
                 None
@@ -300,7 +337,7 @@ fn load_file_dfs<F: FileSystemReader>(
 
     // Find import and include declarations and recurse.
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut resolved_imports_paths: HashMap<String, PathBuf> = HashMap::new();
+    let mut resolved_imports_paths: HashMap<ModulePathKey, PathBuf> = HashMap::new();
     for decl in &ast.declarations {
         let path = match &decl.kind {
             DeclKind::Import(import_decl) => &import_decl.path,
@@ -333,7 +370,7 @@ fn load_file_dfs<F: FileSystemReader>(
             }));
         }
 
-        resolved_imports_paths.insert(path.display_path(), import_canonical.clone());
+        resolved_imports_paths.insert(ModulePathKey::from_path(path), import_canonical.clone());
 
         load_file_dfs(
             &import_canonical,
@@ -363,11 +400,11 @@ fn load_file_dfs<F: FileSystemReader>(
     })?;
 
     // Convert resolved import paths to DagIds.
-    let resolved_imports: HashMap<String, DagId> = resolved_imports_paths
+    let resolved_imports: HashMap<ModulePathKey, DagId> = resolved_imports_paths
         .iter()
-        .map(|(display, canonical)| {
+        .map(|(key, canonical)| {
             let dep_dag_id = path_to_dag_id[canonical].clone();
-            (display.clone(), dep_dag_id)
+            (key.clone(), dep_dag_id)
         })
         .collect();
 
@@ -449,17 +486,17 @@ fn lift_inline_dags<F: FileSystemReader>(
         };
         let name = dag.name.value.to_string();
         let dag_id = self_dag_id.child(name.as_str());
-        let mut resolved_imports: HashMap<String, DagId> = HashMap::new();
+        let mut resolved_imports: HashMap<ModulePathKey, DagId> = HashMap::new();
         for body_decl in &dag.body {
             let DeclKind::Import(import_decl) = &body_decl.kind else {
                 continue;
             };
             let path = &import_decl.path;
-            let display = path.display_path();
+            let key = ModulePathKey::from_path(path);
 
             // Single-segment file-stem reference — Concept 7 self-import.
             if path.segments.len() == 1 && path.segments[0].name == file_stem {
-                resolved_imports.insert(display, self_dag_id.clone());
+                resolved_imports.insert(key, self_dag_id.clone());
                 continue;
             }
             let Ok(resolved) =
@@ -468,9 +505,9 @@ fn lift_inline_dags<F: FileSystemReader>(
                 continue;
             };
             if resolved == canonical_path {
-                resolved_imports.insert(display, self_dag_id.clone());
+                resolved_imports.insert(key, self_dag_id.clone());
             } else if let Some(other_dag_id) = path_to_dag_id.get(&resolved) {
-                resolved_imports.insert(display, other_dag_id.clone());
+                resolved_imports.insert(key, other_dag_id.clone());
             } else {
                 // Cross-file dag-body import to a file the loader did not
                 // recurse into (no file-level import drove its load).
@@ -503,14 +540,14 @@ fn lift_inline_dags_by_stem(ast: &File, path: &Path, self_dag_id: &DagId) -> Vec
         };
         let name = dag.name.value.to_string();
         let dag_id = self_dag_id.child(name.as_str());
-        let mut resolved_imports: HashMap<String, DagId> = HashMap::new();
+        let mut resolved_imports: HashMap<ModulePathKey, DagId> = HashMap::new();
         for body_decl in &dag.body {
             let DeclKind::Import(import_decl) = &body_decl.kind else {
                 continue;
             };
             let import_path = &import_decl.path;
             if import_path.segments.len() == 1 && import_path.segments[0].name == file_stem {
-                resolved_imports.insert(import_path.display_path(), self_dag_id.clone());
+                resolved_imports.insert(ModulePathKey::from_path(import_path), self_dag_id.clone());
             }
         }
         out.push(LoadedDag {
