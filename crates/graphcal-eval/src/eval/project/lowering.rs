@@ -242,7 +242,10 @@ pub(super) fn process_deferred_dag_includes(
 ) -> Result<(), CompileError> {
     let importer_pub_names = super::extract_pub_names(importer_ast);
     let importer_local_type_names = collect_local_type_names(importer_ast);
-    let empty_resolved: HashMap<String, graphcal_compiler::syntax::dag_id::DagId> = HashMap::new();
+    let empty_resolved: HashMap<
+        crate::loader::ModulePathKey,
+        graphcal_compiler::syntax::dag_id::DagId,
+    > = HashMap::new();
 
     for deferred in deferred_dag_includes {
         // ---- 1. Resolve source body + lower to IR ------------------------

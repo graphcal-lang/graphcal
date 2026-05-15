@@ -52,7 +52,7 @@ pub(super) fn derive_module_name_from_import_path(import_path: &ModulePath) -> S
 /// rewriter promotes the access to a typed qualified `GraphRef` directly
 /// — no `Qualified*Ref` variant or flat-string boundary involved.
 struct AliasFieldAccessRewriter<'a> {
-    qualified_pairs: &'a HashSet<(String, String)>,
+    qualified_pairs: &'a HashSet<QualifiedMember>,
 }
 
 impl ExprVisitorMut<Resolved> for AliasFieldAccessRewriter<'_> {
@@ -69,10 +69,10 @@ impl ExprVisitorMut<Resolved> for AliasFieldAccessRewriter<'_> {
         let promote = if let ExprKind::FieldAccess { expr: inner, field } = &expr.kind
             && let ExprKind::GraphRef(qualifier_name) = &inner.kind
             && let ScopedName::Local(qualifier) = &qualifier_name.value
-            && self
-                .qualified_pairs
-                .contains(&(qualifier.clone(), field.value.as_str().to_string()))
-        {
+            && self.qualified_pairs.contains(&QualifiedMember {
+                module: qualifier.clone(),
+                member: field.value.as_str().to_string(),
+            }) {
             let merged_span = qualifier_name.span.merge(field.span);
             Some(ExprKind::GraphRef(Spanned {
                 value: ScopedName::qualified(qualifier.clone(), field.value.as_str()),
@@ -88,11 +88,20 @@ impl ExprVisitorMut<Resolved> for AliasFieldAccessRewriter<'_> {
     }
 }
 
+/// `(module, member)` pair identifying a qualified import alias for the
+/// field-access rewriter — distinct from a flat `(String, String)` tuple so
+/// the two halves cannot be swapped at call sites.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct QualifiedMember {
+    module: String,
+    member: String,
+}
+
 /// Promote `FieldAccess(GraphRef(Local(alias)), field)` to a qualified
 /// `GraphRef` in-place. This is the only producer of qualified graph
 /// references in the project pipeline — qualified const references come
 /// out of name resolution directly.
-fn rewrite_alias_field_access(expr: &mut Expr, qualified_pairs: &HashSet<(String, String)>) {
+fn rewrite_alias_field_access(expr: &mut Expr, qualified_pairs: &HashSet<QualifiedMember>) {
     if qualified_pairs.is_empty() {
         return;
     }
@@ -288,7 +297,7 @@ pub(super) fn rewrite_qualified_refs_in_ast<'a>(
 /// `ScopedName::Qualified { module, member }`; selective imports register
 /// `ScopedName::Local(...)`. The pairs returned here drive the
 /// `@alias.member` rewrite — bare locals do not participate.
-fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<(String, String)> {
+fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<QualifiedMember> {
     let mut pairs = HashSet::new();
     let entries = imported
         .const_names
@@ -297,7 +306,10 @@ fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<(String, St
         .chain(imported.node_names.iter());
     for (scoped, _) in entries {
         if let ScopedName::Qualified { module, member } = scoped {
-            pairs.insert((module.clone(), member.clone()));
+            pairs.insert(QualifiedMember {
+                module: module.clone(),
+                member: member.clone(),
+            });
         }
     }
     pairs
@@ -306,7 +318,7 @@ fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<(String, St
 /// Apply the alias-field-access rewrite to a single declaration's expressions.
 fn rewrite_decl_exprs(
     decl: &mut graphcal_compiler::desugar::resolved_ast::Declaration,
-    alias_pairs: &HashSet<(String, String)>,
+    alias_pairs: &HashSet<QualifiedMember>,
 ) {
     let rewrite = |e: &mut Expr| {
         rewrite_alias_field_access(e, alias_pairs);
