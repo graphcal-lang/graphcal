@@ -339,9 +339,11 @@ async fn is_generation_current(
 /// Build a `LoadedProject` from a URI and in-memory text.
 ///
 /// For file-backed URIs, loads the project from disk with the in-memory text
-/// overlaid on the root file via [`graphcal_io::OverlayFileSystem`].
-/// For untitled/non-file URIs, builds a single-file project from the
-/// in-memory text alone.
+/// overlaid on the root file via [`graphcal_io::OverlayFileSystem`]. The base
+/// reader is sandboxed to the discovered project root (when a `graphcal.toml`
+/// is reachable from the buffer's directory) — keeping the LSP's filesystem
+/// access in lockstep with the CLI's. For untitled/non-file URIs, builds a
+/// single-file project from the in-memory text alone.
 fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Box<CompileError>> {
     let name = uri.as_str();
     match uri.to_file_path() {
@@ -349,11 +351,8 @@ fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Bo
             // OverlayFileSystem canonicalizes internally and falls back to the
             // raw path when the overlay file is not yet on disk — this makes
             // unsaved LSP buffers work without a preflight `FileNotFound`.
-            let fs = graphcal_io::OverlayFileSystem::new(
-                graphcal_io::RealFileSystem::default(),
-                path.clone(),
-                text.to_string(),
-            );
+            let base = graphcal_eval::loader::build_rooted_filesystem(&path, None);
+            let fs = graphcal_io::OverlayFileSystem::new(base, path.clone(), text.to_string());
             graphcal_eval::loader::load_project(&path, None, &fs).map_err(Box::new)
         }
         Err(()) => LoadedProject::from_source(text, name).map_err(Box::new),

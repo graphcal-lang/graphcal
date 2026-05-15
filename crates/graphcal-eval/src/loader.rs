@@ -9,7 +9,7 @@ use graphcal_compiler::desugar::resolved_ast::{Declaration, File};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::dag_id::DagId;
-use graphcal_io::FileSystemReader;
+use graphcal_io::{FileSystemReader, RealFileSystem};
 
 /// A single inline `dag X { ... }` block lifted out of its enclosing file.
 ///
@@ -555,27 +555,68 @@ fn is_valid_module_name(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// Determine the project root directory for import path sandboxing.
+/// Walk up from `start_dir` looking for a `graphcal.toml` manifest. Returns
+/// the directory containing the manifest, or `None` if no ancestor has one.
 ///
-/// Walks from the entry-point file's parent directory upward, looking for a
-/// `graphcal.toml` manifest file. If found, the directory containing the
-/// manifest becomes the project root, widening the import boundary to that
-/// entire directory tree. If no manifest is found, the project root defaults
-/// to the entry-point file's parent directory (the simplest predictable
-/// default: a file can import siblings and descendants but not files above
-/// its own directory).
-fn project_root_for<F: FileSystemReader>(root_file_dir: &Path, fs: &F) -> PathBuf {
-    let mut dir = root_file_dir;
+/// Filesystem access goes through `fs` so callers using overlays, mocks, or
+/// sandboxed real filesystems all share the same discovery rule.
+pub fn discover_project_root<F: FileSystemReader>(start_dir: &Path, fs: &F) -> Option<PathBuf> {
+    let mut dir = start_dir;
     loop {
         if fs.is_file(&dir.join("graphcal.toml")) {
-            return dir.to_path_buf();
+            return Some(dir.to_path_buf());
         }
         match dir.parent() {
             Some(parent) => dir = parent,
-            None => break,
+            None => return None,
         }
     }
-    root_file_dir.to_path_buf()
+}
+
+/// Build a [`RealFileSystem`] sandboxed to the project root for compiling
+/// `file`. Used by the CLI and the LSP so both discover the same root.
+///
+/// Resolution order:
+/// 1. If `root_override` canonicalizes, return [`RealFileSystem::rooted`] there.
+/// 2. Otherwise pick a starting directory: the parent of the canonicalized
+///    file when it exists on disk, falling back to the canonicalized parent
+///    of the input path (so unsaved LSP buffers can still walk up from their
+///    enclosing directory).
+/// 3. From that directory, walk up looking for `graphcal.toml`; if found,
+///    root the FS there.
+/// 4. Otherwise return an unrooted [`RealFileSystem::default`] so one-shot
+///    evals of loose files outside any project keep working.
+#[must_use]
+pub fn build_rooted_filesystem(file: &Path, root_override: Option<&Path>) -> RealFileSystem {
+    if let Some(explicit) = root_override
+        && let Ok(canonical) = explicit.canonicalize()
+    {
+        return RealFileSystem::rooted(canonical);
+    }
+
+    let start_dir = file
+        .canonicalize()
+        .ok()
+        .and_then(|c| c.parent().map(Path::to_path_buf))
+        .or_else(|| file.parent().and_then(|p| p.canonicalize().ok()));
+
+    let Some(start_dir) = start_dir else {
+        return RealFileSystem::default();
+    };
+
+    let fs = RealFileSystem::default();
+    discover_project_root(&start_dir, &fs)
+        .map_or_else(RealFileSystem::default, RealFileSystem::rooted)
+}
+
+/// Pick the project root directory for `root_file_dir`, falling back to
+/// `root_file_dir` itself when no manifest is found anywhere up the tree.
+///
+/// This is the predictable default the loader uses for files that aren't
+/// part of a `graphcal.toml`-defined package: imports can reach siblings
+/// and descendants but not files above the entry-point's own directory.
+fn project_root_for<F: FileSystemReader>(root_file_dir: &Path, fs: &F) -> PathBuf {
+    discover_project_root(root_file_dir, fs).unwrap_or_else(|| root_file_dir.to_path_buf())
 }
 
 /// Resolve the project root, using an explicit override if provided,
