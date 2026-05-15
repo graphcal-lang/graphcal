@@ -424,10 +424,10 @@ pub struct ResolvedFile {
     pub assert_names: HashSet<DeclName>,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Built from `#[assumes(...)]` attributes.
-    pub assumes_map: HashMap<String, Vec<String>>,
+    pub assumes_map: HashMap<DeclName, Vec<DeclName>>,
     /// Mapping from assert name to its expected-fail configuration.
     /// Built from `#[expected_fail]` / `#[expected_fail(...)]` attributes.
-    pub expected_fail: HashMap<String, ExpectedFail>,
+    pub expected_fail: HashMap<DeclName, ExpectedFail>,
     /// Names of all declarations marked `pub` in this file (values + type-system).
     pub pub_names: HashSet<DeclName>,
 }

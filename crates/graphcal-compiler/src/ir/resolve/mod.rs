@@ -543,8 +543,8 @@ fn build_name_sets(
 
 /// Result of attribute validation.
 struct ValidatedAttributes {
-    assumes_map: HashMap<String, Vec<String>>,
-    expected_fail_map: HashMap<String, ExpectedFail>,
+    assumes_map: HashMap<DeclName, Vec<DeclName>>,
+    expected_fail_map: HashMap<DeclName, ExpectedFail>,
 }
 
 /// Validate attributes and build `assumes_map` / `expected_fail_map`.
@@ -554,17 +554,17 @@ fn validate_attributes(
     src: &NamedSource<Arc<String>>,
     assert_names: &HashSet<DeclName>,
 ) -> Result<ValidatedAttributes, GraphcalError> {
-    let mut assumes_map: HashMap<String, Vec<String>> = HashMap::new();
-    let mut expected_fail_map: HashMap<String, ExpectedFail> = HashMap::new();
+    let mut assumes_map: HashMap<DeclName, Vec<DeclName>> = HashMap::new();
+    let mut expected_fail_map: HashMap<DeclName, ExpectedFail> = HashMap::new();
 
     for decl in &file.declarations {
-        let decl_name = match &decl.kind {
-            DeclKind::Param(p) => Some(p.name.value.to_string()),
-            DeclKind::Node(n) => Some(n.name.value.to_string()),
-            DeclKind::ConstNode(c) => Some(c.name.value.to_string()),
-            DeclKind::Assert(a) => Some(a.name.value.to_string()),
-            DeclKind::Plot(p) => Some(p.name.value.to_string()),
-            DeclKind::Figure(f) => Some(f.name.value.to_string()),
+        let decl_name: Option<DeclName> = match &decl.kind {
+            DeclKind::Param(p) => Some(p.name.value.clone()),
+            DeclKind::Node(n) => Some(n.name.value.clone()),
+            DeclKind::ConstNode(c) => Some(c.name.value.clone()),
+            DeclKind::Assert(a) => Some(a.name.value.clone()),
+            DeclKind::Plot(p) => Some(p.name.value.clone()),
+            DeclKind::Figure(f) => Some(f.name.value.clone()),
             _ => None,
         };
         for attr in &decl.attributes {
@@ -625,7 +625,7 @@ fn validate_attributes(
                         }
                         if let Some(ref dname) = decl_name {
                             assumes_map
-                                .entry(arg_name.to_string())
+                                .entry(DeclName::new(arg_name))
                                 .or_default()
                                 .push(dname.clone());
                         }

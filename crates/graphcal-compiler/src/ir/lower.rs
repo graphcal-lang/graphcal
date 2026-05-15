@@ -239,16 +239,19 @@ pub(crate) fn lower_to_builder(
     // Step 1: Name resolution
     let resolved = resolve_with_imports(ast, src, imported)?;
 
-    // Step 2: Extract type annotations from AST + imported declarations
+    // Step 2: Extract type annotations from AST + imported declarations.
+    // Imported lists still carry flat-string names (a wider typing pass is
+    // tracked separately); wrap them at the boundary so the map stays
+    // DeclName-keyed.
     let mut type_anns = extract_type_annotations(ast);
     for (name, type_ann, _, _) in &imported.consts {
-        type_anns.insert(name.clone(), type_ann.clone());
+        type_anns.insert(DeclName::new(name.clone()), type_ann.clone());
     }
     for (name, type_ann, _, _) in &imported.params {
-        type_anns.insert(name.clone(), type_ann.clone());
+        type_anns.insert(DeclName::new(name.clone()), type_ann.clone());
     }
     for (name, type_ann, _, _) in &imported.nodes {
-        type_anns.insert(name.clone(), type_ann.clone());
+        type_anns.insert(DeclName::new(name.clone()), type_ann.clone());
     }
 
     // Step 3: Build registry, augment deps, and construct IR
@@ -499,8 +502,8 @@ pub fn collect_type_system_names(file: &crate::desugar::resolved_ast::File) -> H
 /// guarantee that every top-level const/param/node ends up in `type_anns`;
 /// a missing entry is a compiler invariant violation.
 fn take_type_ann(
-    type_anns: &mut HashMap<String, TypeExpr>,
-    name: &str,
+    type_anns: &mut HashMap<DeclName, TypeExpr>,
+    name: &DeclName,
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<TypeExpr, GraphcalError> {
@@ -529,7 +532,7 @@ fn build_ir_from_resolved(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     mut resolved: ResolvedFile,
-    mut type_anns: HashMap<String, TypeExpr>,
+    mut type_anns: HashMap<DeclName, TypeExpr>,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     imported_decl_types: HashMap<ScopedName, DeclaredType>,
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
@@ -561,14 +564,18 @@ fn build_ir_from_resolved(
         &resolved.nodes,
     );
 
-    // Pair resolved declarations with type annotations.
+    // Pair resolved declarations with type annotations. The resolved entries
+    // still carry flat-string names (a wider typing pass is tracked separately);
+    // wrap each into a `DeclName` once so both `take_type_ann` and the
+    // `ScopedName::from` lift see the typed form.
     let consts = resolved
         .consts
         .into_iter()
         .map(|entry| {
-            let type_ann = take_type_ann(&mut type_anns, &entry.name, entry.span, src)?;
+            let decl_name = DeclName::new(entry.name);
+            let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(ConstEntry {
-                name: ScopedName::local(entry.name),
+                name: ScopedName::from(decl_name),
                 type_ann,
                 expr: entry.expr,
                 span: entry.span,
@@ -579,9 +586,10 @@ fn build_ir_from_resolved(
         .params
         .into_iter()
         .map(|entry| {
-            let type_ann = take_type_ann(&mut type_anns, &entry.name, entry.span, src)?;
+            let decl_name = DeclName::new(entry.name);
+            let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(ParamEntry {
-                name: ScopedName::local(entry.name),
+                name: ScopedName::from(decl_name),
                 type_ann,
                 default_expr: entry.default_expr,
                 span: entry.span,
@@ -592,9 +600,10 @@ fn build_ir_from_resolved(
         .nodes
         .into_iter()
         .map(|entry| {
-            let type_ann = take_type_ann(&mut type_anns, &entry.name, entry.span, src)?;
+            let decl_name = DeclName::new(entry.name);
+            let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(NodeEntry {
-                name: ScopedName::local(entry.name),
+                name: ScopedName::from(decl_name),
                 type_ann,
                 expr: entry.expr,
                 span: entry.span,
@@ -663,15 +672,15 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|(k, v)| {
                 (
-                    ScopedName::local(k),
-                    v.into_iter().map(ScopedName::local).collect(),
+                    ScopedName::from(k),
+                    v.into_iter().map(ScopedName::from).collect(),
                 )
             })
             .collect(),
         expected_fail: resolved
             .expected_fail
             .into_iter()
-            .map(|(k, v)| (ScopedName::local(k), v))
+            .map(|(k, v)| (ScopedName::from(k), v))
             .collect(),
         imported_values,
         imported_decl_types,
@@ -2726,19 +2735,20 @@ fn lower_range_index(
     }))
 }
 
-/// Extract a map of type annotations from const/param/node declarations.
-fn extract_type_annotations(ast: &File) -> HashMap<String, TypeExpr> {
+/// Extract a map of type annotations from const/param/node declarations,
+/// keyed by their typed declaration names.
+fn extract_type_annotations(ast: &File) -> HashMap<DeclName, TypeExpr> {
     let mut type_anns = HashMap::new();
     for decl in &ast.declarations {
         match &decl.kind {
             DeclKind::Param(p) => {
-                type_anns.insert(p.name.value.to_string(), p.type_ann.clone());
+                type_anns.insert(p.name.value.clone(), p.type_ann.clone());
             }
             DeclKind::Node(n) => {
-                type_anns.insert(n.name.value.to_string(), n.type_ann.clone());
+                type_anns.insert(n.name.value.clone(), n.type_ann.clone());
             }
             DeclKind::ConstNode(c) => {
-                type_anns.insert(c.name.value.to_string(), c.type_ann.clone());
+                type_anns.insert(c.name.value.clone(), c.type_ann.clone());
             }
             _ => {}
         }
