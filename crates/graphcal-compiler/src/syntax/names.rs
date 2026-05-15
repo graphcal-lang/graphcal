@@ -125,6 +125,16 @@ define_name_type! {
     pub struct VariantName;
 }
 
+impl VariantName {
+    /// Build the variant name for the `n`-th step of a range index
+    /// (`#0`, `#1`, …). Centralises the `"#"`-prefix format so registry,
+    /// parser, and evaluator can't disagree on it.
+    #[must_use]
+    pub fn range_step(n: impl std::fmt::Display) -> Self {
+        Self::new(format!("#{n}"))
+    }
+}
+
 define_name_type! {
     /// Name of a tagged-union constructor (e.g., `"LowThrust"`, `"Coast"`).
     ///

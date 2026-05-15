@@ -280,13 +280,9 @@ impl IndexDef {
             IndexKind::Named { variants } => variants.clone(),
             IndexKind::Range(data) => {
                 let count = data.step_count();
-                (0..count)
-                    .map(|i| VariantName::new(format!("#{i}")))
-                    .collect()
+                (0..count).map(VariantName::range_step).collect()
             }
-            IndexKind::NatRange { size } => (0..*size)
-                .map(|i| VariantName::new(format!("#{i}")))
-                .collect(),
+            IndexKind::NatRange { size } => (0..*size).map(VariantName::range_step).collect(),
             IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => vec![],
         }
     }
