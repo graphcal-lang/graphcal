@@ -2,18 +2,19 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     CodeActionParams, CodeActionProviderCapability, CodeActionResponse, CompletionOptions,
-    CompletionParams, CompletionResponse, Diagnostic, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
-    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-    Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
-    PrepareRenameResponse, ReferenceParams, RenameOptions, RenameParams, SaveOptions,
+    CompletionParams, CompletionResponse, Diagnostic, DiagnosticSeverity,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, DocumentFormattingParams, DocumentLink, DocumentLinkOptions,
+    DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
+    InitializeResult, InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
+    PrepareRenameResponse, Range, ReferenceParams, RenameOptions, RenameParams, SaveOptions,
     ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
     TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url, WorkDoneProgressOptions,
@@ -91,6 +92,13 @@ pub(crate) struct AnalysisResult {
 /// Debounce delay for `did_change` notifications (milliseconds).
 const DEBOUNCE_DELAY_MS: u64 = 300;
 
+/// Wall-clock cap on a single `run_analysis` pass. When exceeded, the LSP
+/// publishes a timeout diagnostic and leaves any prior cached analysis in
+/// place so queries (hover, goto, etc.) still answer from the last good
+/// state. The blocking thread keeps running until it returns — `spawn_blocking`
+/// is not cancellable — but its result is discarded.
+const ANALYSIS_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The LSP server backend.
 #[derive(Debug)]
 pub struct Backend {
@@ -161,13 +169,19 @@ impl Backend {
         let generation = self.bump_generation(&uri).await;
 
         let uri_clone = uri.clone();
-        let Ok(analysis) =
-            tokio::task::spawn_blocking(move || run_analysis(&uri_clone, &text)).await
-        else {
-            self.client
-                .log_message(MessageType::ERROR, "analysis task panicked")
-                .await;
-            return;
+        let task = tokio::task::spawn_blocking(move || run_analysis(&uri_clone, &text));
+        let analysis = match tokio::time::timeout(ANALYSIS_TIMEOUT, task).await {
+            Ok(Ok(a)) => a,
+            Ok(Err(e)) => {
+                self.client
+                    .log_message(MessageType::ERROR, format!("analysis task panicked: {e}"))
+                    .await;
+                return;
+            }
+            Err(_elapsed) => {
+                publish_analysis_timeout(&self.client, &uri).await;
+                return;
+            }
         };
 
         self.store_and_publish(uri, analysis, generation).await;
@@ -184,7 +198,7 @@ impl Backend {
         let generations = self.change_generations.clone();
 
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
+            tokio::time::sleep(Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
 
             // Check if a newer change has superseded this one.
             if !is_generation_current(&generations, &uri, generation).await {
@@ -192,18 +206,20 @@ impl Backend {
             }
 
             let uri_for_analysis = uri.clone();
-            let analysis =
-                match tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text))
-                    .await
-                {
-                    Ok(a) => a,
-                    Err(e) => {
-                        client
-                            .log_message(MessageType::ERROR, format!("analysis task panicked: {e}"))
-                            .await;
-                        return;
-                    }
-                };
+            let task = tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text));
+            let analysis = match tokio::time::timeout(ANALYSIS_TIMEOUT, task).await {
+                Ok(Ok(a)) => a,
+                Ok(Err(e)) => {
+                    client
+                        .log_message(MessageType::ERROR, format!("analysis task panicked: {e}"))
+                        .await;
+                    return;
+                }
+                Err(_elapsed) => {
+                    publish_analysis_timeout(&client, &uri).await;
+                    return;
+                }
+            };
 
             // A `did_save` or a later `did_change` may have fired while analysis
             // was running. Re-check before writing so stale results never clobber
@@ -262,6 +278,32 @@ impl Backend {
         // Best-effort: the client may not support inlay-hint refresh.
         let _ = self.client.inlay_hint_refresh().await;
     }
+}
+
+/// Publish a single error diagnostic on `uri` indicating that the analysis
+/// pipeline exceeded [`ANALYSIS_TIMEOUT`], and log the event to the client.
+///
+/// The cached `AnalysisResult` for `uri` (if any) is intentionally left
+/// untouched so symbol queries continue to answer from the last good state.
+/// Other URIs are not affected — `publish_diagnostics` is per-URI.
+async fn publish_analysis_timeout(client: &Client, uri: &Url) {
+    let secs = ANALYSIS_TIMEOUT.as_secs();
+    client
+        .log_message(
+            MessageType::ERROR,
+            format!("analysis for {uri} timed out after {secs}s"),
+        )
+        .await;
+    let diag = Diagnostic {
+        range: Range::default(),
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("graphcal".to_string()),
+        message: format!("graphcal-lsp: analysis timed out after {secs}s"),
+        ..Default::default()
+    };
+    client
+        .publish_diagnostics(uri.clone(), vec![diag], None)
+        .await;
 }
 
 /// Compute the set of URIs that previously had diagnostics published from
