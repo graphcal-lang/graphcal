@@ -23,9 +23,9 @@
 //! synthesized `TableLiteral` initializer. Downstream compiler passes
 //! see N ordinary declarations.
 
-use crate::registry::types::nat_range_index_name;
 use crate::syntax::ast::{
-    self as ast, DeclKind, Declaration, Expr, MapEntryKey, TableIndexSpec, TypeExpr, Visibility,
+    self as ast, DeclKind, Declaration, Expr, MapEntryIndex, MapEntryKey, TableIndexSpec, TypeExpr,
+    Visibility,
 };
 use crate::syntax::names::{DeclName, IndexName, Spanned, VariantName};
 use crate::syntax::span::Span;
@@ -400,7 +400,7 @@ impl Parser<'_> {
                         });
                     }
                     keys.push(MapEntryKey {
-                        index: axis.clone(),
+                        index: Spanned::new(MapEntryIndex::Named(axis.value.clone()), axis.span),
                         variant: variant_ident.into_spanned::<VariantName>(),
                     });
                 }
@@ -424,7 +424,7 @@ impl Parser<'_> {
                     }
                     let variant_span = hash_span.merge(num_span);
                     keys.push(MapEntryKey {
-                        index: Spanned::new(IndexName::new(nat_range_index_name(*n)), *sp),
+                        index: Spanned::new(MapEntryIndex::NatRange(*n), *sp),
                         variant: Spanned::new(VariantName::range_step(value), variant_span),
                     });
                 }
@@ -937,8 +937,8 @@ param      power_mode:        Bool[Component, OperationMode]
                 }) => {
                     assert_eq!(indexes.len(), 2);
                     assert_eq!(entries.len(), 4); // 2 components × 2 modes
-                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Component");
-                    assert_eq!(entries[0].keys[1].index.value.as_str(), "OperationMode");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "Component");
+                    assert_eq!(entries[0].keys[1].index.value.to_string(), "OperationMode");
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
             },
@@ -988,7 +988,10 @@ param q: Int[Phase, Component]
         assert_eq!(multi.shared_axes.len(), 2);
         assert_eq!(multi.slices.len(), 2);
         assert_eq!(multi.slices[0].prefix_keys.len(), 1);
-        assert_eq!(multi.slices[0].prefix_keys[0].index.value.as_str(), "Phase");
+        assert_eq!(
+            multi.slices[0].prefix_keys[0].index.value.to_string(),
+            "Phase"
+        );
 
         // Desugared: each slot becomes a Param with a 2-D TableLiteral
         // keyed by (Phase, Component).
@@ -1004,8 +1007,8 @@ param q: Int[Phase, Component]
                     assert_eq!(entries.len(), 2); // 2 phases × 1 component
                     for e in entries {
                         assert_eq!(e.keys.len(), 2);
-                        assert_eq!(e.keys[0].index.value.as_str(), "Phase");
-                        assert_eq!(e.keys[1].index.value.as_str(), "Component");
+                        assert_eq!(e.keys[0].index.value.to_string(), "Phase");
+                        assert_eq!(e.keys[1].index.value.to_string(), "Component");
                     }
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),

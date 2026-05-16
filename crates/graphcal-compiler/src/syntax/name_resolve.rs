@@ -27,8 +27,11 @@ use crate::desugar::desugared_ast as src_ast;
 use crate::desugar::resolved_ast as dst_ast;
 use crate::registry::builtins::builtin_constants;
 use crate::registry::resolve_types::is_time_scale_name;
-use crate::syntax::ast::ImportKind;
-use crate::syntax::names::{IndexName, ScopedName, Spanned, StructTypeName, VariantName};
+use crate::syntax::ast::{ImportKind, TypeSystemRefKind};
+use crate::syntax::names::{
+    ConstructorName, DimName, IndexName, LocalName, ModuleAliasName, ScopedName, Spanned,
+    StructTypeName, VariantName,
+};
 use crate::syntax::phase::{UnresolvedRef, never};
 
 /// Context for name resolution: what names are in scope.
@@ -36,13 +39,19 @@ struct ResolveContext {
     /// Builtin constants: PI, E, TAU, SQRT2, etc.
     builtin_consts: &'static HashMap<&'static str, f64>,
     /// Struct and union type names declared in the file.
-    type_names: HashSet<String>,
+    type_names: HashSet<StructTypeName>,
+    /// Dimension names declared in the file.
+    dim_names: HashSet<DimName>,
+    /// Constructor names declared in the file.
+    constructor_names: HashSet<ConstructorName>,
+    /// Imported type-system names whose concrete category is resolved later.
+    imported_type_system_names: HashSet<StructTypeName>,
     /// Index name → set of variant names.
-    index_variants: HashMap<String, HashSet<String>>,
+    index_variants: HashMap<IndexName, HashSet<VariantName>>,
     /// Module aliases from imports (for qualified const refs).
-    module_names: HashSet<String>,
+    module_names: HashSet<ModuleAliasName>,
     /// Stack of local scopes (for/scan/unfold/match bindings).
-    local_scopes: Vec<HashSet<String>>,
+    local_scopes: Vec<HashSet<LocalName>>,
 }
 
 impl ResolveContext {
@@ -50,7 +59,7 @@ impl ResolveContext {
         self.local_scopes.iter().rev().any(|s| s.contains(name))
     }
 
-    fn push_scope(&mut self, names: HashSet<String>) {
+    fn push_scope(&mut self, names: HashSet<LocalName>) {
         self.local_scopes.push(names);
     }
 
@@ -75,6 +84,9 @@ pub fn resolve_standalone_expr(expr: src_ast::Expr) -> dst_ast::Expr {
     let mut ctx = ResolveContext {
         builtin_consts: builtin_constants(),
         type_names: HashSet::new(),
+        dim_names: HashSet::new(),
+        constructor_names: HashSet::new(),
+        imported_type_system_names: HashSet::new(),
         index_variants: HashMap::new(),
         module_names: HashSet::new(),
         local_scopes: Vec::new(),
@@ -95,11 +107,17 @@ pub fn resolve_name_refs(file: src_ast::File) -> dst_ast::File {
 
     // First pass: scan declarations to build the resolution context.
     let mut type_names = HashSet::new();
-    let mut index_variants: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut dim_names = HashSet::new();
+    let mut constructor_names = HashSet::new();
+    let mut imported_type_system_names = HashSet::new();
+    let mut index_variants: HashMap<IndexName, HashSet<VariantName>> = HashMap::new();
     let mut module_names = HashSet::new();
     collect_names_from_decls(
         &file.declarations,
         &mut type_names,
+        &mut dim_names,
+        &mut constructor_names,
+        &mut imported_type_system_names,
         &mut index_variants,
         &mut module_names,
     );
@@ -107,6 +125,9 @@ pub fn resolve_name_refs(file: src_ast::File) -> dst_ast::File {
     let mut ctx = ResolveContext {
         builtin_consts,
         type_names,
+        dim_names,
+        constructor_names,
+        imported_type_system_names,
         index_variants,
         module_names,
         local_scopes: Vec::new(),
@@ -125,19 +146,25 @@ pub fn resolve_name_refs(file: src_ast::File) -> dst_ast::File {
 /// Collect type names, index variants, and module names from declarations.
 fn collect_names_from_decls(
     decls: &[src_ast::Declaration],
-    type_names: &mut HashSet<String>,
-    index_variants: &mut HashMap<String, HashSet<String>>,
-    module_names: &mut HashSet<String>,
+    type_names: &mut HashSet<StructTypeName>,
+    dim_names: &mut HashSet<DimName>,
+    constructor_names: &mut HashSet<ConstructorName>,
+    imported_type_system_names: &mut HashSet<StructTypeName>,
+    index_variants: &mut HashMap<IndexName, HashSet<VariantName>>,
+    module_names: &mut HashSet<ModuleAliasName>,
 ) {
     for decl in decls {
         match &decl.kind {
             src_ast::DeclKind::Type(t) => {
-                type_names.insert(t.name.value.to_string());
+                type_names.insert(t.name.value.clone());
+                if t.fields.is_some() {
+                    constructor_names.insert(ConstructorName::new(t.name.value.as_str()));
+                }
             }
             src_ast::DeclKind::UnionType(u) => {
-                type_names.insert(u.name.value.to_string());
+                type_names.insert(u.name.value.clone());
                 for member in &u.members {
-                    type_names.insert(member.name.value.to_string());
+                    constructor_names.insert(member.name.value.clone());
                 }
             }
             // Dim names are recognized so that a bare `Velocity` in an
@@ -148,16 +175,16 @@ fn collect_names_from_decls(
             // construction is benign — downstream type checking
             // rejects the misuse with a precise diagnostic.
             src_ast::DeclKind::BaseDimension(d) => {
-                type_names.insert(d.name.value.to_string());
+                dim_names.insert(d.name.value.clone());
             }
             src_ast::DeclKind::Dimension(d) => {
-                type_names.insert(d.name.value.to_string());
+                dim_names.insert(d.name.value.clone());
             }
             src_ast::DeclKind::Index(idx) => {
-                let idx_name = idx.name.value.to_string();
+                let idx_name = idx.name.value.clone();
                 if let src_ast::IndexDeclKind::Named { variants } = &idx.kind {
-                    let variant_set: HashSet<String> =
-                        variants.iter().map(|v| v.value.to_string()).collect();
+                    let variant_set: HashSet<VariantName> =
+                        variants.iter().map(|v| v.value.clone()).collect();
                     index_variants.insert(idx_name, variant_set);
                 } else {
                     index_variants.insert(idx_name, HashSet::new());
@@ -165,7 +192,7 @@ fn collect_names_from_decls(
             }
             src_ast::DeclKind::Import(import) => {
                 if let ImportKind::Module { alias: Some(alias) } = &import.kind {
-                    module_names.insert(alias.name.clone());
+                    module_names.insert(ModuleAliasName::new(&alias.name));
                 }
                 if let ImportKind::Selective(items) = &import.kind {
                     for item in items {
@@ -173,23 +200,31 @@ fn collect_names_from_decls(
                         // Without resolving imports we don't know type vs index;
                         // err on the side of recognizing it as a type so that
                         // bare references parse as struct construction.
-                        type_names.insert(local);
+                        imported_type_system_names.insert(StructTypeName::new(local));
                     }
                 }
             }
             src_ast::DeclKind::Include(include) => {
                 if let ImportKind::Module { alias: Some(alias) } = &include.kind {
-                    module_names.insert(alias.name.clone());
+                    module_names.insert(ModuleAliasName::new(&alias.name));
                 }
                 if let ImportKind::Selective(items) = &include.kind {
                     for item in items {
                         let local = item.local_name().to_string();
-                        type_names.insert(local);
+                        imported_type_system_names.insert(StructTypeName::new(local));
                     }
                 }
             }
             src_ast::DeclKind::Dag(dag) => {
-                collect_names_from_decls(&dag.body, type_names, index_variants, module_names);
+                collect_names_from_decls(
+                    &dag.body,
+                    type_names,
+                    dim_names,
+                    constructor_names,
+                    imported_type_system_names,
+                    index_variants,
+                    module_names,
+                );
             }
             _ => {}
         }
@@ -389,25 +424,41 @@ fn lift_dag(dag: src_ast::DagDecl, ctx: &mut ResolveContext) -> dst_ast::DagDecl
     // The dag body may introduce its own types/indexes/module aliases that
     // are in scope only inside the body.
     let mut inner_types = HashSet::new();
+    let mut inner_dims = HashSet::new();
+    let mut inner_ctors = HashSet::new();
+    let mut inner_imported_type_system = HashSet::new();
     let mut inner_indexes = HashMap::new();
     let mut inner_modules = HashSet::new();
     collect_names_from_decls(
         &dag.body,
         &mut inner_types,
+        &mut inner_dims,
+        &mut inner_ctors,
+        &mut inner_imported_type_system,
         &mut inner_indexes,
         &mut inner_modules,
     );
 
     let orig_types = ctx.type_names.clone();
+    let orig_dims = ctx.dim_names.clone();
+    let orig_ctors = ctx.constructor_names.clone();
+    let orig_imported_type_system = ctx.imported_type_system_names.clone();
     let orig_indexes = ctx.index_variants.clone();
     let orig_modules = ctx.module_names.clone();
     ctx.type_names.extend(inner_types);
+    ctx.dim_names.extend(inner_dims);
+    ctx.constructor_names.extend(inner_ctors);
+    ctx.imported_type_system_names
+        .extend(inner_imported_type_system);
     ctx.index_variants.extend(inner_indexes);
     ctx.module_names.extend(inner_modules);
 
     let body = dag.body.into_iter().map(|d| lift_decl(d, ctx)).collect();
 
     ctx.type_names = orig_types;
+    ctx.dim_names = orig_dims;
+    ctx.constructor_names = orig_ctors;
+    ctx.imported_type_system_names = orig_imported_type_system;
     ctx.index_variants = orig_indexes;
     ctx.module_names = orig_modules;
 
@@ -518,6 +569,7 @@ fn lift_expr_kind(
         S::Integer(n) => dst_ast::ExprKind::Integer(n),
         S::Bool(b) => dst_ast::ExprKind::Bool(b),
         S::StringLiteral(s) => dst_ast::ExprKind::StringLiteral(s),
+        S::TypeSystemRef(r) => dst_ast::ExprKind::TypeSystemRef(r),
         S::GraphRef(r) => dst_ast::ExprKind::GraphRef(r),
         S::ConstRef(r) => dst_ast::ExprKind::ConstRef(r),
         S::LocalRef(i) => dst_ast::ExprKind::LocalRef(i),
@@ -612,7 +664,7 @@ fn lift_expr_kind(
         S::ForComp { bindings, body } => {
             let mut scope = HashSet::new();
             for binding in &bindings {
-                scope.insert(binding.var.name.clone());
+                scope.insert(LocalName::new(&binding.var.name));
             }
             ctx.push_scope(scope);
             let body = Box::new(lift_expr(*body, ctx));
@@ -628,7 +680,10 @@ fn lift_expr_kind(
         } => {
             let source = Box::new(lift_expr(*source, ctx));
             let init = Box::new(lift_expr(*init, ctx));
-            let scope = HashSet::from([acc_name.name.clone(), val_name.name.clone()]);
+            let scope = HashSet::from([
+                LocalName::new(&acc_name.name),
+                LocalName::new(&val_name.name),
+            ]);
             ctx.push_scope(scope);
             let body = Box::new(lift_expr(*body, ctx));
             ctx.pop_scope();
@@ -647,7 +702,10 @@ fn lift_expr_kind(
             body,
         } => {
             let init = Box::new(lift_expr(*init, ctx));
-            let scope = HashSet::from([prev_name.name.clone(), curr_name.name.clone()]);
+            let scope = HashSet::from([
+                LocalName::new(&prev_name.name),
+                LocalName::new(&curr_name.name),
+            ]);
             ctx.push_scope(scope);
             let body = Box::new(lift_expr(*body, ctx));
             ctx.pop_scope();
@@ -666,7 +724,7 @@ fn lift_expr_kind(
                     let mut scope = HashSet::new();
                     for binding in &arm.pattern.bindings {
                         if let crate::syntax::ast::PatternBinding::Bind { var, .. } = binding {
-                            scope.insert(var.name.clone());
+                            scope.insert(LocalName::new(&var.name));
                         }
                     }
                     ctx.push_scope(scope);
@@ -736,8 +794,8 @@ fn resolve_unresolved_ref(
 /// 1. Local scope (for/scan/unfold/match bindings) → `LocalRef`
 /// 2. Builtin constants (PI, E, etc.) → `ConstRef`
 /// 3. Time scale names (UTC, TAI, etc.) → `ConstRef`
-/// 4. Struct/union type names → `StructConstruction` (bare, no fields)
-/// 5. Index variant names → `StructConstruction` (bare, for backward compat)
+/// 4. Constructors → `StructConstruction` (bare, no fields)
+/// 5. Type-system names → `TypeSystemRef`
 /// 6. Fallback → `LocalRef` (will be caught later by semantic validation)
 fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
     let name = &ident.name;
@@ -754,34 +812,48 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> d
         return dst_ast::ExprKind::ConstRef(Spanned::new(ScopedName::local(name), ident.span));
     }
 
-    if ctx.type_names.contains(name.as_str()) {
+    if ctx.constructor_names.contains(name.as_str()) {
         return dst_ast::ExprKind::StructConstruction {
-            type_name: Spanned::new(StructTypeName::new(name), ident.span),
+            type_name: Spanned::new(ConstructorName::new(name), ident.span),
             type_args: Vec::new(),
             fields: Vec::new(),
         };
     }
 
-    // Bare index name in expression position. Used by include bindings
-    // (`include lib(Phase: MyPhase, ...)`) to pass an index by name.
-    // Lowered to a zero-field `StructConstruction` so the existing
-    // binding-extraction path (which already accepts that shape for
-    // index/type bindings) keeps working without a new variant.
+    if ctx.type_names.contains(name.as_str()) {
+        return dst_ast::ExprKind::TypeSystemRef(Spanned::new(
+            TypeSystemRefKind::Type(StructTypeName::new(name)),
+            ident.span,
+        ));
+    }
+
+    if ctx.dim_names.contains(name.as_str()) {
+        return dst_ast::ExprKind::TypeSystemRef(Spanned::new(
+            TypeSystemRefKind::Dimension(DimName::new(name)),
+            ident.span,
+        ));
+    }
+
     if ctx.index_variants.contains_key(name.as_str()) {
-        return dst_ast::ExprKind::StructConstruction {
-            type_name: Spanned::new(StructTypeName::new(name), ident.span),
-            type_args: Vec::new(),
-            fields: Vec::new(),
-        };
+        return dst_ast::ExprKind::TypeSystemRef(Spanned::new(
+            TypeSystemRefKind::Index(IndexName::new(name)),
+            ident.span,
+        ));
+    }
+
+    if ctx.imported_type_system_names.contains(name.as_str()) {
+        return dst_ast::ExprKind::TypeSystemRef(Spanned::new(
+            TypeSystemRefKind::Imported(StructTypeName::new(name)),
+            ident.span,
+        ));
     }
 
     for variants in ctx.index_variants.values() {
         if variants.contains(name.as_str()) {
-            return dst_ast::ExprKind::StructConstruction {
-                type_name: Spanned::new(StructTypeName::new(name), ident.span),
-                type_args: Vec::new(),
-                fields: Vec::new(),
-            };
+            return dst_ast::ExprKind::TypeSystemRef(Spanned::new(
+                TypeSystemRefKind::BareVariant(VariantName::new(name)),
+                ident.span,
+            ));
         }
     }
 

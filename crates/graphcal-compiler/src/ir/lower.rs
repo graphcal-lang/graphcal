@@ -27,7 +27,9 @@ use crate::registry::prelude::load_prelude;
 use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{self, Registry, RegistryBuilder, UnitScale};
 use crate::syntax::dimension::Rational;
-use crate::syntax::names::{DeclName, DimName, IndexName, ScopedName, StructTypeName};
+use crate::syntax::names::{
+    ConstructorName, DeclName, DimName, IndexName, ScopedName, StructTypeName,
+};
 use crate::syntax::span::Span;
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
@@ -1128,7 +1130,12 @@ impl UnfrozenIR {
         // behavior for non-imported `#[expected_fail]` attributes.
         for (orig_name, attrs) in import_item_attributes {
             for attr in attrs {
-                if attr.name.name == "expected_fail" {
+                if attr
+                    .name
+                    .name
+                    .parse::<crate::syntax::attribute::AttributeName>()
+                    == Ok(crate::syntax::attribute::AttributeName::ExpectedFail)
+                {
                     let prefixed_assert =
                         ScopedName::Local(orig_name.as_str().to_string()).with_prefix(prefix);
                     let ef = crate::ir::resolve::names::parse_expected_fail_args(
@@ -1280,17 +1287,15 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
     ) -> Result<(), Self::Error> {
         for entry in entries {
             if let Some(key) = entry.keys.first()
-                && self.index_bindings.contains_key(key.index.value.as_str())
+                && let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
+                && self.index_bindings.contains_key(index_name.as_str())
             {
                 return Err(self.orphan_error(
                     "index",
-                    key.index.value.as_ref(),
+                    index_name.as_ref(),
                     format!(
                         "`{}`",
-                        crate::syntax::names::fmt_qualified_variant(
-                            &key.index.value,
-                            &key.variant.value,
-                        )
+                        crate::syntax::names::fmt_qualified_variant(index_name, &key.variant.value)
                     ),
                 ));
             }
@@ -1498,8 +1503,10 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
         if let ExprKind::MapLiteral { entries } = &mut expr.kind {
             for entry in entries.iter_mut() {
                 for key in &mut entry.keys {
-                    if let Some(new) = self.bindings.get(key.index.value.as_str()) {
-                        key.index.value = new.clone();
+                    if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
+                        && let Some(new) = self.bindings.get(index_name.as_str())
+                    {
+                        key.index.value = crate::syntax::ast::MapEntryIndex::Named(new.clone());
                     }
                 }
                 self.visit_expr_mut(&mut entry.value)?;
@@ -1661,6 +1668,7 @@ pub(crate) fn substitute_type_names_in_expr(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
+        | ExprKind::TypeSystemRef(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::GraphRef(_)
@@ -1679,7 +1687,7 @@ pub(crate) fn substitute_type_names_in_expr(
             fields,
         } => {
             if let Some(new_name) = bindings.get(type_name.value.as_str()) {
-                type_name.value = new_name.clone();
+                type_name.value = ConstructorName::new(new_name.as_str());
             }
             for ty in type_args.iter_mut() {
                 substitute_type_expr_nominal_names(ty, bindings);
@@ -2424,16 +2432,11 @@ fn collect_nat_ranges_from_expr(
                     }
                 }
                 ExprKind::MapLiteral { entries } => {
-                    // After TableLiteral desugaring, NatRange axes survive as
-                    // synthetic `__nat_range_N` index names in entry keys.
-                    // Recover and register N here so the registry knows
-                    // about every range used by the file.
                     for entry in entries {
                         for key in &entry.keys {
-                            if let Some(n) = crate::registry::types::parse_nat_range_index_name(
-                                key.index.value.as_str(),
-                            ) {
-                                let size = nat_size_to_usize(n, key.index.span, self.src)?;
+                            if let crate::syntax::ast::MapEntryIndex::NatRange(n) = &key.index.value
+                            {
+                                let size = nat_size_to_usize(*n, key.index.span, self.src)?;
                                 self.registry.ensure_nat_range_index(size);
                             }
                         }
@@ -2542,7 +2545,7 @@ fn register_union_type_decl(
     // and points back to this union.
     let mut members: Vec<types::UnionMemberDef> = Vec::with_capacity(t.members.len());
     for m in &t.members {
-        let variant_name = StructTypeName::new(m.name.value.as_str());
+        let variant_name = ConstructorName::new(m.name.value.as_str());
         let fields = m.payload.as_ref().map_or_else(Vec::new, |fs| {
             fs.iter()
                 .map(|f| types::StructField {

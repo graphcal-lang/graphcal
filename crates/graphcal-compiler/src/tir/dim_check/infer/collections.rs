@@ -10,7 +10,9 @@ use miette::NamedSource;
 use crate::desugar::resolved_ast::{
     BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, IndexArg, NatExpr,
 };
-use crate::syntax::names::{FieldName, GenericParamName, IndexName, ScopedName, StructTypeName};
+use crate::syntax::names::{
+    ConstructorName, FieldName, GenericParamName, IndexName, ScopedName, StructTypeName,
+};
 use crate::tir::typed::NatLinearForm;
 
 use crate::registry::error::GraphcalError;
@@ -174,13 +176,18 @@ pub(super) fn infer_map_or_table_literal(
         }
     }
     // Validate index names: all entries must use the same indexes in the same order
-    let index_names: Vec<&IndexName> = entries[0].keys.iter().map(|k| &k.index.value).collect();
+    let index_names: Vec<IndexName> = entries[0]
+        .keys
+        .iter()
+        .map(|k| k.index.value.registry_name())
+        .collect();
     for entry in &entries[1..] {
         for (i, key) in entry.keys.iter().enumerate() {
-            if key.index.value != *index_names[i] {
+            let key_index_name = key.index.value.registry_name();
+            if key_index_name != index_names[i] {
                 return Err(GraphcalError::IndexMismatch {
                     expected: index_names[i].clone(),
-                    found: key.index.value.clone(),
+                    found: key_index_name,
                     src: src.clone(),
                     span: key.index.span.into(),
                 });
@@ -190,11 +197,12 @@ pub(super) fn infer_map_or_table_literal(
     // Validate each index exists, reject range indexes as keys, and collect variant lists
     let mut axes_variants: Vec<Vec<crate::syntax::names::VariantName>> = Vec::new();
     for key in &entries[0].keys {
+        let key_index_name = key.index.value.registry_name();
         let idx_def = registry
             .indexes
-            .get_index(key.index.value.as_str())
+            .get_index(key_index_name.as_str())
             .ok_or_else(|| GraphcalError::UnknownIndex {
-                name: key.index.value.clone(),
+                name: key_index_name.clone(),
                 src: src.clone(),
                 span: key.index.span.into(),
             })?;
@@ -230,7 +238,7 @@ pub(super) fn infer_map_or_table_literal(
                         .keys
                         .iter()
                         .map(|k| crate::syntax::names::fmt_qualified_variant(
-                            &k.index.value,
+                            k.index.value.registry_name(),
                             &k.variant.value,
                         ))
                         .collect::<Vec<_>>()
@@ -250,7 +258,7 @@ pub(super) fn infer_map_or_table_literal(
                     .any(|v| v.as_str() == key.variant.value.as_str())
                 {
                     return Err(GraphcalError::UnknownVariant {
-                        index_name: key.index.value.clone(),
+                        index_name: key.index.value.registry_name(),
                         variant_name: key.variant.value.clone(),
                         src: src.clone(),
                         span: key.variant.span.into(),
@@ -282,7 +290,7 @@ pub(super) fn infer_map_or_table_literal(
             .map(|t| {
                 t.iter()
                     .enumerate()
-                    .map(|(i, v)| crate::syntax::names::fmt_qualified_variant(index_names[i], v))
+                    .map(|(i, v)| crate::syntax::names::fmt_qualified_variant(&index_names[i], v))
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -319,7 +327,7 @@ pub(super) fn infer_map_or_table_literal(
             .map(|t| {
                 t.iter()
                     .enumerate()
-                    .map(|(i, v)| crate::syntax::names::fmt_qualified_variant(index_names[i], v))
+                    .map(|(i, v)| crate::syntax::names::fmt_qualified_variant(&index_names[i], v))
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -946,7 +954,7 @@ pub(super) fn infer_field_access(
 )]
 pub(super) fn infer_struct_construction(
     expr: &Expr,
-    type_name: &crate::syntax::names::Spanned<StructTypeName>,
+    type_name: &crate::syntax::names::Spanned<ConstructorName>,
     constructor_type_args: &[crate::desugar::resolved_ast::TypeExpr],
     fields: &[crate::desugar::resolved_ast::FieldInit],
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -962,9 +970,9 @@ pub(super) fn infer_struct_construction(
     // constructor belongs to becomes the value's type.
     let (type_def, variant) = registry
         .types
-        .lookup_ctor(type_name.value.as_str())
+        .lookup_ctor(&type_name.value)
         .ok_or_else(|| GraphcalError::UnknownStructType {
-            name: type_name.value.clone(),
+            name: StructTypeName::new(type_name.value.as_str()),
             src: src.clone(),
             span: type_name.span.into(),
         })?;
@@ -1061,7 +1069,7 @@ pub(super) fn infer_struct_construction(
         .collect();
     if !extra.is_empty() {
         return Err(GraphcalError::ExtraFields {
-            type_name: type_name.value.clone(),
+            type_name: StructTypeName::new(type_name.value.as_str()),
             extra,
             src: src.clone(),
             span: expr.span.into(),
@@ -1077,7 +1085,7 @@ pub(super) fn infer_struct_construction(
         .collect();
     if !missing.is_empty() {
         return Err(GraphcalError::MissingFields {
-            type_name: type_name.value.clone(),
+            type_name: StructTypeName::new(type_name.value.as_str()),
             missing,
             src: src.clone(),
             span: expr.span.into(),
@@ -1129,7 +1137,7 @@ pub(super) fn infer_struct_construction(
         )?;
         if value_type != expected_field_type {
             return Err(GraphcalError::FieldDimensionMismatch {
-                type_name: type_name.value.clone(),
+                type_name: StructTypeName::new(type_name.value.as_str()),
                 field_name: field_init.name.value.clone(),
                 expected: format_inferred_type(&expected_field_type, registry),
                 found: format_inferred_type(&value_type, registry),

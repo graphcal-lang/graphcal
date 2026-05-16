@@ -73,6 +73,13 @@ pub(super) fn infer_type_with_owner(
             src: src.clone(),
             span: expr.span.into(),
         }),
+        ExprKind::TypeSystemRef(name) => Err(GraphcalError::DimensionMismatch {
+            expected: "a value expression".to_string(),
+            found: format!("type-system name `{}`", name.value),
+            help: "type-system names can only be used in include/import bindings".to_string(),
+            src: src.clone(),
+            span: name.span.into(),
+        }),
 
         ExprKind::VariantLiteral { index, variant } => {
             // Validate index exists

@@ -680,6 +680,7 @@ pub(in crate::eval::project) fn extract_index_name_from_binding_expr(
         ExprKind::ConstRef(name) if !name.value.is_qualified() => {
             Ok(name.value.member().to_string())
         }
+        ExprKind::TypeSystemRef(name) => Ok(name.value.as_str().to_string()),
         ExprKind::StructConstruction {
             type_name,
             type_args,
@@ -707,6 +708,7 @@ pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
         ExprKind::ConstRef(name) if !name.value.is_qualified() => {
             Ok(name.value.member().to_string())
         }
+        ExprKind::TypeSystemRef(name) => Ok(name.value.as_str().to_string()),
         ExprKind::StructConstruction {
             type_name,
             type_args,

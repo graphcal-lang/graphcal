@@ -11,7 +11,7 @@ use crate::syntax::names::{FnName, ScopedName};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{
-    ConstructorFn, SpecialFnKind, TypeConversionFn, classify_special_fn,
+    AggregationFn, ConstructorFn, SpecialFnKind, TypeConversionFn, classify_special_fn,
 };
 use crate::registry::types::Registry;
 
@@ -50,13 +50,18 @@ impl InferCtx<'_> {
 
     /// Aggregation dispatch: if the single argument is `Indexed`, aggregate;
     /// otherwise fall through to builtins (e.g. 2-arg `min`/`max`).
-    fn infer_aggregation_fn_call(&self) -> Result<InferredType, GraphcalError> {
+    fn infer_aggregation_fn_call(
+        &self,
+        kind: AggregationFn,
+    ) -> Result<InferredType, GraphcalError> {
         let arg_type = self.infer_arg(&self.args[0])?;
         if let InferredType::Indexed { element, .. } = arg_type {
-            return Ok(if self.name.value.as_str() == "count" {
-                InferredType::Scalar(Dimension::dimensionless())
-            } else {
-                *element
+            return Ok(match kind {
+                AggregationFn::Count => InferredType::Scalar(Dimension::dimensionless()),
+                AggregationFn::Sum
+                | AggregationFn::Min
+                | AggregationFn::Max
+                | AggregationFn::Mean => *element,
             });
         }
         // Not indexed, fall through to builtin (min/max are 2-arg builtins)
@@ -396,7 +401,9 @@ pub(super) fn infer_fn_call(
         src,
     };
     match classify_special_fn(name.value.as_str()) {
-        Some(SpecialFnKind::Aggregation(_)) if args.len() == 1 => ctx.infer_aggregation_fn_call(),
+        Some(SpecialFnKind::Aggregation(kind)) if args.len() == 1 => {
+            ctx.infer_aggregation_fn_call(kind)
+        }
         Some(SpecialFnKind::TypeConversion(kind)) => ctx.infer_type_conversion_fn_call_typed(kind),
         Some(SpecialFnKind::TimeScaleConversion(target_scale)) => {
             ctx.infer_timescale_fn_call(target_scale)

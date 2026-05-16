@@ -150,6 +150,21 @@ define_name_type! {
     pub struct GenericParamName;
 }
 
+define_name_type! {
+    /// Name of a dimension variable in a built-in function signature.
+    pub struct DimVarName;
+}
+
+define_name_type! {
+    /// Name of a local expression binding.
+    pub struct LocalName;
+}
+
+define_name_type! {
+    /// Name of a module alias introduced by an import/include declaration.
+    pub struct ModuleAliasName;
+}
+
 // --- Module-scoped names ---
 
 /// A declaration name that may optionally be module-qualified.

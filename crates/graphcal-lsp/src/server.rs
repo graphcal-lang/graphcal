@@ -568,7 +568,7 @@ fn builtin_signature_parts(sig: &DimSignature) -> (Vec<String>, String) {
         .map(|p| {
             let type_str = match &p.dim {
                 ParamDim::Fixed(dim) => format_dim_display(dim),
-                ParamDim::Bind(var) | ParamDim::Ref(var) => var.clone(),
+                ParamDim::Bind(var) | ParamDim::Ref(var) => var.to_string(),
             };
             format!("{}: {type_str}", p.name)
         })
@@ -576,7 +576,7 @@ fn builtin_signature_parts(sig: &DimSignature) -> (Vec<String>, String) {
 
     let ret = match &sig.result {
         ResultDim::Fixed(dim) => format_dim_display(dim),
-        ResultDim::Var(name) => name.clone(),
+        ResultDim::Var(name) => name.to_string(),
         ResultDim::VarPow(name, power) => format!("{name}^({power})"),
     };
 

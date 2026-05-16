@@ -20,9 +20,11 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use graphcal_compiler::syntax::ast::{Expr, ExprKind, FieldInit, MapEntry, MapEntryKey};
+use graphcal_compiler::syntax::ast::{
+    Expr, ExprKind, FieldInit, MapEntry, MapEntryIndex, MapEntryKey,
+};
 use graphcal_compiler::syntax::names::{
-    DeclName, FieldName, IndexName, Spanned, StructTypeName, VariantName,
+    ConstructorName, DeclName, FieldName, IndexName, Spanned, VariantName,
 };
 use graphcal_compiler::syntax::span::Span;
 
@@ -250,7 +252,7 @@ fn convert_tagged_union(
     };
 
     Ok(synth_expr(ExprKind::StructConstruction {
-        type_name: Spanned::new(StructTypeName::new(variant_name), SYNTH_SPAN),
+        type_name: Spanned::new(ConstructorName::new(variant_name), SYNTH_SPAN),
         type_args: Vec::new(),
         fields,
     }))
@@ -277,7 +279,7 @@ fn convert_struct(
     let fields = convert_field_inits(fields_obj, param_name)?;
 
     Ok(synth_expr(ExprKind::StructConstruction {
-        type_name: Spanned::new(StructTypeName::new(type_name_str), SYNTH_SPAN),
+        type_name: Spanned::new(ConstructorName::new(type_name_str), SYNTH_SPAN),
         type_args: Vec::new(),
         fields,
     }))
@@ -308,7 +310,10 @@ fn convert_indexed(
             let value_expr = convert_value(value, &format!("{param_name}[{variant}]"))?;
             Ok(MapEntry {
                 keys: vec![MapEntryKey {
-                    index: Spanned::new(IndexName::new(index_name), SYNTH_SPAN),
+                    index: Spanned::new(
+                        MapEntryIndex::Named(IndexName::new(index_name)),
+                        SYNTH_SPAN,
+                    ),
                     variant: Spanned::new(VariantName::new(variant), SYNTH_SPAN),
                 }],
                 value: value_expr,
@@ -467,7 +472,7 @@ mod tests {
         match &expr.kind {
             ExprKind::MapLiteral { entries } => {
                 assert_eq!(entries.len(), 3);
-                assert_eq!(entries[0].keys[0].index.value.as_str(), "Maneuver");
+                assert_eq!(entries[0].keys[0].index.value.to_string(), "Maneuver");
             }
             other => panic!("expected MapLiteral, got {other:?}"),
         }

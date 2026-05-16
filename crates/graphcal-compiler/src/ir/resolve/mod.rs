@@ -18,6 +18,7 @@ use crate::registry::resolve_types::{
     ResolvedAssertEntry, ResolvedConstEntry, ResolvedFigureEntry, ResolvedLayerEntry,
     ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
 };
+use crate::syntax::attribute::AttributeName;
 use crate::syntax::names::DeclName;
 use crate::syntax::span::Span;
 
@@ -38,27 +39,6 @@ use names::parse_expected_fail_args;
 use scope::{
     check_no_assert_graph_refs, check_no_pub_index_variant_literals, check_no_runtime_graph_refs,
 };
-
-/// Known attribute names in the language.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AttributeName {
-    Assumes,
-    ExpectedFail,
-    Lazy,
-}
-
-impl std::str::FromStr for AttributeName {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "assumes" => Ok(Self::Assumes),
-            "expected_fail" => Ok(Self::ExpectedFail),
-            "lazy" => Ok(Self::Lazy),
-            _ => Err(()),
-        }
-    }
-}
 
 /// Classification of a name in the resolver's scope.
 ///
@@ -167,7 +147,7 @@ fn collect_local_declarations(
     // bindable, so A10 never fires on their variant literals. Required
     // `pub(bind)` indexes have no declared variants so they carry no
     // variant literals either; the filter below excludes them.
-    let pub_bind_index_names: HashSet<String> = file
+    let pub_bind_index_names: HashSet<crate::syntax::names::IndexName> = file
         .declarations
         .iter()
         .filter_map(|decl| {
@@ -177,7 +157,7 @@ fn collect_local_declarations(
             if let DeclKind::Index(idx) = &decl.kind
                 && !idx.kind.is_required()
             {
-                return Some(idx.name.value.to_string());
+                return Some(idx.name.value.clone());
             }
             None
         })

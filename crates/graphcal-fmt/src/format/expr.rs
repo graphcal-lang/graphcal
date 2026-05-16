@@ -24,6 +24,7 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         }
         ExprKind::Bool(b) => RcDoc::text(if *b { "true" } else { "false" }),
         ExprKind::StringLiteral(s) => RcDoc::text(format!("\"{s}\"")),
+        ExprKind::TypeSystemRef(name) => RcDoc::text(name.value.as_str().to_string()),
         ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", format_scoped_surface(&name.value))),
         ExprKind::InlineDagRef { path, args, output } => {
             format_inline_dag_ref(fmt, path, args, output.value.as_str())
@@ -331,7 +332,7 @@ pub fn format_if(
 pub fn format_struct_construction(
     fmt: &mut Formatter<'_>,
     type_name: &graphcal_compiler::syntax::names::Spanned<
-        graphcal_compiler::syntax::names::StructTypeName,
+        graphcal_compiler::syntax::names::ConstructorName,
     >,
     type_args: &[TypeExpr],
     fields: &[FieldInit],
@@ -384,14 +385,14 @@ pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDo
         let key_doc = if e.keys.len() == 1 {
             RcDoc::text(format!(
                 "{}.{}",
-                e.keys[0].index.value.as_str(),
+                e.keys[0].index.value,
                 e.keys[0].variant.value.as_str()
             ))
         } else {
             let key_parts: Vec<String> = e
                 .keys
                 .iter()
-                .map(|k| format!("{}.{}", k.index.value.as_str(), k.variant.value.as_str()))
+                .map(|k| format!("{}.{}", k.index.value, k.variant.value.as_str()))
                 .collect();
             RcDoc::text(format!("({})", key_parts.join(", ")))
         };
@@ -689,7 +690,7 @@ fn format_table_sliced(
             .map(|i| match &indexes[i] {
                 TableIndexSpec::Named(_) => format!(
                     "{}.{}",
-                    e.keys[i].index.value.as_str(),
+                    e.keys[i].index.value,
                     e.keys[i].variant.value.as_str()
                 ),
                 TableIndexSpec::NatRange(_, _) => e.keys[i].variant.value.as_str().to_string(),

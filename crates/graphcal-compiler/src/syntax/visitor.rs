@@ -38,6 +38,7 @@ pub(crate) trait ExprVisitor<P: Phase> {
             | ExprKind::Integer(_)
             | ExprKind::Bool(_)
             | ExprKind::StringLiteral(_)
+            | ExprKind::TypeSystemRef(_)
             | ExprKind::UnitLiteral { .. }
             | ExprKind::LocalRef(_)
             | ExprKind::VariantLiteral { .. }
@@ -271,6 +272,7 @@ pub trait ExprVisitorMut<P: Phase> {
             | ExprKind::Integer(_)
             | ExprKind::Bool(_)
             | ExprKind::StringLiteral(_)
+            | ExprKind::TypeSystemRef(_)
             | ExprKind::UnitLiteral { .. }
             | ExprKind::LocalRef(_)
             | ExprKind::UnresolvedRef(_) => Ok(()),

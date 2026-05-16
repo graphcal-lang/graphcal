@@ -1040,6 +1040,9 @@ pub enum ExprKind<P: Phase = Raw> {
     Bool(bool),
     /// String literal: `"hello"` (used as arguments to `datetime()`, `epoch()`, etc.)
     StringLiteral(String),
+    /// A bare type-system name used where a value expression is required by
+    /// surface syntax, such as an include binding RHS.
+    TypeSystemRef(Spanned<TypeSystemRefKind>),
     /// Graph reference: `@name` or `@alias.member`. The payload encodes
     /// qualification structurally — `Local` for bare `@name`, `Qualified`
     /// for `@alias.member` (after the namespace-alias rewrite). Producers
@@ -1093,7 +1096,7 @@ pub enum ExprKind<P: Phase = Raw> {
     /// Struct construction: `TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }`
     /// or with type args: `Vec3<Length, ECI> { x: 1 km, y: 0 km, z: 0 km }`
     StructConstruction {
-        type_name: Spanned<StructTypeName>,
+        type_name: Spanned<ConstructorName>,
         type_args: Vec<TypeExpr<P>>,
         fields: Vec<FieldInit<P>>,
     },
@@ -1202,6 +1205,75 @@ pub enum TableIndexSpec {
     NatRange(u64, Span),
 }
 
+/// An index key in a map literal entry.
+///
+/// Plain map literals use named indexes. Table literals over Nat axes desugar
+/// to map entries with an explicitly typed Nat range key so downstream passes
+/// do not have to recover `range(N)` semantics from a fabricated index name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MapEntryIndex {
+    /// A declared named index.
+    Named(IndexName),
+    /// A Nat range literal index, `range(N)`.
+    NatRange(u64),
+}
+
+impl MapEntryIndex {
+    /// Convert to the registry key used for index table lookup.
+    #[must_use]
+    pub fn registry_name(&self) -> IndexName {
+        match self {
+            Self::Named(name) => name.clone(),
+            Self::NatRange(size) => {
+                IndexName::new(crate::registry::types::nat_range_index_name(*size))
+            }
+        }
+    }
+}
+
+impl From<IndexName> for MapEntryIndex {
+    fn from(value: IndexName) -> Self {
+        Self::Named(value)
+    }
+}
+
+impl std::fmt::Display for MapEntryIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Named(name) => write!(f, "{name}"),
+            Self::NatRange(size) => write!(f, "range({size})"),
+        }
+    }
+}
+
+/// A bare type-system identifier after name resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeSystemRefKind {
+    Type(StructTypeName),
+    Dimension(DimName),
+    Index(IndexName),
+    BareVariant(VariantName),
+    Imported(StructTypeName),
+}
+
+impl TypeSystemRefKind {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Type(name) | Self::Imported(name) => name.as_str(),
+            Self::Dimension(name) => name.as_str(),
+            Self::Index(name) => name.as_str(),
+            Self::BareVariant(name) => name.as_str(),
+        }
+    }
+}
+
+impl std::fmt::Display for TypeSystemRefKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl TableIndexSpec {
     /// Get the source span of this table index specification.
     #[must_use]
@@ -1222,7 +1294,7 @@ impl TableIndexSpec {
 /// A single key in a map literal entry: `Index.Variant`
 #[derive(Debug, Clone)]
 pub struct MapEntryKey {
-    pub index: Spanned<IndexName>,
+    pub index: Spanned<MapEntryIndex>,
     pub variant: Spanned<VariantName>,
 }
 
@@ -1495,6 +1567,7 @@ fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
+        | ExprKind::TypeSystemRef(_)
         | ExprKind::UnitLiteral { .. }
         | ExprKind::LocalRef(_)
         | ExprKind::GraphRef(_)

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::desugar::resolved_ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
 use crate::registry::error::GraphcalError;
-use crate::syntax::names::{DeclName, ScopedName};
+use crate::syntax::names::{DeclName, IndexName, ScopedName};
 use crate::syntax::span::Span;
 use crate::syntax::visitor::ExprVisitor;
 use miette::NamedSource;
@@ -150,9 +150,11 @@ where
 
     fn visit_map_entries(&mut self, _expr: &Expr, entries: &[MapEntry]) -> Result<(), Self::Error> {
         for entry in entries {
-            if let Some(key) = entry.keys.first() {
+            if let Some(key) = entry.keys.first()
+                && let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
+            {
                 (self.check)(
-                    key.index.value.as_ref(),
+                    index_name.as_ref(),
                     key.variant.value.as_ref(),
                     key.index.span,
                     self.src,
@@ -195,7 +197,7 @@ where
 /// A10, so this check ignores them.
 pub(super) fn check_no_pub_index_variant_literals(
     expr: &Expr,
-    pub_bind_index_names: &HashSet<String>,
+    pub_bind_index_names: &HashSet<IndexName>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     if pub_bind_index_names.is_empty() {
@@ -207,7 +209,7 @@ pub(super) fn check_no_pub_index_variant_literals(
                 span: Span,
                 src: &NamedSource<Arc<String>>|
          -> Result<(), GraphcalError> {
-            if pub_bind_index_names.contains(index) {
+            if pub_bind_index_names.contains(&IndexName::new(index)) {
                 return Err(GraphcalError::PubIndexVariantLiteral {
                     index: index.to_string(),
                     variant: variant.to_string(),

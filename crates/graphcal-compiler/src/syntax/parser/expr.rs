@@ -2,7 +2,7 @@ use crate::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, ModulePath, TypeExpr, UnaryOp,
 };
 use crate::syntax::names::{
-    DeclName, FieldName, FnName, IndexName, ScopedName, Spanned, StructTypeName, VariantName,
+    ConstructorName, DeclName, FieldName, FnName, IndexName, ScopedName, Spanned, VariantName,
 };
 use crate::syntax::token::Token;
 
@@ -620,7 +620,7 @@ impl Parser<'_> {
                     .collect();
                 return Ok(Expr::new(
                     ExprKind::StructConstruction {
-                        type_name: Spanned::new(StructTypeName::new(name), span),
+                        type_name: Spanned::new(ConstructorName::new(name), span),
                         type_args: type_args_te,
                         fields,
                     },
