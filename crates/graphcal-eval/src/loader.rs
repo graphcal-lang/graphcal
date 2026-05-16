@@ -36,6 +36,18 @@ impl ModulePathKey {
     }
 }
 
+/// Loader-side resolution status for an import inside an inline DAG body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InlineBodyImportResolution {
+    /// The module path resolved to a loaded DAG/file identity.
+    Resolved(DagId),
+    /// The loader could not resolve the path in its current project context.
+    ///
+    /// The import declaration remains in the DAG body so the downstream
+    /// resolver can emit the user-facing diagnostic with the original span.
+    Unresolved,
+}
+
 impl std::fmt::Display for ModulePathKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (i, seg) in self.0.iter().enumerate() {
@@ -70,7 +82,7 @@ pub struct LoadedDag {
     /// `parent_dag_id`; cross-file imports map to the dependency file's id.
     /// Imports whose path fails to resolve at load time are absent here; the
     /// downstream resolver surfaces a structured error for them.
-    pub resolved_imports: HashMap<ModulePathKey, DagId>,
+    pub resolved_imports: HashMap<ModulePathKey, InlineBodyImportResolution>,
 }
 
 /// A single loaded and parsed file.
@@ -415,7 +427,7 @@ fn load_file_dfs<F: FileSystemReader>(
     // with per-dag pre-resolved imports. Self-imports map to this file's own
     // `DagId`; cross-file dag-body imports map to the dependency's id (when
     // already loaded via a file-level import). Resolution failures are
-    // silently skipped — the dag-body import resolver runs later and will
+    // recorded explicitly; the dag-body import resolver runs later and will
     // surface a structured error if the path is genuinely invalid.
     let inline_dags = lift_inline_dags(
         &ast,
@@ -460,8 +472,8 @@ fn load_file_dfs<F: FileSystemReader>(
 /// - A path that resolves to another file already loaded by the file-level
 ///   recursion maps to that file's `DagId` from `path_to_dag_id`.
 /// - Anything else (resolution failure or a cross-file dependency that
-///   wasn't pulled in at file level) is left out of `resolved_imports`;
-///   the dag-body resolver surfaces a structured error later.
+///   wasn't pulled in at file level) is recorded as unresolved; the dag-body
+///   resolver surfaces a structured error later.
 #[expect(
     clippy::too_many_arguments,
     reason = "loader-side resolution needs the same context as file-level imports"
@@ -489,7 +501,8 @@ fn lift_inline_dags<F: FileSystemReader>(
         };
         let name = dag.name.value.to_string();
         let dag_id = self_dag_id.child(name.as_str());
-        let mut resolved_imports: HashMap<ModulePathKey, DagId> = HashMap::new();
+        let mut resolved_imports: HashMap<ModulePathKey, InlineBodyImportResolution> =
+            HashMap::new();
         for body_decl in &dag.body {
             let DeclKind::Import(import_decl) = &body_decl.kind else {
                 continue;
@@ -499,23 +512,34 @@ fn lift_inline_dags<F: FileSystemReader>(
 
             // Single-segment file-stem reference — Concept 7 self-import.
             if path.segments.len() == 1 && path.segments[0].name == file_stem {
-                resolved_imports.insert(key, self_dag_id.clone());
+                resolved_imports.insert(
+                    key,
+                    InlineBodyImportResolution::Resolved(self_dag_id.clone()),
+                );
                 continue;
             }
             let Ok(resolved) =
                 resolve_import_path(path, parent_dir, project_root, src, manifest, fs)
             else {
+                resolved_imports.insert(key, InlineBodyImportResolution::Unresolved);
                 continue;
             };
             if resolved == canonical_path {
-                resolved_imports.insert(key, self_dag_id.clone());
+                resolved_imports.insert(
+                    key,
+                    InlineBodyImportResolution::Resolved(self_dag_id.clone()),
+                );
             } else if let Some(other_dag_id) = path_to_dag_id.get(&resolved) {
-                resolved_imports.insert(key, other_dag_id.clone());
+                resolved_imports.insert(
+                    key,
+                    InlineBodyImportResolution::Resolved(other_dag_id.clone()),
+                );
             } else {
                 // Cross-file dag-body import to a file the loader did not
                 // recurse into (no file-level import drove its load).
                 // Leave unresolved; the dag-body resolver will surface a
                 // structured error if the path is genuinely invalid.
+                resolved_imports.insert(key, InlineBodyImportResolution::Unresolved);
             }
         }
         out.push(LoadedDag {
@@ -543,14 +567,21 @@ fn lift_inline_dags_by_stem(ast: &File, path: &Path, self_dag_id: &DagId) -> Vec
         };
         let name = dag.name.value.to_string();
         let dag_id = self_dag_id.child(name.as_str());
-        let mut resolved_imports: HashMap<ModulePathKey, DagId> = HashMap::new();
+        let mut resolved_imports: HashMap<ModulePathKey, InlineBodyImportResolution> =
+            HashMap::new();
         for body_decl in &dag.body {
             let DeclKind::Import(import_decl) = &body_decl.kind else {
                 continue;
             };
             let import_path = &import_decl.path;
+            let key = ModulePathKey::from_path(import_path);
             if import_path.segments.len() == 1 && import_path.segments[0].name == file_stem {
-                resolved_imports.insert(ModulePathKey::from_path(import_path), self_dag_id.clone());
+                resolved_imports.insert(
+                    key,
+                    InlineBodyImportResolution::Resolved(self_dag_id.clone()),
+                );
+            } else {
+                resolved_imports.insert(key, InlineBodyImportResolution::Unresolved);
             }
         }
         out.push(LoadedDag {
@@ -990,6 +1021,31 @@ mod tests {
         assert_eq!(project.load_order.len(), 1);
         let root_file = &project.files[&project.root];
         assert_eq!(root_file.source.as_str(), source);
+    }
+
+    #[test]
+    fn inline_dag_unresolved_body_import_is_recorded_explicitly() {
+        let source = r"
+dag calc {
+  import missing.{x};
+  param input: Dimensionless = 1.0;
+  pub node output: Dimensionless = @input;
+}
+";
+        let project = LoadedProject::from_source(source, "test.gcl").unwrap();
+        let root_file = &project.files[&project.root];
+        let loaded_dag = root_file
+            .inline_dags
+            .iter()
+            .find(|dag| dag.name == "calc")
+            .expect("inline DAG should be lifted");
+
+        assert!(
+            loaded_dag
+                .resolved_imports
+                .values()
+                .any(|resolution| { matches!(resolution, InlineBodyImportResolution::Unresolved) })
+        );
     }
 
     #[test]

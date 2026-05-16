@@ -31,6 +31,28 @@ use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type, type_resolve
 
 use crate::loader::LoadedDag;
 
+/// Parent-file value declarations visible to an inline DAG self-import
+/// classifier.
+#[derive(Debug, Clone, Default)]
+pub struct ParentValueDecls {
+    consts: HashMap<DeclName, DeclaredType>,
+    runtime: HashSet<DeclName>,
+}
+
+impl ParentValueDecls {
+    fn const_type(&self, name: &str) -> Option<&DeclaredType> {
+        self.consts.get(name)
+    }
+
+    fn is_runtime(&self, name: &str) -> bool {
+        self.runtime.contains(name)
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.const_type(name).is_some() || self.is_runtime(name)
+    }
+}
+
 /// Compile each inline `dag { ... }` body lifted by the loader into a
 /// `DagTIR` and insert it into `tir.dags`, keyed by the loader-supplied
 /// canonical [`DagId`](DagId).
@@ -56,7 +78,7 @@ pub fn compile_inline_dag_bodies(
     // Read parent's value decls directly from the (already type-resolved)
     // root DagTIR. With the flat registry, `tir.root()` IS the parent
     // file's body — no separate `ParentValueKind` table needed.
-    let (parent_consts, parent_runtime_names) = classify_value_decls_in_tir(tir, src)?;
+    let parent_values = classify_value_decls_in_tir(tir, src)?;
     let parent_type_system_names = type_system_names_from_registry(&tir.registry);
 
     for loaded_dag in inline_dags {
@@ -69,8 +91,7 @@ pub fn compile_inline_dag_bodies(
             &loaded_dag.body,
             parent_dag_id,
             &parent_type_system_names,
-            &parent_consts,
-            &parent_runtime_names,
+            &parent_values,
             parent_pub_names,
             &loaded_dag.resolved_imports,
             src,
@@ -123,18 +144,16 @@ pub fn compile_inline_dag_bodies(
 /// Returns a [`GraphcalError`] if a self-import names a runtime declaration
 /// (param/node), a private declaration (no `pub`), or a name that does not
 /// exist in the parent.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "self-import classification needs parent's type-system, const, runtime, and pub views"
-)]
 pub fn preprocess_dag_body_self_imports(
     body: &[Declaration],
     parent_dag_id: &DagId,
     parent_type_system_names: &HashSet<String>,
-    parent_consts: &HashMap<String, DeclaredType>,
-    parent_runtime_names: &HashSet<String>,
+    parent_values: &ParentValueDecls,
     parent_pub_names: &HashSet<DeclName>,
-    body_resolved_imports: &HashMap<crate::loader::ModulePathKey, DagId>,
+    body_resolved_imports: &HashMap<
+        crate::loader::ModulePathKey,
+        crate::loader::InlineBodyImportResolution,
+    >,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagBodySelfImports, GraphcalError> {
     let mut names = ImportedValueNames::default();
@@ -150,7 +169,13 @@ pub fn preprocess_dag_body_self_imports(
 
         let is_self_import = body_resolved_imports
             .get(&crate::loader::ModulePathKey::from_path(&import_decl.path))
-            .is_some_and(|dag_id| dag_id == parent_dag_id);
+            .is_some_and(|resolution| {
+                matches!(
+                    resolution,
+                    crate::loader::InlineBodyImportResolution::Resolved(dag_id)
+                        if dag_id == parent_dag_id
+                )
+            });
         if !is_self_import {
             stripped_body.push(decl.clone());
             continue;
@@ -164,10 +189,10 @@ pub fn preprocess_dag_body_self_imports(
                     let span = item.name.span;
                     let exists_as_type_system =
                         parent_type_system_names.contains(orig_name.as_str());
-                    let const_dt = parent_consts.get(orig_name.as_str());
-                    let is_runtime = parent_runtime_names.contains(orig_name.as_str());
+                    let const_dt = parent_values.const_type(orig_name.as_str());
+                    let is_runtime = parent_values.is_runtime(orig_name.as_str());
 
-                    if !exists_as_type_system && const_dt.is_none() && !is_runtime {
+                    if !exists_as_type_system && !parent_values.contains(orig_name.as_str()) {
                         return Err(GraphcalError::ImportNameNotFound {
                             name: orig_name.clone(),
                             file_path: import_decl.path.display_path(),
@@ -237,26 +262,25 @@ pub fn preprocess_dag_body_self_imports(
 /// dim-check time.
 pub fn classify_value_decls_in_ast(
     ast: &graphcal_compiler::desugar::resolved_ast::File,
-) -> (HashMap<String, DeclaredType>, HashSet<String>) {
+) -> ParentValueDecls {
     let placeholder =
         || DeclaredType::Scalar(graphcal_compiler::syntax::dimension::Dimension::dimensionless());
-    let mut consts: HashMap<String, DeclaredType> = HashMap::new();
-    let mut runtime_names: HashSet<String> = HashSet::new();
+    let mut values = ParentValueDecls::default();
     for decl in &ast.declarations {
         match &decl.kind {
             DeclKind::ConstNode(c) => {
-                consts.insert(c.name.value.to_string(), placeholder());
+                values.consts.insert(c.name.value.clone(), placeholder());
             }
             DeclKind::Param(p) => {
-                runtime_names.insert(p.name.value.to_string());
+                values.runtime.insert(p.name.value.clone());
             }
             DeclKind::Node(n) => {
-                runtime_names.insert(n.name.value.to_string());
+                values.runtime.insert(n.name.value.clone());
             }
             _ => {}
         }
     }
-    (consts, runtime_names)
+    values
 }
 
 /// Classify the value-kind decls of a type-resolved root [`TIR`] into the
@@ -273,24 +297,23 @@ pub fn classify_value_decls_in_ast(
 fn classify_value_decls_in_tir(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<(HashMap<String, DeclaredType>, HashSet<String>), GraphcalError> {
+) -> Result<ParentValueDecls, GraphcalError> {
     let root = tir.root();
-    let mut consts: HashMap<String, DeclaredType> = HashMap::new();
+    let mut values = ParentValueDecls::default();
     for entry in &root.consts {
         let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
             continue;
         };
-        consts.insert(
-            entry.name.member().to_string(),
+        values.consts.insert(
+            DeclName::new(entry.name.member()),
             resolved_to_declared_type(resolved, src)?,
         );
     }
-    let mut runtime_names: HashSet<String> = HashSet::new();
     for entry in &root.params {
-        runtime_names.insert(entry.name.member().to_string());
+        values.runtime.insert(DeclName::new(entry.name.member()));
     }
     for entry in &root.nodes {
-        runtime_names.insert(entry.name.member().to_string());
+        values.runtime.insert(DeclName::new(entry.name.member()));
     }
-    Ok((consts, runtime_names))
+    Ok(values)
 }
