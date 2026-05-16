@@ -820,12 +820,24 @@ fn collect_imported_definitions(
         match kind {
             graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) => {
                 for import_item in items {
-                    let original_key = SymbolKey::TopLevel(import_item.name.name.clone());
-                    let Some(def) = imported_table.definitions.get(&original_key) else {
-                        continue;
-                    };
-                    let local_key = SymbolKey::TopLevel(import_item.local_name().to_string());
-                    insert_imported_def(&mut result, local_key, imported_uri, source, def);
+                    let original_name = import_item.name.name.clone();
+                    let local_name = import_item.local_name().to_string();
+                    // Bring across the named definition itself plus every
+                    // related entry that "belongs to" that name in the
+                    // imported file's table: variants of an index/union,
+                    // fields of a struct, and qualified body members of a
+                    // DAG. Without this, goto-def / hover / find-references
+                    // on tokens like `Color.Red` (variant) or `@scale(...).out`
+                    // (DAG body member) miss because their non-TopLevel keys
+                    // would never travel with the selective import.
+                    for (key, def) in &imported_table.definitions {
+                        let Some(local_key) =
+                            rekey_selective_import(key, &original_name, &local_name)
+                        else {
+                            continue;
+                        };
+                        insert_imported_def(&mut result, local_key, imported_uri, source, def);
+                    }
                 }
             }
             graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
@@ -837,16 +849,7 @@ fn collect_imported_definitions(
                     |alias_ident| alias_ident.name.clone(),
                 );
                 for (key, def) in &imported_table.definitions {
-                    let qualified_key = match key {
-                        SymbolKey::TopLevel(name) => SymbolKey::Qualified {
-                            // The module alias here is a single identifier
-                            // segment; lift it into the structured form to
-                            // match other Qualified construction sites.
-                            module: vec![module_name.clone()],
-                            name: name.clone(),
-                        },
-                        other => other.clone(),
-                    };
+                    let qualified_key = rekey_module_import(key, &module_name);
                     insert_imported_def(&mut result, qualified_key, imported_uri, source, def);
                 }
             }
@@ -854,6 +857,68 @@ fn collect_imported_definitions(
     }
 
     result
+}
+
+/// Re-key an imported-file table entry for a selective import (`import lib.{X};`).
+///
+/// Returns `Some(local_key)` if `key` denotes the imported name `original` or
+/// something semantically attached to it (its variants, fields, qualified body
+/// members) — with the parent / qualifier rewritten to the local alias `local`.
+/// Returns `None` for unrelated entries.
+fn rekey_selective_import(key: &SymbolKey, original: &str, local: &str) -> Option<SymbolKey> {
+    match key {
+        SymbolKey::TopLevel(name) if name == original => {
+            Some(SymbolKey::TopLevel(local.to_string()))
+        }
+        SymbolKey::Variant { parent, variant } if parent == original => Some(SymbolKey::Variant {
+            parent: local.to_string(),
+            variant: variant.clone(),
+        }),
+        SymbolKey::Field {
+            struct_name,
+            field_name,
+        } if struct_name == original => Some(SymbolKey::Field {
+            struct_name: local.to_string(),
+            field_name: field_name.clone(),
+        }),
+        SymbolKey::Qualified { module, name } if module.first().is_some_and(|m| m == original) => {
+            let mut rekeyed = Vec::with_capacity(module.len());
+            rekeyed.push(local.to_string());
+            rekeyed.extend(module.iter().skip(1).cloned());
+            Some(SymbolKey::Qualified {
+                module: rekeyed,
+                name: name.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Re-key an imported-file table entry for a module import (`import lib as m;`).
+///
+/// `TopLevel(x)` becomes `Qualified { module: [m], name: x }`. `Qualified` keys
+/// nest the module alias as a new outer segment so `Qualified { module: [dag], name: out }`
+/// in the imported file becomes `Qualified { module: [m, dag], name: out }` here —
+/// matching the call-site key produced for `@m.dag(args).out`. Non-addressable
+/// keys (`Variant`, `Field`, `ExprScoped`) pass through unchanged since the
+/// grammar gives the caller no way to qualify them with the module alias.
+fn rekey_module_import(key: &SymbolKey, module_name: &str) -> SymbolKey {
+    match key {
+        SymbolKey::TopLevel(name) => SymbolKey::Qualified {
+            module: vec![module_name.to_string()],
+            name: name.clone(),
+        },
+        SymbolKey::Qualified { module, name } => {
+            let mut nested = Vec::with_capacity(module.len() + 1);
+            nested.push(module_name.to_string());
+            nested.extend(module.iter().cloned());
+            SymbolKey::Qualified {
+                module: nested,
+                name: name.clone(),
+            }
+        }
+        other => other.clone(),
+    }
 }
 
 /// Record a symbol from an imported file as visible in the current file under
@@ -1609,6 +1674,145 @@ node bad: Mass = mass + length;
         assert!(
             analysis.imported_definitions.contains_key(&renamed_key),
             "expected imported definition keyed by local alias `renamed`, got: {:?}",
+            analysis.imported_definitions.keys().collect::<Vec<_>>(),
+        );
+    }
+
+    /// Issue #631 case 1+2: `@module.dag(args).out` — both the DAG name and
+    /// the output projection must resolve to the imported library file.
+    #[test]
+    fn goto_definition_resolves_cross_file_inline_dag_call() {
+        use crate::resolve::{SymbolLocation, resolve_symbol_at};
+
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"lib\"\n"),
+            (
+                "src/lib/lib.gcl",
+                "pub dim Velocity = Length / Time;\n\
+                 pub dag scale {\n    \
+                     param factor: Dimensionless;\n    \
+                     param v: Velocity;\n    \
+                     pub node result: Velocity = @v * @factor;\n\
+                 }\n",
+            ),
+            (
+                "src/lib/main.gcl",
+                "import lib.lib as lib;\n\
+                 param speed: Velocity = 10.0 m/s;\n\
+                 node doubled: Velocity = @lib.scale(factor: 2.0, v: @speed).result;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/lib/main.gcl");
+        let lib_path = dir.path().join("src/lib/lib.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        // Cursor on `scale` inside `@lib.scale(...)`.
+        let scale_offset = text.find("scale").expect("scale token in main.gcl");
+        let scale_resolved =
+            resolve_symbol_at(&analysis, scale_offset + 1).expect("resolve `scale`");
+        let SymbolLocation::Imported(scale_imported) = scale_resolved.location else {
+            panic!("expected `scale` to resolve to an imported definition");
+        };
+        assert_eq!(scale_imported.uri, lib_uri, "scale should jump to lib.gcl");
+
+        // Cursor on `result` (the output projection).
+        let result_offset = text.find(").result").expect("`.result` projection") + 2;
+        let result_resolved =
+            resolve_symbol_at(&analysis, result_offset).expect("resolve `result`");
+        let SymbolLocation::Imported(result_imported) = result_resolved.location else {
+            panic!("expected `result` to resolve to an imported definition");
+        };
+        assert_eq!(
+            result_imported.uri, lib_uri,
+            "result should jump to lib.gcl"
+        );
+    }
+
+    /// Issue #631 case 3: variants of a selectively-imported index must
+    /// resolve back to the library file that declared them.
+    #[test]
+    fn goto_definition_resolves_variant_of_selectively_imported_index() {
+        use crate::resolve::{SymbolLocation, resolve_symbol_at};
+
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"lib\"\n"),
+            (
+                "src/lib/lib.gcl",
+                "pub index Color = { Red, Green, Blue };\n\
+                 param dummy: Dimensionless = 0.0;\n",
+            ),
+            (
+                "src/lib/main.gcl",
+                "import lib.lib.{ Color };\n\
+                 param favorite: Dimensionless[Color] = {\n    \
+                     Color.Red: 1.0,\n    \
+                     Color.Green: 2.0,\n    \
+                     Color.Blue: 3.0,\n\
+                 };\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/lib/main.gcl");
+        let lib_path = dir.path().join("src/lib/lib.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        // Cursor on `Red` inside `Color.Red:`.
+        let red_offset = text.find("Color.Red").expect("Color.Red token") + "Color.".len();
+        let red_resolved = resolve_symbol_at(&analysis, red_offset + 1).expect("resolve `Red`");
+        let SymbolLocation::Imported(red_imported) = red_resolved.location else {
+            panic!("expected `Red` to resolve to an imported definition");
+        };
+        assert_eq!(red_imported.uri, lib_uri, "Red should jump to lib.gcl");
+    }
+
+    /// A selective-imported alias should also bring across the variants of the
+    /// underlying index, keyed under the local alias.
+    #[test]
+    fn selectively_imported_index_brings_variants_under_local_alias() {
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"lib\"\n"),
+            (
+                "src/lib/lib.gcl",
+                "pub index Color = { Red, Green, Blue };\n\
+                 param dummy: Dimensionless = 0.0;\n",
+            ),
+            (
+                "src/lib/main.gcl",
+                "import lib.lib.{ Color as Palette };\n\
+                 param favorite: Dimensionless[Palette] = {\n    \
+                     Palette.Red: 1.0,\n    \
+                     Palette.Green: 2.0,\n    \
+                     Palette.Blue: 3.0,\n\
+                 };\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/lib/main.gcl");
+        let uri = Url::from_file_path(&main_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&uri, &text);
+
+        let palette_red_key = crate::symbol_table::SymbolKey::Variant {
+            parent: "Palette".to_string(),
+            variant: "Red".to_string(),
+        };
+        assert!(
+            analysis.imported_definitions.contains_key(&palette_red_key),
+            "expected imported variant under local alias `Palette.Red`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
     }
