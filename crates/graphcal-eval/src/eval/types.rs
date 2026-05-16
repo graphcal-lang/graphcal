@@ -528,3 +528,28 @@ pub enum CompileError {
     #[diagnostic(transparent)]
     Eval(#[from] graphcal_compiler::registry::error::GraphcalError),
 }
+
+impl CompileError {
+    /// Return the `NamedSource` embedded in this error, if any.
+    ///
+    /// Forwards to the inner
+    /// [`ParseError::named_source`](graphcal_compiler::syntax::parser::ParseError::named_source)
+    /// or
+    /// [`GraphcalError::named_source`](graphcal_compiler::registry::error::GraphcalError::named_source).
+    /// When present, the returned
+    /// `NamedSource` pairs the file's name with the exact source text whose
+    /// byte offsets the error's labels index into — so diagnostic emitters
+    /// can build a line index over the right text without having to look it
+    /// up by name.
+    ///
+    /// `ParseError` always carries a source; `GraphcalError` may return
+    /// `None` for a few variants representing source-less errors (e.g.
+    /// `FileNotFound`, `CircularImport`).
+    #[must_use]
+    pub const fn named_source(&self) -> Option<&miette::NamedSource<std::sync::Arc<String>>> {
+        match self {
+            Self::Parse(e) => Some(e.named_source()),
+            Self::Eval(e) => e.named_source(),
+        }
+    }
+}

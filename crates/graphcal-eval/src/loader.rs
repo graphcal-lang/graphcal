@@ -315,12 +315,15 @@ fn load_file_dfs<F: FileSystemReader>(
         .map_err(|_| io_not_found(canonical_path))?;
     let source = Arc::new(source_str);
 
-    let name = canonical_path
-        .file_name()
-        .map_or_else(|| display_name.clone(), |n| n.to_string_lossy().to_string());
-    let named_source = graphcal_compiler::syntax::named_source(&name, Arc::clone(&source));
+    // Use the canonical path as the NamedSource name (not just the basename).
+    // Downstream diagnostic emitters can recover the file URL via
+    // `Url::from_file_path(Path::new(name))` without an external resolver,
+    // and basename ambiguity (two `lib.gcl`s in different packages) cannot
+    // arise. The CLI's miette renderer trims this for display anyway.
+    let name = display_name.as_str();
+    let named_source = graphcal_compiler::syntax::named_source(name, Arc::clone(&source));
     let raw_ast =
-        graphcal_compiler::syntax::parser::Parser::with_name(&source, &name).parse_file()?;
+        graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
     let mut desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
     graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
     let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);

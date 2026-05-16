@@ -208,6 +208,35 @@ pub enum ParseError {
     },
 }
 
+impl ParseError {
+    /// Return the `NamedSource` embedded in this error.
+    ///
+    /// Every variant carries the file's name and full source text via miette's
+    /// `#[source_code]` field. Exposing it as a typed accessor lets diagnostic
+    /// emitters pair the error's offsets with the exact source they index into
+    /// — instead of inferring (name, source) from external context, which can
+    /// silently desynchronize when an imported file is the origin.
+    #[must_use]
+    pub const fn named_source(&self) -> &NamedSource<Arc<String>> {
+        match self {
+            Self::UnexpectedToken { src, .. }
+            | Self::UnexpectedEof { src, .. }
+            | Self::InvalidNumber { src, .. }
+            | Self::TableRowLengthMismatch { src, .. }
+            | Self::InvalidDomainBoundKey { src, .. }
+            | Self::UnknownToken { src, .. }
+            | Self::MultiDeclTupleArity { src, .. }
+            | Self::MultiDeclHeaderArity { src, .. }
+            | Self::MultiDeclRowArity { src, .. }
+            | Self::MultiDeclSingleSlot { src, .. }
+            | Self::MultiDeclNoSharedAxis { src, .. }
+            | Self::MultiDeclUnsupportedShape { src, .. }
+            | Self::IndexVariantPatternWithBindings { src, .. }
+            | Self::InlineDagCallMissingProjection { src, .. } => src,
+        }
+    }
+}
+
 pub struct Parser<'src> {
     pub(super) lexer: Lexer<'src>,
     pub(super) source: Arc<String>,

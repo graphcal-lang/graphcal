@@ -92,11 +92,18 @@ pub fn eval_result_to_diagnostics(
 /// Convert a `CompileError` to LSP diagnostics, grouped by the URI of the
 /// source file the error actually belongs to.
 ///
-/// Each label's offset is interpreted against the source name carried by the
-/// diagnostic's `source_code` (typically the imported file's basename). The
-/// `resolve` callback maps that name to a (URI, source-text) pair so a parse
-/// or type error in `helper.gcl` is published on `helper.gcl`'s URI with
-/// offsets resolved against `helper.gcl`'s text — not the importer's.
+/// The (URI, source) pair is read directly from the error's
+/// [`CompileError::named_source`]: the source text is the exact buffer whose
+/// byte offsets the error's labels index into, and the URI is parsed from the
+/// name miette already carries on the source. This makes it structurally
+/// impossible to pair offsets from one file with the line index of another —
+/// e.g., an `import`ed file's parse error cannot be rendered against the
+/// importer's text, no matter how nested the import graph is.
+///
+/// `fallback_uri` is used only for source-less errors (loader-stage
+/// `FileNotFound`, `CircularImport`, `ManifestError`) and as a last-ditch
+/// fallback when the error's source name can be neither parsed as a URL nor
+/// converted from a file path (e.g., synthetic test names).
 ///
 /// When an error has multiple labeled spans (e.g., "duplicate definition here" +
 /// "first defined here"), the first label becomes the primary diagnostic and the
@@ -106,30 +113,27 @@ pub fn eval_result_to_diagnostics(
 pub fn compile_error_to_diagnostics_grouped(
     error: &CompileError,
     fallback_uri: &Url,
-    fallback_source: &str,
-    resolve: impl Fn(&str) -> Option<(Url, String)>,
 ) -> HashMap<Url, Vec<Diagnostic>> {
     let diag: &dyn miette::Diagnostic = match error {
         CompileError::Parse(e) => e,
         CompileError::Eval(e) => e,
     };
 
-    let (uri, source) = diag
-        .source_code()
-        .and_then(|sc| sc.read_span(&(0, 0).into(), 0, 0).ok())
-        .and_then(|data| {
-            let name = data.name()?;
-            // First try treating the name as a parseable URL or absolute path.
-            // Otherwise defer to the resolver, which knows about loaded files.
-            Url::parse(name)
+    // Source-less errors carry no labels either, so an empty source is safe
+    // for the LineIndex (which is unused when there are no labels).
+    let (uri, source) = error.named_source().map_or_else(
+        || (fallback_uri.clone(), ""),
+        |ns| {
+            let name = ns.name();
+            let uri = Url::parse(name)
                 .ok()
                 .or_else(|| Url::from_file_path(name).ok())
-                .map(|u| (u, fallback_source.to_string()))
-                .or_else(|| resolve(name))
-        })
-        .unwrap_or_else(|| (fallback_uri.clone(), fallback_source.to_string()));
+                .unwrap_or_else(|| fallback_uri.clone());
+            (uri, ns.inner().as_str())
+        },
+    );
 
-    let diags = compile_error_to_diagnostics_in_source(diag, &source, &uri);
+    let diags = compile_error_to_diagnostics_in_source(diag, source, &uri);
 
     let mut grouped: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
     grouped.insert(uri, diags);
@@ -205,11 +209,11 @@ fn compile_error_to_diagnostics_in_source(
 }
 
 #[cfg(test)]
-fn compile_error_to_diagnostics(error: &CompileError, source: &str) -> Vec<Diagnostic> {
+fn compile_error_to_diagnostics(error: &CompileError) -> Vec<Diagnostic> {
     // Static URL literal — always parses.
     #[expect(clippy::unwrap_used, reason = "static URL literal is always valid")]
     let fallback_uri = Url::parse("file:///unknown").unwrap();
-    compile_error_to_diagnostics_grouped(error, &fallback_uri, source, |_| None)
+    compile_error_to_diagnostics_grouped(error, &fallback_uri)
         .into_values()
         .flatten()
         .collect()
@@ -252,7 +256,7 @@ mod tests {
         let symbol_table = build_symbol_table(source);
         match compile_and_eval_named(source, name) {
             Ok(result) => eval_result_to_diagnostics(&result, source, &symbol_table),
-            Err(e) => compile_error_to_diagnostics(&e, source),
+            Err(e) => compile_error_to_diagnostics(&e),
         }
     }
 
@@ -260,7 +264,7 @@ mod tests {
         let symbol_table = build_symbol_table(source);
         match compile_and_eval_project(path, &HashMap::new(), None, &RealFileSystem::default()) {
             Ok(result) => eval_result_to_diagnostics(&result, source, &symbol_table),
-            Err(e) => compile_error_to_diagnostics(&e, source),
+            Err(e) => compile_error_to_diagnostics(&e),
         }
     }
 

@@ -363,59 +363,6 @@ fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Bo
     }
 }
 
-/// Build a resolver that maps a diagnostic's source name (typically the
-/// imported file's basename) to its (URI, source-text) pair, using the loaded
-/// project as the lookup table.
-fn build_source_resolver(project: &LoadedProject) -> impl Fn(&str) -> Option<(Url, String)> + '_ {
-    move |name: &str| {
-        project.files.values().find_map(|f| {
-            let basename = f.path.file_name().map(|s| s.to_string_lossy());
-            let matches = basename.as_deref() == Some(name) || f.path.to_string_lossy() == name;
-            if !matches {
-                return None;
-            }
-            let uri = Url::from_file_path(&f.path).ok()?;
-            Some((uri, f.source.as_str().to_string()))
-        })
-    }
-}
-
-/// Fallback resolver used when no project loaded: resolve the diagnostic's
-/// source name as a sibling of the active URI's file. Reads the file off
-/// disk to recover the source text. Returns None if the file can't be read
-/// or if it would escape the active file's directory.
-///
-/// This exists so that an unparsable imported file still routes its
-/// diagnostic to the right URI even when `load_project` itself failed.
-///
-/// # Sandboxing
-///
-/// The candidate path (canonicalized) must stay under the active file's
-/// canonicalized parent directory. This rejects `..` traversal and absolute
-/// `name` inputs even when no `graphcal.toml` is in play, matching the
-/// function's "sibling" intent rather than allowing arbitrary disk reads.
-fn sibling_file_resolver(active_uri: &Url) -> impl Fn(&str) -> Option<(Url, String)> + '_ {
-    move |name: &str| {
-        let active_path = active_uri.to_file_path().ok()?;
-        let parent = active_path.parent()?;
-        let candidate = parent.join(name);
-
-        // Canonical forms gate the sandbox check; the read and the resulting
-        // URI keep the un-canonicalized form so URIs stay byte-identical to
-        // what the loader and downstream resolvers produce (no surprise
-        // /private/var prefix on macOS, no symlink resolution).
-        let canonical_parent = parent.canonicalize().ok()?;
-        let canonical_candidate = candidate.canonicalize().ok()?;
-        if !canonical_candidate.starts_with(&canonical_parent) {
-            return None;
-        }
-
-        let source = std::fs::read_to_string(&candidate).ok()?;
-        let uri = Url::from_file_path(&candidate).ok()?;
-        Some((uri, source))
-    }
-}
-
 /// Wrap a single-URI diagnostic vec into the per-URI map shape so the active
 /// document's URI is always present (even when empty) and so eval diagnostics
 /// — which always belong to the active file — sit alongside any cross-file
@@ -440,20 +387,25 @@ pub(crate) fn run_analysis_for_test(uri: &Url, text: &str) -> AnalysisResult {
 
 fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
     // Stage 1: Build project (parse + load imports).
-    // If this fails, no AST is available — return minimal diagnostics.
+    // If this fails, no AST is available for the multi-file pipeline. Fall
+    // back to parsing just the active buffer so hover/goto-def on the active
+    // file's own symbols still answer — the imported-file error remains
+    // visible, but local LSP features degrade gracefully.
     let project = match build_project(uri, text) {
         Ok(project) => project,
         Err(e) => {
-            // No loaded project, but the diagnostic's source name might point
-            // at a sibling file we can resolve by joining onto the active
-            // URI's directory (this is enough for "imported file failed to
-            // parse" — the common case).
-            let resolve = sibling_file_resolver(uri);
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri, text, &resolve);
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri);
             diagnostics.entry(uri.clone()).or_default();
+            let symbol_table = LoadedProject::from_source(text, uri.as_str())
+                .ok()
+                .map(|single| {
+                    let root_ast = &single.files[&single.root].ast;
+                    symbol_table::build_from_ast(root_ast, text)
+                })
+                .unwrap_or_default();
             return AnalysisResult {
                 source: Arc::new(text.to_string()),
-                symbol_table: SymbolTable::default(),
+                symbol_table,
                 imported_definitions: HashMap::new(),
                 diagnostics: Arc::new(diagnostics),
                 eval_values: HashMap::new(),
@@ -465,7 +417,6 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
 
     let root_ast = &project.files[&project.root].ast;
     let import_links = collect_import_links(&project);
-    let resolve = build_source_resolver(&project);
 
     // Stage 2: Compile TIR from the project.
     match compile_to_tir_from_project(&project) {
@@ -501,7 +452,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             // TIR failed (type/dim error) but parse succeeded — use AST for partial info.
             let symbol_table = symbol_table::build_from_ast(root_ast, text);
             let imported_definitions = collect_imported_definitions(uri, &project, None);
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri, text, &resolve);
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri);
             diagnostics.entry(uri.clone()).or_default();
 
             AnalysisResult {
@@ -531,8 +482,7 @@ fn run_eval_from_project(
             (diagnostics_for_active_uri(uri, diagnostics), values)
         }
         Err(e) => {
-            let resolve = build_source_resolver(project);
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri, text, &resolve);
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri);
             diagnostics.entry(uri.clone()).or_default();
             (diagnostics, HashMap::new())
         }
@@ -1542,8 +1492,12 @@ node bad: Mass = mass + length;
         ]);
         let main_path = dir.path().join("src/helper/main.gcl");
         let helper_path = dir.path().join("src/helper/lib.gcl");
-        let main_uri = Url::from_file_path(&main_path).unwrap();
-        let helper_uri = Url::from_file_path(&helper_path).unwrap();
+        // The loader stores the canonical path on every NamedSource, so the
+        // diagnostic's URI is built from the canonical form too. Canonicalize
+        // here so the test matches what the LSP actually publishes (on macOS,
+        // this turns `/var/folders/...` into `/private/var/folders/...`).
+        let main_uri = Url::from_file_path(main_path.canonicalize().unwrap()).unwrap();
+        let helper_uri = Url::from_file_path(helper_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
         let analysis = run_analysis(&main_uri, &text);
 
@@ -1565,6 +1519,66 @@ node bad: Mass = mass + length;
         assert!(
             main_diags.is_empty(),
             "main.gcl should not carry the parse error from the imported file; got: {main_diags:?}",
+        );
+        // The diagnostic's range must come from helper.gcl's offsets indexed
+        // against helper.gcl's text — not main.gcl's. helper.gcl's content is
+        // "this is not valid graphcal" (one line); the parse error fires on
+        // the first token, so the range must start at line 0 with a small
+        // column. If the bug regressed (offsets indexed against main.gcl),
+        // either the column would diverge or the start position would be off
+        // entirely.
+        let primary = &helper_diags[0];
+        assert_eq!(primary.range.start.line, 0);
+        assert!(
+            primary.range.end.character <= u32::try_from("this".len()).unwrap(),
+            "expected range bounded by the first token of helper.gcl, got: {:?}",
+            primary.range,
+        );
+    }
+
+    #[test]
+    fn parse_error_in_non_sibling_imported_file_routes_to_imported_uri() {
+        // Regression guard for the structural-source/offset bug: when the
+        // failing import is *not* a sibling of the active buffer (here, an
+        // extra `util/` directory between main.gcl and lib.gcl), the
+        // diagnostic must still land on lib.gcl's URI with offsets indexed
+        // against lib.gcl's text. The pre-fix code's sibling resolver would
+        // fail to find lib.gcl from main.gcl's directory, leak the error
+        // onto main.gcl's URI, and clamp the offset against main.gcl's line
+        // index — producing a misleading squiggle on innocent code.
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"helper\"\n"),
+            ("src/helper/util/lib.gcl", "this is not valid graphcal"),
+            (
+                "src/helper/main.gcl",
+                "import helper.util.lib.{y};\nnode z: Dimensionless = 1.0;",
+            ),
+        ]);
+        let main_path = dir.path().join("src/helper/main.gcl");
+        let lib_path = dir.path().join("src/helper/util/lib.gcl");
+        let main_uri = Url::from_file_path(main_path.canonicalize().unwrap()).unwrap();
+        let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text);
+
+        let lib_diags = analysis
+            .diagnostics
+            .get(&lib_uri)
+            .cloned()
+            .unwrap_or_default();
+        let main_diags = analysis
+            .diagnostics
+            .get(&main_uri)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !lib_diags.is_empty(),
+            "expected parse error in util/lib.gcl to surface on its own URI even when not a sibling of main.gcl; full map: {:?}",
+            analysis.diagnostics,
+        );
+        assert!(
+            main_diags.is_empty(),
+            "main.gcl must not carry the parse error from a non-sibling import; got: {main_diags:?}",
         );
     }
 
@@ -1597,34 +1611,5 @@ node bad: Mass = mass + length;
             "expected imported definition keyed by local alias `renamed`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
-    }
-
-    #[test]
-    fn sibling_file_resolver_resolves_siblings() {
-        let dir = write_project(&[("main.gcl", "ok"), ("helper.gcl", "helper-content")]);
-        let main_uri = Url::from_file_path(dir.path().join("main.gcl")).unwrap();
-        let resolve = sibling_file_resolver(&main_uri);
-        let (uri, source) = resolve("helper.gcl").expect("sibling should resolve");
-        assert_eq!(source, "helper-content");
-        assert_eq!(
-            uri.to_file_path().unwrap().canonicalize().unwrap(),
-            dir.path().join("helper.gcl").canonicalize().unwrap(),
-        );
-    }
-
-    #[test]
-    fn sibling_file_resolver_rejects_parent_traversal() {
-        // A `..`-traversal in the source name must not let the resolver read
-        // arbitrary files off disk. The candidate path canonicalizes outside
-        // the active file's parent and is rejected.
-        let outer = tempfile::tempdir().unwrap();
-        std::fs::write(outer.path().join("secret"), "secret-content").unwrap();
-        let inner = outer.path().join("project");
-        std::fs::create_dir(&inner).unwrap();
-        std::fs::write(inner.join("main.gcl"), "ok").unwrap();
-
-        let main_uri = Url::from_file_path(inner.join("main.gcl")).unwrap();
-        let resolve = sibling_file_resolver(&main_uri);
-        assert!(resolve("../secret").is_none());
     }
 }
