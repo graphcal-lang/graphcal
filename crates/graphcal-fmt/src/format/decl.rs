@@ -420,6 +420,9 @@ fn format_import_or_include_kind(
                     if item.is_pub {
                         doc = doc.append(RcDoc::text("pub "));
                     }
+                    if item.namespace == graphcal_compiler::syntax::ast::ImportItemNamespace::Type {
+                        doc = doc.append(RcDoc::text("type "));
+                    }
                     doc = doc.append(RcDoc::text(item.name.name.clone()));
                     if let Some(ref alias) = item.alias {
                         doc = doc

@@ -375,7 +375,9 @@ index_decl
 
 (* --- import --- *)
 (* Import brings names (types, dimensions, units, consts, dags,
-   indexes) into the current scope. No param bindings -- for DAG
+   indexes) into the current scope. Type names are imported from the
+   type namespace with an explicit `type` marker; bare items target the
+   default compile-time namespace. No param bindings -- for DAG
    instantiation with param bindings, use `include`.
 
    All paths are dot-separated and absolute from a package root.
@@ -390,7 +392,7 @@ index_decl
                           (brings: rocket -- the module leaf)
    2. Module with alias:  import nasa.rocket as nr;
                           (brings: nr)
-   3. Brace list:         import nasa.rocket.{Orbit, compute_thrust as ct};
+   3. Brace list:         import nasa.rocket.{type Orbit, compute_thrust as ct};
                           (brings: only the listed names; the brace
                            form does NOT also bring the module leaf)
 
@@ -417,12 +419,13 @@ import_item_list
    = import_item, { ",", import_item }, [ "," ];
 
 import_item
-   = { attribute }, [ "pub" ], IDENT, [ "as", IDENT ];
+   = { attribute }, [ "pub" ], [ "type" ], IDENT, [ "as", IDENT ];
 
 (* `pub` inside the brace list marks the item for re-export at the
    importer (issue #452). Mixing whole-module `pub` (on the outer
    import/include) with selective `pub` inside the brace list is
-   rejected. *)
+   rejected. The `type` marker is valid only on `import` items, not on
+   `include` output selectors. *)
 
 (* --- include --- *)
 (* Include instantiates a DAG with optional param bindings, embedding

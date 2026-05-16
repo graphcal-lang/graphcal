@@ -13,7 +13,7 @@ param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;
 
 dag hohmann_transfer {
-    import hohmann.{ TransferResult, r_earth, gm_earth };
+    import hohmann.{ type TransferResult, r_earth, gm_earth };
     
     param parking_alt: Length;
     

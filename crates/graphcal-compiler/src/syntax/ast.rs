@@ -436,6 +436,7 @@ pub struct ParamBinding<P: Phase = Raw> {
 ///
 /// Example: `name1 as local_name` → `ImportItem { name: "name1", alias: Some("local_name") }`
 /// Example: `name1` → `ImportItem { name: "name1", alias: None }`
+/// Example: `type name1` → imports from the type namespace.
 /// Example: `pub name1` → re-exported at the importer (selective form).
 #[derive(Debug, Clone)]
 pub struct ImportItem {
@@ -443,10 +444,22 @@ pub struct ImportItem {
     pub attributes: Vec<Attribute>,
     /// Whether this item is re-exported (`pub` prefix) from the importer.
     pub is_pub: bool,
+    /// Which namespace this selective import targets.
+    pub namespace: ImportItemNamespace,
     /// The original name from the imported file.
     pub name: Ident,
     /// Optional local alias (introduced by `as`).
     pub alias: Option<Ident>,
+}
+
+/// Namespace targeted by a single selective import item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportItemNamespace {
+    /// Default compile-time namespace: consts, dimensions, units, indexes,
+    /// DAGs, assertions, and other non-type importable items.
+    Default,
+    /// Type namespace, written with the `type` marker.
+    Type,
 }
 
 impl ImportItem {

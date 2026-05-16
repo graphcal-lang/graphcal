@@ -1,0 +1,3 @@
+import academy.lib.{ Student };
+
+node learner: Student = Student(mass: 70.0 kg);

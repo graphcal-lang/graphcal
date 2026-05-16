@@ -78,7 +78,7 @@ down** — no implicit additions.
 ```graphcal
 import nasa.rocket;                                  // bare: brings `rocket`
 import nasa.rocket as nr;                            // alias: brings `nr`
-import nasa.rocket.{Orbit, compute_thrust as ct};    // brace: brings `Orbit` and `ct` only
+import nasa.rocket.{type Orbit, compute_thrust as ct}; // brace: brings `Orbit` and `ct` only
 ```
 
 The forms differ in what enters scope:
@@ -87,16 +87,16 @@ The forms differ in what enters scope:
 |--------------------------------------------------------|--------------------------------------------|
 | `import nasa.rocket;`                                  | `rocket` (the module, by its leaf name)    |
 | `import nasa.rocket as nr;`                            | `nr` (the module under alias)              |
-| `import nasa.rocket.{Orbit};`                          | `Orbit` only — **not** `rocket`            |
-| `import nasa.rocket.{Orbit, compute_thrust as ct};`    | `Orbit` and `ct` only                      |
-| `import nasa.rocket as nr.{Orbit};`                    | parse error — alias and brace mutually exclusive |
+| `import nasa.rocket.{type Orbit};`                     | `Orbit` only — **not** `rocket`            |
+| `import nasa.rocket.{type Orbit, compute_thrust as ct};` | `Orbit` and `ct` only                    |
+| `import nasa.rocket as nr.{type Orbit};`               | parse error — alias and brace mutually exclusive |
 
 If you want both the module qualifier *and* an unqualified item, write
 two statements:
 
 ```graphcal
 import nasa.rocket;            // brings: rocket
-import nasa.rocket.{Orbit};    // brings: Orbit
+import nasa.rocket.{type Orbit}; // brings: Orbit
 // Now both `rocket.Orbit` and `Orbit` are usable.
 ```
 
@@ -105,15 +105,22 @@ This is a deliberate divergence from Gleam: Graphcal's brace form does
 what enters scope so a reader scanning the import list sees the precise
 set of names introduced.
 
-### The brace list mixes any compile-time kind
+### Type imports use `type`
 
-Within a brace list, every item is just a bare identifier; there are no
-kind markers (no `type`, no `const`). The kind is recovered from the
-declaration in the source module:
+Graphcal has separate namespaces for type names and constructors. To
+import a type name selectively, prefix the item with `type`. Bare items
+target the default compile-time namespace:
 
 ```graphcal
-import nasa.rocket.{Orbit, Length, m, MAX_THRUST, Maneuver};
-//                  type   dim     unit  const       index
+import nasa.rocket.{type Orbit, Length, m, MAX_THRUST, Maneuver};
+//                       type   dim     unit  const       index
+```
+
+This is required even when the type and its constructor share the same
+spelling. To import both namespaces, write both items:
+
+```graphcal
+import school.records.{type Student, Student};
 ```
 
 ### Aliasing items
@@ -121,7 +128,7 @@ import nasa.rocket.{Orbit, Length, m, MAX_THRUST, Maneuver};
 Each item in a brace list may be aliased independently:
 
 ```graphcal
-import nasa.rocket.{Orbit as O, compute_thrust as ct};
+import nasa.rocket.{type Orbit as O, compute_thrust as ct};
 ```
 
 ### What `import` may bring
@@ -149,21 +156,21 @@ the importer's namespace:
 
 ```graphcal
 pub import nasa.rocket;                              // re-exports `rocket`
-pub import nasa.rocket.{Orbit, compute_thrust};      // re-exports both items
+pub import nasa.rocket.{type Orbit, compute_thrust}; // re-exports both items
 ```
 
 The brace form also supports per-item `pub`, for fine-grained
 re-export:
 
 ```graphcal
-import nasa.rocket.{ pub Orbit, compute_thrust };
+import nasa.rocket.{ pub type Orbit, compute_thrust };
 //                   ^^^ only `Orbit` is re-exported
 ```
 
 Mixing whole-import `pub` with per-item `pub` is rejected:
 
 ```graphcal
-pub import nasa.rocket.{ pub Orbit };   // parse error
+pub import nasa.rocket.{ pub type Orbit };   // parse error
 ```
 
 `pub(bind)` is illegal on `import`. Imports name use-sites, and
@@ -209,7 +216,7 @@ the param interface, however, must still be brought into scope by
 
 ```graphcal
 dag mission {
-    import nasa.rocket.{Orbit};               // type for the param
+    import nasa.rocket.{type Orbit};          // type for the param
     param o: Orbit;
 
     include nasa.rocket.compute_thrust(orbit: @o, dry_mass: 800 kg).{ thrust };
@@ -236,7 +243,7 @@ does, because `out` is a node belonging to the DAG instance `dag(args)`.
 
 ```graphcal
 dag mission {
-    import nasa.rocket.{compute_thrust, Orbit};
+    import nasa.rocket.{compute_thrust, type Orbit};
     param o: Orbit;
     node t: Force = @compute_thrust(orbit: @o, dry_mass: 800 kg).thrust;
 }
@@ -289,7 +296,7 @@ dag analyze {
     type IntermediateResult { IntermediateResult(value: Length) };
 
     dag deeper {
-        import orbit_analysis.analyze.{IntermediateResult};
+        import orbit_analysis.analyze.{type IntermediateResult};
         param r: IntermediateResult;
         // ...
     }
@@ -338,7 +345,7 @@ const earth_mu: GravParam = 3.986e5 km^3/s^2;
 
 dag analyze {
     dag energy {
-        import dynamics.{OrbitType, earth_mu};   // file's own name
+        import dynamics.{type OrbitType, earth_mu};   // file's own name
         param o: OrbitType;
         node e: SpecificEnergy = -earth_mu / (2.0 * @o.sma);
     }
@@ -354,7 +361,7 @@ type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) };
 
 dag analyze {
     dag energy {
-        import nasa.rocket.dynamics.{OrbitType};
+        import nasa.rocket.dynamics.{type OrbitType};
         param o: OrbitType;
         // ...
     }
@@ -382,7 +389,7 @@ dag analyze {
 }
 
 dag analyze_ok {
-    import dynamics.{OrbitType};
+    import dynamics.{type OrbitType};
     param o: OrbitType;
 }
 ```
@@ -420,7 +427,7 @@ The files are now addressed as:
 
 ```graphcal
 import nasa.constants.{g0};
-import nasa.rocket.{Orbit, compute_thrust};
+import nasa.rocket.{type Orbit, compute_thrust};
 import nasa.orbital.transfer.{dv};
 ```
 
@@ -431,10 +438,10 @@ be rewritten from the bare file stem to the full package path:
 
 ```graphcal
 // Before (virtual package `dynamics`):
-import dynamics.{OrbitType};
+import dynamics.{type OrbitType};
 
 // After (real package `nasa`, file at src/nasa/rocket/dynamics.gcl):
-import nasa.rocket.dynamics.{OrbitType};
+import nasa.rocket.dynamics.{type OrbitType};
 ```
 
 The LSP rename refactor handles the mechanical part of this rewrite.

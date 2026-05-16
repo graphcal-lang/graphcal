@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::resolved_ast::{DeclKind, Declaration, Expr, ExprKind, ModulePath};
+use graphcal_compiler::desugar::resolved_ast::{
+    DeclKind, Declaration, Expr, ExprKind, ImportItemNamespace, ModulePath,
+};
 use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, Spanned, StructTypeName};
 use graphcal_compiler::syntax::phase::Resolved;
 use graphcal_compiler::syntax::span::Span;
@@ -311,8 +313,10 @@ pub(in crate::eval::project) struct ImportContext<'a> {
     pub(in crate::eval::project) imported_names: ImportedValueNames,
     pub(in crate::eval::project) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     pub(in crate::eval::project) imported_source_order: Vec<(ScopedName, DeclCategory)>,
-    pub(in crate::eval::project) imported_type_system_names:
-        HashMap<graphcal_compiler::syntax::dag_id::DagId, HashSet<String>>,
+    pub(in crate::eval::project) imported_type_system_names: HashMap<
+        graphcal_compiler::syntax::dag_id::DagId,
+        graphcal_compiler::ir::lower::SelectedDeclarations,
+    >,
     pub(in crate::eval::project) module_map:
         HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
     /// Registry + `pub_names` for module-imported dependencies.
@@ -529,6 +533,99 @@ pub(in crate::eval::project) fn file_has_declaration(
         ),
         DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
     })
+}
+
+pub(in crate::eval::project) fn file_has_import_item(
+    file: &graphcal_compiler::desugar::resolved_ast::File,
+    name: &str,
+    namespace: ImportItemNamespace,
+) -> bool {
+    file.declarations.iter().any(|decl| match &decl.kind {
+        DeclKind::Param(_)
+        | DeclKind::Node(_)
+        | DeclKind::ConstNode(_)
+        | DeclKind::Assert(_)
+        | DeclKind::BaseDimension(_)
+        | DeclKind::Dimension(_)
+        | DeclKind::Unit(_)
+        | DeclKind::Index(_)
+        | DeclKind::Type(_)
+        | DeclKind::UnionType(_)
+        | DeclKind::Plot(_)
+        | DeclKind::Figure(_)
+        | DeclKind::Layer(_)
+        | DeclKind::Dag(_) => decl_identity(decl).is_some_and(|identity| {
+            import_namespace_matches(identity.kind, namespace) && identity.name == name
+        }),
+        DeclKind::Import(d) => matches!(
+            &d.kind,
+            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
+                if items.iter().any(|it| {
+                    it.is_pub && it.namespace == namespace && it.local_name() == name
+                })
+        ),
+        DeclKind::Include(d) => {
+            namespace == ImportItemNamespace::Default
+                && matches!(
+                    &d.kind,
+                    graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
+                        if items.iter().any(|it| it.is_pub && it.local_name() == name)
+                )
+        }
+        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+    })
+}
+
+pub(in crate::eval::project) fn file_exports_import_item(
+    file: &graphcal_compiler::desugar::resolved_ast::File,
+    name: &str,
+    namespace: ImportItemNamespace,
+) -> bool {
+    file.declarations.iter().any(|decl| match &decl.kind {
+        DeclKind::Param(_)
+        | DeclKind::Node(_)
+        | DeclKind::ConstNode(_)
+        | DeclKind::Assert(_)
+        | DeclKind::BaseDimension(_)
+        | DeclKind::Dimension(_)
+        | DeclKind::Unit(_)
+        | DeclKind::Index(_)
+        | DeclKind::Type(_)
+        | DeclKind::UnionType(_)
+        | DeclKind::Plot(_)
+        | DeclKind::Figure(_)
+        | DeclKind::Layer(_)
+        | DeclKind::Dag(_) => {
+            let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
+            (decl.is_pub() || implicitly_visible)
+                && decl_identity(decl).is_some_and(|identity| {
+                    import_namespace_matches(identity.kind, namespace) && identity.name == name
+                })
+        }
+        DeclKind::Import(d) => matches!(
+            &d.kind,
+            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
+                if items.iter().any(|it| {
+                    it.is_pub && it.namespace == namespace && it.local_name() == name
+                })
+        ),
+        DeclKind::Include(d) => {
+            namespace == ImportItemNamespace::Default
+                && matches!(
+                    &d.kind,
+                    graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
+                        if items.iter().any(|it| it.is_pub && it.local_name() == name)
+                )
+        }
+        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+    })
+}
+
+const fn import_namespace_matches(kind: ProjectDeclKind, namespace: ImportItemNamespace) -> bool {
+    match namespace {
+        ImportItemNamespace::Type => matches!(kind, ProjectDeclKind::Type),
+        ImportItemNamespace::Default => !matches!(kind, ProjectDeclKind::Type),
+    }
 }
 
 /// Resolve a struct field's declared type, handling generic type parameter substitution.

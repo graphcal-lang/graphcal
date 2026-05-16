@@ -1808,24 +1808,45 @@ pub(crate) fn register_file_declarations(
     register_declarations_impl(file, registry, src, None, dag_id)
 }
 
+/// Names selected from a dependency's type-system registry.
+#[derive(Debug, Default, Clone)]
+pub struct SelectedDeclarations {
+    /// Names imported from the default compile-time namespace.
+    pub default: HashSet<String>,
+    /// Names imported from the explicit `type` namespace.
+    pub types: HashSet<String>,
+}
+
+impl SelectedDeclarations {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.default.is_empty() && self.types.is_empty()
+    }
+
+    pub fn insert_default(&mut self, name: impl Into<String>) {
+        self.default.insert(name.into());
+    }
+
+    pub fn insert_type(&mut self, name: impl Into<String>) {
+        self.types.insert(name.into());
+    }
+}
+
 /// Register only the named type-system declarations (dimensions, units, indexes, types)
 /// from a file into the registry.
 ///
 /// This is the selective counterpart to `register_file_declarations`: instead of
-/// registering everything, it only registers declarations whose names are in `names`.
+/// registering everything, it filters default-namespace declarations and type
+/// declarations independently.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if a referenced dimension or unit is unknown.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
 pub fn register_selected_declarations(
     file: &File,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-    names: &std::collections::HashSet<String>,
+    names: &SelectedDeclarations,
     dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
     register_declarations_impl(file, registry, src, Some(names), dag_id)
@@ -1844,17 +1865,20 @@ pub fn register_selected_declarations(
 /// 5. Range indexes (depend on dimensions and units)
 ///
 /// When `filter` is `None`, all declarations are registered.
-/// When `filter` is `Some(names)`, only declarations whose names are in `names` are registered.
+/// When `filter` is `Some(names)`, default-namespace declarations and type
+/// declarations are filtered independently.
 fn register_declarations_impl(
     file: &File,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-    filter: Option<&std::collections::HashSet<String>>,
+    filter: Option<&SelectedDeclarations>,
     dag_id: &crate::syntax::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
     use crate::desugar::resolved_ast::{DimDecl, IndexDecl, UnitDecl};
 
-    let should_register = |name: &str| filter.is_none_or(|names| names.contains(name));
+    let should_register_default =
+        |name: &str| filter.is_none_or(|names| names.default.contains(name));
+    let should_register_type = |name: &str| filter.is_none_or(|names| names.types.contains(name));
 
     // Collect declarations by kind for phased registration.
     let mut derived_dims: Vec<&DimDecl> = Vec::new();
@@ -1866,10 +1890,10 @@ fn register_declarations_impl(
     // Also collect derived dims, units, and dependent indexes for later phases.
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::BaseDimension(d) if should_register(d.name.value.as_str()) => {
+            DeclKind::BaseDimension(d) if should_register_default(d.name.value.as_str()) => {
                 register_base_dimension_decl(d, registry, dag_id);
             }
-            DeclKind::Dimension(d) if should_register(d.name.value.as_str()) => {
+            DeclKind::Dimension(d) if should_register_default(d.name.value.as_str()) => {
                 if d.definition.is_some() {
                     derived_dims.push(d);
                 } else {
@@ -1880,27 +1904,29 @@ fn register_declarations_impl(
                     register_required_dimension_decl(d, registry, dag_id);
                 }
             }
-            DeclKind::Unit(u) if should_register(u.name.value.as_str()) => {
+            DeclKind::Unit(u) if should_register_default(u.name.value.as_str()) => {
                 units.push(u);
             }
-            DeclKind::Index(idx) if should_register(idx.name.value.as_str()) => match &idx.kind {
-                IndexDeclKind::RequiredRange { .. } => {
-                    required_range_indexes.push((idx, decl.span));
+            DeclKind::Index(idx) if should_register_default(idx.name.value.as_str()) => {
+                match &idx.kind {
+                    IndexDeclKind::RequiredRange { .. } => {
+                        required_range_indexes.push((idx, decl.span));
+                    }
+                    IndexDeclKind::Range { .. } => {
+                        range_indexes.push((idx, decl.span));
+                    }
+                    IndexDeclKind::Named { .. } | IndexDeclKind::RequiredNamed => {
+                        register_index_decl(idx, registry, src, decl.span)?;
+                    }
                 }
-                IndexDeclKind::Range { .. } => {
-                    range_indexes.push((idx, decl.span));
-                }
-                IndexDeclKind::Named { .. } | IndexDeclKind::RequiredNamed => {
-                    register_index_decl(idx, registry, src, decl.span)?;
-                }
-            },
-            DeclKind::Type(t) if should_register(t.name.value.as_str()) => {
+            }
+            DeclKind::Type(t) if should_register_type(t.name.value.as_str()) => {
                 register_type_decl(t, registry);
             }
-            DeclKind::UnionType(t) if should_register(t.name.value.as_str()) => {
+            DeclKind::UnionType(t) if should_register_type(t.name.value.as_str()) => {
                 register_union_type_decl(t, registry);
             }
-            DeclKind::Dag(d) if should_register(d.name.value.as_str()) => {
+            DeclKind::Dag(d) if should_register_default(d.name.value.as_str()) => {
                 registry.register_dag(d.name.value.to_string(), d.clone());
             }
             _ => {}
