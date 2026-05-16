@@ -1274,3 +1274,115 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 }
+
+impl GraphcalError {
+    /// Return the `NamedSource` embedded in this error, if any.
+    ///
+    /// Most variants carry a `#[source_code]` field naming the file and its
+    /// full source text. Exposing it as a typed accessor lets diagnostic
+    /// emitters pair the error's offsets with the exact source they index
+    /// into — instead of inferring (name, source) from external context,
+    /// which can silently desynchronize when an imported file is the origin.
+    ///
+    /// Returns `None` for the handful of variants that represent errors
+    /// without a source location: file-system errors before parsing
+    /// ([`Self::FileNotFound`], [`Self::CircularImport`],
+    /// [`Self::ManifestError`]) and CLI override errors
+    /// ([`Self::OverrideNotAParam`], [`Self::OverrideUnknownParam`]).
+    #[must_use]
+    pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
+        let src = match self {
+            Self::FileNotFound { .. }
+            | Self::CircularImport { .. }
+            | Self::ManifestError { .. }
+            | Self::OverrideNotAParam { .. }
+            | Self::OverrideUnknownParam { .. } => return None,
+            Self::DuplicateName { src, .. }
+            | Self::UnknownGraphRef { src, .. }
+            | Self::UnknownConstRef { src, .. }
+            | Self::UnknownFunction { src, .. }
+            | Self::GraphRefInConst { src, .. }
+            | Self::GraphRefInFn { src, .. }
+            | Self::RecursiveFunction { src, .. }
+            | Self::WrongArity { src, .. }
+            | Self::WrongGenericArity { src, .. }
+            | Self::GenericArgMismatch { src, .. }
+            | Self::CyclicDependency { src, .. }
+            | Self::EvalError { src, .. }
+            | Self::InternalError { src, .. }
+            | Self::DimensionOverflow { src, .. }
+            | Self::DimensionMismatch { src, .. }
+            | Self::DimensionMismatchInAnnotation { src, .. }
+            | Self::UnknownUnit { src, .. }
+            | Self::UnknownDimension { src, .. }
+            | Self::CyclicDimension { src, .. }
+            | Self::CyclicUnit { src, .. }
+            | Self::NonLiteralExponent { src, .. }
+            | Self::ConversionDimensionMismatch { src, .. }
+            | Self::UnknownStructType { src, .. }
+            | Self::UnknownField { src, .. }
+            | Self::MissingFields { src, .. }
+            | Self::ExtraFields { src, .. }
+            | Self::FieldDimensionMismatch { src, .. }
+            | Self::NotAStruct { src, .. }
+            | Self::UnknownLocalRef { src, .. }
+            | Self::UnknownIndex { src, .. }
+            | Self::UnknownVariant { src, .. }
+            | Self::MissingVariants { src, .. }
+            | Self::ExtraVariants { src, .. }
+            | Self::IndexMismatch { src, .. }
+            | Self::ImportFileNotFound { src, .. }
+            | Self::ImportNameNotFound { src, .. }
+            | Self::InvalidModuleName { src, .. }
+            | Self::DuplicateModuleName { src, .. }
+            | Self::UnknownModule { src, .. }
+            | Self::QualifiedNameNotFound { src, .. }
+            | Self::RangeIndexDimensionMismatch { src, .. }
+            | Self::RangeIndexInvalid { src, .. }
+            | Self::GraphRefToAssert { src, .. }
+            | Self::AssertBodyNotBool { src, .. }
+            | Self::AssumedAssertionFailed { src, .. }
+            | Self::UnknownAssertInAssumes { src, .. }
+            | Self::InvalidAssumesTarget { src, .. }
+            | Self::UnknownAttribute { src, .. }
+            | Self::InvalidExpectedFailTarget { src, .. }
+            | Self::ExpectedFailInvalidArg { src, .. }
+            | Self::ExpectedFailNotIndexed { src, .. }
+            | Self::ExpectedFailAllOnIndexed { src, .. }
+            | Self::ImportOutsideRoot { src, .. }
+            | Self::RequiredParamNotProvided { src, .. }
+            | Self::UnknownParamBinding { src, .. }
+            | Self::BindingNotAParam { src, .. }
+            | Self::InstantiatedImportNeedsNamespace { src, .. }
+            | Self::BareImportWithoutManifest { src, .. }
+            | Self::PackageNameMismatch { src, .. }
+            | Self::StdlibNotImplemented { src, .. }
+            | Self::CrossFileImportInVirtualPackage { src, .. }
+            | Self::BindingTargetsIndex { src, .. }
+            | Self::IndexBindingNotAnIndex { src, .. }
+            | Self::IndexKindMismatch { src, .. }
+            | Self::IndexBindingDimensionMismatch { src, .. }
+            | Self::RequiredIndexNotBound { src, .. }
+            | Self::ImportRuntimeItem { src, .. }
+            | Self::InvalidTimezone { src, .. }
+            | Self::DomainViolation { src, .. }
+            | Self::DomainDimensionMismatch { src, .. }
+            | Self::DomainMinExceedsMax { src, .. }
+            | Self::InvalidDomainTarget { src, .. }
+            | Self::IntDomainBoundNotUnitless { src, .. }
+            | Self::GenericTypeArgDomainConstraint { src, .. }
+            | Self::ImportPrivateItem { src, .. }
+            | Self::RequiredItemMustBeBindable { src, .. }
+            | Self::PrivateInPublic { src, .. }
+            | Self::PubIndexVariantLiteral { src, .. }
+            | Self::IncludeMustReconcileOverride { src, .. }
+            | Self::GenericsLeakage { src, .. }
+            | Self::UnknownDag { src, .. }
+            | Self::UnknownInlineDagParam { src, .. }
+            | Self::MissingInlineDagBindings { src, .. }
+            | Self::UnknownInlineDagOutput { src, .. }
+            | Self::InlineDagArgDimensionMismatch { src, .. } => src,
+        };
+        Some(src)
+    }
+}
