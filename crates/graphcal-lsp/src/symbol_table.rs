@@ -994,23 +994,34 @@ fn collect_expr_refs(
             });
         }
         ExprKind::InlineDagRef { path, args, output } => {
-            // Same-file calls (`@dag(args).out`) reference the DAG by its
-            // bare name. Cross-file qualified calls (`@module.dag(args).out`)
-            // reference the DAG via a module alias; for goto-def we point
-            // the leaf segment at the DAG name as a top-level symbol — best
-            // effort, since the cross-file declaration lives in a different
-            // file's symbol table.
+            // Same-file calls (`@dag(args).out`) use a single-segment path —
+            // the leaf names a `TopLevel` DAG declaration in the active
+            // file's table. Cross-file qualified calls (`@module.dag(args).out`)
+            // have multi-segment paths where the prefix segments are module
+            // aliases; the leaf names the DAG under `Qualified { module: <prefix>, name: <leaf> }`
+            // in `imported_definitions` (see `collect_imported_definitions`).
             if let Some(leaf) = path.leaf() {
+                let leaf_target = if path.segments.len() > 1 {
+                    SymbolKey::Qualified {
+                        module: path.segments[..path.segments.len() - 1]
+                            .iter()
+                            .map(|s| s.name.clone())
+                            .collect(),
+                        name: leaf.name.clone(),
+                    }
+                } else {
+                    SymbolKey::TopLevel(leaf.name.clone())
+                };
                 table.references.push(ReferenceInfo {
                     span: leaf.span,
-                    target: SymbolKey::TopLevel(leaf.name.clone()),
+                    target: leaf_target,
                 });
             }
-            // The projected output resolves to `<dag>.output` as a
-            // qualified member; goto-def jumps into the dag body when the
-            // caller's dag body is in the same file. For cross-file
-            // qualified calls the symbol-table layer keeps the surface
-            // module path as the qualifier.
+            // The projected output resolves to `<dag>.output` as a qualified
+            // member. For same-file calls the qualifier is the bare DAG name
+            // (matches `collect_dag_decl`'s body-member entries). For cross-file
+            // calls the qualifier is `<module-alias>.<dag>`, which matches the
+            // re-keyed body member in `imported_definitions`.
             table.references.push(ReferenceInfo {
                 span: output.span,
                 target: SymbolKey::Qualified {
