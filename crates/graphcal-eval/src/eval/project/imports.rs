@@ -31,15 +31,15 @@ impl OtherDeclKind {
 /// Built once per dep file and reused for every binding rather than re-scanning
 /// `declarations` four or five times per binding.
 struct DepDeclIndex<'a> {
-    params: HashSet<&'a str>,
-    types: HashSet<&'a str>,
-    dims: HashSet<&'a str>,
-    units: HashSet<&'a str>,
+    params: HashSet<DeclName>,
+    types: HashSet<StructTypeName>,
+    dims: HashSet<DimName>,
+    units: HashSet<graphcal_compiler::syntax::names::UnitName>,
     /// Maps index name to its declaration (needed for kind/required checks).
-    indexes: HashMap<&'a str, &'a graphcal_compiler::desugar::resolved_ast::IndexDecl>,
+    indexes: HashMap<IndexName, &'a graphcal_compiler::desugar::resolved_ast::IndexDecl>,
     /// "Other" declarations (const node / node / assert) that are invalid as
     /// binding targets; used to produce precise "is actually a …" diagnostics.
-    other: HashMap<&'a str, OtherDeclKind>,
+    other: HashMap<DeclName, OtherDeclKind>,
 }
 
 impl DepDeclIndex<'_> {
@@ -64,40 +64,40 @@ fn build_dep_decl_index(
     let mut types = HashSet::new();
     let mut dims = HashSet::new();
     let mut units = HashSet::new();
-    let mut indexes: HashMap<&str, &graphcal_compiler::desugar::resolved_ast::IndexDecl> =
+    let mut indexes: HashMap<IndexName, &graphcal_compiler::desugar::resolved_ast::IndexDecl> =
         HashMap::new();
-    let mut other: HashMap<&str, OtherDeclKind> = HashMap::new();
+    let mut other: HashMap<DeclName, OtherDeclKind> = HashMap::new();
     for d in decls {
         match &d.kind {
             DeclKind::Param(p) => {
-                params.insert(p.name.value.as_str());
+                params.insert(p.name.value.clone());
             }
             DeclKind::Type(t) => {
-                types.insert(t.name.value.as_str());
+                types.insert(t.name.value.clone());
             }
             DeclKind::UnionType(t) => {
-                types.insert(t.name.value.as_str());
+                types.insert(t.name.value.clone());
             }
             DeclKind::BaseDimension(dim) => {
-                dims.insert(dim.name.value.as_str());
+                dims.insert(dim.name.value.clone());
             }
             DeclKind::Dimension(dim) => {
-                dims.insert(dim.name.value.as_str());
+                dims.insert(dim.name.value.clone());
             }
             DeclKind::Unit(u) => {
-                units.insert(u.name.value.as_str());
+                units.insert(u.name.value.clone());
             }
             DeclKind::Index(idx) => {
-                indexes.insert(idx.name.value.as_str(), idx);
+                indexes.insert(idx.name.value.clone(), idx);
             }
             DeclKind::ConstNode(c) => {
-                other.insert(c.name.value.as_str(), OtherDeclKind::ConstNode);
+                other.insert(c.name.value.clone(), OtherDeclKind::ConstNode);
             }
             DeclKind::Node(n) => {
-                other.insert(n.name.value.as_str(), OtherDeclKind::Node);
+                other.insert(n.name.value.clone(), OtherDeclKind::Node);
             }
             DeclKind::Assert(a) => {
-                other.insert(a.name.value.as_str(), OtherDeclKind::Assert);
+                other.insert(a.name.value.clone(), OtherDeclKind::Assert);
             }
             _ => {}
         }
@@ -118,7 +118,7 @@ fn build_dep_decl_index(
 /// is the dep-side name and the value is the importer-side name it binds to.
 pub(in crate::eval::project) struct ClassifiedBindings {
     pub(in crate::eval::project) params:
-        HashMap<String, graphcal_compiler::desugar::resolved_ast::Expr>,
+        HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
     pub(in crate::eval::project) indexes: DepToImporter<IndexName>,
     pub(in crate::eval::project) types: DepToImporter<StructTypeName>,
     pub(in crate::eval::project) dims: DepToImporter<DimName>,
@@ -147,7 +147,7 @@ fn classify_param_bindings(
         let binding_name = &binding.name.name;
         if dep_index.params.contains(binding_name.as_str()) {
             out.params
-                .insert(binding_name.clone(), binding.value.clone());
+                .insert(DeclName::new(binding_name), binding.value.clone());
             continue;
         }
         if dep_index.types.contains(binding_name.as_str()) {
@@ -360,7 +360,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
     // Register the dependency's declaration names in the importer's scope
     // so that the resolver recognizes references to them.
     let mut import_item_attributes: HashMap<
-        String,
+        DeclName,
         Vec<graphcal_compiler::desugar::resolved_ast::Attribute>,
     > = HashMap::new();
     let selective_names = match &include_decl.kind {
@@ -383,7 +383,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 // Collect import-item attributes for deferred processing.
                 if !import_item.attributes.is_empty() {
                     import_item_attributes
-                        .insert(orig_name.clone(), import_item.attributes.clone());
+                        .insert(DeclName::new(orig_name), import_item.attributes.clone());
                 }
 
                 // Register the local name in scope for the resolver.
@@ -406,7 +406,10 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                         .insert(orig_name.clone());
                 }
 
-                selective.push((orig_name.clone(), local_name));
+                selective.push(ImportAlias {
+                    original: DeclName::new(orig_name),
+                    local: DeclName::new(local_name),
+                });
             }
             Some(selective)
         }
@@ -459,11 +462,11 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
 
     let pub_reexport_whole =
         decl.visibility == graphcal_compiler::desugar::resolved_ast::Visibility::Public;
-    let pub_reexport_items: HashSet<String> = match &include_decl.kind {
+    let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
         graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) => items
             .iter()
             .filter(|it| it.is_pub)
-            .map(|it| it.name.name.clone())
+            .map(|it| DeclName::new(&it.name.name))
             .collect(),
         graphcal_compiler::desugar::resolved_ast::ImportKind::Module { .. } => HashSet::new(),
     };
@@ -553,7 +556,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
 
     // Register imported names in the importer's scope.
     let mut import_item_attributes: HashMap<
-        String,
+        DeclName,
         Vec<graphcal_compiler::desugar::resolved_ast::Attribute>,
     > = HashMap::new();
     let selective_names = match &include_decl.kind {
@@ -575,7 +578,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
 
                 if !import_item.attributes.is_empty() {
                     import_item_attributes
-                        .insert(orig_name.clone(), import_item.attributes.clone());
+                        .insert(DeclName::new(orig_name), import_item.attributes.clone());
                 }
 
                 // Register the local name in scope.
@@ -596,7 +599,10 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                     // Type-system declarations — handled via registry merge.
                 }
 
-                selective.push((orig_name.clone(), local_name));
+                selective.push(ImportAlias {
+                    original: DeclName::new(orig_name),
+                    local: DeclName::new(local_name),
+                });
             }
             Some(selective)
         }
@@ -644,11 +650,11 @@ pub(in crate::eval::project) fn process_inline_dag_include(
 
     let pub_reexport_whole =
         decl.visibility == graphcal_compiler::desugar::resolved_ast::Visibility::Public;
-    let pub_reexport_items: HashSet<String> = match &include_decl.kind {
+    let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
         graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) => items
             .iter()
             .filter(|it| it.is_pub)
-            .map(|it| it.name.name.clone())
+            .map(|it| DeclName::new(&it.name.name))
             .collect(),
         graphcal_compiler::desugar::resolved_ast::ImportKind::Module { .. } => HashSet::new(),
     };
@@ -750,8 +756,8 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                     // Check if the name exists at all (value or type-system) before
                     // reporting "private" vs "not found".
                     let dep_loaded = &project.files[import_dag_id];
-                    let exists = dep.const_values.contains_key(orig_name)
-                        || dep.values.contains_key(orig_name)
+                    let exists = dep.const_values.contains_key(orig_name.as_str())
+                        || dep.values.contains_key(orig_name.as_str())
                         || dep.has_assert(orig_name)
                         || file_has_declaration(&dep_loaded.ast, orig_name);
                     if exists {
@@ -775,10 +781,11 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                     orig_name,
                     &local_name,
                     import_item.name.span,
+                    file_src,
                     &mut ctx.imported_names,
                     &mut ctx.imported_values,
                     Some(&mut ctx.imported_source_order),
-                ) {
+                )? {
                     SelectiveImportResult::Const => {}
                     SelectiveImportResult::Runtime => {
                         if is_import {
@@ -841,11 +848,12 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                 dep,
                 &module_name,
                 import_span,
+                file_src,
                 &mut ctx.imported_names,
                 &mut ctx.imported_values,
                 Some(&mut ctx.imported_source_order),
                 is_import,
-            );
+            )?;
             // Import all public type-system declarations from dep's registry.
             ctx.extra_registry_builders
                 .push((&dep.registry, &dep.pub_names));
@@ -941,53 +949,64 @@ pub(in crate::eval::project) fn check_dag_recursion(
 ///
 /// Handles `const_values` and values (params/nodes).
 /// Returns what was found so the caller can handle assert and type-system fallbacks.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "helper mutates imported name/value/source-order collections together"
+)]
 pub(in crate::eval::project) fn import_selective_item(
     dep: &EvaluatedFile,
     orig_name: &str,
     local_name: &str,
     span: Span,
+    src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
     imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
-) -> SelectiveImportResult {
+) -> Result<SelectiveImportResult, CompileError> {
     // The dep's `declared_types` is keyed by typed `ScopedName`. Its top-level
     // declarations are always bare locals, so wrap the bare member name.
-    let dep_key = ScopedName::local(orig_name);
-    if let Some(rv) = dep.const_values.get(orig_name) {
+    let orig_decl = DeclName::new(orig_name);
+    if let Some(rv) = dep.const_values.get(&orig_decl) {
+        let dt = imported_declared_type(dep, &orig_decl, src, span)?;
         let scoped = ScopedName::Local(local_name.to_string());
         imported_names.const_names.push((scoped.clone(), span));
-        let dt = dep
-            .declared_types
-            .get(&dep_key)
-            .cloned()
-            .unwrap_or(DeclaredType::Scalar(
-                graphcal_compiler::syntax::dimension::Dimension::dimensionless(),
-            ));
         if let Some(source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Const));
         }
         imported_values.insert(scoped, (rv.clone(), dt));
-        SelectiveImportResult::Const
-    } else if let Some(rv) = dep.values.get(orig_name) {
+        Ok(SelectiveImportResult::Const)
+    } else if let Some(rv) = dep.values.get(&orig_decl) {
+        let dt = imported_declared_type(dep, &orig_decl, src, span)?;
         let scoped = ScopedName::Local(local_name.to_string());
         imported_names.param_names.push((scoped.clone(), span));
-        let dt = dep
-            .declared_types
-            .get(&dep_key)
-            .cloned()
-            .unwrap_or(DeclaredType::Scalar(
-                graphcal_compiler::syntax::dimension::Dimension::dimensionless(),
-            ));
         if let Some(source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Param));
         }
         imported_values.insert(scoped, (rv.clone(), dt));
-        SelectiveImportResult::Runtime
+        Ok(SelectiveImportResult::Runtime)
     } else if dep.has_assert(orig_name) {
-        SelectiveImportResult::Assert
+        Ok(SelectiveImportResult::Assert)
     } else {
-        SelectiveImportResult::NotFound
+        Ok(SelectiveImportResult::NotFound)
     }
+}
+
+fn imported_declared_type(
+    dep: &EvaluatedFile,
+    name: &DeclName,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<DeclaredType, CompileError> {
+    dep.declared_types
+        .get(&ScopedName::local(name.as_str()))
+        .cloned()
+        .ok_or_else(|| {
+            CompileError::Eval(GraphcalError::EvalError {
+                message: format!("internal: imported value `{name}` is missing its declared type"),
+                src: src.clone(),
+                span: span.into(),
+            })
+        })
 }
 
 /// Import all values from an `EvaluatedFile` under a module prefix.
@@ -998,17 +1017,22 @@ pub(in crate::eval::project) fn import_selective_item(
 /// When `const_only` is `true`, only `const_values` are imported; runtime values
 /// (params/nodes) are silently skipped. This is used for `import` statements which
 /// only allow compile-time items.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "helper mutates imported name/value/source-order collections together"
+)]
 pub(in crate::eval::project) fn import_module_values(
     dep: &EvaluatedFile,
     module_name: &str,
     import_span: Span,
+    src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
     imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     mut imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
     const_only: bool,
-) {
+) -> Result<(), CompileError> {
     // Sort keys for deterministic ordering — HashMap iteration is arbitrary.
-    let mut const_keys: Vec<&String> = dep.const_values.keys().collect();
+    let mut const_keys: Vec<&DeclName> = dep.const_values.keys().collect();
     const_keys.sort();
     for name in const_keys {
         // Only import pub items.
@@ -1016,21 +1040,11 @@ pub(in crate::eval::project) fn import_module_values(
             continue;
         }
         let rv = &dep.const_values[name];
-        let scoped = ScopedName::Qualified {
-            module: module_name.to_string(),
-            member: name.clone(),
-        };
+        let scoped = ScopedName::qualified(module_name, name.as_str());
         imported_names
             .const_names
             .push((scoped.clone(), import_span));
-        let dep_key = ScopedName::local(name);
-        let dt = dep
-            .declared_types
-            .get(&dep_key)
-            .cloned()
-            .unwrap_or(DeclaredType::Scalar(
-                graphcal_compiler::syntax::dimension::Dimension::dimensionless(),
-            ));
+        let dt = imported_declared_type(dep, name, src, import_span)?;
         if let Some(ref mut source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Const));
         }
@@ -1039,10 +1053,10 @@ pub(in crate::eval::project) fn import_module_values(
 
     // Skip runtime values when const_only is true (import semantics).
     if const_only {
-        return;
+        return Ok(());
     }
 
-    let mut value_keys: Vec<&String> = dep.values.keys().collect();
+    let mut value_keys: Vec<&DeclName> = dep.values.keys().collect();
     value_keys.sort();
     for name in value_keys {
         // Only import pub items.
@@ -1050,24 +1064,110 @@ pub(in crate::eval::project) fn import_module_values(
             continue;
         }
         let rv = &dep.values[name];
-        let scoped = ScopedName::Qualified {
-            module: module_name.to_string(),
-            member: name.clone(),
-        };
+        let scoped = ScopedName::qualified(module_name, name.as_str());
         imported_names
             .param_names
             .push((scoped.clone(), import_span));
-        let dep_key = ScopedName::local(name);
-        let dt = dep
-            .declared_types
-            .get(&dep_key)
-            .cloned()
-            .unwrap_or(DeclaredType::Scalar(
-                graphcal_compiler::syntax::dimension::Dimension::dimensionless(),
-            ));
+        let dt = imported_declared_type(dep, name, src, import_span)?;
         if let Some(ref mut source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Param));
         }
         imported_values.insert(scoped, (rv.clone(), dt));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+
+    use super::*;
+
+    fn empty_evaluated_file() -> EvaluatedFile {
+        EvaluatedFile {
+            values: HashMap::new(),
+            const_values: HashMap::new(),
+            declared_types: HashMap::new(),
+            assertions: HashMap::new(),
+            registry: graphcal_compiler::registry::types::RegistryBuilder::new().build(),
+            pub_names: HashSet::new(),
+            dag_tirs: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn import_selective_item_errors_when_declared_type_is_missing() {
+        let mut dep = empty_evaluated_file();
+        dep.const_values
+            .insert(DeclName::new("g0"), RuntimeValue::Scalar(9.80665));
+        dep.pub_names.insert(DeclName::new("g0"));
+
+        let src = graphcal_compiler::syntax::named_source("test.gcl", String::new());
+        let mut imported_names = ImportedValueNames::default();
+        let mut imported_values = HashMap::new();
+
+        let err = import_selective_item(
+            &dep,
+            "g0",
+            "g0",
+            Span::new(0, 2),
+            &src,
+            &mut imported_names,
+            &mut imported_values,
+            None,
+        )
+        .expect_err("missing declared type must be an internal compile error");
+
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("missing its declared type"),
+            "unexpected error: {message}"
+        );
+        assert!(imported_names.const_names.is_empty());
+        assert!(imported_values.is_empty());
+    }
+
+    #[test]
+    fn transitive_const_only_import_skips_runtime_without_registering_it() {
+        let mut dep = empty_evaluated_file();
+        dep.values
+            .insert(DeclName::new("runtime"), RuntimeValue::Scalar(1.0));
+        dep.pub_names.insert(DeclName::new("runtime"));
+
+        let import_item = graphcal_compiler::desugar::resolved_ast::ImportItem {
+            name: graphcal_compiler::desugar::resolved_ast::Ident {
+                name: "runtime".to_string(),
+                span: Span::new(0, 7),
+            },
+            alias: None,
+            is_pub: false,
+            attributes: Vec::new(),
+        };
+        let import_kind =
+            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(vec![import_item]);
+        let path = graphcal_compiler::desugar::resolved_ast::ModulePath {
+            segments: vec![graphcal_compiler::desugar::resolved_ast::Ident {
+                name: "dep".to_string(),
+                span: Span::new(0, 3),
+            }],
+            span: Span::new(0, 3),
+        };
+        let src = graphcal_compiler::syntax::named_source("test.gcl", String::new());
+        let mut imported_names = ImportedValueNames::default();
+        let mut imported_values = HashMap::new();
+
+        crate::eval::project::lowering::build_dep_import_values_for_kind(
+            &path,
+            &import_kind,
+            &dep,
+            &src,
+            &mut imported_names,
+            &mut imported_values,
+            true,
+        )
+        .expect("runtime values are skipped for const-only transitive imports");
+
+        assert!(imported_names.param_names.is_empty());
+        assert!(imported_values.is_empty());
     }
 }

@@ -190,7 +190,7 @@ pub(in crate::eval::project) fn merge_dep_dag_tirs(
                 if &source.dag_id != dep_dag_id {
                     continue;
                 }
-                if let Some(value) = dep_eval.const_values.get(source.source_name.as_str())
+                if let Some(value) = dep_eval.const_values.get(&source.source_name)
                     && let Some(dt) = dep_eval
                         .declared_types
                         .get(&ScopedName::local(source.source_name.as_str()))
@@ -244,7 +244,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
     let importer_local_type_names = collect_local_type_names(importer_ast);
     let empty_resolved: HashMap<
         crate::loader::ModulePathKey,
-        graphcal_compiler::syntax::dag_id::DagId,
+        crate::loader::InlineBodyImportResolution,
     > = HashMap::new();
 
     for deferred in deferred_dag_includes {
@@ -283,7 +283,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                     let parent_pub_names = super::extract_pub_names(&parent_loaded.ast);
                     let parent_type_system_names =
                         graphcal_compiler::ir::lower::collect_type_system_names(&parent_loaded.ast);
-                    let (parent_consts, parent_runtime_names) =
+                    let parent_values =
                         crate::inline_dag::classify_value_decls_in_ast(&parent_loaded.ast);
                     let parent_resolved_imports = parent_loaded
                         .inline_dags
@@ -294,8 +294,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                         &dag_body.declarations,
                         parent_dag_id,
                         &parent_type_system_names,
-                        &parent_consts,
-                        &parent_runtime_names,
+                        &parent_values,
                         &parent_pub_names,
                         parent_resolved_imports,
                         importer_src,
@@ -335,8 +334,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                             if &source.dag_id != parent_dag_id {
                                 continue;
                             }
-                            let Some(value) =
-                                parent_eval.const_values.get(source.source_name.as_str())
+                            let Some(value) = parent_eval.const_values.get(&source.source_name)
                             else {
                                 continue;
                             };
@@ -495,13 +493,15 @@ pub(in crate::eval::project) struct AliasSubstitutions<'a> {
 /// silently skipped.
 fn add_selective_aliases_inner(
     decls: &[graphcal_compiler::desugar::resolved_ast::Declaration],
-    selective: &[(String, String)],
+    selective: &[ImportAlias],
     prefix: &str,
     subs: &AliasSubstitutions<'_>,
     import_span: Span,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) {
-    for (orig_name, local_name) in selective {
+    for alias in selective {
+        let orig_name = alias.original.as_str();
+        let local_name = alias.local.as_str();
         // The alias points at the dep's prefixed declaration: a typed
         // qualified `ScopedName`. No flat `prefix::orig_name` strings are
         // built — the qualification stays structural through the IR.
@@ -539,7 +539,7 @@ fn add_selective_aliases_inner(
 
         if is_const {
             unfrozen.add_const_alias(
-                ScopedName::local(local_name.clone()),
+                ScopedName::local(local_name),
                 type_ann,
                 alias_expr,
                 import_span,
@@ -547,7 +547,7 @@ fn add_selective_aliases_inner(
             );
         } else {
             unfrozen.add_node_alias(
-                ScopedName::local(local_name.clone()),
+                ScopedName::local(local_name),
                 type_ann,
                 alias_expr,
                 import_span,
@@ -756,7 +756,7 @@ pub(in crate::eval::project) fn build_dep_imported_values(
             &mut imported_names,
             &mut imported_values,
             true, // is_import: skip runtime items
-        );
+        )?;
     }
 
     // Process include declarations.
@@ -788,7 +788,7 @@ pub(in crate::eval::project) fn build_dep_imported_values(
             &mut imported_names,
             &mut imported_values,
             false, // is_import: include allows runtime items
-        );
+        )?;
     }
 
     Ok(DepImportedValues {
@@ -804,35 +804,32 @@ pub(in crate::eval::project) fn build_dep_import_values_for_kind(
     import_path: &ModulePath,
     import_kind: &graphcal_compiler::desugar::resolved_ast::ImportKind,
     trans_dep: &EvaluatedFile,
-    _dep_src: &NamedSource<Arc<String>>,
+    dep_src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
     imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     is_import: bool,
-) {
+) -> Result<(), CompileError> {
     match import_kind {
         graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(names) => {
             for import_item in names {
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
-                let result = imports::import_selective_item(
+                if is_import && trans_dep.values.contains_key(orig_name.as_str()) {
+                    // The dep file's own import has already been validated.
+                    // For transitive const-only imports, runtime values do not
+                    // propagate through the compile-time import chain.
+                    continue;
+                }
+                let _ = imports::import_selective_item(
                     trans_dep,
                     orig_name,
                     &local_name,
                     import_item.name.span,
+                    dep_src,
                     imported_names,
                     imported_values,
                     None,
-                );
-                // For transitive import dependencies, skip runtime items silently
-                // (the dep file was already validated; we just don't propagate runtime values
-                // through import chains).
-                if is_import && matches!(result, SelectiveImportResult::Runtime) {
-                    // Runtime item was registered by import_selective_item;
-                    // remove it since import doesn't allow runtime items.
-                    let scoped = ScopedName::Local(local_name);
-                    imported_values.remove(&scoped);
-                    imported_names.param_names.retain(|(s, _)| *s != scoped);
-                }
+                )?;
             }
         }
         graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
@@ -845,13 +842,15 @@ pub(in crate::eval::project) fn build_dep_import_values_for_kind(
                 trans_dep,
                 &module_name,
                 import_span,
+                dep_src,
                 imported_names,
                 imported_values,
                 None,
                 is_import,
-            );
+            )?;
         }
     }
+    Ok(())
 }
 
 /// Collect the set of type-system names declared locally in a file
@@ -935,7 +934,7 @@ fn collect_type_expr_names(
 fn check_generics_leakage(
     dep_ast: &graphcal_compiler::desugar::resolved_ast::File,
     pub_reexport_whole: bool,
-    pub_reexport_items: &HashSet<String>,
+    pub_reexport_items: &HashSet<DeclName>,
     index_bindings: &HashMap<IndexName, IndexName>,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
@@ -966,7 +965,7 @@ fn check_generics_leakage(
         let reexported = if pub_reexport_whole {
             decl.is_pub() || implicitly_visible
         } else {
-            pub_reexport_items.contains(&decl_name)
+            pub_reexport_items.contains(decl_name.as_str())
         };
         if !reexported {
             continue;

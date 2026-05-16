@@ -231,7 +231,7 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
             const_values: plan
                 .const_values
                 .into_iter()
-                .map(|(k, v)| (k.member().to_string(), v))
+                .map(|(k, v)| (DeclName::new(k.member()), v))
                 .collect(),
             declared_types: compiled.declared_types,
             assertions: eval_result
@@ -363,7 +363,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
                         Some(dt),
                         &compiled.tir.registry,
                     );
-                    let decl_name = DeclName::new(name.to_string());
+                    let decl_name = DeclName::new(name.member());
                     match cat {
                         DeclCategory::Const => {
                             all_consts.push((decl_name.clone(), value.clone()));
@@ -663,7 +663,7 @@ pub(super) fn extract_runtime_values(
     plan: &crate::exec_plan::ExecPlan,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     src: &NamedSource<Arc<String>>,
-) -> HashMap<String, RuntimeValue> {
+) -> HashMap<DeclName, RuntimeValue> {
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let result = super::super::runtime::run_eval_loop(
@@ -689,6 +689,6 @@ pub(super) fn extract_runtime_values(
         .values
         .into_iter()
         .filter(|(name, _)| local_runtime_names.contains(name))
-        .map(|(k, v)| (k.member().to_string(), v))
+        .map(|(k, v)| (DeclName::new(k.member()), v))
         .collect()
 }

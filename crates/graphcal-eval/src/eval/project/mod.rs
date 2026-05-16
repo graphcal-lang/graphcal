@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::resolved_ast::{DeclKind, Expr, ExprKind, ModulePath};
+use graphcal_compiler::desugar::resolved_ast::{DeclKind, Declaration, Expr, ExprKind, ModulePath};
 use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, Spanned, StructTypeName};
 use graphcal_compiler::syntax::phase::Resolved;
 use graphcal_compiler::syntax::span::Span;
@@ -36,6 +36,63 @@ mod pipeline;
 /// directional convention discoverable everywhere the map shape appears in a
 /// signature.
 pub(in crate::eval::project) type DepToImporter<T> = HashMap<T, T>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::eval::project) enum ProjectDeclKind {
+    Param,
+    Node,
+    Const,
+    Assert,
+    Dimension,
+    Unit,
+    Index,
+    Type,
+    Plot,
+    Figure,
+    Layer,
+    Dag,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::eval::project) struct ProjectDeclIdentity<'a> {
+    pub(in crate::eval::project) name: &'a str,
+    pub(in crate::eval::project) kind: ProjectDeclKind,
+}
+
+pub(in crate::eval::project) fn decl_identity(
+    decl: &Declaration,
+) -> Option<ProjectDeclIdentity<'_>> {
+    let (name, kind) = match &decl.kind {
+        DeclKind::Param(p) => (p.name.value.as_str(), ProjectDeclKind::Param),
+        DeclKind::Node(n) => (n.name.value.as_str(), ProjectDeclKind::Node),
+        DeclKind::ConstNode(c) => (c.name.value.as_str(), ProjectDeclKind::Const),
+        DeclKind::Assert(a) => (a.name.value.as_str(), ProjectDeclKind::Assert),
+        DeclKind::BaseDimension(d) => (d.name.value.as_str(), ProjectDeclKind::Dimension),
+        DeclKind::Dimension(d) => (d.name.value.as_str(), ProjectDeclKind::Dimension),
+        DeclKind::Unit(u) => (u.name.value.as_str(), ProjectDeclKind::Unit),
+        DeclKind::Index(idx) => (idx.name.value.as_str(), ProjectDeclKind::Index),
+        DeclKind::Type(t) => (t.name.value.as_str(), ProjectDeclKind::Type),
+        DeclKind::UnionType(u) => (u.name.value.as_str(), ProjectDeclKind::Type),
+        DeclKind::Plot(p) => (p.name.value.as_str(), ProjectDeclKind::Plot),
+        DeclKind::Figure(f) => (f.name.value.as_str(), ProjectDeclKind::Figure),
+        DeclKind::Layer(l) => (l.name.value.as_str(), ProjectDeclKind::Layer),
+        DeclKind::Dag(d) => (d.name.value.as_str(), ProjectDeclKind::Dag),
+        DeclKind::Import(_) | DeclKind::Include(_) => return None,
+        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+    };
+    Some(ProjectDeclIdentity { name, kind })
+}
+
+/// A selective import/include alias.
+///
+/// `original` is the dependency-side declaration name; `local` is the name
+/// introduced into the importer. Keeping the two roles named prevents call
+/// sites from swapping a raw `(String, String)` pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::eval::project) struct ImportAlias {
+    pub(in crate::eval::project) original: DeclName,
+    pub(in crate::eval::project) local: DeclName,
+}
 
 /// Derive a module name (the leaf segment) from a `ModulePath`.
 ///
@@ -125,9 +182,9 @@ fn rewrite_alias_field_access(expr: &mut Expr, qualified_pairs: &HashSet<Qualifi
 /// The result of evaluating a single file in the per-file pipeline.
 pub(in crate::eval::project) struct EvaluatedFile {
     /// Evaluated runtime values (params + nodes): name → `RuntimeValue`.
-    pub(in crate::eval::project) values: HashMap<String, RuntimeValue>,
+    pub(in crate::eval::project) values: HashMap<DeclName, RuntimeValue>,
     /// Evaluated const values: name → `RuntimeValue`.
-    pub(in crate::eval::project) const_values: HashMap<String, RuntimeValue>,
+    pub(in crate::eval::project) const_values: HashMap<DeclName, RuntimeValue>,
     /// Declared types for all consts/params/nodes in this file.
     pub(in crate::eval::project) declared_types: HashMap<ScopedName, DeclaredType>,
     /// Assertion results from this file: name → (result, span).
@@ -190,7 +247,7 @@ pub(in crate::eval::project) struct DeferredDagInclude {
     /// filename).
     pub(in crate::eval::project) prefix: String,
     /// Param bindings: `param_name` → binding expression.
-    pub(in crate::eval::project) bindings: HashMap<String, Expr>,
+    pub(in crate::eval::project) bindings: HashMap<DeclName, Expr>,
     /// Index bindings: `dep_index_name` → `importer_index_name`.
     pub(in crate::eval::project) index_bindings: DepToImporter<IndexName>,
     /// Type bindings: `dep_type_name` → `importer_type_name`.
@@ -199,18 +256,18 @@ pub(in crate::eval::project) struct DeferredDagInclude {
     pub(in crate::eval::project) dim_bindings: DepToImporter<DimName>,
     /// For selective includes: the selected names and their local aliases.
     /// `None` for module-form includes (all names accessible via `prefix::`).
-    pub(in crate::eval::project) selective_names: Option<Vec<(String, String)>>,
+    pub(in crate::eval::project) selective_names: Option<Vec<ImportAlias>>,
     /// Span of the include declaration (for diagnostics).
     pub(in crate::eval::project) import_span: Span,
     /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on
     /// included assertions). Key = original name in dep.
     pub(in crate::eval::project) import_item_attributes:
-        HashMap<String, Vec<graphcal_compiler::desugar::resolved_ast::Attribute>>,
+        HashMap<DeclName, Vec<graphcal_compiler::desugar::resolved_ast::Attribute>>,
     /// Whether this include carries a leading `pub` (whole-module re-export).
     pub(in crate::eval::project) pub_reexport_whole: bool,
     /// Original names of selective items marked `pub` in the importer's
     /// brace list. Empty for whole-module form.
-    pub(in crate::eval::project) pub_reexport_items: HashSet<String>,
+    pub(in crate::eval::project) pub_reexport_items: HashSet<DeclName>,
 }
 
 /// What is being included — distinguishes file roots from inline DAGs and
@@ -265,6 +322,7 @@ pub(in crate::eval::project) struct ImportContext<'a> {
 }
 
 /// Result of looking up a single selective import item in an `EvaluatedFile`.
+#[derive(Debug)]
 pub(in crate::eval::project) enum SelectiveImportResult {
     /// A const value was found and registered.
     Const,
@@ -411,25 +469,9 @@ pub(in crate::eval::project) fn extract_pub_names(
             }
             continue;
         }
-        let name = match &decl.kind {
-            DeclKind::Param(p) => p.name.value.as_str(),
-            DeclKind::Node(n) => n.name.value.as_str(),
-            DeclKind::ConstNode(c) => c.name.value.as_str(),
-            DeclKind::Assert(a) => a.name.value.as_str(),
-            DeclKind::BaseDimension(d) => d.name.value.as_str(),
-            DeclKind::Dimension(d) => d.name.value.as_str(),
-            DeclKind::Unit(u) => u.name.value.as_str(),
-            DeclKind::Index(idx) => idx.name.value.as_str(),
-            DeclKind::Type(t) => t.name.value.as_str(),
-            DeclKind::UnionType(u) => u.name.value.as_str(),
-            DeclKind::Plot(p) => p.name.value.as_str(),
-            DeclKind::Figure(f) => f.name.value.as_str(),
-            DeclKind::Layer(l) => l.name.value.as_str(),
-            DeclKind::Dag(d) => d.name.value.as_str(),
-            DeclKind::Import(_) | DeclKind::Include(_) => continue,
-            DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
-        };
-        pub_names.insert(DeclName::new(name));
+        if let Some(identity) = decl_identity(decl) {
+            pub_names.insert(DeclName::new(identity.name));
+        }
     }
     pub_names
 }
@@ -445,20 +487,36 @@ pub(in crate::eval::project) fn file_has_declaration(
     name: &str,
 ) -> bool {
     file.declarations.iter().any(|decl| match &decl.kind {
-        DeclKind::Param(p) => p.name.value.as_str() == name,
-        DeclKind::Node(n) => n.name.value.as_str() == name,
-        DeclKind::ConstNode(c) => c.name.value.as_str() == name,
-        DeclKind::Assert(a) => a.name.value.as_str() == name,
-        DeclKind::BaseDimension(d) => d.name.value.as_str() == name,
-        DeclKind::Dimension(d) => d.name.value.as_str() == name,
-        DeclKind::Unit(u) => u.name.value.as_str() == name,
-        DeclKind::Index(idx) => idx.name.value.as_str() == name,
-        DeclKind::Type(t) => t.name.value.as_str() == name,
-        DeclKind::UnionType(u) => u.name.value.as_str() == name,
-        DeclKind::Plot(p) => p.name.value.as_str() == name,
-        DeclKind::Figure(f) => f.name.value.as_str() == name,
-        DeclKind::Layer(l) => l.name.value.as_str() == name,
-        DeclKind::Dag(d) => d.name.value.as_str() == name,
+        DeclKind::Param(_)
+        | DeclKind::Node(_)
+        | DeclKind::ConstNode(_)
+        | DeclKind::Assert(_)
+        | DeclKind::BaseDimension(_)
+        | DeclKind::Dimension(_)
+        | DeclKind::Unit(_)
+        | DeclKind::Index(_)
+        | DeclKind::Type(_)
+        | DeclKind::UnionType(_)
+        | DeclKind::Plot(_)
+        | DeclKind::Figure(_)
+        | DeclKind::Layer(_)
+        | DeclKind::Dag(_) => decl_identity(decl).is_some_and(|identity| {
+            matches!(
+                identity.kind,
+                ProjectDeclKind::Param
+                    | ProjectDeclKind::Node
+                    | ProjectDeclKind::Const
+                    | ProjectDeclKind::Assert
+                    | ProjectDeclKind::Dimension
+                    | ProjectDeclKind::Unit
+                    | ProjectDeclKind::Index
+                    | ProjectDeclKind::Type
+                    | ProjectDeclKind::Plot
+                    | ProjectDeclKind::Figure
+                    | ProjectDeclKind::Layer
+                    | ProjectDeclKind::Dag
+            ) && identity.name == name
+        }),
         DeclKind::Import(d) => matches!(
             &d.kind,
             graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)

@@ -809,7 +809,7 @@ impl UnfrozenIR {
     /// stays focused on `param` for that reason.
     pub fn check_include_reconciles_overrides(
         &self,
-        bindings: &HashMap<String, Expr>,
+        bindings: &HashMap<DeclName, Expr>,
         index_bindings: &HashMap<IndexName, IndexName>,
         type_bindings: &HashMap<StructTypeName, StructTypeName>,
         importer_src: &NamedSource<Arc<String>>,
@@ -858,12 +858,12 @@ impl UnfrozenIR {
         &mut self,
         dep: Self,
         prefix: &str,
-        bindings: &HashMap<String, Expr>,
+        bindings: &HashMap<DeclName, Expr>,
         dep_names: &HashSet<String>,
         index_bindings: &HashMap<IndexName, IndexName>,
         type_bindings: &HashMap<StructTypeName, StructTypeName>,
         dim_bindings: &HashMap<DimName, DimName>,
-        import_item_attributes: &HashMap<String, Vec<crate::desugar::resolved_ast::Attribute>>,
+        import_item_attributes: &HashMap<DeclName, Vec<crate::desugar::resolved_ast::Attribute>>,
         importer_src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
         /// Prefix a `ScopedName` dep if its member is in `dep_names`.
@@ -1129,7 +1129,8 @@ impl UnfrozenIR {
         for (orig_name, attrs) in import_item_attributes {
             for attr in attrs {
                 if attr.name.name == "expected_fail" {
-                    let prefixed_assert = ScopedName::Local(orig_name.clone()).with_prefix(prefix);
+                    let prefixed_assert =
+                        ScopedName::Local(orig_name.as_str().to_string()).with_prefix(prefix);
                     let ef = crate::ir::resolve::names::parse_expected_fail_args(
                         &attr.args,
                         importer_src,
