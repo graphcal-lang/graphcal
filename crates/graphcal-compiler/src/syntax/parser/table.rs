@@ -1,5 +1,4 @@
-use crate::registry::types::nat_range_index_name;
-use crate::syntax::ast::{Expr, ExprKind, MapEntry, MapEntryKey, TableIndexSpec};
+use crate::syntax::ast::{Expr, ExprKind, MapEntry, MapEntryIndex, MapEntryKey, TableIndexSpec};
 use crate::syntax::names::{IndexName, Spanned, VariantName};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
@@ -78,9 +77,17 @@ impl Parser<'_> {
         }
     }
 
-    /// Build the synthetic `Spanned<IndexName>` used for entries on a `NatRange` axis.
-    fn nat_range_index_spanned(size: u64, span: Span) -> Spanned<IndexName> {
-        Spanned::new(IndexName::new(nat_range_index_name(size)), span)
+    fn named_index_spanned(index: &Spanned<IndexName>) -> Spanned<MapEntryIndex> {
+        Spanned::new(MapEntryIndex::Named(index.value.clone()), index.span)
+    }
+
+    fn named_index_spanned_owned(index: Spanned<IndexName>) -> Spanned<MapEntryIndex> {
+        Spanned::new(MapEntryIndex::Named(index.value), index.span)
+    }
+
+    /// Build the typed map-entry index used for entries on a `NatRange` axis.
+    const fn nat_range_index_spanned(size: u64, span: Span) -> Spanned<MapEntryIndex> {
+        Spanned::new(MapEntryIndex::NatRange(size), span)
     }
 
     /// Synthetic variant name `#i` for a `NatRange` axis.
@@ -111,7 +118,7 @@ impl Parser<'_> {
             self.expect(Token::Semicolon)?;
             entries.push(MapEntry {
                 keys: vec![MapEntryKey {
-                    index: index.clone(),
+                    index: Self::named_index_spanned(index),
                     variant: label.into_spanned::<VariantName>(),
                 }],
                 value,
@@ -168,12 +175,12 @@ impl Parser<'_> {
         let col_spec = &indexes[n - 1];
 
         // Build the row/column index name used for emitted keys.
-        let row_index_template: Spanned<IndexName> = match row_spec {
-            TableIndexSpec::Named(s) => s.clone(),
+        let row_index_template: Spanned<MapEntryIndex> = match row_spec {
+            TableIndexSpec::Named(s) => Self::named_index_spanned(s),
             TableIndexSpec::NatRange(n, sp) => Self::nat_range_index_spanned(*n, *sp),
         };
-        let col_index_template: Spanned<IndexName> = match col_spec {
-            TableIndexSpec::Named(s) => s.clone(),
+        let col_index_template: Spanned<MapEntryIndex> = match col_spec {
+            TableIndexSpec::Named(s) => Self::named_index_spanned(s),
             TableIndexSpec::NatRange(n, sp) => Self::nat_range_index_spanned(*n, *sp),
         };
 
@@ -310,7 +317,10 @@ impl Parser<'_> {
                         self.expect(Token::Dot)?;
                         let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
                         prefix_keys.push(MapEntryKey {
-                            index: Spanned::new(IndexName::new(index_ident.name), index_ident.span),
+                            index: Spanned::new(
+                                MapEntryIndex::Named(IndexName::new(index_ident.name)),
+                                index_ident.span,
+                            ),
                             variant,
                         });
                     }
@@ -365,7 +375,7 @@ impl Parser<'_> {
         let value = self.parse_expr()?;
         let mut entries = vec![MapEntry {
             keys: vec![MapEntryKey {
-                index: first_index,
+                index: Self::named_index_spanned_owned(first_index),
                 variant: first_variant,
             }],
             value,
@@ -382,7 +392,10 @@ impl Parser<'_> {
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             entries.push(MapEntry {
-                keys: vec![MapEntryKey { index, variant }],
+                keys: vec![MapEntryKey {
+                    index: Self::named_index_spanned_owned(index),
+                    variant,
+                }],
                 value,
             });
         }
@@ -409,7 +422,10 @@ impl Parser<'_> {
                 let index = self.parse_any_ident()?.into_spanned::<IndexName>();
                 self.expect(Token::Dot)?;
                 let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
-                keys.push(MapEntryKey { index, variant });
+                keys.push(MapEntryKey {
+                    index: Self::named_index_spanned_owned(index),
+                    variant,
+                });
                 if self.lexer.peek() == Some(&Token::Comma) {
                     self.lexer.next_token();
                 } else {
@@ -453,9 +469,9 @@ mod tests {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
                 ExprKind::MapLiteral { entries } => {
                     assert_eq!(entries.len(), 2);
-                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "Maneuver");
                     assert_eq!(entries[0].keys[0].variant.value.as_str(), "Departure");
-                    assert_eq!(entries[1].keys[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[1].keys[0].index.value.to_string(), "Maneuver");
                     assert_eq!(entries[1].keys[0].variant.value.as_str(), "Correction");
                 }
                 other => panic!("expected MapLiteral, got {other:?}"),
@@ -496,7 +512,7 @@ mod tests {
                     assert_eq!(named_index_name(&indexes[0]), "Maneuver");
                     assert_eq!(entries.len(), 3);
                     assert_eq!(entries[0].keys.len(), 1);
-                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "Maneuver");
                     assert_eq!(entries[0].keys[0].variant.value.as_str(), "Departure");
                     assert_eq!(entries[1].keys[0].variant.value.as_str(), "Correction");
                     assert_eq!(entries[2].keys[0].variant.value.as_str(), "Insertion");
@@ -524,7 +540,7 @@ mod tests {
                     assert_eq!(indexes.len(), 1);
                     assert_eq!(nat_range_size(&indexes[0]), 3);
                     assert_eq!(entries.len(), 3);
-                    assert_eq!(entries[0].keys[0].index.value.as_str(), "__nat_range_3");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "range(3)");
                     assert_eq!(entries[0].keys[0].variant.value.as_str(), "#0");
                     assert_eq!(entries[1].keys[0].variant.value.as_str(), "#1");
                     assert_eq!(entries[2].keys[0].variant.value.as_str(), "#2");
@@ -555,9 +571,9 @@ mod tests {
                     assert_eq!(named_index_name(&indexes[1]), "Maneuver");
                     assert_eq!(entries.len(), 9);
                     assert_eq!(entries[0].keys.len(), 2);
-                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Phase");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "Phase");
                     assert_eq!(entries[0].keys[0].variant.value.as_str(), "Launch");
-                    assert_eq!(entries[0].keys[1].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[1].index.value.to_string(), "Maneuver");
                     assert_eq!(entries[0].keys[1].variant.value.as_str(), "Departure");
                     assert_eq!(entries[1].keys[1].variant.value.as_str(), "Correction");
                     assert_eq!(entries[8].keys[0].variant.value.as_str(), "Arrival");
@@ -586,9 +602,9 @@ mod tests {
                     assert_eq!(nat_range_size(&indexes[0]), 2);
                     assert_eq!(nat_range_size(&indexes[1]), 3);
                     assert_eq!(entries.len(), 6);
-                    assert_eq!(entries[0].keys[0].index.value.as_str(), "__nat_range_2");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "range(2)");
                     assert_eq!(entries[0].keys[0].variant.value.as_str(), "#0");
-                    assert_eq!(entries[0].keys[1].index.value.as_str(), "__nat_range_3");
+                    assert_eq!(entries[0].keys[1].index.value.to_string(), "range(3)");
                     assert_eq!(entries[0].keys[1].variant.value.as_str(), "#0");
                     assert_eq!(entries[5].keys[0].variant.value.as_str(), "#1");
                     assert_eq!(entries[5].keys[1].variant.value.as_str(), "#2");
@@ -616,9 +632,9 @@ mod tests {
                     assert_eq!(named_index_name(&indexes[0]), "Phase");
                     assert_eq!(nat_range_size(&indexes[1]), 3);
                     assert_eq!(entries.len(), 6);
-                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Phase");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "Phase");
                     assert_eq!(entries[0].keys[0].variant.value.as_str(), "Launch");
-                    assert_eq!(entries[0].keys[1].index.value.as_str(), "__nat_range_3");
+                    assert_eq!(entries[0].keys[1].index.value.to_string(), "range(3)");
                     assert_eq!(entries[0].keys[1].variant.value.as_str(), "#0");
                     assert_eq!(entries[2].keys[1].variant.value.as_str(), "#2");
                 }
@@ -646,9 +662,9 @@ mod tests {
                     assert_eq!(nat_range_size(&indexes[0]), 2);
                     assert_eq!(named_index_name(&indexes[1]), "Maneuver");
                     assert_eq!(entries.len(), 4);
-                    assert_eq!(entries[0].keys[0].index.value.as_str(), "__nat_range_2");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "range(2)");
                     assert_eq!(entries[0].keys[0].variant.value.as_str(), "#0");
-                    assert_eq!(entries[0].keys[1].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[1].index.value.to_string(), "Maneuver");
                     assert_eq!(entries[0].keys[1].variant.value.as_str(), "Departure");
                     assert_eq!(entries[3].keys[0].variant.value.as_str(), "#1");
                     assert_eq!(entries[3].keys[1].variant.value.as_str(), "Correction");
@@ -685,11 +701,11 @@ mod tests {
                     assert_eq!(named_index_name(&indexes[2]), "Maneuver");
                     assert_eq!(entries.len(), 8);
                     assert_eq!(entries[0].keys.len(), 3);
-                    assert_eq!(entries[0].keys[0].index.value.as_str(), "Time");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "Time");
                     assert_eq!(entries[0].keys[0].variant.value.as_str(), "T1");
-                    assert_eq!(entries[0].keys[1].index.value.as_str(), "Phase");
+                    assert_eq!(entries[0].keys[1].index.value.to_string(), "Phase");
                     assert_eq!(entries[0].keys[1].variant.value.as_str(), "Launch");
-                    assert_eq!(entries[0].keys[2].index.value.as_str(), "Maneuver");
+                    assert_eq!(entries[0].keys[2].index.value.to_string(), "Maneuver");
                     assert_eq!(entries[0].keys[2].variant.value.as_str(), "Departure");
                     assert_eq!(entries[4].keys[0].variant.value.as_str(), "T2");
                     assert_eq!(entries[4].keys[1].variant.value.as_str(), "Launch");
@@ -726,7 +742,7 @@ mod tests {
                     assert_eq!(named_index_name(&indexes[1]), "Phase");
                     assert_eq!(named_index_name(&indexes[2]), "Maneuver");
                     assert_eq!(entries.len(), 8);
-                    assert_eq!(entries[0].keys[0].index.value.as_str(), "__nat_range_2");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "range(2)");
                     assert_eq!(entries[0].keys[0].variant.value.as_str(), "#0");
                     assert_eq!(entries[0].keys[1].variant.value.as_str(), "Launch");
                     assert_eq!(entries[0].keys[2].variant.value.as_str(), "Departure");

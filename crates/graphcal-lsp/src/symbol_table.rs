@@ -9,6 +9,7 @@ use graphcal_compiler::desugar::resolved_ast::{
     PatternBinding, PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl, UnitExpr,
     Visibility,
 };
+use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
@@ -521,7 +522,7 @@ fn collect_attribute_refs(
     table: &mut SymbolTable,
 ) {
     for attr in attributes {
-        if attr.name.name == "assumes" {
+        if attr.name.name.parse::<AttributeName>() == Ok(AttributeName::Assumes) {
             for arg in &attr.args {
                 if let Some(ident) = arg.as_single_ident() {
                     table.references.push(ReferenceInfo {
@@ -1050,6 +1051,12 @@ fn collect_expr_refs(
             table.references.push(ReferenceInfo {
                 span: ident.span,
                 target,
+            });
+        }
+        ExprKind::TypeSystemRef(name) => {
+            table.references.push(ReferenceInfo {
+                span: name.span,
+                target: SymbolKey::TopLevel(name.value.as_str().to_string()),
             });
         }
         ExprKind::BinOp { lhs, rhs, .. } => {

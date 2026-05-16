@@ -2201,7 +2201,7 @@ mod tests {
             generic_params: vec![],
             kind: crate::registry::types::TypeDefKind::Union {
                 members: vec![crate::registry::types::UnionMemberDef {
-                    name: StructTypeName::new("TransferResult"),
+                    name: crate::syntax::names::ConstructorName::new("TransferResult"),
                     fields: vec![
                         crate::registry::types::StructField {
                             name: crate::syntax::names::FieldName::new("dv1"),

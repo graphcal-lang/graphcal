@@ -46,10 +46,10 @@ pub fn unreachable_post_desugar() -> ! {
     )
 }
 
-use crate::registry::types::nat_range_index_name;
 use crate::syntax::ast::{
-    ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, File, MapEntry, MapEntryKey, MultiDecl,
-    MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl, ParamDecl, TableIndexSpec,
+    ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, File, MapEntry, MapEntryIndex,
+    MapEntryKey, MultiDecl, MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl,
+    ParamDecl, TableIndexSpec,
 };
 use crate::syntax::names::{IndexName, Spanned, VariantName};
 use crate::syntax::phase::{Desugared, Raw};
@@ -83,10 +83,8 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
     let slice_axis_specs: &[TableIndexSpec] = &multi.shared_axes[..multi.shared_axes.len() - 1];
 
     let row_index_name = match &row_index_spec {
-        TableIndexSpec::Named(s) => s.clone(),
-        TableIndexSpec::NatRange(n, sp) => {
-            Spanned::new(IndexName::new(nat_range_index_name(*n)), *sp)
-        }
+        TableIndexSpec::Named(s) => Spanned::new(MapEntryIndex::Named(s.value.clone()), s.span),
+        TableIndexSpec::NatRange(n, sp) => Spanned::new(MapEntryIndex::NatRange(*n), *sp),
     };
 
     let mut out: Vec<Declaration> = Vec::with_capacity(multi.slots.len());
@@ -120,7 +118,10 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
                     if extra_axis_name.is_none() {
                         extra_axis_name = Some(extra_axis.clone());
                     }
-                    let extra_index_name = Spanned::new(extra_axis.value.clone(), extra_axis.span);
+                    let extra_index_name = Spanned::new(
+                        MapEntryIndex::Named(extra_axis.value.clone()),
+                        extra_axis.span,
+                    );
                     let col_variants: Vec<Spanned<VariantName>> = slice.header_cells[*start..*end]
                         .iter()
                         .filter_map(|c| match c {

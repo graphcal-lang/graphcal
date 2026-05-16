@@ -8,6 +8,7 @@ use crate::registry::builtins::{DimSignature, ParamDim, ResultDim};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
+use crate::syntax::names::DimVarName;
 
 pub(super) fn infer_fn_dim(
     fn_name: &str,
@@ -17,7 +18,7 @@ pub(super) fn infer_fn_dim(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
-    let mut bindings: HashMap<&str, &Dimension> = HashMap::new();
+    let mut bindings: HashMap<DimVarName, &Dimension> = HashMap::new();
 
     for (i, param) in sig.params.iter().enumerate() {
         match &param.dim {
@@ -37,10 +38,10 @@ pub(super) fn infer_fn_dim(
                 }
             }
             ParamDim::Bind(var) => {
-                bindings.insert(var, &arg_dims[i]);
+                bindings.insert(var.clone(), &arg_dims[i]);
             }
             ParamDim::Ref(var) => {
-                let bound = lookup_binding(&bindings, var.as_str(), fn_name, src, args[i].span)?;
+                let bound = lookup_binding(&bindings, var, fn_name, src, args[i].span)?;
                 if arg_dims[i] != *bound {
                     let bind_param_name = sig
                         .params
@@ -72,10 +73,10 @@ pub(super) fn infer_fn_dim(
     match &sig.result {
         ResultDim::Fixed(dim) => Ok(dim.clone()),
         ResultDim::Var(name) => {
-            Ok(lookup_binding(&bindings, name.as_str(), fn_name, src, result_span)?.clone())
+            Ok(lookup_binding(&bindings, name, fn_name, src, result_span)?.clone())
         }
         ResultDim::VarPow(name, power) => {
-            lookup_binding(&bindings, name.as_str(), fn_name, src, result_span)?
+            lookup_binding(&bindings, name, fn_name, src, result_span)?
                 .pow(*power)
                 .map_err(|_| GraphcalError::DimensionOverflow {
                     src: src.clone(),
@@ -86,8 +87,8 @@ pub(super) fn infer_fn_dim(
 }
 
 fn lookup_binding<'a>(
-    bindings: &HashMap<&str, &'a Dimension>,
-    var: &str,
+    bindings: &HashMap<DimVarName, &'a Dimension>,
+    var: &DimVarName,
     fn_name: &str,
     src: &NamedSource<Arc<String>>,
     span: crate::syntax::span::Span,

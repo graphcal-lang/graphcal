@@ -108,6 +108,13 @@ pub fn eval_expr(
         ExprKind::StringLiteral(_) => {
             Err(ctx.eval_error("unexpected string literal in evaluation context", expr.span))
         }
+        ExprKind::TypeSystemRef(name) => Err(ctx.eval_error(
+            format!(
+                "unexpected type-system name `{}` in evaluation context",
+                name.value
+            ),
+            name.span,
+        )),
         ExprKind::UnitLiteral { value, unit } => {
             let scale = resolve_unit_scale(unit, values, local_values, ctx)?;
             Ok(RuntimeValue::Scalar(*value * scale))
@@ -261,9 +268,11 @@ pub fn eval_expr(
                 // Validate against any field-level domain constraint declared
                 // on `<type_name>.<field_name>`. The check fires at the field's
                 // span so the diagnostic points at the offending value.
+                let constructor_name =
+                    graphcal_compiler::syntax::names::StructTypeName::new(type_name.value.as_str());
                 if let Some(field_constraints) = ctx.struct_field_constraints
                     && let Some(constraint) = field_constraints
-                        .get(&(type_name.value.clone(), field_init.name.value.clone()))
+                        .get(&(constructor_name.clone(), field_init.name.value.clone()))
                     && let Err(violation) =
                         crate::domain_check::check_domain_constraint(&val, constraint)
                 {
@@ -282,7 +291,9 @@ pub fn eval_expr(
                 field_map.insert(field_init.name.value.clone(), val);
             }
             Ok(RuntimeValue::Struct {
-                type_name: type_name.value.clone(),
+                type_name: graphcal_compiler::syntax::names::StructTypeName::new(
+                    type_name.value.as_str(),
+                ),
                 fields: field_map,
             })
         }

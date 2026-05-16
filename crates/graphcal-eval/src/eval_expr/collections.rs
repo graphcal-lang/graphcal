@@ -337,7 +337,7 @@ pub(super) fn eval_map_literal(
         )
     })?;
     let arity = first.keys.len();
-    let idx_name = first_key.index.value.clone();
+    let idx_name = first_key.index.value.registry_name();
 
     if arity == 1 {
         // Single-axis: flat Indexed
@@ -416,14 +416,14 @@ pub(super) fn eval_for_comp(
     let binding = &bindings[0];
 
     // Resolve the index name and get the index definition
-    let (idx_name, error_span) = match &binding.index {
-        ForBindingIndex::Named(spanned) => (spanned.value.clone(), spanned.span),
+    let (idx_name, error_span, dynamic_nat_size) = match &binding.index {
+        ForBindingIndex::Named(spanned) => (spanned.value.clone(), spanned.span, None),
         ForBindingIndex::Range { arg, span } => {
             let size = eval_nat_expr(arg, local_values, ctx)?;
             let idx_name = graphcal_compiler::syntax::names::IndexName::new(
                 graphcal_compiler::registry::types::nat_range_index_name(size),
             );
-            (idx_name, *span)
+            (idx_name, *span, Some(size))
         }
     };
 
@@ -433,9 +433,7 @@ pub(super) fn eval_for_comp(
     let dynamic_nat_def;
     let idx_def = if let Some(def) = ctx.registry.indexes.get_index(idx_name.as_str()) {
         def
-    } else if let Some(size) =
-        graphcal_compiler::registry::types::parse_nat_range_index_name(idx_name.as_str())
-    {
+    } else if let Some(size) = dynamic_nat_size {
         let size = usize::try_from(size).map_err(|_| {
             ctx.eval_error(
                 format!("nat range size {size} does not fit in usize on this target"),

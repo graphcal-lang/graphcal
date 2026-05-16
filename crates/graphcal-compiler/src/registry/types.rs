@@ -5,7 +5,8 @@ use crate::desugar::resolved_ast::{
 };
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational, RationalError};
 use crate::syntax::names::{
-    DimName, FieldName, GenericParamName, IndexName, StructTypeName, UnitName, VariantName,
+    ConstructorName, DimName, FieldName, GenericParamName, IndexName, StructTypeName, UnitName,
+    VariantName,
 };
 // ---------------------------------------------------------------------------
 // Data types
@@ -75,10 +76,8 @@ pub struct StructField {
 /// its payload fields inline; there are no per-variant standalone types.
 #[derive(Debug, Clone)]
 pub struct UnionMemberDef {
-    /// Constructor name. Tracked as `StructTypeName` for now — once the
-    /// constructor namespace is fully split out, this will become a
-    /// `ConstructorName` newtype.
-    pub name: StructTypeName,
+    /// Constructor name.
+    pub name: ConstructorName,
     /// Payload fields for this constructor. An empty `Vec` means a unit
     /// constructor (`Coast`).
     pub fields: Vec<StructField>,
@@ -594,7 +593,7 @@ pub struct TypeRegistry {
     /// Constructor namespace: each constructor name resolves to the
     /// union it belongs to. With no module system, the namespace is
     /// flat; collisions are rejected at registry construction time.
-    ctors: HashMap<StructTypeName, StructTypeName>,
+    ctors: HashMap<ConstructorName, StructTypeName>,
 }
 
 impl TypeRegistry {
@@ -608,11 +607,11 @@ impl TypeRegistry {
     /// constructor's payload fields. Returns `None` if the name is not
     /// a registered constructor.
     #[must_use]
-    pub fn lookup_ctor(&self, ctor: &str) -> Option<(&TypeDef, &UnionMemberDef)> {
+    pub fn lookup_ctor(&self, ctor: &ConstructorName) -> Option<(&TypeDef, &UnionMemberDef)> {
         let union_name = self.ctors.get(ctor)?;
         let td = self.types.get(union_name)?;
         let members = td.union_members()?;
-        let member = members.iter().find(|m| m.name.as_str() == ctor)?;
+        let member = members.iter().find(|m| m.name == *ctor)?;
         Some((td, member))
     }
 
@@ -698,7 +697,7 @@ pub struct RegistryBuilder {
     dimensions: HashMap<DimName, Dimension>,
     units: HashMap<UnitName, UnitInfo>,
     types: HashMap<StructTypeName, TypeDef>,
-    ctors: HashMap<StructTypeName, StructTypeName>,
+    ctors: HashMap<ConstructorName, StructTypeName>,
     indexes: HashMap<IndexName, IndexDef>,
     dags: HashMap<String, DagDecl>,
 }
@@ -1187,7 +1186,7 @@ mod tests {
             generic_params: vec![],
             kind: TypeDefKind::Union {
                 members: vec![UnionMemberDef {
-                    name: StructTypeName::new("TransferResult"),
+                    name: ConstructorName::new("TransferResult"),
                     fields: vec![
                         StructField {
                             name: FieldName::new("dv1"),

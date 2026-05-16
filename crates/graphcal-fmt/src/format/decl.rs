@@ -760,7 +760,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
             let labels = slice
                 .prefix_keys
                 .iter()
-                .map(|k| format!("{}.{}", k.index.value.as_str(), k.variant.value.as_str()))
+                .map(|k| format!("{}.{}", k.index.value, k.variant.value.as_str()))
                 .collect::<Vec<_>>()
                 .join(", ");
             out.push('\n');

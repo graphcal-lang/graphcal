@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational};
+use crate::syntax::names::DimVarName;
 
 /// Describes how a single parameter's dimension is constrained.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,9 +11,9 @@ pub enum ParamDim {
     Fixed(Dimension),
     /// Introduces a new dimension variable. The variable is bound to
     /// the argument's actual dimension.
-    Bind(String),
+    Bind(DimVarName),
     /// Must match the dimension already bound to this variable name.
-    Ref(String),
+    Ref(DimVarName),
 }
 
 /// Describes how the result dimension is computed.
@@ -21,9 +22,9 @@ pub enum ResultDim {
     /// A specific fixed dimension.
     Fixed(Dimension),
     /// The dimension bound to the named variable.
-    Var(String),
+    Var(DimVarName),
     /// The dimension bound to the named variable, raised to a rational power.
-    VarPow(String, Rational),
+    VarPow(DimVarName, Rational),
 }
 
 /// A parameter with its display name and dimension constraint.
@@ -49,6 +50,10 @@ pub struct DimSignature {
 
 const fn dimensionless() -> Dimension {
     Dimension::dimensionless()
+}
+
+fn dim_var_d() -> DimVarName {
+    DimVarName::new("D")
 }
 
 fn angle() -> Dimension {
@@ -89,9 +94,9 @@ impl DimSignature {
         Self {
             params: vec![ParamSig {
                 name: name.to_string(),
-                dim: ParamDim::Bind("D".to_string()),
+                dim: ParamDim::Bind(dim_var_d()),
             }],
-            result: ResultDim::Var("D".to_string()),
+            result: ResultDim::Var(dim_var_d()),
         }
     }
 
@@ -101,7 +106,7 @@ impl DimSignature {
         Self {
             params: vec![ParamSig {
                 name: name.to_string(),
-                dim: ParamDim::Bind("D".to_string()),
+                dim: ParamDim::Bind(dim_var_d()),
             }],
             result: ResultDim::Fixed(output),
         }
@@ -113,9 +118,9 @@ impl DimSignature {
         Self {
             params: vec![ParamSig {
                 name: name.to_string(),
-                dim: ParamDim::Bind("D".to_string()),
+                dim: ParamDim::Bind(dim_var_d()),
             }],
-            result: ResultDim::VarPow("D".to_string(), power),
+            result: ResultDim::VarPow(dim_var_d(), power),
         }
     }
 
@@ -129,13 +134,13 @@ impl DimSignature {
                 .map(|(i, &n)| ParamSig {
                     name: n.to_string(),
                     dim: if i == 0 {
-                        ParamDim::Bind("D".to_string())
+                        ParamDim::Bind(dim_var_d())
                     } else {
-                        ParamDim::Ref("D".to_string())
+                        ParamDim::Ref(dim_var_d())
                     },
                 })
                 .collect(),
-            result: ResultDim::Var("D".to_string()),
+            result: ResultDim::Var(dim_var_d()),
         }
     }
 
@@ -149,9 +154,9 @@ impl DimSignature {
                 .map(|(i, &n)| ParamSig {
                     name: n.to_string(),
                     dim: if i == 0 {
-                        ParamDim::Bind("D".to_string())
+                        ParamDim::Bind(dim_var_d())
                     } else {
-                        ParamDim::Ref("D".to_string())
+                        ParamDim::Ref(dim_var_d())
                     },
                 })
                 .collect(),

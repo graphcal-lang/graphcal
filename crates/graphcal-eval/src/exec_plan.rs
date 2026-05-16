@@ -623,7 +623,10 @@ pub fn resolve_struct_field_constraints(
             }
 
             constraints.insert(
-                (variant.name.clone(), field.name.clone()),
+                (
+                    graphcal_compiler::syntax::names::StructTypeName::new(variant.name.as_str()),
+                    field.name.clone(),
+                ),
                 ResolvedDomainConstraint {
                     min: min_val,
                     max: max_val,

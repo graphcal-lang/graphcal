@@ -1,6 +1,7 @@
 //! Graphcal Syntax: lexer, parser, and AST definitions.
 
 pub mod ast;
+pub mod attribute;
 pub mod comments;
 pub mod dag_id;
 pub mod desugar;
