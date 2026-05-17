@@ -5,7 +5,7 @@ exclude = ["editors/zed"]
 default-members = ["crates/graphcal-cli"]
 
 [workspace.package]
-version = "0.0.1-alpha.6"
+version = "0.0.1-alpha.7"
 edition = "2024"
 rust-version = "1.91"
 description = "Type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations"
@@ -17,11 +17,11 @@ categories = ["compilers", "science"]
 
 [workspace.dependencies]
 clap = { version = "4.5.58", features = ["derive"] }
-graphcal-compiler = { path = "crates/graphcal-compiler", version = "0.0.1-alpha.6" }
-graphcal-eval = { path = "crates/graphcal-eval", version = "0.0.1-alpha.6" }
-graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.0.1-alpha.6" }
-graphcal-io = { path = "crates/graphcal-io", version = "0.0.1-alpha.6" }
-graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.0.1-alpha.6" }
+graphcal-compiler = { path = "crates/graphcal-compiler", version = "0.0.1-alpha.7" }
+graphcal-eval = { path = "crates/graphcal-eval", version = "0.0.1-alpha.7" }
+graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.0.1-alpha.7" }
+graphcal-io = { path = "crates/graphcal-io", version = "0.0.1-alpha.7" }
+graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.0.1-alpha.7" }
 hifitime = "4.2.4"
 indexmap = "2.13.0"
 insta = "1.46.3"
