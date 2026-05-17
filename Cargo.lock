@@ -463,7 +463,7 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "graphcal"
-version = "0.0.1-alpha.6"
+version = "0.0.1-alpha.7"
 dependencies = [
  "clap",
  "graphcal-compiler",
@@ -485,7 +485,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-compiler"
-version = "0.0.1-alpha.6"
+version = "0.0.1-alpha.7"
 dependencies = [
  "hifitime",
  "indexmap",
@@ -501,7 +501,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-eval"
-version = "0.0.1-alpha.6"
+version = "0.0.1-alpha.7"
 dependencies = [
  "graphcal-compiler",
  "graphcal-io",
@@ -519,7 +519,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-fmt"
-version = "0.0.1-alpha.6"
+version = "0.0.1-alpha.7"
 dependencies = [
  "graphcal-compiler",
  "insta",
@@ -529,14 +529,14 @@ dependencies = [
 
 [[package]]
 name = "graphcal-io"
-version = "0.0.1-alpha.6"
+version = "0.0.1-alpha.7"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "graphcal-lsp"
-version = "0.0.1-alpha.6"
+version = "0.0.1-alpha.7"
 dependencies = [
  "graphcal-compiler",
  "graphcal-eval",
