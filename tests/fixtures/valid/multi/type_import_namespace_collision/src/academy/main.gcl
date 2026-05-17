@@ -1,4 +1,5 @@
-import academy.lib.{ Student, type Student, student_score };
+import academy.lib.{ StudentConstructor, type Student, WeightlessStudent, student_score };
 
-node learner: Student = Student(mass: 70.0 kg);
+node learner: Student = StudentConstructor(mass: 70.0 kg);
+node another_learner: Student = WeightlessStudent;
 node score: Dimensionless = @student_score;

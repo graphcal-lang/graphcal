@@ -27,7 +27,7 @@ use crate::desugar::desugared_ast as src_ast;
 use crate::desugar::resolved_ast as dst_ast;
 use crate::registry::builtins::builtin_constants;
 use crate::registry::resolve_types::is_time_scale_name;
-use crate::syntax::ast::{ImportKind, TypeSystemRefKind};
+use crate::syntax::ast::{ImportItemNamespace, ImportKind, TypeSystemRefKind};
 use crate::syntax::names::{
     ConstructorName, DimName, IndexName, LocalName, ModuleAliasName, ScopedName, Spanned,
     StructTypeName, VariantName,
@@ -197,10 +197,20 @@ fn collect_names_from_decls(
                 if let ImportKind::Selective(items) = &import.kind {
                     for item in items {
                         let local = item.local_name().to_string();
-                        // Without resolving imports we don't know type vs index;
-                        // err on the side of recognizing it as a type so that
-                        // bare references parse as struct construction.
-                        imported_type_system_names.insert(StructTypeName::new(local));
+                        match item.namespace {
+                            ImportItemNamespace::Type => {
+                                imported_type_system_names.insert(StructTypeName::new(local));
+                            }
+                            ImportItemNamespace::Default => {
+                                // The default namespace includes union
+                                // constructors. Treating selective default
+                                // imports as constructor candidates lets
+                                // nullary constructors resolve as values; the
+                                // project import pass later verifies the
+                                // imported item category and visibility.
+                                constructor_names.insert(ConstructorName::new(local));
+                            }
+                        }
                     }
                 }
             }
@@ -211,7 +221,7 @@ fn collect_names_from_decls(
                 if let ImportKind::Selective(items) = &include.kind {
                     for item in items {
                         let local = item.local_name().to_string();
-                        imported_type_system_names.insert(StructTypeName::new(local));
+                        constructor_names.insert(ConstructorName::new(local));
                     }
                 }
             }
@@ -883,4 +893,66 @@ fn resolve_qualified_name_ref(
         ScopedName::qualified(qualifier.name, member.name),
         merged_span,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used, reason = "test code")]
+
+    use super::*;
+    use crate::desugar::resolved_ast::{DeclKind, ExprKind};
+    use crate::syntax::parser::Parser;
+
+    fn resolve_source(source: &str) -> dst_ast::File {
+        let raw_file = Parser::new(source).parse_file().unwrap();
+        let mut desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        crate::syntax::ast::desugar_tuple_matches(&mut desugared);
+        resolve_name_refs(desugared)
+    }
+
+    #[test]
+    fn default_selective_import_can_resolve_bare_constructor() {
+        let file = resolve_source(
+            "import academy.lib.{ WeightlessStudent };\n\
+             node another_learner: Student = WeightlessStudent;",
+        );
+
+        let node = match &file.declarations[1].kind {
+            DeclKind::Node(node) => Some(node),
+            _ => None,
+        }
+        .unwrap();
+        let (type_name, type_args, fields) = match &node.value.kind {
+            ExprKind::StructConstruction {
+                type_name,
+                type_args,
+                fields,
+            } => Some((type_name, type_args, fields)),
+            _ => None,
+        }
+        .unwrap();
+        assert_eq!(type_name.value.as_str(), "WeightlessStudent");
+        assert!(type_args.is_empty());
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn explicit_type_import_stays_type_system_ref() {
+        let file = resolve_source(
+            "import academy.lib.{ type Student };\n\
+             node learner: Dimensionless = Student;",
+        );
+
+        let node = match &file.declarations[1].kind {
+            DeclKind::Node(node) => Some(node),
+            _ => None,
+        }
+        .unwrap();
+        let name = match &node.value.kind {
+            ExprKind::TypeSystemRef(name) => Some(name),
+            _ => None,
+        }
+        .unwrap();
+        assert_eq!(name.value.as_str(), "Student");
+    }
 }

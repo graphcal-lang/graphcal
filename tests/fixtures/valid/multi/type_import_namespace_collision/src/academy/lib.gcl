@@ -1,5 +1,6 @@
 pub type Student {
-    Student(mass: Mass),
+    StudentConstructor(mass: Mass),
+    WeightlessStudent,
 }
 
 pub const node student_score: Dimensionless = 1.0;
