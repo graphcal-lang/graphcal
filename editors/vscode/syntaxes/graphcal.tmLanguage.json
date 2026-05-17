@@ -242,7 +242,7 @@
     },
 
     "import-declaration": {
-      "comment": "Import: import nasa.rocket; / import nasa.rocket as r; / import nasa.rocket.{X, Y as Z};",
+      "comment": "Import: import nasa.rocket; / import nasa.rocket as r; / import nasa.rocket.{type X, Y as Z};",
       "begin": "(?:\\b(pub(?:\\s*\\(\\s*bind\\s*\\))?)\\s+)?\\b(import)\\b",
       "end": ";",
       "beginCaptures": {
@@ -354,6 +354,11 @@
           "comment": "Selective re-export marker: { pub item, item } — only `pub` items are re-exported",
           "match": "\\b(pub)\\b(?!\\s*\\()",
           "name": "keyword.other.pub.graphcal"
+        },
+        {
+          "comment": "Type namespace marker: { type Name }",
+          "match": "\\b(type)\\b",
+          "name": "keyword.declaration.type.graphcal"
         },
         {
           "match": "\\b(as)\\b",

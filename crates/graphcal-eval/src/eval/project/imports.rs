@@ -400,10 +400,15 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 }
                 // Type-system declarations from instantiated imports also need registration.
                 if dep_index.is_type_system(orig_name) {
-                    ctx.imported_type_system_names
+                    let selected = ctx
+                        .imported_type_system_names
                         .entry(import_dag_id.clone())
-                        .or_default()
-                        .insert(orig_name.clone());
+                        .or_default();
+                    if dep_index.types.contains(orig_name.as_str()) {
+                        selected.insert_type(orig_name.clone());
+                    } else {
+                        selected.insert_default(orig_name.clone());
+                    }
                 }
 
                 selective.push(ImportAlias {
@@ -751,15 +756,12 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
 
+                let dep_loaded = &project.files[import_dag_id];
+
                 // Visibility check: the item must be declared `pub` in the source file.
-                if !dep.pub_names.contains(orig_name.as_str()) {
-                    // Check if the name exists at all (value or type-system) before
-                    // reporting "private" vs "not found".
-                    let dep_loaded = &project.files[import_dag_id];
-                    let exists = dep.const_values.contains_key(orig_name.as_str())
-                        || dep.values.contains_key(orig_name.as_str())
-                        || dep.has_assert(orig_name)
-                        || file_has_declaration(&dep_loaded.ast, orig_name);
+                if !file_exports_import_item(&dep_loaded.ast, orig_name, import_item.namespace) {
+                    let exists =
+                        file_has_import_item(&dep_loaded.ast, orig_name, import_item.namespace);
                     if exists {
                         return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
                             name: orig_name.clone(),
@@ -774,6 +776,16 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                         src: file_src.clone(),
                         span: import_item.name.span.into(),
                     }));
+                }
+
+                if import_item.namespace
+                    == graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Type
+                {
+                    ctx.imported_type_system_names
+                        .entry(import_dag_id.clone())
+                        .or_default()
+                        .insert_type(orig_name.clone());
+                    continue;
                 }
 
                 match import_selective_item(
@@ -805,13 +817,16 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                     }
                     SelectiveImportResult::NotFound => {
                         // Check if it's a type-system declaration in the dep's file.
-                        let dep_loaded = &project.files[import_dag_id];
-                        if file_has_declaration(&dep_loaded.ast, orig_name) {
-                            // Type-system declaration (dim/unit/index/type).
+                        if file_has_import_item(
+                            &dep_loaded.ast,
+                            orig_name,
+                            graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Default,
+                        ) {
+                            // Default type-system declaration (dim/unit/index/dag).
                             ctx.imported_type_system_names
                                 .entry(import_dag_id.clone())
                                 .or_default()
-                                .insert(orig_name.clone());
+                                .insert_default(orig_name.clone());
                         } else {
                             return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                                 name: orig_name.clone(),
@@ -1141,6 +1156,7 @@ mod tests {
             },
             alias: None,
             is_pub: false,
+            namespace: graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Default,
             attributes: Vec::new(),
         };
         let import_kind =

@@ -6,8 +6,8 @@
 )]
 
 use crate::syntax::ast::{
-    AttributeArg, DeclKind, ExprKind, GenericConstraint, ImportKind, IndexDeclKind, MulDivOp,
-    TypeExprKind, Visibility,
+    AttributeArg, DeclKind, ExprKind, GenericConstraint, ImportItemNamespace, ImportKind,
+    IndexDeclKind, MulDivOp, TypeExprKind, Visibility,
 };
 use crate::syntax::parser::Parser;
 
@@ -743,6 +743,30 @@ fn parse_import_brace_list_with_alias() {
     assert_eq!(names[0].name.name, "x");
     assert_eq!(names[0].alias.as_ref().unwrap().name, "y");
     assert_eq!(names[0].local_name(), "y");
+}
+
+#[test]
+fn parse_import_type_item_with_alias() {
+    let file = Parser::new("import helper.{type Student as Pupil};")
+        .parse_file()
+        .unwrap();
+    let DeclKind::Import(u) = &file.declarations[0].kind else {
+        panic!("expected Import");
+    };
+    let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
+        panic!("expected Selective");
+    };
+    assert_eq!(names.len(), 1);
+    assert_eq!(names[0].namespace, ImportItemNamespace::Type);
+    assert_eq!(names[0].name.name, "Student");
+    assert_eq!(names[0].alias.as_ref().unwrap().name, "Pupil");
+    assert_eq!(names[0].local_name(), "Pupil");
+}
+
+#[test]
+fn parse_include_rejects_type_item_marker() {
+    let result = Parser::new("include helper().{type Student};").parse_file();
+    assert!(result.is_err());
 }
 
 #[test]

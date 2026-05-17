@@ -309,6 +309,16 @@ fn format_dimension_decl() {
 }
 
 #[test]
+fn format_type_import_item() {
+    let source = "import school.records.{pub type Student as Pupil, Student};";
+    let formatted = format_source(source).unwrap();
+    assert_eq!(
+        formatted,
+        "import school.records.{ pub type Student as Pupil, Student };\n"
+    );
+}
+
+#[test]
 fn format_base_dimension() {
     let source = "base dim Length;\n";
     let formatted = format_source(source).unwrap();

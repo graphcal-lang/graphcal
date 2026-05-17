@@ -1,0 +1,4 @@
+import academy.lib.{ Student, type Student, student_score };
+
+node learner: Student = Student(mass: 70.0 kg);
+node score: Dimensionless = @student_score;

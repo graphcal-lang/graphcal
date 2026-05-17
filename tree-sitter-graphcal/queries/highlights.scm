@@ -139,6 +139,20 @@
 (import_item alias: (identifier) @variable
   (#match? @variable "^[a-z]"))
 
+(include_item name: (identifier) @constant
+  (#match? @constant "^[A-Z][A-Z0-9_]*$"))
+(include_item name: (identifier) @type
+  (#match? @type "^[A-Z][a-z]"))
+(include_item name: (identifier) @variable
+  (#match? @variable "^[a-z]"))
+
+(include_item alias: (identifier) @constant
+  (#match? @constant "^[A-Z][A-Z0-9_]*$"))
+(include_item alias: (identifier) @type
+  (#match? @type "^[A-Z][a-z]"))
+(include_item alias: (identifier) @variable
+  (#match? @variable "^[a-z]"))
+
 ; ---------------------------------------------------------------
 ; Types in annotations
 ; ---------------------------------------------------------------

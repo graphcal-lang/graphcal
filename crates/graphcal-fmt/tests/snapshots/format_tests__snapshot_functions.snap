@@ -30,7 +30,7 @@ dag hohmann_dv {
     
     param r2: Length;
     
-    import functions.{ TransferResult };
+    import functions.{ type TransferResult };
     
     node v1: Velocity = sqrt(@gm / @r1);
     

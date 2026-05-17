@@ -21,7 +21,7 @@ Every `.gcl` file in Graphcal is a **package**. Without a
 `graphcal.toml` manifest, the file is a *virtual* package — a
 standalone Graphcal script. The package contains exactly one module:
 the file itself. You can self-reference its top-level decls from
-inline DAGs (e.g. `import dynamics.{T};` from inside `dynamics.gcl`),
+inline DAGs (e.g. `import dynamics.{type T};` from inside `dynamics.gcl`),
 but you **cannot** import a sibling file. The first multi-file step
 in any Graphcal project is to add a manifest.
 
@@ -140,7 +140,7 @@ the producing DAG instead of importing the value (see
 | `const node`     | `import file.{name}`                | `@name`          |
 | `dim`            | `import file.{DimName}`             | `DimName`        |
 | `unit`           | `import file.{unit_name}`           | `unit_name`      |
-| `type`           | `import file.{TypeName}`            | `TypeName`       |
+| `type`           | `import file.{type TypeName}`       | `TypeName`       |
 | `index`          | `import file.{IndexName}`           | `IndexName`      |
 | `dag`            | `import file.{dag_name}`            | `include`-d, or called as `@dag_name(...).out` |
 
@@ -157,7 +157,7 @@ self-reference path:
 type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) };
 
 dag analyze {
-    import rocket.{OrbitType};   // file's own name
+    import rocket.{type OrbitType};   // file's own name
     param o: OrbitType;
     // ...
 }

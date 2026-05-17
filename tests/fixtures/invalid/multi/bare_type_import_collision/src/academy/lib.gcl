@@ -1,0 +1,5 @@
+pub type Student {
+    Student(mass: Mass),
+}
+
+pub const node Student: Dimensionless = 1.0;

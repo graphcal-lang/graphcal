@@ -159,6 +159,18 @@ fn resolve_duplicate_node_name() {
 }
 
 #[test]
+fn resolve_constructor_collision_with_node() {
+    let err = parse_and_resolve(
+        "type Student { Student(mass: Dimensionless), }\nnode Student: Dimensionless = 1.0;",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::DuplicateName { ref name, .. } if name == "Student"
+    ));
+}
+
+#[test]
 fn resolve_const_collision_with_param() {
     // const and param both use lower_snake_case — different names → no collision
     let resolved =

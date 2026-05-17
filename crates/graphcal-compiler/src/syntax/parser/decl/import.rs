@@ -27,7 +27,7 @@ impl Parser<'_> {
             ));
         }
 
-        let (kind, end_span) = self.parse_import_tail("`.{`, `as`, or `;` after path")?;
+        let (kind, end_span) = self.parse_import_tail("`.{`, `as`, or `;` after path", true)?;
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
@@ -58,7 +58,8 @@ impl Parser<'_> {
             return Err(self.unexpected_token("`(` to begin param bindings", &found, path.span));
         };
 
-        let (kind, end_span) = self.parse_import_tail("`.{`, `as`, or `;` after param bindings")?;
+        let (kind, end_span) =
+            self.parse_import_tail("`.{`, `as`, or `;` after param bindings", false)?;
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
@@ -114,6 +115,7 @@ impl Parser<'_> {
     fn parse_import_tail(
         &mut self,
         hint: &str,
+        allow_type_marker: bool,
     ) -> Result<(ImportKind, crate::syntax::span::Span), ParseError> {
         match self.lexer.peek() {
             Some(Token::Dot) => {
@@ -131,7 +133,7 @@ impl Parser<'_> {
                         span,
                     ));
                 }
-                let names = self.parse_import_brace_list()?;
+                let names = self.parse_import_brace_list(allow_type_marker)?;
                 let (_, end_span) = self.expect(Token::Semicolon)?;
                 Ok((ImportKind::Selective(names), end_span))
             }
@@ -157,6 +159,7 @@ impl Parser<'_> {
     /// Parse the `{ X, Y as Z, ... }` body of a brace-list selector.
     fn parse_import_brace_list(
         &mut self,
+        allow_type_marker: bool,
     ) -> Result<Vec<crate::syntax::ast::ImportItem>, ParseError> {
         self.expect(Token::LBrace)?;
 
@@ -181,6 +184,20 @@ impl Parser<'_> {
                 true
             } else {
                 false
+            };
+
+            let namespace = if p.lexer.peek() == Some(&Token::Type) {
+                let (_, type_span) = p.advance()?;
+                if !allow_type_marker {
+                    return Err(p.unexpected_token(
+                        "an identifier (`type` import items are only allowed in `import`, not `include`)",
+                        "type",
+                        type_span,
+                    ));
+                }
+                crate::syntax::ast::ImportItemNamespace::Type
+            } else {
+                crate::syntax::ast::ImportItemNamespace::Default
             };
 
             // Accept any identifier (imports can be any casing).
@@ -223,6 +240,7 @@ impl Parser<'_> {
             Ok(crate::syntax::ast::ImportItem {
                 attributes: item_attributes,
                 is_pub,
+                namespace,
                 name: crate::syntax::ast::Ident {
                     name: name_str,
                     span: name_span,
