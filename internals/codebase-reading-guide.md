@@ -59,11 +59,11 @@ File<Raw> -> File<Desugared> -> File<Resolved>
 
 The marker controls three phase-specific slots:
 
-| Slot | Raw | Desugared | Resolved |
-| --- | --- | --- | --- |
-| `DeclSugar` | `RawDeclSugar` | `Infallible` | `Infallible` |
-| `ExprSugar` | `RawExprSugar` | `Infallible` | `Infallible` |
-| `RefSugar` | `UnresolvedRef` | `UnresolvedRef` | `Infallible` |
+| Slot        | Raw             | Desugared       | Resolved     |
+| ----------- | --------------- | --------------- | ------------ |
+| `DeclSugar` | `RawDeclSugar`  | `Infallible`    | `Infallible` |
+| `ExprSugar` | `RawExprSugar`  | `Infallible`    | `Infallible` |
+| `RefSugar`  | `UnresolvedRef` | `UnresolvedRef` | `Infallible` |
 
 `File<Raw>` is produced by the parser and consumed by surface-aware tooling such
 as the formatter. `File<Desugared>` has no multi-decl or table-literal sugar,
@@ -217,37 +217,37 @@ graphcal-fmt
 
 The compiler crate owns the functional core through TIR.
 
-| Path | Purpose |
-| --- | --- |
-| `syntax/ast.rs` | Phase-parameterized AST definitions |
-| `syntax/phase.rs` | `Raw`, `Desugared`, `Resolved`, sugar slots, `never` |
-| `syntax/names.rs` | Typed name newtypes and `ScopedName` |
-| `syntax/dag_id.rs` | Filesystem-independent DAG identity |
-| `syntax/parser/` | Parser for declarations, expressions, types, tables |
-| `syntax/name_resolve.rs` | Bare/dotted identifier rewrite to `File<Resolved>` |
-| `desugar/` | Phase walker and AST alias modules |
-| `ir/lower.rs` | IR entries and lowering entry points |
-| `ir/resolve/` | Name, scope, dependency, visibility resolution |
-| `registry/` | Dimensions, units, indexes, types, values, built-ins |
-| `tir/typed.rs` | `TIR`, `DagTIR`, resolved type expressions, Nat forms |
-| `tir/dim_check/` | Dimension/type inference and checking |
+| Path                     | Purpose                                               |
+| ------------------------ | ----------------------------------------------------- |
+| `syntax/ast.rs`          | Phase-parameterized AST definitions                   |
+| `syntax/phase.rs`        | `Raw`, `Desugared`, `Resolved`, sugar slots, `never`  |
+| `syntax/names.rs`        | Typed name newtypes and `ScopedName`                  |
+| `syntax/dag_id.rs`       | Filesystem-independent DAG identity                   |
+| `syntax/parser/`         | Parser for declarations, expressions, types, tables   |
+| `syntax/name_resolve.rs` | Bare/dotted identifier rewrite to `File<Resolved>`    |
+| `desugar/`               | Phase walker and AST alias modules                    |
+| `ir/lower.rs`            | IR entries and lowering entry points                  |
+| `ir/resolve/`            | Name, scope, dependency, visibility resolution        |
+| `registry/`              | Dimensions, units, indexes, types, values, built-ins  |
+| `tir/typed.rs`           | `TIR`, `DagTIR`, resolved type expressions, Nat forms |
+| `tir/dim_check/`         | Dimension/type inference and checking                 |
 
 ### 2.2 `graphcal-eval`
 
 The evaluator owns project loading, cross-file orchestration, execution-plan
 compilation, and expression evaluation.
 
-| Path | Purpose |
-| --- | --- |
-| `loader.rs` | `LoadedProject`, `LoadedFile`, `LoadedDag`, import resolution |
-| `eval/project/` | Multi-file compile/eval orchestration |
-| `inline_dag.rs` | Inline DAG compilation helpers |
-| `exec_plan.rs` | Const evaluation, runtime topological order, domain prep |
-| `domain_check.rs` | Runtime and compile-time domain validation |
-| `eval/runtime.rs` | Evaluation loop |
-| `eval/display.rs` | Display-unit extraction and attachment |
-| `eval/types.rs` | Public `EvalResult`, `Value`, plot/assert result types |
-| `eval_expr/` | Expression evaluator by expression family |
+| Path              | Purpose                                                       |
+| ----------------- | ------------------------------------------------------------- |
+| `loader.rs`       | `LoadedProject`, `LoadedFile`, `LoadedDag`, import resolution |
+| `eval/project/`   | Multi-file compile/eval orchestration                         |
+| `inline_dag.rs`   | Inline DAG compilation helpers                                |
+| `exec_plan.rs`    | Const evaluation, runtime topological order, domain prep      |
+| `domain_check.rs` | Runtime and compile-time domain validation                    |
+| `eval/runtime.rs` | Evaluation loop                                               |
+| `eval/display.rs` | Display-unit extraction and attachment                        |
+| `eval/types.rs`   | Public `EvalResult`, `Value`, plot/assert result types        |
+| `eval_expr/`      | Expression evaluator by expression family                     |
 
 The public API is re-exported from `eval/mod.rs`, including
 `compile_and_eval_project`, `compile_to_tir_project`, and
@@ -271,12 +271,12 @@ The CLI is the imperative shell around the library pipeline.
 
 Subcommands:
 
-| Command | Purpose |
-| --- | --- |
-| `eval` | Compile and evaluate a `.gcl` file |
-| `check` | Parse and type-check without evaluation |
-| `format` | Format files or check formatting |
-| `lsp` | Start the language server |
+| Command  | Purpose                                 |
+| -------- | --------------------------------------- |
+| `eval`   | Compile and evaluate a `.gcl` file      |
+| `check`  | Parse and type-check without evaluation |
+| `format` | Format files or check formatting        |
+| `lsp`    | Start the language server               |
 
 Key files:
 
@@ -289,23 +289,23 @@ Key files:
 
 The LSP consumes compiler/evaluator APIs and adds editor-facing analysis:
 
-| Path | Feature |
-| --- | --- |
-| `server.rs` | Server lifecycle and `run_analysis()` |
-| `diagnostics.rs` | Compiler/evaluator diagnostics to LSP diagnostics |
-| `symbol_table.rs` | Symbol collection for editor features |
-| `completion.rs` | Completion |
-| `hover.rs` | Hover |
-| `goto_definition.rs` | Go to definition |
-| `references.rs` | Find references |
-| `rename.rs` | Rename |
-| `inlay_hints.rs` | Computed value hints |
-| `formatting.rs` | Formatting provider |
-| `document_symbols.rs` | Outline symbols |
-| `document_links.rs` | Import/include links |
-| `signature_help.rs` | Function signatures |
-| `code_actions.rs` | Quick fixes |
-| `cursor_context.rs` | Cursor-sensitive context |
+| Path                        | Feature                                           |
+| --------------------------- | ------------------------------------------------- |
+| `server.rs`                 | Server lifecycle and `run_analysis()`             |
+| `diagnostics.rs`            | Compiler/evaluator diagnostics to LSP diagnostics |
+| `symbol_table.rs`           | Symbol collection for editor features             |
+| `completion.rs`             | Completion                                        |
+| `hover.rs`                  | Hover                                             |
+| `goto_definition.rs`        | Go to definition                                  |
+| `references.rs`             | Find references                                   |
+| `rename.rs`                 | Rename                                            |
+| `inlay_hints.rs`            | Computed value hints                              |
+| `formatting.rs`             | Formatting provider                               |
+| `document_symbols.rs`       | Outline symbols                                   |
+| `document_links.rs`         | Import/include links                              |
+| `signature_help.rs`         | Function signatures                               |
+| `code_actions.rs`           | Quick fixes                                       |
+| `cursor_context.rs`         | Cursor-sensitive context                          |
 | `resolve.rs` / `convert.rs` | Shared resolution and protocol conversion helpers |
 
 `run_analysis()` treats library files specially. A file with required params or
@@ -498,15 +498,15 @@ module/include boundary. `pub(bind)` means visible and bindable. Required
 declarations do not take a visibility modifier; required params are implicitly
 bindable.
 
-| Category | Main syntax | Evaluation phase | Reference rules |
-| --- | --- | --- | --- |
-| Type system | `base dim`, `dim`, `unit`, `type`, `index` | Registry build | Other type-system declarations |
-| DAG | `dag` | Compiled per body, instantiated by include/call | Own declarations, imports, includes |
-| Const node | `const node` | Compile time | Const nodes and built-ins |
-| Param | `param` | Runtime input/default | Consts, params, nodes |
-| Node | `node` | Runtime computed | Consts, params, nodes |
-| Assert | `assert` | After runtime values | Consts, params, nodes |
-| Plot/Figure/Layer | `plot`, `figure`, `layer` | After runtime values | Consts, params, nodes |
+| Category          | Main syntax                                | Evaluation phase                                | Reference rules                     |
+| ----------------- | ------------------------------------------ | ----------------------------------------------- | ----------------------------------- |
+| Type system       | `base dim`, `dim`, `unit`, `type`, `index` | Registry build                                  | Other type-system declarations      |
+| DAG               | `dag`                                      | Compiled per body, instantiated by include/call | Own declarations, imports, includes |
+| Const node        | `const node`                               | Compile time                                    | Const nodes and built-ins           |
+| Param             | `param`                                    | Runtime input/default                           | Consts, params, nodes               |
+| Node              | `node`                                     | Runtime computed                                | Consts, params, nodes               |
+| Assert            | `assert`                                   | After runtime values                            | Consts, params, nodes               |
+| Plot/Figure/Layer | `plot`, `figure`, `layer`                  | After runtime values                            | Consts, params, nodes               |
 
 `@name` references graph values: params, nodes, and const nodes. Built-in
 constants such as `PI`, `E`, `TAU`, `SQRT2`, `LN2`, and `LN10` are bare names.
@@ -598,18 +598,18 @@ just lint
 
 ## 8. Conventions Worth Keeping in Mind
 
-| Convention | Where | Why |
-| --- | --- | --- |
-| AST phases | `syntax/phase.rs` | Parser-only constructs are statically excluded downstream |
-| Typed names | `syntax/names.rs` | Avoid mixing semantic identifier categories |
-| `DagId` | `syntax/dag_id.rs` | Keep filesystem paths at loader boundaries |
-| `ModulePathKey` | `loader.rs` | Keep module paths structured instead of separator-joined |
-| Trait-based I/O | `graphcal-io` | Deterministic tests and editor integration |
-| Visitor pattern | `syntax/visitor.rs` | Centralized AST traversal |
-| `BTreeSet` in dep values | IR/TIR deps | Deterministic graph construction |
-| `IndexMap` in output-facing maps | eval/display output | Stable user-facing order |
-| Separate const/runtime phases | `exec_plan.rs` | Compile-time values and runtime values have different failure modes |
-| Display units outside dimensions | `eval/display.rs` | Compute in SI, display in requested units |
+| Convention                       | Where               | Why                                                                 |
+| -------------------------------- | ------------------- | ------------------------------------------------------------------- |
+| AST phases                       | `syntax/phase.rs`   | Parser-only constructs are statically excluded downstream           |
+| Typed names                      | `syntax/names.rs`   | Avoid mixing semantic identifier categories                         |
+| `DagId`                          | `syntax/dag_id.rs`  | Keep filesystem paths at loader boundaries                          |
+| `ModulePathKey`                  | `loader.rs`         | Keep module paths structured instead of separator-joined            |
+| Trait-based I/O                  | `graphcal-io`       | Deterministic tests and editor integration                          |
+| Visitor pattern                  | `syntax/visitor.rs` | Centralized AST traversal                                           |
+| `BTreeSet` in dep values         | IR/TIR deps         | Deterministic graph construction                                    |
+| `IndexMap` in output-facing maps | eval/display output | Stable user-facing order                                            |
+| Separate const/runtime phases    | `exec_plan.rs`      | Compile-time values and runtime values have different failure modes |
+| Display units outside dimensions | `eval/display.rs`   | Compute in SI, display in requested units                           |
 
 When adding a feature, update the grammar, parser, compiler stages, evaluator,
 LSP/editor surfaces, docs, and fixtures together. The compiler core should carry
