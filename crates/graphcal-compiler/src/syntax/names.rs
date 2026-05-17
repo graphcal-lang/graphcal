@@ -246,7 +246,7 @@ impl std::fmt::Display for ScopedName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Local(name) => write!(f, "{name}"),
-            Self::Qualified { module, member } => write!(f, "{module}::{member}"),
+            Self::Qualified { module, member } => write!(f, "{module}.{member}"),
         }
     }
 }
