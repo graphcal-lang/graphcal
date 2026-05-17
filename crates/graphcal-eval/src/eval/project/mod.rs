@@ -541,6 +541,19 @@ pub(in crate::eval::project) fn file_has_import_item(
     namespace: ImportItemNamespace,
 ) -> bool {
     file.declarations.iter().any(|decl| match &decl.kind {
+        DeclKind::Type(t) => {
+            (namespace == ImportItemNamespace::Type && t.name.value.as_str() == name)
+                || (namespace == ImportItemNamespace::Default
+                    && t.fields.is_some()
+                    && t.name.value.as_str() == name)
+        }
+        DeclKind::UnionType(u) => {
+            (namespace == ImportItemNamespace::Type && u.name.value.as_str() == name)
+                || (namespace == ImportItemNamespace::Default
+                    && u.members
+                        .iter()
+                        .any(|member| member.name.value.as_str() == name))
+        }
         DeclKind::Param(_)
         | DeclKind::Node(_)
         | DeclKind::ConstNode(_)
@@ -549,8 +562,6 @@ pub(in crate::eval::project) fn file_has_import_item(
         | DeclKind::Dimension(_)
         | DeclKind::Unit(_)
         | DeclKind::Index(_)
-        | DeclKind::Type(_)
-        | DeclKind::UnionType(_)
         | DeclKind::Plot(_)
         | DeclKind::Figure(_)
         | DeclKind::Layer(_)
@@ -582,6 +593,21 @@ pub(in crate::eval::project) fn file_exports_import_item(
     namespace: ImportItemNamespace,
 ) -> bool {
     file.declarations.iter().any(|decl| match &decl.kind {
+        DeclKind::Type(t) => {
+            decl.is_pub()
+                && ((namespace == ImportItemNamespace::Type && t.name.value.as_str() == name)
+                    || (namespace == ImportItemNamespace::Default
+                        && t.fields.is_some()
+                        && t.name.value.as_str() == name))
+        }
+        DeclKind::UnionType(u) => {
+            decl.is_pub()
+                && ((namespace == ImportItemNamespace::Type && u.name.value.as_str() == name)
+                    || (namespace == ImportItemNamespace::Default
+                        && u.members
+                            .iter()
+                            .any(|member| member.name.value.as_str() == name)))
+        }
         DeclKind::Param(_)
         | DeclKind::Node(_)
         | DeclKind::ConstNode(_)
@@ -590,8 +616,6 @@ pub(in crate::eval::project) fn file_exports_import_item(
         | DeclKind::Dimension(_)
         | DeclKind::Unit(_)
         | DeclKind::Index(_)
-        | DeclKind::Type(_)
-        | DeclKind::UnionType(_)
         | DeclKind::Plot(_)
         | DeclKind::Figure(_)
         | DeclKind::Layer(_)

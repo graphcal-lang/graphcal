@@ -49,6 +49,113 @@ enum NameCategory {
     Runtime,
 }
 
+fn register_value_namespace_name(
+    value_names: &mut HashMap<ScopedName, Span>,
+    name: String,
+    span: Span,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let scoped_name = ScopedName::local(name.clone());
+    if let Some(first_span) = value_names.get(&scoped_name) {
+        return Err(GraphcalError::DuplicateName {
+            name,
+            src: src.clone(),
+            duplicate: span.into(),
+            first: (*first_span).into(),
+        });
+    }
+    value_names.insert(scoped_name, span);
+    Ok(())
+}
+
+fn check_value_namespace_collisions(
+    file: &File,
+    src: &NamedSource<Arc<String>>,
+    names: &HashMap<ScopedName, (Span, NameCategory)>,
+) -> Result<(), GraphcalError> {
+    let mut value_names: HashMap<ScopedName, Span> = names
+        .iter()
+        .map(|(name, (span, _))| (name.clone(), *span))
+        .collect();
+
+    for decl in &file.declarations {
+        match &decl.kind {
+            DeclKind::Param(p) => register_value_namespace_name(
+                &mut value_names,
+                p.name.value.to_string(),
+                p.name.span,
+                src,
+            )?,
+            DeclKind::Node(n) => register_value_namespace_name(
+                &mut value_names,
+                n.name.value.to_string(),
+                n.name.span,
+                src,
+            )?,
+            DeclKind::ConstNode(c) => register_value_namespace_name(
+                &mut value_names,
+                c.name.value.to_string(),
+                c.name.span,
+                src,
+            )?,
+            DeclKind::Assert(a) => register_value_namespace_name(
+                &mut value_names,
+                a.name.value.to_string(),
+                a.name.span,
+                src,
+            )?,
+            DeclKind::Plot(p) => register_value_namespace_name(
+                &mut value_names,
+                p.name.value.to_string(),
+                p.name.span,
+                src,
+            )?,
+            DeclKind::Figure(f) => register_value_namespace_name(
+                &mut value_names,
+                f.name.value.to_string(),
+                f.name.span,
+                src,
+            )?,
+            DeclKind::Layer(l) => register_value_namespace_name(
+                &mut value_names,
+                l.name.value.to_string(),
+                l.name.span,
+                src,
+            )?,
+            DeclKind::Type(t) => {
+                if t.fields.is_some() {
+                    register_value_namespace_name(
+                        &mut value_names,
+                        t.name.value.to_string(),
+                        t.name.span,
+                        src,
+                    )?;
+                }
+            }
+            DeclKind::UnionType(u) => {
+                for member in &u.members {
+                    register_value_namespace_name(
+                        &mut value_names,
+                        member.name.value.to_string(),
+                        member.name.span,
+                        src,
+                    )?;
+                }
+            }
+            DeclKind::BaseDimension(_)
+            | DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Index(_)
+            | DeclKind::Import(_)
+            | DeclKind::Include(_)
+            | DeclKind::Dag(_) => {}
+            DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+        }
+    }
+
+    Ok(())
+}
+
 /// Result of collecting local declarations from the AST.
 struct CollectedDeclarations {
     consts: Vec<ResolvedConstEntry>,
@@ -90,6 +197,8 @@ fn collect_local_declarations(
     let mut const_deps: HashMap<ScopedName, HashSet<ScopedName>> = HashMap::new();
     let mut source_order: Vec<(DeclName, DeclCategory)> = Vec::new();
     let mut assert_names: HashSet<DeclName> = HashSet::new();
+
+    check_value_namespace_collisions(file, src, names)?;
 
     // Collect names of all visible declarations. Explicit `pub`/`pub(bind)`
     // declarations contribute; params are implicitly visible+bindable under
@@ -188,16 +297,7 @@ fn collect_local_declarations(
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
         };
 
-        // Check for duplicates. Names from local declarations are bare locals.
         let scoped_name = ScopedName::local(name.clone());
-        if let Some((first_span, _)) = names.get(&scoped_name) {
-            return Err(GraphcalError::DuplicateName {
-                name,
-                src: src.clone(),
-                duplicate: name_span.into(),
-                first: (*first_span).into(),
-            });
-        }
         let name_cat = if is_const {
             NameCategory::Const
         } else {
