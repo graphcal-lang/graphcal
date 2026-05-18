@@ -1,21 +1,22 @@
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 use logos::Logos;
-use peek_cache::PeekCache;
+use peek_cache::{Cached, PeekCache};
 
 /// A peekable wrapper around `logos::Lexer` that yields `(Token, Span)` pairs.
 ///
 /// # Internal design
 ///
-/// The inner `logos::Lexer` is **only** advanced by the private peek cache while
-/// filling an empty first slot. `Lexer` cannot read or take the cache slots
-/// directly; the cache fields are private to a nested module, and its public
-/// methods fill the first slot before returning or consuming it.
+/// The inner `logos::Lexer` is **only** advanced by `read_next_token()`, which
+/// adapts the tokenizer into the generic private peek cache. `Lexer` cannot read
+/// or take the cache slots directly; the cache fields are private to a nested
+/// module, and its public methods fill the first slot before returning or
+/// consuming it.
 ///
 /// ```text
 ///   cache.first = Empty    (initial / just consumed)
 ///       │
-///       ▼  cache fills from inner lexer
+///       ▼  cache calls read_next_token()
 ///   cache.first = Token(_) (token ready)
 ///   cache.first = Eof      (EOF)
 ///       │
@@ -30,7 +31,7 @@ use peek_cache::PeekCache;
 /// downstream parse happened to succeed.
 pub struct Lexer<'src> {
     inner: logos::Lexer<'src, Token>,
-    peek_cache: PeekCache,
+    peek_cache: PeekCache<(Token, Span)>,
     source: &'src str,
     /// Span of the first unrecognized character encountered during lexing, if any.
     first_error_span: Option<Span>,
@@ -60,8 +61,11 @@ impl<'src> Lexer<'src> {
     /// This delegates to the cache, which fills its first slot before returning
     /// a reference to it.
     pub fn peek_with_span(&mut self) -> Option<(&Token, Span)> {
+        let inner = &mut self.inner;
+        let first_error_span = &mut self.first_error_span;
         self.peek_cache
-            .peek_or_fill(&mut self.inner, &mut self.first_error_span)
+            .peek_or_fill(|| read_next_token(inner, first_error_span))
+            .map(|(tok, span)| (tok, *span))
     }
 
     /// Return the span of the first unrecognized character encountered during lexing.
@@ -80,8 +84,10 @@ impl<'src> Lexer<'src> {
     /// The cache fills its first slot before taking from it, so this method
     /// cannot accidentally consume an uninitialized cache slot.
     pub fn next_token(&mut self) -> Option<(Token, Span)> {
+        let inner = &mut self.inner;
+        let first_error_span = &mut self.first_error_span;
         self.peek_cache
-            .next_or_fill(&mut self.inner, &mut self.first_error_span)
+            .next_or_fill(|| read_next_token(inner, first_error_span))
     }
 
     /// Put back a consumed token so the next `peek`/`next_token` returns it.
@@ -92,8 +98,8 @@ impl<'src> Lexer<'src> {
     /// # Errors
     ///
     /// Returns [`PutBackError`] if both peek slots are occupied.
-    pub const fn put_back(&mut self, token: Token, span: Span) -> Result<(), PutBackError> {
-        self.peek_cache.put_back(token, span)
+    pub fn put_back(&mut self, token: Token, span: Span) -> Result<(), PutBackError> {
+        self.peek_cache.put_back((token, span))
     }
 
     /// Get the source text corresponding to a span.
@@ -109,34 +115,52 @@ impl<'src> Lexer<'src> {
     }
 }
 
-mod peek_cache {
-    use super::{PutBackError, Span, Token};
+fn read_next_token(
+    inner: &mut logos::Lexer<'_, Token>,
+    first_error_span: &mut Option<Span>,
+) -> Cached<(Token, Span)> {
+    loop {
+        let Some(result) = inner.next() else {
+            break Cached::Eof;
+        };
+        let slice_span = inner.span();
+        let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
+        match result {
+            Ok(token) => break Cached::Some((token, span)),
+            Err(()) => {
+                if first_error_span.is_none() {
+                    *first_error_span = Some(span);
+                }
+            }
+        }
+    }
+}
 
-    #[derive(Default)]
-    pub(super) struct PeekCache {
-        first: CachedToken,
+mod peek_cache {
+    use super::PutBackError;
+
+    pub(super) struct PeekCache<T> {
+        first: Cached<T>,
         /// Second peek slot for 2-token lookahead. When set, `next_or_fill()`
-        /// drains this slot before consuming from the inner lexer.
-        second: Option<(Token, Span)>,
+        /// drains this slot before requesting a new item.
+        second: Option<T>,
     }
 
-    impl PeekCache {
-        pub(super) fn peek_or_fill<'cache>(
-            &'cache mut self,
-            inner: &mut logos::Lexer<'_, Token>,
-            first_error_span: &mut Option<Span>,
-        ) -> Option<(&'cache Token, Span)> {
-            self.fill_if_needed(inner, first_error_span);
+    impl<T> PeekCache<T> {
+        pub(super) fn peek_or_fill<F>(&mut self, read_next: F) -> Option<&T>
+        where
+            F: FnOnce() -> Cached<T>,
+        {
+            self.fill_if_needed(read_next);
             self.first.as_ref()
         }
 
-        pub(super) fn next_or_fill(
-            &mut self,
-            inner: &mut logos::Lexer<'_, Token>,
-            first_error_span: &mut Option<Span>,
-        ) -> Option<(Token, Span)> {
-            self.fill_if_needed(inner, first_error_span);
-            std::mem::take(&mut self.first).into_token()
+        pub(super) fn next_or_fill<F>(&mut self, read_next: F) -> Option<T>
+        where
+            F: FnOnce() -> Cached<T>,
+        {
+            self.fill_if_needed(read_next);
+            std::mem::take(&mut self.first).into_item()
         }
 
         /// Put back a consumed token so the next `peek`/`next_token` returns it.
@@ -147,86 +171,65 @@ mod peek_cache {
         /// # Errors
         ///
         /// Returns [`PutBackError`] if both peek slots are occupied.
-        pub(super) const fn put_back(
-            &mut self,
-            token: Token,
-            span: Span,
-        ) -> Result<(), PutBackError> {
-            if matches!(self.first, CachedToken::Some(..)) && self.second.is_some() {
+        pub(super) fn put_back(&mut self, item: T) -> Result<(), PutBackError> {
+            if matches!(self.first, Cached::Some(..)) && self.second.is_some() {
                 return Err(PutBackError);
             }
 
-            match std::mem::replace(&mut self.first, CachedToken::Some(token, span)) {
-                CachedToken::Some(existing_token, existing_span) => {
-                    self.second = Some((existing_token, existing_span));
+            match std::mem::replace(&mut self.first, Cached::Some(item)) {
+                Cached::Some(existing) => {
+                    self.second = Some(existing);
                 }
-                CachedToken::None | CachedToken::Eof => {}
+                Cached::None | Cached::Eof => {}
             }
             Ok(())
         }
 
-        fn fill_if_needed(
-            &mut self,
-            inner: &mut logos::Lexer<'_, Token>,
-            first_error_span: &mut Option<Span>,
-        ) {
+        fn fill_if_needed<F>(&mut self, read_next: F)
+        where
+            F: FnOnce() -> Cached<T>,
+        {
             if !self.first.is_none() {
                 return;
             }
 
-            self.first = if let Some(second) = self.second.take() {
-                CachedToken::Some(second.0, second.1)
-            } else {
-                Self::read_next(inner, first_error_span)
-            };
-        }
-
-        fn read_next(
-            inner: &mut logos::Lexer<'_, Token>,
-            first_error_span: &mut Option<Span>,
-        ) -> CachedToken {
-            loop {
-                let Some(result) = inner.next() else {
-                    break CachedToken::Eof;
-                };
-                let slice_span = inner.span();
-                let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
-                match result {
-                    Ok(token) => break CachedToken::Some(token, span),
-                    Err(()) => {
-                        if first_error_span.is_none() {
-                            *first_error_span = Some(span);
-                        }
-                    }
-                }
-            }
+            self.first = self.second.take().map_or_else(read_next, Cached::Some);
         }
     }
 
     #[derive(Default)]
-    enum CachedToken {
+    pub(super) enum Cached<T> {
         #[default]
         None,
-        Some(Token, Span),
+        Some(T),
         Eof,
     }
 
-    impl CachedToken {
+    impl<T> Default for PeekCache<T> {
+        fn default() -> Self {
+            Self {
+                first: Cached::None,
+                second: None,
+            }
+        }
+    }
+
+    impl<T> Cached<T> {
         const fn is_none(&self) -> bool {
             matches!(self, Self::None)
         }
 
-        const fn as_ref(&self) -> Option<(&Token, Span)> {
+        const fn as_ref(&self) -> Option<&T> {
             match self {
                 Self::None | Self::Eof => None,
-                Self::Some(token, span) => Some((token, *span)),
+                Self::Some(item) => Some(item),
             }
         }
 
-        const fn into_token(self) -> Option<(Token, Span)> {
+        fn into_item(self) -> Option<T> {
             match self {
                 Self::None | Self::Eof => None,
-                Self::Some(token, span) => Some((token, span)),
+                Self::Some(item) => Some(item),
             }
         }
     }
@@ -241,6 +244,7 @@ mod tests {
         clippy::unreachable,
         reason = "test code"
     )]
+    use super::peek_cache::Cached;
     use super::*;
 
     #[test]
@@ -377,5 +381,41 @@ mod tests {
         let (_, span) = lexer.next_token().unwrap(); // delta_v
         assert_eq!(span.offset(), 5);
         assert_eq!(span.len(), 7);
+    }
+
+    #[test]
+    fn peek_cache_uses_supplied_items_without_lexer_knowledge() {
+        let mut cache = PeekCache::<u8>::default();
+        let mut next = 0;
+
+        assert_eq!(
+            cache.peek_or_fill(|| {
+                next += 1;
+                Cached::Some(next)
+            }),
+            Some(&1)
+        );
+        assert_eq!(
+            cache.peek_or_fill(|| {
+                next += 1;
+                Cached::Some(next)
+            }),
+            Some(&1)
+        );
+        assert_eq!(
+            cache.next_or_fill(|| {
+                next += 1;
+                Cached::Some(next)
+            }),
+            Some(1)
+        );
+        assert_eq!(
+            cache.next_or_fill(|| {
+                next += 1;
+                Cached::Some(next)
+            }),
+            Some(2)
+        );
+        assert_eq!(next, 2);
     }
 }
