@@ -1,25 +1,26 @@
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 use logos::Logos;
+use peek_cache::PeekCache;
 
 /// A peekable wrapper around `logos::Lexer` that yields `(Token, Span)` pairs.
 ///
 /// # Internal design
 ///
-/// The inner `logos::Lexer` is **only** advanced inside `peek_with_span()`.
-/// Every other public method goes through `peek_with_span()` to get the next
-/// token, which keeps lexer-position bookkeeping in a single place and makes
-/// the state machine easy to reason about:
+/// The inner `logos::Lexer` is **only** advanced by the private peek cache while
+/// filling an empty first slot. `Lexer` cannot read or take the cache slots
+/// directly; the cache fields are private to a nested module, and its public
+/// methods fill the first slot before returning or consuming it.
 ///
 /// ```text
-///   peeked = None          (initial / just consumed)
+///   cache.first = Empty    (initial / just consumed)
 ///       │
-///       ▼  peek_with_span() calls inner.next()
-///   peeked = Token(_)      (token ready)
-///   peeked = Eof           (EOF)
+///       ▼  cache fills from inner lexer
+///   cache.first = Token(_) (token ready)
+///   cache.first = Eof      (EOF)
 ///       │
-///       ▼  next_token() takes the peeked value
-///   peeked = None          (consumed, ready for next peek)
+///       ▼  cache.next_or_fill() takes the token
+///   cache.first = Empty    (consumed, ready for next peek)
 /// ```
 ///
 /// When the underlying `logos::Lexer` encounters an unrecognized character, the
@@ -29,41 +30,10 @@ use logos::Logos;
 /// downstream parse happened to succeed.
 pub struct Lexer<'src> {
     inner: logos::Lexer<'src, Token>,
-    peeked: PeekedToken,
-    /// Second peek slot for 2-token lookahead. When set, `next_token()` drains
-    /// this slot before consuming `peeked`.
-    peeked2: Option<(Token, Span)>,
+    peek_cache: PeekCache,
     source: &'src str,
     /// Span of the first unrecognized character encountered during lexing, if any.
     first_error_span: Option<Span>,
-}
-
-#[derive(Default)]
-enum PeekedToken {
-    #[default]
-    None,
-    Some(Token, Span),
-    Eof,
-}
-
-impl PeekedToken {
-    const fn is_none(&self) -> bool {
-        matches!(self, Self::None)
-    }
-
-    const fn as_ref(&self) -> Option<(&Token, Span)> {
-        match self {
-            Self::None | Self::Eof => None,
-            Self::Some(token, span) => Some((token, *span)),
-        }
-    }
-
-    const fn into_token(self) -> Option<(Token, Span)> {
-        match self {
-            Self::None | Self::Eof => None,
-            Self::Some(token, span) => Some((token, span)),
-        }
-    }
 }
 
 impl<'src> Lexer<'src> {
@@ -71,8 +41,7 @@ impl<'src> Lexer<'src> {
     pub fn new(source: &'src str) -> Self {
         Self {
             inner: Token::lexer(source),
-            peeked: PeekedToken::None,
-            peeked2: None,
+            peek_cache: PeekCache::default(),
             source,
             first_error_span: None,
         }
@@ -85,37 +54,11 @@ impl<'src> Lexer<'src> {
 
     /// Peek at the next token and its span without consuming it.
     ///
-    /// This is the **only** method that advances the inner logos lexer.
-    /// All other public methods delegate here to ensure a single point of
-    /// state mutation.
+    /// This delegates to the cache, which fills its first slot before returning
+    /// a reference to it.
     pub fn peek_with_span(&mut self) -> Option<(&Token, Span)> {
-        if self.peeked.is_none() {
-            if let Some(second) = self.peeked2.take() {
-                self.peeked = PeekedToken::Some(second.0, second.1);
-            } else {
-                // Advance the inner lexer, skipping unrecognized characters.
-                // The first bad span is remembered in `first_error_span` so the
-                // parser can surface it as a `ParseError::UnknownToken` rather
-                // than letting a stray character trigger a misleading downstream
-                // diagnostic.
-                self.peeked = loop {
-                    let Some(result) = self.inner.next() else {
-                        break PeekedToken::Eof;
-                    };
-                    let slice_span = self.inner.span();
-                    let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
-                    match result {
-                        Ok(token) => break PeekedToken::Some(token, span),
-                        Err(()) => {
-                            if self.first_error_span.is_none() {
-                                self.first_error_span = Some(span);
-                            }
-                        }
-                    }
-                };
-            }
-        }
-        self.peeked.as_ref()
+        self.peek_cache
+            .peek_or_fill(&mut self.inner, &mut self.first_error_span)
     }
 
     /// Return the span of the first unrecognized character encountered during lexing.
@@ -131,11 +74,11 @@ impl<'src> Lexer<'src> {
 
     /// Consume and return the next token and its span.
     ///
-    /// Internally peeks first (if needed) then takes the peeked value,
-    /// so the inner lexer is only ever advanced via `peek_with_span()`.
+    /// The cache fills its first slot before taking from it, so this method
+    /// cannot accidentally consume an uninitialized cache slot.
     pub fn next_token(&mut self) -> Option<(Token, Span)> {
-        self.peek_with_span(); // ensure peeked is populated
-        std::mem::take(&mut self.peeked).into_token()
+        self.peek_cache
+            .next_or_fill(&mut self.inner, &mut self.first_error_span)
     }
 
     /// Put back a consumed token so the next `peek`/`next_token` returns it.
@@ -147,17 +90,7 @@ impl<'src> Lexer<'src> {
     ///
     /// Panics if both peek slots are occupied.
     pub fn put_back(&mut self, token: Token, span: Span) {
-        match std::mem::take(&mut self.peeked) {
-            PeekedToken::Some(existing_token, existing_span) => {
-                assert!(
-                    self.peeked2.is_none(),
-                    "cannot put_back: both peek slots are occupied"
-                );
-                self.peeked2 = Some((existing_token, existing_span));
-            }
-            PeekedToken::None | PeekedToken::Eof => {}
-        }
-        self.peeked = PeekedToken::Some(token, span);
+        self.peek_cache.put_back(token, span);
     }
 
     /// Get the source text corresponding to a span.
@@ -170,6 +103,125 @@ impl<'src> Lexer<'src> {
     #[must_use]
     pub const fn source_len(&self) -> usize {
         self.source.len()
+    }
+}
+
+mod peek_cache {
+    use super::{Span, Token};
+
+    #[derive(Default)]
+    pub(super) struct PeekCache {
+        first: CachedToken,
+        /// Second peek slot for 2-token lookahead. When set, `next_or_fill()`
+        /// drains this slot before consuming from the inner lexer.
+        second: Option<(Token, Span)>,
+    }
+
+    impl PeekCache {
+        pub(super) fn peek_or_fill<'cache>(
+            &'cache mut self,
+            inner: &mut logos::Lexer<'_, Token>,
+            first_error_span: &mut Option<Span>,
+        ) -> Option<(&'cache Token, Span)> {
+            self.fill_if_needed(inner, first_error_span);
+            self.first.as_ref()
+        }
+
+        pub(super) fn next_or_fill(
+            &mut self,
+            inner: &mut logos::Lexer<'_, Token>,
+            first_error_span: &mut Option<Span>,
+        ) -> Option<(Token, Span)> {
+            self.fill_if_needed(inner, first_error_span);
+            std::mem::take(&mut self.first).into_token()
+        }
+
+        /// Put back a consumed token so the next `peek`/`next_token` returns it.
+        ///
+        /// If a token is already peeked, the currently peeked token is moved to
+        /// the second peek slot. Only one level of put-back is supported.
+        ///
+        /// # Panics
+        ///
+        /// Panics if both peek slots are occupied.
+        pub(super) fn put_back(&mut self, token: Token, span: Span) {
+            match std::mem::take(&mut self.first) {
+                CachedToken::Some(existing_token, existing_span) => {
+                    assert!(
+                        self.second.is_none(),
+                        "cannot put_back: both peek slots are occupied"
+                    );
+                    self.second = Some((existing_token, existing_span));
+                }
+                CachedToken::None | CachedToken::Eof => {}
+            }
+            self.first = CachedToken::Some(token, span);
+        }
+
+        fn fill_if_needed(
+            &mut self,
+            inner: &mut logos::Lexer<'_, Token>,
+            first_error_span: &mut Option<Span>,
+        ) {
+            if !self.first.is_none() {
+                return;
+            }
+
+            self.first = if let Some(second) = self.second.take() {
+                CachedToken::Some(second.0, second.1)
+            } else {
+                Self::read_next(inner, first_error_span)
+            };
+        }
+
+        fn read_next(
+            inner: &mut logos::Lexer<'_, Token>,
+            first_error_span: &mut Option<Span>,
+        ) -> CachedToken {
+            loop {
+                let Some(result) = inner.next() else {
+                    break CachedToken::Eof;
+                };
+                let slice_span = inner.span();
+                let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
+                match result {
+                    Ok(token) => break CachedToken::Some(token, span),
+                    Err(()) => {
+                        if first_error_span.is_none() {
+                            *first_error_span = Some(span);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[derive(Default)]
+    enum CachedToken {
+        #[default]
+        None,
+        Some(Token, Span),
+        Eof,
+    }
+
+    impl CachedToken {
+        const fn is_none(&self) -> bool {
+            matches!(self, Self::None)
+        }
+
+        const fn as_ref(&self) -> Option<(&Token, Span)> {
+            match self {
+                Self::None | Self::Eof => None,
+                Self::Some(token, span) => Some((token, *span)),
+            }
+        }
+
+        const fn into_token(self) -> Option<(Token, Span)> {
+            match self {
+                Self::None | Self::Eof => None,
+                Self::Some(token, span) => Some((token, span)),
+            }
+        }
     }
 }
 
