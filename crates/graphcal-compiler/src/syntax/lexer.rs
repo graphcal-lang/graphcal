@@ -20,7 +20,7 @@ use peek_cache::{Cached, PeekCache};
 ///   cache.first = Token(_) (token ready)
 ///   cache.first = Eof      (EOF)
 ///       │
-///       ▼  cache.next_or_fill() takes the token
+///       ▼  cache.next() takes the token
 ///   cache.first = Empty    (consumed, ready for next peek)
 /// ```
 ///
@@ -64,7 +64,7 @@ impl<'src> Lexer<'src> {
         let inner = &mut self.inner;
         let first_error_span = &mut self.first_error_span;
         self.peek_cache
-            .peek_or_fill(|| read_next_token(inner, first_error_span))
+            .peek(|| read_next_token(inner, first_error_span))
             .map(|(tok, span)| (tok, *span))
     }
 
@@ -87,7 +87,7 @@ impl<'src> Lexer<'src> {
         let inner = &mut self.inner;
         let first_error_span = &mut self.first_error_span;
         self.peek_cache
-            .next_or_fill(|| read_next_token(inner, first_error_span))
+            .next(|| read_next_token(inner, first_error_span))
     }
 
     /// Put back a consumed token so the next `peek`/`next_token` returns it.
@@ -126,7 +126,7 @@ fn read_next_token(
         let slice_span = inner.span();
         let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
         match result {
-            Ok(token) => break Cached::Some((token, span)),
+            Ok(token) => break Cached::Item((token, span)),
             Err(()) => {
                 if first_error_span.is_none() {
                     *first_error_span = Some(span);
@@ -141,25 +141,25 @@ mod peek_cache {
 
     pub(super) struct PeekCache<T> {
         first: Cached<T>,
-        /// Second peek slot for 2-token lookahead. When set, `next_or_fill()`
+        /// Second peek slot for 2-token lookahead. When set, `next()`
         /// drains this slot before requesting a new item.
         second: Option<T>,
     }
 
     impl<T> PeekCache<T> {
-        pub(super) fn peek_or_fill<F>(&mut self, read_next: F) -> Option<&T>
+        pub(super) fn peek<F>(&mut self, load_next: F) -> Option<&T>
         where
             F: FnOnce() -> Cached<T>,
         {
-            self.fill_if_needed(read_next);
+            self.fill_if_needed(load_next);
             self.first.as_ref()
         }
 
-        pub(super) fn next_or_fill<F>(&mut self, read_next: F) -> Option<T>
+        pub(super) fn next<F>(&mut self, load_next: F) -> Option<T>
         where
             F: FnOnce() -> Cached<T>,
         {
-            self.fill_if_needed(read_next);
+            self.fill_if_needed(load_next);
             std::mem::take(&mut self.first).into_item()
         }
 
@@ -172,64 +172,64 @@ mod peek_cache {
         ///
         /// Returns [`PutBackError`] if both peek slots are occupied.
         pub(super) fn put_back(&mut self, item: T) -> Result<(), PutBackError> {
-            if matches!(self.first, Cached::Some(..)) && self.second.is_some() {
+            if matches!(self.first, Cached::Item(..)) && self.second.is_some() {
                 return Err(PutBackError);
             }
 
-            match std::mem::replace(&mut self.first, Cached::Some(item)) {
-                Cached::Some(existing) => {
+            match std::mem::replace(&mut self.first, Cached::Item(item)) {
+                Cached::Item(existing) => {
                     self.second = Some(existing);
                 }
-                Cached::None | Cached::Eof => {}
+                Cached::Empty | Cached::Eof => {}
             }
             Ok(())
         }
 
-        fn fill_if_needed<F>(&mut self, read_next: F)
+        fn fill_if_needed<F>(&mut self, load_next: F)
         where
             F: FnOnce() -> Cached<T>,
         {
-            if !self.first.is_none() {
+            if !self.first.is_empty() {
                 return;
             }
 
-            self.first = self.second.take().map_or_else(read_next, Cached::Some);
+            self.first = self.second.take().map_or_else(load_next, Cached::Item);
         }
     }
 
     #[derive(Default)]
     pub(super) enum Cached<T> {
         #[default]
-        None,
-        Some(T),
+        Empty,
+        Item(T),
         Eof,
     }
 
     impl<T> Default for PeekCache<T> {
         fn default() -> Self {
             Self {
-                first: Cached::None,
+                first: Cached::Empty,
                 second: None,
             }
         }
     }
 
     impl<T> Cached<T> {
-        const fn is_none(&self) -> bool {
-            matches!(self, Self::None)
+        const fn is_empty(&self) -> bool {
+            matches!(self, Self::Empty)
         }
 
         const fn as_ref(&self) -> Option<&T> {
             match self {
-                Self::None | Self::Eof => None,
-                Self::Some(item) => Some(item),
+                Self::Empty | Self::Eof => None,
+                Self::Item(item) => Some(item),
             }
         }
 
         fn into_item(self) -> Option<T> {
             match self {
-                Self::None | Self::Eof => None,
-                Self::Some(item) => Some(item),
+                Self::Empty | Self::Eof => None,
+                Self::Item(item) => Some(item),
             }
         }
     }
@@ -389,30 +389,30 @@ mod tests {
         let mut next = 0;
 
         assert_eq!(
-            cache.peek_or_fill(|| {
+            cache.peek(|| {
                 next += 1;
-                Cached::Some(next)
+                Cached::Item(next)
             }),
             Some(&1)
         );
         assert_eq!(
-            cache.peek_or_fill(|| {
+            cache.peek(|| {
                 next += 1;
-                Cached::Some(next)
+                Cached::Item(next)
             }),
             Some(&1)
         );
         assert_eq!(
-            cache.next_or_fill(|| {
+            cache.next(|| {
                 next += 1;
-                Cached::Some(next)
+                Cached::Item(next)
             }),
             Some(1)
         );
         assert_eq!(
-            cache.next_or_fill(|| {
+            cache.next(|| {
                 next += 1;
-                Cached::Some(next)
+                Cached::Item(next)
             }),
             Some(2)
         );
