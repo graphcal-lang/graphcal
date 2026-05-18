@@ -96,7 +96,7 @@ impl Parser<'_> {
                 segments.push(seg);
             } else {
                 // Not a path continuation; restore the `.` for the tail parser.
-                self.lexer.put_back(Token::Dot, dot_span);
+                self.put_back(Token::Dot, dot_span)?;
                 break;
             }
         }

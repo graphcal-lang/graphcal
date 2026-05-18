@@ -337,7 +337,7 @@ impl Parser<'_> {
             // and let the expression parser handle it as arithmetic
             // (e.g., `459.3 W / (1.0 m^2)`).
             if !matches!(self.lexer.peek(), Some(&Token::Ident | &Token::LParen)) {
-                self.lexer.put_back(op_token, op_span);
+                self.put_back(op_token, op_span)?;
                 break;
             }
 

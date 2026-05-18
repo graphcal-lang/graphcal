@@ -36,6 +36,9 @@ pub struct Lexer<'src> {
     first_error_span: Option<Span>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PutBackError;
+
 impl<'src> Lexer<'src> {
     #[must_use]
     pub fn new(source: &'src str) -> Self {
@@ -86,11 +89,11 @@ impl<'src> Lexer<'src> {
     /// If a token is already peeked, the currently peeked token is moved to
     /// the second peek slot. Only one level of put-back is supported.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if both peek slots are occupied.
-    pub fn put_back(&mut self, token: Token, span: Span) {
-        self.peek_cache.put_back(token, span);
+    /// Returns [`PutBackError`] if both peek slots are occupied.
+    pub const fn put_back(&mut self, token: Token, span: Span) -> Result<(), PutBackError> {
+        self.peek_cache.put_back(token, span)
     }
 
     /// Get the source text corresponding to a span.
@@ -107,7 +110,7 @@ impl<'src> Lexer<'src> {
 }
 
 mod peek_cache {
-    use super::{Span, Token};
+    use super::{PutBackError, Span, Token};
 
     #[derive(Default)]
     pub(super) struct PeekCache {
@@ -141,21 +144,25 @@ mod peek_cache {
         /// If a token is already peeked, the currently peeked token is moved to
         /// the second peek slot. Only one level of put-back is supported.
         ///
-        /// # Panics
+        /// # Errors
         ///
-        /// Panics if both peek slots are occupied.
-        pub(super) fn put_back(&mut self, token: Token, span: Span) {
-            match std::mem::take(&mut self.first) {
+        /// Returns [`PutBackError`] if both peek slots are occupied.
+        pub(super) const fn put_back(
+            &mut self,
+            token: Token,
+            span: Span,
+        ) -> Result<(), PutBackError> {
+            if matches!(self.first, CachedToken::Some(..)) && self.second.is_some() {
+                return Err(PutBackError);
+            }
+
+            match std::mem::replace(&mut self.first, CachedToken::Some(token, span)) {
                 CachedToken::Some(existing_token, existing_span) => {
-                    assert!(
-                        self.second.is_none(),
-                        "cannot put_back: both peek slots are occupied"
-                    );
                     self.second = Some((existing_token, existing_span));
                 }
                 CachedToken::None | CachedToken::Eof => {}
             }
-            self.first = CachedToken::Some(token, span);
+            Ok(())
         }
 
         fn fill_if_needed(
@@ -310,6 +317,24 @@ mod tests {
         assert_eq!(tok, Token::Ident);
         assert_eq!(lexer.slice_at(span), "x");
 
+        assert!(lexer.next_token().is_none());
+    }
+
+    #[test]
+    fn put_back_returns_error_when_both_slots_are_occupied() {
+        let input = "param x";
+        let mut lexer = Lexer::new(input);
+
+        let (token, span) = lexer.next_token().unwrap();
+        assert_eq!(lexer.peek(), Some(&Token::Ident));
+        assert_eq!(lexer.put_back(token, span), Ok(()));
+
+        assert_eq!(lexer.put_back(Token::Const, span), Err(PutBackError));
+
+        let (token, _) = lexer.next_token().unwrap();
+        assert_eq!(token, Token::Param);
+        let (token, _) = lexer.next_token().unwrap();
+        assert_eq!(token, Token::Ident);
         assert!(lexer.next_token().is_none());
     }
 

@@ -420,7 +420,7 @@ impl Parser<'_> {
                 // `.` not followed by an ident — not a path continuation. Put
                 // back the dot for whoever runs next (e.g. brace-list tail
                 // parser, or an error site higher up).
-                self.lexer.put_back(Token::Dot, dot_span);
+                self.put_back(Token::Dot, dot_span)?;
                 break;
             }
             let seg = self.parse_any_ident()?;
@@ -574,7 +574,7 @@ impl Parser<'_> {
         let (_, span) = self.advance()?;
         let name = self.lexer.slice_at(span).to_string();
 
-        if self.peek_dot_then_ident() {
+        if self.peek_dot_then_ident()? {
             // Qualified reference: `ident.member`. After the alpha-4 module
             // redesign there are no user-defined functions, so a `module.fn(...)`
             // form has no resolution path; we always parse `ident.ident` (no
@@ -723,7 +723,7 @@ impl Parser<'_> {
             let name = self.lexer.slice_at(span).to_string();
             // Consume the identifier to peek at what follows
             self.lexer.next_token();
-            if self.peek_dot_then_ident() {
+            if self.peek_dot_then_ident()? {
                 // Qualified variant: Index.Variant
                 self.lexer.next_token(); // consume '.'
                 let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
@@ -733,7 +733,7 @@ impl Parser<'_> {
                 });
             }
             // Not a qualified variant — put the token back and fall through to expression
-            self.lexer.put_back(Token::Ident, span);
+            self.put_back(Token::Ident, span)?;
         }
 
         // Parse a full expression
@@ -786,17 +786,17 @@ impl Parser<'_> {
     /// `IDENT.{...}` (a brace-list selector that doesn't appear in expression
     /// position) and from a stray `.` followed by a non-identifier token.
     /// This consumes neither the `.` nor the following token.
-    pub(super) fn peek_dot_then_ident(&mut self) -> bool {
+    pub(super) fn peek_dot_then_ident(&mut self) -> Result<bool, ParseError> {
         if self.lexer.peek() != Some(&Token::Dot) {
-            return false;
+            return Ok(false);
         }
         // Consume `.` and peek the next token; restore via put_back.
         let Some((Token::Dot, dot_span)) = self.lexer.next_token() else {
-            return false;
+            return Ok(false);
         };
         let next_is_ident = self.lexer.peek() == Some(&Token::Ident);
-        self.lexer.put_back(Token::Dot, dot_span);
-        next_is_ident
+        self.put_back(Token::Dot, dot_span)?;
+        Ok(next_is_ident)
     }
 
     /// Look ahead to check if `(` starts tuple-key sugar: `(ident, ident, ...) =>`.

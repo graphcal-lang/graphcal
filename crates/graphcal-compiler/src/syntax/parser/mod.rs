@@ -206,6 +206,18 @@ pub enum ParseError {
         #[label("expected `.<out>` projection here")]
         span: SourceSpan,
     },
+
+    #[error("lexer put-back buffer is full")]
+    #[diagnostic(
+        code(graphcal::P015),
+        help("this is an internal parser lookahead error; please report it")
+    )]
+    LexerPutBackOverflow {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("put-back requested here")]
+        span: SourceSpan,
+    },
 }
 
 impl ParseError {
@@ -232,7 +244,8 @@ impl ParseError {
             | Self::MultiDeclNoSharedAxis { src, .. }
             | Self::MultiDeclUnsupportedShape { src, .. }
             | Self::IndexVariantPatternWithBindings { src, .. }
-            | Self::InlineDagCallMissingProjection { src, .. } => src,
+            | Self::InlineDagCallMissingProjection { src, .. }
+            | Self::LexerPutBackOverflow { src, .. } => src,
         }
     }
 }
@@ -281,6 +294,15 @@ impl<'src> Parser<'src> {
             src: self.named_source(),
             span: Span::new(self.lexer.source_len(), 0).into(),
         }
+    }
+
+    pub(super) fn put_back(&mut self, token: Token, span: Span) -> Result<(), ParseError> {
+        self.lexer
+            .put_back(token, span)
+            .map_err(|_| ParseError::LexerPutBackOverflow {
+                src: self.named_source(),
+                span: span.into(),
+            })
     }
 
     /// Consume any remaining tokens and, if the lexer encountered an unrecognized
