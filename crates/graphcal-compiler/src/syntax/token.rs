@@ -480,47 +480,29 @@ mod tests {
     }
 
     #[test]
-    fn lex_identifier_starting_with_base() {
-        // "baseline" should be Ident, not Base + "line"
-        let mut lexer = Token::lexer("baseline");
-        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "baseline");
-    }
-
-    #[test]
     fn lex_identifier_starting_with_new_keywords() {
         // "scanner" should be Ident, not Scan + "ner"
         for word in [
+            "baseline",
             "scanner",
             "unfolder",
             "stepped",
             "indexed",
             "indexing",
             "linspaced",
+            "tableau",
+            "parameter",
+            "typedef",
+            "importable",
+            "dagger",
+            "public",
+            "included",
         ] {
             let mut lexer = Token::lexer(word);
             assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
             assert_eq!(lexer.slice(), word);
         }
     }
-
-    #[test]
-    fn lex_identifier_starting_with_table() {
-        // "tableau" should be Ident, not Table + "au"
-        let mut lexer = Token::lexer("tableau");
-        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "tableau");
-    }
-
-    #[test]
-    fn lex_identifier_starting_with_keyword() {
-        // "parameter" should be Ident, not Param + "eter"
-        let mut lexer = Token::lexer("parameter");
-        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "parameter");
-    }
-
-    // Phase 1 specific tests
 
     #[test]
     fn lex_pascal_case_identifiers() {
@@ -615,25 +597,27 @@ mod tests {
         );
     }
 
-    // Phase 2 specific tests
-
     #[test]
     fn lex_type_decl() {
-        let tokens = lex_tokens("type TransferResult { dv1: Velocity, dv2: Velocity }");
+        let tokens =
+            lex_tokens("type TransferResult { TransferResult(dv1: Velocity, dv2: Velocity) }");
         assert_eq!(
             tokens,
             vec![
-                Token::Type,
-                Token::Ident,
-                Token::LBrace,
-                Token::Ident,
-                Token::Colon,
-                Token::Ident,
-                Token::Comma,
-                Token::Ident,
-                Token::Colon,
-                Token::Ident,
-                Token::RBrace,
+                Token::Type,   // type
+                Token::Ident,  // TransferResult
+                Token::LBrace, // {
+                Token::Ident,  // TransferResult
+                Token::LParen, // (
+                Token::Ident,  // dv1
+                Token::Colon,  // :
+                Token::Ident,  // Velocity
+                Token::Comma,  // ,
+                Token::Ident,  // dv2
+                Token::Colon,  // :
+                Token::Ident,  // Velocity
+                Token::RParen, // )
+                Token::RBrace, // }
             ]
         );
     }
@@ -646,16 +630,6 @@ mod tests {
             vec![Token::At, Token::Ident, Token::Dot, Token::Ident,]
         );
     }
-
-    #[test]
-    fn lex_identifier_starting_with_type() {
-        // "typedef" should be Ident, not Type + "def"
-        let mut lexer = Token::lexer("typedef");
-        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "typedef");
-    }
-
-    // Phase 4 specific tests
 
     #[test]
     fn lex_import_statement() {
@@ -704,14 +678,6 @@ mod tests {
     }
 
     #[test]
-    fn lex_identifier_starting_with_import() {
-        // "importable" should be Ident, not Import + "able"
-        let mut lexer = Token::lexer("importable");
-        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "importable");
-    }
-
-    #[test]
     fn lex_dag_keyword() {
         let tokens = lex_tokens("dag my_pipeline {}");
         assert_eq!(
@@ -721,26 +687,22 @@ mod tests {
     }
 
     #[test]
-    fn lex_identifier_starting_with_dag() {
-        // "dagger" should be Ident, not Dag + "ger"
-        let mut lexer = Token::lexer("dagger");
-        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "dagger");
-    }
-
-    #[test]
-    fn lex_identifier_starting_with_pub() {
-        // "public" should be Ident, not Pub + "lic"
-        let mut lexer = Token::lexer("public");
-        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "public");
-    }
-
-    #[test]
-    fn lex_identifier_starting_with_include() {
-        // "included" should be Ident, not Include + "d"
-        let mut lexer = Token::lexer("included");
-        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "included");
+    fn lex_import_type() {
+        let tokens = lex_tokens("import f.{type T, T};");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Import,
+                Token::Ident, // f
+                Token::Dot,
+                Token::LBrace,
+                Token::Type,
+                Token::Ident, // T
+                Token::Comma,
+                Token::Ident,
+                Token::RBrace,
+                Token::Semicolon,
+            ]
+        );
     }
 }
