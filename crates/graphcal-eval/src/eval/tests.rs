@@ -532,12 +532,12 @@ fn parse_expr(s: &str) -> graphcal_compiler::desugar::resolved_ast::Expr {
 fn override_param_changes_result() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     // Default isp=320 s, override to 450 s => higher delta_v
-    let default = compile_and_eval_named(source, "test").unwrap();
+    let default = compile_and_eval_named(source, "test.gcl").unwrap();
     let default_dv = find_value(&default, "delta_v");
 
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("isp"), parse_expr("450.0 s"));
-    let overridden = compile_and_eval_with_overrides(source, "test", &overrides).unwrap();
+    let overridden = compile_and_eval_with_overrides(source, "test.gcl", &overrides).unwrap();
     let new_dv = find_value(&overridden, "delta_v");
 
     assert!(new_dv > default_dv, "higher isp should give higher delta_v");
@@ -549,7 +549,7 @@ fn override_with_wrong_dimension_errors() {
     // isp expects Time, not Mass
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("isp"), parse_expr("450.0 kg"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides);
+    let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     assert!(result.is_err());
 }
 
@@ -558,7 +558,7 @@ fn override_node_errors() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("delta_v"), parse_expr("100.0 m/s"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides);
+    let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
             assert_eq!(name.as_str(), "delta_v");
@@ -573,7 +573,7 @@ fn override_const_errors() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("g0"), parse_expr("10.0 m/s^2"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides);
+    let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
             assert_eq!(name.as_str(), "g0");
@@ -588,7 +588,7 @@ fn override_unknown_param_errors() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("nonexistent"), parse_expr("100"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides);
+    let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideUnknownParam { name })) => {
             assert_eq!(name.as_str(), "nonexistent");
@@ -600,7 +600,7 @@ fn override_unknown_param_errors() {
 #[test]
 fn required_param_without_override_errors() {
     let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
-    let result = compile_and_eval_with_overrides(source, "test", &HashMap::new());
+    let result = compile_and_eval_with_overrides(source, "test.gcl", &HashMap::new());
     match result {
         Err(CompileError::Eval(GraphcalError::RequiredParamNotProvided { name, .. })) => {
             assert_eq!(name, "x");
@@ -614,7 +614,7 @@ fn required_param_with_override_succeeds() {
     let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("x"), parse_expr("42.0"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides).unwrap();
+    let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides).unwrap();
     let y = find_value(&result, "y");
     assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
 }
@@ -962,7 +962,7 @@ fn cli_partial_override_uses_defaults() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::new("isp"), parse_expr("450.0 s"));
-    let result = compile_and_eval_with_overrides(source, "test", &overrides);
+    let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     assert!(
         result.is_ok(),
         "partial overrides should fall back to defaults: {result:?}"

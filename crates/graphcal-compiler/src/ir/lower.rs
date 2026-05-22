@@ -2799,7 +2799,7 @@ mod tests {
     use crate::syntax::parser::Parser;
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
-        NamedSource::new("test", Arc::new(source.to_string()))
+        NamedSource::new("test.gcl", Arc::new(source.to_string()))
     }
 
     fn parse_and_lower(source: &str) -> Result<IR, GraphcalError> {

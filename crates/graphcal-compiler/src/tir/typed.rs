@@ -2458,10 +2458,11 @@ mod tests {
         let mut desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         crate::syntax::ast::desugar_tuple_matches(&mut desugared);
         let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
-        let src = NamedSource::new("test", Arc::new(source.to_string()));
+        let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let ir = crate::ir::lower::lower(&file, &src)?;
         let parent_dag_id =
-            crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test")).unwrap();
+            crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl"))
+                .unwrap();
         let mut tir = type_resolve(ir, parent_dag_id.clone(), &src)?;
         compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id)?;
         Ok(tir)

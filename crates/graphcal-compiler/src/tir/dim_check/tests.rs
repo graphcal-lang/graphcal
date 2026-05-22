@@ -5,7 +5,7 @@ use crate::syntax::names::ScopedName;
 use crate::syntax::parser::Parser;
 
 fn make_src(source: &str) -> NamedSource<Arc<String>> {
-    NamedSource::new("test", Arc::new(source.to_string()))
+    NamedSource::new("test.gcl", Arc::new(source.to_string()))
 }
 
 fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalError> {
@@ -16,7 +16,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     let src = make_src(source);
     let ir = crate::ir::lower::lower(&file, &src)?;
     let parent_dag_id =
-        crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test")).unwrap();
+        crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
     let mut tir = crate::tir::typed::type_resolve(ir, parent_dag_id.clone(), &src)?;
     compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id)?;
     check_dimensions_tir(&tir, &src)?;

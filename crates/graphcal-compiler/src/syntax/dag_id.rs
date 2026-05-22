@@ -11,6 +11,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+use thiserror::Error;
+
 /// An abstract identifier for a DAG in the compiler pipeline.
 ///
 /// Segments form a hierarchical name: for example, a file at `helpers/math.gcl`
@@ -30,26 +32,20 @@ pub struct DagId {
     tail: Arc<[Arc<str>]>,
 }
 
-/// Returned by [`DagId::from_relative_path`] when the path has zero components
-/// or contains a non-UTF-8 component.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Returned by [`DagId::from_relative_path`] when the path is not a valid
+/// graphcal source path.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DagIdPathError {
     /// The path produced no components (e.g., an empty `Path`).
+    #[error("path has no components")]
     Empty,
     /// A path component was not valid UTF-8.
+    #[error("path contains a non-UTF-8 component")]
     NonUtf8Component,
+    /// The path did not end with `.gcl`.
+    #[error("path must end with `.gcl`")]
+    MissingGclExtension,
 }
-
-impl fmt::Display for DagIdPathError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty => f.write_str("path has no components"),
-            Self::NonUtf8Component => f.write_str("path contains a non-UTF-8 component"),
-        }
-    }
-}
-
-impl std::error::Error for DagIdPathError {}
 
 impl DagId {
     /// Create a `DagId` from a leading segment and any further segments.
@@ -122,20 +118,28 @@ impl DagId {
     ///
     /// # Errors
     ///
-    /// Returns [`DagIdPathError`] if `path` has no components or contains a
-    /// non-UTF-8 component.
+    /// Returns [`DagIdPathError`] if `path` has no components, contains a
+    /// non-UTF-8 component, or does not end with `.gcl`.
     pub fn from_relative_path(path: &std::path::Path) -> Result<Self, DagIdPathError> {
-        let mut segments = path.components().map(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| {
-                    // Strip .gcl extension from the last component.
-                    Arc::<str>::from(s.strip_suffix(".gcl").unwrap_or(s))
-                })
-                .ok_or(DagIdPathError::NonUtf8Component)
-        });
-        let head = segments.next().ok_or(DagIdPathError::Empty)??;
-        let tail: Arc<[Arc<str>]> = segments.collect::<Result<Vec<_>, _>>()?.into();
+        let mut segments: Vec<Arc<str>> = path
+            .components()
+            .map(|c| {
+                c.as_os_str()
+                    .to_str()
+                    .map(Arc::<str>::from)
+                    .ok_or(DagIdPathError::NonUtf8Component)
+            })
+            .collect::<Result<_, _>>()?;
+
+        let last = segments.last_mut().ok_or(DagIdPathError::Empty)?;
+        *last = last
+            .strip_suffix(".gcl")
+            .map(Arc::<str>::from)
+            .ok_or(DagIdPathError::MissingGclExtension)?;
+
+        let mut segments = segments.into_iter();
+        let head = segments.next().ok_or(DagIdPathError::Empty)?;
+        let tail: Arc<[Arc<str>]> = segments.collect::<Vec<_>>().into();
         Ok(Self { head, tail })
     }
 }
@@ -144,7 +148,7 @@ impl fmt::Display for DagId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.head)?;
         for seg in self.tail.iter() {
-            f.write_str("/")?;
+            f.write_str(".")?;
             f.write_str(seg)?;
         }
         Ok(())
@@ -161,7 +165,7 @@ mod tests {
         let id = DagId::from_relative_path(std::path::Path::new("helpers/math.gcl")).unwrap();
         let segs: Vec<&str> = id.segments().map(|s| &**s).collect();
         assert_eq!(segs, ["helpers", "math"]);
-        assert_eq!(id.to_string(), "helpers/math");
+        assert_eq!(id.to_string(), "helpers.math");
     }
 
     #[test]
@@ -171,17 +175,23 @@ mod tests {
     }
 
     #[test]
+    fn from_relative_path_rejects_path_without_gcl_extension() {
+        let err = DagId::from_relative_path(std::path::Path::new("helpers/math")).unwrap_err();
+        assert_eq!(err, DagIdPathError::MissingGclExtension);
+    }
+
+    #[test]
     fn child_appends_segment() {
         let parent = DagId::new("helpers", ["math"]);
         let child = parent.child("double_speed");
-        assert_eq!(child.to_string(), "helpers/math/double_speed");
+        assert_eq!(child.to_string(), "helpers.math.double_speed");
     }
 
     #[test]
     fn parent_drops_last_segment() {
         let id = DagId::new("helpers", ["math", "double_speed"]);
         let parent = id.parent().unwrap();
-        assert_eq!(parent.to_string(), "helpers/math");
+        assert_eq!(parent.to_string(), "helpers.math");
     }
 
     #[test]
@@ -203,8 +213,8 @@ mod tests {
     }
 
     #[test]
-    fn display_joins_with_slash() {
+    fn display_joins_with_dot() {
         let id = DagId::new("a", ["b", "c"]);
-        assert_eq!(id.to_string(), "a/b/c");
+        assert_eq!(id.to_string(), "a.b.c");
     }
 }

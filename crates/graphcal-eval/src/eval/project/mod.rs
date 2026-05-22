@@ -804,7 +804,8 @@ pub fn compile_and_eval_project<F: graphcal_io::FileSystemReader>(
 ///
 /// # Errors
 ///
-/// Returns a [`CompileError`] if parsing, lowering, or checking fails.
+/// Returns a [`CompileError`] if parsing, lowering, or checking fails, or if
+/// `name` is not a valid `.gcl` source path.
 pub fn compile_to_tir(
     source: &str,
     name: &str,
