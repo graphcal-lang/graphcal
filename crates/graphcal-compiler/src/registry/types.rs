@@ -473,12 +473,12 @@ fn resolve_unit_dimension_impl(
 // ---------------------------------------------------------------------------
 
 /// Dimension registry: maps dimension names to `Dimension` values and tracks
-/// base dimension metadata (ID assignment, names, SI symbols).
+/// base dimension metadata (ID assignment, names, default unit symbols).
 #[derive(Debug, Clone)]
 pub struct DimensionRegistry {
     /// Base dimension ID → dimension name (for display).
     base_dim_names: BTreeMap<BaseDimId, String>,
-    /// Base dimension ID → SI unit symbol (for `si_unit_string()`).
+    /// Base dimension ID → default unit symbol for runtime display.
     base_dim_symbols: BTreeMap<BaseDimId, String>,
     dimensions: HashMap<DimName, Dimension>,
 }
@@ -501,7 +501,7 @@ impl DimensionRegistry {
         &self.base_dim_names
     }
 
-    /// Get the base dimension symbols map (for SI unit string formatting).
+    /// Get the base dimension symbols map for runtime display.
     #[must_use]
     pub const fn base_dim_symbols(&self) -> &BTreeMap<BaseDimId, String> {
         &self.base_dim_symbols
@@ -802,8 +802,8 @@ impl RegistryBuilder {
 
     /// Register a new base dimension with an SI symbol.
     ///
-    /// Same as `register_base_dimension` but also records the unit symbol
-    /// used in `si_unit_string()` output (e.g., `"m"` for Length).
+    /// Same as `register_base_dimension` but also records the default unit symbol
+    /// used for runtime display (e.g., `"m"` for Length).
     pub fn register_base_dimension_with_symbol(
         &mut self,
         name: DimName,
@@ -932,7 +932,7 @@ impl RegistryBuilder {
         &self.base_dim_names
     }
 
-    /// Get the base dimension symbols map (for SI unit string formatting).
+    /// Get the base dimension symbols map for runtime display.
     #[must_use]
     pub const fn base_dim_symbols(&self) -> &BTreeMap<BaseDimId, String> {
         &self.base_dim_symbols

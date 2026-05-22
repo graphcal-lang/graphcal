@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
+
 use indexmap::IndexMap;
 use miette::Diagnostic;
 use thiserror::Error;
 
 use graphcal_compiler::desugar::resolved_ast::EncodingChannel;
-use graphcal_compiler::syntax::dimension::Dimension;
+use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::syntax::names::{
     DeclName, FieldName, IndexName, StructTypeName, VariantName,
 };
@@ -144,22 +146,17 @@ impl Value {
     /// Get the unit label for display, or `None` for dimensionless values.
     ///
     /// Returns the explicit display unit label if set (e.g., "km", "km/hour"),
-    /// otherwise falls back to the SI unit string (e.g., "m/s", "kg").
+    /// otherwise falls back to a label built from registered base-unit symbols
+    /// (e.g., "m/s", "kg").
     #[must_use]
-    pub fn display_label(
-        &self,
-        symbols: &std::collections::BTreeMap<
-            graphcal_compiler::syntax::dimension::BaseDimId,
-            String,
-        >,
-    ) -> Option<String> {
+    pub fn display_label(&self, symbols: &BTreeMap<BaseDimId, String>) -> Option<String> {
         match self {
             Self::Scalar {
                 display_unit,
                 dimension,
                 ..
             } => display_unit.as_ref().map_or_else(
-                || dimension.si_unit_string(symbols),
+                || default_unit_label(dimension, symbols),
                 |du| Some(du.label.clone()),
             ),
             Self::Bool(_)
@@ -179,12 +176,7 @@ impl Value {
     /// Composite values (`Struct`, `Indexed`) are shown as their variant name or
     /// a placeholder string, not recursively expanded.
     #[must_use]
-    pub fn format_display(
-        &self,
-        symbols: Option<
-            &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
-        >,
-    ) -> String {
+    pub fn format_display(&self, symbols: Option<&BTreeMap<BaseDimId, String>>) -> String {
         match self {
             Self::Bool(b) => b.to_string(),
             Self::Int(i) => i.to_string(),
@@ -239,6 +231,66 @@ impl Value {
 #[must_use]
 pub fn scalar_display_value(si_value: f64, display_unit: Option<&DisplayUnit>) -> f64 {
     display_unit.map_or(si_value, |du| si_value / du.scale)
+}
+
+/// Format a scalar's default unit label from its dimension and registered base-unit symbols.
+///
+/// This is intentionally kept in the runtime display layer rather than on
+/// `Dimension`: dimensions describe physical semantics; unit labels are a
+/// presentation concern derived from registry metadata.
+#[must_use]
+fn default_unit_label(
+    dimension: &Dimension,
+    symbols: &BTreeMap<BaseDimId, String>,
+) -> Option<String> {
+    if dimension.is_dimensionless() {
+        return None;
+    }
+
+    let mut result = String::new();
+    let mut first = true;
+
+    for (id, &exp) in dimension.iter() {
+        if exp.num() <= 0 {
+            continue;
+        }
+        if !first {
+            result.push('*');
+        }
+        first = false;
+        push_unit_factor(&mut result, id, exp, symbols);
+    }
+
+    for (id, &exp) in dimension.iter() {
+        if exp.num() >= 0 {
+            continue;
+        }
+        if first {
+            push_unit_factor(&mut result, id, exp, symbols);
+            first = false;
+        } else {
+            result.push('/');
+            push_unit_factor(&mut result, id, -exp, symbols);
+        }
+    }
+
+    Some(result)
+}
+
+fn push_unit_factor(
+    result: &mut String,
+    id: &BaseDimId,
+    exp: Rational,
+    symbols: &BTreeMap<BaseDimId, String>,
+) {
+    let symbol = symbols
+        .get(id)
+        .map_or_else(|| id.fallback_symbol(), String::clone);
+    result.push_str(&symbol);
+    if exp != Rational::ONE {
+        result.push('^');
+        result.push_str(&exp.to_string());
+    }
 }
 
 /// Format an `hifitime::Epoch` with an optional IANA timezone.
@@ -551,5 +603,60 @@ impl CompileError {
             Self::Parse(e) => Some(e.named_source()),
             Self::Eval(e) => e.named_source(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dim_id(name: &str) -> BaseDimId {
+        BaseDimId::Prelude(name.to_string())
+    }
+
+    fn scalar(dimension: Dimension, display_unit: Option<DisplayUnit>) -> Value {
+        Value::Scalar {
+            si_value: 1.0,
+            dimension,
+            display_unit,
+        }
+    }
+
+    fn symbols() -> BTreeMap<BaseDimId, String> {
+        BTreeMap::from([
+            (dim_id("Length"), "m".to_string()),
+            (dim_id("Time"), "s".to_string()),
+        ])
+    }
+
+    #[test]
+    fn display_label_falls_back_to_default_unit_symbols() {
+        let velocity =
+            (Dimension::base(dim_id("Length")) / Dimension::base(dim_id("Time"))).unwrap();
+        let value = scalar(velocity, None);
+
+        assert_eq!(value.display_label(&symbols()), Some("m/s".to_string()));
+    }
+
+    #[test]
+    fn display_label_prefers_explicit_display_unit() {
+        let velocity =
+            (Dimension::base(dim_id("Length")) / Dimension::base(dim_id("Time"))).unwrap();
+        let value = scalar(
+            velocity,
+            Some(DisplayUnit {
+                label: "km/hour".to_string(),
+                scale: 1000.0 / 3600.0,
+            }),
+        );
+
+        assert_eq!(value.display_label(&symbols()), Some("km/hour".to_string()));
+    }
+
+    #[test]
+    fn display_label_omits_dimensionless_default_unit() {
+        let value = scalar(Dimension::dimensionless(), None);
+
+        assert_eq!(value.display_label(&symbols()), None);
     }
 }

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+
+use thiserror::Error;
 
 /// A rational number for dimension exponents (e.g., 1/2 for sqrt).
 ///
@@ -89,27 +90,18 @@ impl Rational {
 }
 
 /// Error from `Rational` construction or arithmetic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RationalError {
     /// The denominator was zero.
+    #[error("denominator must not be zero")]
     ZeroDenominator,
     /// The reduced numerator or denominator did not fit in `i32`.
     ///
     /// Dimension exponents are stored as `i32`; an operation produced a
     /// reduced value outside that range.
+    #[error("dimension exponent overflowed i32")]
     Overflow,
 }
-
-impl fmt::Display for RationalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ZeroDenominator => write!(f, "denominator must not be zero"),
-            Self::Overflow => write!(f, "dimension exponent overflowed i32"),
-        }
-    }
-}
-
-impl std::error::Error for RationalError {}
 
 /// Compute `num / den` in `i64` with GCD reduction, then narrow back to `i32`.
 ///
@@ -217,22 +209,10 @@ impl BaseDimId {
 ///
 /// Only non-zero exponents are stored. An empty map represents the dimensionless
 /// dimension.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Dimension {
     /// Non-zero exponents only. Sorted by `BaseDimId` for deterministic equality/hash.
     exponents: BTreeMap<BaseDimId, Rational>,
-}
-
-// Manual Hash impl because BTreeMap doesn't derive Hash,
-// but its iteration order is deterministic (sorted by key).
-impl Hash for Dimension {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_usize(self.exponents.len());
-        for (id, exp) in &self.exponents {
-            id.hash(state);
-            exp.hash(state);
-        }
-    }
 }
 
 impl fmt::Debug for Dimension {
@@ -330,23 +310,6 @@ impl Dimension {
         names: &'a BTreeMap<BaseDimId, String>,
     ) -> DimensionDisplay<'a> {
         DimensionDisplay { dim: self, names }
-    }
-
-    /// Format this dimension as an SI unit string (e.g., `m/s`, `kg*m/s^2`).
-    ///
-    /// The `symbols` map provides `BaseDimId → unit symbol` mappings.
-    /// Returns `None` for dimensionless.
-    #[must_use]
-    pub fn si_unit_string(&self, symbols: &BTreeMap<BaseDimId, String>) -> Option<String> {
-        if self.is_dimensionless() {
-            return None;
-        }
-        let mut result = String::new();
-        // Writing to `String` never fails, so `expect` is safe here.
-        #[expect(clippy::expect_used, reason = "writing to String is infallible")]
-        self.write_exponents(&mut result, symbols, "*", "/")
-            .expect("writing to String never fails");
-        Some(result)
     }
 
     /// Write the dimension's exponents to a [`fmt::Write`] sink.
@@ -481,14 +444,6 @@ impl std::ops::Div for &Dimension {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unreachable,
-        reason = "test code"
-    )]
-
     use super::*;
 
     /// Test helper: build a `Rational` from integer literals, panicking on
@@ -726,6 +681,7 @@ mod tests {
     #[test]
     fn dimension_hash_consistency() {
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
         let a = (Dimension::base(length()) / Dimension::base(time())).unwrap();
         let b = (Dimension::base(length()) / Dimension::base(time())).unwrap();
