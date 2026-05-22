@@ -148,7 +148,7 @@ impl fmt::Display for DagId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.head)?;
         for seg in self.tail.iter() {
-            f.write_str("/")?;
+            f.write_str(".")?;
             f.write_str(seg)?;
         }
         Ok(())
@@ -165,7 +165,7 @@ mod tests {
         let id = DagId::from_relative_path(std::path::Path::new("helpers/math.gcl")).unwrap();
         let segs: Vec<&str> = id.segments().map(|s| &**s).collect();
         assert_eq!(segs, ["helpers", "math"]);
-        assert_eq!(id.to_string(), "helpers/math");
+        assert_eq!(id.to_string(), "helpers.math");
     }
 
     #[test]
@@ -184,14 +184,14 @@ mod tests {
     fn child_appends_segment() {
         let parent = DagId::new("helpers", ["math"]);
         let child = parent.child("double_speed");
-        assert_eq!(child.to_string(), "helpers/math/double_speed");
+        assert_eq!(child.to_string(), "helpers.math.double_speed");
     }
 
     #[test]
     fn parent_drops_last_segment() {
         let id = DagId::new("helpers", ["math", "double_speed"]);
         let parent = id.parent().unwrap();
-        assert_eq!(parent.to_string(), "helpers/math");
+        assert_eq!(parent.to_string(), "helpers.math");
     }
 
     #[test]
@@ -213,8 +213,8 @@ mod tests {
     }
 
     #[test]
-    fn display_joins_with_slash() {
+    fn display_joins_with_dot() {
         let id = DagId::new("a", ["b", "c"]);
-        assert_eq!(id.to_string(), "a/b/c");
+        assert_eq!(id.to_string(), "a.b.c");
     }
 }
