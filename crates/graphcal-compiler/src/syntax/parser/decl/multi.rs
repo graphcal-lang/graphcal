@@ -647,13 +647,6 @@ impl Parser<'_> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        reason = "test code"
-    )]
-
     use super::*;
     use crate::syntax::ast::{ExprKind, MultiSlotKind, Visibility};
     use crate::syntax::desugar::expand_multi_decl;

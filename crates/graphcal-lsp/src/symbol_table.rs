@@ -1740,14 +1740,6 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unreachable,
-        reason = "test code"
-    )]
-
     use super::*;
 
     #[test]

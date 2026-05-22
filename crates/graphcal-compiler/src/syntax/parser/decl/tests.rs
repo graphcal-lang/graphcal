@@ -1,10 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test code"
-)]
-
 use crate::syntax::ast::{
     AttributeArg, DeclKind, ExprKind, GenericConstraint, ImportItemNamespace, ImportKind,
     IndexDeclKind, MulDivOp, TypeExprKind, Visibility,

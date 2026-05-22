@@ -314,13 +314,6 @@ pub fn format_indexed_table(
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        reason = "test code"
-    )]
-
     use super::*;
     use graphcal_compiler::syntax::dimension::Dimension;
     use graphcal_compiler::syntax::names::{FieldName, IndexName, StructTypeName, VariantName};

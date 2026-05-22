@@ -115,7 +115,6 @@ fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
     use super::TOP_LEVEL_KEYWORDS;
 
     #[test]

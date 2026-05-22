@@ -2788,13 +2788,6 @@ fn extract_type_annotations(ast: &File) -> HashMap<DeclName, TypeExpr> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unreachable,
-        reason = "test code"
-    )]
     use super::*;
     use crate::syntax::parser::Parser;
 

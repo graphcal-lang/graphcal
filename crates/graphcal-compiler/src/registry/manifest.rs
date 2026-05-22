@@ -84,13 +84,6 @@ fn is_valid_package_name(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        reason = "test code"
-    )]
-
     use super::*;
 
     #[test]

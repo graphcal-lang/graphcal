@@ -426,13 +426,6 @@ pub fn render_json(figures: &[RenderedFigure]) -> Result<String, serde_json::Err
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        reason = "test code"
-    )]
-
     use super::*;
 
     #[test]

@@ -859,13 +859,6 @@ fn format_bound_display(
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unreachable,
-        reason = "test code"
-    )]
     use super::*;
     use graphcal_compiler::ir::lower::lower;
     use graphcal_compiler::syntax::parser::Parser;

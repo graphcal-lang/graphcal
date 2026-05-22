@@ -5,7 +5,6 @@
 //! - Display/formatting of output values
 //! - Range index step count precision
 //! - Unit conversion accuracy
-#![expect(clippy::unwrap_used, clippy::panic, reason = "test code")]
 #![expect(
     clippy::cast_precision_loss,
     reason = "test code intentionally tests precision edge cases"

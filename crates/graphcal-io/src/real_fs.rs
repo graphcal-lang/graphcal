@@ -104,13 +104,6 @@ impl FileSystemReader for RealFileSystem {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        reason = "test code"
-    )]
-
     use super::*;
     use std::fs;
 

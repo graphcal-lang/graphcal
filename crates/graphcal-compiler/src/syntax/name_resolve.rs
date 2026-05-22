@@ -897,8 +897,6 @@ fn resolve_qualified_name_ref(
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "test code")]
-
     use super::*;
     use crate::desugar::resolved_ast::{DeclKind, ExprKind};
     use crate::syntax::parser::Parser;
