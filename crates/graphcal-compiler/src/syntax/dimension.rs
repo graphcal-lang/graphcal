@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
+use thiserror::Error;
+
 /// A rational number for dimension exponents (e.g., 1/2 for sqrt).
 ///
 /// Always stored in reduced form with `den > 0`.
@@ -89,27 +91,18 @@ impl Rational {
 }
 
 /// Error from `Rational` construction or arithmetic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RationalError {
     /// The denominator was zero.
+    #[error("denominator must not be zero")]
     ZeroDenominator,
     /// The reduced numerator or denominator did not fit in `i32`.
     ///
     /// Dimension exponents are stored as `i32`; an operation produced a
     /// reduced value outside that range.
+    #[error("dimension exponent overflowed i32")]
     Overflow,
 }
-
-impl fmt::Display for RationalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ZeroDenominator => write!(f, "denominator must not be zero"),
-            Self::Overflow => write!(f, "dimension exponent overflowed i32"),
-        }
-    }
-}
-
-impl std::error::Error for RationalError {}
 
 /// Compute `num / den` in `i64` with GCD reduction, then narrow back to `i32`.
 ///
