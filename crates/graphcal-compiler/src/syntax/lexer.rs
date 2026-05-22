@@ -2,6 +2,9 @@ use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 use logos::Logos;
 use peek_cache::{PeekCache, SourceItem};
+use std::num::NonZeroUsize;
+
+const LEXER_MAX_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 
 /// A peekable wrapper around `logos::Lexer` that yields `(Token, Span)` pairs.
 ///
@@ -42,7 +45,7 @@ impl<'src> Lexer<'src> {
     pub fn new(source: &'src str) -> Self {
         Self {
             inner: Token::lexer(source),
-            peek_cache: PeekCache::default(),
+            peek_cache: PeekCache::new(LEXER_MAX_LOOKAHEAD),
             source,
             first_error_span: None,
         }
@@ -145,15 +148,23 @@ fn read_next_token(
 
 mod peek_cache {
     use std::collections::VecDeque;
-
-    const MAX_LOOKAHEAD: usize = 3;
+    use std::num::NonZeroUsize;
 
     pub(super) struct PeekCache<T> {
         items: VecDeque<T>,
         eof_seen: bool,
+        max_lookahead: NonZeroUsize,
     }
 
     impl<T> PeekCache<T> {
+        pub(super) fn new(max_lookahead: NonZeroUsize) -> Self {
+            Self {
+                items: VecDeque::with_capacity(max_lookahead.get()),
+                eof_seen: false,
+                max_lookahead,
+            }
+        }
+
         pub(super) fn peek<F>(&mut self, load_next: F) -> Option<&T>
         where
             F: FnMut() -> SourceItem<T>,
@@ -165,8 +176,8 @@ mod peek_cache {
         where
             F: FnMut() -> SourceItem<T>,
         {
-            debug_assert!(offset < MAX_LOOKAHEAD);
-            if offset >= MAX_LOOKAHEAD {
+            debug_assert!(offset < self.max_lookahead.get());
+            if offset >= self.max_lookahead.get() {
                 return None;
             }
 
@@ -186,6 +197,10 @@ mod peek_cache {
         where
             F: FnMut() -> SourceItem<T>,
         {
+            // Private callers preserve this invariant: `peek_at` validates
+            // arbitrary offsets, and `next` only asks for slot 0, which is
+            // guaranteed by the nonzero lookahead bound.
+            debug_assert!(offset < self.max_lookahead.get());
             while self.items.len() <= offset && !self.eof_seen {
                 match load_next() {
                     SourceItem::Item(item) => self.items.push_back(item),
@@ -198,15 +213,6 @@ mod peek_cache {
     pub(super) enum SourceItem<T> {
         Item(T),
         Eof,
-    }
-
-    impl<T> Default for PeekCache<T> {
-        fn default() -> Self {
-            Self {
-                items: VecDeque::new(),
-                eof_seen: false,
-            }
-        }
     }
 }
 
@@ -357,7 +363,7 @@ mod tests {
 
     #[test]
     fn peek_cache_uses_supplied_items_without_lexer_knowledge() {
-        let mut cache = PeekCache::<u8>::default();
+        let mut cache = PeekCache::<u8>::new(NonZeroUsize::new(2).unwrap());
         let mut next = 0;
 
         assert_eq!(
@@ -389,5 +395,20 @@ mod tests {
             Some(2)
         );
         assert_eq!(next, 2);
+    }
+
+    #[test]
+    fn peek_cache_respects_caller_supplied_lookahead() {
+        let mut cache = PeekCache::<u8>::new(NonZeroUsize::new(4).unwrap());
+        let mut next = 0;
+
+        assert_eq!(
+            cache.peek_at(3, || {
+                next += 1;
+                SourceItem::Item(next)
+            }),
+            Some(&4)
+        );
+        assert_eq!(next, 4);
     }
 }
