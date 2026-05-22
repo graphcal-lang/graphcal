@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::hash::{Hash, Hasher};
 
 use thiserror::Error;
 
@@ -210,22 +209,10 @@ impl BaseDimId {
 ///
 /// Only non-zero exponents are stored. An empty map represents the dimensionless
 /// dimension.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Dimension {
     /// Non-zero exponents only. Sorted by `BaseDimId` for deterministic equality/hash.
     exponents: BTreeMap<BaseDimId, Rational>,
-}
-
-// Manual Hash impl because BTreeMap doesn't derive Hash,
-// but its iteration order is deterministic (sorted by key).
-impl Hash for Dimension {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_usize(self.exponents.len());
-        for (id, exp) in &self.exponents {
-            id.hash(state);
-            exp.hash(state);
-        }
-    }
 }
 
 impl fmt::Debug for Dimension {
@@ -323,23 +310,6 @@ impl Dimension {
         names: &'a BTreeMap<BaseDimId, String>,
     ) -> DimensionDisplay<'a> {
         DimensionDisplay { dim: self, names }
-    }
-
-    /// Format this dimension as an SI unit string (e.g., `m/s`, `kg*m/s^2`).
-    ///
-    /// The `symbols` map provides `BaseDimId → unit symbol` mappings.
-    /// Returns `None` for dimensionless.
-    #[must_use]
-    pub fn si_unit_string(&self, symbols: &BTreeMap<BaseDimId, String>) -> Option<String> {
-        if self.is_dimensionless() {
-            return None;
-        }
-        let mut result = String::new();
-        // Writing to `String` never fails, so `expect` is safe here.
-        #[expect(clippy::expect_used, reason = "writing to String is infallible")]
-        self.write_exponents(&mut result, symbols, "*", "/")
-            .expect("writing to String never fails");
-        Some(result)
     }
 
     /// Write the dimension's exponents to a [`fmt::Write`] sink.
@@ -719,6 +689,7 @@ mod tests {
     #[test]
     fn dimension_hash_consistency() {
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
         let a = (Dimension::base(length()) / Dimension::base(time())).unwrap();
         let b = (Dimension::base(length()) / Dimension::base(time())).unwrap();
