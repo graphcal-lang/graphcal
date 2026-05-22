@@ -411,18 +411,10 @@ impl Parser<'_> {
         // path without finding `(`, rebuild a `GraphRef`-with-`FieldAccess`
         // chain — the same shape `apply_postfix` would have produced.
         let mut segments = vec![first_seg];
-        loop {
-            if self.lexer.peek() != Some(&Token::Dot) {
-                break;
-            }
-            let (_, dot_span) = self.advance()?; // consume `.`
-            if self.lexer.peek() != Some(&Token::Ident) {
-                // `.` not followed by an ident — not a path continuation. Put
-                // back the dot for whoever runs next (e.g. brace-list tail
-                // parser, or an error site higher up).
-                self.lexer.put_back(Token::Dot, dot_span);
-                break;
-            }
+        while self.lexer.peek() == Some(&Token::Dot)
+            && self.lexer.peek_second() == Some(&Token::Ident)
+        {
+            self.advance()?; // consume `.`
             let seg = self.parse_any_ident()?;
             segments.push(seg);
 
@@ -719,21 +711,18 @@ impl Parser<'_> {
     ///    - Otherwise → `IndexArg::Expr`.
     pub(super) fn parse_index_arg(&mut self) -> Result<IndexArg, ParseError> {
         // Check for qualified variant: Ident.Ident
-        if let Some((&Token::Ident, span)) = self.lexer.peek_with_span() {
+        if self.lexer.peek() == Some(&Token::Ident)
+            && self.lexer.peek_second() == Some(&Token::Dot)
+            && self.lexer.peek_third() == Some(&Token::Ident)
+        {
+            let (_, span) = self.advance()?;
             let name = self.lexer.slice_at(span).to_string();
-            // Consume the identifier to peek at what follows
-            self.lexer.next_token();
-            if self.peek_dot_then_ident() {
-                // Qualified variant: Index.Variant
-                self.lexer.next_token(); // consume '.'
-                let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
-                return Ok(IndexArg::Variant {
-                    index: Spanned::new(IndexName::new(name), span),
-                    variant,
-                });
-            }
-            // Not a qualified variant — put the token back and fall through to expression
-            self.lexer.put_back(Token::Ident, span);
+            self.lexer.next_token(); // consume '.'
+            let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
+            return Ok(IndexArg::Variant {
+                index: Spanned::new(IndexName::new(name), span),
+                variant,
+            });
         }
 
         // Parse a full expression
@@ -787,16 +776,7 @@ impl Parser<'_> {
     /// position) and from a stray `.` followed by a non-identifier token.
     /// This consumes neither the `.` nor the following token.
     pub(super) fn peek_dot_then_ident(&mut self) -> bool {
-        if self.lexer.peek() != Some(&Token::Dot) {
-            return false;
-        }
-        // Consume `.` and peek the next token; restore via put_back.
-        let Some((Token::Dot, dot_span)) = self.lexer.next_token() else {
-            return false;
-        };
-        let next_is_ident = self.lexer.peek() == Some(&Token::Ident);
-        self.lexer.put_back(Token::Dot, dot_span);
-        next_is_ident
+        self.lexer.peek() == Some(&Token::Dot) && self.lexer.peek_second() == Some(&Token::Ident)
     }
 
     /// Look ahead to check if `(` starts tuple-key sugar: `(ident, ident, ...) =>`.

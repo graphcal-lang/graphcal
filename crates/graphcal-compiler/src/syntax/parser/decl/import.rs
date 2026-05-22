@@ -76,9 +76,8 @@ impl Parser<'_> {
 
     /// Parse a dot-separated module path: `IDENT { "." IDENT }`.
     ///
-    /// Stops at any `.` that is *not* immediately followed by an identifier —
-    /// such a `.` belongs to the brace-list tail (`.{ ... }`) and is restored
-    /// for the caller via `put_back`.
+    /// Stops before any `.` that is *not* immediately followed by an identifier;
+    /// such a `.` belongs to the brace-list tail (`.{ ... }`).
     pub(in crate::syntax::parser) fn parse_module_path(
         &mut self,
     ) -> Result<ModulePath, ParseError> {
@@ -86,19 +85,12 @@ impl Parser<'_> {
         let path_start = first.span;
         let mut segments = vec![first];
 
-        loop {
-            if self.lexer.peek() != Some(&Token::Dot) {
-                break;
-            }
-            let (_, dot_span) = self.advance()?; // consume `.`
-            if self.lexer.peek() == Some(&Token::Ident) {
-                let seg = self.parse_any_ident()?;
-                segments.push(seg);
-            } else {
-                // Not a path continuation; restore the `.` for the tail parser.
-                self.lexer.put_back(Token::Dot, dot_span);
-                break;
-            }
+        while self.lexer.peek() == Some(&Token::Dot)
+            && self.lexer.peek_second() == Some(&Token::Ident)
+        {
+            self.advance()?; // consume `.`
+            let seg = self.parse_any_ident()?;
+            segments.push(seg);
         }
 
         let path_end = segments.last().map_or(path_start, |s| s.span);

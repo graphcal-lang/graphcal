@@ -322,8 +322,19 @@ impl Parser<'_> {
         let mut terms: Vec<UnitExprItem> = first_terms;
 
         while let Some(&Token::Star | &Token::Slash) = self.lexer.peek() {
+            // Only continue the unit expression if the operator is followed by
+            // an identifier or `(` (parenthesized group). Otherwise, leave the
+            // operator for the expression parser to handle as arithmetic
+            // (e.g., `459.3 W / (1.0 m^2)`).
+            if !matches!(
+                self.lexer.peek_second(),
+                Some(&Token::Ident | &Token::LParen)
+            ) {
+                break;
+            }
+
             // peek() confirmed a token exists, so next_token() will return Some.
-            let Some((op_token, op_span)) = self.lexer.next_token() else {
+            let Some((op_token, _)) = self.lexer.next_token() else {
                 break;
             };
             let outer_op = if op_token == Token::Star {
@@ -331,15 +342,6 @@ impl Parser<'_> {
             } else {
                 MulDivOp::Div
             };
-
-            // Only continue the unit expression if next token is an identifier
-            // or `(` (parenthesized group). Otherwise, put the operator back
-            // and let the expression parser handle it as arithmetic
-            // (e.g., `459.3 W / (1.0 m^2)`).
-            if !matches!(self.lexer.peek(), Some(&Token::Ident | &Token::LParen)) {
-                self.lexer.put_back(op_token, op_span);
-                break;
-            }
 
             let (new_terms, _, new_end) = self.parse_unit_term_or_group(outer_op)?;
             end_span = new_end;
