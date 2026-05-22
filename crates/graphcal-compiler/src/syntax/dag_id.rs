@@ -32,8 +32,8 @@ pub struct DagId {
     tail: Arc<[Arc<str>]>,
 }
 
-/// Returned by [`DagId::from_relative_path`] when the path has zero components
-/// or contains a non-UTF-8 component.
+/// Returned by [`DagId::from_relative_path`] when the path is not a valid
+/// graphcal source path.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DagIdPathError {
     /// The path produced no components (e.g., an empty `Path`).
@@ -42,6 +42,9 @@ pub enum DagIdPathError {
     /// A path component was not valid UTF-8.
     #[error("path contains a non-UTF-8 component")]
     NonUtf8Component,
+    /// The path did not end with `.gcl`.
+    #[error("path must end with `.gcl`")]
+    MissingGclExtension,
 }
 
 impl DagId {
@@ -115,20 +118,28 @@ impl DagId {
     ///
     /// # Errors
     ///
-    /// Returns [`DagIdPathError`] if `path` has no components or contains a
-    /// non-UTF-8 component.
+    /// Returns [`DagIdPathError`] if `path` has no components, contains a
+    /// non-UTF-8 component, or does not end with `.gcl`.
     pub fn from_relative_path(path: &std::path::Path) -> Result<Self, DagIdPathError> {
-        let mut segments = path.components().map(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| {
-                    // Strip .gcl extension from the last component.
-                    Arc::<str>::from(s.strip_suffix(".gcl").unwrap_or(s))
-                })
-                .ok_or(DagIdPathError::NonUtf8Component)
-        });
-        let head = segments.next().ok_or(DagIdPathError::Empty)??;
-        let tail: Arc<[Arc<str>]> = segments.collect::<Result<Vec<_>, _>>()?.into();
+        let mut segments: Vec<Arc<str>> = path
+            .components()
+            .map(|c| {
+                c.as_os_str()
+                    .to_str()
+                    .map(Arc::<str>::from)
+                    .ok_or(DagIdPathError::NonUtf8Component)
+            })
+            .collect::<Result<_, _>>()?;
+
+        let last = segments.last_mut().ok_or(DagIdPathError::Empty)?;
+        *last = last
+            .strip_suffix(".gcl")
+            .map(Arc::<str>::from)
+            .ok_or(DagIdPathError::MissingGclExtension)?;
+
+        let mut segments = segments.into_iter();
+        let head = segments.next().ok_or(DagIdPathError::Empty)?;
+        let tail: Arc<[Arc<str>]> = segments.collect::<Vec<_>>().into();
         Ok(Self { head, tail })
     }
 }
@@ -161,6 +172,12 @@ mod tests {
     fn from_relative_path_rejects_empty_path() {
         let err = DagId::from_relative_path(std::path::Path::new("")).unwrap_err();
         assert_eq!(err, DagIdPathError::Empty);
+    }
+
+    #[test]
+    fn from_relative_path_rejects_path_without_gcl_extension() {
+        let err = DagId::from_relative_path(std::path::Path::new("helpers/math")).unwrap_err();
+        assert_eq!(err, DagIdPathError::MissingGclExtension);
     }
 
     #[test]

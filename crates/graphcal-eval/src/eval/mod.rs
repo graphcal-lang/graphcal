@@ -21,14 +21,15 @@ pub use types::{
 };
 
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {
-    compile_and_eval_named(source, "input")
+    compile_and_eval_named(source, "input.gcl")
 }
 
-/// Full pipeline with a custom source name (used for file paths in diagnostics).
+/// Full pipeline with a custom `.gcl` source name (used for file paths in diagnostics).
 ///
 /// # Errors
 ///
-/// Returns a [`CompileError`] if parsing or evaluation fails.
+/// Returns a [`CompileError`] if parsing or evaluation fails, or if `name` is
+/// not a valid `.gcl` source path.
 pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, CompileError> {
     compile_and_eval_with_overrides(source, name, &HashMap::new())
 }
@@ -41,7 +42,8 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
 ///
 /// # Errors
 ///
-/// Returns a [`CompileError`] if parsing, validation, or evaluation fails.
+/// Returns a [`CompileError`] if parsing, validation, or evaluation fails, or
+/// if `name` is not a valid `.gcl` source path.
 #[expect(
     clippy::implicit_hasher,
     reason = "public API accepts HashMap without requiring specific hasher"

@@ -872,7 +872,7 @@ mod tests {
     use graphcal_compiler::tir::typed::type_resolve;
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
-        NamedSource::new("test", Arc::new(source.to_string()))
+        NamedSource::new("test.gcl", Arc::new(source.to_string()))
     }
 
     fn compile_source(source: &str) -> Result<ExecPlan, GraphcalError> {
@@ -884,7 +884,7 @@ mod tests {
         let src = make_src(source);
         let ir = lower(&file, &src).unwrap();
         let dag_id = graphcal_compiler::syntax::dag_id::DagId::from_relative_path(
-            std::path::Path::new("test"),
+            std::path::Path::new("test.gcl"),
         )
         .unwrap();
         let tir = type_resolve(ir, dag_id, &src).unwrap();

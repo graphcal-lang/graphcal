@@ -181,7 +181,8 @@ impl LoadedProject {
     ///
     /// # Errors
     ///
-    /// Returns a [`CompileError`] if parsing fails.
+    /// Returns a [`CompileError`] if parsing fails or `name` is not a valid
+    /// `.gcl` source path.
     pub fn from_source(source: &str, name: &str) -> Result<Self, CompileError> {
         let source = Arc::new(source.to_string());
         let named_source = graphcal_compiler::syntax::named_source(name, Arc::clone(&source));
