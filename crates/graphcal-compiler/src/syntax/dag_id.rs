@@ -11,6 +11,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+use thiserror::Error;
+
 /// An abstract identifier for a DAG in the compiler pipeline.
 ///
 /// Segments form a hierarchical name: for example, a file at `helpers/math.gcl`
@@ -32,24 +34,15 @@ pub struct DagId {
 
 /// Returned by [`DagId::from_relative_path`] when the path has zero components
 /// or contains a non-UTF-8 component.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DagIdPathError {
     /// The path produced no components (e.g., an empty `Path`).
+    #[error("path has no components")]
     Empty,
     /// A path component was not valid UTF-8.
+    #[error("path contains a non-UTF-8 component")]
     NonUtf8Component,
 }
-
-impl fmt::Display for DagIdPathError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty => f.write_str("path has no components"),
-            Self::NonUtf8Component => f.write_str("path contains a non-UTF-8 component"),
-        }
-    }
-}
-
-impl std::error::Error for DagIdPathError {}
 
 impl DagId {
     /// Create a `DagId` from a leading segment and any further segments.
