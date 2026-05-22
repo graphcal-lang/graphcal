@@ -8,7 +8,7 @@
 //! results remain identical.
 //!
 //! See: <https://github.com/shunichironomura/graphcal/issues/247>
-#![expect(clippy::expect_used, clippy::panic, reason = "test code")]
+#![cfg(test)]
 
 use graphcal_compiler::syntax::parser::Parser;
 use graphcal_eval::eval::{EvalResult, compile_and_eval};

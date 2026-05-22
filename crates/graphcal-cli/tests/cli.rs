@@ -1,4 +1,6 @@
 //! Allow use of unwrap in tests
+#![cfg(test)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
