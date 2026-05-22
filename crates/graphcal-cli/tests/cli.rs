@@ -1,5 +1,5 @@
 //! Allow use of unwrap in tests
-#![expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+#![cfg(test)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

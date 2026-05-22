@@ -231,14 +231,6 @@ fn find_declaration_line(source: &str, name: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unreachable,
-        reason = "test code"
-    )]
-
     use tower_lsp::lsp_types::{
         CodeActionContext, PartialResultParams, TextDocumentIdentifier, WorkDoneProgressParams,
     };

@@ -30,14 +30,6 @@ pub fn format_document(source: &str) -> Option<Vec<TextEdit>> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unreachable,
-        reason = "test code"
-    )]
-
     use super::*;
 
     #[test]

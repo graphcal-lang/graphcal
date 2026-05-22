@@ -1,4 +1,3 @@
-#![expect(clippy::unwrap_used, reason = "test code")]
 use super::*;
 use crate::syntax::dimension::BaseDimId;
 use crate::syntax::names::ScopedName;

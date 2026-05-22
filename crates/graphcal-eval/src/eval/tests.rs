@@ -1,9 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test code"
-)]
 use super::*;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_io::RealFileSystem;

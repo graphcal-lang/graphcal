@@ -109,14 +109,6 @@ pub fn rename(
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unreachable,
-        reason = "test code"
-    )]
-
     use std::sync::Arc;
 
     use super::*;

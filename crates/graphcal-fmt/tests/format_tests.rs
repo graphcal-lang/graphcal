@@ -1,4 +1,4 @@
-#![expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+#![cfg(test)]
 
 use graphcal_fmt::format_source;
 

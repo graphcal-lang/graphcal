@@ -136,8 +136,6 @@ pub fn format_unit_expr_canonical(expr: &crate::syntax::ast::UnitExpr) -> String
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
-
     use super::*;
     use crate::syntax::ast::{MulDivOp, UnitExpr, UnitExprItem};
     use crate::syntax::names::{Spanned, UnitName};

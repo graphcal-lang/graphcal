@@ -1094,8 +1094,6 @@ pub(in crate::eval::project) fn import_module_values(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
-
     use super::*;
 
     fn empty_evaluated_file() -> EvaluatedFile {

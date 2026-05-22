@@ -989,13 +989,6 @@ impl RegistryBuilder {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unreachable,
-        reason = "test code"
-    )]
     use super::*;
     use crate::registry::prelude::load_prelude;
     use crate::syntax::ast::{DimExprItem, DimTerm, Ident, UnitExprItem};

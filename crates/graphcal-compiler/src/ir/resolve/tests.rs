@@ -1,4 +1,3 @@
-#![expect(clippy::unwrap_used, reason = "test code")]
 use super::*;
 use crate::syntax::parser::Parser;
 

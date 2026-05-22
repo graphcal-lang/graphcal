@@ -104,8 +104,6 @@ impl<F: FileSystemReader> FileSystemReader for OverlayFileSystem<F> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, reason = "test code")]
-
     use crate::InMemoryFileSystem;
 
     use super::*;

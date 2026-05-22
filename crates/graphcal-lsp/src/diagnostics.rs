@@ -211,7 +211,6 @@ fn compile_error_to_diagnostics_in_source(
 #[cfg(test)]
 fn compile_error_to_diagnostics(error: &CompileError) -> Vec<Diagnostic> {
     // Static URL literal — always parses.
-    #[expect(clippy::unwrap_used, reason = "static URL literal is always valid")]
     let fallback_uri = Url::parse("file:///unknown").unwrap();
     compile_error_to_diagnostics_grouped(error, &fallback_uri)
         .into_values()
@@ -221,14 +220,6 @@ fn compile_error_to_diagnostics(error: &CompileError) -> Vec<Diagnostic> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unreachable,
-        reason = "test code"
-    )]
-
     use std::collections::HashMap;
 
     use graphcal_compiler::syntax::parser::Parser;

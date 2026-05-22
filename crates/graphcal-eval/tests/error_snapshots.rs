@@ -1,5 +1,5 @@
 //! Tests for error rendering snapshots.
-#![expect(clippy::unwrap_used, clippy::panic, reason = "test code")]
+#![cfg(test)]
 
 use graphcal_eval::eval::{NodeError, compile_and_eval_named};
 use miette::{Diagnostic, NarratableReportHandler};
