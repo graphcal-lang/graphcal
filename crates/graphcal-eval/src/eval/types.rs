@@ -7,7 +7,7 @@ use thiserror::Error;
 use graphcal_compiler::desugar::resolved_ast::EncodingChannel;
 use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::syntax::names::{
-    DeclName, FieldName, IndexName, StructTypeName, VariantName,
+    DeclName, FieldName, IndexName, StructTypeName, IndexVariantName,
 };
 use graphcal_compiler::syntax::span::Span;
 
@@ -46,7 +46,7 @@ pub enum Value {
         /// The index name (e.g., `Maneuver`).
         index_name: IndexName,
         /// The variant name (e.g., `Departure`).
-        variant: VariantName,
+        variant: IndexVariantName,
     },
     Struct {
         /// The concrete type name (e.g., `Impulsive`, `TransferResult`).
@@ -59,7 +59,7 @@ pub enum Value {
         /// The index type name.
         index_name: IndexName,
         /// Entries in declaration order.
-        entries: IndexMap<VariantName, Self>,
+        entries: IndexMap<IndexVariantName, Self>,
     },
     /// A datetime instant.
     Datetime {

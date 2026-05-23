@@ -27,7 +27,7 @@ use crate::syntax::ast::{
     self as ast, DeclKind, Declaration, Expr, MapEntryIndex, MapEntryKey, TableIndexSpec, TypeExpr,
     Visibility,
 };
-use crate::syntax::names::{DeclName, IndexName, Spanned, VariantName};
+use crate::syntax::names::{DeclName, IndexName, Spanned, IndexVariantName};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
@@ -401,7 +401,7 @@ impl Parser<'_> {
                     }
                     keys.push(MapEntryKey {
                         index: Spanned::new(MapEntryIndex::Named(axis.value.clone()), axis.span),
-                        variant: variant_ident.into_spanned::<VariantName>(),
+                        variant: variant_ident.into_spanned::<IndexVariantName>(),
                     });
                 }
                 TableIndexSpec::NatRange(n, sp) => {
@@ -425,7 +425,7 @@ impl Parser<'_> {
                     let variant_span = hash_span.merge(num_span);
                     keys.push(MapEntryKey {
                         index: Spanned::new(MapEntryIndex::NatRange(*n), *sp),
-                        variant: Spanned::new(VariantName::range_step(value), variant_span),
+                        variant: Spanned::new(IndexVariantName::range_step(value), variant_span),
                     });
                 }
             }
@@ -447,13 +447,13 @@ impl Parser<'_> {
         let column_layout = build_column_layout(slot_axes, &header_cells, header_span, slots)
             .map_err(|e| e.into_parse_error(&self.named_source()))?;
 
-        let mut row_values: Vec<(Spanned<VariantName>, Vec<Expr>, Span)> = Vec::new();
+        let mut row_values: Vec<(Spanned<IndexVariantName>, Vec<Expr>, Span)> = Vec::new();
         while self.lexer.peek() != Some(&Token::RBrace)
             && self.lexer.peek() != Some(&Token::LBracket)
         {
             let label = self.parse_any_ident()?;
             let label_span = label.span;
-            let row_label = label.into_spanned::<VariantName>();
+            let row_label = label.into_spanned::<IndexVariantName>();
             self.expect(Token::Colon)?;
             let mut values = Vec::with_capacity(header_cells.len());
             loop {
@@ -622,14 +622,14 @@ impl Parser<'_> {
                     let span = ident.span.merge(variant.span);
                     return Ok(HeaderCell::Variant {
                         axis: Some(Spanned::new(IndexName::new(&ident.name), ident.span)),
-                        variant: variant.into_spanned::<VariantName>(),
+                        variant: variant.into_spanned::<IndexVariantName>(),
                         span,
                     });
                 }
                 let span = ident.span;
                 Ok(HeaderCell::Variant {
                     axis: None,
-                    variant: ident.into_spanned::<VariantName>(),
+                    variant: ident.into_spanned::<IndexVariantName>(),
                     span,
                 })
             }
@@ -1067,7 +1067,7 @@ pub(super) enum HeaderCell {
     Variant {
         /// Axis qualifier, if the author wrote `Axis::Variant`.
         axis: Option<Spanned<IndexName>>,
-        variant: Spanned<VariantName>,
+        variant: Spanned<IndexVariantName>,
         span: Span,
     },
 }
@@ -1081,7 +1081,7 @@ pub(super) struct MultiSlice {
     pub header_cells: Vec<HeaderCell>,
     pub header_span: Span,
     pub column_layout: Vec<SlotColumnSpan>,
-    pub row_values: Vec<(Spanned<VariantName>, Vec<Expr>, Span)>,
+    pub row_values: Vec<(Spanned<IndexVariantName>, Vec<Expr>, Span)>,
 }
 
 /// Where each slot's cells live within the parsed header row.

@@ -122,10 +122,10 @@ define_name_type! {
 
 define_name_type! {
     /// Name of an index variant (e.g., `"Departure"`, `"Correction"`).
-    pub struct VariantName;
+    pub struct IndexVariantName;
 }
 
-impl VariantName {
+impl IndexVariantName {
     /// Build the variant name for the `n`-th step of a range index
     /// (`#0`, `#1`, …). Centralises the `"#"`-prefix format so registry,
     /// parser, and evaluator can't disagree on it.
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn newtype_from_str() {
-        let name: VariantName = "Departure".into();
+        let name: IndexVariantName = "Departure".into();
         assert_eq!(name.as_str(), "Departure");
     }
 

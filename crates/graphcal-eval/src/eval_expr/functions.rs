@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, ExprKind};
-use graphcal_compiler::syntax::names::{ScopedName, VariantName};
+use graphcal_compiler::syntax::names::{ScopedName, IndexVariantName};
 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::resolve_types::{
@@ -157,7 +157,7 @@ impl FnDispatch<'_, '_> {
 /// Evaluate an aggregation function over indexed entries.
 fn eval_aggregation_fn(
     kind: AggregationFn,
-    entries: &IndexMap<VariantName, RuntimeValue>,
+    entries: &IndexMap<IndexVariantName, RuntimeValue>,
     expr: &Expr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {

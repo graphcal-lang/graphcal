@@ -2218,8 +2218,8 @@ mod tests {
             name: IndexName::new("Maneuver"),
             kind: crate::registry::types::IndexKind::Named {
                 variants: vec![
-                    crate::syntax::names::VariantName::new("Departure"),
-                    crate::syntax::names::VariantName::new("Insertion"),
+                    crate::syntax::names::IndexVariantName::new("Departure"),
+                    crate::syntax::names::IndexVariantName::new("Insertion"),
                 ],
             },
         });

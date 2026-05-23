@@ -2,7 +2,7 @@ use crate::syntax::ast::{
     Expr, ExprKind, ForBinding, ForBindingIndex, MatchArm, MatchPattern, NatExpr, PatternBinding,
     TupleMatchArm,
 };
-use crate::syntax::names::{FieldName, IndexName, Spanned, VariantName};
+use crate::syntax::names::{FieldName, IndexName, Spanned, IndexVariantName};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
@@ -176,7 +176,7 @@ impl Parser<'_> {
                     first_ident.span,
                 )),
                 variant_name: Spanned::new(
-                    VariantName::new(&variant_ident.name),
+                    IndexVariantName::new(&variant_ident.name),
                     variant_ident.span,
                 ),
                 bindings: vec![],
@@ -185,7 +185,7 @@ impl Parser<'_> {
         }
 
         // Tagged union pattern: bare VariantName or VariantName { fields }
-        let variant_name = Spanned::new(VariantName::new(&first_ident.name), first_ident.span);
+        let variant_name = Spanned::new(IndexVariantName::new(&first_ident.name), first_ident.span);
 
         let (bindings, end_span) = if self.lexer.peek() == Some(&Token::LBrace) {
             self.lexer.next_token(); // consume '{'

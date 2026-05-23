@@ -51,7 +51,7 @@ use crate::syntax::ast::{
     MapEntryKey, MultiDecl, MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl,
     ParamDecl, TableIndexSpec,
 };
-use crate::syntax::names::{IndexName, Spanned, VariantName};
+use crate::syntax::names::{IndexName, Spanned, IndexVariantName};
 use crate::syntax::phase::{Desugared, Raw};
 
 /// Expand every multi-decl in `file` into its N constituent ordinary
@@ -122,7 +122,7 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
                         MapEntryIndex::Named(extra_axis.value.clone()),
                         extra_axis.span,
                     );
-                    let col_variants: Vec<Spanned<VariantName>> = slice.header_cells[*start..*end]
+                    let col_variants: Vec<Spanned<IndexVariantName>> = slice.header_cells[*start..*end]
                         .iter()
                         .filter_map(|c| match c {
                             MultiHeaderCell::Variant { variant, .. } => Some(variant.clone()),

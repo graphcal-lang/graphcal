@@ -2,7 +2,7 @@ use crate::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, ModulePath, TypeExpr, UnaryOp,
 };
 use crate::syntax::names::{
-    ConstructorName, DeclName, FieldName, FnName, IndexName, ScopedName, Spanned, VariantName,
+    ConstructorName, DeclName, FieldName, FnName, IndexName, ScopedName, Spanned, IndexVariantName,
 };
 use crate::syntax::token::Token;
 
@@ -661,7 +661,7 @@ impl Parser<'_> {
                     self.parse_map_literal_after_first_entry(
                         start_span,
                         Spanned::new(IndexName::new(saved_text), saved_span),
-                        variant_ident.into_spanned::<VariantName>(),
+                        variant_ident.into_spanned::<IndexVariantName>(),
                     )
                 } else {
                     let found = self
@@ -718,7 +718,7 @@ impl Parser<'_> {
             let (_, span) = self.advance()?;
             let name = self.lexer.slice_at(span).to_string();
             self.lexer.next_token(); // consume '.'
-            let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
+            let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
             return Ok(IndexArg::Variant {
                 index: Spanned::new(IndexName::new(name), span),
                 variant,

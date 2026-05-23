@@ -23,7 +23,7 @@ use tower_lsp::lsp_types::{
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
-use graphcal_compiler::syntax::names::{DeclName, VariantName};
+use graphcal_compiler::syntax::names::{DeclName, IndexVariantName};
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
 };
@@ -719,7 +719,7 @@ fn format_braced_entries(
 /// For a nested `Indexed { A: Indexed { X: 1, Y: 2 }, B: Indexed { X: 3 } }`,
 /// produces `[([A, X], 1), ([A, Y], 2), ([B, X], 3)]`.
 fn flatten_indexed_entries<'a>(
-    entries: &'a IndexMap<VariantName, Value>,
+    entries: &'a IndexMap<IndexVariantName, Value>,
     prefix: &mut Vec<&'a str>,
     out: &mut Vec<(Vec<&'a str>, &'a Value)>,
 ) {
@@ -1192,7 +1192,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use graphcal_compiler::syntax::dimension::Dimension;
-    use graphcal_compiler::syntax::names::{FieldName, IndexName, StructTypeName, VariantName};
+    use graphcal_compiler::syntax::names::{FieldName, IndexName, StructTypeName, IndexVariantName};
     use graphcal_eval::eval::Value;
     use indexmap::IndexMap;
 
@@ -1276,9 +1276,9 @@ mod tests {
     fn format_indexed() {
         let symbols = empty_symbols();
         let mut entries = IndexMap::new();
-        entries.insert(VariantName::new("A"), scalar(1.0));
-        entries.insert(VariantName::new("B"), scalar(2.0));
-        entries.insert(VariantName::new("C"), scalar(3.0));
+        entries.insert(IndexVariantName::new("A"), scalar(1.0));
+        entries.insert(IndexVariantName::new("B"), scalar(2.0));
+        entries.insert(IndexVariantName::new("C"), scalar(3.0));
         let val = Value::Indexed {
             index_name: IndexName::new("Phase"),
             entries,
@@ -1301,10 +1301,10 @@ mod tests {
         let symbols = empty_symbols();
         let mut entries = IndexMap::new();
         // Create entries with long names to trigger truncation at 80 chars
-        entries.insert(VariantName::new("LongVariantAlpha"), scalar(1.23456));
-        entries.insert(VariantName::new("LongVariantBeta"), scalar(2.34567));
-        entries.insert(VariantName::new("LongVariantGamma"), scalar(3.45678));
-        entries.insert(VariantName::new("LongVariantDelta"), scalar(4.56789));
+        entries.insert(IndexVariantName::new("LongVariantAlpha"), scalar(1.23456));
+        entries.insert(IndexVariantName::new("LongVariantBeta"), scalar(2.34567));
+        entries.insert(IndexVariantName::new("LongVariantGamma"), scalar(3.45678));
+        entries.insert(IndexVariantName::new("LongVariantDelta"), scalar(4.56789));
         let val = Value::Indexed {
             index_name: IndexName::new("Idx"),
             entries,
@@ -1327,7 +1327,7 @@ mod tests {
             fields,
         };
         let mut entries = IndexMap::new();
-        entries.insert(VariantName::new("A"), struct_val);
+        entries.insert(IndexVariantName::new("A"), struct_val);
         let val = Value::Indexed {
             index_name: IndexName::new("Idx"),
             entries,
@@ -1339,21 +1339,21 @@ mod tests {
     fn format_nested_indexed_tuple_keyed() {
         let symbols = empty_symbols();
         let mut inner_a = IndexMap::new();
-        inner_a.insert(VariantName::new("X"), scalar(1.0));
-        inner_a.insert(VariantName::new("Y"), scalar(2.0));
+        inner_a.insert(IndexVariantName::new("X"), scalar(1.0));
+        inner_a.insert(IndexVariantName::new("Y"), scalar(2.0));
         let mut inner_b = IndexMap::new();
-        inner_b.insert(VariantName::new("X"), scalar(3.0));
-        inner_b.insert(VariantName::new("Y"), scalar(4.0));
+        inner_b.insert(IndexVariantName::new("X"), scalar(3.0));
+        inner_b.insert(IndexVariantName::new("Y"), scalar(4.0));
         let mut entries = IndexMap::new();
         entries.insert(
-            VariantName::new("A"),
+            IndexVariantName::new("A"),
             Value::Indexed {
                 index_name: IndexName::new("Col"),
                 entries: inner_a,
             },
         );
         entries.insert(
-            VariantName::new("B"),
+            IndexVariantName::new("B"),
             Value::Indexed {
                 index_name: IndexName::new("Col"),
                 entries: inner_b,
@@ -1374,10 +1374,10 @@ mod tests {
         let symbols = empty_symbols();
         // 3-level nesting: Scenario[Phase[Maneuver[scalar]]]
         let mut inner_most = IndexMap::new();
-        inner_most.insert(VariantName::new("Dep"), scalar(100.0));
+        inner_most.insert(IndexVariantName::new("Dep"), scalar(100.0));
         let mut mid = IndexMap::new();
         mid.insert(
-            VariantName::new("Launch"),
+            IndexVariantName::new("Launch"),
             Value::Indexed {
                 index_name: IndexName::new("Maneuver"),
                 entries: inner_most,
@@ -1385,7 +1385,7 @@ mod tests {
         );
         let mut outer = IndexMap::new();
         outer.insert(
-            VariantName::new("Nom"),
+            IndexVariantName::new("Nom"),
             Value::Indexed {
                 index_name: IndexName::new("Phase"),
                 entries: mid,
@@ -1405,23 +1405,23 @@ mod tests {
     fn format_nested_indexed_truncation() {
         let symbols = empty_symbols();
         let mut inner_a = IndexMap::new();
-        inner_a.insert(VariantName::new("LongNameAlpha"), scalar(1.23456));
-        inner_a.insert(VariantName::new("LongNameBeta"), scalar(2.34567));
-        inner_a.insert(VariantName::new("LongNameGamma"), scalar(3.45678));
+        inner_a.insert(IndexVariantName::new("LongNameAlpha"), scalar(1.23456));
+        inner_a.insert(IndexVariantName::new("LongNameBeta"), scalar(2.34567));
+        inner_a.insert(IndexVariantName::new("LongNameGamma"), scalar(3.45678));
         let mut inner_b = IndexMap::new();
-        inner_b.insert(VariantName::new("LongNameAlpha"), scalar(4.56789));
-        inner_b.insert(VariantName::new("LongNameBeta"), scalar(5.6789));
-        inner_b.insert(VariantName::new("LongNameGamma"), scalar(6.7891));
+        inner_b.insert(IndexVariantName::new("LongNameAlpha"), scalar(4.56789));
+        inner_b.insert(IndexVariantName::new("LongNameBeta"), scalar(5.6789));
+        inner_b.insert(IndexVariantName::new("LongNameGamma"), scalar(6.7891));
         let mut entries = IndexMap::new();
         entries.insert(
-            VariantName::new("LongOuter1"),
+            IndexVariantName::new("LongOuter1"),
             Value::Indexed {
                 index_name: IndexName::new("Inner"),
                 entries: inner_a,
             },
         );
         entries.insert(
-            VariantName::new("LongOuter2"),
+            IndexVariantName::new("LongOuter2"),
             Value::Indexed {
                 index_name: IndexName::new("Inner"),
                 entries: inner_b,

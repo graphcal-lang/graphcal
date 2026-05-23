@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::syntax::dimension::Dimension;
-use graphcal_compiler::syntax::names::{DeclName, IndexName, ScopedName, VariantName};
+use graphcal_compiler::syntax::names::{DeclName, IndexName, ScopedName, IndexVariantName};
 use graphcal_compiler::syntax::span::Span;
 
 use crate::eval_expr::{EvalContext, RuntimeValue, UnfoldContext, eval_expr};
@@ -103,7 +103,7 @@ pub(super) fn runtime_to_value(
                 .enumerate()
                 .map(|(i, (variant, entry_rv))| {
                     let display_key = match idx_def {
-                        Some(def) if def.is_range() => VariantName::new(format_range_step(def, i)),
+                        Some(def) if def.is_range() => IndexVariantName::new(format_range_step(def, i)),
                         _ => variant.clone(),
                     };
                     let val = runtime_to_value(entry_rv, element_declared, registry);
@@ -539,9 +539,9 @@ fn evaluate_assert_with_expected_fail(
 /// For nested indexed values (multi-index), recurse.
 fn invert_indexed_variants(
     index_name: &IndexName,
-    entries: IndexMap<VariantName, RuntimeValue>,
-    keys: &[Vec<(IndexName, VariantName)>],
-) -> (IndexName, IndexMap<VariantName, RuntimeValue>) {
+    entries: IndexMap<IndexVariantName, RuntimeValue>,
+    keys: &[Vec<(IndexName, IndexVariantName)>],
+) -> (IndexName, IndexMap<IndexVariantName, RuntimeValue>) {
     let inverted_entries = entries
         .into_iter()
         .map(|(variant, value)| {
@@ -563,7 +563,7 @@ fn invert_indexed_variants(
                 } => {
                     // Multi-index: filter keys that match the current variant at position 0,
                     // then strip the first element and recurse.
-                    let sub_keys: Vec<Vec<(IndexName, VariantName)>> = keys
+                    let sub_keys: Vec<Vec<(IndexName, IndexVariantName)>> = keys
                         .iter()
                         .filter(|key| {
                             key.len() >= 2 && key[0].0 == *index_name && key[0].1 == variant
@@ -598,7 +598,7 @@ fn invert_indexed_variants(
 /// Each path is a slice of `(IndexName, VariantName)` index/variant pairs from outermost to innermost.
 /// For single-index paths, formats as `Mode.Boost, Mode.Cruise`.
 /// For multi-index paths, formats as `(Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`.
-fn format_indexed_paths(paths: &[&[(IndexName, VariantName)]], is_multi_index: bool) -> String {
+fn format_indexed_paths(paths: &[&[(IndexName, IndexVariantName)]], is_multi_index: bool) -> String {
     let formatted: Vec<String> = if is_multi_index {
         paths
             .iter()
@@ -634,8 +634,8 @@ fn format_indexed_paths(paths: &[&[(IndexName, VariantName)]], is_multi_index: b
 /// failing path as either "unexpected pass" or "unexpected fail".
 fn check_indexed_assert_with_expected_fail(
     index_name: &IndexName,
-    entries: &IndexMap<VariantName, RuntimeValue>,
-    keys: &[Vec<(IndexName, VariantName)>],
+    entries: &IndexMap<IndexVariantName, RuntimeValue>,
+    keys: &[Vec<(IndexName, IndexVariantName)>],
 ) -> AssertResult {
     match collect_failing_paths(index_name, entries) {
         Ok(paths) if paths.is_empty() => AssertResult::Pass,
@@ -691,7 +691,7 @@ fn check_indexed_assert_with_expected_fail(
 ///   `failed at (Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`
 pub(super) fn check_indexed_assert(
     index_name: &IndexName,
-    entries: &IndexMap<VariantName, RuntimeValue>,
+    entries: &IndexMap<IndexVariantName, RuntimeValue>,
 ) -> AssertResult {
     match collect_failing_paths(index_name, entries) {
         Ok(paths) if paths.is_empty() => AssertResult::Pass,
@@ -717,8 +717,8 @@ pub(super) fn check_indexed_assert(
 /// For example, `vec![(IndexName::new("Phase"), VariantName::new("Launch")), (IndexName::new("Maneuver"), VariantName::new("Correction"))]` for a 2D failure.
 fn collect_failing_paths(
     index_name: &IndexName,
-    entries: &IndexMap<VariantName, RuntimeValue>,
-) -> Result<Vec<Vec<(IndexName, VariantName)>>, String> {
+    entries: &IndexMap<IndexVariantName, RuntimeValue>,
+) -> Result<Vec<Vec<(IndexName, IndexVariantName)>>, String> {
     let mut paths = Vec::new();
     for (variant, value) in entries {
         let key = (index_name.clone(), variant.clone());
@@ -1065,7 +1065,7 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> PlotFieldValue {
                 PlotFieldValue::Labels(
                     entries
                         .keys()
-                        .map(graphcal_compiler::syntax::names::VariantName::to_string)
+                        .map(graphcal_compiler::syntax::names::IndexVariantName::to_string)
                         .collect(),
                 )
             }

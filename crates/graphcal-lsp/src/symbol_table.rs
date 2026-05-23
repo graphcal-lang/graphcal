@@ -1655,7 +1655,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
                         IndexKind::Named { variants } => {
                             let vs: Vec<&str> = variants
                                 .iter()
-                                .map(graphcal_compiler::syntax::names::VariantName::as_str)
+                                .map(graphcal_compiler::syntax::names::IndexVariantName::as_str)
                                 .collect();
                             def_mut.type_description = Some(format!("{{ {} }}", vs.join(", ")));
                         }

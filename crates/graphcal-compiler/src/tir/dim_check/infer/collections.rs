@@ -195,7 +195,7 @@ pub(super) fn infer_map_or_table_literal(
         }
     }
     // Validate each index exists, reject range indexes as keys, and collect variant lists
-    let mut axes_variants: Vec<Vec<crate::syntax::names::VariantName>> = Vec::new();
+    let mut axes_variants: Vec<Vec<crate::syntax::names::IndexVariantName>> = Vec::new();
     for key in &entries[0].keys {
         let key_index_name = key.index.value.registry_name();
         let idx_def = registry
@@ -274,9 +274,9 @@ pub(super) fn infer_map_or_table_literal(
         .collect();
     if !extra.is_empty() {
         if arity == 1 {
-            let extra_variants: Vec<crate::syntax::names::VariantName> = extra
+            let extra_variants: Vec<crate::syntax::names::IndexVariantName> = extra
                 .iter()
-                .map(|t| crate::syntax::names::VariantName::new(t[0]))
+                .map(|t| crate::syntax::names::IndexVariantName::new(t[0]))
                 .collect();
             return Err(GraphcalError::ExtraVariants {
                 index_name: index_names[0].clone(),
@@ -311,9 +311,9 @@ pub(super) fn infer_map_or_table_literal(
         .collect();
     if !missing.is_empty() {
         if arity == 1 {
-            let missing_variants: Vec<crate::syntax::names::VariantName> = missing
+            let missing_variants: Vec<crate::syntax::names::IndexVariantName> = missing
                 .iter()
-                .map(|t| crate::syntax::names::VariantName::new(t[0]))
+                .map(|t| crate::syntax::names::IndexVariantName::new(t[0]))
                 .collect();
             return Err(GraphcalError::MissingVariants {
                 index_name: index_names[0].clone(),
