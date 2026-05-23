@@ -1,5 +1,4 @@
 use crate::syntax::span::{Span, Spanned};
-use thiserror::Error;
 
 /// The delimiter that starts a comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,32 +111,15 @@ impl SourceMetadata {
     }
 }
 
-/// Error encountered while scanning source metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum MetadataScanError {
-    #[error("unrecognized token while scanning source metadata")]
-    UnrecognizedToken { span: Span },
-}
-
-/// Extract comments and blank-line positions from source text.
-///
-/// This uses the normal lexer pipeline. The parser-facing lexer consumes trivia
-/// tokens, but records them as typed metadata while it scans.
-pub fn extract_source_metadata(source: &str) -> Result<SourceMetadata, MetadataScanError> {
-    let mut lexer = crate::syntax::lexer::Lexer::new(source);
-    while lexer.next_token().is_some() {}
-    match lexer.first_error_span() {
-        Some(span) => Err(MetadataScanError::UnrecognizedToken { span }),
-        None => Ok(lexer.into_source_metadata()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn metadata(source: &str) -> SourceMetadata {
-        extract_source_metadata(source).expect("metadata scan should succeed")
+        let mut lexer = crate::syntax::lexer::Lexer::new(source);
+        while lexer.next_token().is_some() {}
+        assert_eq!(lexer.first_error_span(), None);
+        lexer.into_source_metadata()
     }
 
     #[test]
@@ -181,14 +163,13 @@ mod tests {
     }
 
     #[test]
-    fn reports_unrecognized_token() {
+    fn records_lexer_error_for_unrecognized_token() {
         let source = r#"import "//not-a-comment.gcl"#;
-        let err = extract_source_metadata(source).expect_err("scan should fail");
+        let mut lexer = crate::syntax::lexer::Lexer::new(source);
+        while lexer.next_token().is_some() {}
         assert_eq!(
-            err,
-            MetadataScanError::UnrecognizedToken {
-                span: Span::new(7, source.len() - 7),
-            }
+            lexer.first_error_span(),
+            Some(Span::new(7, source.len() - 7))
         );
     }
 

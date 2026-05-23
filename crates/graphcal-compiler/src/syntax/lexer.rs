@@ -1,6 +1,6 @@
 use crate::syntax::comments::{BlankLine, Comment, CommentBody, CommentDelimiter, SourceMetadata};
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::token::Token;
+use crate::syntax::token::{LexicalItem, LexicalToken, Token, TriviaToken};
 use logos::Logos;
 use peek_cache::{PeekCache, SourceItem};
 use std::num::NonZeroUsize;
@@ -34,7 +34,7 @@ const LEXER_MAX_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 /// when a top-level `parse_*` entry point finishes, regardless of whether the
 /// downstream parse happened to succeed.
 pub struct Lexer<'src> {
-    inner: logos::Lexer<'src, Token>,
+    inner: logos::Lexer<'src, LexicalToken>,
     peek_cache: PeekCache<(Token, Span)>,
     source: &'src str,
     source_metadata: SourceMetadata,
@@ -46,7 +46,7 @@ impl<'src> Lexer<'src> {
     #[must_use]
     pub fn new(source: &'src str) -> Self {
         Self {
-            inner: Token::lexer(source),
+            inner: LexicalToken::lexer(source),
             peek_cache: PeekCache::new(LEXER_MAX_LOOKAHEAD),
             source,
             source_metadata: SourceMetadata::default(),
@@ -142,7 +142,7 @@ impl<'src> Lexer<'src> {
 }
 
 fn read_next_token(
-    inner: &mut logos::Lexer<'_, Token>,
+    inner: &mut logos::Lexer<'_, LexicalToken>,
     source: &str,
     source_metadata: &mut SourceMetadata,
     first_error_span: &mut Option<Span>,
@@ -153,10 +153,14 @@ fn read_next_token(
         };
         let slice_span = inner.span();
         let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
-        match result {
-            Ok(Token::Whitespace) => record_blank_lines(source, span, source_metadata),
-            Ok(Token::Comment) => record_comment(source, span, source_metadata),
-            Ok(token) => break SourceItem::Item((token, span)),
+        match result.map(LexicalToken::classify) {
+            Ok(LexicalItem::Trivia(TriviaToken::Whitespace)) => {
+                record_blank_lines(source, span, source_metadata);
+            }
+            Ok(LexicalItem::Trivia(TriviaToken::Comment)) => {
+                record_comment(source, span, source_metadata);
+            }
+            Ok(LexicalItem::Syntax(token)) => break SourceItem::Item((token, span)),
             Err(()) => {
                 if first_error_span.is_none() {
                     *first_error_span = Some(span);

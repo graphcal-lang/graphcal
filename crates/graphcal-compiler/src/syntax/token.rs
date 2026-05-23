@@ -1,13 +1,32 @@
+//! Lexical token model.
+//!
+//! This module intentionally separates the tokens recognized by the concrete
+//! lexer from the tokens exposed to the parser.
+//!
+//! - `LexicalToken` is the private Logos-facing token enum. It includes both
+//!   syntax and trivia because Logos scans the full source text, including
+//!   whitespace and comments.
+//! - `TriviaToken` classifies non-syntax source regions. Trivia never reaches
+//!   the parser; `lexer.rs` consumes it and records typed formatter metadata
+//!   such as comments and blank lines.
+//! - `LexicalItem` is the typed boundary between the raw Logos token and the
+//!   parser-facing lexer. It forces every raw token to be classified as either
+//!   syntax or trivia before the lexer decides whether to yield or record it.
+//! - [`Token`] is the parser-facing syntax token enum. It deliberately cannot
+//!   represent whitespace or comments, making trivia unrepresentable in parser
+//!   code.
+
 use logos::Logos;
 
 #[derive(Logos, Debug, Clone, PartialEq)]
-pub enum Token {
+pub(crate) enum LexicalToken {
     // Trivia. The parser-facing lexer consumes these and exposes them through
     // typed source metadata instead of yielding them as syntax tokens.
     #[regex(r"[ \t\r\n]+")]
     Whitespace,
     #[regex(r"//[^\n\r]*", allow_greedy = true)]
     Comment,
+
     // Keywords
     #[token("param")]
     Param,
@@ -155,11 +174,180 @@ pub enum Token {
     Number,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TriviaToken {
+    Whitespace,
+    Comment,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LexicalItem {
+    Trivia(TriviaToken),
+    Syntax(Token),
+}
+
+impl LexicalToken {
+    #[must_use]
+    pub(crate) const fn classify(self) -> LexicalItem {
+        match self {
+            Self::Whitespace => LexicalItem::Trivia(TriviaToken::Whitespace),
+            Self::Comment => LexicalItem::Trivia(TriviaToken::Comment),
+            Self::Param => LexicalItem::Syntax(Token::Param),
+            Self::Node => LexicalItem::Syntax(Token::Node),
+            Self::Const => LexicalItem::Syntax(Token::Const),
+            Self::If => LexicalItem::Syntax(Token::If),
+            Self::Else => LexicalItem::Syntax(Token::Else),
+            Self::True => LexicalItem::Syntax(Token::True),
+            Self::False => LexicalItem::Syntax(Token::False),
+            Self::Base => LexicalItem::Syntax(Token::Base),
+            Self::Dimension => LexicalItem::Syntax(Token::Dimension),
+            Self::Unit => LexicalItem::Syntax(Token::Unit),
+            Self::Type => LexicalItem::Syntax(Token::Type),
+            Self::Index => LexicalItem::Syntax(Token::Index),
+            Self::For => LexicalItem::Syntax(Token::For),
+            Self::Import => LexicalItem::Syntax(Token::Import),
+            Self::Include => LexicalItem::Syntax(Token::Include),
+            Self::Dag => LexicalItem::Syntax(Token::Dag),
+            Self::Match => LexicalItem::Syntax(Token::Match),
+            Self::As => LexicalItem::Syntax(Token::As),
+            Self::Assert => LexicalItem::Syntax(Token::Assert),
+            Self::Table => LexicalItem::Syntax(Token::Table),
+            Self::Plot => LexicalItem::Syntax(Token::Plot),
+            Self::Figure => LexicalItem::Syntax(Token::Figure),
+            Self::Layer => LexicalItem::Syntax(Token::Layer),
+            Self::Scan => LexicalItem::Syntax(Token::Scan),
+            Self::Unfold => LexicalItem::Syntax(Token::Unfold),
+            Self::Linspace => LexicalItem::Syntax(Token::Linspace),
+            Self::Step => LexicalItem::Syntax(Token::Step),
+            Self::Pub => LexicalItem::Syntax(Token::Pub),
+            Self::StringLiteral => LexicalItem::Syntax(Token::StringLiteral),
+            Self::Plus => LexicalItem::Syntax(Token::Plus),
+            Self::Minus => LexicalItem::Syntax(Token::Minus),
+            Self::Star => LexicalItem::Syntax(Token::Star),
+            Self::Slash => LexicalItem::Syntax(Token::Slash),
+            Self::Caret => LexicalItem::Syntax(Token::Caret),
+            Self::Percent => LexicalItem::Syntax(Token::Percent),
+            Self::Eq => LexicalItem::Syntax(Token::Eq),
+            Self::EqEq => LexicalItem::Syntax(Token::EqEq),
+            Self::BangEq => LexicalItem::Syntax(Token::BangEq),
+            Self::Lt => LexicalItem::Syntax(Token::Lt),
+            Self::Gt => LexicalItem::Syntax(Token::Gt),
+            Self::LtEq => LexicalItem::Syntax(Token::LtEq),
+            Self::GtEq => LexicalItem::Syntax(Token::GtEq),
+            Self::AmpAmp => LexicalItem::Syntax(Token::AmpAmp),
+            Self::PipePipe => LexicalItem::Syntax(Token::PipePipe),
+            Self::Bang => LexicalItem::Syntax(Token::Bang),
+            Self::Arrow => LexicalItem::Syntax(Token::Arrow),
+            Self::Pipe => LexicalItem::Syntax(Token::Pipe),
+            Self::FatArrow => LexicalItem::Syntax(Token::FatArrow),
+            Self::TildeEq => LexicalItem::Syntax(Token::TildeEq),
+            Self::PlusMinus => LexicalItem::Syntax(Token::PlusMinus),
+            Self::Hash => LexicalItem::Syntax(Token::Hash),
+            Self::LParen => LexicalItem::Syntax(Token::LParen),
+            Self::RParen => LexicalItem::Syntax(Token::RParen),
+            Self::LBrace => LexicalItem::Syntax(Token::LBrace),
+            Self::RBrace => LexicalItem::Syntax(Token::RBrace),
+            Self::LBracket => LexicalItem::Syntax(Token::LBracket),
+            Self::RBracket => LexicalItem::Syntax(Token::RBracket),
+            Self::Semicolon => LexicalItem::Syntax(Token::Semicolon),
+            Self::Comma => LexicalItem::Syntax(Token::Comma),
+            Self::At => LexicalItem::Syntax(Token::At),
+            Self::Colon => LexicalItem::Syntax(Token::Colon),
+            Self::Dot => LexicalItem::Syntax(Token::Dot),
+            Self::Underscore => LexicalItem::Syntax(Token::Underscore),
+            Self::Ident => LexicalItem::Syntax(Token::Ident),
+            Self::Number => LexicalItem::Syntax(Token::Number),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Token {
+    // Keywords
+    Param,
+    Node,
+    Const,
+    If,
+    Else,
+    True,
+    False,
+    Base,
+    Dimension,
+    Unit,
+    Type,
+    Index,
+    For,
+    Import,
+    Include,
+    Dag,
+    Match,
+    As,
+    Assert,
+    Table,
+    Plot,
+    Figure,
+    Layer,
+    Scan,
+    Unfold,
+    Linspace,
+    Step,
+    Pub,
+
+    // Literals
+    StringLiteral,
+
+    // Operators
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Caret,
+    Percent,
+    Eq,
+    EqEq,
+    BangEq,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
+    AmpAmp,
+    PipePipe,
+    Bang,
+    Arrow,
+    Pipe,
+    FatArrow,
+    TildeEq,
+    PlusMinus,
+
+    // Attribute prefix
+    Hash,
+
+    // Delimiters
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    Semicolon,
+    Comma,
+    At,
+    Colon,
+    Dot,
+
+    // Wildcard pattern
+    Underscore,
+
+    // General identifier: covers lower_snake_case, UPPER_SNAKE_CASE, PascalCase, and mixed
+    Ident,
+
+    // Numeric literal (with _ separators and scientific notation)
+    Number,
+}
+
 impl std::fmt::Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Whitespace => write!(f, "whitespace"),
-            Self::Comment => write!(f, "comment"),
             Self::Param => write!(f, "param"),
             Self::Node => write!(f, "node"),
             Self::Const => write!(f, "const"),
@@ -234,10 +422,22 @@ mod tests {
     use super::*;
 
     fn lex_tokens(input: &str) -> Vec<Token> {
-        Token::lexer(input)
-            .map(|r| r.unwrap())
-            .filter(|tok| !matches!(tok, Token::Whitespace | Token::Comment))
-            .collect()
+        let mut lexer = crate::syntax::lexer::Lexer::new(input);
+        let mut tokens = Vec::new();
+        while let Some((token, _)) = lexer.next_token() {
+            tokens.push(token);
+        }
+        tokens
+    }
+
+    fn assert_single_token(input: &str, expected: Token) {
+        let mut lexer = crate::syntax::lexer::Lexer::new(input);
+        let Some((token, span)) = lexer.next_token() else {
+            panic!("expected one token");
+        };
+        assert_eq!(token, expected);
+        assert_eq!(lexer.slice_at(span), input);
+        assert_eq!(lexer.next_token(), None);
     }
 
     #[test]
@@ -291,37 +491,27 @@ mod tests {
 
     #[test]
     fn lex_scientific_notation() {
-        let mut lexer = Token::lexer("3.98e5");
-        assert_eq!(lexer.next(), Some(Ok(Token::Number)));
-        assert_eq!(lexer.slice(), "3.98e5");
+        assert_single_token("3.98e5", Token::Number);
     }
 
     #[test]
     fn lex_scientific_notation_negative_exponent() {
-        let mut lexer = Token::lexer("1e-3");
-        assert_eq!(lexer.next(), Some(Ok(Token::Number)));
-        assert_eq!(lexer.slice(), "1e-3");
+        assert_single_token("1e-3", Token::Number);
     }
 
     #[test]
     fn lex_underscore_separator() {
-        let mut lexer = Token::lexer("200_000");
-        assert_eq!(lexer.next(), Some(Ok(Token::Number)));
-        assert_eq!(lexer.slice(), "200_000");
+        assert_single_token("200_000", Token::Number);
     }
 
     #[test]
     fn lex_underscore_separator_with_decimal() {
-        let mut lexer = Token::lexer("1_000.5");
-        assert_eq!(lexer.next(), Some(Ok(Token::Number)));
-        assert_eq!(lexer.slice(), "1_000.5");
+        assert_single_token("1_000.5", Token::Number);
     }
 
     #[test]
     fn lex_integer() {
-        let mut lexer = Token::lexer("42");
-        assert_eq!(lexer.next(), Some(Ok(Token::Number)));
-        assert_eq!(lexer.slice(), "42");
+        assert_single_token("42", Token::Number);
     }
 
     #[test]
@@ -431,9 +621,7 @@ mod tests {
 
     #[test]
     fn lex_upper_ident_pi() {
-        let mut lexer = Token::lexer("PI");
-        assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-        assert_eq!(lexer.slice(), "PI");
+        assert_single_token("PI", Token::Ident);
     }
 
     #[test]
@@ -499,9 +687,7 @@ mod tests {
             "public",
             "included",
         ] {
-            let mut lexer = Token::lexer(word);
-            assert_eq!(lexer.next(), Some(Ok(Token::Ident)));
-            assert_eq!(lexer.slice(), word);
+            assert_single_token(word, Token::Ident);
         }
     }
 
@@ -654,9 +840,7 @@ mod tests {
     #[test]
     fn lex_string_literal() {
         // String literals survive in non-import contexts (e.g., timezone names).
-        let mut lexer = Token::lexer(r#""UTC""#);
-        assert_eq!(lexer.next(), Some(Ok(Token::StringLiteral)));
-        assert_eq!(lexer.slice(), r#""UTC""#);
+        assert_single_token(r#""UTC""#, Token::StringLiteral);
     }
 
     #[test]
