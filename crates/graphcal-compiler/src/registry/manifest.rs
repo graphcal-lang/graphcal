@@ -79,7 +79,10 @@ pub fn parse_manifest_str(content: &str) -> Result<Manifest, ManifestError> {
 
 /// A valid package name follows `lower_snake_case` rules.
 fn is_valid_package_name(s: &str) -> bool {
-    crate::syntax::names::is_lower_snake_case(s)
+    !s.is_empty()
+        && s.starts_with(|c: char| c.is_ascii_lowercase())
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 #[cfg(test)]

@@ -319,18 +319,6 @@ impl From<DeclName> for ScopedName {
     }
 }
 
-// --- Naming convention helpers ---
-
-/// Check if `s` is a valid `lower_snake_case` identifier
-/// (starts with a lowercase letter, contains only lowercase letters, digits, and underscores).
-#[must_use]
-pub fn is_lower_snake_case(s: &str) -> bool {
-    !s.is_empty()
-        && s.starts_with(|c: char| c.is_ascii_lowercase())
-        && s.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
 // --- Spanned wrapper ---
 
 use crate::syntax::span::Span;
