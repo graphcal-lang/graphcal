@@ -367,7 +367,7 @@ impl Parser<'_> {
         Ok(Declaration {
             attributes: vec![],
             visibility: Visibility::Private,
-            kind: DeclKind::Sugar(crate::syntax::phase::RawDeclSugar::Multi(multi)),
+            kind: DeclKind::Sugar(crate::syntax::ast::RawDeclSugar::Multi(multi)),
             span: surface_span,
         })
     }
@@ -659,7 +659,7 @@ mod tests {
         file.declarations
             .iter()
             .find_map(|d| match &d.kind {
-                DeclKind::Sugar(crate::syntax::phase::RawDeclSugar::Multi(m)) => Some(m),
+                DeclKind::Sugar(crate::syntax::ast::RawDeclSugar::Multi(m)) => Some(m),
                 _ => None,
             })
             .expect("file has one multi-decl")
@@ -700,7 +700,7 @@ param n_installed:       Int[Component]
             panic!("expected Param")
         };
         match &first.value.as_ref().unwrap().kind {
-            ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+            ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                 indexes,
                 entries,
             }) => {
@@ -925,7 +925,7 @@ param      power_mode:        Bool[Component, OperationMode]
         assert_eq!(desugared.len(), 4);
         match &desugared[3].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                     indexes,
                     entries,
                 }) => {
@@ -993,7 +993,7 @@ param q: Int[Phase, Component]
         assert_eq!(desugared.len(), 2);
         match &desugared[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                     indexes,
                     entries,
                 }) => {

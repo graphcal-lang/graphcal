@@ -576,7 +576,7 @@ impl Parser<'_> {
             let member_ident = self.parse_any_ident()?;
             let full_span = span.merge(member_ident.span);
             Ok(Expr::new(
-                ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::QualifiedNameRef {
+                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::QualifiedNameRef {
                     qualifier: crate::syntax::ast::Ident { name, span },
                     member: member_ident,
                 }),
@@ -635,7 +635,7 @@ impl Parser<'_> {
         } else {
             // Bare identifier → NameRef (resolved later by name resolution pass)
             Ok(Expr::new(
-                ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::NameRef(
+                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::NameRef(
                     crate::syntax::ast::Ident { name, span },
                 )),
                 span,
@@ -729,7 +729,7 @@ impl Parser<'_> {
         let expr = self.parse_expr()?;
 
         // If it's a bare name reference, use IndexArg::Var for backward compatibility
-        if let ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::NameRef(ident)) =
+        if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::NameRef(ident)) =
             expr.kind
         {
             Ok(IndexArg::Var(ident))
@@ -1084,7 +1084,7 @@ mod tests {
         if let ExprKind::BinOp { lhs, .. } = &expr.kind {
             assert!(matches!(
                 &lhs.kind,
-                ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::NameRef(id))
+                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::NameRef(id))
                     if id.name.as_str() == "PI"
             ));
         } else {
@@ -1561,7 +1561,7 @@ mod tests {
             panic!("expected Node");
         };
         match &node.value.kind {
-            ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::QualifiedNameRef {
+            ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::QualifiedNameRef {
                 qualifier,
                 member,
             }) => {

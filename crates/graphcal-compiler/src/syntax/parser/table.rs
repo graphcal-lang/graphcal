@@ -48,7 +48,7 @@ impl Parser<'_> {
         let span = start_span.merge(end_span);
 
         Ok(Expr::new(
-            ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral { indexes, entries }),
+            ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral { indexes, entries }),
             span,
         ))
     }
@@ -500,7 +500,7 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                     indexes,
                     entries,
                 }) => {
@@ -529,7 +529,7 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                     indexes,
                     entries,
                 }) => {
@@ -558,7 +558,7 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                     indexes,
                     entries,
                 }) => {
@@ -590,7 +590,7 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                     indexes,
                     entries,
                 }) => {
@@ -620,7 +620,7 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                     indexes,
                     entries,
                 }) => {
@@ -650,7 +650,7 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                     indexes,
                     entries,
                 }) => {
@@ -687,7 +687,7 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                     indexes,
                     entries,
                 }) => {
@@ -729,7 +729,7 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                     indexes,
                     entries,
                 }) => {

@@ -27,12 +27,13 @@ use crate::desugar::desugared_ast as src_ast;
 use crate::desugar::resolved_ast as dst_ast;
 use crate::registry::builtins::builtin_constants;
 use crate::registry::resolve_types::is_time_scale_name;
+use crate::syntax::ast::UnresolvedRef;
 use crate::syntax::ast::{ImportItemNamespace, ImportKind, TypeSystemRefKind};
 use crate::syntax::names::{
     ConstructorName, DimName, IndexName, IndexVariantName, LocalName, ModuleAliasName, ScopedName,
     StructTypeName,
 };
-use crate::syntax::phase::{UnresolvedRef, never};
+use crate::syntax::phase::never;
 use crate::syntax::span::Spanned;
 
 /// Context for name resolution: what names are in scope.

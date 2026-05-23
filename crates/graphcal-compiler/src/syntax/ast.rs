@@ -1,11 +1,116 @@
+use core::convert::Infallible;
 use std::marker::PhantomData;
 
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, FnName, GenericParamName, IndexName,
     IndexVariantName, ScopedName, StructTypeName, UnitName,
 };
-use crate::syntax::phase::{Phase, Raw};
+use crate::syntax::phase::{Desugared, Phase, Raw, Resolved};
 use crate::syntax::span::{Span, Spanned};
+
+impl Phase for Raw {
+    type DeclSugar = RawDeclSugar;
+    type ExprSugar = RawExprSugar;
+    type RefSugar = UnresolvedRef;
+}
+
+impl Phase for Desugared {
+    type DeclSugar = Infallible;
+    type ExprSugar = Infallible;
+    type RefSugar = UnresolvedRef;
+}
+
+impl Phase for Resolved {
+    type DeclSugar = Infallible;
+    type ExprSugar = Infallible;
+    type RefSugar = Infallible;
+}
+
+// ---------------------------------------------------------------------------
+// Raw-only sugar variants
+// ---------------------------------------------------------------------------
+
+/// Declaration-level sugar — only legal in [`Raw`].
+///
+/// Each variant corresponds to a surface declaration form that is rewritten
+/// into ordinary `DeclKind` variants by [`crate::desugar`]. After desugaring,
+/// `DeclKind::Sugar(_)` carries [`Infallible`] and these variants vanish from
+/// the type system entirely.
+#[derive(Debug, Clone)]
+pub enum RawDeclSugar {
+    /// Multi-declaration (issue #481): N parallel slots sharing one
+    /// `table[…] {…}` initializer. Desugared into N separate
+    /// `DeclKind::{Param, Node, ConstNode}` declarations.
+    ///
+    /// Pinned to `MultiDecl<Raw>` because multi-decl is by definition a
+    /// raw-only construct — the desugar pass eliminates it.
+    Multi(MultiDecl<Raw>),
+}
+
+impl RawDeclSugar {
+    /// Returns the surface span of the sugar form.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Multi(m) => m.span,
+        }
+    }
+}
+
+/// Expression-level sugar — only legal in [`Raw`].
+///
+/// Each variant corresponds to a surface expression form that is rewritten
+/// into ordinary `ExprKind` variants by [`crate::desugar::convert`]. In
+/// `Desugared`, the `Sugar` slot is `Infallible` and these variants vanish.
+#[derive(Debug, Clone)]
+pub enum RawExprSugar {
+    /// Table literal: `table[Phase, 3] { ... }`.
+    ///
+    /// Desugars to [`ExprKind::MapLiteral`] — the `indexes` metadata is
+    /// dropped (entries already carry full `Index.Variant` keys), and the
+    /// `table` keyword is purely surface syntax preserved by the formatter
+    /// via the raw AST.
+    TableLiteral {
+        indexes: Vec<TableIndexSpec>,
+        entries: Vec<MapEntry<Raw>>,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Unresolved-ref variants (legal in `Raw` and `Desugared`, not in `Resolved`)
+// ---------------------------------------------------------------------------
+
+/// Unresolved reference, produced by the parser before name resolution.
+///
+/// Carried by `ExprKind::UnresolvedRef(P::RefSugar)`. The parser emits these
+/// when the meaning of a bare or dotted identifier cannot be determined from
+/// syntax alone; the name-resolution pass rewrites them into concrete
+/// `ConstRef` / `LocalRef` / `VariantLiteral` / `StructConstruction` variants
+/// and produces a [`Resolved`] AST in which `RefSugar = Infallible`.
+#[derive(Debug, Clone)]
+pub enum UnresolvedRef {
+    /// Unresolved bare identifier reference.
+    ///
+    /// Resolved to one of `ConstRef`, `LocalRef`, or `StructConstruction`
+    /// (bare variant) depending on context.
+    NameRef(Ident),
+    /// Unresolved qualified reference: `a.b`.
+    ///
+    /// Resolved to `VariantLiteral` (when `a` is a known index) or `ConstRef`
+    /// (module-qualified constant) depending on context.
+    QualifiedNameRef { qualifier: Ident, member: Ident },
+}
+
+impl UnresolvedRef {
+    /// Returns the source span of the underlying identifier(s).
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Self::NameRef(ident) => ident.span,
+            Self::QualifiedNameRef { qualifier, member } => qualifier.span.merge(member.span),
+        }
+    }
+}
 
 /// A complete source file.
 ///
@@ -129,7 +234,7 @@ pub enum DeclKind<P: Phase = Raw> {
     Layer(LayerDecl<P>),
     /// Phase-specific declaration sugar.
     ///
-    /// In [`Raw`], this is [`crate::syntax::phase::RawDeclSugar`] and carries
+    /// In [`Raw`], this is [`crate::syntax::ast::RawDeclSugar`] and carries
     /// surface forms like multi-decl (issue #481) that are eliminated by the
     /// desugar pass. In [`Desugared`](Raw), the
     /// payload is [`core::convert::Infallible`] — the variant is statically
@@ -1193,7 +1298,7 @@ pub enum ExprKind<P: Phase = Raw> {
     },
     /// Unresolved reference produced by the parser.
     ///
-    /// Carries [`crate::syntax::phase::UnresolvedRef`] in [`Raw`] and
+    /// Carries [`crate::syntax::ast::UnresolvedRef`] in [`Raw`] and
     /// [`crate::syntax::phase::Desugared`], with `NameRef`/`QualifiedNameRef`
     /// sub-variants. In [`crate::syntax::phase::Resolved`] the payload is
     /// [`core::convert::Infallible`] — the variant is statically unreachable
@@ -1201,7 +1306,7 @@ pub enum ExprKind<P: Phase = Raw> {
     UnresolvedRef(P::RefSugar),
     /// Phase-specific expression sugar.
     ///
-    /// In [`Raw`], this is [`crate::syntax::phase::RawExprSugar`] and carries
+    /// In [`Raw`], this is [`crate::syntax::ast::RawExprSugar`] and carries
     /// surface forms like `TableLiteral` that are eliminated by the desugar
     /// pass. In `Desugared` and `Resolved`, the payload is
     /// [`core::convert::Infallible`] — the variant is statically unreachable.
