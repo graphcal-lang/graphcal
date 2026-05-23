@@ -10,7 +10,7 @@
 //! Pre-resolution consumers (parser, formatter, LSP symbol-table walk,
 //! `desugar_tuple_matches`, `resolve_name_refs`) keep using
 //! [`crate::desugar::desugared_ast`] — those operate on the AST before name
-//! resolution has eliminated [`crate::syntax::phase::UnresolvedRef`].
+//! resolution has eliminated [`crate::syntax::ast::UnresolvedRef`].
 //!
 //! Phase-invariant types (e.g. `Attribute`, `Ident`, `ModulePath`, `BinOp`)
 //! are re-exported as-is — they have no `<P>` parameter and behave the same

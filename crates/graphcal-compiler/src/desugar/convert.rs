@@ -38,7 +38,8 @@ use crate::syntax::ast::{
     ParamBinding, ParamDecl, PlotDecl, PlotField, TupleMatchArm, TypeDecl, TypeExpr, TypeExprKind,
     UnionMember, UnionTypeDecl, UnitDecl, UnitDef,
 };
-use crate::syntax::phase::{Desugared, Raw, RawDeclSugar, RawExprSugar};
+use crate::syntax::ast::{RawDeclSugar, RawExprSugar};
+use crate::syntax::phase::{Desugared, Raw};
 
 // ---------------------------------------------------------------------------
 // File / Declaration / DeclKind

@@ -234,7 +234,7 @@ fn parse_unit_decl_with_paren_expr() {
                     assert!(matches!(op, crate::syntax::ast::BinOp::Div));
                     assert!(matches!(
                         &lhs.kind,
-                        ExprKind::UnresolvedRef(crate::syntax::phase::UnresolvedRef::NameRef(c))
+                        ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::NameRef(c))
                             if c.name.as_str() == "PI"
                     ));
                     assert!(matches!(&rhs.kind, ExprKind::Integer(180)));

@@ -7,8 +7,9 @@
 //! Three phases:
 //!
 //! - [`Raw`] — produced by the parser. Carries every surface sugar via
-//!   [`RawDeclSugar`] / [`RawExprSugar`], plus the unresolved-ref slot
-//!   [`UnresolvedRef`]. Consumed by the formatter and any surface-aware
+//!   [`crate::syntax::ast::RawDeclSugar`] /
+//!   [`crate::syntax::ast::RawExprSugar`], plus the unresolved-ref slot
+//!   [`crate::syntax::ast::UnresolvedRef`]. Consumed by the formatter and any surface-aware
 //!   tooling.
 //! - [`Desugared`] — produced by [`crate::desugar`]. Surface-sugar slots
 //!   are [`core::convert::Infallible`], so `match` arms over them are
@@ -28,10 +29,7 @@
 use core::convert::Infallible;
 use core::fmt::Debug;
 
-use crate::syntax::ast::{Ident, MapEntry, MultiDecl, TableIndexSpec};
-use crate::syntax::span::Span;
-
-mod sealed {
+pub(crate) mod sealed {
     pub trait Sealed {}
 }
 
@@ -41,21 +39,23 @@ mod sealed {
 pub trait Phase: 'static + sealed::Sealed {
     /// Phase-specific declaration sugar variants.
     ///
-    /// Carried by `DeclKind::Sugar(_)`. For [`Raw`] this is [`RawDeclSugar`];
+    /// Carried by `DeclKind::Sugar(_)`. For [`Raw`] this is
+    /// [`crate::syntax::ast::RawDeclSugar`];
     /// for [`Desugared`] and [`Resolved`] it is [`Infallible`] so the variant
     /// cannot be constructed.
     type DeclSugar: Debug + Clone;
 
     /// Phase-specific expression sugar variants.
     ///
-    /// Carried by `ExprKind::Sugar(_)`. For [`Raw`] this is [`RawExprSugar`];
+    /// Carried by `ExprKind::Sugar(_)`. For [`Raw`] this is
+    /// [`crate::syntax::ast::RawExprSugar`];
     /// for [`Desugared`] and [`Resolved`] it is [`Infallible`].
     type ExprSugar: Debug + Clone;
 
     /// Phase-specific unresolved-reference variants.
     ///
     /// Carried by `ExprKind::UnresolvedRef(_)`. For [`Raw`] and [`Desugared`]
-    /// this is [`UnresolvedRef`] (the parser produces `NameRef`/`QualifiedNameRef`
+    /// this is [`crate::syntax::ast::UnresolvedRef`] (the parser produces `NameRef`/`QualifiedNameRef`
     /// variants); for [`Resolved`] it is [`Infallible`] so the variant cannot
     /// be constructed and the name-resolution pass is statically known to
     /// have eliminated every unresolved reference.
@@ -70,11 +70,6 @@ pub trait Phase: 'static + sealed::Sealed {
 pub enum Raw {}
 
 impl sealed::Sealed for Raw {}
-impl Phase for Raw {
-    type DeclSugar = RawDeclSugar;
-    type ExprSugar = RawExprSugar;
-    type RefSugar = UnresolvedRef;
-}
 
 /// Post-desugar phase: surface-sugar variants are statically impossible.
 ///
@@ -85,11 +80,6 @@ impl Phase for Raw {
 pub enum Desugared {}
 
 impl sealed::Sealed for Desugared {}
-impl Phase for Desugared {
-    type DeclSugar = Infallible;
-    type ExprSugar = Infallible;
-    type RefSugar = UnresolvedRef;
-}
 
 /// Post-name-resolution phase: every phase slot is [`Infallible`].
 ///
@@ -100,11 +90,6 @@ impl Phase for Desugared {
 pub enum Resolved {}
 
 impl sealed::Sealed for Resolved {}
-impl Phase for Resolved {
-    type DeclSugar = Infallible;
-    type ExprSugar = Infallible;
-    type RefSugar = Infallible;
-}
 
 /// Helper for matching against `Sugar(Infallible)` arms.
 ///
@@ -114,91 +99,4 @@ impl Phase for Resolved {
 #[must_use]
 pub const fn never<T>(x: Infallible) -> T {
     match x {}
-}
-
-// ---------------------------------------------------------------------------
-// Raw-only sugar variants
-// ---------------------------------------------------------------------------
-
-/// Declaration-level sugar — only legal in [`Raw`].
-///
-/// Each variant corresponds to a surface declaration form that is rewritten
-/// into ordinary `DeclKind` variants by [`crate::desugar`]. After desugaring,
-/// `DeclKind::Sugar(_)` carries [`Infallible`] and these variants vanish from
-/// the type system entirely.
-#[derive(Debug, Clone)]
-pub enum RawDeclSugar {
-    /// Multi-declaration (issue #481): N parallel slots sharing one
-    /// `table[…] {…}` initializer. Desugared into N separate
-    /// `DeclKind::{Param, Node, ConstNode}` declarations.
-    ///
-    /// Pinned to `MultiDecl<Raw>` because multi-decl is by definition a
-    /// raw-only construct — the desugar pass eliminates it.
-    Multi(MultiDecl<Raw>),
-}
-
-impl RawDeclSugar {
-    /// Returns the surface span of the sugar form.
-    #[must_use]
-    pub const fn span(&self) -> Span {
-        match self {
-            Self::Multi(m) => m.span,
-        }
-    }
-}
-
-/// Expression-level sugar — only legal in [`Raw`].
-///
-/// Each variant corresponds to a surface expression form that is rewritten
-/// into ordinary `ExprKind` variants by [`crate::desugar::convert`]. In
-/// `Desugared`, the `Sugar` slot is `Infallible` and these variants vanish.
-#[derive(Debug, Clone)]
-pub enum RawExprSugar {
-    /// Table literal: `table[Phase, 3] { ... }`.
-    ///
-    /// Desugars to [`crate::syntax::ast::ExprKind::MapLiteral`] — the
-    /// `indexes` metadata is dropped (entries already carry full
-    /// `Index.Variant` keys), and the `table` keyword is purely surface
-    /// syntax preserved by the formatter via the raw AST.
-    TableLiteral {
-        indexes: Vec<TableIndexSpec>,
-        entries: Vec<MapEntry<Raw>>,
-    },
-}
-
-// ---------------------------------------------------------------------------
-// Unresolved-ref variants (legal in `Raw` and `Desugared`, not in `Resolved`)
-// ---------------------------------------------------------------------------
-
-/// Unresolved reference, produced by the parser before name resolution.
-///
-/// Carried by `ExprKind::UnresolvedRef(P::RefSugar)`. The parser emits these
-/// when the meaning of a bare or dotted identifier cannot be determined from
-/// syntax alone; the name-resolution pass rewrites them into concrete
-/// `ConstRef` / `LocalRef` / `VariantLiteral` / `StructConstruction` variants
-/// and produces a [`Resolved`] AST in which
-/// `RefSugar = Infallible`.
-#[derive(Debug, Clone)]
-pub enum UnresolvedRef {
-    /// Unresolved bare identifier reference.
-    ///
-    /// Resolved to one of `ConstRef`, `LocalRef`, or `StructConstruction`
-    /// (bare variant) depending on context.
-    NameRef(Ident),
-    /// Unresolved qualified reference: `a.b`.
-    ///
-    /// Resolved to `VariantLiteral` (when `a` is a known index) or
-    /// `ConstRef` (module-qualified constant) depending on context.
-    QualifiedNameRef { qualifier: Ident, member: Ident },
-}
-
-impl UnresolvedRef {
-    /// Returns the source span of the underlying identifier(s).
-    #[must_use]
-    pub fn span(&self) -> Span {
-        match self {
-            Self::NameRef(ident) => ident.span,
-            Self::QualifiedNameRef { qualifier, member } => qualifier.span.merge(member.span),
-        }
-    }
 }

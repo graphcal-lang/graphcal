@@ -158,7 +158,7 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
         }
 
         let table_expr = Expr::new(
-            ExprKind::Sugar(crate::syntax::phase::RawExprSugar::TableLiteral {
+            ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
                 indexes: slot_indexes,
                 entries: slot_entries,
             }),

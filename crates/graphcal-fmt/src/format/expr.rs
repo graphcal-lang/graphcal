@@ -31,11 +31,11 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         }
         ExprKind::ConstRef(name) => RcDoc::text(format_scoped_surface(&name.value)),
         ExprKind::LocalRef(ident)
-        | ExprKind::UnresolvedRef(graphcal_compiler::syntax::phase::UnresolvedRef::NameRef(
-            ident,
-        )) => RcDoc::text(ident.name.clone()),
+        | ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::NameRef(ident)) => {
+            RcDoc::text(ident.name.clone())
+        }
         ExprKind::UnresolvedRef(
-            graphcal_compiler::syntax::phase::UnresolvedRef::QualifiedNameRef { qualifier, member },
+            graphcal_compiler::syntax::ast::UnresolvedRef::QualifiedNameRef { qualifier, member },
         ) => RcDoc::text(format!("{}.{}", qualifier.name, member.name)),
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
@@ -85,7 +85,7 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             fields,
         } => format_struct_construction(fmt, type_name, type_args, fields),
         ExprKind::MapLiteral { entries } => format_map_literal(fmt, entries),
-        ExprKind::Sugar(graphcal_compiler::syntax::phase::RawExprSugar::TableLiteral {
+        ExprKind::Sugar(graphcal_compiler::syntax::ast::RawExprSugar::TableLiteral {
             indexes,
             entries,
         }) => format_table_literal(fmt, indexes, entries),

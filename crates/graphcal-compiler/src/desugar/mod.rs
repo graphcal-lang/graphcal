@@ -22,8 +22,8 @@
 //!
 //! # Adding a new customer
 //!
-//! 1. Add a variant to [`crate::syntax::phase::RawDeclSugar`] or
-//!    [`crate::syntax::phase::RawExprSugar`].
+//! 1. Add a variant to [`crate::syntax::ast::RawDeclSugar`] or
+//!    [`crate::syntax::ast::RawExprSugar`].
 //! 2. Implement [`DesugarSugar`] for that variant in a submodule of this
 //!    module.
 //! 3. Wire it into the walker's `Sugar(_)` dispatch.
