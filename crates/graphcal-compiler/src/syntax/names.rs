@@ -324,10 +324,7 @@ impl From<DeclName> for ScopedName {
 use crate::syntax::span::Span;
 
 /// A value paired with its source span.
-///
-/// `PartialEq`/`Eq`/`Hash` delegate to `value` only, so two occurrences
-/// of the same name at different source positions are considered equal.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Spanned<T> {
     pub value: T,
     pub span: Span,
@@ -337,20 +334,6 @@ impl<T> Spanned<T> {
     /// Create a new spanned value.
     pub const fn new(value: T, span: Span) -> Self {
         Self { value, span }
-    }
-}
-
-impl<T: PartialEq> PartialEq for Spanned<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
-impl<T: Eq> Eq for Spanned<T> {}
-
-impl<T: std::hash::Hash> std::hash::Hash for Spanned<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.value.hash(state);
     }
 }
 
@@ -439,10 +422,10 @@ mod tests {
     }
 
     #[test]
-    fn spanned_eq_ignores_span() {
+    fn spanned_eq_considers_span() {
         let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
         let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
-        assert_eq!(a, b);
+        assert_ne!(a, b);
     }
 
     #[test]
@@ -453,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn spanned_hash_ignores_span() {
+    fn spanned_hash_considers_span() {
         use std::hash::{DefaultHasher, Hash, Hasher};
         let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
         let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
@@ -461,6 +444,6 @@ mod tests {
         a.hash(&mut ha);
         let mut hb = DefaultHasher::new();
         b.hash(&mut hb);
-        assert_eq!(ha.finish(), hb.finish());
+        assert_ne!(ha.finish(), hb.finish());
     }
 }

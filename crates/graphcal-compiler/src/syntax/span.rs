@@ -1,5 +1,5 @@
 /// Byte-offset span in source code. Compatible with `miette::SourceSpan`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     offset: usize,
     len: usize,
