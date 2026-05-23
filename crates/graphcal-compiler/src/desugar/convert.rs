@@ -560,8 +560,8 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
                 arms: arms.into_iter().map(Into::into).collect(),
             },
             ExprKind::TupleMatch { scrutinees, arms } => Self::TupleMatch {
-                scrutinees: scrutinees.into_iter().map(Into::into).collect(),
-                arms: arms.into_iter().map(Into::into).collect(),
+                scrutinees: scrutinees.map(Into::into),
+                arms: arms.map(Into::into),
             },
             ExprKind::InlineDagRef { path, args, output } => Self::InlineDagRef {
                 path,
@@ -627,9 +627,7 @@ impl From<MatchArm<Raw>> for MatchArm<Desugared> {
 impl From<TupleMatchArm<Raw>> for TupleMatchArm<Desugared> {
     fn from(a: TupleMatchArm<Raw>) -> Self {
         Self {
-            patterns: a
-                .patterns
-                .map(|ps| ps.into_iter().map(Into::into).collect()),
+            patterns: a.patterns.map(|ps| ps.map(Into::into)),
             body: a.body.into(),
             span: a.span,
         }

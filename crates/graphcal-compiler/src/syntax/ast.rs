@@ -5,6 +5,7 @@ use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, FnName, GenericParamName, IndexName,
     IndexVariantName, ScopedName, StructTypeName, UnitName,
 };
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Phase, Raw, Resolved};
 use crate::syntax::span::{Span, Spanned};
 
@@ -138,7 +139,10 @@ pub struct Attribute {
 #[derive(Debug, Clone)]
 pub enum AttributeArg {
     /// A path of one or more `.`-separated segments: `foo`, `Index.Variant`.
-    Path { segments: Vec<Ident>, span: Span },
+    Path {
+        segments: NonEmpty<Ident>,
+        span: Span,
+    },
     /// A parenthesized group of args: `(Index.A, Index.B).`
     Group { elements: Vec<Self>, span: Span },
 }
@@ -158,7 +162,7 @@ impl AttributeArg {
     #[must_use]
     pub fn as_single_ident(&self) -> Option<&Ident> {
         match self {
-            Self::Path { segments, .. } if segments.len() == 1 => Some(&segments[0]),
+            Self::Path { segments, .. } if segments.len() == 1 => Some(segments.first()),
             _ => None,
         }
     }
@@ -611,10 +615,8 @@ pub struct MultiDecl<P: Phase = Raw> {
     /// Slot headers in declaration order. Length = number of declarations
     /// this multi-decl expanded into.
     pub slots: Vec<MultiDeclSlot<P>>,
-    /// Shared axes from the bracket prefix `table[A, B, …, (…)]`. The
-    /// **last** entry is the row axis; earlier entries become slice axes
-    /// when there is more than one.
-    pub shared_axes: Vec<TableIndexSpec>,
+    /// Shared axes from the bracket prefix `table[A, B, …, (…)]`.
+    pub shared_axes: MultiDeclSharedAxes,
     /// Per-slot extra-axis annotation from the slot tuple. Same length
     /// as `slots`.
     pub slot_axes: Vec<MultiSlotAxis>,
@@ -1261,8 +1263,8 @@ pub enum ExprKind<P: Phase = Raw> {
     /// Preserved in the AST for formatting and tooling. Desugared to nested
     /// `If` / `BinOp(Eq)` chains before evaluation.
     TupleMatch {
-        scrutinees: Vec<Expr<P>>,
-        arms: Vec<TupleMatchArm<P>>,
+        scrutinees: NonEmpty<Expr<P>>,
+        arms: NonEmpty<TupleMatchArm<P>>,
     },
     /// Standalone index variant reference: `Maneuver.Departure`
     /// Used in comparisons with loop variables: `m == Maneuver.Departure`
@@ -1323,6 +1325,83 @@ pub enum TableIndexSpec {
     Named(Spanned<IndexName>),
     /// A Nat range literal: `3` (desugars to `range(3)`)
     NatRange(u64, Span),
+}
+
+/// Shared axes in a multi-declaration table prefix.
+///
+/// The final axis has a distinct semantic role: it is the row axis. Any axes
+/// before it are slice axes. This is intentionally not modeled as a generic
+/// `NonEmpty<TableIndexSpec>` because the tail element is special.
+#[derive(Debug, Clone)]
+pub struct MultiDeclSharedAxes {
+    slice_axes: Vec<TableIndexSpec>,
+    row_axis: TableIndexSpec,
+}
+
+impl MultiDeclSharedAxes {
+    /// Construct shared axes from zero or more slice axes and the always-present row axis.
+    #[must_use]
+    pub const fn new(slice_axes: Vec<TableIndexSpec>, row_axis: TableIndexSpec) -> Self {
+        Self {
+            slice_axes,
+            row_axis,
+        }
+    }
+
+    /// Convert a parser-order vector into semantic slice/row axes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::syntax::non_empty::EmptyVecError`] when `axes` is empty.
+    pub fn try_from_vec(
+        mut axes: Vec<TableIndexSpec>,
+    ) -> Result<Self, crate::syntax::non_empty::EmptyVecError> {
+        let row_axis = axes.pop().ok_or(crate::syntax::non_empty::EmptyVecError)?;
+        Ok(Self::new(axes, row_axis))
+    }
+
+    /// Slice axes preceding the row axis.
+    #[must_use]
+    pub fn slice_axes(&self) -> &[TableIndexSpec] {
+        &self.slice_axes
+    }
+
+    /// The row axis.
+    #[must_use]
+    pub const fn row_axis(&self) -> &TableIndexSpec {
+        &self.row_axis
+    }
+
+    /// Number of shared axes. Always at least 1.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.slice_axes.len() + 1
+    }
+
+    /// Returns `false`; provided for sequence-like callers.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Iterate over axes in source order: slice axes first, then row axis.
+    pub fn iter(&self) -> impl Iterator<Item = &TableIndexSpec> {
+        self.slice_axes
+            .iter()
+            .chain(std::iter::once(&self.row_axis))
+    }
+}
+
+impl std::ops::Index<usize> for MultiDeclSharedAxes {
+    type Output = TableIndexSpec;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        match index < self.slice_axes.len() {
+            true => &self.slice_axes[index],
+            false if index == self.slice_axes.len() => &self.row_axis,
+            false => panic!("multi-decl shared axis index out of bounds"),
+        }
+    }
 }
 
 /// An index key in a map literal entry.
@@ -1424,7 +1503,7 @@ pub struct MapEntryKey {
 /// Multi-axis:  `(Phase.Launch, Maneuver.Departure): 2.46 km/s` (keys has 2+ elements)
 #[derive(Debug, Clone)]
 pub struct MapEntry<P: Phase = Raw> {
-    pub keys: Vec<MapEntryKey>,
+    pub keys: NonEmpty<MapEntryKey>,
     pub value: Expr<P>,
 }
 
@@ -1543,7 +1622,7 @@ pub struct MatchArm<P: Phase = Raw> {
 #[derive(Debug, Clone)]
 pub struct TupleMatchArm<P: Phase = Raw> {
     /// `None` for the wildcard `_` arm.
-    pub patterns: Option<Vec<Expr<P>>>,
+    pub patterns: Option<NonEmpty<Expr<P>>>,
     pub body: Expr<P>,
     pub span: Span,
 }
@@ -1777,8 +1856,7 @@ fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
             desugar_expr(&mut arm.body);
         }
 
-        // Take ownership of arms (scrutinees are borrowed).
-        let arms = std::mem::take(arms);
+        let arms = arms.clone();
         let span = expr.span;
 
         expr.kind = desugar_tuple_match(scrutinees, arms, span);
@@ -1794,8 +1872,8 @@ fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
 /// else { e3 }
 /// ```
 fn desugar_tuple_match(
-    scrutinees: &[Expr<crate::syntax::phase::Desugared>],
-    arms: Vec<TupleMatchArm<crate::syntax::phase::Desugared>>,
+    scrutinees: &NonEmpty<Expr<crate::syntax::phase::Desugared>>,
+    arms: NonEmpty<TupleMatchArm<crate::syntax::phase::Desugared>>,
     span: Span,
 ) -> ExprKind<crate::syntax::phase::Desugared> {
     let false_expr = Expr::new(ExprKind::Bool(false), span);
@@ -1838,8 +1916,8 @@ fn desugar_tuple_match(
     reason = "invariant: parser guarantees arity >= 1"
 )]
 fn build_conjunction(
-    scrutinees: &[Expr<crate::syntax::phase::Desugared>],
-    patterns: &[Expr<crate::syntax::phase::Desugared>],
+    scrutinees: &NonEmpty<Expr<crate::syntax::phase::Desugared>>,
+    patterns: &NonEmpty<Expr<crate::syntax::phase::Desugared>>,
     span: Span,
 ) -> Expr<crate::syntax::phase::Desugared> {
     scrutinees

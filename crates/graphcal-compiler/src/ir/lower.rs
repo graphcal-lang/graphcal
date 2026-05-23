@@ -1276,8 +1276,8 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
         entries: &[crate::desugar::resolved_ast::MapEntry],
     ) -> Result<(), Self::Error> {
         for entry in entries {
-            if let Some(key) = entry.keys.first()
-                && let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
+            let key = entry.keys.first();
+            if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
                 && self.index_bindings.contains_key(index_name.as_str())
             {
                 return Err(self.orphan_error(

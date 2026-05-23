@@ -357,7 +357,8 @@ impl Parser<'_> {
 
         let multi = ast::MultiDecl {
             slots: ast_slots,
-            shared_axes: shared_axes.clone(),
+            shared_axes: ast::MultiDeclSharedAxes::try_from_vec(shared_axes.clone())
+                .expect("multi-decl parser rejects an empty shared-axis list"),
             slot_axes: ast_slot_axes,
             slices: ast_slices,
             span: surface_span,

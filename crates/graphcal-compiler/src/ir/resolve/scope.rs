@@ -150,9 +150,8 @@ where
 
     fn visit_map_entries(&mut self, _expr: &Expr, entries: &[MapEntry]) -> Result<(), Self::Error> {
         for entry in entries {
-            if let Some(key) = entry.keys.first()
-                && let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
-            {
+            let key = entry.keys.first();
+            if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value {
                 (self.check)(
                     index_name.as_ref(),
                     key.variant.value.as_ref(),

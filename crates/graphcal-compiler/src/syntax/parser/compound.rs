@@ -3,6 +3,7 @@ use crate::syntax::ast::{
     TupleMatchArm,
 };
 use crate::syntax::names::{FieldName, IndexName, IndexVariantName};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
@@ -32,6 +33,8 @@ impl Parser<'_> {
                 let arms = self.parse_tuple_match_arms(scrutinees.len(), start_span)?;
                 let (_, end_span) = self.expect(Token::RBrace)?;
                 let span = start_span.merge(end_span);
+                let scrutinees = NonEmpty::try_from_vec(scrutinees)
+                    .expect("tuple match scrutinees contain the first parsed expression");
                 return Ok(Expr::new(ExprKind::TupleMatch { scrutinees, arms }, span));
             }
             self.expect(Token::RParen)?;
@@ -60,7 +63,7 @@ impl Parser<'_> {
         &mut self,
         arity: usize,
         start_span: Span,
-    ) -> Result<Vec<TupleMatchArm>, ParseError> {
+    ) -> Result<NonEmpty<TupleMatchArm>, ParseError> {
         let mut arms = Vec::new();
 
         loop {
@@ -101,7 +104,10 @@ impl Parser<'_> {
                 let body = self.parse_expr()?;
                 let span = lparen_span.merge(body.span);
                 arms.push(TupleMatchArm {
-                    patterns: Some(pattern_elems),
+                    patterns: Some(
+                        NonEmpty::try_from_vec(pattern_elems)
+                            .expect("tuple pattern parser always parses at least one element"),
+                    ),
                     body,
                     span,
                 });
@@ -112,11 +118,8 @@ impl Parser<'_> {
             }
         }
 
-        if arms.is_empty() {
-            return Err(self.unexpected_eof("at least one tuple match arm"));
-        }
-
-        Ok(arms)
+        NonEmpty::try_from_vec(arms)
+            .map_err(|_| self.unexpected_eof("at least one tuple match arm"))
     }
 
     /// Parse a list of match arms until `}`.

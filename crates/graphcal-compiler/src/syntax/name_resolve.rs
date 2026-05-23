@@ -752,17 +752,12 @@ fn lift_expr_kind(
             dst_ast::ExprKind::Match { scrutinee, arms }
         }
         S::TupleMatch { scrutinees, arms } => dst_ast::ExprKind::TupleMatch {
-            scrutinees: scrutinees.into_iter().map(|s| lift_expr(s, ctx)).collect(),
-            arms: arms
-                .into_iter()
-                .map(|arm| dst_ast::TupleMatchArm {
-                    patterns: arm
-                        .patterns
-                        .map(|ps| ps.into_iter().map(|p| lift_expr(p, ctx)).collect()),
-                    body: lift_expr(arm.body, ctx),
-                    span: arm.span,
-                })
-                .collect(),
+            scrutinees: scrutinees.map(|s| lift_expr(s, ctx)),
+            arms: arms.map(|arm| dst_ast::TupleMatchArm {
+                patterns: arm.patterns.map(|ps| ps.map(|p| lift_expr(p, ctx))),
+                body: lift_expr(arm.body, ctx),
+                span: arm.span,
+            }),
         },
         S::InlineDagRef { path, args, output } => dst_ast::ExprKind::InlineDagRef {
             path,

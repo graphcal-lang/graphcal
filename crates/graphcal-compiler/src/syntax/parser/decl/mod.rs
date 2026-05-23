@@ -1,4 +1,5 @@
 use crate::syntax::ast::{Attribute, AttributeArg, DeclKind, Declaration, Visibility};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
@@ -361,7 +362,8 @@ impl Parser<'_> {
             }
             let end_span = segments.last().map_or(start_span, |s| s.span);
             Ok(AttributeArg::Path {
-                segments,
+                segments: NonEmpty::try_from_vec(segments)
+                    .expect("attribute paths always contain the first parsed identifier"),
                 span: start_span.merge(end_span),
             })
         }

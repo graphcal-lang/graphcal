@@ -1,5 +1,6 @@
 use crate::syntax::ast::{Expr, ExprKind, MapEntry, MapEntryIndex, MapEntryKey, TableIndexSpec};
 use crate::syntax::names::{IndexName, IndexVariantName};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
@@ -118,10 +119,10 @@ impl Parser<'_> {
             let value = self.parse_expr()?;
             self.expect(Token::Semicolon)?;
             entries.push(MapEntry {
-                keys: vec![MapEntryKey {
+                keys: NonEmpty::singleton(MapEntryKey {
                     index: Self::named_index_spanned(index),
                     variant: label.into_spanned::<IndexVariantName>(),
-                }],
+                }),
                 value,
             });
         }
@@ -137,10 +138,10 @@ impl Parser<'_> {
             self.expect(Token::Semicolon)?;
             let i = entries.len() as u64;
             entries.push(MapEntry {
-                keys: vec![MapEntryKey {
+                keys: NonEmpty::singleton(MapEntryKey {
                     index: index.clone(),
                     variant: Self::nat_range_variant_spanned(i, value.span),
-                }],
+                }),
                 value,
             });
         }
@@ -272,7 +273,11 @@ impl Parser<'_> {
                     index: col_index_template.clone(),
                     variant: col_labels[col_idx].clone(),
                 });
-                entries.push(MapEntry { keys, value });
+                entries.push(MapEntry {
+                    keys: NonEmpty::try_from_vec(keys)
+                        .expect("2D table entries contain row and column keys"),
+                    value,
+                });
             }
             row_index_counter += 1;
         }
@@ -378,10 +383,10 @@ impl Parser<'_> {
         self.expect(Token::Colon)?;
         let value = self.parse_expr()?;
         let mut entries = vec![MapEntry {
-            keys: vec![MapEntryKey {
+            keys: NonEmpty::singleton(MapEntryKey {
                 index: Self::named_index_spanned_owned(first_index),
                 variant: first_variant,
-            }],
+            }),
             value,
         }];
         // Parse remaining entries
@@ -396,10 +401,10 @@ impl Parser<'_> {
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             entries.push(MapEntry {
-                keys: vec![MapEntryKey {
+                keys: NonEmpty::singleton(MapEntryKey {
                     index: Self::named_index_spanned_owned(index),
                     variant,
-                }],
+                }),
                 value,
             });
         }
@@ -439,7 +444,11 @@ impl Parser<'_> {
             self.expect(Token::RParen)?;
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
-            entries.push(MapEntry { keys, value });
+            entries.push(MapEntry {
+                keys: NonEmpty::try_from_vec(keys)
+                    .expect("tuple-key map literal parses at least one key"),
+                value,
+            });
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
             } else {

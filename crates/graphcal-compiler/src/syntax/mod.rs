@@ -9,6 +9,7 @@ pub mod dimension;
 pub mod lexer;
 pub mod name_resolve;
 pub mod names;
+pub mod non_empty;
 pub mod parser;
 pub mod phase;
 pub mod span;

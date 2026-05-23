@@ -24,10 +24,10 @@ pub fn parse_expected_fail_args(
         .map(|arg| match arg {
             AttributeArg::Path { segments, span } => {
                 // Must be exactly 2 segments: Index.Variant
-                match segments.as_slice() {
-                    [index, variant] => Ok(vec![(
-                        IndexName::new(&index.name),
-                        IndexVariantName::new(&variant.name),
+                match segments.len() {
+                    2 => Ok(vec![(
+                        IndexName::new(&segments[0].name),
+                        IndexVariantName::new(&segments[1].name),
                     )]),
                     _ => Err(GraphcalError::ExpectedFailInvalidArg {
                         src: src.clone(),
@@ -43,10 +43,10 @@ pub fn parse_expected_fail_args(
                         AttributeArg::Path {
                             segments,
                             span: elem_span,
-                        } => match segments.as_slice() {
-                            [index, variant] => Ok((
-                                IndexName::new(&index.name),
-                                IndexVariantName::new(&variant.name),
+                        } => match segments.len() {
+                            2 => Ok((
+                                IndexName::new(&segments[0].name),
+                                IndexVariantName::new(&segments[1].name),
                             )),
                             _ => Err(GraphcalError::ExpectedFailInvalidArg {
                                 src: src.clone(),

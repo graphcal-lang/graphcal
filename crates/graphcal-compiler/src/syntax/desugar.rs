@@ -52,6 +52,7 @@ use crate::syntax::ast::{
     ParamDecl, TableIndexSpec,
 };
 use crate::syntax::names::{IndexName, IndexVariantName};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Raw};
 use crate::syntax::span::Spanned;
 
@@ -76,12 +77,8 @@ pub fn desugar_multi_decls_in_file(file: File<Raw>) -> File<Desugared> {
     reason = "single cohesive routine for multi-decl expansion"
 )]
 pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
-    // Parser guarantees at least one shared axis; the `MultiDeclNoSharedAxis`
-    // error rejects the alternative at parse time.
-    let Some(row_index_spec) = multi.shared_axes.last().cloned() else {
-        return Vec::new();
-    };
-    let slice_axis_specs: &[TableIndexSpec] = &multi.shared_axes[..multi.shared_axes.len() - 1];
+    let row_index_spec = multi.shared_axes.row_axis().clone();
+    let slice_axis_specs: &[TableIndexSpec] = multi.shared_axes.slice_axes();
 
     let row_index_name = match &row_index_spec {
         TableIndexSpec::Named(s) => Spanned::new(MapEntryIndex::Named(s.value.clone()), s.span),
@@ -106,7 +103,8 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
                             variant: row.label.clone(),
                         });
                         slot_entries.push(MapEntry {
-                            keys,
+                            keys: NonEmpty::try_from_vec(keys)
+                                .expect("multi-decl entry contains at least the row key"),
                             value: row.values[*col_idx].clone(),
                         });
                     }
@@ -144,7 +142,8 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
                                 variant: col_variant.clone(),
                             });
                             slot_entries.push(MapEntry {
-                                keys,
+                                keys: NonEmpty::try_from_vec(keys)
+                                    .expect("multi-decl entry contains at least the row key"),
                                 value: row.values[global_col].clone(),
                             });
                         }
