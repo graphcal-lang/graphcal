@@ -237,10 +237,12 @@ pub(super) fn infer_map_or_table_literal(
                     entry
                         .keys
                         .iter()
-                        .map(|k| crate::syntax::names::fmt_qualified_variant(
-                            k.index.value.registry_name(),
-                            &k.variant.value,
-                        ))
+                        .map(|k| {
+                            k.variant
+                                .value
+                                .qualified_by(&k.index.value.registry_name())
+                                .to_string()
+                        })
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
@@ -290,7 +292,11 @@ pub(super) fn infer_map_or_table_literal(
             .map(|t| {
                 t.iter()
                     .enumerate()
-                    .map(|(i, v)| crate::syntax::names::fmt_qualified_variant(&index_names[i], v))
+                    .map(|(i, v)| {
+                        crate::syntax::names::IndexVariantName::new(*v)
+                            .qualified_by(&index_names[i])
+                            .to_string()
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -327,7 +333,11 @@ pub(super) fn infer_map_or_table_literal(
             .map(|t| {
                 t.iter()
                     .enumerate()
-                    .map(|(i, v)| crate::syntax::names::fmt_qualified_variant(&index_names[i], v))
+                    .map(|(i, v)| {
+                        crate::syntax::names::IndexVariantName::new(*v)
+                            .qualified_by(&index_names[i])
+                            .to_string()
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             })

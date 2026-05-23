@@ -274,10 +274,7 @@ pub fn format_table_slices(
 
     // depth >= 3: emit section headers and recurse
     for (variant, inner_val) in entries {
-        parts.push(format!(
-            "\n  [{}]",
-            graphcal_compiler::syntax::names::fmt_qualified_variant(index_name, variant)
-        ));
+        parts.push(format!("\n  [{}]", variant.qualified_by(index_name)));
         format_table_slices(inner_val, symbols, depth - 1, parts);
     }
 }

@@ -1247,10 +1247,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
             return Err(self.orphan_error(
                 "index",
                 index.value.as_ref(),
-                format!(
-                    "`{}`",
-                    crate::syntax::names::fmt_qualified_variant(&index.value, &variant.value)
-                ),
+                format!("`{}`", variant.value.qualified_by(&index.value)),
             ));
         }
         Ok(())
@@ -1265,13 +1262,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
                     return Err(self.orphan_error(
                         "index",
                         index.value.as_ref(),
-                        format!(
-                            "`{}`",
-                            crate::syntax::names::fmt_qualified_variant(
-                                &index.value,
-                                &variant.value
-                            )
-                        ),
+                        format!("`{}`", variant.value.qualified_by(&index.value)),
                     ));
                 }
             }
@@ -1292,10 +1283,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
                 return Err(self.orphan_error(
                     "index",
                     index_name.as_ref(),
-                    format!(
-                        "`{}`",
-                        crate::syntax::names::fmt_qualified_variant(index_name, &key.variant.value)
-                    ),
+                    format!("`{}`", key.variant.value.qualified_by(index_name)),
                 ));
             }
             self.visit_expr(&entry.value)?;
@@ -1319,10 +1307,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
                     qi.value.as_ref(),
                     format!(
                         "`{}`",
-                        crate::syntax::names::fmt_qualified_variant(
-                            &qi.value,
-                            &arm.pattern.variant_name.value,
-                        )
+                        arm.pattern.variant_name.value.qualified_by(&qi.value)
                     ),
                 ));
             }

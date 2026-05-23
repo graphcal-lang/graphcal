@@ -173,10 +173,8 @@ pub(super) fn infer_match(
                     return Err(GraphcalError::EvalError {
                         message: format!(
                             "index label variant `{}` has no fields to bind",
-                            crate::syntax::names::fmt_qualified_variant(
-                                index_name,
-                                variant_name_str
-                            )
+                            crate::syntax::names::IndexVariantName::new(variant_name_str)
+                                .qualified_by(index_name)
                         ),
                         src: src.clone(),
                         span: arm.pattern.span.into(),
@@ -202,7 +200,7 @@ pub(super) fn infer_match(
                     return Err(GraphcalError::EvalError {
                         message: format!(
                             "non-exhaustive match: variant `{}` not covered",
-                            crate::syntax::names::fmt_qualified_variant(index_name, variant)
+                            variant.qualified_by(index_name)
                         ),
                         src: src.clone(),
                         span: expr.span.into(),

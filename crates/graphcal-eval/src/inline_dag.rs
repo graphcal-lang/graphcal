@@ -211,7 +211,7 @@ pub fn preprocess_dag_body_self_imports(
                     }
 
                     if let Some(dt) = const_dt {
-                        let scoped = ScopedName::Local(local_name);
+                        let scoped = ScopedName::local(local_name);
                         names.const_names.push((scoped.clone(), span));
                         decl_types.insert(scoped.clone(), dt.clone());
                         value_sources.insert(

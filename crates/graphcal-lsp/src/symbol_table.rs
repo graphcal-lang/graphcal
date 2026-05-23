@@ -975,19 +975,18 @@ fn collect_expr_refs(
 ) {
     match &expr.kind {
         ExprKind::GraphRef(name) | ExprKind::ConstRef(name) => {
-            // The typed `ScopedName` payload distinguishes bare from
-            // qualified refs; map the variant onto the corresponding
-            // `SymbolKey`.
-            use graphcal_compiler::syntax::names::ScopedName;
-            let target = match &name.value {
-                ScopedName::Local(n) => SymbolKey::TopLevel(n.clone()),
-                ScopedName::Qualified { module, member } => SymbolKey::Qualified {
-                    // ScopedName::module is still a single flat-string segment
-                    // (a wider typing pass is tracked separately); wrap it
-                    // into the structured form at this boundary.
-                    module: vec![module.clone()],
-                    name: member.clone(),
-                },
+            let target = if name.value.is_qualified() {
+                SymbolKey::Qualified {
+                    module: name
+                        .value
+                        .qualifier()
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                    name: name.value.member().to_string(),
+                }
+            } else {
+                SymbolKey::TopLevel(name.value.member().to_string())
             };
             table.references.push(ReferenceInfo {
                 span: name.span,

@@ -133,6 +133,45 @@ impl IndexVariantName {
     pub fn range_step(n: impl std::fmt::Display) -> Self {
         Self::new(format!("#{n}"))
     }
+
+    /// Pair this variant with its index name for qualified rendering.
+    #[must_use]
+    pub fn qualified_by(&self, index: &IndexName) -> QualifiedIndexVariantName {
+        QualifiedIndexVariantName::new(index.clone(), self.clone())
+    }
+}
+
+/// A fully qualified index variant name, rendered as `Index.Variant`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct QualifiedIndexVariantName {
+    index: IndexName,
+    variant: IndexVariantName,
+}
+
+impl QualifiedIndexVariantName {
+    /// Create a qualified index variant name from its index and variant parts.
+    #[must_use]
+    pub const fn new(index: IndexName, variant: IndexVariantName) -> Self {
+        Self { index, variant }
+    }
+
+    /// The index/type part of the qualified variant.
+    #[must_use]
+    pub const fn index(&self) -> &IndexName {
+        &self.index
+    }
+
+    /// The variant/constructor part of the qualified variant.
+    #[must_use]
+    pub const fn variant(&self) -> &IndexVariantName {
+        &self.variant
+    }
+}
+
+impl std::fmt::Display for QualifiedIndexVariantName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.index, self.variant)
+    }
 }
 
 define_name_type! {
@@ -278,27 +317,6 @@ impl From<DeclName> for ScopedName {
     fn from(name: DeclName) -> Self {
         Self::local(name.into_inner())
     }
-}
-
-// --- Qualified-variant rendering ---
-
-/// Render a qualified index variant `Index.Variant` in surface syntax.
-///
-/// Centralizes the separator `.` so diagnostics, table headers, error
-/// messages, and value descriptions all stay consistent. Use anywhere a
-/// qualified variant needs to appear in user-visible output — never roll
-/// your own `format!("{idx}.{var}")` inline; if the surface separator
-/// ever changes again, this single call site is the only thing that must
-/// move.
-///
-/// Accepts any `Display` types so the helper works whether the caller
-/// holds typed [`IndexName`] / [`VariantName`] values, raw `&str`s
-/// extracted from the registry, or anything else printable.
-pub fn fmt_qualified_variant(
-    index: impl std::fmt::Display,
-    variant: impl std::fmt::Display,
-) -> String {
-    format!("{index}.{variant}")
 }
 
 // --- Naming convention helpers ---

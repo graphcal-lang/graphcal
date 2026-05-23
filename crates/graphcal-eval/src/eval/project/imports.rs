@@ -388,7 +388,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
 
                 // Register the local name in scope for the resolver.
                 // Determine the category from the dep's AST.
-                let scoped = ScopedName::Local(local_name.clone());
+                let scoped = ScopedName::local(local_name.as_str());
                 let span = import_item.name.span;
                 if dep_index.is_const(orig_name) {
                     ctx.imported_names.const_names.push((scoped, span));
@@ -429,10 +429,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                     _ => (None, false),
                 };
                 if let Some(name) = dep_name {
-                    let scoped = ScopedName::Qualified {
-                        module: prefix.clone(),
-                        member: name,
-                    };
+                    let scoped = ScopedName::qualified(prefix.as_str(), name);
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
                     } else {
@@ -594,7 +591,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                     matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name)
                         || matches!(&d.kind, DeclKind::Node(n) if n.name.value.as_str() == orig_name)
                 });
-                let scoped = ScopedName::Local(local_name.clone());
+                let scoped = ScopedName::local(local_name.as_str());
                 let span = import_item.name.span;
                 if is_const {
                     ctx.imported_names.const_names.push((scoped, span));
@@ -622,10 +619,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                     _ => (None, false),
                 };
                 if let Some(name) = dep_name {
-                    let scoped = ScopedName::Qualified {
-                        module: prefix.clone(),
-                        member: name,
-                    };
+                    let scoped = ScopedName::qualified(prefix.as_str(), name);
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
                     } else {
@@ -983,7 +977,7 @@ pub(in crate::eval::project) fn import_selective_item(
     let orig_decl = DeclName::new(orig_name);
     if let Some(rv) = dep.const_values.get(&orig_decl) {
         let dt = imported_declared_type(dep, &orig_decl, src, span)?;
-        let scoped = ScopedName::Local(local_name.to_string());
+        let scoped = ScopedName::local(local_name);
         imported_names.const_names.push((scoped.clone(), span));
         if let Some(source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Const));
@@ -992,7 +986,7 @@ pub(in crate::eval::project) fn import_selective_item(
         Ok(SelectiveImportResult::Const)
     } else if let Some(rv) = dep.values.get(&orig_decl) {
         let dt = imported_declared_type(dep, &orig_decl, src, span)?;
-        let scoped = ScopedName::Local(local_name.to_string());
+        let scoped = ScopedName::local(local_name);
         imported_names.param_names.push((scoped.clone(), span));
         if let Some(source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Param));
@@ -1027,7 +1021,7 @@ fn imported_declared_type(
 /// Import all values from an `EvaluatedFile` under a module prefix.
 ///
 /// Registers `const_values` and values (params/nodes) with qualified
-/// `ScopedName::Qualified` names.
+/// `ScopedName` names.
 ///
 /// When `const_only` is `true`, only `const_values` are imported; runtime values
 /// (params/nodes) are silently skipped. This is used for `import` statements which

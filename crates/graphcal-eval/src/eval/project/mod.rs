@@ -108,17 +108,15 @@ pub(in crate::eval::project) fn derive_module_name_from_import_path(
         .map_or_else(|| "module".to_string(), |seg| seg.name.clone())
 }
 
-/// Visitor that recognizes `FieldAccess(GraphRef(Local(alias)), field)`
-/// and rewrites it to `GraphRef(ScopedName::Qualified { module: alias,
-/// member: field })` when `(alias, field)` matches an imported
+/// Visitor that recognizes `FieldAccess(GraphRef(alias), field)` and rewrites
+/// it to a qualified `GraphRef` when `(alias, field)` matches an imported
 /// module-namespace member.
 ///
-/// `@bar.field` parses as `FieldAccess(GraphRef(Local(bar)), field)`. For
-/// the `include foo() as bar;` and `import foo as bar;` namespace forms,
-/// the dependency's items are registered as
-/// `ScopedName::Qualified { module: "bar", member: "field" }`. The
-/// rewriter promotes the access to a typed qualified `GraphRef` directly
-/// — no `Qualified*Ref` variant or flat-string boundary involved.
+/// `@bar.field` parses as `FieldAccess(GraphRef(bar), field)`. For the
+/// `include foo() as bar;` and `import foo as bar;` namespace forms, the
+/// dependency's items are registered as qualified `ScopedName`s. The rewriter
+/// promotes the access to a typed qualified `GraphRef` directly — no
+/// `Qualified*Ref` variant or flat-string boundary involved.
 struct AliasFieldAccessRewriter<'a> {
     qualified_pairs: &'a HashSet<QualifiedMember>,
 }
@@ -136,14 +134,14 @@ impl ExprVisitorMut<Resolved> for AliasFieldAccessRewriter<'_> {
 
         let promote = if let ExprKind::FieldAccess { expr: inner, field } = &expr.kind
             && let ExprKind::GraphRef(qualifier_name) = &inner.kind
-            && let ScopedName::Local(qualifier) = &qualifier_name.value
+            && !qualifier_name.value.is_qualified()
             && self.qualified_pairs.contains(&QualifiedMember {
-                module: qualifier.clone(),
+                module: qualifier_name.value.member().to_string(),
                 member: field.value.as_str().to_string(),
             }) {
             let merged_span = qualifier_name.span.merge(field.span);
             Some(ExprKind::GraphRef(Spanned {
-                value: ScopedName::qualified(qualifier.clone(), field.value.as_str()),
+                value: ScopedName::qualified(qualifier_name.value.member(), field.value.as_str()),
                 span: merged_span,
             }))
         } else {
@@ -366,10 +364,10 @@ pub(in crate::eval::project) fn rewrite_qualified_refs_in_ast<'a>(
 
 /// Collect `(module, member)` pairs from imported namespace registrations.
 ///
-/// Module-form `import`/`include` registers each dep declaration as
-/// `ScopedName::Qualified { module, member }`; selective imports register
-/// `ScopedName::Local(...)`. The pairs returned here drive the
-/// `@alias.member` rewrite — bare locals do not participate.
+/// Module-form `import`/`include` registers each dep declaration as qualified
+/// `ScopedName`s; selective imports register local `ScopedName`s. The pairs
+/// returned here drive the `@alias.member` rewrite — bare locals do not
+/// participate.
 fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<QualifiedMember> {
     let mut pairs = HashSet::new();
     let entries = imported
@@ -378,10 +376,10 @@ fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<QualifiedMe
         .chain(imported.param_names.iter())
         .chain(imported.node_names.iter());
     for (scoped, _) in entries {
-        if let ScopedName::Qualified { module, member } = scoped {
+        if let [module] = scoped.qualifier() {
             pairs.insert(QualifiedMember {
-                module: module.clone(),
-                member: member.clone(),
+                module: module.to_string(),
+                member: scoped.member().to_string(),
             });
         }
     }
