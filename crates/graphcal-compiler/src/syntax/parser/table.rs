@@ -1,5 +1,5 @@
 use crate::syntax::ast::{Expr, ExprKind, MapEntry, MapEntryIndex, MapEntryKey, TableIndexSpec};
-use crate::syntax::names::{IndexName, Spanned, IndexVariantName};
+use crate::syntax::names::{IndexName, IndexVariantName, Spanned};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
@@ -345,7 +345,10 @@ impl Parser<'_> {
                         let variant_span = hash_span.merge(num_span);
                         prefix_keys.push(MapEntryKey {
                             index: Self::nat_range_index_spanned(*n, *sp),
-                            variant: Spanned::new(IndexVariantName::range_step(value), variant_span),
+                            variant: Spanned::new(
+                                IndexVariantName::range_step(value),
+                                variant_span,
+                            ),
                         });
                     }
                 }
@@ -363,7 +366,7 @@ impl Parser<'_> {
 
     // --- Map literal ---
 
-    /// Parse a map literal after `{`, `Index`, `::`, and `Variant` have already been consumed.
+    /// Parse a map literal after `{`, `Index`, `.`, and `Variant` have already been consumed.
     /// The `:` (colon before value) is the next token to consume.
     pub(super) fn parse_map_literal_after_first_entry(
         &mut self,
@@ -406,7 +409,7 @@ impl Parser<'_> {
 
     /// Parse a tuple-key map literal after `{` has been consumed.
     ///
-    /// `{ (Index1::Variant1, Index2::Variant2): expr, ... }`
+    /// `{ (Index1.Variant1, Index2.Variant2): expr, ... }`
     pub(super) fn parse_tuple_key_map_literal(
         &mut self,
         brace_span: Span,

@@ -27,7 +27,7 @@ use crate::syntax::ast::{
     self as ast, DeclKind, Declaration, Expr, MapEntryIndex, MapEntryKey, TableIndexSpec, TypeExpr,
     Visibility,
 };
-use crate::syntax::names::{DeclName, IndexName, Spanned, IndexVariantName};
+use crate::syntax::names::{DeclName, IndexName, IndexVariantName, Spanned};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
@@ -371,7 +371,7 @@ impl Parser<'_> {
         })
     }
 
-    /// Parse the slice-section prefix `[A::a1, B::b1, …]` for multi-decls
+    /// Parse the slice-section prefix `[A.a1, B.b1, …]` for multi-decls
     /// with more than one shared axis. The labels cover every shared axis
     /// except the last (the row axis), in declared order.
     fn parse_slice_labels(
@@ -947,7 +947,7 @@ param      power_mode:        Bool[Component, OperationMode]
 param a: Bool[Component, OperationMode],
 param b: Bool[Component, OperationMode]
   = table[Component, (OperationMode, OperationMode)] {
-      :           Safe, Nominal, OpMode::Safe, OpMode::Nominal;
+      :           Safe, Nominal, OpMode.Safe, OpMode.Nominal;
       ComponentA: true, false,   false,        true;
   };
 ";
@@ -1065,7 +1065,7 @@ pub(super) enum SlotAxis {
 pub(super) enum HeaderCell {
     Underscore(Span),
     Variant {
-        /// Axis qualifier, if the author wrote `Axis::Variant`.
+        /// Axis qualifier, if the author wrote `Axis.Variant`.
         axis: Option<Spanned<IndexName>>,
         variant: Spanned<IndexVariantName>,
         span: Span,
@@ -1159,7 +1159,7 @@ impl LayoutError {
                 got_axis,
             } => ParseError::MultiDeclUnsupportedShape {
                 reason: format!(
-                    "header cell for slot `{slot_name}` is qualified with `{got_axis}::…`, but the slot's extra axis is `{expected_axis}`",
+                    "header cell for slot `{slot_name}` is qualified with `{got_axis}.…`, but the slot's extra axis is `{expected_axis}`",
                 ),
                 src: src.clone(),
                 span: span.into(),

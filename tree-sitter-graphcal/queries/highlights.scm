@@ -364,7 +364,7 @@
 (slot_axis_entry (identifier) @type)
 
 ; Header-row cells that are bare variant identifiers: index variants.
-; (`_` placeholders are a literal token; qualified `Axis::Variant` is
+; (`_` placeholders are a literal token; qualified `Axis.Variant` is
 ; already covered by the `qualified_variant` rule above.)
 (multi_header_cell (identifier) @constant)
 

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, MapEntry};
-use graphcal_compiler::syntax::names::{ScopedName, IndexVariantName};
+use graphcal_compiler::syntax::names::{IndexVariantName, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::error::GraphcalError;
@@ -89,7 +89,9 @@ pub(super) fn eval_index_access(
                 })?;
                 match var_val {
                     RuntimeValue::Label { variant, .. } => variant.clone(),
-                    RuntimeValue::Struct { type_name, .. } => IndexVariantName::new(type_name.as_str()),
+                    RuntimeValue::Struct { type_name, .. } => {
+                        IndexVariantName::new(type_name.as_str())
+                    }
                     RuntimeValue::RangeLabel { step_index, .. } => {
                         IndexVariantName::range_step(step_index)
                     }

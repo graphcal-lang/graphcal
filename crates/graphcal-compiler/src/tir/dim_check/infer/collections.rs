@@ -352,7 +352,7 @@ pub(super) fn infer_map_or_table_literal(
         src,
     )?;
     // Reject nested Indexed when the inner index is a label (named) index.
-    // Label-indexed elements should use tuple keys instead: { (I::A, J::B): expr, ... }.
+    // Label-indexed elements should use tuple keys instead: { (I.A, J.B): expr, ... }.
     // Allow when the inner index is a range index, enabling mixed-index construction:
     //   { LabelIndex.Variant: for t: RangeIndex { ... }, ... }
     if let InferredType::Indexed { index, .. } = &first_type {

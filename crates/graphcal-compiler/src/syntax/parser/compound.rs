@@ -2,7 +2,7 @@ use crate::syntax::ast::{
     Expr, ExprKind, ForBinding, ForBindingIndex, MatchArm, MatchPattern, NatExpr, PatternBinding,
     TupleMatchArm,
 };
-use crate::syntax::names::{FieldName, IndexName, Spanned, IndexVariantName};
+use crate::syntax::names::{FieldName, IndexName, IndexVariantName, Spanned};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 

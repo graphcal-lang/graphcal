@@ -316,7 +316,9 @@ pub fn format_indexed_table(
 mod tests {
     use super::*;
     use graphcal_compiler::syntax::dimension::Dimension;
-    use graphcal_compiler::syntax::names::{FieldName, IndexName, StructTypeName, IndexVariantName};
+    use graphcal_compiler::syntax::names::{
+        FieldName, IndexName, IndexVariantName, StructTypeName,
+    };
     use indexmap::IndexMap;
 
     fn scalar(si: f64) -> Value {

@@ -34,7 +34,7 @@ pub struct Attribute {
 pub enum AttributeArg {
     /// A path of one or more `.`-separated segments: `foo`, `Index.Variant`.
     Path { segments: Vec<Ident>, span: Span },
-    /// A parenthesized group of args: `(Index::A, Index::B)`.
+    /// A parenthesized group of args: `(Index.A, Index.B).`
     Group { elements: Vec<Self>, span: Span },
 }
 
@@ -595,7 +595,7 @@ pub enum MultiHeaderCell {
         span: Span,
     },
     Variant {
-        /// Axis qualifier, if the author wrote `Axis::Variant`.
+        /// Axis qualifier, if the author wrote `Axis.Variant`.
         axis: Option<Spanned<IndexName>>,
         variant: Spanned<IndexVariantName>,
         span: Span,
@@ -1061,7 +1061,7 @@ pub enum ExprKind<P: Phase = Raw> {
     /// Graph reference: `@name` or `@alias.member`. The payload encodes
     /// qualification structurally — `Local` for bare `@name`, `Qualified`
     /// for `@alias.member` (after the namespace-alias rewrite). Producers
-    /// never invent or interpret a `::` separator.
+    /// never invent or interpret a flat-string separator.
     GraphRef(Spanned<ScopedName>),
     /// Built-in constant reference (`PI`, `E`, `TAU`) or module-qualified
     /// constant (`module.CONST`). The payload encodes qualification

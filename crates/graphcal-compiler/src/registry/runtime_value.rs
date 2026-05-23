@@ -2,7 +2,7 @@
 
 use indexmap::IndexMap;
 
-use crate::syntax::names::{FieldName, IndexName, StructTypeName, IndexVariantName};
+use crate::syntax::names::{FieldName, IndexName, IndexVariantName, StructTypeName};
 
 /// The kind of a [`RuntimeValue`], used in type-mismatch error reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]

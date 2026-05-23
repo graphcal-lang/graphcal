@@ -328,8 +328,8 @@ impl Parser<'_> {
         Ok(Attribute { name, args, span })
     }
 
-    /// Parse a single attribute argument: a path (`ident`, `Idx::Var`) or
-    /// a parenthesized group (`(Idx::A, Idx::B)`).
+    /// Parse a single attribute argument: a path (`ident`, `Idx.Var`) or
+    /// a parenthesized group (`(Idx.A, Idx.B)`).
     fn parse_attribute_arg(&mut self) -> Result<AttributeArg, ParseError> {
         if self.lexer.peek() == Some(&Token::LParen) {
             // Group: (arg, arg, ...)

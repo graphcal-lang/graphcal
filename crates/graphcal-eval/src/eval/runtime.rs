@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::syntax::dimension::Dimension;
-use graphcal_compiler::syntax::names::{DeclName, IndexName, ScopedName, IndexVariantName};
+use graphcal_compiler::syntax::names::{DeclName, IndexName, IndexVariantName, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
 use crate::eval_expr::{EvalContext, RuntimeValue, UnfoldContext, eval_expr};
@@ -103,7 +103,9 @@ pub(super) fn runtime_to_value(
                 .enumerate()
                 .map(|(i, (variant, entry_rv))| {
                     let display_key = match idx_def {
-                        Some(def) if def.is_range() => IndexVariantName::new(format_range_step(def, i)),
+                        Some(def) if def.is_range() => {
+                            IndexVariantName::new(format_range_step(def, i))
+                        }
                         _ => variant.clone(),
                     };
                     let val = runtime_to_value(entry_rv, element_declared, registry);
@@ -598,7 +600,10 @@ fn invert_indexed_variants(
 /// Each path is a slice of `(IndexName, VariantName)` index/variant pairs from outermost to innermost.
 /// For single-index paths, formats as `Mode.Boost, Mode.Cruise`.
 /// For multi-index paths, formats as `(Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`.
-fn format_indexed_paths(paths: &[&[(IndexName, IndexVariantName)]], is_multi_index: bool) -> String {
+fn format_indexed_paths(
+    paths: &[&[(IndexName, IndexVariantName)]],
+    is_multi_index: bool,
+) -> String {
     let formatted: Vec<String> = if is_multi_index {
         paths
             .iter()

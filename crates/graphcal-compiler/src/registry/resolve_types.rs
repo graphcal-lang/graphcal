@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::desugar::resolved_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
-use crate::syntax::names::{DeclName, IndexName, ScopedName, IndexVariantName};
+use crate::syntax::names::{DeclName, IndexName, IndexVariantName, ScopedName};
 use crate::syntax::span::Span;
 
 // ---------------------------------------------------------------------------

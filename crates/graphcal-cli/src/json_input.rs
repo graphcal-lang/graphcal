@@ -24,7 +24,7 @@ use graphcal_compiler::syntax::ast::{
     Expr, ExprKind, FieldInit, MapEntry, MapEntryIndex, MapEntryKey,
 };
 use graphcal_compiler::syntax::names::{
-    ConstructorName, DeclName, FieldName, IndexName, Spanned, IndexVariantName,
+    ConstructorName, DeclName, FieldName, IndexName, IndexVariantName, Spanned,
 };
 use graphcal_compiler::syntax::span::Span;
 

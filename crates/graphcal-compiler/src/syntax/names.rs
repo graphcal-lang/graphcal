@@ -174,18 +174,18 @@ define_name_type! {
 ///
 /// Selective imports produce `Local` names (`x`); whole-module imports and
 /// alias-rewritten qualified references produce `Qualified` names
-/// (`module::x`). The variant carries the qualification structurally — no
+/// (`module.x`). The variant carries the qualification structurally — no
 /// flat string parsing is needed to recover it.
 ///
 /// The `Display` impl renders `Qualified { module: "m", member: "x" }` as
-/// `m::x`. That serialized form is for *boundary* use only (debug output,
+/// `m.x`. That serialized form is for *boundary* use only (debug output,
 /// `HashMap` keys that haven't yet been re-typed). The functional core
 /// should pattern-match on the variant directly.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ScopedName {
     /// A bare local name: `x`, `G0`, etc.
     Local(String),
-    /// A module-qualified name: `module::x`, `constants::G0`, etc.
+    /// A module-qualified name: `module.x`, `constants.G0`, etc.
     Qualified { module: String, member: String },
 }
 
@@ -278,7 +278,7 @@ impl From<DeclName> for ScopedName {
 /// Render a qualified index variant `Index.Variant` in surface syntax.
 ///
 /// Centralizes the separator (`.`, since the alpha-4 module-system redesign
-/// removed `::` from the language) so diagnostics, table headers, error
+/// uses `.`) so diagnostics, table headers, error
 /// messages, and value descriptions all stay consistent. Use anywhere a
 /// qualified variant needs to appear in user-visible output — never roll
 /// your own `format!("{idx}.{var}")` inline; if the surface separator
@@ -402,6 +402,12 @@ mod tests {
         let a = FnName::new("alpha");
         let b = FnName::new("beta");
         assert!(a < b);
+    }
+
+    #[test]
+    fn scoped_name_qualified_display_uses_dot() {
+        let name = ScopedName::qualified("module", "x");
+        assert_eq!(format!("{name}"), "module.x");
     }
 
     #[test]

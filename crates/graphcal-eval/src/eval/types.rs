@@ -7,7 +7,7 @@ use thiserror::Error;
 use graphcal_compiler::desugar::resolved_ast::EncodingChannel;
 use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::syntax::names::{
-    DeclName, FieldName, IndexName, StructTypeName, IndexVariantName,
+    DeclName, FieldName, IndexName, IndexVariantName, StructTypeName,
 };
 use graphcal_compiler::syntax::span::Span;
 

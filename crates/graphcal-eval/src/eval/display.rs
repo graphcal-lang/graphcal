@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::desugar::resolved_ast::{ExprKind, MapEntryKey};
-use graphcal_compiler::syntax::names::{ScopedName, IndexVariantName};
+use graphcal_compiler::syntax::names::{IndexVariantName, ScopedName};
 use indexmap::IndexMap;
 
 use crate::eval_expr::RuntimeValue;

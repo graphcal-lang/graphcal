@@ -4,7 +4,7 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::syntax::names::{
-    DeclName, DimName, FieldName, FnName, IndexName, StructTypeName, UnitName, IndexVariantName,
+    DeclName, DimName, FieldName, FnName, IndexName, IndexVariantName, StructTypeName, UnitName,
 };
 
 /// Rich diagnostic error types for graphcal evaluation.

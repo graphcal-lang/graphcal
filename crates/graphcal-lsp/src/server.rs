@@ -1192,7 +1192,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use graphcal_compiler::syntax::dimension::Dimension;
-    use graphcal_compiler::syntax::names::{FieldName, IndexName, StructTypeName, IndexVariantName};
+    use graphcal_compiler::syntax::names::{
+        FieldName, IndexName, IndexVariantName, StructTypeName,
+    };
     use graphcal_eval::eval::Value;
     use indexmap::IndexMap;
 

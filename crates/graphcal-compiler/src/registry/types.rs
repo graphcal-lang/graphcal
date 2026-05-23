@@ -5,8 +5,8 @@ use crate::desugar::resolved_ast::{
 };
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational, RationalError};
 use crate::syntax::names::{
-    ConstructorName, DimName, FieldName, GenericParamName, IndexName, StructTypeName, UnitName,
-    IndexVariantName,
+    ConstructorName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
+    StructTypeName, UnitName,
 };
 // ---------------------------------------------------------------------------
 // Data types
@@ -661,7 +661,7 @@ pub struct Registry {
 ///
 /// Populated at IR lowering time with the raw AST body for each declared `dag`.
 /// Used during dim-checking (and later, evaluation) to resolve inline DAG
-/// invocations `@dag(args)::out` against the called `dag`'s `pub param` and
+/// invocations `@dag(args).out` against the called `dag`'s `pub param` and
 /// `pub node` signatures.
 #[derive(Debug, Default, Clone)]
 pub struct DagRegistry {
@@ -731,7 +731,7 @@ impl RegistryBuilder {
 
     /// Register a `dag` declaration body keyed by the declaration's name.
     ///
-    /// Accessed later during dim-checking of inline `@dag(args)::out`
+    /// Accessed later during dim-checking of inline `@dag(args).out`
     /// expressions.
     pub fn register_dag(&mut self, name: String, decl: DagDecl) {
         self.dags.insert(name, decl);

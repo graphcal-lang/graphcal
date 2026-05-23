@@ -293,7 +293,7 @@ impl<S: GraphRefSink> ExprVisitor<crate::syntax::phase::Resolved> for GraphRefVi
 }
 
 /// Sink that stores every observed ref name as a flat `String` (the
-/// qualified `module::member` form for qualified refs, bare for locals).
+/// qualified `module.member` form for qualified refs, bare for locals).
 /// Boundary stringification — callers that want the typed form should use
 /// `collect_scoped_graph_refs` instead.
 struct StringNameSink<'a> {

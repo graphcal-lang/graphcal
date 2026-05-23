@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, ExprKind};
-use graphcal_compiler::syntax::names::{ScopedName, IndexVariantName};
+use graphcal_compiler::syntax::names::{IndexVariantName, ScopedName};
 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::resolve_types::{

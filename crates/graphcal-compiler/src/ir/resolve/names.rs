@@ -44,9 +44,10 @@ pub fn parse_expected_fail_args(
                             segments,
                             span: elem_span,
                         } => match segments.as_slice() {
-                            [index, variant] => {
-                                Ok((IndexName::new(&index.name), IndexVariantName::new(&variant.name)))
-                            }
+                            [index, variant] => Ok((
+                                IndexName::new(&index.name),
+                                IndexVariantName::new(&variant.name),
+                            )),
                             _ => Err(GraphcalError::ExpectedFailInvalidArg {
                                 src: src.clone(),
                                 span: (*elem_span).into(),
