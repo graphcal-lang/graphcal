@@ -86,7 +86,7 @@ macro_rules! define_name_type {
 }
 
 define_name_type! {
-    /// Name of a const, param, or node declaration.
+    /// Name of a const, param, or node declaration (e.g., `"G0"`, `"dry_mass"`, `"dv_total"`).
     pub struct DeclName;
 }
 
@@ -151,17 +151,20 @@ define_name_type! {
 }
 
 define_name_type! {
-    /// Name of a dimension variable in a built-in function signature.
+    /// Name of a dimension variable in a built-in function signature (e.g., `"D"`).
+    ///
+    /// Built-in signatures use these variables to relate argument and result
+    /// dimensions, such as `sqrt: D -> D^(1/2)` or `min: (D, D) -> D`.
     pub struct DimVarName;
 }
 
 define_name_type! {
-    /// Name of a local expression binding.
+    /// Name of a local expression binding (e.g., `"x"`, `"stage_mass"`).
     pub struct LocalName;
 }
 
 define_name_type! {
-    /// Name of a module alias introduced by an import/include declaration.
+    /// Name of a module alias introduced by an import/include declaration (e.g., `"constants"`, `"std"`).
     pub struct ModuleAliasName;
 }
 
