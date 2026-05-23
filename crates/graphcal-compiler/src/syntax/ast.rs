@@ -1,11 +1,11 @@
 use std::marker::PhantomData;
 
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, FnName, GenericParamName, IndexName, ScopedName,
-    Spanned, StructTypeName, UnitName, VariantName,
+    ConstructorName, DeclName, DimName, FieldName, FnName, GenericParamName, IndexName,
+    IndexVariantName, ScopedName, StructTypeName, UnitName,
 };
 use crate::syntax::phase::{Phase, Raw};
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
 
 /// A complete source file.
 ///
@@ -34,7 +34,7 @@ pub struct Attribute {
 pub enum AttributeArg {
     /// A path of one or more `.`-separated segments: `foo`, `Index.Variant`.
     Path { segments: Vec<Ident>, span: Span },
-    /// A parenthesized group of args: `(Index::A, Index::B)`.
+    /// A parenthesized group of args: `(Index.A, Index.B).`
     Group { elements: Vec<Self>, span: Span },
 }
 
@@ -595,9 +595,9 @@ pub enum MultiHeaderCell {
         span: Span,
     },
     Variant {
-        /// Axis qualifier, if the author wrote `Axis::Variant`.
+        /// Axis qualifier, if the author wrote `Axis.Variant`.
         axis: Option<Spanned<IndexName>>,
-        variant: Spanned<VariantName>,
+        variant: Spanned<IndexVariantName>,
         span: Span,
     },
 }
@@ -615,7 +615,7 @@ impl MultiHeaderCell {
 /// One data row of a multi-decl body: label + value per column.
 #[derive(Debug, Clone)]
 pub struct MultiDataRow<P: Phase = Raw> {
-    pub label: Spanned<VariantName>,
+    pub label: Spanned<IndexVariantName>,
     pub values: Vec<Expr<P>>,
     pub span: Span,
 }
@@ -735,7 +735,9 @@ pub struct FieldDecl<P: Phase = Raw> {
 #[derive(Debug, Clone)]
 pub enum IndexDeclKind<P: Phase = Raw> {
     /// Named variants: `{ Departure, Correction, Insertion }`
-    Named { variants: Vec<Spanned<VariantName>> },
+    Named {
+        variants: Vec<Spanned<IndexVariantName>>,
+    },
     /// Numeric range: `linspace(start, end, step: step)`
     Range {
         start: Box<Expr<P>>,
@@ -848,8 +850,8 @@ impl Ident {
 
     /// Interpret this identifier as an index variant name.
     #[must_use]
-    pub fn as_variant_name(&self) -> VariantName {
-        VariantName::new(&self.name)
+    pub fn as_variant_name(&self) -> IndexVariantName {
+        IndexVariantName::new(&self.name)
     }
 
     /// Interpret this identifier as a generic parameter name.
@@ -1059,7 +1061,7 @@ pub enum ExprKind<P: Phase = Raw> {
     /// Graph reference: `@name` or `@alias.member`. The payload encodes
     /// qualification structurally — `Local` for bare `@name`, `Qualified`
     /// for `@alias.member` (after the namespace-alias rewrite). Producers
-    /// never invent or interpret a `::` separator.
+    /// never invent or interpret a flat-string separator.
     GraphRef(Spanned<ScopedName>),
     /// Built-in constant reference (`PI`, `E`, `TAU`) or module-qualified
     /// constant (`module.CONST`). The payload encodes qualification
@@ -1161,7 +1163,7 @@ pub enum ExprKind<P: Phase = Raw> {
     /// Used in comparisons with loop variables: `m == Maneuver.Departure`
     VariantLiteral {
         index: Spanned<IndexName>,
-        variant: Spanned<VariantName>,
+        variant: Spanned<IndexVariantName>,
     },
     /// Inline DAG invocation: `@dag(args).out` or `@module.dag(args).out`.
     ///
@@ -1265,7 +1267,7 @@ pub enum TypeSystemRefKind {
     Type(StructTypeName),
     Dimension(DimName),
     Index(IndexName),
-    BareVariant(VariantName),
+    BareVariant(IndexVariantName),
     Imported(StructTypeName),
 }
 
@@ -1308,7 +1310,7 @@ impl TableIndexSpec {
 #[derive(Debug, Clone)]
 pub struct MapEntryKey {
     pub index: Spanned<MapEntryIndex>,
-    pub variant: Spanned<VariantName>,
+    pub variant: Spanned<IndexVariantName>,
 }
 
 /// An entry in a map literal.
@@ -1408,7 +1410,7 @@ pub enum IndexArg<P: Phase = Raw> {
     /// Qualified variant: `Maneuver.Departure`
     Variant {
         index: Spanned<IndexName>,
-        variant: Spanned<VariantName>,
+        variant: Spanned<IndexVariantName>,
     },
     /// Loop variable: `m`
     Var(Ident),
@@ -1447,7 +1449,7 @@ pub struct MatchPattern {
     /// For index variant match: `Maneuver.Departure` → `Some(Spanned<IndexName>)`
     /// For tagged union match: `Nominal { ... }` → `None`
     pub qualified_index: Option<Spanned<IndexName>>,
-    pub variant_name: Spanned<VariantName>,
+    pub variant_name: Spanned<IndexVariantName>,
     pub bindings: Vec<PatternBinding>,
     pub span: Span,
 }

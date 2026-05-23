@@ -24,9 +24,9 @@ use graphcal_compiler::syntax::ast::{
     Expr, ExprKind, FieldInit, MapEntry, MapEntryIndex, MapEntryKey,
 };
 use graphcal_compiler::syntax::names::{
-    ConstructorName, DeclName, FieldName, IndexName, Spanned, VariantName,
+    ConstructorName, DeclName, FieldName, IndexName, IndexVariantName,
 };
-use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::span::{Span, Spanned};
 
 /// A synthetic span used for all AST nodes constructed from JSON input.
 const SYNTH_SPAN: Span = Span::new(0, 0);
@@ -314,7 +314,7 @@ fn convert_indexed(
                         MapEntryIndex::Named(IndexName::new(index_name)),
                         SYNTH_SPAN,
                     ),
-                    variant: Spanned::new(VariantName::new(variant), SYNTH_SPAN),
+                    variant: Spanned::new(IndexVariantName::new(variant), SYNTH_SPAN),
                 }],
                 value: value_expr,
             })

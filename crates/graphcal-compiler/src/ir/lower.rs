@@ -751,7 +751,7 @@ impl UnfrozenIR {
 
     /// Add a const alias: a synthetic const declaration that references another const.
     ///
-    /// Used for selective instantiated imports where `delta_v` aliases `prefix::delta_v`.
+    /// Used for selective instantiated imports where `delta_v` aliases `prefix.delta_v`.
     pub fn add_const_alias(
         &mut self,
         name: ScopedName,
@@ -774,7 +774,7 @@ impl UnfrozenIR {
 
     /// Add a node alias: a synthetic node declaration that references another node/param.
     ///
-    /// Used for selective instantiated imports where `delta_v` aliases `prefix::delta_v`.
+    /// Used for selective instantiated imports where `delta_v` aliases `prefix.delta_v`.
     pub fn add_node_alias(
         &mut self,
         name: ScopedName,
@@ -841,7 +841,7 @@ impl UnfrozenIR {
 
     /// Merge an instantiated dependency's IR into this IR.
     ///
-    /// All declarations from the dependency are prefixed with `prefix::` and
+    /// All declarations from the dependency are prefixed with `prefix.` and
     /// appended to this IR's declaration lists. Param bindings replace the
     /// dependency's param default expressions. Internal references within the
     /// dependency's expressions are rewritten to use prefixed names.
@@ -1046,7 +1046,7 @@ impl UnfrozenIR {
             for plot_name in &mut entry.decl.plot_names {
                 if dep_names.contains(plot_name.value.as_str()) {
                     plot_name.value = crate::syntax::names::DeclName::new(format!(
-                        "{prefix}::{}",
+                        "{prefix}.{}",
                         plot_name.value
                     ));
                 }
@@ -1071,7 +1071,7 @@ impl UnfrozenIR {
             for plot_name in &mut entry.decl.plot_names {
                 if dep_names.contains(plot_name.value.as_str()) {
                     plot_name.value = crate::syntax::names::DeclName::new(format!(
-                        "{prefix}::{}",
+                        "{prefix}.{}",
                         plot_name.value
                     ));
                 }
@@ -1136,8 +1136,7 @@ impl UnfrozenIR {
                     .parse::<crate::syntax::attribute::AttributeName>()
                     == Ok(crate::syntax::attribute::AttributeName::ExpectedFail)
                 {
-                    let prefixed_assert =
-                        ScopedName::Local(orig_name.as_str().to_string()).with_prefix(prefix);
+                    let prefixed_assert = ScopedName::local(orig_name.as_str()).with_prefix(prefix);
                     let ef = crate::ir::resolve::names::parse_expected_fail_args(
                         &attr.args,
                         importer_src,
@@ -1152,7 +1151,7 @@ impl UnfrozenIR {
         // its parent-file value bindings on `dep.imported_values` /
         // `dep.imported_value_sources`; merging the dag into the importer
         // requires those entries to ride along so eval can resolve the
-        // local alias (e.g., `radius` in `prefix::result = @radius * ...`).
+        // local alias (e.g., `radius` in `prefix.result = @radius * ...`).
         // Keys keep their original `ScopedName` (they were not in
         // `dep_names` and therefore not prefixed in expressions).
         for (name, value) in dep.imported_values {
@@ -1171,7 +1170,7 @@ impl UnfrozenIR {
 /// Visitor that detects V005 / A8 violations in a param default expression.
 ///
 /// Emits [`GraphcalError::IncludeMustReconcileOverride`] on the first
-/// occurrence of a variant literal `s::v` where `s` is in
+/// occurrence of a variant literal `s.v` where `s` is in
 /// `index_bindings`, or of a constructor / as-cast / generic type
 /// argument whose type name is in `type_bindings`. The spans reported
 /// point at the importer's include statement — the error blames the
@@ -1248,10 +1247,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
             return Err(self.orphan_error(
                 "index",
                 index.value.as_ref(),
-                format!(
-                    "`{}`",
-                    crate::syntax::names::fmt_qualified_variant(&index.value, &variant.value)
-                ),
+                format!("`{}`", variant.value.qualified_by(&index.value)),
             ));
         }
         Ok(())
@@ -1266,13 +1262,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
                     return Err(self.orphan_error(
                         "index",
                         index.value.as_ref(),
-                        format!(
-                            "`{}`",
-                            crate::syntax::names::fmt_qualified_variant(
-                                &index.value,
-                                &variant.value
-                            )
-                        ),
+                        format!("`{}`", variant.value.qualified_by(&index.value)),
                     ));
                 }
             }
@@ -1293,10 +1283,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
                 return Err(self.orphan_error(
                     "index",
                     index_name.as_ref(),
-                    format!(
-                        "`{}`",
-                        crate::syntax::names::fmt_qualified_variant(index_name, &key.variant.value)
-                    ),
+                    format!("`{}`", key.variant.value.qualified_by(index_name)),
                 ));
             }
             self.visit_expr(&entry.value)?;
@@ -1320,10 +1307,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
                     qi.value.as_ref(),
                     format!(
                         "`{}`",
-                        crate::syntax::names::fmt_qualified_variant(
-                            &qi.value,
-                            &arm.pattern.variant_name.value,
-                        )
+                        arm.pattern.variant_name.value.qualified_by(&qi.value)
                     ),
                 ));
             }
@@ -1379,8 +1363,8 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
 /// When a `@name` (or bare const `NAME`) refers to a name owned by the
 /// dependency being merged, rewrite the typed [`ScopedName`] payload via
 /// [`ScopedName::with_prefix`] so the merged-IR key matches the prefixed
-/// declaration name. No flat `::` strings are constructed here — the
-/// `Local`/`Qualified` distinction lives in the variant.
+/// declaration name. No flat separator strings are constructed here — the
+/// local/qualified distinction lives in the structured qualifier path.
 struct RefPrefixer<'a> {
     prefix: &'a str,
     dep_names: &'a HashSet<String>,
@@ -1392,9 +1376,7 @@ impl RefPrefixer<'_> {
         // members owned by the dependency). Already-qualified refs (e.g.
         // a transitively-imported `@module.x` inside the dep) belong to
         // some other namespace and are left untouched.
-        if let ScopedName::Local(name) = scoped
-            && self.dep_names.contains(name.as_str())
-        {
+        if !scoped.is_qualified() && self.dep_names.contains(scoped.member()) {
             Some(scoped.with_prefix(self.prefix))
         } else {
             None
@@ -1432,7 +1414,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for RefPrefixer<'_> {
 /// Rewrite `@`-references and const/fn references within an expression to use
 /// prefixed names, but only for names that belong to the dependency.
 ///
-/// For example, `GraphRef("dry_mass")` becomes `GraphRef("r::dry_mass")` when
+/// For example, `GraphRef("dry_mass")` becomes `GraphRef("r.dry_mass")` when
 /// `"dry_mass"` is in `dep_names` and `prefix` is `"r"`.
 ///
 /// Built-in names and names from the importer's scope are left unchanged.
@@ -1538,7 +1520,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
 /// `VariantLiteral { index: MyPhase, variant: A }`.
 ///
 /// This must be called **before** `prefix_expr_refs` so that index names are
-/// correct before ref-prefixing adds the `prefix::` qualifier.
+/// correct before ref-prefixing adds the `prefix.` qualifier.
 pub(crate) fn substitute_index_names(expr: &mut Expr, bindings: &HashMap<IndexName, IndexName>) {
     if bindings.is_empty() {
         return;

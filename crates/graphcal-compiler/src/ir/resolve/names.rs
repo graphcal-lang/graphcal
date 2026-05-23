@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::desugar::resolved_ast::AttributeArg;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey};
-use crate::syntax::names::{IndexName, VariantName};
+use crate::syntax::names::{IndexName, IndexVariantName};
 use miette::NamedSource;
 
 /// Parse `#[expected_fail]` attribute arguments into an [`ExpectedFail`] value.
@@ -27,7 +27,7 @@ pub fn parse_expected_fail_args(
                 match segments.as_slice() {
                     [index, variant] => Ok(vec![(
                         IndexName::new(&index.name),
-                        VariantName::new(&variant.name),
+                        IndexVariantName::new(&variant.name),
                     )]),
                     _ => Err(GraphcalError::ExpectedFailInvalidArg {
                         src: src.clone(),
@@ -44,9 +44,10 @@ pub fn parse_expected_fail_args(
                             segments,
                             span: elem_span,
                         } => match segments.as_slice() {
-                            [index, variant] => {
-                                Ok((IndexName::new(&index.name), VariantName::new(&variant.name)))
-                            }
+                            [index, variant] => Ok((
+                                IndexName::new(&index.name),
+                                IndexVariantName::new(&variant.name),
+                            )),
                             _ => Err(GraphcalError::ExpectedFailInvalidArg {
                                 src: src.clone(),
                                 span: (*elem_span).into(),

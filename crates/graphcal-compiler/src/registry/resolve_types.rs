@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::desugar::resolved_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
-use crate::syntax::names::{DeclName, IndexName, ScopedName, VariantName};
+use crate::syntax::names::{DeclName, IndexName, IndexVariantName, ScopedName};
 use crate::syntax::span::Span;
 
 // ---------------------------------------------------------------------------
@@ -380,7 +380,7 @@ pub struct ResolvedLayerEntry {
 ///
 /// - Length 1 for single-index assertions: `[("Mode", "Boost")]`
 /// - Length >1 for multi-index assertions: `[("Mode", "Boost"), ("Phase", "Launch")]`
-pub type ExpectedFailKey = Vec<(IndexName, VariantName)>;
+pub type ExpectedFailKey = Vec<(IndexName, IndexVariantName)>;
 
 /// Describes how an assertion is expected to fail.
 #[derive(Debug, Clone)]

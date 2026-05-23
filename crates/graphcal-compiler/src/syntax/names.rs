@@ -86,7 +86,7 @@ macro_rules! define_name_type {
 }
 
 define_name_type! {
-    /// Name of a const, param, or node declaration.
+    /// Name of a const, param, or node declaration (e.g., `"G0"`, `"dry_mass"`, `"dv_total"`).
     pub struct DeclName;
 }
 
@@ -122,16 +122,55 @@ define_name_type! {
 
 define_name_type! {
     /// Name of an index variant (e.g., `"Departure"`, `"Correction"`).
-    pub struct VariantName;
+    pub struct IndexVariantName;
 }
 
-impl VariantName {
+impl IndexVariantName {
     /// Build the variant name for the `n`-th step of a range index
     /// (`#0`, `#1`, …). Centralises the `"#"`-prefix format so registry,
     /// parser, and evaluator can't disagree on it.
     #[must_use]
     pub fn range_step(n: impl std::fmt::Display) -> Self {
         Self::new(format!("#{n}"))
+    }
+
+    /// Pair this variant with its index name for qualified rendering.
+    #[must_use]
+    pub fn qualified_by(&self, index: &IndexName) -> QualifiedIndexVariantName {
+        QualifiedIndexVariantName::new(index.clone(), self.clone())
+    }
+}
+
+/// A fully qualified index variant name, rendered as `Index.Variant`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct QualifiedIndexVariantName {
+    index: IndexName,
+    variant: IndexVariantName,
+}
+
+impl QualifiedIndexVariantName {
+    /// Create a qualified index variant name from its index and variant parts.
+    #[must_use]
+    pub const fn new(index: IndexName, variant: IndexVariantName) -> Self {
+        Self { index, variant }
+    }
+
+    /// The index/type part of the qualified variant.
+    #[must_use]
+    pub const fn index(&self) -> &IndexName {
+        &self.index
+    }
+
+    /// The variant/constructor part of the qualified variant.
+    #[must_use]
+    pub const fn variant(&self) -> &IndexVariantName {
+        &self.variant
+    }
+}
+
+impl std::fmt::Display for QualifiedIndexVariantName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.index, self.variant)
     }
 }
 
@@ -151,197 +190,132 @@ define_name_type! {
 }
 
 define_name_type! {
-    /// Name of a dimension variable in a built-in function signature.
+    /// Name of a dimension variable in a built-in function signature (e.g., `"D"`).
+    ///
+    /// Built-in signatures use these variables to relate argument and result
+    /// dimensions, such as `sqrt: D -> D^(1/2)` or `min: (D, D) -> D`.
     pub struct DimVarName;
 }
 
 define_name_type! {
-    /// Name of a local expression binding.
+    /// Name of a local expression binding (e.g., `"x"`, `"stage_mass"`).
     pub struct LocalName;
 }
 
 define_name_type! {
-    /// Name of a module alias introduced by an import/include declaration.
+    /// Name of a module alias introduced by an import/include declaration (e.g., `"constants"`, `"std"`).
     pub struct ModuleAliasName;
 }
 
 // --- Module-scoped names ---
 
-/// A declaration name that may optionally be module-qualified.
+use std::sync::Arc;
+
+/// A declaration name that may optionally be qualified by a module path.
 ///
-/// Selective imports produce `Local` names (`x`); whole-module imports and
-/// alias-rewritten qualified references produce `Qualified` names
-/// (`module::x`). The variant carries the qualification structurally — no
-/// flat string parsing is needed to recover it.
+/// The qualifier is stored as structured path segments, not as a flat
+/// dot-separated string. This allows arbitrary-depth qualification such as
+/// `helpers.math.G0` while keeping the declaration member (`G0`) directly
+/// accessible and distinct from the qualifier.
 ///
-/// The `Display` impl renders `Qualified { module: "m", member: "x" }` as
-/// `m::x`. That serialized form is for *boundary* use only (debug output,
-/// `HashMap` keys that haven't yet been re-typed). The functional core
-/// should pattern-match on the variant directly.
+/// The `Display` impl renders `qualifier: ["helpers", "math"], member: "G0"`
+/// as `helpers.math.G0`. That serialized form is for boundary use only
+/// (diagnostics, debug output, third-party APIs); the compiler core should use
+/// the typed accessors instead of splitting strings.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ScopedName {
-    /// A bare local name: `x`, `G0`, etc.
-    Local(String),
-    /// A module-qualified name: `module::x`, `constants::G0`, etc.
-    Qualified { module: String, member: String },
+pub struct ScopedName {
+    /// Module/path segments that qualify `member`. Empty for a local name.
+    qualifier: Arc<[Arc<str>]>,
+    /// The declaration/member name inside the qualifier scope.
+    member: Arc<str>,
 }
 
 impl ScopedName {
-    /// Create a `Local` name.
+    /// Create an unqualified local name.
     #[must_use]
-    pub fn local(name: impl Into<String>) -> Self {
-        Self::Local(name.into())
-    }
-
-    /// Create a `Qualified` name.
-    #[must_use]
-    pub fn qualified(module: impl Into<String>, member: impl Into<String>) -> Self {
-        Self::Qualified {
-            module: module.into(),
+    pub fn local(member: impl Into<Arc<str>>) -> Self {
+        Self {
+            qualifier: Arc::from([] as [Arc<str>; 0]),
             member: member.into(),
         }
     }
 
-    /// Returns the member (leaf) part of the name.
-    ///
-    /// For `Local("x")` this returns `"x"`.
-    /// For `Qualified { module: "m", member: "x" }` this also returns `"x"`.
+    /// Create a name qualified by a single module segment.
     #[must_use]
-    pub fn member(&self) -> &str {
-        match self {
-            Self::Local(name) => name,
-            Self::Qualified { member, .. } => member,
+    pub fn qualified(module: impl Into<Arc<str>>, member: impl Into<Arc<str>>) -> Self {
+        Self::qualified_path([module], member)
+    }
+
+    /// Create a name qualified by an arbitrary-depth module path.
+    #[must_use]
+    pub fn qualified_path(
+        qualifier: impl IntoIterator<Item = impl Into<Arc<str>>>,
+        member: impl Into<Arc<str>>,
+    ) -> Self {
+        Self {
+            qualifier: qualifier.into_iter().map(Into::into).collect(),
+            member: member.into(),
         }
     }
 
-    /// Returns the module part, if qualified.
+    /// Returns the member (leaf declaration) part of the name.
+    ///
+    /// For `x` this returns `"x"`; for `helpers.math.x` this also returns
+    /// `"x"`.
     #[must_use]
-    pub fn module(&self) -> Option<&str> {
-        match self {
-            Self::Qualified { module, .. } => Some(module),
-            Self::Local(_) => None,
-        }
+    pub fn member(&self) -> &str {
+        &self.member
+    }
+
+    /// Returns the qualifier path segments. Empty means this name is local.
+    #[must_use]
+    pub fn qualifier(&self) -> &[Arc<str>] {
+        &self.qualifier
     }
 
     /// Returns whether this is a qualified name.
     #[must_use]
-    pub const fn is_qualified(&self) -> bool {
-        matches!(self, Self::Qualified { .. })
+    pub fn is_qualified(&self) -> bool {
+        !self.qualifier.is_empty()
     }
 
-    /// Qualify a name with a prefix.
+    /// Qualify a name with a single-segment prefix, replacing any existing
+    /// qualifier while preserving the member.
     ///
-    /// `Local("x").with_prefix("p")` → `Qualified { module: "p", member: "x" }`.
-    /// `Qualified { module: "m", member: "x" }.with_prefix("p")` → `Qualified { module: "p", member: "x" }`.
+    /// `x.with_prefix("p")` → `p.x`.
+    /// `m.x.with_prefix("p")` → `p.x`.
     #[must_use]
     pub fn with_prefix(&self, prefix: &str) -> Self {
-        Self::Qualified {
-            module: prefix.to_string(),
-            member: self.member().to_string(),
-        }
+        Self::qualified(prefix, Arc::clone(&self.member))
     }
 }
 
 impl std::fmt::Display for ScopedName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Local(name) => write!(f, "{name}"),
-            Self::Qualified { module, member } => write!(f, "{module}.{member}"),
+        for segment in self.qualifier.iter() {
+            f.write_str(segment)?;
+            f.write_str(".")?;
         }
+        f.write_str(&self.member)
     }
 }
 
 impl From<String> for ScopedName {
-    /// Wrap a bare string as `ScopedName::Local`. This is what
+    /// Wrap a bare string as a local `ScopedName`. This is what
     /// [`crate::syntax::ast::Ident::into_spanned`] uses to lift parser
     /// identifiers into the typed name; qualified forms are constructed
-    /// explicitly via [`ScopedName::qualified`].
+    /// explicitly via [`ScopedName::qualified`] or [`ScopedName::qualified_path`].
     fn from(s: String) -> Self {
-        Self::Local(s)
+        Self::local(s)
     }
 }
 
 impl From<DeclName> for ScopedName {
-    /// Wrap a `DeclName` as a `ScopedName::Local`. Use this at the resolver →
+    /// Wrap a `DeclName` as a local `ScopedName`. Use this at the resolver →
     /// IR boundary where resolver keys (local `DeclName`s) become IR keys
     /// (`ScopedName`s).
     fn from(name: DeclName) -> Self {
-        Self::Local(name.into_inner())
-    }
-}
-
-// --- Qualified-variant rendering ---
-
-/// Render a qualified index variant `Index.Variant` in surface syntax.
-///
-/// Centralizes the separator (`.`, since the alpha-4 module-system redesign
-/// removed `::` from the language) so diagnostics, table headers, error
-/// messages, and value descriptions all stay consistent. Use anywhere a
-/// qualified variant needs to appear in user-visible output — never roll
-/// your own `format!("{idx}.{var}")` inline; if the surface separator
-/// ever changes again, this single call site is the only thing that must
-/// move.
-///
-/// Accepts any `Display` types so the helper works whether the caller
-/// holds typed [`IndexName`] / [`VariantName`] values, raw `&str`s
-/// extracted from the registry, or anything else printable.
-pub fn fmt_qualified_variant(
-    index: impl std::fmt::Display,
-    variant: impl std::fmt::Display,
-) -> String {
-    format!("{index}.{variant}")
-}
-
-// --- Naming convention helpers ---
-
-/// Check if `s` is a valid `lower_snake_case` identifier
-/// (starts with a lowercase letter, contains only lowercase letters, digits, and underscores).
-#[must_use]
-pub fn is_lower_snake_case(s: &str) -> bool {
-    !s.is_empty()
-        && s.starts_with(|c: char| c.is_ascii_lowercase())
-        && s.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
-// --- Spanned wrapper ---
-
-use crate::syntax::span::Span;
-
-/// A value paired with its source span.
-///
-/// `PartialEq`/`Eq`/`Hash` delegate to `value` only, so two occurrences
-/// of the same name at different source positions are considered equal.
-#[derive(Debug, Clone)]
-pub struct Spanned<T> {
-    pub value: T,
-    pub span: Span,
-}
-
-impl<T> Spanned<T> {
-    /// Create a new spanned value.
-    pub const fn new(value: T, span: Span) -> Self {
-        Self { value, span }
-    }
-}
-
-impl<T: PartialEq> PartialEq for Spanned<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
-impl<T: Eq> Eq for Spanned<T> {}
-
-impl<T: std::hash::Hash> std::hash::Hash for Spanned<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.value.hash(state);
-    }
-}
-
-impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.value.fmt(f)
+        Self::local(name.into_inner())
     }
 }
 
@@ -384,7 +358,7 @@ mod tests {
 
     #[test]
     fn newtype_from_str() {
-        let name: VariantName = "Departure".into();
+        let name: IndexVariantName = "Departure".into();
         assert_eq!(name.as_str(), "Departure");
     }
 
@@ -402,28 +376,24 @@ mod tests {
     }
 
     #[test]
-    fn spanned_eq_ignores_span() {
-        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
-        let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
-        assert_eq!(a, b);
+    fn scoped_name_qualified_display_uses_dot() {
+        let name = ScopedName::qualified("module", "x");
+        assert_eq!(format!("{name}"), "module.x");
+        assert_eq!(name.member(), "x");
+        assert_eq!(
+            name.qualifier().iter().map(|s| &**s).collect::<Vec<_>>(),
+            ["module"]
+        );
     }
 
     #[test]
-    fn spanned_ne_different_value() {
-        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
-        let b = Spanned::new(DeclName::new("y"), Span::new(0, 1));
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn spanned_hash_ignores_span() {
-        use std::hash::{DefaultHasher, Hash, Hasher};
-        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
-        let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
-        let mut ha = DefaultHasher::new();
-        a.hash(&mut ha);
-        let mut hb = DefaultHasher::new();
-        b.hash(&mut hb);
-        assert_eq!(ha.finish(), hb.finish());
+    fn scoped_name_supports_nested_qualifier_path() {
+        let name = ScopedName::qualified_path(["helpers", "math"], "G0");
+        assert_eq!(format!("{name}"), "helpers.math.G0");
+        assert_eq!(name.member(), "G0");
+        assert_eq!(
+            name.qualifier().iter().map(|s| &**s).collect::<Vec<_>>(),
+            ["helpers", "math"]
+        );
     }
 }

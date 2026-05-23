@@ -4,7 +4,7 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::syntax::names::{
-    DeclName, DimName, FieldName, FnName, IndexName, StructTypeName, UnitName, VariantName,
+    DeclName, DimName, FieldName, FnName, IndexName, IndexVariantName, StructTypeName, UnitName,
 };
 
 /// Rich diagnostic error types for graphcal evaluation.
@@ -407,7 +407,7 @@ pub enum GraphcalError {
     #[diagnostic(code(graphcal::I002))]
     UnknownVariant {
         index_name: IndexName,
-        variant_name: VariantName,
+        variant_name: IndexVariantName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not a variant of `{index_name}`")]
@@ -421,7 +421,7 @@ pub enum GraphcalError {
     )]
     MissingVariants {
         index_name: IndexName,
-        missing: Vec<VariantName>,
+        missing: Vec<IndexVariantName>,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("incomplete map literal")]
@@ -435,7 +435,7 @@ pub enum GraphcalError {
     )]
     ExtraVariants {
         index_name: IndexName,
-        extra: Vec<VariantName>,
+        extra: Vec<IndexVariantName>,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unexpected variants")]

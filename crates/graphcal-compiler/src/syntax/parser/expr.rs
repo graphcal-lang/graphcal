@@ -2,8 +2,9 @@ use crate::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, ModulePath, TypeExpr, UnaryOp,
 };
 use crate::syntax::names::{
-    ConstructorName, DeclName, FieldName, FnName, IndexName, ScopedName, Spanned, VariantName,
+    ConstructorName, DeclName, FieldName, FnName, IndexName, IndexVariantName, ScopedName,
 };
+use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
@@ -553,8 +554,7 @@ impl Parser<'_> {
     /// Parse an identifier-based expression.
     ///
     /// Dispatches on following tokens (syntax-based disambiguation):
-    /// - `ident::member<T>(...)` or `ident::member(...)` → qualified function call
-    /// - `ident::member` → `QualifiedNameRef` (resolved later to variant or const)
+    /// - `ident.member` → `QualifiedNameRef` (resolved later to variant or const)
     /// - `ident<T>(args)` or `ident(args)` — disambiguated structurally
     ///   by the first argument's shape: `IDENT :` → constructor call,
     ///   otherwise → function call
@@ -661,7 +661,7 @@ impl Parser<'_> {
                     self.parse_map_literal_after_first_entry(
                         start_span,
                         Spanned::new(IndexName::new(saved_text), saved_span),
-                        variant_ident.into_spanned::<VariantName>(),
+                        variant_ident.into_spanned::<IndexVariantName>(),
                     )
                 } else {
                     let found = self
@@ -718,7 +718,7 @@ impl Parser<'_> {
             let (_, span) = self.advance()?;
             let name = self.lexer.slice_at(span).to_string();
             self.lexer.next_token(); // consume '.'
-            let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
+            let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
             return Ok(IndexArg::Variant {
                 index: Spanned::new(IndexName::new(name), span),
                 variant,
@@ -888,10 +888,9 @@ impl Parser<'_> {
         if pos >= bytes.len() {
             return false;
         }
-        // `:` (single colon) — but not `::` (legacy qualified path)
-        // signals a named argument. Graphcal's surface module path uses
-        // `.`, not `::`, so a `::` here would be a stray token; either
-        // way, we only commit to the named-arg path on a lone `:`.
+        // `:` (single colon) signals a named argument. Graphcal's surface
+        // module path uses `.`, so a second `:` here would be a stray token;
+        // either way, we only commit to the named-arg path on a lone `:`.
         bytes[pos] == b':' && bytes.get(pos + 1).is_none_or(|c| *c != b':')
     }
 

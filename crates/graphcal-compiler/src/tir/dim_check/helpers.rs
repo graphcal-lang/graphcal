@@ -7,7 +7,7 @@ use crate::desugar::resolved_ast::Expr;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{GenericParamName, IndexName, VariantName};
+use crate::syntax::names::{GenericParamName, IndexName, IndexVariantName};
 
 use super::{DeclaredType, InferredType};
 
@@ -274,7 +274,7 @@ pub(super) fn expect_scalar(
 
 /// Build the Cartesian product of variant name slices across multiple axes.
 pub(super) fn cartesian_product<'a>(
-    axes: &'a [Vec<VariantName>],
+    axes: &'a [Vec<IndexVariantName>],
     current: &mut Vec<&'a str>,
     result: &mut std::collections::HashSet<Vec<&'a str>>,
 ) {

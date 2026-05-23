@@ -586,7 +586,7 @@ fn format_composition_decl(
     fmt: &mut Formatter<'_>,
     keyword: &str,
     name: &str,
-    plot_names: &[graphcal_compiler::syntax::names::Spanned<
+    plot_names: &[graphcal_compiler::syntax::span::Spanned<
         graphcal_compiler::syntax::names::DeclName,
     >],
     fields: &[graphcal_compiler::syntax::ast::PlotField],

@@ -84,7 +84,7 @@ module.exports = grammar({
       $.layer_declaration,
     ),
 
-    // #[name] or #[name(arg1, arg2)] or #[name(Index::Variant, (A::X, B::Y))]
+    // #[name] or #[name(arg1, arg2)] or #[name(Index.Variant, (A.X, B.Y))]
     attribute: $ => seq(
       "#",
       "[",
@@ -1087,7 +1087,7 @@ module.exports = grammar({
       $.table_single,
     ),
 
-    // Slice labels: `Index::Variant` (named axis) or `#N` (Nat range axis).
+    // Slice labels: `Index.Variant` (named axis) or `#N` (Nat range axis).
     table_slice_label: $ => choice(
       $.qualified_variant,
       seq("#", $.nat_literal),
@@ -1265,8 +1265,8 @@ module.exports = grammar({
       field("name", $.identifier),
     ),
 
-    // { Maneuver::Departure: 2.46 km/s, ... }
-    // { (Maneuver::Departure, Phase::Burn): 2.46 km/s, ... }
+    // { Maneuver.Departure: 2.46 km/s, ... }
+    // { (Maneuver.Departure, Phase.Burn): 2.46 km/s, ... }
     map_literal: $ => seq(
       "{",
       optional(seq(

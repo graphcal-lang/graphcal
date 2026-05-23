@@ -1,5 +1,5 @@
 use crate::syntax::ast::{DeclKind, Declaration, IndexDecl, IndexDeclKind, Visibility};
-use crate::syntax::names::{IndexName, VariantName};
+use crate::syntax::names::{IndexName, IndexVariantName};
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
@@ -56,7 +56,7 @@ impl Parser<'_> {
                 self.expect(Token::LBrace)?;
 
                 let variants = self.parse_comma_separated(Token::RBrace, |p| {
-                    Ok(p.parse_any_ident()?.into_spanned::<VariantName>())
+                    Ok(p.parse_any_ident()?.into_spanned::<IndexVariantName>())
                 })?;
 
                 if variants.is_empty() {

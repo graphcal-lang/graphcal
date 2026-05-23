@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, MapEntry};
-use graphcal_compiler::syntax::names::{ScopedName, VariantName};
+use graphcal_compiler::syntax::names::{IndexVariantName, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::error::GraphcalError;
@@ -76,7 +76,7 @@ pub(super) fn eval_index_access(
         let RuntimeValue::Indexed { entries, .. } = current else {
             return Err(ctx.eval_error("indexing a non-indexed value", expr.span));
         };
-        let variant_name: VariantName = match arg {
+        let variant_name: IndexVariantName = match arg {
             graphcal_compiler::desugar::resolved_ast::IndexArg::Variant { variant, .. } => {
                 variant.value.clone()
             }
@@ -89,13 +89,15 @@ pub(super) fn eval_index_access(
                 })?;
                 match var_val {
                     RuntimeValue::Label { variant, .. } => variant.clone(),
-                    RuntimeValue::Struct { type_name, .. } => VariantName::new(type_name.as_str()),
+                    RuntimeValue::Struct { type_name, .. } => {
+                        IndexVariantName::new(type_name.as_str())
+                    }
                     RuntimeValue::RangeLabel { step_index, .. } => {
-                        VariantName::range_step(step_index)
+                        IndexVariantName::range_step(step_index)
                     }
                     RuntimeValue::Int(n) => {
                         // Nat range loop variable: integer value maps to #N variant
-                        VariantName::range_step(n)
+                        IndexVariantName::range_step(n)
                     }
                     _ => {
                         return Err(ctx.eval_error(
@@ -115,7 +117,7 @@ pub(super) fn eval_index_access(
                                 index_expr.span,
                             ));
                         }
-                        VariantName::range_step(n)
+                        IndexVariantName::range_step(n)
                     }
                     _ => {
                         return Err(ctx.eval_error(
@@ -246,7 +248,7 @@ pub(super) fn eval_unfold(
     let init_val = eval_expr(init, values, &empty_locals, ctx)?;
 
     // Build results incrementally
-    let mut result_entries: IndexMap<VariantName, RuntimeValue> = IndexMap::new();
+    let mut result_entries: IndexMap<IndexVariantName, RuntimeValue> = IndexMap::new();
 
     // Step 0: init value
     result_entries.insert(variants[0].clone(), init_val);

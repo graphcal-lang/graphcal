@@ -29,10 +29,11 @@ use crate::registry::builtins::builtin_constants;
 use crate::registry::resolve_types::is_time_scale_name;
 use crate::syntax::ast::{ImportItemNamespace, ImportKind, TypeSystemRefKind};
 use crate::syntax::names::{
-    ConstructorName, DimName, IndexName, LocalName, ModuleAliasName, ScopedName, Spanned,
-    StructTypeName, VariantName,
+    ConstructorName, DimName, IndexName, IndexVariantName, LocalName, ModuleAliasName, ScopedName,
+    StructTypeName,
 };
 use crate::syntax::phase::{UnresolvedRef, never};
+use crate::syntax::span::Spanned;
 
 /// Context for name resolution: what names are in scope.
 struct ResolveContext {
@@ -47,7 +48,7 @@ struct ResolveContext {
     /// Imported type-system names whose concrete category is resolved later.
     imported_type_system_names: HashSet<StructTypeName>,
     /// Index name → set of variant names.
-    index_variants: HashMap<IndexName, HashSet<VariantName>>,
+    index_variants: HashMap<IndexName, HashSet<IndexVariantName>>,
     /// Module aliases from imports (for qualified const refs).
     module_names: HashSet<ModuleAliasName>,
     /// Stack of local scopes (for/scan/unfold/match bindings).
@@ -110,7 +111,7 @@ pub fn resolve_name_refs(file: src_ast::File) -> dst_ast::File {
     let mut dim_names = HashSet::new();
     let mut constructor_names = HashSet::new();
     let mut imported_type_system_names = HashSet::new();
-    let mut index_variants: HashMap<IndexName, HashSet<VariantName>> = HashMap::new();
+    let mut index_variants: HashMap<IndexName, HashSet<IndexVariantName>> = HashMap::new();
     let mut module_names = HashSet::new();
     collect_names_from_decls(
         &file.declarations,
@@ -150,7 +151,7 @@ fn collect_names_from_decls(
     dim_names: &mut HashSet<DimName>,
     constructor_names: &mut HashSet<ConstructorName>,
     imported_type_system_names: &mut HashSet<StructTypeName>,
-    index_variants: &mut HashMap<IndexName, HashSet<VariantName>>,
+    index_variants: &mut HashMap<IndexName, HashSet<IndexVariantName>>,
     module_names: &mut HashSet<ModuleAliasName>,
 ) {
     for decl in decls {
@@ -183,7 +184,7 @@ fn collect_names_from_decls(
             src_ast::DeclKind::Index(idx) => {
                 let idx_name = idx.name.value.clone();
                 if let src_ast::IndexDeclKind::Named { variants } = &idx.kind {
-                    let variant_set: HashSet<VariantName> =
+                    let variant_set: HashSet<IndexVariantName> =
                         variants.iter().map(|v| v.value.clone()).collect();
                     index_variants.insert(idx_name, variant_set);
                 } else {
@@ -815,11 +816,17 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> d
     }
 
     if ctx.builtin_consts.contains_key(name.as_str()) {
-        return dst_ast::ExprKind::ConstRef(Spanned::new(ScopedName::local(name), ident.span));
+        return dst_ast::ExprKind::ConstRef(Spanned::new(
+            ScopedName::local(name.as_str()),
+            ident.span,
+        ));
     }
 
     if is_time_scale_name(name) {
-        return dst_ast::ExprKind::ConstRef(Spanned::new(ScopedName::local(name), ident.span));
+        return dst_ast::ExprKind::ConstRef(Spanned::new(
+            ScopedName::local(name.as_str()),
+            ident.span,
+        ));
     }
 
     if ctx.constructor_names.contains(name.as_str()) {
@@ -861,7 +868,7 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> d
     for variants in ctx.index_variants.values() {
         if variants.contains(name.as_str()) {
             return dst_ast::ExprKind::TypeSystemRef(Spanned::new(
-                TypeSystemRefKind::BareVariant(VariantName::new(name)),
+                TypeSystemRefKind::BareVariant(IndexVariantName::new(name)),
                 ident.span,
             ));
         }
@@ -874,7 +881,7 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> d
 ///
 /// Priority:
 /// 1. If `qualifier` is a known index name → `VariantLiteral`
-/// 2. Otherwise → `ConstRef` carrying a `ScopedName::Qualified`
+/// 2. Otherwise → `ConstRef` carrying a qualified `ScopedName`
 ///    (module-qualified constant, validated later)
 fn resolve_qualified_name_ref(
     qualifier: crate::syntax::ast::Ident,
@@ -884,7 +891,7 @@ fn resolve_qualified_name_ref(
     if ctx.index_variants.contains_key(qualifier.name.as_str()) {
         return dst_ast::ExprKind::VariantLiteral {
             index: Spanned::new(IndexName::new(&qualifier.name), qualifier.span),
-            variant: Spanned::new(VariantName::new(&member.name), member.span),
+            variant: Spanned::new(IndexVariantName::new(&member.name), member.span),
         };
     }
 

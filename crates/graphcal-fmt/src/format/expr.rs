@@ -129,16 +129,9 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
     }
 }
 
-/// Render a [`ScopedName`] in surface syntax (qualified separator is `.`).
-///
-/// The `Display` impl for `ScopedName` uses `::` because that is the
-/// internal/boundary form (`HashMap` keys, debug output). Surface graphcal
-/// has used `.` since alpha-4, so the formatter has its own rendering.
+/// Render a [`ScopedName`] in surface syntax.
 fn format_scoped_surface(scoped: &ScopedName) -> String {
-    match scoped {
-        ScopedName::Local(name) => name.clone(),
-        ScopedName::Qualified { module, member } => format!("{module}.{member}"),
-    }
+    scoped.to_string()
 }
 
 /// Operator precedence (higher = binds tighter).
@@ -331,7 +324,7 @@ pub fn format_if(
 
 pub fn format_struct_construction(
     fmt: &mut Formatter<'_>,
-    type_name: &graphcal_compiler::syntax::names::Spanned<
+    type_name: &graphcal_compiler::syntax::span::Spanned<
         graphcal_compiler::syntax::names::ConstructorName,
     >,
     type_args: &[TypeExpr],

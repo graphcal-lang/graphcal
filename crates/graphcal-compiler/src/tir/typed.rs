@@ -824,7 +824,7 @@ pub struct DagTIR {
     /// Names of `pub` nodes declared in this dag body.
     ///
     /// Used by `dim_check` to reject cross-file projection of private
-    /// nodes (`@mod::dag(args)::private_node` → `ImportPrivateItem`). The
+    /// nodes (`@mod.dag(args).private_node` → `ImportPrivateItem`). The
     /// same-file case reads visibility from the AST; cross-file merges
     /// drop the AST, so this set is the compiled proxy.
     pub pub_nodes: std::collections::HashSet<String>,
@@ -2218,8 +2218,8 @@ mod tests {
             name: IndexName::new("Maneuver"),
             kind: crate::registry::types::IndexKind::Named {
                 variants: vec![
-                    crate::syntax::names::VariantName::new("Departure"),
-                    crate::syntax::names::VariantName::new("Insertion"),
+                    crate::syntax::names::IndexVariantName::new("Departure"),
+                    crate::syntax::names::IndexVariantName::new("Insertion"),
                 ],
             },
         });

@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, ExprKind};
-use graphcal_compiler::syntax::names::{ScopedName, VariantName};
+use graphcal_compiler::syntax::names::{IndexVariantName, ScopedName};
 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::resolve_types::{
@@ -21,7 +21,7 @@ use super::eval_expr;
 /// Evaluate a built-in function call expression (`FnCall`).
 pub(super) fn eval_fn_call(
     expr: &Expr,
-    name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -58,7 +58,7 @@ pub(super) fn eval_fn_call(
 /// This avoids repeating arguments in every helper invocation inside `eval_fn_call`.
 struct FnDispatch<'a, 'ctx> {
     expr: &'a Expr,
-    name: &'a graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    name: &'a graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &'a [Expr],
     values: &'a HashMap<ScopedName, RuntimeValue>,
     local_values: &'a HashMap<String, RuntimeValue>,
@@ -157,7 +157,7 @@ impl FnDispatch<'_, '_> {
 /// Evaluate an aggregation function over indexed entries.
 fn eval_aggregation_fn(
     kind: AggregationFn,
-    entries: &IndexMap<VariantName, RuntimeValue>,
+    entries: &IndexMap<IndexVariantName, RuntimeValue>,
     expr: &Expr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -220,7 +220,7 @@ fn eval_aggregation_fn(
 fn eval_conversion_fn(
     kind: TypeConversionFn,
     expr: &Expr,
-    _name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    _name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -283,7 +283,7 @@ fn eval_conversion_fn(
 fn eval_datetime_constructor(
     kind: ConstructorFn,
     _expr: &Expr,
-    _name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    _name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -352,7 +352,7 @@ fn eval_datetime_constructor(
 /// Evaluate a time scale conversion function (`to_utc`, `to_tai`, `to_tt`, etc.).
 fn eval_timescale_fn(
     _expr: &Expr,
-    name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
     target_scale: graphcal_compiler::registry::time_scale::TimeScale,
     values: &HashMap<ScopedName, RuntimeValue>,
@@ -374,7 +374,7 @@ fn eval_timescale_fn(
 fn eval_datetime_extract_fn(
     kind: DatetimeExtractFn,
     _expr: &Expr,
-    name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -424,7 +424,7 @@ fn eval_datetime_extract_fn(
 fn eval_datetime_from_fn(
     kind: DatetimeFromFn,
     _expr: &Expr,
-    name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -457,7 +457,7 @@ fn eval_datetime_from_fn(
 fn eval_datetime_to_fn(
     kind: DatetimeToFn,
     _expr: &Expr,
-    name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -481,7 +481,7 @@ fn eval_datetime_to_fn(
 /// Evaluate a builtin numeric function.
 fn eval_builtin_fn(
     expr: &Expr,
-    name: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::FnName>,
+    name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
     values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,

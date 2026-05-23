@@ -39,7 +39,7 @@ struct RefCollector<'a> {
 impl RefCollector<'_> {
     fn handle_graph_ref(
         &mut self,
-        ident: &crate::syntax::names::Spanned<ScopedName>,
+        ident: &crate::syntax::span::Spanned<ScopedName>,
     ) -> Result<(), GraphcalError> {
         let scoped = &ident.value;
         match self.kind {
@@ -83,7 +83,7 @@ impl RefCollector<'_> {
 
     fn handle_const_ref(
         &self,
-        ident: &crate::syntax::names::Spanned<ScopedName>,
+        ident: &crate::syntax::span::Spanned<ScopedName>,
     ) -> Result<(), GraphcalError> {
         // Built-in constant names (`PI`, `E`, time scales) are bare; a
         // qualified `module.CONST` path never resolves to a built-in. The
@@ -104,7 +104,7 @@ impl RefCollector<'_> {
 
     fn handle_fn_call(
         &self,
-        name: &crate::syntax::names::Spanned<crate::syntax::names::FnName>,
+        name: &crate::syntax::span::Spanned<crate::syntax::names::FnName>,
         args: &[Expr],
     ) -> Result<(), GraphcalError> {
         let name_str = name.value.as_str();
@@ -293,7 +293,7 @@ impl<S: GraphRefSink> ExprVisitor<crate::syntax::phase::Resolved> for GraphRefVi
 }
 
 /// Sink that stores every observed ref name as a flat `String` (the
-/// qualified `module::member` form for qualified refs, bare for locals).
+/// qualified `module.member` form for qualified refs, bare for locals).
 /// Boundary stringification — callers that want the typed form should use
 /// `collect_scoped_graph_refs` instead.
 struct StringNameSink<'a> {

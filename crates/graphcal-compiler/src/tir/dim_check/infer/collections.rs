@@ -195,7 +195,7 @@ pub(super) fn infer_map_or_table_literal(
         }
     }
     // Validate each index exists, reject range indexes as keys, and collect variant lists
-    let mut axes_variants: Vec<Vec<crate::syntax::names::VariantName>> = Vec::new();
+    let mut axes_variants: Vec<Vec<crate::syntax::names::IndexVariantName>> = Vec::new();
     for key in &entries[0].keys {
         let key_index_name = key.index.value.registry_name();
         let idx_def = registry
@@ -237,10 +237,12 @@ pub(super) fn infer_map_or_table_literal(
                     entry
                         .keys
                         .iter()
-                        .map(|k| crate::syntax::names::fmt_qualified_variant(
-                            k.index.value.registry_name(),
-                            &k.variant.value,
-                        ))
+                        .map(|k| {
+                            k.variant
+                                .value
+                                .qualified_by(&k.index.value.registry_name())
+                                .to_string()
+                        })
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
@@ -274,9 +276,9 @@ pub(super) fn infer_map_or_table_literal(
         .collect();
     if !extra.is_empty() {
         if arity == 1 {
-            let extra_variants: Vec<crate::syntax::names::VariantName> = extra
+            let extra_variants: Vec<crate::syntax::names::IndexVariantName> = extra
                 .iter()
-                .map(|t| crate::syntax::names::VariantName::new(t[0]))
+                .map(|t| crate::syntax::names::IndexVariantName::new(t[0]))
                 .collect();
             return Err(GraphcalError::ExtraVariants {
                 index_name: index_names[0].clone(),
@@ -290,7 +292,11 @@ pub(super) fn infer_map_or_table_literal(
             .map(|t| {
                 t.iter()
                     .enumerate()
-                    .map(|(i, v)| crate::syntax::names::fmt_qualified_variant(&index_names[i], v))
+                    .map(|(i, v)| {
+                        crate::syntax::names::IndexVariantName::new(*v)
+                            .qualified_by(&index_names[i])
+                            .to_string()
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -311,9 +317,9 @@ pub(super) fn infer_map_or_table_literal(
         .collect();
     if !missing.is_empty() {
         if arity == 1 {
-            let missing_variants: Vec<crate::syntax::names::VariantName> = missing
+            let missing_variants: Vec<crate::syntax::names::IndexVariantName> = missing
                 .iter()
-                .map(|t| crate::syntax::names::VariantName::new(t[0]))
+                .map(|t| crate::syntax::names::IndexVariantName::new(t[0]))
                 .collect();
             return Err(GraphcalError::MissingVariants {
                 index_name: index_names[0].clone(),
@@ -327,7 +333,11 @@ pub(super) fn infer_map_or_table_literal(
             .map(|t| {
                 t.iter()
                     .enumerate()
-                    .map(|(i, v)| crate::syntax::names::fmt_qualified_variant(&index_names[i], v))
+                    .map(|(i, v)| {
+                        crate::syntax::names::IndexVariantName::new(*v)
+                            .qualified_by(&index_names[i])
+                            .to_string()
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -352,7 +362,7 @@ pub(super) fn infer_map_or_table_literal(
         src,
     )?;
     // Reject nested Indexed when the inner index is a label (named) index.
-    // Label-indexed elements should use tuple keys instead: { (I::A, J::B): expr, ... }.
+    // Label-indexed elements should use tuple keys instead: { (I.A, J.B): expr, ... }.
     // Allow when the inner index is a range index, enabling mixed-index construction:
     //   { LabelIndex.Variant: for t: RangeIndex { ... }, ... }
     if let InferredType::Indexed { index, .. } = &first_type {
@@ -886,7 +896,7 @@ pub(super) fn infer_unfold(
 /// Infer the type of a field access expression.
 pub(super) fn infer_field_access(
     inner: &Expr,
-    field: &crate::syntax::names::Spanned<FieldName>,
+    field: &crate::syntax::span::Spanned<FieldName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
@@ -954,7 +964,7 @@ pub(super) fn infer_field_access(
 )]
 pub(super) fn infer_struct_construction(
     expr: &Expr,
-    type_name: &crate::syntax::names::Spanned<ConstructorName>,
+    type_name: &crate::syntax::span::Spanned<ConstructorName>,
     constructor_type_args: &[crate::desugar::resolved_ast::TypeExpr],
     fields: &[crate::desugar::resolved_ast::FieldInit],
     declared_types: &HashMap<ScopedName, DeclaredType>,

@@ -2,7 +2,7 @@
 
 use indexmap::IndexMap;
 
-use crate::syntax::names::{FieldName, IndexName, StructTypeName, VariantName};
+use crate::syntax::names::{FieldName, IndexName, IndexVariantName, StructTypeName};
 
 /// The kind of a [`RuntimeValue`], used in type-mismatch error reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,7 +12,7 @@ pub enum RuntimeValueKind {
     Int,
     Label {
         index_name: IndexName,
-        variant: VariantName,
+        variant: IndexVariantName,
     },
     Struct {
         type_name: StructTypeName,
@@ -33,11 +33,7 @@ impl std::fmt::Display for RuntimeValueKind {
             Self::Label {
                 index_name,
                 variant,
-            } => write!(
-                f,
-                "label `{}`",
-                crate::syntax::names::fmt_qualified_variant(index_name, variant)
-            ),
+            } => write!(f, "label `{}`", variant.qualified_by(index_name)),
             Self::Struct { type_name } => write!(f, "struct `{type_name}`"),
             Self::Indexed { index_name } => write!(f, "indexed value `{index_name}[...]`"),
             Self::RangeLabel => write!(f, "RangeLabel"),
@@ -78,7 +74,7 @@ pub enum RuntimeValue {
     /// A label of a named index (e.g., `Maneuver.Departure`).
     Label {
         index_name: IndexName,
-        variant: VariantName,
+        variant: IndexVariantName,
     },
     Struct {
         type_name: StructTypeName,
@@ -87,7 +83,7 @@ pub enum RuntimeValue {
     /// An indexed collection: maps variant names to values, preserving declaration order.
     Indexed {
         index_name: IndexName,
-        entries: IndexMap<VariantName, Self>,
+        entries: IndexMap<IndexVariantName, Self>,
     },
     /// A range index label during `Unfold` iteration.
     /// Carries the step index and SI value (for arithmetic like `t - prev_t`).

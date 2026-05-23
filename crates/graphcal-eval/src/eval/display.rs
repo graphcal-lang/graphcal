@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::desugar::resolved_ast::{ExprKind, MapEntryKey};
-use graphcal_compiler::syntax::names::{ScopedName, VariantName};
+use graphcal_compiler::syntax::names::{IndexVariantName, ScopedName};
 use indexmap::IndexMap;
 
 use crate::eval_expr::RuntimeValue;
@@ -175,7 +175,7 @@ pub(super) fn set_scalar_display_unit(value: &mut Value, du: &DisplayUnit) {
 /// For a single-axis map (`keys.len() == 1`), returns the entry matching `keys[0]`.
 /// For multi-axis maps, drills into nested `Value::Indexed` using each key in turn.
 fn walk_indexed_keys<'a>(
-    entries: &'a mut IndexMap<VariantName, Value>,
+    entries: &'a mut IndexMap<IndexVariantName, Value>,
     keys: &[MapEntryKey],
 ) -> Option<&'a mut Value> {
     let (first, rest) = keys.split_first()?;

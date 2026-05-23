@@ -1,8 +1,9 @@
 use crate::syntax::ast::{
     DeclKind, Declaration, FieldDecl, TypeDecl, UnionMember, UnionTypeDecl, Visibility,
 };
-use crate::syntax::names::{ConstructorName, FieldName, Spanned, StructTypeName};
+use crate::syntax::names::{ConstructorName, FieldName, StructTypeName};
 use crate::syntax::span::Span;
+use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};

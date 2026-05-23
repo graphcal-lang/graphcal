@@ -350,7 +350,7 @@ fn eval_inline_dag_call(
     _call_expr: &Expr,
     path: &graphcal_compiler::syntax::ast::ModulePath,
     args: &[graphcal_compiler::desugar::resolved_ast::ParamBinding],
-    output: &graphcal_compiler::syntax::names::Spanned<graphcal_compiler::syntax::names::DeclName>,
+    output: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::DeclName>,
     caller_values: &HashMap<ScopedName, RuntimeValue>,
     caller_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,

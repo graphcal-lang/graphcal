@@ -208,7 +208,7 @@ pub fn format_table_grid(value: &Value) -> String {
     };
     let col_names: Vec<&str> = col_entries
         .keys()
-        .map(graphcal_compiler::syntax::names::VariantName::as_str)
+        .map(graphcal_compiler::syntax::names::IndexVariantName::as_str)
         .collect();
 
     let mut builder = Builder::default();
@@ -274,10 +274,7 @@ pub fn format_table_slices(
 
     // depth >= 3: emit section headers and recurse
     for (variant, inner_val) in entries {
-        parts.push(format!(
-            "\n  [{}]",
-            graphcal_compiler::syntax::names::fmt_qualified_variant(index_name, variant)
-        ));
+        parts.push(format!("\n  [{}]", variant.qualified_by(index_name)));
         format_table_slices(inner_val, symbols, depth - 1, parts);
     }
 }
@@ -316,7 +313,9 @@ pub fn format_indexed_table(
 mod tests {
     use super::*;
     use graphcal_compiler::syntax::dimension::Dimension;
-    use graphcal_compiler::syntax::names::{FieldName, IndexName, StructTypeName, VariantName};
+    use graphcal_compiler::syntax::names::{
+        FieldName, IndexName, IndexVariantName, StructTypeName,
+    };
     use indexmap::IndexMap;
 
     fn scalar(si: f64) -> Value {
@@ -330,7 +329,7 @@ mod tests {
     fn indexed_1d(name: &str, pairs: &[(&str, Value)]) -> Value {
         let mut entries = IndexMap::new();
         for (k, v) in pairs {
-            entries.insert(VariantName::new(*k), v.clone());
+            entries.insert(IndexVariantName::new(*k), v.clone());
         }
         Value::Indexed {
             index_name: IndexName::new(name),

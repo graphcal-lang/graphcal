@@ -1,6 +1,7 @@
 use crate::syntax::ast::{Expr, ExprKind, MapEntry, MapEntryIndex, MapEntryKey, TableIndexSpec};
-use crate::syntax::names::{IndexName, Spanned, VariantName};
+use crate::syntax::names::{IndexName, IndexVariantName};
 use crate::syntax::span::Span;
+use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
@@ -91,8 +92,8 @@ impl Parser<'_> {
     }
 
     /// Synthetic variant name `#i` for a `NatRange` axis.
-    fn nat_range_variant_spanned(i: u64, span: Span) -> Spanned<VariantName> {
-        Spanned::new(VariantName::range_step(i), span)
+    fn nat_range_variant_spanned(i: u64, span: Span) -> Spanned<IndexVariantName> {
+        Spanned::new(IndexVariantName::range_step(i), span)
     }
 
     /// Parse a 1D table body.
@@ -119,7 +120,7 @@ impl Parser<'_> {
             entries.push(MapEntry {
                 keys: vec![MapEntryKey {
                     index: Self::named_index_spanned(index),
-                    variant: label.into_spanned::<VariantName>(),
+                    variant: label.into_spanned::<IndexVariantName>(),
                 }],
                 value,
             });
@@ -187,13 +188,13 @@ impl Parser<'_> {
         // Parse the column header row.
         // - Named column axis: requires `: ColLabel1, ColLabel2, ...;`
         // - NatRange column axis: no header; auto-generate `#0..#(n-1)` labels.
-        let col_labels: Vec<Spanned<VariantName>> = match col_spec {
+        let col_labels: Vec<Spanned<IndexVariantName>> = match col_spec {
             TableIndexSpec::Named(_) => {
                 self.expect(Token::Colon)?;
                 let mut labels = Vec::new();
                 loop {
                     let label = self.parse_any_ident()?;
-                    labels.push(label.into_spanned::<VariantName>());
+                    labels.push(label.into_spanned::<IndexVariantName>());
                     if self.lexer.peek() == Some(&Token::Comma) {
                         self.lexer.next_token();
                     } else {
@@ -219,7 +220,7 @@ impl Parser<'_> {
                 TableIndexSpec::Named(_) => {
                     let row_label_ident = self.parse_any_ident()?;
                     let span = row_label_ident.span;
-                    let label = row_label_ident.into_spanned::<VariantName>();
+                    let label = row_label_ident.into_spanned::<IndexVariantName>();
                     self.expect(Token::Colon)?;
                     (label, span)
                 }
@@ -315,7 +316,7 @@ impl Parser<'_> {
                     TableIndexSpec::Named(_) => {
                         let index_ident = self.parse_any_ident()?;
                         self.expect(Token::Dot)?;
-                        let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
+                        let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
                         prefix_keys.push(MapEntryKey {
                             index: Spanned::new(
                                 MapEntryIndex::Named(IndexName::new(index_ident.name)),
@@ -345,7 +346,10 @@ impl Parser<'_> {
                         let variant_span = hash_span.merge(num_span);
                         prefix_keys.push(MapEntryKey {
                             index: Self::nat_range_index_spanned(*n, *sp),
-                            variant: Spanned::new(VariantName::range_step(value), variant_span),
+                            variant: Spanned::new(
+                                IndexVariantName::range_step(value),
+                                variant_span,
+                            ),
                         });
                     }
                 }
@@ -363,13 +367,13 @@ impl Parser<'_> {
 
     // --- Map literal ---
 
-    /// Parse a map literal after `{`, `Index`, `::`, and `Variant` have already been consumed.
+    /// Parse a map literal after `{`, `Index`, `.`, and `Variant` have already been consumed.
     /// The `:` (colon before value) is the next token to consume.
     pub(super) fn parse_map_literal_after_first_entry(
         &mut self,
         brace_span: Span,
         first_index: Spanned<IndexName>,
-        first_variant: Spanned<VariantName>,
+        first_variant: Spanned<IndexVariantName>,
     ) -> Result<Expr, ParseError> {
         self.expect(Token::Colon)?;
         let value = self.parse_expr()?;
@@ -388,7 +392,7 @@ impl Parser<'_> {
             }
             let index = self.parse_any_ident()?.into_spanned::<IndexName>();
             self.expect(Token::Dot)?;
-            let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
+            let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             entries.push(MapEntry {
@@ -406,7 +410,7 @@ impl Parser<'_> {
 
     /// Parse a tuple-key map literal after `{` has been consumed.
     ///
-    /// `{ (Index1::Variant1, Index2::Variant2): expr, ... }`
+    /// `{ (Index1.Variant1, Index2.Variant2): expr, ... }`
     pub(super) fn parse_tuple_key_map_literal(
         &mut self,
         brace_span: Span,
@@ -421,7 +425,7 @@ impl Parser<'_> {
             loop {
                 let index = self.parse_any_ident()?.into_spanned::<IndexName>();
                 self.expect(Token::Dot)?;
-                let variant = self.parse_any_ident()?.into_spanned::<VariantName>();
+                let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
                 keys.push(MapEntryKey {
                     index: Self::named_index_spanned_owned(index),
                     variant,

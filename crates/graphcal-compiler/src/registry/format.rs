@@ -138,8 +138,9 @@ pub fn format_unit_expr_canonical(expr: &crate::syntax::ast::UnitExpr) -> String
 mod tests {
     use super::*;
     use crate::syntax::ast::{MulDivOp, UnitExpr, UnitExprItem};
-    use crate::syntax::names::{Spanned, UnitName};
+    use crate::syntax::names::UnitName;
     use crate::syntax::span::Span;
+    use crate::syntax::span::Spanned;
 
     fn unit_term(op: MulDivOp, name: &str, power: Option<i32>) -> UnitExprItem {
         UnitExprItem {

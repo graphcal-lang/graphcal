@@ -417,7 +417,7 @@ fn infer_inline_dag_ref(
     expr: &Expr,
     path: &crate::syntax::ast::ModulePath,
     args: &[crate::desugar::resolved_ast::ParamBinding],
-    output: &crate::syntax::names::Spanned<crate::syntax::names::DeclName>,
+    output: &crate::syntax::span::Spanned<crate::syntax::names::DeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,

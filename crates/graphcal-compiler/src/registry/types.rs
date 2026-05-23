@@ -5,8 +5,8 @@ use crate::desugar::resolved_ast::{
 };
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational, RationalError};
 use crate::syntax::names::{
-    ConstructorName, DimName, FieldName, GenericParamName, IndexName, StructTypeName, UnitName,
-    VariantName,
+    ConstructorName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
+    StructTypeName, UnitName,
 };
 // ---------------------------------------------------------------------------
 // Data types
@@ -241,7 +241,7 @@ impl RangeIndexData {
 #[derive(Debug, Clone)]
 pub enum IndexKind {
     /// A named label set, e.g. `index Maneuver = { Departure, Correction, Insertion };`
-    Named { variants: Vec<VariantName> },
+    Named { variants: Vec<IndexVariantName> },
     /// A numeric range, e.g. `index T = linspace(0.0 s, 100.0 s, step: 0.1 s);`
     Range(RangeIndexData),
     /// Required named index (no variants): must be bound via parameterized import.
@@ -274,14 +274,14 @@ impl IndexDef {
     /// For nat range indexes, generates synthetic names like `"#0"`, `"#1"`, etc.
     /// For required indexes, returns an empty vec (no variants until bound).
     #[must_use]
-    pub fn variants(&self) -> Vec<VariantName> {
+    pub fn variants(&self) -> Vec<IndexVariantName> {
         match &self.kind {
             IndexKind::Named { variants } => variants.clone(),
             IndexKind::Range(data) => {
                 let count = data.step_count();
-                (0..count).map(VariantName::range_step).collect()
+                (0..count).map(IndexVariantName::range_step).collect()
             }
-            IndexKind::NatRange { size } => (0..*size).map(VariantName::range_step).collect(),
+            IndexKind::NatRange { size } => (0..*size).map(IndexVariantName::range_step).collect(),
             IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => vec![],
         }
     }
@@ -661,7 +661,7 @@ pub struct Registry {
 ///
 /// Populated at IR lowering time with the raw AST body for each declared `dag`.
 /// Used during dim-checking (and later, evaluation) to resolve inline DAG
-/// invocations `@dag(args)::out` against the called `dag`'s `pub param` and
+/// invocations `@dag(args).out` against the called `dag`'s `pub param` and
 /// `pub node` signatures.
 #[derive(Debug, Default, Clone)]
 pub struct DagRegistry {
@@ -731,7 +731,7 @@ impl RegistryBuilder {
 
     /// Register a `dag` declaration body keyed by the declaration's name.
     ///
-    /// Accessed later during dim-checking of inline `@dag(args)::out`
+    /// Accessed later during dim-checking of inline `@dag(args).out`
     /// expressions.
     pub fn register_dag(&mut self, name: String, decl: DagDecl) {
         self.dags.insert(name, decl);
@@ -993,8 +993,8 @@ mod tests {
     use crate::registry::prelude::load_prelude;
     use crate::syntax::ast::{DimExprItem, DimTerm, Ident, UnitExprItem};
     use crate::syntax::dimension::BaseDimId;
-    use crate::syntax::names::Spanned;
     use crate::syntax::span::Span;
+    use crate::syntax::span::Spanned;
 
     // Well-known IDs matching prelude dimension names.
     fn length_id() -> BaseDimId {
@@ -1216,9 +1216,9 @@ mod tests {
             name: IndexName::new("Maneuver"),
             kind: IndexKind::Named {
                 variants: vec![
-                    VariantName::new("Departure"),
-                    VariantName::new("Correction"),
-                    VariantName::new("Insertion"),
+                    IndexVariantName::new("Departure"),
+                    IndexVariantName::new("Correction"),
+                    IndexVariantName::new("Insertion"),
                 ],
             },
         });
@@ -1226,7 +1226,7 @@ mod tests {
         let def = r.indexes.get_index("Maneuver").unwrap();
         assert_eq!(def.name.as_str(), "Maneuver");
         let variants = def.variants();
-        let variant_strs: Vec<&str> = variants.iter().map(VariantName::as_str).collect();
+        let variant_strs: Vec<&str> = variants.iter().map(IndexVariantName::as_str).collect();
         assert_eq!(variant_strs, vec!["Departure", "Correction", "Insertion"]);
         assert!(r.indexes.get_index("NonExistent").is_none());
     }
