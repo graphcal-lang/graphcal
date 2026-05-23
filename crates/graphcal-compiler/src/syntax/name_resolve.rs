@@ -815,11 +815,17 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> d
     }
 
     if ctx.builtin_consts.contains_key(name.as_str()) {
-        return dst_ast::ExprKind::ConstRef(Spanned::new(ScopedName::local(name), ident.span));
+        return dst_ast::ExprKind::ConstRef(Spanned::new(
+            ScopedName::local(name.as_str()),
+            ident.span,
+        ));
     }
 
     if is_time_scale_name(name) {
-        return dst_ast::ExprKind::ConstRef(Spanned::new(ScopedName::local(name), ident.span));
+        return dst_ast::ExprKind::ConstRef(Spanned::new(
+            ScopedName::local(name.as_str()),
+            ident.span,
+        ));
     }
 
     if ctx.constructor_names.contains(name.as_str()) {
@@ -874,7 +880,7 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> d
 ///
 /// Priority:
 /// 1. If `qualifier` is a known index name → `VariantLiteral`
-/// 2. Otherwise → `ConstRef` carrying a `ScopedName::Qualified`
+/// 2. Otherwise → `ConstRef` carrying a qualified `ScopedName`
 ///    (module-qualified constant, validated later)
 fn resolve_qualified_name_ref(
     qualifier: crate::syntax::ast::Ident,

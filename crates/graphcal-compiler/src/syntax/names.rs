@@ -170,106 +170,113 @@ define_name_type! {
 
 // --- Module-scoped names ---
 
-/// A declaration name that may optionally be module-qualified.
+use std::sync::Arc;
+
+/// A declaration name that may optionally be qualified by a module path.
 ///
-/// Selective imports produce `Local` names (`x`); whole-module imports and
-/// alias-rewritten qualified references produce `Qualified` names
-/// (`module.x`). The variant carries the qualification structurally — no
-/// flat string parsing is needed to recover it.
+/// The qualifier is stored as structured path segments, not as a flat
+/// dot-separated string. This allows arbitrary-depth qualification such as
+/// `helpers.math.G0` while keeping the declaration member (`G0`) directly
+/// accessible and distinct from the qualifier.
 ///
-/// The `Display` impl renders `Qualified { module: "m", member: "x" }` as
-/// `m.x`. That serialized form is for *boundary* use only (debug output,
-/// `HashMap` keys that haven't yet been re-typed). The functional core
-/// should pattern-match on the variant directly.
+/// The `Display` impl renders `qualifier: ["helpers", "math"], member: "G0"`
+/// as `helpers.math.G0`. That serialized form is for boundary use only
+/// (diagnostics, debug output, third-party APIs); the compiler core should use
+/// the typed accessors instead of splitting strings.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ScopedName {
-    /// A bare local name: `x`, `G0`, etc.
-    Local(String),
-    /// A module-qualified name: `module.x`, `constants.G0`, etc.
-    Qualified { module: String, member: String },
+pub struct ScopedName {
+    /// Module/path segments that qualify `member`. Empty for a local name.
+    qualifier: Arc<[Arc<str>]>,
+    /// The declaration/member name inside the qualifier scope.
+    member: Arc<str>,
 }
 
 impl ScopedName {
-    /// Create a `Local` name.
+    /// Create an unqualified local name.
     #[must_use]
-    pub fn local(name: impl Into<String>) -> Self {
-        Self::Local(name.into())
-    }
-
-    /// Create a `Qualified` name.
-    #[must_use]
-    pub fn qualified(module: impl Into<String>, member: impl Into<String>) -> Self {
-        Self::Qualified {
-            module: module.into(),
+    pub fn local(member: impl Into<Arc<str>>) -> Self {
+        Self {
+            qualifier: Arc::from([] as [Arc<str>; 0]),
             member: member.into(),
         }
     }
 
-    /// Returns the member (leaf) part of the name.
-    ///
-    /// For `Local("x")` this returns `"x"`.
-    /// For `Qualified { module: "m", member: "x" }` this also returns `"x"`.
+    /// Create a name qualified by a single module segment.
     #[must_use]
-    pub fn member(&self) -> &str {
-        match self {
-            Self::Local(name) => name,
-            Self::Qualified { member, .. } => member,
+    pub fn qualified(module: impl Into<Arc<str>>, member: impl Into<Arc<str>>) -> Self {
+        Self::qualified_path([module], member)
+    }
+
+    /// Create a name qualified by an arbitrary-depth module path.
+    #[must_use]
+    pub fn qualified_path(
+        qualifier: impl IntoIterator<Item = impl Into<Arc<str>>>,
+        member: impl Into<Arc<str>>,
+    ) -> Self {
+        Self {
+            qualifier: qualifier.into_iter().map(Into::into).collect(),
+            member: member.into(),
         }
     }
 
-    /// Returns the module part, if qualified.
+    /// Returns the member (leaf declaration) part of the name.
+    ///
+    /// For `x` this returns `"x"`; for `helpers.math.x` this also returns
+    /// `"x"`.
     #[must_use]
-    pub fn module(&self) -> Option<&str> {
-        match self {
-            Self::Qualified { module, .. } => Some(module),
-            Self::Local(_) => None,
-        }
+    pub fn member(&self) -> &str {
+        &self.member
+    }
+
+    /// Returns the qualifier path segments. Empty means this name is local.
+    #[must_use]
+    pub fn qualifier(&self) -> &[Arc<str>] {
+        &self.qualifier
     }
 
     /// Returns whether this is a qualified name.
     #[must_use]
-    pub const fn is_qualified(&self) -> bool {
-        matches!(self, Self::Qualified { .. })
+    pub fn is_qualified(&self) -> bool {
+        !self.qualifier.is_empty()
     }
 
-    /// Qualify a name with a prefix.
+    /// Qualify a name with a single-segment prefix, replacing any existing
+    /// qualifier while preserving the member.
     ///
-    /// `Local("x").with_prefix("p")` → `Qualified { module: "p", member: "x" }`.
-    /// `Qualified { module: "m", member: "x" }.with_prefix("p")` → `Qualified { module: "p", member: "x" }`.
+    /// `x.with_prefix("p")` → `p.x`.
+    /// `m.x.with_prefix("p")` → `p.x`.
     #[must_use]
     pub fn with_prefix(&self, prefix: &str) -> Self {
-        Self::Qualified {
-            module: prefix.to_string(),
-            member: self.member().to_string(),
-        }
+        Self::qualified(prefix, Arc::clone(&self.member))
     }
 }
 
 impl std::fmt::Display for ScopedName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Local(name) => write!(f, "{name}"),
-            Self::Qualified { module, member } => write!(f, "{module}.{member}"),
+        for segment in self.qualifier.iter() {
+            f.write_str(segment)?;
+            f.write_str(".")?;
         }
+        f.write_str(&self.member)
     }
 }
 
 impl From<String> for ScopedName {
-    /// Wrap a bare string as `ScopedName::Local`. This is what
+    /// Wrap a bare string as a local `ScopedName`. This is what
     /// [`crate::syntax::ast::Ident::into_spanned`] uses to lift parser
     /// identifiers into the typed name; qualified forms are constructed
-    /// explicitly via [`ScopedName::qualified`].
+    /// explicitly via [`ScopedName::qualified`] or [`ScopedName::qualified_path`].
     fn from(s: String) -> Self {
-        Self::Local(s)
+        Self::local(s)
     }
 }
 
 impl From<DeclName> for ScopedName {
-    /// Wrap a `DeclName` as a `ScopedName::Local`. Use this at the resolver →
+    /// Wrap a `DeclName` as a local `ScopedName`. Use this at the resolver →
     /// IR boundary where resolver keys (local `DeclName`s) become IR keys
     /// (`ScopedName`s).
     fn from(name: DeclName) -> Self {
-        Self::Local(name.into_inner())
+        Self::local(name.into_inner())
     }
 }
 
@@ -277,8 +284,7 @@ impl From<DeclName> for ScopedName {
 
 /// Render a qualified index variant `Index.Variant` in surface syntax.
 ///
-/// Centralizes the separator (`.`, since the alpha-4 module-system redesign
-/// uses `.`) so diagnostics, table headers, error
+/// Centralizes the separator `.` so diagnostics, table headers, error
 /// messages, and value descriptions all stay consistent. Use anywhere a
 /// qualified variant needs to appear in user-visible output — never roll
 /// your own `format!("{idx}.{var}")` inline; if the surface separator
@@ -408,6 +414,22 @@ mod tests {
     fn scoped_name_qualified_display_uses_dot() {
         let name = ScopedName::qualified("module", "x");
         assert_eq!(format!("{name}"), "module.x");
+        assert_eq!(name.member(), "x");
+        assert_eq!(
+            name.qualifier().iter().map(|s| &**s).collect::<Vec<_>>(),
+            ["module"]
+        );
+    }
+
+    #[test]
+    fn scoped_name_supports_nested_qualifier_path() {
+        let name = ScopedName::qualified_path(["helpers", "math"], "G0");
+        assert_eq!(format!("{name}"), "helpers.math.G0");
+        assert_eq!(name.member(), "G0");
+        assert_eq!(
+            name.qualifier().iter().map(|s| &**s).collect::<Vec<_>>(),
+            ["helpers", "math"]
+        );
     }
 
     #[test]

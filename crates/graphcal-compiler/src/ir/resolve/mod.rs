@@ -1008,16 +1008,28 @@ pub(crate) fn resolve_with_imports(
     // The `imported.*` legacy entries pass bare names; the at-rest dep map
     // produced upstream already classifies them as locals.
     for (name, _, _, span) in &imported.consts {
-        names.insert(ScopedName::local(name), (*span, NameCategory::Const));
+        names.insert(
+            ScopedName::local(name.as_str()),
+            (*span, NameCategory::Const),
+        );
     }
     for (name, _, _, span) in &imported.params {
-        names.insert(ScopedName::local(name), (*span, NameCategory::Runtime));
+        names.insert(
+            ScopedName::local(name.as_str()),
+            (*span, NameCategory::Runtime),
+        );
     }
     for (name, _, _, span) in &imported.nodes {
-        names.insert(ScopedName::local(name), (*span, NameCategory::Runtime));
+        names.insert(
+            ScopedName::local(name.as_str()),
+            (*span, NameCategory::Runtime),
+        );
     }
     for (name, _, span) in &imported.asserts {
-        names.insert(ScopedName::local(name), (*span, NameCategory::Runtime));
+        names.insert(
+            ScopedName::local(name.as_str()),
+            (*span, NameCategory::Runtime),
+        );
     }
 
     // Collect local declarations
@@ -1186,7 +1198,10 @@ pub(crate) fn resolve_with_imported_values(
         names.insert(name.clone(), (*span, NameCategory::Runtime));
     }
     for (name, span) in &imported.assert_names {
-        names.insert(ScopedName::local(name), (*span, NameCategory::Runtime));
+        names.insert(
+            ScopedName::local(name.as_str()),
+            (*span, NameCategory::Runtime),
+        );
     }
 
     // Collect local declarations

@@ -1136,8 +1136,7 @@ impl UnfrozenIR {
                     .parse::<crate::syntax::attribute::AttributeName>()
                     == Ok(crate::syntax::attribute::AttributeName::ExpectedFail)
                 {
-                    let prefixed_assert =
-                        ScopedName::Local(orig_name.as_str().to_string()).with_prefix(prefix);
+                    let prefixed_assert = ScopedName::local(orig_name.as_str()).with_prefix(prefix);
                     let ef = crate::ir::resolve::names::parse_expected_fail_args(
                         &attr.args,
                         importer_src,
@@ -1380,7 +1379,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
 /// dependency being merged, rewrite the typed [`ScopedName`] payload via
 /// [`ScopedName::with_prefix`] so the merged-IR key matches the prefixed
 /// declaration name. No flat separator strings are constructed here — the
-/// `Local`/`Qualified` distinction lives in the variant.
+/// local/qualified distinction lives in the structured qualifier path.
 struct RefPrefixer<'a> {
     prefix: &'a str,
     dep_names: &'a HashSet<String>,
@@ -1392,9 +1391,7 @@ impl RefPrefixer<'_> {
         // members owned by the dependency). Already-qualified refs (e.g.
         // a transitively-imported `@module.x` inside the dep) belong to
         // some other namespace and are left untouched.
-        if let ScopedName::Local(name) = scoped
-            && self.dep_names.contains(name.as_str())
-        {
+        if !scoped.is_qualified() && self.dep_names.contains(scoped.member()) {
             Some(scoped.with_prefix(self.prefix))
         } else {
             None
