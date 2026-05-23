@@ -837,7 +837,7 @@ pub(in crate::eval::project) fn build_dep_import_values_for_kind(
         graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
             let module_name = alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(import_path),
-                |alias_ident| alias_ident.name.clone(),
+                |alias_ident| alias_ident.value.to_string(),
             );
             let import_span = import_path.span();
             imports::import_module_values(

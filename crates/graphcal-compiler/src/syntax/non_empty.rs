@@ -45,9 +45,10 @@ impl<T> NonEmpty<T> {
     ///
     /// Returns [`EmptyVecError`] if `items` is empty.
     pub fn try_from_vec(items: Vec<T>) -> Result<Self, EmptyVecError> {
-        match items.is_empty() {
-            true => Err(EmptyVecError),
-            false => Ok(Self { items }),
+        if items.is_empty() {
+            Err(EmptyVecError)
+        } else {
+            Ok(Self { items })
         }
     }
 
@@ -71,7 +72,7 @@ impl<T> NonEmpty<T> {
 
     /// Number of elements. Always at least 1.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.items.len()
     }
 
@@ -90,9 +91,7 @@ impl<T> NonEmpty<T> {
     /// Last element in source order.
     #[must_use]
     pub fn last(&self) -> &T {
-        self.items
-            .last()
-            .expect("NonEmpty invariant: items always contains at least one element")
+        &self.items[self.items.len() - 1]
     }
 
     /// Iterate over all elements in source order.

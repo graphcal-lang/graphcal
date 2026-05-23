@@ -23,18 +23,18 @@ impl Parser<'_> {
             self.lexer.next_token(); // consume '('
             let first = self.parse_expr()?;
             if self.lexer.peek() == Some(&Token::Comma) {
-                let mut scrutinees = vec![first];
+                let mut rest_scrutinees = Vec::new();
                 while self.lexer.peek() == Some(&Token::Comma) {
                     self.lexer.next_token();
-                    scrutinees.push(self.parse_expr()?);
+                    rest_scrutinees.push(self.parse_expr()?);
                 }
                 self.expect(Token::RParen)?;
                 self.expect(Token::LBrace)?;
-                let arms = self.parse_tuple_match_arms(scrutinees.len(), start_span)?;
+                let arity = rest_scrutinees.len() + 1;
+                let arms = self.parse_tuple_match_arms(arity, start_span)?;
                 let (_, end_span) = self.expect(Token::RBrace)?;
                 let span = start_span.merge(end_span);
-                let scrutinees = NonEmpty::try_from_vec(scrutinees)
-                    .expect("tuple match scrutinees contain the first parsed expression");
+                let scrutinees = NonEmpty::new(first, rest_scrutinees);
                 return Ok(Expr::new(ExprKind::TupleMatch { scrutinees, arms }, span));
             }
             self.expect(Token::RParen)?;
@@ -83,20 +83,18 @@ impl Parser<'_> {
                 });
             } else {
                 let (_, lparen_span) = self.expect(Token::LParen)?;
-                let mut pattern_elems = Vec::new();
-                loop {
-                    pattern_elems.push(self.parse_expr()?);
-                    if self.lexer.peek() == Some(&Token::Comma) {
-                        self.lexer.next_token();
-                    } else {
-                        break;
-                    }
+                let first_pattern = self.parse_expr()?;
+                let mut rest_patterns = Vec::new();
+                while self.lexer.peek() == Some(&Token::Comma) {
+                    self.lexer.next_token();
+                    rest_patterns.push(self.parse_expr()?);
                 }
                 self.expect(Token::RParen)?;
-                if pattern_elems.len() != arity {
+                let pattern_len = rest_patterns.len() + 1;
+                if pattern_len != arity {
                     return Err(self.unexpected_token(
                         &format!("tuple pattern of arity {arity}"),
-                        &format!("tuple pattern of arity {}", pattern_elems.len()),
+                        &format!("tuple pattern of arity {pattern_len}"),
                         start_span,
                     ));
                 }
@@ -104,10 +102,7 @@ impl Parser<'_> {
                 let body = self.parse_expr()?;
                 let span = lparen_span.merge(body.span);
                 arms.push(TupleMatchArm {
-                    patterns: Some(
-                        NonEmpty::try_from_vec(pattern_elems)
-                            .expect("tuple pattern parser always parses at least one element"),
-                    ),
+                    patterns: Some(NonEmpty::new(first_pattern, rest_patterns)),
                     body,
                     span,
                 });

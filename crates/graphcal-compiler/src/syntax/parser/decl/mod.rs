@@ -355,15 +355,16 @@ impl Parser<'_> {
             // Path: ident or ident.ident.ident...
             let first = self.parse_any_ident()?;
             let start_span = first.span;
-            let mut segments = vec![first];
+            let mut end_span = start_span;
+            let mut rest_segments = Vec::new();
             while self.lexer.peek() == Some(&Token::Dot) {
                 self.expect(Token::Dot)?;
-                segments.push(self.parse_any_ident()?);
+                let segment = self.parse_any_ident()?;
+                end_span = segment.span;
+                rest_segments.push(segment);
             }
-            let end_span = segments.last().map_or(start_span, |s| s.span);
             Ok(AttributeArg::Path {
-                segments: NonEmpty::try_from_vec(segments)
-                    .expect("attribute paths always contain the first parsed identifier"),
+                segments: NonEmpty::new(first, rest_segments),
                 span: start_span.merge(end_span),
             })
         }

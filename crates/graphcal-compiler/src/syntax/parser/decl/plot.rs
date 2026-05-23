@@ -2,7 +2,7 @@ use crate::syntax::ast::{
     DeclKind, Declaration, Encoding, EncodingChannel, MarkSpec, MarkType, PlotDecl, PlotField,
     Visibility,
 };
-use crate::syntax::names::DeclName;
+use crate::syntax::names::{DeclName, PlotPropertyName};
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
@@ -38,7 +38,7 @@ impl Parser<'_> {
                     let value = self.parse_expr()?;
                     let field_end = value.span;
                     properties.push(PlotField {
-                        name: field_name,
+                        name: field_name.into_spanned::<PlotPropertyName>(),
                         value,
                         span: field_start.merge(field_end),
                     });
@@ -106,7 +106,7 @@ impl Parser<'_> {
                 let value = self.parse_expr()?;
                 let prop_end = value.span;
                 properties.push(PlotField {
-                    name: prop_name,
+                    name: prop_name.into_spanned::<PlotPropertyName>(),
                     value,
                     span: prop_start.merge(prop_end),
                 });

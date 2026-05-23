@@ -815,7 +815,7 @@ fn parse_import_bare_module_with_alias() {
     let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
         panic!("expected Module");
     };
-    assert_eq!(alias.as_ref().unwrap().name, "consts");
+    assert_eq!(alias.as_ref().unwrap().value.as_str(), "consts");
 }
 
 #[test]
@@ -868,7 +868,7 @@ fn parse_import_dotted_path_with_alias() {
     let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
         panic!("expected Module");
     };
-    assert_eq!(alias.as_ref().unwrap().name, "r");
+    assert_eq!(alias.as_ref().unwrap().value.as_str(), "r");
 }
 
 #[test]
@@ -885,7 +885,7 @@ fn parse_include_dotted_path_with_param_bindings() {
     let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
         panic!("expected Module");
     };
-    assert_eq!(alias.as_ref().unwrap().name, "stage_1");
+    assert_eq!(alias.as_ref().unwrap().value.as_str(), "stage_1");
 }
 
 #[test]
@@ -938,7 +938,7 @@ fn parse_pub_include_whole_module_with_alias() {
     let crate::syntax::ast::ImportKind::Module { alias } = &i.kind else {
         panic!("expected Module");
     };
-    assert_eq!(alias.as_ref().unwrap().name, "c");
+    assert_eq!(alias.as_ref().unwrap().value.as_str(), "c");
 }
 
 #[test]

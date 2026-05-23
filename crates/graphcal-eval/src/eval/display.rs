@@ -45,7 +45,7 @@ pub(super) fn attach_display_units(
             },
         ) => {
             for map_entry in map_entries {
-                if let Some(target) = walk_indexed_keys(entries, &map_entry.keys) {
+                if let Some(target) = walk_indexed_keys(entries, map_entry.keys.as_slice()) {
                     attach_display_units(target, &map_entry.value, registry, values);
                 }
             }

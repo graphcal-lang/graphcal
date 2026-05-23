@@ -207,6 +207,11 @@ define_name_type! {
     pub struct ModuleAliasName;
 }
 
+define_name_type! {
+    /// Name of an open plot/figure/layer property (e.g., `"title"`, `"width"`, `"stroke_width"`).
+    pub struct PlotPropertyName;
+}
+
 // --- Module-scoped names ---
 
 use std::sync::Arc;

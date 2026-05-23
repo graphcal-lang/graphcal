@@ -3,6 +3,7 @@ use crate::syntax::ast::Declaration;
 use crate::syntax::ast::ImportKind;
 use crate::syntax::ast::ModulePath;
 use crate::syntax::ast::Visibility;
+use crate::syntax::names::ModuleAliasName;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
@@ -131,7 +132,7 @@ impl Parser<'_> {
             }
             Some(Token::As) => {
                 self.lexer.next_token(); // consume `as`
-                let alias = self.parse_any_ident()?;
+                let alias = self.parse_any_ident()?.into_spanned::<ModuleAliasName>();
                 let (_, end_span) = self.expect(Token::Semicolon)?;
                 Ok((ImportKind::Module { alias: Some(alias) }, end_span))
             }

@@ -355,10 +355,18 @@ impl Parser<'_> {
         // expansion loop; they're preserved in the captured AST instead.
         let _ = (&row_index_spec, &slice_axis_specs, table_total_span);
 
+        let shared_axes =
+            ast::MultiDeclSharedAxes::try_from_vec(shared_axes.clone()).map_err(|_| {
+                self.unexpected_token(
+                    "at least one shared table axis",
+                    "empty axis list",
+                    table_total_span,
+                )
+            })?;
+
         let multi = ast::MultiDecl {
             slots: ast_slots,
-            shared_axes: ast::MultiDeclSharedAxes::try_from_vec(shared_axes.clone())
-                .expect("multi-decl parser rejects an empty shared-axis list"),
+            shared_axes,
             slot_axes: ast_slot_axes,
             slices: ast_slices,
             span: surface_span,

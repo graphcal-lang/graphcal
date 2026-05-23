@@ -1,7 +1,6 @@
 use graphcal_compiler::syntax::ast::{
-    BinOp, Expr, ExprKind, FieldInit, ForBinding, IndexArg, MapEntry, MatchArm,
-    MatchPattern, ModulePath, ParamBinding, PatternBinding, TableIndexSpec, TupleMatchArm,
-    TypeExpr, UnaryOp,
+    BinOp, Expr, ExprKind, FieldInit, ForBinding, IndexArg, MapEntry, MatchArm, MatchPattern,
+    ModulePath, ParamBinding, PatternBinding, TableIndexSpec, TupleMatchArm, TypeExpr, UnaryOp,
 };
 use graphcal_compiler::syntax::names::{LocalName, ScopedName};
 use graphcal_compiler::syntax::span::Spanned;
@@ -123,7 +122,9 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             body,
         } => format_unfold(fmt, init, prev_name, curr_name, body),
         ExprKind::Match { scrutinee, arms } => format_match(fmt, scrutinee, arms),
-        ExprKind::TupleMatch { scrutinees, arms } => format_tuple_match(fmt, scrutinees, arms),
+        ExprKind::TupleMatch { scrutinees, arms } => {
+            format_tuple_match(fmt, scrutinees.as_slice(), arms.as_slice())
+        }
         ExprKind::VariantLiteral { index, variant } => {
             RcDoc::text(format!("{}.{}", index.value, variant.value))
         }

@@ -443,7 +443,7 @@ fn format_import_or_include_kind(
         }
         graphcal_compiler::syntax::ast::ImportKind::Module { alias: Some(a) } => path_doc
             .append(bindings_doc)
-            .append(RcDoc::text(format!(" as {};", a.name))),
+            .append(RcDoc::text(format!(" as {};", a.value))),
     }
 }
 
@@ -485,7 +485,7 @@ fn format_plot_decl(fmt: &mut Formatter<'_>, d: &PlotDecl) -> RcDoc<'static> {
     // Emit other properties
     for f in &d.properties {
         field_docs.push(
-            RcDoc::text(f.name.name.clone())
+            RcDoc::text(f.name.value.to_string())
                 .append(RcDoc::text(": "))
                 .append(format_expr(fmt, &f.value))
                 .append(RcDoc::text(",")),
@@ -519,7 +519,7 @@ fn format_mark_spec(
             .properties
             .iter()
             .map(|f| {
-                RcDoc::text(f.name.name.clone())
+                RcDoc::text(f.name.value.to_string())
                     .append(RcDoc::text(": "))
                     .append(format_expr(fmt, &f.value))
                     .append(RcDoc::text(","))
@@ -611,7 +611,7 @@ fn format_composition_decl(
     // Emit other fields
     for f in fields {
         field_docs.push(
-            RcDoc::text(f.name.name.clone())
+            RcDoc::text(f.name.value.to_string())
                 .append(RcDoc::text(": "))
                 .append(format_expr(fmt, &f.value))
                 .append(RcDoc::text(",")),

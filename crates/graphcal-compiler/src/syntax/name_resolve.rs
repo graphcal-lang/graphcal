@@ -194,7 +194,7 @@ fn collect_names_from_decls(
             }
             src_ast::DeclKind::Import(import) => {
                 if let ImportKind::Module { alias: Some(alias) } = &import.kind {
-                    module_names.insert(ModuleAliasName::new(&alias.name));
+                    module_names.insert(alias.value.clone());
                 }
                 if let ImportKind::Selective(items) = &import.kind {
                     for item in items {
@@ -218,7 +218,7 @@ fn collect_names_from_decls(
             }
             src_ast::DeclKind::Include(include) => {
                 if let ImportKind::Module { alias: Some(alias) } = &include.kind {
-                    module_names.insert(ModuleAliasName::new(&alias.name));
+                    module_names.insert(alias.value.clone());
                 }
                 if let ImportKind::Selective(items) = &include.kind {
                     for item in items {

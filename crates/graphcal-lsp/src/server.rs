@@ -846,7 +846,7 @@ fn collect_imported_definitions(
                         graphcal_eval::loader::derive_module_name(&path_display)
                             .unwrap_or_else(|stem| stem)
                     },
-                    |alias_ident| alias_ident.name.clone(),
+                    |alias_ident| alias_ident.value.to_string(),
                 );
                 for (key, def) in &imported_table.definitions {
                     let qualified_key = rekey_module_import(key, &module_name);

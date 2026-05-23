@@ -229,7 +229,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
             alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(&include_decl.path),
-                |alias_ident| alias_ident.name.clone(),
+                |alias_ident| alias_ident.value.to_string(),
             )
         }
         graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(_) => {
@@ -519,7 +519,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     let prefix = match &include_decl.kind {
         ImportKind::Module { alias } => alias.as_ref().map_or_else(
             || dag_name.to_string(),
-            |alias_ident| alias_ident.name.clone(),
+            |alias_ident| alias_ident.value.to_string(),
         ),
         ImportKind::Selective(_) => dag_name.to_string(),
     };
@@ -836,7 +836,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
         graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
             let module_name = alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(import_path),
-                |alias_ident| alias_ident.name.clone(),
+                |alias_ident| alias_ident.value.to_string(),
             );
             if let Some((_, first_span)) = ctx.module_map.get(&module_name) {
                 return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {

@@ -3,7 +3,8 @@ use std::marker::PhantomData;
 
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, FnName, GenericParamName, IndexName,
-    IndexVariantName, LocalName, ScopedName, StructTypeName, UnitName,
+    IndexVariantName, LocalName, ModuleAliasName, PlotPropertyName, ScopedName, StructTypeName,
+    UnitName,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Phase, Raw, Resolved};
@@ -381,7 +382,7 @@ pub struct Encoding<P: Phase = Raw> {
 #[derive(Debug, Clone)]
 pub struct PlotField<P: Phase = Raw> {
     /// The field name (e.g., "title", "width", "height").
-    pub name: Ident,
+    pub name: Spanned<PlotPropertyName>,
     /// The field value expression.
     pub value: Expr<P>,
     pub span: Span,
@@ -448,7 +449,9 @@ pub enum ImportKind {
     /// Brace-list selector: `path.{ X, Y as Z, ... }`.
     Selective(Vec<ImportItem>),
     /// Bare or aliased form.
-    Module { alias: Option<Ident> },
+    Module {
+        alias: Option<Spanned<ModuleAliasName>>,
+    },
 }
 
 /// A dot-separated module path: `nasa.rocket.dynamics`.
@@ -1374,7 +1377,7 @@ impl MultiDeclSharedAxes {
 
     /// Number of shared axes. Always at least 1.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.slice_axes.len() + 1
     }
 
@@ -1395,11 +1398,17 @@ impl MultiDeclSharedAxes {
 impl std::ops::Index<usize> for MultiDeclSharedAxes {
     type Output = TableIndexSpec;
 
+    #[expect(
+        clippy::panic,
+        reason = "Index implementations conventionally panic on out-of-bounds access"
+    )]
     fn index(&self, index: usize) -> &Self::Output {
-        match index < self.slice_axes.len() {
-            true => &self.slice_axes[index],
-            false if index == self.slice_axes.len() => &self.row_axis,
-            false => panic!("multi-decl shared axis index out of bounds"),
+        match index.cmp(&self.slice_axes.len()) {
+            std::cmp::Ordering::Less => &self.slice_axes[index],
+            std::cmp::Ordering::Equal => &self.row_axis,
+            std::cmp::Ordering::Greater => {
+                panic!("multi-decl shared axis index out of bounds")
+            }
         }
     }
 }

@@ -7,6 +7,21 @@ use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
 
+fn table_entry_keys(
+    mut prefix: Vec<MapEntryKey>,
+    row: MapEntryKey,
+    column: MapEntryKey,
+) -> NonEmpty<MapEntryKey> {
+    if prefix.is_empty() {
+        NonEmpty::new(row, vec![column])
+    } else {
+        let first = prefix.remove(0);
+        prefix.push(row);
+        prefix.push(column);
+        NonEmpty::new(first, prefix)
+    }
+}
+
 impl Parser<'_> {
     // --- Table expression (desugars to MapLiteral) ---
 
@@ -264,18 +279,16 @@ impl Parser<'_> {
             }
 
             for (col_idx, value) in row_values.into_iter().enumerate() {
-                let mut keys: Vec<MapEntryKey> = prefix_keys.to_vec();
-                keys.push(MapEntryKey {
+                let row_key = MapEntryKey {
                     index: row_index_template.clone(),
                     variant: row_label.clone(),
-                });
-                keys.push(MapEntryKey {
+                };
+                let column_key = MapEntryKey {
                     index: col_index_template.clone(),
                     variant: col_labels[col_idx].clone(),
-                });
+                };
                 entries.push(MapEntry {
-                    keys: NonEmpty::try_from_vec(keys)
-                        .expect("2D table entries contain row and column keys"),
+                    keys: table_entry_keys(prefix_keys.to_vec(), row_key, column_key),
                     value,
                 });
             }
@@ -426,27 +439,29 @@ impl Parser<'_> {
                 break;
             }
             self.expect(Token::LParen)?;
-            let mut keys = Vec::new();
-            loop {
+            let index = self.parse_any_ident()?.into_spanned::<IndexName>();
+            self.expect(Token::Dot)?;
+            let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+            let first_key = MapEntryKey {
+                index: Self::named_index_spanned_owned(index),
+                variant,
+            };
+            let mut rest_keys = Vec::new();
+            while self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
                 let index = self.parse_any_ident()?.into_spanned::<IndexName>();
                 self.expect(Token::Dot)?;
                 let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
-                keys.push(MapEntryKey {
+                rest_keys.push(MapEntryKey {
                     index: Self::named_index_spanned_owned(index),
                     variant,
                 });
-                if self.lexer.peek() == Some(&Token::Comma) {
-                    self.lexer.next_token();
-                } else {
-                    break;
-                }
             }
             self.expect(Token::RParen)?;
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             entries.push(MapEntry {
-                keys: NonEmpty::try_from_vec(keys)
-                    .expect("tuple-key map literal parses at least one key"),
+                keys: NonEmpty::new(first_key, rest_keys),
                 value,
             });
             if self.lexer.peek() == Some(&Token::Comma) {
