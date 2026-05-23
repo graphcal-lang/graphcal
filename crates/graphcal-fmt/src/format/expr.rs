@@ -1,9 +1,10 @@
 use graphcal_compiler::syntax::ast::{
-    BinOp, Expr, ExprKind, FieldInit, ForBinding, Ident, IndexArg, MapEntry, MatchArm,
+    BinOp, Expr, ExprKind, FieldInit, ForBinding, IndexArg, MapEntry, MatchArm,
     MatchPattern, ModulePath, ParamBinding, PatternBinding, TableIndexSpec, TupleMatchArm,
     TypeExpr, UnaryOp,
 };
-use graphcal_compiler::syntax::names::ScopedName;
+use graphcal_compiler::syntax::names::{LocalName, ScopedName};
+use graphcal_compiler::syntax::span::Spanned;
 use pretty::RcDoc;
 
 use super::{
@@ -753,7 +754,7 @@ pub fn format_for_comp(
     let binding_docs: Vec<RcDoc<'static>> = bindings
         .iter()
         .map(|b| {
-            RcDoc::text(b.var.name.clone())
+            RcDoc::text(b.var.value.as_str().to_owned())
                 .append(RcDoc::text(": "))
                 .append(match &b.index {
                     graphcal_compiler::syntax::ast::ForBindingIndex::Named(spanned) => {
@@ -798,7 +799,7 @@ fn format_lambda_call(
     fmt: &mut Formatter<'_>,
     head: &'static str,
     args: &[&Expr],
-    lambda_params: (&Ident, &Ident),
+    lambda_params: (&Spanned<LocalName>, &Spanned<LocalName>),
     body: &Expr,
 ) -> RcDoc<'static> {
     let mut doc = RcDoc::text(head).append(RcDoc::text("("));
@@ -806,9 +807,9 @@ fn format_lambda_call(
         doc = doc.append(format_expr(fmt, arg)).append(RcDoc::text(", "));
     }
     doc.append(RcDoc::text("|"))
-        .append(RcDoc::text(lambda_params.0.name.clone()))
+        .append(RcDoc::text(lambda_params.0.value.as_str().to_owned()))
         .append(RcDoc::text(", "))
-        .append(RcDoc::text(lambda_params.1.name.clone()))
+        .append(RcDoc::text(lambda_params.1.value.as_str().to_owned()))
         .append(RcDoc::text("| "))
         .append(format_expr(fmt, body))
         .append(RcDoc::text(")"))
@@ -818,8 +819,8 @@ fn format_scan(
     fmt: &mut Formatter<'_>,
     source: &Expr,
     init: &Expr,
-    acc_name: &Ident,
-    val_name: &Ident,
+    acc_name: &Spanned<LocalName>,
+    val_name: &Spanned<LocalName>,
     body: &Expr,
 ) -> RcDoc<'static> {
     format_lambda_call(fmt, "scan", &[source, init], (acc_name, val_name), body)
@@ -828,8 +829,8 @@ fn format_scan(
 fn format_unfold(
     fmt: &mut Formatter<'_>,
     init: &Expr,
-    prev_name: &Ident,
-    curr_name: &Ident,
+    prev_name: &Spanned<LocalName>,
+    curr_name: &Spanned<LocalName>,
     body: &Expr,
 ) -> RcDoc<'static> {
     format_lambda_call(fmt, "unfold", &[init], (prev_name, curr_name), body)

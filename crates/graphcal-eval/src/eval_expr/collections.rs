@@ -143,8 +143,8 @@ pub(super) fn eval_index_access(
 pub(super) fn eval_scan(
     source: &Expr,
     init: &Expr,
-    acc_name: &graphcal_compiler::desugar::resolved_ast::Ident,
-    val_name: &graphcal_compiler::desugar::resolved_ast::Ident,
+    acc_name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::LocalName>,
+    val_name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::LocalName>,
     body: &Expr,
     values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -166,8 +166,8 @@ pub(super) fn eval_scan(
     // Reuse across iterations instead of cloning local_values each time.
     let mut scan_locals = local_values.clone();
     for (variant, val) in &source_entries {
-        scan_locals.insert(acc_name.name.clone(), acc);
-        scan_locals.insert(val_name.name.clone(), val.clone());
+        scan_locals.insert(acc_name.value.as_str().to_owned(), acc);
+        scan_locals.insert(val_name.value.as_str().to_owned(), val.clone());
         let body_val = eval_expr(body, values, &scan_locals, ctx)?;
         result_entries.insert(variant.clone(), body_val.clone());
         acc = body_val;
@@ -193,8 +193,8 @@ pub(super) fn eval_scan(
 pub(super) fn eval_unfold(
     expr: &Expr,
     init: &Expr,
-    prev_name: &graphcal_compiler::desugar::resolved_ast::Ident,
-    curr_name: &graphcal_compiler::desugar::resolved_ast::Ident,
+    prev_name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::LocalName>,
+    curr_name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::LocalName>,
     body: &Expr,
     values: &HashMap<ScopedName, RuntimeValue>,
     ctx: &EvalContext<'_>,
@@ -280,14 +280,14 @@ pub(super) fn eval_unfold(
         let curr_value = range_data.step_value(i);
 
         scan_locals.insert(
-            prev_name.name.clone(),
+            prev_name.value.as_str().to_owned(),
             RuntimeValue::RangeLabel {
                 step_index: i - 1,
                 value: prev_value,
             },
         );
         scan_locals.insert(
-            curr_name.name.clone(),
+            curr_name.value.as_str().to_owned(),
             RuntimeValue::RangeLabel {
                 step_index: i,
                 value: curr_value,
@@ -489,7 +489,7 @@ pub(super) fn eval_for_comp(
                 })?)
             }
         };
-        inner_locals.insert(binding.var.name.clone(), binding_value);
+        inner_locals.insert(binding.var.value.as_str().to_owned(), binding_value);
         let val = if remaining.is_empty() {
             eval_expr(body, values, &inner_locals, ctx)?
         } else {

@@ -244,7 +244,7 @@ impl Parser<'_> {
         let (_, start_span) = self.expect(Token::For)?;
         let mut bindings = Vec::new();
         loop {
-            let var = self.parse_any_ident()?;
+            let var = self.parse_any_ident()?.into_spanned();
             self.expect(Token::Colon)?;
             let index = self.parse_for_binding_index()?;
             bindings.push(ForBinding { var, index });
@@ -378,9 +378,9 @@ impl Parser<'_> {
         self.expect(Token::Comma)?;
         // Parse lambda: |acc, val| body
         self.expect(Token::Pipe)?;
-        let acc_name = self.parse_any_ident()?;
+        let acc_name = self.parse_any_ident()?.into_spanned();
         self.expect(Token::Comma)?;
-        let val_name = self.parse_any_ident()?;
+        let val_name = self.parse_any_ident()?.into_spanned();
         self.expect(Token::Pipe)?;
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;
@@ -407,9 +407,9 @@ impl Parser<'_> {
         let init = self.parse_expr()?;
         self.expect(Token::Comma)?;
         self.expect(Token::Pipe)?;
-        let prev_name = self.parse_any_ident()?;
+        let prev_name = self.parse_any_ident()?.into_spanned();
         self.expect(Token::Comma)?;
-        let curr_name = self.parse_any_ident()?;
+        let curr_name = self.parse_any_ident()?.into_spanned();
         self.expect(Token::Pipe)?;
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;
@@ -517,7 +517,7 @@ mod tests {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ForComp { bindings, body } => {
                     assert_eq!(bindings.len(), 1);
-                    assert_eq!(bindings[0].var.name, "m");
+                    assert_eq!(bindings[0].var.value.as_str(), "m");
                     let ForBindingIndex::Named(spanned) = &bindings[0].index else {
                         panic!("expected Named")
                     };
@@ -538,12 +538,12 @@ mod tests {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ForComp { bindings, .. } => {
                     assert_eq!(bindings.len(), 2);
-                    assert_eq!(bindings[0].var.name, "r");
+                    assert_eq!(bindings[0].var.value.as_str(), "r");
                     let ForBindingIndex::Named(spanned) = &bindings[0].index else {
                         panic!("expected Named")
                     };
                     assert_eq!(spanned.value.as_str(), "Row");
-                    assert_eq!(bindings[1].var.name, "c");
+                    assert_eq!(bindings[1].var.value.as_str(), "c");
                     let ForBindingIndex::Named(spanned) = &bindings[1].index else {
                         panic!("expected Named")
                     };
@@ -615,8 +615,8 @@ mod tests {
                 ExprKind::Scan {
                     acc_name, val_name, ..
                 } => {
-                    assert_eq!(acc_name.name, "acc");
-                    assert_eq!(val_name.name, "val");
+                    assert_eq!(acc_name.value.as_str(), "acc");
+                    assert_eq!(val_name.value.as_str(), "val");
                 }
                 other => panic!("expected Scan, got {other:?}"),
             },
@@ -635,8 +635,8 @@ mod tests {
                     curr_name,
                     ..
                 } => {
-                    assert_eq!(prev_name.name, "prev_t");
-                    assert_eq!(curr_name.name, "t");
+                    assert_eq!(prev_name.value.as_str(), "prev_t");
+                    assert_eq!(curr_name.value.as_str(), "t");
                 }
                 other => panic!("expected Unfold, got {other:?}"),
             },

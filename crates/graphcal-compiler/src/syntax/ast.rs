@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, FnName, GenericParamName, IndexName,
-    IndexVariantName, ScopedName, StructTypeName, UnitName,
+    IndexVariantName, LocalName, ScopedName, StructTypeName, UnitName,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Phase, Raw, Resolved};
@@ -1238,8 +1238,8 @@ pub enum ExprKind<P: Phase = Raw> {
     Scan {
         source: Box<Expr<P>>,
         init: Box<Expr<P>>,
-        acc_name: Ident,
-        val_name: Ident,
+        acc_name: Spanned<LocalName>,
+        val_name: Spanned<LocalName>,
         body: Box<Expr<P>>,
     },
     /// Unfold: `unfold(init, |prev_i, i| body)`
@@ -1249,8 +1249,8 @@ pub enum ExprKind<P: Phase = Raw> {
     /// step indices, and the body can reference `@node_name[prev_i]`.
     Unfold {
         init: Box<Expr<P>>,
-        prev_name: Ident,
-        curr_name: Ident,
+        prev_name: Spanned<LocalName>,
+        curr_name: Spanned<LocalName>,
         body: Box<Expr<P>>,
     },
     /// Match expression: `match @status { Nominal => ..., Warning { message } => ... }`
@@ -1510,7 +1510,7 @@ pub struct MapEntry<P: Phase = Raw> {
 /// A binding in a `for` comprehension: `m: Maneuver` or `i: range(3)`
 #[derive(Debug, Clone)]
 pub struct ForBinding {
-    pub var: Ident,
+    pub var: Spanned<LocalName>,
     pub index: ForBindingIndex,
 }
 

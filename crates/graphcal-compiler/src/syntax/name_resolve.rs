@@ -676,7 +676,7 @@ fn lift_expr_kind(
         S::ForComp { bindings, body } => {
             let mut scope = HashSet::new();
             for binding in &bindings {
-                scope.insert(LocalName::new(&binding.var.name));
+                scope.insert(binding.var.value.clone());
             }
             ctx.push_scope(scope);
             let body = Box::new(lift_expr(*body, ctx));
@@ -692,10 +692,7 @@ fn lift_expr_kind(
         } => {
             let source = Box::new(lift_expr(*source, ctx));
             let init = Box::new(lift_expr(*init, ctx));
-            let scope = HashSet::from([
-                LocalName::new(&acc_name.name),
-                LocalName::new(&val_name.name),
-            ]);
+            let scope = HashSet::from([acc_name.value.clone(), val_name.value.clone()]);
             ctx.push_scope(scope);
             let body = Box::new(lift_expr(*body, ctx));
             ctx.pop_scope();
@@ -714,10 +711,7 @@ fn lift_expr_kind(
             body,
         } => {
             let init = Box::new(lift_expr(*init, ctx));
-            let scope = HashSet::from([
-                LocalName::new(&prev_name.name),
-                LocalName::new(&curr_name.name),
-            ]);
+            let scope = HashSet::from([prev_name.value.clone(), curr_name.value.clone()]);
             ctx.push_scope(scope);
             let body = Box::new(lift_expr(*body, ctx));
             ctx.pop_scope();

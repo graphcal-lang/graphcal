@@ -940,18 +940,18 @@ fn register_local_var(
     scopes: &mut ScopeStack,
     kind: ExprScopeKind,
     offset: usize,
-    name: &graphcal_compiler::desugar::resolved_ast::Ident,
+    name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::LocalName>,
     detail: &str,
 ) {
     let key = SymbolKey::ExprScoped {
         kind,
         offset,
-        local: name.name.clone(),
+        local: name.value.as_str().to_owned(),
     };
     table.insert_definition(
         key.clone(),
         DefinitionInfo {
-            name: name.name.clone(),
+            name: name.value.as_str().to_owned(),
             category: SymbolCategory::LocalVar,
             name_span: name.span,
             decl_span: name.span,
@@ -960,7 +960,7 @@ fn register_local_var(
             visibility: None,
         },
     );
-    scopes.insert(name.name.clone(), key);
+    scopes.insert(name.value.as_str().to_owned(), key);
 }
 
 /// Collect references from an expression, tracking local scopes.
@@ -1169,7 +1169,7 @@ fn collect_expr_refs(
                 if let Some(ri) = ref_info {
                     table.references.push(ri);
                 }
-                let var_name = binding.var.name.clone();
+                let var_name = binding.var.value.as_str().to_owned();
                 let key = SymbolKey::ExprScoped {
                     kind: ExprScopeKind::For,
                     offset: binding.var.span.offset(),
