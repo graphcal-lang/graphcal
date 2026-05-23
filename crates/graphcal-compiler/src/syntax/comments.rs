@@ -1,121 +1,134 @@
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
+use thiserror::Error;
 
-/// The kind of a comment.
+/// The delimiter that starts a comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommentKind {
+pub(crate) enum CommentDelimiter {
     /// `// ...`
     Line,
     /// `/// ...`
     Doc,
 }
 
+impl CommentDelimiter {
+    #[must_use]
+    pub(crate) const fn lexeme(self) -> &'static str {
+        match self {
+            Self::Line => "//",
+            Self::Doc => "///",
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn len(self) -> usize {
+        self.lexeme().len()
+    }
+}
+
+/// The text after a comment delimiter, excluding the line ending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CommentBody(String);
+
+impl CommentBody {
+    #[must_use]
+    pub(crate) fn new(body: impl Into<String>) -> Self {
+        Self(body.into())
+    }
+
+    #[must_use]
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A comment extracted from source text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comment {
-    pub kind: CommentKind,
-    pub text: String,
-    pub span: Span,
+    delimiter: CommentDelimiter,
+    body: CommentBody,
+}
+
+impl Comment {
+    #[must_use]
+    pub(crate) const fn new(delimiter: CommentDelimiter, body: CommentBody) -> Self {
+        Self { delimiter, body }
+    }
+
+    /// Reconstruct the source lexeme without the trailing line ending.
+    #[must_use]
+    pub fn lexeme(&self) -> String {
+        format!("{}{}", self.delimiter.lexeme(), self.body.as_str())
+    }
+}
+
+/// A comment paired with its source span.
+pub type SpannedComment = Spanned<Comment>;
+
+/// A blank line represented by the span from the previous line ending through
+/// the line ending that completes the blank line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BlankLine {
+    span: Span,
+}
+
+impl BlankLine {
+    #[must_use]
+    pub(crate) const fn new(span: Span) -> Self {
+        Self { span }
+    }
+
+    #[must_use]
+    pub const fn span(self) -> Span {
+        self.span
+    }
 }
 
 /// Metadata extracted from source text for the formatter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SourceMetadata {
     /// All comments in source order.
-    pub comments: Vec<Comment>,
-    /// Byte offsets where blank lines (2+ consecutive newlines) occur.
-    pub blank_line_offsets: Vec<usize>,
+    comments: Vec<SpannedComment>,
+    /// Blank-line separators in source order.
+    blank_lines: Vec<BlankLine>,
+}
+
+impl SourceMetadata {
+    #[must_use]
+    pub fn comments(&self) -> &[SpannedComment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn blank_lines(&self) -> &[BlankLine] {
+        &self.blank_lines
+    }
+
+    pub(crate) fn push_comment(&mut self, comment: SpannedComment) {
+        self.comments.push(comment);
+    }
+
+    pub(crate) fn push_blank_line(&mut self, blank_line: BlankLine) {
+        self.blank_lines.push(blank_line);
+    }
+}
+
+/// Error encountered while scanning source metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum MetadataScanError {
+    #[error("unrecognized token while scanning source metadata")]
+    UnrecognizedToken { span: Span },
 }
 
 /// Extract comments and blank-line positions from source text.
 ///
-/// This is a pre-scan pass that runs before lexing/parsing.
-/// The lexer skips comments, so we need to extract them separately
-/// to preserve them during formatting.
-#[must_use]
-pub fn extract_source_metadata(source: &str) -> SourceMetadata {
-    let mut scanner = Scanner::new(source);
-    scanner.scan();
-    SourceMetadata {
-        comments: scanner.comments,
-        blank_line_offsets: scanner.blank_line_offsets,
-    }
-}
-
-struct Scanner<'a> {
-    bytes: &'a [u8],
-    source: &'a str,
-    pos: usize,
-    comments: Vec<Comment>,
-    blank_line_offsets: Vec<usize>,
-}
-
-impl<'a> Scanner<'a> {
-    const fn new(source: &'a str) -> Self {
-        Self {
-            bytes: source.as_bytes(),
-            source,
-            pos: 0,
-            comments: Vec::new(),
-            blank_line_offsets: Vec::new(),
-        }
-    }
-
-    fn scan(&mut self) {
-        while self.pos < self.bytes.len() {
-            match self.bytes[self.pos] {
-                b'\n' => self.scan_newline(),
-                b'"' => self.skip_string_literal(),
-                b'/' if self.next_byte() == Some(b'/') => self.scan_comment(),
-                _ => self.pos += 1,
-            }
-        }
-    }
-
-    fn next_byte(&self) -> Option<u8> {
-        self.bytes.get(self.pos + 1).copied()
-    }
-
-    /// Record the offset if a blank line follows (two newlines with only
-    /// whitespace between them), then advance past the newline.
-    fn scan_newline(&mut self) {
-        let mut j = self.pos + 1;
-        while j < self.bytes.len() && matches!(self.bytes[j], b' ' | b'\t') {
-            j += 1;
-        }
-        if j < self.bytes.len() && self.bytes[j] == b'\n' {
-            self.blank_line_offsets.push(self.pos);
-        }
-        self.pos += 1;
-    }
-
-    /// Skip past a string literal to avoid false-positive `//` matches.
-    fn skip_string_literal(&mut self) {
-        self.pos += 1; // skip opening quote
-        while self.pos < self.bytes.len() && self.bytes[self.pos] != b'"' {
-            self.pos += 1;
-        }
-        if self.pos < self.bytes.len() {
-            self.pos += 1; // skip closing quote
-        }
-    }
-
-    /// Extract a `//` or `///` comment and advance to the end of the line.
-    fn scan_comment(&mut self) {
-        let start = self.pos;
-        while self.pos < self.bytes.len() && self.bytes[self.pos] != b'\n' {
-            self.pos += 1;
-        }
-        let text = &self.source[start..self.pos];
-        let kind = if text.starts_with("///") && !text.starts_with("////") {
-            CommentKind::Doc
-        } else {
-            CommentKind::Line
-        };
-        self.comments.push(Comment {
-            kind,
-            text: text.to_string(),
-            span: Span::new(start, self.pos - start),
-        });
+/// This uses the normal lexer pipeline. The parser-facing lexer consumes trivia
+/// tokens, but records them as typed metadata while it scans.
+pub fn extract_source_metadata(source: &str) -> Result<SourceMetadata, MetadataScanError> {
+    let mut lexer = crate::syntax::lexer::Lexer::new(source);
+    while lexer.next_token().is_some() {}
+    match lexer.first_error_span() {
+        Some(span) => Err(MetadataScanError::UnrecognizedToken { span }),
+        None => Ok(lexer.into_source_metadata()),
     }
 }
 
@@ -123,53 +136,92 @@ impl<'a> Scanner<'a> {
 mod tests {
     use super::*;
 
+    fn metadata(source: &str) -> SourceMetadata {
+        extract_source_metadata(source).expect("metadata scan should succeed")
+    }
+
     #[test]
     fn extract_line_comment() {
         let source = "// hello world\nparam x = 1;";
-        let meta = extract_source_metadata(source);
+        let meta = metadata(source);
         assert_eq!(meta.comments.len(), 1);
-        assert_eq!(meta.comments[0].kind, CommentKind::Line);
-        assert_eq!(meta.comments[0].text, "// hello world");
+        assert_eq!(meta.comments[0].value.lexeme(), "// hello world");
         assert_eq!(meta.comments[0].span.offset(), 0);
     }
 
     #[test]
     fn extract_doc_comment() {
         let source = "/// doc comment\nparam x = 1;";
-        let meta = extract_source_metadata(source);
+        let meta = metadata(source);
         assert_eq!(meta.comments.len(), 1);
-        assert_eq!(meta.comments[0].kind, CommentKind::Doc);
-        assert_eq!(meta.comments[0].text, "/// doc comment");
+        assert_eq!(meta.comments[0].value.lexeme(), "/// doc comment");
+    }
+
+    #[test]
+    fn four_slashes_is_a_line_comment() {
+        let source = "//// not doc\nparam x = 1;";
+        let meta = metadata(source);
+        assert_eq!(meta.comments.len(), 1);
+        assert_eq!(meta.comments[0].value.lexeme(), "//// not doc");
     }
 
     #[test]
     fn extract_inline_comment() {
         let source = "param x = 1; // inline";
-        let meta = extract_source_metadata(source);
+        let meta = metadata(source);
         assert_eq!(meta.comments.len(), 1);
-        assert_eq!(meta.comments[0].text, "// inline");
+        assert_eq!(meta.comments[0].value.lexeme(), "// inline");
     }
 
     #[test]
     fn no_false_positive_in_string() {
         let source = r#"import "//not-a-comment.gcl" { x };"#;
-        let meta = extract_source_metadata(source);
+        let meta = metadata(source);
         assert_eq!(meta.comments.len(), 0);
+    }
+
+    #[test]
+    fn reports_unrecognized_token() {
+        let source = r#"import "//not-a-comment.gcl"#;
+        let err = extract_source_metadata(source).expect_err("scan should fail");
+        assert_eq!(
+            err,
+            MetadataScanError::UnrecognizedToken {
+                span: Span::new(7, source.len() - 7),
+            }
+        );
     }
 
     #[test]
     fn extract_blank_lines() {
         let source = "param x = 1;\n\nparam y = 2;";
-        let meta = extract_source_metadata(source);
-        assert_eq!(meta.blank_line_offsets.len(), 1);
+        let meta = metadata(source);
+        assert_eq!(meta.blank_lines.len(), 1);
+        assert_eq!(meta.blank_lines[0].span(), Span::new(12, 2));
+    }
+
+    #[test]
+    fn extract_blank_lines_with_crlf() {
+        let source = "param x = 1;\r\n\t\r\nparam y = 2;";
+        let meta = metadata(source);
+        assert_eq!(meta.blank_lines.len(), 1);
+        assert_eq!(meta.blank_lines[0].span(), Span::new(12, 5));
+    }
+
+    #[test]
+    fn crlf_comment_excludes_line_ending_from_body() {
+        let source = "// first\r\nparam x = 1;";
+        let meta = metadata(source);
+        assert_eq!(meta.comments[0].value.lexeme(), "// first");
+        assert_eq!(meta.comments[0].span, Span::new(0, 8));
     }
 
     #[test]
     fn multiple_comments() {
         let source = "// first\n// second\nparam x = 1;";
-        let meta = extract_source_metadata(source);
+        let meta = metadata(source);
         assert_eq!(meta.comments.len(), 2);
-        assert_eq!(meta.comments[0].text, "// first");
-        assert_eq!(meta.comments[1].text, "// second");
+        assert_eq!(meta.comments[0].value.lexeme(), "// first");
+        assert_eq!(meta.comments[1].value.lexeme(), "// second");
     }
 }

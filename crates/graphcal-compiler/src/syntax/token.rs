@@ -1,9 +1,13 @@
 use logos::Logos;
 
 #[derive(Logos, Debug, Clone, PartialEq)]
-#[logos(skip r"[ \t\r\n]+")]
-#[logos(skip(r"//[^\n]*", allow_greedy = true))]
 pub enum Token {
+    // Trivia. The parser-facing lexer consumes these and exposes them through
+    // typed source metadata instead of yielding them as syntax tokens.
+    #[regex(r"[ \t\r\n]+")]
+    Whitespace,
+    #[regex(r"//[^\n\r]*", allow_greedy = true)]
+    Comment,
     // Keywords
     #[token("param")]
     Param,
@@ -154,6 +158,8 @@ pub enum Token {
 impl std::fmt::Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Whitespace => write!(f, "whitespace"),
+            Self::Comment => write!(f, "comment"),
             Self::Param => write!(f, "param"),
             Self::Node => write!(f, "node"),
             Self::Const => write!(f, "const"),
@@ -228,7 +234,10 @@ mod tests {
     use super::*;
 
     fn lex_tokens(input: &str) -> Vec<Token> {
-        Token::lexer(input).map(|r| r.unwrap()).collect()
+        Token::lexer(input)
+            .map(|r| r.unwrap())
+            .filter(|tok| !matches!(tok, Token::Whitespace | Token::Comment))
+            .collect()
     }
 
     #[test]

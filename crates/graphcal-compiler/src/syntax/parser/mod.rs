@@ -4,6 +4,7 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::syntax::ast::{Expr, Ident};
+use crate::syntax::comments::SourceMetadata;
 use crate::syntax::lexer::Lexer;
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
@@ -260,6 +261,11 @@ impl<'src> Parser<'src> {
             source: Arc::new(source.to_string()),
             source_name: name.to_string(),
         }
+    }
+
+    #[must_use]
+    pub fn into_source_metadata(self) -> SourceMetadata {
+        self.lexer.into_source_metadata()
     }
 
     pub(super) fn named_source(&self) -> NamedSource<Arc<String>> {

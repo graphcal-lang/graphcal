@@ -50,12 +50,12 @@ impl<'src> Formatter<'src> {
     /// avoid rendering a known-empty doc just to check for emptiness.
     pub fn drain_comments_before(&mut self, before_offset: usize) -> Option<RcDoc<'static>> {
         let mut docs: Vec<RcDoc<'static>> = Vec::new();
-        while self.next_comment < self.metadata.comments.len() {
-            let comment = &self.metadata.comments[self.next_comment];
+        while self.next_comment < self.metadata.comments().len() {
+            let comment = &self.metadata.comments()[self.next_comment];
             if comment.span.offset() >= before_offset {
                 break;
             }
-            docs.push(RcDoc::text(comment.text.clone()));
+            docs.push(RcDoc::text(comment.value.lexeme()));
             docs.push(RcDoc::hardline());
             self.next_comment += 1;
         }
@@ -70,10 +70,10 @@ impl<'src> Formatter<'src> {
     /// Returns the comment text (with leading space) or `None` when there
     /// isn't one.
     pub fn drain_trailing_comment(&mut self, line_end_offset: usize) -> Option<RcDoc<'static>> {
-        if self.next_comment >= self.metadata.comments.len() {
+        if self.next_comment >= self.metadata.comments().len() {
             return None;
         }
-        let comment = &self.metadata.comments[self.next_comment];
+        let comment = &self.metadata.comments()[self.next_comment];
         // A trailing comment must be on the same line — its offset must be
         // between the end of the node and the next newline. The boundary is
         // inclusive: a comment starting exactly at `line_end_offset` (no
@@ -83,7 +83,7 @@ impl<'src> Formatter<'src> {
                 &self.source[line_end_offset..comment.span.offset().min(self.source.len())];
             if !between.contains('\n') {
                 self.next_comment += 1;
-                return Some(RcDoc::text(format!(" {}", comment.text)));
+                return Some(RcDoc::text(format!(" {}", comment.value.lexeme())));
             }
         }
         None
@@ -91,10 +91,9 @@ impl<'src> Formatter<'src> {
 
     /// Check if there's a blank line in the source between two byte offsets.
     pub fn has_blank_line_between(&self, start: usize, end: usize) -> bool {
-        self.metadata
-            .blank_line_offsets
-            .iter()
-            .any(|&offset| offset >= start && offset < end)
+        self.metadata.blank_lines().iter().any(|blank_line| {
+            blank_line.span().offset() >= start && blank_line.span().offset() < end
+        })
     }
 }
 
@@ -130,8 +129,8 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
         // surface span so they aren't re-emitted later; `format_multi_decl`
         // doesn't interleave source comments inside the body.
         if matches!(&decl.kind, DeclKind::Sugar(_)) {
-            while fmt.next_comment < fmt.metadata.comments.len() {
-                let c = &fmt.metadata.comments[fmt.next_comment];
+            while fmt.next_comment < fmt.metadata.comments().len() {
+                let c = &fmt.metadata.comments()[fmt.next_comment];
                 if c.span.offset() < emit_end {
                     fmt.next_comment += 1;
                 } else {
