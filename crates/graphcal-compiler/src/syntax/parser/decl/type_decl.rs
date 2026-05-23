@@ -135,7 +135,7 @@ impl Parser<'_> {
                     let (_, end_span) = self.expect(Token::RParen)?;
                     (Vec::new(), end_span)
                 } else {
-                    let fields = self.parse_field_list_until(&Token::RParen)?;
+                    let fields = self.parse_field_list_until(Token::RParen)?;
                     let (_, end_span) = self.expect(Token::RParen)?;
                     (fields, end_span)
                 };
@@ -147,7 +147,7 @@ impl Parser<'_> {
                     let (_, end_span) = self.expect(Token::RBrace)?;
                     (Vec::new(), end_span)
                 } else {
-                    let fields = self.parse_field_list_until(&Token::RBrace)?;
+                    let fields = self.parse_field_list_until(Token::RBrace)?;
                     let (_, end_span) = self.expect(Token::RBrace)?;
                     (fields, end_span)
                 };
@@ -165,7 +165,7 @@ impl Parser<'_> {
 
     /// Parse `field: Type, field: Type, ...` terminated by `terminator`
     /// (which is *not* consumed). Trailing comma allowed.
-    fn parse_field_list_until(&mut self, terminator: &Token) -> Result<Vec<FieldDecl>, ParseError> {
+    fn parse_field_list_until(&mut self, terminator: Token) -> Result<Vec<FieldDecl>, ParseError> {
         let mut fields = Vec::new();
         loop {
             let ident = self.parse_any_ident()?;
@@ -176,11 +176,11 @@ impl Parser<'_> {
                 type_ann,
             });
             match self.lexer.peek() {
-                Some(t) if t == terminator => break,
+                Some(t) if *t == terminator => break,
                 Some(&Token::Comma) => {
                     self.lexer.next_token();
                     if let Some(t) = self.lexer.peek()
-                        && t == terminator
+                        && *t == terminator
                     {
                         break;
                     }

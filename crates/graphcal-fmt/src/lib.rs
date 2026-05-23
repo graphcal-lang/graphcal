@@ -1,6 +1,5 @@
 mod format;
 
-use graphcal_compiler::syntax::comments::extract_source_metadata;
 use graphcal_compiler::syntax::parser::{ParseError, Parser};
 
 /// Default line width for formatting.
@@ -35,8 +34,9 @@ pub enum FormatError {
 /// [`FormatError::Render`] if rendering the formatted document fails,
 /// or [`FormatError::Utf8`] if the rendered bytes are not valid UTF-8.
 pub fn format_source(source: &str) -> Result<String, FormatError> {
-    let metadata = extract_source_metadata(source);
-    let file = Parser::new(source).parse_file()?;
+    let mut parser = Parser::new(source);
+    let file = parser.parse_file()?;
+    let metadata = parser.into_source_metadata();
     let doc = format::format_file(&file, source, &metadata);
 
     let mut output = Vec::new();

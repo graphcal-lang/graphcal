@@ -10,7 +10,7 @@ use crate::syntax::token::Token;
 use super::{ParseError, Parser};
 
 /// Map comparison tokens to their corresponding `BinOp`.
-pub(super) const fn token_to_comparison_op(token: &Token) -> Option<BinOp> {
+pub(super) const fn token_to_comparison_op(token: Token) -> Option<BinOp> {
     match token {
         Token::EqEq => Some(BinOp::Eq),
         Token::BangEq => Some(BinOp::Ne),
@@ -159,7 +159,7 @@ impl Parser<'_> {
 
     fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
         let lhs = self.parse_add()?;
-        let op = self.lexer.peek().and_then(token_to_comparison_op);
+        let op = self.lexer.peek().copied().and_then(token_to_comparison_op);
         if let Some(op) = op {
             self.lexer.next_token();
             let rhs = self.parse_add()?;

@@ -1,5 +1,6 @@
-use crate::syntax::span::Span;
-use crate::syntax::token::Token;
+use crate::syntax::comments::{BlankLine, Comment, CommentBody, CommentDelimiter, SourceMetadata};
+use crate::syntax::span::{Span, Spanned};
+use crate::syntax::token::{LexicalItem, LexicalToken, Token, TriviaToken};
 use logos::Logos;
 use peek_cache::{PeekCache, SourceItem};
 use std::num::NonZeroUsize;
@@ -33,9 +34,10 @@ const LEXER_MAX_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 /// when a top-level `parse_*` entry point finishes, regardless of whether the
 /// downstream parse happened to succeed.
 pub struct Lexer<'src> {
-    inner: logos::Lexer<'src, Token>,
+    inner: logos::Lexer<'src, LexicalToken>,
     peek_cache: PeekCache<(Token, Span)>,
     source: &'src str,
+    source_metadata: SourceMetadata,
     /// Span of the first unrecognized character encountered during lexing, if any.
     first_error_span: Option<Span>,
 }
@@ -44,9 +46,10 @@ impl<'src> Lexer<'src> {
     #[must_use]
     pub fn new(source: &'src str) -> Self {
         Self {
-            inner: Token::lexer(source),
+            inner: LexicalToken::lexer(source),
             peek_cache: PeekCache::new(LEXER_MAX_LOOKAHEAD),
             source,
+            source_metadata: SourceMetadata::default(),
             first_error_span: None,
         }
     }
@@ -72,9 +75,11 @@ impl<'src> Lexer<'src> {
     /// a reference to it.
     pub fn peek_with_span(&mut self) -> Option<(&Token, Span)> {
         let inner = &mut self.inner;
+        let source = self.source;
+        let source_metadata = &mut self.source_metadata;
         let first_error_span = &mut self.first_error_span;
         self.peek_cache
-            .peek(|| read_next_token(inner, first_error_span))
+            .peek(|| read_next_token(inner, source, source_metadata, first_error_span))
             .map(|(tok, span)| (tok, *span))
     }
 
@@ -84,9 +89,13 @@ impl<'src> Lexer<'src> {
 
     fn peek_with_span_at(&mut self, offset: usize) -> Option<(&Token, Span)> {
         let inner = &mut self.inner;
+        let source = self.source;
+        let source_metadata = &mut self.source_metadata;
         let first_error_span = &mut self.first_error_span;
         self.peek_cache
-            .peek_at(offset, || read_next_token(inner, first_error_span))
+            .peek_at(offset, || {
+                read_next_token(inner, source, source_metadata, first_error_span)
+            })
             .map(|(tok, span)| (tok, *span))
     }
 
@@ -107,9 +116,11 @@ impl<'src> Lexer<'src> {
     /// cannot accidentally consume an uninitialized cache slot.
     pub fn next_token(&mut self) -> Option<(Token, Span)> {
         let inner = &mut self.inner;
+        let source = self.source;
+        let source_metadata = &mut self.source_metadata;
         let first_error_span = &mut self.first_error_span;
         self.peek_cache
-            .next(|| read_next_token(inner, first_error_span))
+            .next(|| read_next_token(inner, source, source_metadata, first_error_span))
     }
 
     /// Get the source text corresponding to a span.
@@ -123,10 +134,17 @@ impl<'src> Lexer<'src> {
     pub const fn source_len(&self) -> usize {
         self.source.len()
     }
+
+    #[must_use]
+    pub fn into_source_metadata(self) -> SourceMetadata {
+        self.source_metadata
+    }
 }
 
 fn read_next_token(
-    inner: &mut logos::Lexer<'_, Token>,
+    inner: &mut logos::Lexer<'_, LexicalToken>,
+    source: &str,
+    source_metadata: &mut SourceMetadata,
     first_error_span: &mut Option<Span>,
 ) -> SourceItem<(Token, Span)> {
     loop {
@@ -135,13 +153,82 @@ fn read_next_token(
         };
         let slice_span = inner.span();
         let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
-        match result {
-            Ok(token) => break SourceItem::Item((token, span)),
+        match result.map(LexicalToken::classify) {
+            Ok(LexicalItem::Trivia(TriviaToken::Whitespace)) => {
+                record_blank_lines(source, span, source_metadata);
+            }
+            Ok(LexicalItem::Trivia(TriviaToken::Comment)) => {
+                record_comment(source, span, source_metadata);
+            }
+            Ok(LexicalItem::Syntax(token)) => break SourceItem::Item((token, span)),
             Err(()) => {
                 if first_error_span.is_none() {
                     *first_error_span = Some(span);
                 }
             }
+        }
+    }
+}
+
+fn record_comment(source: &str, span: Span, source_metadata: &mut SourceMetadata) {
+    let lexeme = &source[span.offset()..span.offset() + span.len()];
+    let delimiter = comment_delimiter(lexeme);
+    let body = CommentBody::new(&lexeme[delimiter.len()..]);
+    source_metadata.push_comment(Spanned::new(Comment::new(delimiter, body), span));
+}
+
+fn comment_delimiter(lexeme: &str) -> CommentDelimiter {
+    let bytes = lexeme.as_bytes();
+    match (bytes.get(2).copied(), bytes.get(3).copied()) {
+        (Some(b'/'), Some(b'/')) => CommentDelimiter::Line,
+        (Some(b'/'), _) => CommentDelimiter::Doc,
+        _ => CommentDelimiter::Line,
+    }
+}
+
+fn record_blank_lines(source: &str, span: Span, source_metadata: &mut SourceMetadata) {
+    let whitespace = &source[span.offset()..span.offset() + span.len()];
+    let mut previous_line_ending_start: Option<usize> = None;
+    let mut pos = 0;
+    while pos < whitespace.len() {
+        match line_ending_at(whitespace.as_bytes(), pos) {
+            Some(line_ending) => {
+                if let Some(start) = previous_line_ending_start {
+                    let end = pos + line_ending.len();
+                    source_metadata.push_blank_line(BlankLine::new(Span::new(
+                        span.offset() + start,
+                        end - start,
+                    )));
+                }
+                previous_line_ending_start = Some(pos);
+                pos += line_ending.len();
+            }
+            None => pos += 1,
+        }
+    }
+}
+
+fn line_ending_at(bytes: &[u8], pos: usize) -> Option<LineEnding> {
+    match bytes.get(pos).copied() {
+        Some(b'\n') => Some(LineEnding::Lf),
+        Some(b'\r') if bytes.get(pos + 1) == Some(&b'\n') => Some(LineEnding::CrLf),
+        Some(b'\r') => Some(LineEnding::Cr),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineEnding {
+    Lf,
+    CrLf,
+    Cr,
+}
+
+impl LineEnding {
+    const fn len(self) -> usize {
+        match self {
+            Self::Lf | Self::Cr => 1,
+            Self::CrLf => 2,
         }
     }
 }

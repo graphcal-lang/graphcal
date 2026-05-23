@@ -4,6 +4,7 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::syntax::ast::{Expr, Ident};
+use crate::syntax::comments::SourceMetadata;
 use crate::syntax::lexer::Lexer;
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
@@ -262,6 +263,11 @@ impl<'src> Parser<'src> {
         }
     }
 
+    #[must_use]
+    pub fn into_source_metadata(self) -> SourceMetadata {
+        self.lexer.into_source_metadata()
+    }
+
     pub(super) fn named_source(&self) -> NamedSource<Arc<String>> {
         crate::syntax::named_source(&self.source_name, Arc::clone(&self.source))
     }
@@ -329,7 +335,7 @@ impl<'src> Parser<'src> {
     fn parse_single_expr_inner(&mut self) -> Result<Expr, ParseError> {
         let expr = self.parse_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
-            let tok = tok.clone();
+            let tok = *tok;
             return Err(self.unexpected_token("end of input", &format!("{tok:?}"), span));
         }
         Ok(expr)
@@ -355,7 +361,7 @@ impl<'src> Parser<'src> {
     ) -> Result<crate::syntax::ast::UnitExpr, ParseError> {
         let expr = self.parse_unit_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
-            let tok = tok.clone();
+            let tok = *tok;
             return Err(self.unexpected_token("end of input", &format!("{tok:?}"), span));
         }
         Ok(expr)
@@ -379,7 +385,7 @@ impl<'src> Parser<'src> {
     ) -> Result<crate::syntax::ast::DimExpr, ParseError> {
         let expr = self.parse_dim_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
-            let tok = tok.clone();
+            let tok = *tok;
             return Err(self.unexpected_token("end of input", &format!("{tok:?}"), span));
         }
         Ok(expr)
@@ -405,10 +411,6 @@ impl<'src> Parser<'src> {
 
     // --- Helper methods ---
 
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "Token is small and the API is cleaner with by-value"
-    )]
     pub(super) fn expect(&mut self, expected: Token) -> Result<(Token, Span), ParseError> {
         let expected_str = format!("`{expected}`");
         match self.lexer.next_token() {
@@ -421,10 +423,6 @@ impl<'src> Parser<'src> {
     /// Parse a comma-separated list of items until `end_token` is peeked.
     ///
     /// Supports trailing commas. Does **not** consume the `end_token`.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "Token is small and the API is cleaner with by-value"
-    )]
     pub(super) fn parse_comma_separated<T>(
         &mut self,
         end_token: Token,
