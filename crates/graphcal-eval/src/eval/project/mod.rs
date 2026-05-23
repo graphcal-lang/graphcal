@@ -10,9 +10,10 @@ use miette::NamedSource;
 use graphcal_compiler::desugar::resolved_ast::{
     DeclKind, Declaration, Expr, ExprKind, ImportItemNamespace, ModulePath,
 };
-use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, Spanned, StructTypeName};
+use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, StructTypeName};
 use graphcal_compiler::syntax::phase::Resolved;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
 
 use graphcal_compiler::ir::resolve::{DeclCategory, ImportedValueNames, ScopedName};

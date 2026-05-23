@@ -896,7 +896,7 @@ pub(super) fn infer_unfold(
 /// Infer the type of a field access expression.
 pub(super) fn infer_field_access(
     inner: &Expr,
-    field: &crate::syntax::names::Spanned<FieldName>,
+    field: &crate::syntax::span::Spanned<FieldName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
@@ -964,7 +964,7 @@ pub(super) fn infer_field_access(
 )]
 pub(super) fn infer_struct_construction(
     expr: &Expr,
-    type_name: &crate::syntax::names::Spanned<ConstructorName>,
+    type_name: &crate::syntax::span::Spanned<ConstructorName>,
     constructor_type_args: &[crate::desugar::resolved_ast::TypeExpr],
     fields: &[crate::desugar::resolved_ast::FieldInit],
     declared_types: &HashMap<ScopedName, DeclaredType>,

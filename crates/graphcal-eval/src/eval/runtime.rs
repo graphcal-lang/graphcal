@@ -1005,7 +1005,7 @@ fn dimension_label_from_declared_type(
 /// Evaluate composition fields (properties and plot names) shared by figures and layers.
 fn eval_composition_fields(
     fields: &[graphcal_compiler::desugar::resolved_ast::PlotField],
-    plot_name_spans: &[graphcal_compiler::syntax::names::Spanned<DeclName>],
+    plot_name_spans: &[graphcal_compiler::syntax::span::Spanned<DeclName>],
     values: &HashMap<ScopedName, RuntimeValue>,
     empty_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,

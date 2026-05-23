@@ -24,7 +24,7 @@ use super::infer_type;
 ///
 /// This avoids repeating 7 arguments in every helper invocation inside `infer_fn_call`.
 struct InferCtx<'a> {
-    name: &'a crate::syntax::names::Spanned<FnName>,
+    name: &'a crate::syntax::span::Spanned<FnName>,
     args: &'a [Expr],
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
     local_types: &'a HashMap<String, InferredType>,
@@ -381,7 +381,7 @@ impl InferCtx<'_> {
 
 /// Infer the type of a function call (FnCall only; built-in functions).
 pub(super) fn infer_fn_call(
-    name: &crate::syntax::names::Spanned<FnName>,
+    name: &crate::syntax::span::Spanned<FnName>,
     args: &[Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,

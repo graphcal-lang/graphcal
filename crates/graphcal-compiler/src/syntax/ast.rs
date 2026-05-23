@@ -2,10 +2,10 @@ use std::marker::PhantomData;
 
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, FnName, GenericParamName, IndexName,
-    IndexVariantName, ScopedName, Spanned, StructTypeName, UnitName,
+    IndexVariantName, ScopedName, StructTypeName, UnitName,
 };
 use crate::syntax::phase::{Phase, Raw};
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
 
 /// A complete source file.
 ///

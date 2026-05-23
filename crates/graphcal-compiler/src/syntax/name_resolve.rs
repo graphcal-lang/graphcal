@@ -30,9 +30,10 @@ use crate::registry::resolve_types::is_time_scale_name;
 use crate::syntax::ast::{ImportItemNamespace, ImportKind, TypeSystemRefKind};
 use crate::syntax::names::{
     ConstructorName, DimName, IndexName, IndexVariantName, LocalName, ModuleAliasName, ScopedName,
-    Spanned, StructTypeName,
+    StructTypeName,
 };
 use crate::syntax::phase::{UnresolvedRef, never};
+use crate::syntax::span::Spanned;
 
 /// Context for name resolution: what names are in scope.
 struct ResolveContext {

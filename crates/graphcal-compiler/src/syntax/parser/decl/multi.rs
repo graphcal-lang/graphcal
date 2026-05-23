@@ -27,8 +27,9 @@ use crate::syntax::ast::{
     self as ast, DeclKind, Declaration, Expr, MapEntryIndex, MapEntryKey, TableIndexSpec, TypeExpr,
     Visibility,
 };
-use crate::syntax::names::{DeclName, IndexName, IndexVariantName, Spanned};
+use crate::syntax::names::{DeclName, IndexName, IndexVariantName};
 use crate::syntax::span::Span;
+use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};

@@ -324,7 +324,7 @@ pub fn format_if(
 
 pub fn format_struct_construction(
     fmt: &mut Formatter<'_>,
-    type_name: &graphcal_compiler::syntax::names::Spanned<
+    type_name: &graphcal_compiler::syntax::span::Spanned<
         graphcal_compiler::syntax::names::ConstructorName,
     >,
     type_args: &[TypeExpr],

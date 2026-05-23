@@ -319,30 +319,6 @@ impl From<DeclName> for ScopedName {
     }
 }
 
-// --- Spanned wrapper ---
-
-use crate::syntax::span::Span;
-
-/// A value paired with its source span.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Spanned<T> {
-    pub value: T,
-    pub span: Span,
-}
-
-impl<T> Spanned<T> {
-    /// Create a new spanned value.
-    pub const fn new(value: T, span: Span) -> Self {
-        Self { value, span }
-    }
-}
-
-impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.value.fmt(f)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,31 +395,5 @@ mod tests {
             name.qualifier().iter().map(|s| &**s).collect::<Vec<_>>(),
             ["helpers", "math"]
         );
-    }
-
-    #[test]
-    fn spanned_eq_considers_span() {
-        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
-        let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn spanned_ne_different_value() {
-        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
-        let b = Spanned::new(DeclName::new("y"), Span::new(0, 1));
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn spanned_hash_considers_span() {
-        use std::hash::{DefaultHasher, Hash, Hasher};
-        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
-        let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
-        let mut ha = DefaultHasher::new();
-        a.hash(&mut ha);
-        let mut hb = DefaultHasher::new();
-        b.hash(&mut hb);
-        assert_ne!(ha.finish(), hb.finish());
     }
 }

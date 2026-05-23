@@ -2,8 +2,9 @@ use crate::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, ModulePath, TypeExpr, UnaryOp,
 };
 use crate::syntax::names::{
-    ConstructorName, DeclName, FieldName, FnName, IndexName, IndexVariantName, ScopedName, Spanned,
+    ConstructorName, DeclName, FieldName, FnName, IndexName, IndexVariantName, ScopedName,
 };
+use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};

@@ -44,6 +44,26 @@ impl From<Span> for miette::SourceSpan {
     }
 }
 
+/// A value paired with its source span.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Spanned<T> {
+    pub value: T,
+    pub span: Span,
+}
+
+impl<T> Spanned<T> {
+    /// Create a new spanned value.
+    pub const fn new(value: T, span: Span) -> Self {
+        Self { value, span }
+    }
+}
+
+impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,5 +92,37 @@ mod tests {
         let ms: miette::SourceSpan = s.into();
         assert_eq!(ms.offset(), 10);
         assert_eq!(ms.len(), 5);
+    }
+
+    #[test]
+    fn spanned_eq_considers_span() {
+        use crate::syntax::names::DeclName;
+
+        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
+        let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn spanned_ne_different_value() {
+        use crate::syntax::names::DeclName;
+
+        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
+        let b = Spanned::new(DeclName::new("y"), Span::new(0, 1));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn spanned_hash_considers_span() {
+        use crate::syntax::names::DeclName;
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
+        let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
+        let mut ha = DefaultHasher::new();
+        a.hash(&mut ha);
+        let mut hb = DefaultHasher::new();
+        b.hash(&mut hb);
+        assert_ne!(ha.finish(), hb.finish());
     }
 }

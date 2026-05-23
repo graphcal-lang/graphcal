@@ -993,8 +993,8 @@ mod tests {
     use crate::registry::prelude::load_prelude;
     use crate::syntax::ast::{DimExprItem, DimTerm, Ident, UnitExprItem};
     use crate::syntax::dimension::BaseDimId;
-    use crate::syntax::names::Spanned;
     use crate::syntax::span::Span;
+    use crate::syntax::span::Spanned;
 
     // Well-known IDs matching prelude dimension names.
     fn length_id() -> BaseDimId {

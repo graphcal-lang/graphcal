@@ -51,8 +51,9 @@ use crate::syntax::ast::{
     MapEntryKey, MultiDecl, MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl,
     ParamDecl, TableIndexSpec,
 };
-use crate::syntax::names::{IndexName, IndexVariantName, Spanned};
+use crate::syntax::names::{IndexName, IndexVariantName};
 use crate::syntax::phase::{Desugared, Raw};
+use crate::syntax::span::Spanned;
 
 /// Expand every multi-decl in `file` into its N constituent ordinary
 /// declarations and return the result as [`File<Desugared>`].
