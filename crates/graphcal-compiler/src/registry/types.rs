@@ -991,7 +991,7 @@ impl RegistryBuilder {
 mod tests {
     use super::*;
     use crate::registry::prelude::load_prelude;
-    use crate::syntax::ast::{DimExprItem, DimTerm, Ident, UnitExprItem};
+    use crate::syntax::ast::{DimExprItem, DimTerm, ResolvedDimTermName, UnitExprItem};
     use crate::syntax::dimension::BaseDimId;
     use crate::syntax::span::Span;
     use crate::syntax::span::Spanned;
@@ -1013,11 +1013,11 @@ mod tests {
         b.build()
     }
 
-    fn make_ident(name: &str) -> Ident {
-        Ident {
-            name: name.to_string(),
-            span: Span::new(0, 0),
-        }
+    fn make_dim_term_name(name: &str) -> Spanned<ResolvedDimTermName> {
+        Spanned::new(
+            ResolvedDimTermName::Dimension(Spanned::new(DimName::new(name), Span::new(0, 0))),
+            Span::new(0, 0),
+        )
     }
 
     /// Create a simple dimension `TypeExpr` from a name string.
@@ -1028,7 +1028,7 @@ mod tests {
                 terms: vec![DimExprItem {
                     op: MulDivOp::Mul,
                     term: DimTerm {
-                        name: make_ident(name),
+                        name: make_dim_term_name(name),
                         power: None,
                         span: Span::new(0, 0),
                     },
@@ -1094,7 +1094,7 @@ mod tests {
                 DimExprItem {
                     op: MulDivOp::Mul,
                     term: DimTerm {
-                        name: make_ident("Length"),
+                        name: make_dim_term_name("Length"),
                         power: None,
                         span: Span::new(0, 0),
                     },
@@ -1102,7 +1102,7 @@ mod tests {
                 DimExprItem {
                     op: MulDivOp::Div,
                     term: DimTerm {
-                        name: make_ident("Time"),
+                        name: make_dim_term_name("Time"),
                         power: None,
                         span: Span::new(0, 0),
                     },

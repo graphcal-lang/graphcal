@@ -1868,7 +1868,21 @@ pub fn resolve_type_expr(
                                 .push(ResolvedIndex::GenericParam(name.value.clone(), ident.span));
                         }
                         ResolvedIndexExprName::Index(name) => {
-                            if registry.indexes.get_index(name.value.as_str()).is_some() {
+                            if let Some(gp) = nat_params
+                                .iter()
+                                .find(|p| p.as_str() == name.value.as_str())
+                            {
+                                resolved_indexes.push(ResolvedIndex::NatExpr(
+                                    NatPolyForm::from_var(gp.clone()),
+                                    ident.span,
+                                ));
+                            } else if let Some(gp) = index_params
+                                .iter()
+                                .find(|p| p.as_str() == name.value.as_str())
+                            {
+                                resolved_indexes
+                                    .push(ResolvedIndex::GenericParam(gp.clone(), ident.span));
+                            } else if registry.indexes.get_index(name.value.as_str()).is_some() {
                                 resolved_indexes
                                     .push(ResolvedIndex::Concrete(name.value.clone(), ident.span));
                             } else {
@@ -2163,6 +2177,17 @@ mod tests {
         b.build()
     }
 
+    fn make_dim_term_name(
+        name: &str,
+    ) -> crate::syntax::span::Spanned<crate::desugar::resolved_ast::ResolvedDimTermName> {
+        crate::syntax::span::Spanned::new(
+            crate::desugar::resolved_ast::ResolvedDimTermName::Dimension(
+                crate::syntax::span::Spanned::new(DimName::new(name), Span::new(0, 0)),
+            ),
+            Span::new(0, 0),
+        )
+    }
+
     /// Create a simple dimension `TypeExpr` from a name string like `"Velocity"`.
     fn make_dim_type_expr(name: &str) -> crate::desugar::resolved_ast::TypeExpr {
         crate::desugar::resolved_ast::TypeExpr {
@@ -2171,10 +2196,7 @@ mod tests {
                     terms: vec![crate::desugar::resolved_ast::DimExprItem {
                         op: crate::desugar::resolved_ast::MulDivOp::Mul,
                         term: crate::desugar::resolved_ast::DimTerm {
-                            name: crate::desugar::resolved_ast::Ident {
-                                name: name.to_string(),
-                                span: Span::new(0, 0),
-                            },
+                            name: make_dim_term_name(name),
                             power: None,
                             span: Span::new(0, 0),
                         },

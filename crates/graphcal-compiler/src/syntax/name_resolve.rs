@@ -584,7 +584,7 @@ fn lift_type_expr_kind(
         },
         src_ast::TypeExprKind::TypeApplication { name, type_args } => {
             dst_ast::TypeExprKind::TypeApplication {
-                name: lift_type_application_name(name, ctx),
+                name: lift_type_application_name(&name, ctx),
                 type_args: type_args
                     .into_iter()
                     .map(|t| lift_type_expr(t, ctx))
@@ -603,7 +603,7 @@ fn lift_type_expr_kind(
 }
 
 fn lift_type_application_name(
-    name: Spanned<src_ast::Ident>,
+    name: &Spanned<src_ast::Ident>,
     ctx: &ResolveContext,
 ) -> Spanned<dst_ast::ResolvedTypeApplicationName> {
     let text = name.value.name.as_str();
@@ -635,14 +635,14 @@ fn lift_dim_expr(d: src_ast::DimExpr, ctx: &ResolveContext) -> dst_ast::DimExpr 
             .into_iter()
             .map(|item| dst_ast::DimExprItem {
                 op: item.op,
-                term: lift_dim_term(item.term, ctx),
+                term: lift_dim_term(&item.term, ctx),
             })
             .collect(),
         span: d.span,
     }
 }
 
-fn lift_dim_term(term: src_ast::DimTerm, ctx: &ResolveContext) -> dst_ast::DimTerm {
+fn lift_dim_term(term: &src_ast::DimTerm, ctx: &ResolveContext) -> dst_ast::DimTerm {
     let text = term.name.value.name.as_str();
     let name_span = term.name.span;
     let value = match ctx.generic_constraint(text) {
@@ -661,15 +661,17 @@ fn lift_dim_term(term: src_ast::DimTerm, ctx: &ResolveContext) -> dst_ast::DimTe
                 name_span,
             ))
         }
-        _ => match text.parse::<TimeScale>() {
-            Ok(scale) => dst_ast::ResolvedDimTermName::TimeScale(Spanned::new(
-                TimeScaleName::new(scale),
-                name_span,
-            )),
-            Err(_) => {
+        _ => text.parse::<TimeScale>().map_or_else(
+            |_| {
                 dst_ast::ResolvedDimTermName::Dimension(Spanned::new(DimName::new(text), name_span))
-            }
-        },
+            },
+            |scale| {
+                dst_ast::ResolvedDimTermName::TimeScale(Spanned::new(
+                    TimeScaleName::new(scale),
+                    name_span,
+                ))
+            },
+        ),
     };
     dst_ast::DimTerm {
         name: Spanned::new(value, name_span),
