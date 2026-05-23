@@ -649,9 +649,9 @@ fn validate_attributes(
         };
         for attr in &decl.attributes {
             let attr_name_str = attr.name.name.as_str();
-            let attr_name = attr_name_str.parse::<AttributeName>().map_err(|()| {
+            let attr_name = attr_name_str.parse::<AttributeName>().map_err(|err| {
                 GraphcalError::UnknownAttribute {
-                    name: attr_name_str.to_string(),
+                    name: err.into_raw(),
                     src: src.clone(),
                     span: attr.span.into(),
                 }
