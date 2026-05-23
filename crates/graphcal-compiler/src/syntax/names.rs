@@ -212,6 +212,42 @@ define_name_type! {
     pub struct PlotPropertyName;
 }
 
+/// Name of a built-in datetime time scale (e.g., `"UTC"`, `"TAI"`, `"TDB"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TimeScaleName(crate::registry::time_scale::TimeScale);
+
+impl TimeScaleName {
+    /// Create a time-scale name from an already-validated time scale.
+    #[must_use]
+    pub const fn new(scale: crate::registry::time_scale::TimeScale) -> Self {
+        Self(scale)
+    }
+
+    /// Get the underlying time scale.
+    #[must_use]
+    pub const fn scale(self) -> crate::registry::time_scale::TimeScale {
+        self.0
+    }
+
+    /// Get the canonical time-scale name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.0.name()
+    }
+}
+
+impl std::fmt::Display for TimeScaleName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for TimeScaleName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 // --- Module-scoped names ---
 
 use std::sync::Arc;

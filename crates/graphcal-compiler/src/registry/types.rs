@@ -381,7 +381,7 @@ fn resolve_dim_expr_impl(
 ) -> Result<Option<Dimension>, RationalError> {
     let mut result = Dimension::dimensionless();
     for item in &expr.terms {
-        let Some(base) = dimensions.get(item.term.name.name.as_str()) else {
+        let Some(base) = dimensions.get(item.term.name.as_str()) else {
             return Ok(None);
         };
         let exp = item.term.power.unwrap_or(1);

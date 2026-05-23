@@ -38,11 +38,16 @@ pub type DagDecl = crate::syntax::ast::DagDecl<Desugared>;
 pub type ParamDecl = crate::syntax::ast::ParamDecl<Desugared>;
 pub type NodeDecl = crate::syntax::ast::NodeDecl<Desugared>;
 pub type ConstNodeDecl = crate::syntax::ast::ConstNodeDecl<Desugared>;
+pub type DimDecl = crate::syntax::ast::DimDecl<Desugared>;
 pub type UnitDecl = crate::syntax::ast::UnitDecl<Desugared>;
 pub type UnitDef = crate::syntax::ast::UnitDef<Desugared>;
 pub type DomainBound = crate::syntax::ast::DomainBound<Desugared>;
 pub type TypeExpr = crate::syntax::ast::TypeExpr<Desugared>;
 pub type TypeExprKind = crate::syntax::ast::TypeExprKind<Desugared>;
+pub type DimExpr = crate::syntax::ast::DimExpr<Desugared>;
+pub type DimExprItem = crate::syntax::ast::DimExprItem<Desugared>;
+pub type DimTerm = crate::syntax::ast::DimTerm<Desugared>;
+pub type IndexExpr = crate::syntax::ast::IndexExpr<Desugared>;
 pub type IndexDecl = crate::syntax::ast::IndexDecl<Desugared>;
 pub type IndexDeclKind = crate::syntax::ast::IndexDeclKind<Desugared>;
 pub type Expr = crate::syntax::ast::Expr<Desugared>;
@@ -64,10 +69,9 @@ pub type FieldDecl = crate::syntax::ast::FieldDecl<Desugared>;
 // ---------------------------------------------------------------------------
 
 pub use crate::syntax::ast::{
-    Attribute, AttributeArg, BaseDimDecl, BinOp, DimDecl, DimExpr, DimExprItem, DimTerm,
-    DomainBoundKind, EncodingChannel, ForBinding, ForBindingIndex, GenericConstraint, Ident,
-    ImportDecl, ImportItem, ImportKind, IndexExpr, MapEntryKey, MarkType, MatchPattern, ModulePath,
-    MulDivOp, MultiDataRow, MultiDecl, MultiDeclSlice, MultiDeclSlot, MultiHeaderCell,
-    MultiSlotAxis, MultiSlotColumnSpan, MultiSlotKind, NatExpr, PatternBinding, TableIndexSpec,
-    UnaryOp, UnitExpr, UnitExprItem, Visibility,
+    Attribute, AttributeArg, BaseDimDecl, BinOp, DomainBoundKind, EncodingChannel, ForBinding,
+    ForBindingIndex, GenericConstraint, Ident, ImportDecl, ImportItem, ImportKind, MapEntryKey,
+    MarkType, MatchPattern, ModulePath, MulDivOp, MultiDataRow, MultiDecl, MultiDeclSlice,
+    MultiDeclSlot, MultiHeaderCell, MultiSlotAxis, MultiSlotColumnSpan, MultiSlotKind, NatExpr,
+    PatternBinding, TableIndexSpec, UnaryOp, UnitExpr, UnitExprItem, Visibility,
 };

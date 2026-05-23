@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, FnName, GenericParamName, IndexName,
     IndexVariantName, LocalName, ModuleAliasName, PlotPropertyName, ScopedName, StructTypeName,
-    UnitName,
+    TimeScaleName, UnitName,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Phase, Raw, Resolved};
@@ -14,18 +14,27 @@ impl Phase for Raw {
     type DeclSugar = RawDeclSugar;
     type ExprSugar = RawExprSugar;
     type RefSugar = UnresolvedRef;
+    type TypeApplicationName = Ident;
+    type DimTermName = Ident;
+    type IndexExprName = Ident;
 }
 
 impl Phase for Desugared {
     type DeclSugar = Infallible;
     type ExprSugar = Infallible;
     type RefSugar = UnresolvedRef;
+    type TypeApplicationName = Ident;
+    type DimTermName = Ident;
+    type IndexExprName = Ident;
 }
 
 impl Phase for Resolved {
     type DeclSugar = Infallible;
     type ExprSugar = Infallible;
     type RefSugar = Infallible;
+    type TypeApplicationName = ResolvedTypeApplicationName;
+    type DimTermName = ResolvedDimTermName;
+    type IndexExprName = ResolvedIndexExprName;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +234,7 @@ pub enum DeclKind<P: Phase = Raw> {
     Node(NodeDecl<P>),
     ConstNode(ConstNodeDecl<P>),
     BaseDimension(BaseDimDecl),
-    Dimension(DimDecl),
+    Dimension(DimDecl<P>),
     Unit(UnitDecl<P>),
     Type(TypeDecl<P>),
     UnionType(UnionTypeDecl<P>),
@@ -761,9 +770,9 @@ pub struct BaseDimDecl {
 ///   dim bindings). Treated like an opaque base dimension when the
 ///   library is compiled standalone.
 #[derive(Debug, Clone)]
-pub struct DimDecl {
+pub struct DimDecl<P: Phase = Raw> {
     pub name: Spanned<DimName>,
-    pub definition: Option<DimExpr>,
+    pub definition: Option<DimExpr<P>>,
 }
 
 /// Unit declaration: `unit km: Length = 1000 m;`, `const unit km: Length = 1000 m;`,
@@ -772,7 +781,7 @@ pub struct DimDecl {
 pub struct UnitDecl<P: Phase = Raw> {
     pub name: Spanned<UnitName>,
     /// The dimension this unit measures.
-    pub dim_type: DimExpr,
+    pub dim_type: DimExpr<P>,
     /// Scale definition: `(scale_value, base_unit_expr)`.
     /// `None` iff this is a base unit (`base unit m: Length;`).
     pub definition: Option<UnitDef<P>>,
@@ -861,7 +870,7 @@ pub enum IndexDeclKind<P: Phase = Raw> {
     /// Required range index with dimension constraint: `index Foo: Time;`
     ///
     /// Must be bound via parameterized import.
-    RequiredRange { dimension: DimExpr },
+    RequiredRange { dimension: DimExpr<P> },
 }
 
 impl<P: Phase> IndexDeclKind<P> {
@@ -900,6 +909,151 @@ pub enum GenericConstraint {
     Nat,
     /// `F: Type` -- the generic stands for any type (unconstrained phantom parameter).
     Type,
+}
+
+/// Resolved name carried by a user-defined type application.
+#[derive(Debug, Clone)]
+pub enum ResolvedTypeApplicationName {
+    /// Type declared in the current compilation unit.
+    Struct(Spanned<StructTypeName>),
+    /// Type imported from another module; validated by the import/project layer.
+    ImportedTypeSystem(Spanned<StructTypeName>),
+    /// Generic parameter constrained as `Type`.
+    GenericTypeParam(Spanned<GenericParamName>),
+}
+
+impl ResolvedTypeApplicationName {
+    #[must_use]
+    pub fn renamed_like(&self, new_name: impl Into<String>, span: Span) -> Self {
+        match self {
+            Self::Struct(_) => Self::Struct(Spanned::new(StructTypeName::new(new_name), span)),
+            Self::ImportedTypeSystem(_) => {
+                Self::ImportedTypeSystem(Spanned::new(StructTypeName::new(new_name), span))
+            }
+            Self::GenericTypeParam(_) => {
+                Self::GenericTypeParam(Spanned::new(GenericParamName::new(new_name), span))
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Struct(name) | Self::ImportedTypeSystem(name) => name.span,
+            Self::GenericTypeParam(name) => name.span,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Struct(name) | Self::ImportedTypeSystem(name) => name.value.as_str(),
+            Self::GenericTypeParam(name) => name.value.as_str(),
+        }
+    }
+}
+
+/// Resolved name carried by a dimension-expression term.
+#[derive(Debug, Clone)]
+pub enum ResolvedDimTermName {
+    /// Concrete dimension name. Unknown dimensions are still represented in this
+    /// semantic slot so downstream registry validation can report `UnknownDimension`.
+    Dimension(Spanned<DimName>),
+    /// Generic parameter constrained as `Dim`.
+    GenericDimParam(Spanned<GenericParamName>),
+    /// Single-term type expression referring to a struct/union type.
+    StructType(Spanned<StructTypeName>),
+    /// Single-term type expression referring to an index label type.
+    Index(Spanned<IndexName>),
+    /// Imported type-system name whose concrete category is validated later.
+    ImportedTypeSystem(Spanned<StructTypeName>),
+    /// Built-in datetime time scale used in `Datetime<UTC>`-style arguments.
+    TimeScale(Spanned<TimeScaleName>),
+}
+
+impl ResolvedDimTermName {
+    #[must_use]
+    pub fn renamed_like(&self, new_name: impl Into<String>, span: Span) -> Self {
+        match self {
+            Self::Dimension(_) => Self::Dimension(Spanned::new(DimName::new(new_name), span)),
+            Self::GenericDimParam(_) => {
+                Self::GenericDimParam(Spanned::new(GenericParamName::new(new_name), span))
+            }
+            Self::StructType(_) => {
+                Self::StructType(Spanned::new(StructTypeName::new(new_name), span))
+            }
+            Self::Index(_) => Self::Index(Spanned::new(IndexName::new(new_name), span)),
+            Self::ImportedTypeSystem(_) => {
+                Self::ImportedTypeSystem(Spanned::new(StructTypeName::new(new_name), span))
+            }
+            Self::TimeScale(name) => Self::TimeScale(name.clone()),
+        }
+    }
+
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Dimension(name) => name.span,
+            Self::GenericDimParam(name) => name.span,
+            Self::StructType(name) | Self::ImportedTypeSystem(name) => name.span,
+            Self::Index(name) => name.span,
+            Self::TimeScale(name) => name.span,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Dimension(name) => name.value.as_str(),
+            Self::GenericDimParam(name) => name.value.as_str(),
+            Self::StructType(name) | Self::ImportedTypeSystem(name) => name.value.as_str(),
+            Self::Index(name) => name.value.as_str(),
+            Self::TimeScale(name) => name.value.as_str(),
+        }
+    }
+}
+
+/// Resolved name carried by an indexed-type index expression.
+#[derive(Debug, Clone)]
+pub enum ResolvedIndexExprName {
+    /// Concrete index name. Unknown indexes are still represented in this
+    /// semantic slot so downstream registry validation can report `UnknownIndex`.
+    Index(Spanned<IndexName>),
+    /// Generic parameter constrained as `Index`.
+    GenericIndexParam(Spanned<GenericParamName>),
+    /// Generic parameter constrained as `Nat`.
+    GenericNatParam(Spanned<GenericParamName>),
+}
+
+impl ResolvedIndexExprName {
+    #[must_use]
+    pub fn renamed_like(&self, new_name: impl Into<String>, span: Span) -> Self {
+        match self {
+            Self::Index(_) => Self::Index(Spanned::new(IndexName::new(new_name), span)),
+            Self::GenericIndexParam(_) => {
+                Self::GenericIndexParam(Spanned::new(GenericParamName::new(new_name), span))
+            }
+            Self::GenericNatParam(_) => {
+                Self::GenericNatParam(Spanned::new(GenericParamName::new(new_name), span))
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Index(name) => name.span,
+            Self::GenericIndexParam(name) | Self::GenericNatParam(name) => name.span,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Index(name) => name.value.as_str(),
+            Self::GenericIndexParam(name) | Self::GenericNatParam(name) => name.value.as_str(),
+        }
+    }
 }
 
 /// An identifier with its source span.
@@ -1010,21 +1164,21 @@ pub struct DomainBound<P: Phase = Raw> {
 /// In `Dimensionless[3, 4]`, `3` and `4` are `IndexExpr::NatLiteral`.
 /// In `D[N + 1]`, `N + 1` is an `IndexExpr::NatExpr`.
 #[derive(Debug, Clone)]
-pub enum IndexExpr {
+pub enum IndexExpr<P: Phase = Raw> {
     /// A named index or generic parameter: `Maneuver`, `I`, `N`
-    Name(Ident),
+    Name(Spanned<P::IndexExprName>),
     /// An integer literal in index position: `3` (desugars to `range(3)` internally)
     NatLiteral(u64, Span),
     /// A compound Nat expression in index position: `N + 1`, `M + N`
     NatExpr(NatExpr),
 }
 
-impl IndexExpr {
+impl<P: Phase> IndexExpr<P> {
     /// Get the source span of this index expression.
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
-            Self::Name(ident) => ident.span,
+            Self::Name(name) => name.span,
             Self::NatLiteral(_, span) => *span,
             Self::NatExpr(nat_expr) => nat_expr.span(),
         }
@@ -1059,17 +1213,17 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// built-in name.
     DatetimeApplication { type_args: Vec<TypeExpr<P>> },
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
-    DimExpr(DimExpr),
+    DimExpr(DimExpr<P>),
     /// An indexed type like `Velocity[Maneuver]`, `Dimensionless[3, 4]`, or `D[M, N]`
     Indexed {
         base: Box<TypeExpr<P>>,
-        indexes: Vec<IndexExpr>,
+        indexes: Vec<IndexExpr<P>>,
     },
     /// A user-defined generic type application like `Vec3<Length, ECI>`.
     /// Built-in parameterized types (currently only `Datetime<...>`) have their
     /// own variants instead — see [`Self::DatetimeApplication`].
     TypeApplication {
-        name: Ident,
+        name: Spanned<P::TypeApplicationName>,
         type_args: Vec<TypeExpr<P>>,
     },
 }
@@ -1077,23 +1231,23 @@ pub enum TypeExprKind<P: Phase = Raw> {
 /// A dimension expression: product/quotient of dimension terms.
 /// E.g., `Length^3 / Time^2`
 #[derive(Debug, Clone)]
-pub struct DimExpr {
-    pub terms: Vec<DimExprItem>,
+pub struct DimExpr<P: Phase = Raw> {
+    pub terms: Vec<DimExprItem<P>>,
     pub span: Span,
 }
 
 /// One term in a dimension expression with its combining operator.
 #[derive(Debug, Clone)]
-pub struct DimExprItem {
+pub struct DimExprItem<P: Phase = Raw> {
     /// `Mul` for the first term and for `*`, `Div` for `/`.
     pub op: MulDivOp,
-    pub term: DimTerm,
+    pub term: DimTerm<P>,
 }
 
 /// A single dimension term: `IDENT` or `IDENT ^ INTEGER`
 #[derive(Debug, Clone)]
-pub struct DimTerm {
-    pub name: Ident,
+pub struct DimTerm<P: Phase = Raw> {
+    pub name: Spanned<P::DimTermName>,
     /// `None` means exponent 1.
     pub power: Option<i32>,
     pub span: Span,

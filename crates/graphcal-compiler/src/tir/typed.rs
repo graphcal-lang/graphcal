@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::resolved_ast::{MulDivOp, TypeExpr, TypeExprKind};
+use crate::desugar::resolved_ast::{
+    MulDivOp, ResolvedIndexExprName, ResolvedTypeApplicationName, TypeExpr, TypeExprKind,
+};
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{DimName, GenericParamName, IndexName, StructTypeName};
 use crate::syntax::span::Span;
@@ -1854,32 +1856,30 @@ pub fn resolve_type_expr(
                         let form = normalize_nat_expr(nat_expr, nat_params, src)?;
                         resolved_indexes.push(ResolvedIndex::NatExpr(form, nat_expr.span()));
                     }
-                    crate::desugar::resolved_ast::IndexExpr::Name(ident) => {
-                        let idx_name = &ident.name;
-                        if let Some(gp) = nat_params.iter().find(|p| p.as_str() == idx_name) {
-                            // Generic nat param in index position: `D[N]` where `N: Nat`
+                    crate::desugar::resolved_ast::IndexExpr::Name(ident) => match &ident.value {
+                        ResolvedIndexExprName::GenericNatParam(name) => {
                             resolved_indexes.push(ResolvedIndex::NatExpr(
-                                NatPolyForm::from_var(gp.clone()),
+                                NatPolyForm::from_var(name.value.clone()),
                                 ident.span,
                             ));
-                        } else if let Some(gp) =
-                            index_params.iter().find(|p| p.as_str() == idx_name)
-                        {
-                            resolved_indexes
-                                .push(ResolvedIndex::GenericParam(gp.clone(), ident.span));
-                        } else if registry.indexes.get_index(idx_name).is_some() {
-                            resolved_indexes.push(ResolvedIndex::Concrete(
-                                IndexName::new(idx_name),
-                                ident.span,
-                            ));
-                        } else {
-                            return Err(GraphcalError::UnknownIndex {
-                                name: ident.as_index_name(),
-                                src: src.clone(),
-                                span: ident.span.into(),
-                            });
                         }
-                    }
+                        ResolvedIndexExprName::GenericIndexParam(name) => {
+                            resolved_indexes
+                                .push(ResolvedIndex::GenericParam(name.value.clone(), ident.span));
+                        }
+                        ResolvedIndexExprName::Index(name) => {
+                            if registry.indexes.get_index(name.value.as_str()).is_some() {
+                                resolved_indexes
+                                    .push(ResolvedIndex::Concrete(name.value.clone(), ident.span));
+                            } else {
+                                return Err(GraphcalError::UnknownIndex {
+                                    name: name.value.clone(),
+                                    src: src.clone(),
+                                    span: ident.span.into(),
+                                });
+                            }
+                        }
+                    },
                 }
             }
             Ok(ResolvedTypeExpr::Indexed {
@@ -1918,7 +1918,7 @@ fn resolve_dim_expr(
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
     // Single-term, no power: could be struct, generic dim param, or dimension
     if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() {
-        let name = &dim_expr.terms[0].term.name.name;
+        let name = dim_expr.terms[0].term.name.as_str();
         let span = dim_expr.terms[0].term.span;
 
         // Check named index → Label type
@@ -1944,16 +1944,17 @@ fn resolve_dim_expr(
     }
 
     // Check if any term is a generic dim param
-    let has_generic = dim_expr
-        .terms
-        .iter()
-        .any(|item| dim_params.iter().any(|p| p.as_str() == item.term.name.name));
+    let has_generic = dim_expr.terms.iter().any(|item| {
+        dim_params
+            .iter()
+            .any(|p| p.as_str() == item.term.name.as_str())
+    });
 
     if has_generic {
         // Build GenericDimExpr with mixed concrete/generic terms
         let mut terms = Vec::with_capacity(dim_expr.terms.len());
         for item in &dim_expr.terms {
-            let name = &item.term.name.name;
+            let name = item.term.name.as_str();
             let power = item.term.power.unwrap_or(1);
             let op = item.op;
 
@@ -1986,7 +1987,7 @@ fn resolve_dim_expr(
         // All terms are concrete dimensions — resolve to Scalar
         let mut result = Dimension::dimensionless();
         for item in &dim_expr.terms {
-            let name = &item.term.name.name;
+            let name = item.term.name.as_str();
             let base = registry.dimensions.get_dimension(name).ok_or_else(|| {
                 GraphcalError::UnknownDimension {
                     name: DimName::new(name),
@@ -2038,7 +2039,7 @@ fn resolve_datetime_application(
         TypeExprKind::DimExpr(dim_expr)
             if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() =>
         {
-            &dim_expr.terms[0].term.name.name
+            dim_expr.terms[0].term.name.as_str()
         }
         _ => {
             return Err(GraphcalError::EvalError {
@@ -2071,7 +2072,7 @@ fn resolve_datetime_application(
 )]
 fn resolve_type_application(
     type_ann: &TypeExpr,
-    name: &crate::desugar::resolved_ast::Ident,
+    name: &crate::syntax::span::Spanned<ResolvedTypeApplicationName>,
     type_args: &[TypeExpr],
     registry: &Registry,
     dim_params: &[GenericParamName],
@@ -2079,7 +2080,7 @@ fn resolve_type_application(
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let type_name = &name.name;
+    let type_name = name.as_str();
 
     // Verify this is a known generic type
     let type_def =

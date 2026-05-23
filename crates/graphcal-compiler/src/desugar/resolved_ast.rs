@@ -39,11 +39,16 @@ pub type DagDecl = crate::syntax::ast::DagDecl<Resolved>;
 pub type ParamDecl = crate::syntax::ast::ParamDecl<Resolved>;
 pub type NodeDecl = crate::syntax::ast::NodeDecl<Resolved>;
 pub type ConstNodeDecl = crate::syntax::ast::ConstNodeDecl<Resolved>;
+pub type DimDecl = crate::syntax::ast::DimDecl<Resolved>;
 pub type UnitDecl = crate::syntax::ast::UnitDecl<Resolved>;
 pub type UnitDef = crate::syntax::ast::UnitDef<Resolved>;
 pub type DomainBound = crate::syntax::ast::DomainBound<Resolved>;
 pub type TypeExpr = crate::syntax::ast::TypeExpr<Resolved>;
 pub type TypeExprKind = crate::syntax::ast::TypeExprKind<Resolved>;
+pub type DimExpr = crate::syntax::ast::DimExpr<Resolved>;
+pub type DimExprItem = crate::syntax::ast::DimExprItem<Resolved>;
+pub type DimTerm = crate::syntax::ast::DimTerm<Resolved>;
+pub type IndexExpr = crate::syntax::ast::IndexExpr<Resolved>;
 pub type IndexDecl = crate::syntax::ast::IndexDecl<Resolved>;
 pub type IndexDeclKind = crate::syntax::ast::IndexDeclKind<Resolved>;
 pub type Expr = crate::syntax::ast::Expr<Resolved>;
@@ -65,10 +70,10 @@ pub type FieldDecl = crate::syntax::ast::FieldDecl<Resolved>;
 // ---------------------------------------------------------------------------
 
 pub use crate::syntax::ast::{
-    Attribute, AttributeArg, BaseDimDecl, BinOp, DimDecl, DimExpr, DimExprItem, DimTerm,
-    DomainBoundKind, EncodingChannel, ForBinding, ForBindingIndex, GenericConstraint, Ident,
-    ImportDecl, ImportItem, ImportItemNamespace, ImportKind, IndexExpr, MapEntryKey, MarkType,
-    MatchPattern, ModulePath, MulDivOp, MultiDataRow, MultiDecl, MultiDeclSlice, MultiDeclSlot,
-    MultiHeaderCell, MultiSlotAxis, MultiSlotColumnSpan, MultiSlotKind, NatExpr, PatternBinding,
-    TableIndexSpec, UnaryOp, UnitExpr, UnitExprItem, Visibility,
+    Attribute, AttributeArg, BaseDimDecl, BinOp, DomainBoundKind, EncodingChannel, ForBinding,
+    ForBindingIndex, GenericConstraint, Ident, ImportDecl, ImportItem, ImportItemNamespace,
+    ImportKind, MapEntryKey, MarkType, MatchPattern, ModulePath, MulDivOp, MultiDataRow, MultiDecl,
+    MultiDeclSlice, MultiDeclSlot, MultiHeaderCell, MultiSlotAxis, MultiSlotColumnSpan,
+    MultiSlotKind, NatExpr, PatternBinding, ResolvedDimTermName, ResolvedIndexExprName,
+    ResolvedTypeApplicationName, TableIndexSpec, UnaryOp, UnitExpr, UnitExprItem, Visibility,
 };

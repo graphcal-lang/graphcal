@@ -553,7 +553,7 @@ fn field_constraint_target_kind(
         TypeExprKind::Datetime | TypeExprKind::DatetimeApplication { .. } => {
             Some("Datetime".to_string())
         }
-        TypeExprKind::TypeApplication { name, .. } => Some(format!("struct `{}`", name.name)),
+        TypeExprKind::TypeApplication { name, .. } => Some(format!("struct `{}`", name.as_str())),
         // The outer `Indexed` wrapper was stripped above; a nested indexed
         // type at this depth is unusual but constraint-compatible (the base
         // dim is what carries the constraint).
@@ -566,7 +566,7 @@ fn field_constraint_target_kind(
                 && dim_expr.terms[0].term.power.is_none()
                 && let Some(item) = dim_expr.terms.first()
             {
-                let name = item.term.name.name.as_str();
+                let name = item.term.name.as_str();
                 if registry.dimensions.get_dimension(name).is_some() {
                     None
                 } else if registry.types.get_type(name).is_some() {

@@ -1205,7 +1205,7 @@ impl OverrideReconciliationChecker<'_> {
         match &type_expr.kind {
             TypeExprKind::DimExpr(dim_expr) => {
                 for item in &dim_expr.terms {
-                    let name = item.term.name.name.as_str();
+                    let name = item.term.name.as_str();
                     if self.type_bindings.contains_key(name) {
                         return Err(self.orphan_error("type", name, format!("type `{name}`")));
                     }
@@ -1213,7 +1213,7 @@ impl OverrideReconciliationChecker<'_> {
                 Ok(())
             }
             TypeExprKind::TypeApplication { name, type_args } => {
-                let n = name.name.as_str();
+                let n = name.as_str();
                 if self.type_bindings.contains_key(n) {
                     return Err(self.orphan_error("type", n, format!("type `{n}`")));
                 }
@@ -1552,9 +1552,9 @@ pub fn substitute_type_expr_index_names(
         TypeExprKind::Indexed { base, indexes } => {
             for idx_expr in indexes.iter_mut() {
                 if let crate::desugar::resolved_ast::IndexExpr::Name(ident) = idx_expr
-                    && let Some(new_name) = bindings.get(ident.name.as_str())
+                    && let Some(new_name) = bindings.get(ident.as_str())
                 {
-                    ident.name = new_name.as_str().to_string();
+                    ident.value = ident.renamed_like(new_name.as_str(), ident.span);
                 }
             }
             substitute_type_expr_index_names(base, bindings);
@@ -1597,8 +1597,11 @@ where
     match &mut type_expr.kind {
         TypeExprKind::DimExpr(dim_expr) => {
             for item in &mut dim_expr.terms {
-                if let Some(new_name) = bindings.get(item.term.name.name.as_str()) {
-                    item.term.name.name = new_name.as_ref().to_string();
+                if let Some(new_name) = bindings.get(item.term.name.as_str()) {
+                    item.term.name.value = item
+                        .term
+                        .name
+                        .renamed_like(new_name.as_ref(), item.term.name.span);
                 }
             }
         }
@@ -1606,8 +1609,8 @@ where
             substitute_type_expr_nominal_names(base, bindings);
         }
         TypeExprKind::TypeApplication { name, type_args } => {
-            if let Some(new_name) = bindings.get(name.name.as_str()) {
-                name.name = new_name.as_ref().to_string();
+            if let Some(new_name) = bindings.get(name.as_str()) {
+                name.value = name.renamed_like(new_name.as_ref(), name.span);
             }
             for arg in type_args {
                 substitute_type_expr_nominal_names(arg, bindings);
@@ -2000,7 +2003,7 @@ fn topo_sort_derived_dims<'a>(
             continue;
         };
         for item in &definition.terms {
-            let dep_name = item.term.name.name.as_str();
+            let dep_name = item.term.name.as_str();
             if dep_name != self_name
                 && let Some(&to) = name_to_idx.get(dep_name)
             {

@@ -1421,7 +1421,7 @@ fn collect_type_expr_refs(
                     graphcal_compiler::desugar::resolved_ast::IndexExpr::Name(ident) => {
                         table.references.push(ReferenceInfo {
                             span: ident.span,
-                            target: SymbolKey::TopLevel(ident.name.clone()),
+                            target: SymbolKey::TopLevel(ident.as_str().to_string()),
                         });
                     }
                     graphcal_compiler::desugar::resolved_ast::IndexExpr::NatLiteral(_, _)
@@ -1434,7 +1434,7 @@ fn collect_type_expr_refs(
         TypeExprKind::TypeApplication { name, type_args } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
-                target: SymbolKey::TopLevel(name.name.clone()),
+                target: SymbolKey::TopLevel(name.as_str().to_string()),
             });
             for arg in type_args {
                 collect_type_expr_refs(arg, table);
@@ -1476,7 +1476,7 @@ fn collect_dim_expr_refs(dim_expr: &DimExpr, table: &mut SymbolTable) {
     for item in &dim_expr.terms {
         table.references.push(ReferenceInfo {
             span: item.term.span,
-            target: SymbolKey::TopLevel(item.term.name.name.clone()),
+            target: SymbolKey::TopLevel(item.term.name.as_str().to_string()),
         });
     }
 }

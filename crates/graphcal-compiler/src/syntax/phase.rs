@@ -60,6 +60,15 @@ pub trait Phase: 'static + sealed::Sealed {
     /// be constructed and the name-resolution pass is statically known to
     /// have eliminated every unresolved reference.
     type RefSugar: Debug + Clone;
+
+    /// Phase-specific name carried by `TypeExprKind::TypeApplication`.
+    type TypeApplicationName: Debug + Clone;
+
+    /// Phase-specific name carried by dimension terms in type expressions.
+    type DimTermName: Debug + Clone;
+
+    /// Phase-specific name carried by `IndexExpr::Name`.
+    type IndexExprName: Debug + Clone;
 }
 
 /// Pre-desugar phase: every surface sugar is representable.
