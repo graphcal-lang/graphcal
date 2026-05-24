@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, FnName, GenericParamName, IndexName,
     IndexVariantName, LocalName, ModuleAliasName, PlotPropertyName, ScopedName, StructTypeName,
-    TimeScaleName, UnitName,
+    TypeLevelName, UnitName,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Phase, Raw, Resolved};
@@ -14,27 +14,27 @@ impl Phase for Raw {
     type DeclSugar = RawDeclSugar;
     type ExprSugar = RawExprSugar;
     type RefSugar = UnresolvedRef;
-    type TypeApplicationName = Ident;
-    type DimTermName = Ident;
-    type IndexExprName = Ident;
+    type TypeApplicationName = TypeLevelName;
+    type DimTermName = TypeLevelName;
+    type IndexExprName = TypeLevelName;
 }
 
 impl Phase for Desugared {
     type DeclSugar = Infallible;
     type ExprSugar = Infallible;
     type RefSugar = UnresolvedRef;
-    type TypeApplicationName = Ident;
-    type DimTermName = Ident;
-    type IndexExprName = Ident;
+    type TypeApplicationName = TypeLevelName;
+    type DimTermName = TypeLevelName;
+    type IndexExprName = TypeLevelName;
 }
 
 impl Phase for Resolved {
     type DeclSugar = Infallible;
     type ExprSugar = Infallible;
     type RefSugar = Infallible;
-    type TypeApplicationName = ResolvedTypeApplicationName;
-    type DimTermName = ResolvedDimTermName;
-    type IndexExprName = ResolvedIndexExprName;
+    type TypeApplicationName = TypeLevelName;
+    type DimTermName = TypeLevelName;
+    type IndexExprName = TypeLevelName;
 }
 
 // ---------------------------------------------------------------------------
@@ -909,151 +909,6 @@ pub enum GenericConstraint {
     Nat,
     /// `F: Type` -- the generic stands for any type (unconstrained phantom parameter).
     Type,
-}
-
-/// Resolved name carried by a user-defined type application.
-#[derive(Debug, Clone)]
-pub enum ResolvedTypeApplicationName {
-    /// Type declared in the current compilation unit.
-    Struct(Spanned<StructTypeName>),
-    /// Type imported from another module; validated by the import/project layer.
-    ImportedTypeSystem(Spanned<StructTypeName>),
-    /// Generic parameter constrained as `Type`.
-    GenericTypeParam(Spanned<GenericParamName>),
-}
-
-impl ResolvedTypeApplicationName {
-    #[must_use]
-    pub fn renamed_like(&self, new_name: impl Into<String>, span: Span) -> Self {
-        match self {
-            Self::Struct(_) => Self::Struct(Spanned::new(StructTypeName::new(new_name), span)),
-            Self::ImportedTypeSystem(_) => {
-                Self::ImportedTypeSystem(Spanned::new(StructTypeName::new(new_name), span))
-            }
-            Self::GenericTypeParam(_) => {
-                Self::GenericTypeParam(Spanned::new(GenericParamName::new(new_name), span))
-            }
-        }
-    }
-
-    #[must_use]
-    pub const fn span(&self) -> Span {
-        match self {
-            Self::Struct(name) | Self::ImportedTypeSystem(name) => name.span,
-            Self::GenericTypeParam(name) => name.span,
-        }
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Struct(name) | Self::ImportedTypeSystem(name) => name.value.as_str(),
-            Self::GenericTypeParam(name) => name.value.as_str(),
-        }
-    }
-}
-
-/// Resolved name carried by a dimension-expression term.
-#[derive(Debug, Clone)]
-pub enum ResolvedDimTermName {
-    /// Concrete dimension name. Unknown dimensions are still represented in this
-    /// semantic slot so downstream registry validation can report `UnknownDimension`.
-    Dimension(Spanned<DimName>),
-    /// Generic parameter constrained as `Dim`.
-    GenericDimParam(Spanned<GenericParamName>),
-    /// Single-term type expression referring to a struct/union type.
-    StructType(Spanned<StructTypeName>),
-    /// Single-term type expression referring to an index label type.
-    Index(Spanned<IndexName>),
-    /// Imported type-system name whose concrete category is validated later.
-    ImportedTypeSystem(Spanned<StructTypeName>),
-    /// Built-in datetime time scale used in `Datetime<UTC>`-style arguments.
-    TimeScale(Spanned<TimeScaleName>),
-}
-
-impl ResolvedDimTermName {
-    #[must_use]
-    pub fn renamed_like(&self, new_name: impl Into<String>, span: Span) -> Self {
-        match self {
-            Self::Dimension(_) => Self::Dimension(Spanned::new(DimName::new(new_name), span)),
-            Self::GenericDimParam(_) => {
-                Self::GenericDimParam(Spanned::new(GenericParamName::new(new_name), span))
-            }
-            Self::StructType(_) => {
-                Self::StructType(Spanned::new(StructTypeName::new(new_name), span))
-            }
-            Self::Index(_) => Self::Index(Spanned::new(IndexName::new(new_name), span)),
-            Self::ImportedTypeSystem(_) => {
-                Self::ImportedTypeSystem(Spanned::new(StructTypeName::new(new_name), span))
-            }
-            Self::TimeScale(name) => Self::TimeScale(name.clone()),
-        }
-    }
-
-    #[must_use]
-    pub const fn span(&self) -> Span {
-        match self {
-            Self::Dimension(name) => name.span,
-            Self::GenericDimParam(name) => name.span,
-            Self::StructType(name) | Self::ImportedTypeSystem(name) => name.span,
-            Self::Index(name) => name.span,
-            Self::TimeScale(name) => name.span,
-        }
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Dimension(name) => name.value.as_str(),
-            Self::GenericDimParam(name) => name.value.as_str(),
-            Self::StructType(name) | Self::ImportedTypeSystem(name) => name.value.as_str(),
-            Self::Index(name) => name.value.as_str(),
-            Self::TimeScale(name) => name.value.as_str(),
-        }
-    }
-}
-
-/// Resolved name carried by an indexed-type index expression.
-#[derive(Debug, Clone)]
-pub enum ResolvedIndexExprName {
-    /// Concrete index name. Unknown indexes are still represented in this
-    /// semantic slot so downstream registry validation can report `UnknownIndex`.
-    Index(Spanned<IndexName>),
-    /// Generic parameter constrained as `Index`.
-    GenericIndexParam(Spanned<GenericParamName>),
-    /// Generic parameter constrained as `Nat`.
-    GenericNatParam(Spanned<GenericParamName>),
-}
-
-impl ResolvedIndexExprName {
-    #[must_use]
-    pub fn renamed_like(&self, new_name: impl Into<String>, span: Span) -> Self {
-        match self {
-            Self::Index(_) => Self::Index(Spanned::new(IndexName::new(new_name), span)),
-            Self::GenericIndexParam(_) => {
-                Self::GenericIndexParam(Spanned::new(GenericParamName::new(new_name), span))
-            }
-            Self::GenericNatParam(_) => {
-                Self::GenericNatParam(Spanned::new(GenericParamName::new(new_name), span))
-            }
-        }
-    }
-
-    #[must_use]
-    pub const fn span(&self) -> Span {
-        match self {
-            Self::Index(name) => name.span,
-            Self::GenericIndexParam(name) | Self::GenericNatParam(name) => name.span,
-        }
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Index(name) => name.value.as_str(),
-            Self::GenericIndexParam(name) | Self::GenericNatParam(name) => name.value.as_str(),
-        }
-    }
 }
 
 /// An identifier with its source span.

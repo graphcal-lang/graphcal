@@ -14,7 +14,7 @@ use petgraph::graph::DiGraph;
 
 use crate::desugar::resolved_ast::{
     AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl, PlotDecl,
-    ResolvedDimTermName, TypeExpr,
+    TypeExpr,
 };
 use crate::ir::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
@@ -1205,18 +1205,13 @@ impl OverrideReconciliationChecker<'_> {
         match &type_expr.kind {
             TypeExprKind::DimExpr(dim_expr) => {
                 for item in &dim_expr.terms {
-                    match &item.term.name.value {
-                        ResolvedDimTermName::StructType(name)
-                        | ResolvedDimTermName::ImportedTypeSystem(name)
-                            if self.type_bindings.contains_key(name.value.as_str()) =>
-                        {
-                            return Err(self.orphan_error(
-                                "type",
-                                name.value.as_str(),
-                                format!("type `{}`", name.value),
-                            ));
-                        }
-                        _ => {}
+                    let name = &item.term.name.value;
+                    if self.type_bindings.contains_key(name.as_str()) {
+                        return Err(self.orphan_error(
+                            "type",
+                            name.as_str(),
+                            format!("type `{name}`"),
+                        ));
                     }
                 }
                 Ok(())
@@ -1563,7 +1558,7 @@ pub fn substitute_type_expr_index_names(
                 if let crate::desugar::resolved_ast::IndexExpr::Name(ident) = idx_expr
                     && let Some(new_name) = bindings.get(ident.as_str())
                 {
-                    ident.value = ident.renamed_like(new_name.as_str(), ident.span);
+                    ident.value = crate::syntax::names::TypeLevelName::new(new_name.as_str());
                 }
             }
             substitute_type_expr_index_names(base, bindings);
@@ -1607,10 +1602,8 @@ where
         TypeExprKind::DimExpr(dim_expr) => {
             for item in &mut dim_expr.terms {
                 if let Some(new_name) = bindings.get(item.term.name.as_str()) {
-                    item.term.name.value = item
-                        .term
-                        .name
-                        .renamed_like(new_name.as_ref(), item.term.name.span);
+                    item.term.name.value =
+                        crate::syntax::names::TypeLevelName::new(new_name.as_ref());
                 }
             }
         }
@@ -1619,7 +1612,7 @@ where
         }
         TypeExprKind::TypeApplication { name, type_args } => {
             if let Some(new_name) = bindings.get(name.as_str()) {
-                name.value = name.renamed_like(new_name.as_ref(), name.span);
+                name.value = crate::syntax::names::TypeLevelName::new(new_name.as_ref());
             }
             for arg in type_args {
                 substitute_type_expr_nominal_names(arg, bindings);

@@ -31,7 +31,7 @@ use crate::syntax::ast::UnresolvedRef;
 use crate::syntax::ast::{ImportItemNamespace, ImportKind, TypeSystemRefKind};
 use crate::syntax::names::{
     ConstructorName, DimName, GenericParamName, IndexName, IndexVariantName, LocalName,
-    ModuleAliasName, ScopedName, StructTypeName, TimeScaleName,
+    ModuleAliasName, ScopedName, StructTypeName,
 };
 use crate::syntax::phase::never;
 use crate::syntax::span::Spanned;
@@ -69,13 +69,6 @@ impl ResolveContext {
 
     fn pop_scope(&mut self) {
         self.local_scopes.pop();
-    }
-
-    fn generic_constraint(&self, name: &str) -> Option<src_ast::GenericConstraint> {
-        self.generic_scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name).copied())
     }
 
     fn push_generic_scope(&mut self, params: &[src_ast::GenericParam]) {
@@ -603,29 +596,10 @@ fn lift_type_expr_kind(
 }
 
 fn lift_type_application_name(
-    name: &Spanned<src_ast::Ident>,
-    ctx: &ResolveContext,
-) -> Spanned<dst_ast::ResolvedTypeApplicationName> {
-    let text = name.value.name.as_str();
-    let value = match ctx.generic_constraint(text) {
-        Some(src_ast::GenericConstraint::Type) => {
-            dst_ast::ResolvedTypeApplicationName::GenericTypeParam(Spanned::new(
-                GenericParamName::new(text),
-                name.span,
-            ))
-        }
-        _ if ctx.imported_type_system_names.contains(text) => {
-            dst_ast::ResolvedTypeApplicationName::ImportedTypeSystem(Spanned::new(
-                StructTypeName::new(text),
-                name.span,
-            ))
-        }
-        _ => dst_ast::ResolvedTypeApplicationName::Struct(Spanned::new(
-            StructTypeName::new(text),
-            name.span,
-        )),
-    };
-    Spanned::new(value, name.span)
+    name: &Spanned<crate::syntax::names::TypeLevelName>,
+    _ctx: &ResolveContext,
+) -> Spanned<crate::syntax::names::TypeLevelName> {
+    name.clone()
 }
 
 fn lift_dim_expr(d: src_ast::DimExpr, ctx: &ResolveContext) -> dst_ast::DimExpr {
@@ -642,68 +616,17 @@ fn lift_dim_expr(d: src_ast::DimExpr, ctx: &ResolveContext) -> dst_ast::DimExpr 
     }
 }
 
-fn lift_dim_term(term: &src_ast::DimTerm, ctx: &ResolveContext) -> dst_ast::DimTerm {
-    let text = term.name.value.name.as_str();
-    let name_span = term.name.span;
-    let value = match ctx.generic_constraint(text) {
-        Some(src_ast::GenericConstraint::Dim) => dst_ast::ResolvedDimTermName::GenericDimParam(
-            Spanned::new(GenericParamName::new(text), name_span),
-        ),
-        _ if ctx.type_names.contains(text) => dst_ast::ResolvedDimTermName::StructType(
-            Spanned::new(StructTypeName::new(text), name_span),
-        ),
-        _ if ctx.index_variants.contains_key(text) => {
-            dst_ast::ResolvedDimTermName::Index(Spanned::new(IndexName::new(text), name_span))
-        }
-        _ if ctx.imported_type_system_names.contains(text) => {
-            dst_ast::ResolvedDimTermName::ImportedTypeSystem(Spanned::new(
-                StructTypeName::new(text),
-                name_span,
-            ))
-        }
-        _ => text.parse::<TimeScale>().map_or_else(
-            |_| {
-                dst_ast::ResolvedDimTermName::Dimension(Spanned::new(DimName::new(text), name_span))
-            },
-            |scale| {
-                dst_ast::ResolvedDimTermName::TimeScale(Spanned::new(
-                    TimeScaleName::new(scale),
-                    name_span,
-                ))
-            },
-        ),
-    };
+fn lift_dim_term(term: &src_ast::DimTerm, _ctx: &ResolveContext) -> dst_ast::DimTerm {
     dst_ast::DimTerm {
-        name: Spanned::new(value, name_span),
+        name: term.name.clone(),
         power: term.power,
         span: term.span,
     }
 }
 
-fn lift_index_expr(idx: src_ast::IndexExpr, ctx: &ResolveContext) -> dst_ast::IndexExpr {
+fn lift_index_expr(idx: src_ast::IndexExpr, _ctx: &ResolveContext) -> dst_ast::IndexExpr {
     match idx {
-        src_ast::IndexExpr::Name(name) => {
-            let text = name.value.name.as_str();
-            let value = match ctx.generic_constraint(text) {
-                Some(src_ast::GenericConstraint::Nat) => {
-                    dst_ast::ResolvedIndexExprName::GenericNatParam(Spanned::new(
-                        GenericParamName::new(text),
-                        name.span,
-                    ))
-                }
-                Some(src_ast::GenericConstraint::Index) => {
-                    dst_ast::ResolvedIndexExprName::GenericIndexParam(Spanned::new(
-                        GenericParamName::new(text),
-                        name.span,
-                    ))
-                }
-                _ => dst_ast::ResolvedIndexExprName::Index(Spanned::new(
-                    IndexName::new(text),
-                    name.span,
-                )),
-            };
-            dst_ast::IndexExpr::Name(Spanned::new(value, name.span))
-        }
+        src_ast::IndexExpr::Name(name) => dst_ast::IndexExpr::Name(name),
         src_ast::IndexExpr::NatLiteral(n, span) => dst_ast::IndexExpr::NatLiteral(n, span),
         src_ast::IndexExpr::NatExpr(nat_expr) => dst_ast::IndexExpr::NatExpr(nat_expr),
     }

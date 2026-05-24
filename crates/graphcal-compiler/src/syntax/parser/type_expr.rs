@@ -68,7 +68,7 @@ impl Parser<'_> {
                 let span = ident.span.merge(end_span);
                 TypeExpr {
                     kind: TypeExprKind::TypeApplication {
-                        name: crate::syntax::span::Spanned::new(ident.clone(), ident.span),
+                        name: ident.clone().into_spanned(),
                         type_args,
                     },
                     constraints: vec![],
@@ -266,7 +266,7 @@ impl Parser<'_> {
 
         Ok(DimTerm {
             span: name.span.merge(end_span),
-            name: crate::syntax::span::Spanned::new(name.clone(), name.span),
+            name: name.clone().into_spanned(),
             power,
         })
     }
@@ -505,10 +505,7 @@ impl Parser<'_> {
             // Simple case: bare atom. Desugar appropriately.
             return match first_atom {
                 NatExpr::Literal(value, span) => Ok(IndexExpr::NatLiteral(value, span)),
-                NatExpr::Var(ident) => Ok(IndexExpr::Name(crate::syntax::span::Spanned::new(
-                    ident.clone(),
-                    ident.span,
-                ))),
+                NatExpr::Var(ident) => Ok(IndexExpr::Name(ident.clone().into_spanned())),
                 _ => Ok(IndexExpr::NatExpr(first_atom)),
             };
         }
@@ -650,7 +647,7 @@ mod tests {
         match &te.kind {
             TypeExprKind::DimExpr(dim) => {
                 assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
-                dim.terms[0].term.name.name.as_str()
+                dim.terms[0].term.name.value.as_str()
             }
             other => panic!("expected DimExpr, got {other:?}"),
         }
@@ -663,7 +660,7 @@ mod tests {
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
                 TypeExprKind::TypeApplication { name, type_args } => {
-                    assert_eq!(name.name.as_str(), "Vec3");
+                    assert_eq!(name.value.as_str(), "Vec3");
                     assert_eq!(type_args.len(), 2);
                     assert_eq!(dim_expr_name(&type_args[0]), "Length");
                     assert_eq!(dim_expr_name(&type_args[1]), "ECI");
@@ -681,7 +678,7 @@ mod tests {
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
                 TypeExprKind::TypeApplication { name, type_args } => {
-                    assert_eq!(name.name.as_str(), "Timestamp");
+                    assert_eq!(name.value.as_str(), "Timestamp");
                     assert_eq!(type_args.len(), 1);
                     assert_eq!(dim_expr_name(&type_args[0]), "UTC");
                 }
@@ -706,7 +703,7 @@ mod tests {
                 }
                 TypeExprKind::TypeApplication { name, .. } => panic!(
                     "Datetime<...> must parse as DatetimeApplication, not TypeApplication (got name `{}`)",
-                    name.name,
+                    name.value,
                 ),
                 other => panic!("expected DatetimeApplication, got {other:?}"),
             },
@@ -752,7 +749,7 @@ mod tests {
                         let IndexExpr::Name(ident) = &indexes[0] else {
                             panic!("expected Name")
                         };
-                        assert_eq!(ident.name, "Maneuver");
+                        assert_eq!(ident.value, "Maneuver");
                     }
                     other => panic!("expected Indexed type, got {other:?}"),
                 }
@@ -772,11 +769,11 @@ mod tests {
                     let IndexExpr::Name(ident) = &indexes[0] else {
                         panic!("expected Name")
                     };
-                    assert_eq!(ident.name, "Row");
+                    assert_eq!(ident.value, "Row");
                     let IndexExpr::Name(ident) = &indexes[1] else {
                         panic!("expected Name")
                     };
-                    assert_eq!(ident.name, "Col");
+                    assert_eq!(ident.value, "Col");
                 }
                 other => panic!("expected Indexed type, got {other:?}"),
             },
@@ -859,7 +856,7 @@ mod tests {
                     let IndexExpr::Name(ident) = &indexes[0] else {
                         panic!("expected Name")
                     };
-                    assert_eq!(ident.name, "Maneuver");
+                    assert_eq!(ident.value, "Maneuver");
                 }
                 other => panic!("expected Indexed type, got {other:?}"),
             },
