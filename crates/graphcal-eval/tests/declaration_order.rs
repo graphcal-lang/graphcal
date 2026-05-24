@@ -7,7 +7,7 @@
 //! These tests randomly shuffle declarations and verify that the evaluation
 //! results remain identical.
 //!
-//! See: <https://github.com/shunichironomura/graphcal/issues/247>
+//! See: <https://github.com/graphcal-lang/graphcal/issues/247>
 #![cfg(test)]
 
 use graphcal_compiler::syntax::parser::Parser;

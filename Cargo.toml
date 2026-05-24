@@ -4,7 +4,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-exclude = ["editors/zed"]
 default-members = ["crates/graphcal-cli"]
 
 [workspace.package]
@@ -13,7 +12,7 @@ edition = "2024"
 rust-version = "1.91"
 description = "Type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations"
 readme = "README.md"
-repository = "https://github.com/shunichironomura/graphcal"
+repository = "https://github.com/graphcal-lang/graphcal"
 license = "MIT OR Apache-2.0"
 keywords = ["calculations", "engineering", "reactive", "units"]
 categories = ["compilers", "science"]

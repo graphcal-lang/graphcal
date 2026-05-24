@@ -49,7 +49,7 @@ delta_v    = 3778.220768 m/s
 Requires the Rust stable toolchain. Get it from [rustup.rs](https://rustup.rs/) if needed.
 
 ```sh
-cargo install --git https://github.com/shunichironomura/graphcal --locked
+cargo install --git https://github.com/graphcal-lang/graphcal --locked
 ```
 
 ## Quickstart
@@ -72,9 +72,9 @@ See the [CLI reference](docs/cli-reference.md) for the full surface, including `
 
 Inlay hints show computed values right next to the source -- install one of the supported integrations and your editor turns into a live notebook.
 
-- **VS Code** -- extension in [`editors/vscode/`](editors/vscode/)
-- **Zed** -- extension in [`editors/zed/`](editors/zed/)
-- **Neovim / Helix** -- tree-sitter grammar in [`tree-sitter-graphcal/`](tree-sitter-graphcal/), plus the `graphcal lsp` server
+- **VS Code** -- extension in [`graphcal-lang/vscode-graphcal`](https://github.com/graphcal-lang/vscode-graphcal)
+- **Zed** -- extension in [`graphcal-lang/zed-graphcal`](https://github.com/graphcal-lang/zed-graphcal)
+- **Neovim / Helix** -- tree-sitter grammar in [`graphcal-lang/tree-sitter-graphcal`](https://github.com/graphcal-lang/tree-sitter-graphcal), plus the `graphcal lsp` server
 
 Setup details for each editor are in the [Editor Setup guide](docs/editor-setup.md).
 
@@ -98,7 +98,7 @@ Graphcal is heading toward:
 - **Python interop** -- parameter sweeps and Monte Carlo at native speed
 - **Spreadsheet bridges** -- keep `.gcl` as the source of truth, let domain experts stay in Excel
 
-Track progress and discussion on [GitHub Issues](https://github.com/shunichironomura/graphcal/issues).
+Track progress and discussion on [GitHub Issues](https://github.com/graphcal-lang/graphcal/issues).
 
 ## Project Structure
 
@@ -113,9 +113,9 @@ graphcal/
     graphcal-lsp/       # LSP server (tower-lsp) -- diagnostics, symbols, hover, inlay hints
   grammar.ebnf          # formal grammar (source of truth for tree-sitter / TextMate)
   docs/                 # user-facing documentation (Zensical site)
-  editors/              # VS Code and Zed extensions
-  tree-sitter-graphcal/ # tree-sitter grammar
   tests/fixtures/       # .gcl test files: valid/, runtime_error/, invalid/
+
+Editor extensions and tree-sitter grammar live in separate repositories under github.com/graphcal-lang/.
 ```
 
 ## Design Influences

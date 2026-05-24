@@ -23,9 +23,9 @@
   - The test cases in the codebase (unit tests, integration tests, snapshot tests, property-based tests, etc.).
   - The corresponding LSP features in the `crates/graphcal-lsp/` directory (diagnostics, code actions, inlay hints, etc.).
   - The user-facing documentation in `docs/` directory and the `README.md` file in the project root.
-  - The tree-sitter grammar in `tree-sitter-graphcal/` directory.
-  - The Zed extension in `editors/zed/` directory (syntax highlighting, LSP features, etc.).
-  - The VS Code extension in `editors/vscode/` directory, including the TextMate grammar and LSP features.
+  - The tree-sitter grammar in the `graphcal-lang/tree-sitter-graphcal` repository.
+  - The Zed extension in the `graphcal-lang/zed-graphcal` repository (syntax highlighting, LSP features, etc.).
+  - The VS Code extension in the `graphcal-lang/vscode-graphcal` repository, including the TextMate grammar and LSP features.
 
 ## Type Safety: Encode Semantics in Types, Not Conventions
 
