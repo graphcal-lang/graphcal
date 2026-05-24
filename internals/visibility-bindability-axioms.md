@@ -7,9 +7,9 @@ declaration / include / import compile?" can be answered by checking the
 axioms directly, rather than by enumerating cases.
 
 Companion design discussions live in GitHub issues — primarily
-[#444](https://github.com/shunichironomura/graphcal/issues/444) (the
+[#444](https://github.com/graphcal-lang/graphcal/issues/444) (the
 two-axis split) and
-[#452](https://github.com/shunichironomura/graphcal/issues/452)
+[#452](https://github.com/graphcal-lang/graphcal/issues/452)
 (re-export syntax). This document is the canonical statement; the issues
 are the running discussion.
 
@@ -321,7 +321,7 @@ just observe that for `param`, V and B are constants of the kind.
 don't admit bindability (`B ≡ fixed`). The V-axis still applies: a bare
 form is file-local; a `pub`-prefixed form re-exports.
 
-Two forms (per [issue #452](https://github.com/shunichironomura/graphcal/issues/452)):
+Two forms (per [issue #452](https://github.com/graphcal-lang/graphcal/issues/452)):
 
 ```text
 // Whole-module re-export under a namespace

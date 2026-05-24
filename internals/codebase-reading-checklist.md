@@ -146,14 +146,13 @@ Files to read in library-consumer order. The goal is that implementation buildin
 - [ ] `crates/graphcal-lsp/src/code_actions.rs`
 - [ ] `crates/graphcal-lsp/src/lib.rs`
 
-## Stage 11 - CLI shell and editor extension
+## Stage 11 - CLI shell
 
 - [ ] `crates/graphcal-cli/src/json_input.rs`
 - [ ] `crates/graphcal-cli/src/overrides.rs`
 - [ ] `crates/graphcal-cli/src/display.rs`
 - [ ] `crates/graphcal-cli/src/plot.rs`
 - [ ] `crates/graphcal-cli/src/main.rs`
-- [ ] `editors/zed/src/lib.rs`
 
 ## Stage 12 - Integration tests (read after the corresponding stage)
 

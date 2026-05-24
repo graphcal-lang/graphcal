@@ -318,10 +318,12 @@ includes.
 Syntax/editor surfaces live outside the Rust workspace:
 
 - `grammar.ebnf` is the formal grammar source of truth.
-- `tree-sitter-graphcal/` contains the tree-sitter grammar and highlight
-  queries.
-- `editors/vscode/` contains the VS Code extension and TextMate grammar.
-- `editors/zed/` contains the Zed extension and bundled grammar artifact.
+- `graphcal-lang/tree-sitter-graphcal` contains the tree-sitter grammar and
+  highlight queries.
+- `graphcal-lang/vscode-graphcal` contains the VS Code extension and TextMate
+  grammar.
+- `graphcal-lang/zed-graphcal` contains the Zed extension and bundled grammar
+  artifact.
 
 When syntax changes, update these together with the compiler/parser and docs.
 

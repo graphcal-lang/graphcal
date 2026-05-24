@@ -31,21 +31,27 @@ The VS Code extension provides syntax highlighting (via TextMate grammar) and fu
 
 ### Installation
 
-1. Build the extension:
+1. Clone the extension repository:
 
     ```bash
-    cd editors/vscode
+    git clone https://github.com/graphcal-lang/vscode-graphcal.git
+    cd vscode-graphcal
+    ```
+
+2. Build the extension:
+
+    ```bash
     npm install
     npm run build
     ```
 
-2. Install as a dev extension by symlinking into your VS Code extensions directory:
+3. Install as a dev extension by symlinking into your VS Code extensions directory:
 
     ```bash
-    ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/graphcal
+    ln -s "$(pwd)" ~/.vscode/extensions/graphcal
     ```
 
-3. Restart VS Code.
+4. Restart VS Code.
 
 ### Configuration
 
@@ -62,10 +68,11 @@ The Zed extension provides syntax highlighting (via tree-sitter grammar) and LSP
 
 ### Setup
 
-1. Open the command palette in Zed
-2. Select **"Extensions: Install Dev Extension"**
-3. Navigate to the `editors/zed` directory in the Graphcal repository
-4. The extension will be installed and activated
+1. Clone the extension repository: `https://github.com/graphcal-lang/zed-graphcal`
+2. Open the command palette in Zed
+3. Select **"Extensions: Install Dev Extension"**
+4. Navigate to the cloned `zed-graphcal` directory
+5. The extension will be installed and activated
 
 ## Neovim / Helix
 
@@ -73,12 +80,12 @@ For Neovim, Helix, and other editors that support tree-sitter:
 
 ### Tree-Sitter Grammar
 
-The tree-sitter grammar is in `tree-sitter-graphcal/`. Install it according to your editor's tree-sitter plugin instructions.
+The tree-sitter grammar is in [`graphcal-lang/tree-sitter-graphcal`](https://github.com/graphcal-lang/tree-sitter-graphcal). Install it according to your editor's tree-sitter plugin instructions.
 
 For Neovim with `nvim-treesitter`:
 
-1. Add the grammar source to your tree-sitter config
-2. Copy the highlight queries from `tree-sitter-graphcal/queries/highlights.scm`
+1. Add `https://github.com/graphcal-lang/tree-sitter-graphcal` as the grammar source in your tree-sitter config
+2. Copy the highlight queries from the repository's `queries/highlights.scm`
 
 ### LSP Configuration
 

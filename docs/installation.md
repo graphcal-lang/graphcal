@@ -13,7 +13,7 @@ If you don't have Rust installed, get it from [rustup.rs](https://rustup.rs/).
 ## Install from Source
 
 ```bash
-cargo install --git https://github.com/shunichironomura/graphcal --locked
+cargo install --git https://github.com/graphcal-lang/graphcal --locked
 ```
 
 This builds and installs the `graphcal` binary to `~/.cargo/bin/`.
