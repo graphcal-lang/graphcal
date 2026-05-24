@@ -15,13 +15,13 @@ use super::*;
 )]
 pub(in crate::eval::project) fn lower_and_finalize(
     project: &crate::loader::LoadedProject,
-    file_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     file_ast: &graphcal_compiler::desugar::resolved_ast::File,
     ctx: ImportContext<'_>,
-    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
+    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
-    override_targets: &HashMap<DeclName, (graphcal_compiler::syntax::dag_id::DagId, DeclName)>,
+    override_targets: &HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>,
 ) -> Result<CompiledFile, CompileError> {
     // Snapshot before lower_to_builder_with_imported_values consumes
     // `ctx.imported_values`. The deferred-instantiated-include processing
@@ -142,7 +142,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
 
 /// Merge compiled per-DAG TIRs from each module-imported dependency into
 /// the importer's flat `tir.dags`, keyed by the dep's canonical
-/// [`DagId`](graphcal_compiler::syntax::dag_id::DagId), and record the
+/// [`DagId`](graphcal_compiler::dag_id::DagId), and record the
 /// alias→DagId mapping in `tir.module_aliases` so user-typed
 /// `@alias.dag(args).out` references resolve through
 /// [`graphcal_compiler::tir::typed::TIR::lookup_call_target`].
@@ -161,8 +161,8 @@ pub(in crate::eval::project) fn lower_and_finalize(
 /// resolves under the local alias at inline-call eval time.
 pub(in crate::eval::project) fn merge_dep_dag_tirs(
     tir: &mut graphcal_compiler::tir::typed::TIR,
-    module_map: &HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
-    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
+    module_map: &HashMap<String, (graphcal_compiler::dag_id::DagId, Span)>,
+    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
 ) {
     for (alias, (dep_dag_id, _)) in module_map {
         // Record the alias → dep DagId mapping so call paths like
@@ -232,9 +232,9 @@ pub(in crate::eval::project) fn merge_dep_dag_tirs(
 )]
 pub(in crate::eval::project) fn process_deferred_dag_includes(
     project: &crate::loader::LoadedProject,
-    importer_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    importer_dag_id: &graphcal_compiler::dag_id::DagId,
     deferred_dag_includes: &[DeferredDagInclude],
-    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
+    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     importer_src: &NamedSource<Arc<String>>,
     importer_ast: &graphcal_compiler::desugar::resolved_ast::File,
     builder: &mut RegistryBuilder,
@@ -729,8 +729,8 @@ pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
 /// evaluated and stored in `evaluated_files`).
 pub(in crate::eval::project) fn build_dep_imported_values(
     project: &crate::loader::LoadedProject,
-    dep_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
-    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
+    dep_dag_id: &graphcal_compiler::dag_id::DagId,
+    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
 ) -> Result<DepImportedValues, CompileError> {
     let dep_loaded = &project.files[dep_dag_id];
     let dep_src = &dep_loaded.named_source;

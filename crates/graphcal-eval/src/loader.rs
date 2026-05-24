@@ -5,10 +5,10 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::eval::CompileError;
+use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::resolved_ast::{Declaration, File};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
-use graphcal_compiler::syntax::dag_id::DagId;
 use graphcal_io::{FileSystemReader, RealFileSystem};
 
 /// Span-free identity for an `import`/`include` path.
@@ -798,7 +798,7 @@ fn resolve_import_path<F: FileSystemReader>(
     fs: &F,
 ) -> Result<PathBuf, CompileError> {
     resolve_module_path(
-        &import_path.segments,
+        import_path.segments.as_slice(),
         import_path.span,
         project_root,
         src,

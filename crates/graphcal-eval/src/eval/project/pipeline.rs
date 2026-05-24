@@ -18,10 +18,10 @@ use super::*;
 )]
 pub(in crate::eval::project) fn compile_single_file_in_project(
     project: &crate::loader::LoadedProject,
-    file_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
-    evaluated_files: &HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
+    file_dag_id: &graphcal_compiler::dag_id::DagId,
+    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
-    override_targets: &HashMap<DeclName, (graphcal_compiler::syntax::dag_id::DagId, DeclName)>,
+    override_targets: &HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>,
 ) -> Result<CompiledFile, CompileError> {
     let loaded_file = &project.files[file_dag_id];
     let file_src = &loaded_file.named_source;
@@ -140,10 +140,7 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
         if include_decl.path.segments.len() < 2 {
             continue;
         }
-        let Some(last_seg) = include_decl.path.segments.last() else {
-            continue;
-        };
-        let dag_name = &last_seg.name;
+        let dag_name = &include_decl.path.segments.last().name;
 
         // Find the target file's AST from the project.
         let target_loaded = project.files.get(&include_canonical).ok_or_else(|| {
@@ -207,10 +204,10 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
 /// Evaluate and store a non-root file, producing an [`EvaluatedFile`] for downstream imports.
 pub(in crate::eval::project) fn evaluate_and_store_file(
     compiled: CompiledFile,
-    file_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     pub_names: HashSet<DeclName>,
-    evaluated_files: &mut HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
+    evaluated_files: &mut HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
 ) -> Result<(), CompileError> {
     let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
     let eval_result = evaluate_plan(&compiled.tir, &plan, &compiled.declared_types, file_src);
@@ -266,7 +263,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
     // the param. Walk root file's imports to find the owning file for each override.
     let override_targets = route_overrides_to_files(project, overrides)?;
 
-    let mut evaluated_files: HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile> =
+    let mut evaluated_files: HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile> =
         HashMap::new();
 
     for file_dag_id in &project.load_order {
@@ -446,15 +443,15 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
 /// root imports, the first root import in source order wins.
 pub(in crate::eval::project) fn build_dep_import_spans(
     project: &crate::loader::LoadedProject,
-) -> HashMap<graphcal_compiler::syntax::dag_id::DagId, Span> {
+) -> HashMap<graphcal_compiler::dag_id::DagId, Span> {
     let root_file = &project.files[&project.root];
-    let mut spans: HashMap<graphcal_compiler::syntax::dag_id::DagId, Span> = HashMap::new();
+    let mut spans: HashMap<graphcal_compiler::dag_id::DagId, Span> = HashMap::new();
 
     // Process root's direct imports/includes in source order.
     // For each, DFS into its transitive dependencies, propagating the root span.
     // `entry().or_insert()` ensures the first root import/include (in source order) to reach
     // a transitive dep determines its attribution.
-    let root_decl_dag_ids: Vec<(Span, graphcal_compiler::syntax::dag_id::DagId)> = root_file
+    let root_decl_dag_ids: Vec<(Span, graphcal_compiler::dag_id::DagId)> = root_file
         .imports_with_dag_ids()
         .map(|(d, _, c)| (d.span, c.clone()))
         .chain(
@@ -501,7 +498,7 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
     let empty_overrides = HashMap::new();
     let empty_targets = HashMap::new();
-    let mut evaluated_files: HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile> =
+    let mut evaluated_files: HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile> =
         HashMap::new();
 
     for file_dag_id in &project.load_order {
@@ -555,14 +552,14 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
 pub(in crate::eval::project) fn route_overrides_to_files(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
-) -> Result<HashMap<DeclName, (graphcal_compiler::syntax::dag_id::DagId, DeclName)>, CompileError> {
+) -> Result<HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>, CompileError> {
     if overrides.is_empty() {
         return Ok(HashMap::new());
     }
 
     let root_file = &project.files[&project.root];
 
-    let mut result: HashMap<DeclName, (graphcal_compiler::syntax::dag_id::DagId, DeclName)> =
+    let mut result: HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)> =
         HashMap::new();
 
     for override_name in overrides.keys() {

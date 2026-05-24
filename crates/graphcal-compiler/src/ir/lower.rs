@@ -168,7 +168,7 @@ pub struct IR {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportedValueSource {
     /// DAG that owns the original declaration.
-    pub dag_id: crate::syntax::dag_id::DagId,
+    pub dag_id: crate::dag_id::DagId,
     /// Original declaration name in the owning DAG.
     pub source_name: DeclName,
 }
@@ -196,7 +196,7 @@ fn wrap_dep_map(
 /// Returns a [`GraphcalError`] if name resolution or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
 pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalError> {
-    let dag_id = crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()))
+    let dag_id = crate::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()))
         .map_err(|e| GraphcalError::EvalError {
             message: format!("invalid source name `{}`: {e}", src.name()),
             src: src.clone(),
@@ -217,7 +217,7 @@ fn lower_with_imports(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
     let (builder, resolved_ir) = lower_to_builder(ast, src, imported, dag_id)?;
     Ok(resolved_ir.freeze(builder.build()))
@@ -236,7 +236,7 @@ pub(crate) fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution
     let resolved = resolve_with_imports(ast, src, imported)?;
@@ -290,7 +290,7 @@ pub fn lower_to_builder_with_imported_values(
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     let imported_decl_types = imported_values
         .iter()
@@ -328,7 +328,7 @@ pub fn lower_to_builder_with_imported_value_decls(
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     imported_decl_types: HashMap<ScopedName, DeclaredType>,
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Name resolution with imported value names in scope
     let resolved = resolve_with_imported_values(ast, src, imported_names)?;
@@ -398,7 +398,7 @@ pub fn lower_dag_body_to_ir(
     imported_decl_types: HashMap<ScopedName, DeclaredType>,
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     src: &NamedSource<Arc<String>>,
-    parent_dag_id: &crate::syntax::dag_id::DagId,
+    parent_dag_id: &crate::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
     let virtual_file = File {
         declarations: stripped_body.to_vec(),
@@ -538,7 +538,7 @@ fn build_ir_from_resolved(
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     imported_decl_types: HashMap<ScopedName, DeclaredType>,
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
     parent_registry: Option<&Registry>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Build registry (prelude + user-declared dimensions/units/indexes/structs).
@@ -1790,7 +1790,7 @@ pub(crate) fn register_file_declarations(
     file: &File,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
     register_declarations_impl(file, registry, src, None, dag_id)
 }
@@ -1834,7 +1834,7 @@ pub fn register_selected_declarations(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     names: &SelectedDeclarations,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
     register_declarations_impl(file, registry, src, Some(names), dag_id)
 }
@@ -1859,7 +1859,7 @@ fn register_declarations_impl(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     filter: Option<&SelectedDeclarations>,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
     use crate::desugar::resolved_ast::{DimDecl, IndexDecl, UnitDecl};
 
@@ -2090,7 +2090,7 @@ fn topo_sort_units<'a>(
 fn register_base_dimension_decl(
     d: &crate::desugar::resolved_ast::BaseDimDecl,
     registry: &mut RegistryBuilder,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
 ) {
     let dim_id = crate::syntax::dimension::BaseDimId::UserDefined {
         dag: dag_id.clone(),
@@ -2133,7 +2133,7 @@ fn register_dimension_decl(
 fn register_required_dimension_decl(
     d: &crate::desugar::resolved_ast::DimDecl,
     registry: &mut RegistryBuilder,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
 ) {
     let dim_id = crate::syntax::dimension::BaseDimId::UserDefined {
         dag: dag_id.clone(),

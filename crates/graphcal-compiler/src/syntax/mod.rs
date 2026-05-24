@@ -3,7 +3,6 @@
 pub mod ast;
 pub mod attribute;
 pub mod comments;
-pub mod dag_id;
 pub mod desugar;
 pub mod dimension;
 pub mod lexer;

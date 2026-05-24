@@ -104,9 +104,7 @@ pub(in crate::eval::project) struct ImportAlias {
 pub(in crate::eval::project) fn derive_module_name_from_import_path(
     import_path: &ModulePath,
 ) -> String {
-    import_path
-        .leaf()
-        .map_or_else(|| "module".to_string(), |seg| seg.name.clone())
+    import_path.leaf().name.clone()
 }
 
 /// Visitor that recognizes `FieldAccess(GraphRef(alias), field)` and rewrites
@@ -278,9 +276,9 @@ pub(in crate::eval::project) enum DeferredDagSource {
     /// transitive imports' values supplied via
     /// [`build_dep_imported_values`].
     File {
-        /// Canonical [`DagId`](graphcal_compiler::syntax::dag_id::DagId)
+        /// Canonical [`DagId`](graphcal_compiler::dag_id::DagId)
         /// of the dep file (equal to the file's root id).
-        dep_dag_id: graphcal_compiler::syntax::dag_id::DagId,
+        dep_dag_id: graphcal_compiler::dag_id::DagId,
     },
     /// Inline DAG include — body is the dag block's declarations, with
     /// `import <self>.{...}` items resolved against `parent_dag_id`
@@ -291,11 +289,11 @@ pub(in crate::eval::project) enum DeferredDagSource {
         dag_body: graphcal_compiler::desugar::resolved_ast::File,
         /// Imported names collected from `import ..` inside the DAG body.
         dag_imported_names: ImportedValueNames,
-        /// [`DagId`](graphcal_compiler::syntax::dag_id::DagId) of the file
+        /// [`DagId`](graphcal_compiler::dag_id::DagId) of the file
         /// where this DAG was *defined*. For same-file includes this is
         /// the importer; for cross-file qualified includes it's the target
         /// file.
-        parent_dag_id: graphcal_compiler::syntax::dag_id::DagId,
+        parent_dag_id: graphcal_compiler::dag_id::DagId,
         /// The DAG's bare name (matches the parent file's
         /// `LoadedDag.name`). May differ from `prefix` when the include
         /// uses an alias.
@@ -313,11 +311,11 @@ pub(in crate::eval::project) struct ImportContext<'a> {
     pub(in crate::eval::project) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     pub(in crate::eval::project) imported_source_order: Vec<(ScopedName, DeclCategory)>,
     pub(in crate::eval::project) imported_type_system_names: HashMap<
-        graphcal_compiler::syntax::dag_id::DagId,
+        graphcal_compiler::dag_id::DagId,
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
     pub(in crate::eval::project) module_map:
-        HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
+        HashMap<String, (graphcal_compiler::dag_id::DagId, Span)>,
     /// Registry + `pub_names` for module-imported dependencies.
     pub(in crate::eval::project) extra_registry_builders:
         Vec<(&'a Registry, &'a HashSet<DeclName>)>,
@@ -348,7 +346,7 @@ pub(in crate::eval::project) enum SelectiveImportResult {
 /// borrowed reference to the original AST.
 pub(in crate::eval::project) fn rewrite_qualified_refs_in_ast<'a>(
     ast: &'a graphcal_compiler::desugar::resolved_ast::File,
-    module_map: &HashMap<String, (graphcal_compiler::syntax::dag_id::DagId, Span)>,
+    module_map: &HashMap<String, (graphcal_compiler::dag_id::DagId, Span)>,
     imported_names: &ImportedValueNames,
 ) -> std::borrow::Cow<'a, graphcal_compiler::desugar::resolved_ast::File> {
     let alias_pairs = collect_qualified_pairs(imported_names);

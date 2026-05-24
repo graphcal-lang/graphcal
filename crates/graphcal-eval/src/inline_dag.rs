@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::resolved_ast::{DeclKind, Declaration};
 use graphcal_compiler::ir::lower::{
     DagBodySelfImports, ImportedValueSource, lower_dag_body_to_ir, type_system_names_from_registry,
@@ -25,7 +26,6 @@ use graphcal_compiler::ir::lower::{
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::dag_id::DagId;
 use graphcal_compiler::syntax::names::DeclName;
 use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type, type_resolve_single};
 

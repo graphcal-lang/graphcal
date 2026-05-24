@@ -212,12 +212,12 @@ fn classify_param_bindings(
 )]
 pub(in crate::eval::project) fn process_instantiated_include<'a>(
     project: &'a crate::loader::LoadedProject,
-    importer_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
-    import_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    importer_dag_id: &graphcal_compiler::dag_id::DagId,
+    import_dag_id: &graphcal_compiler::dag_id::DagId,
     include_decl: &graphcal_compiler::desugar::resolved_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::resolved_ast::Declaration,
     file_src: &NamedSource<Arc<String>>,
-    evaluated_files: &'a HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
+    evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     let dep_loaded = &project.files[import_dag_id];
@@ -507,7 +507,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
 pub(in crate::eval::project) fn process_inline_dag_include(
     dag_def: &graphcal_compiler::desugar::resolved_ast::DagDecl,
     dag_name: &str,
-    parent_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    parent_dag_id: &graphcal_compiler::dag_id::DagId,
     include_decl: &graphcal_compiler::desugar::resolved_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::resolved_ast::Declaration,
     file_src: &NamedSource<Arc<String>>,
@@ -526,8 +526,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
 
     // Check for duplicate module names.
     // We use a sentinel DagId for inline DAGs in the module_map.
-    let sentinel_dag_id =
-        graphcal_compiler::syntax::dag_id::DagId::root(format!("<dag:{dag_name}>"));
+    let sentinel_dag_id = graphcal_compiler::dag_id::DagId::root(format!("<dag:{dag_name}>"));
     if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
         return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
             name: prefix,
@@ -689,16 +688,13 @@ pub(in crate::eval::project) fn process_inline_dag_include(
 /// `dag double { ... }`.
 pub(in crate::eval::project) fn is_bare_module_dag_ref(
     import_path: &ModulePath,
-    resolved_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    resolved_dag_id: &graphcal_compiler::dag_id::DagId,
     project: &crate::loader::LoadedProject,
 ) -> bool {
     if import_path.segments.len() < 2 {
         return false;
     }
-    let Some(last_seg) = import_path.segments.last() else {
-        return false;
-    };
-    let last_segment = &last_seg.name;
+    let last_segment = &import_path.segments.last().name;
 
     // Check if the resolved file contains a DAG with the matching name.
     let Some(target_loaded) = project.files.get(resolved_dag_id) else {
@@ -728,11 +724,11 @@ pub(in crate::eval::project) fn is_bare_module_dag_ref(
 )]
 pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
     project: &crate::loader::LoadedProject,
-    import_dag_id: &graphcal_compiler::syntax::dag_id::DagId,
+    import_dag_id: &graphcal_compiler::dag_id::DagId,
     import_path: &graphcal_compiler::desugar::resolved_ast::ModulePath,
     import_kind: &graphcal_compiler::desugar::resolved_ast::ImportKind,
     file_src: &NamedSource<Arc<String>>,
-    evaluated_files: &'a HashMap<graphcal_compiler::syntax::dag_id::DagId, EvaluatedFile>,
+    evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     ctx: &mut ImportContext<'a>,
     is_import: bool,
 ) -> Result<(), CompileError> {
@@ -1154,10 +1150,12 @@ mod tests {
         let import_kind =
             graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(vec![import_item]);
         let path = graphcal_compiler::desugar::resolved_ast::ModulePath {
-            segments: vec![graphcal_compiler::desugar::resolved_ast::Ident {
-                name: "dep".to_string(),
-                span: Span::new(0, 3),
-            }],
+            segments: graphcal_compiler::syntax::non_empty::NonEmpty::singleton(
+                graphcal_compiler::desugar::resolved_ast::Ident {
+                    name: "dep".to_string(),
+                    span: Span::new(0, 3),
+                },
+            ),
             span: Span::new(0, 3),
         };
         let src = graphcal_compiler::syntax::named_source("test.gcl", String::new());

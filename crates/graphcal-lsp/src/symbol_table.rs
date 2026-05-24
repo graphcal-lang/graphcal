@@ -1000,23 +1000,22 @@ fn collect_expr_refs(
             // have multi-segment paths where the prefix segments are module
             // aliases; the leaf names the DAG under `Qualified { module: <prefix>, name: <leaf> }`
             // in `imported_definitions` (see `collect_imported_definitions`).
-            if let Some(leaf) = path.leaf() {
-                let leaf_target = if path.segments.len() > 1 {
-                    SymbolKey::Qualified {
-                        module: path.segments[..path.segments.len() - 1]
-                            .iter()
-                            .map(|s| s.name.clone())
-                            .collect(),
-                        name: leaf.name.clone(),
-                    }
-                } else {
-                    SymbolKey::TopLevel(leaf.name.clone())
-                };
-                table.references.push(ReferenceInfo {
-                    span: leaf.span,
-                    target: leaf_target,
-                });
-            }
+            let leaf = path.leaf();
+            let leaf_target = if path.segments.len() > 1 {
+                SymbolKey::Qualified {
+                    module: path.segments.as_slice()[..path.segments.len() - 1]
+                        .iter()
+                        .map(|s| s.name.clone())
+                        .collect(),
+                    name: leaf.name.clone(),
+                }
+            } else {
+                SymbolKey::TopLevel(leaf.name.clone())
+            };
+            table.references.push(ReferenceInfo {
+                span: leaf.span,
+                target: leaf_target,
+            });
             // The projected output resolves to `<dag>.output` as a qualified
             // member. For same-file calls the qualifier is the bare DAG name
             // (matches `collect_dag_decl`'s body-member entries). For cross-file

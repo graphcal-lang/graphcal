@@ -880,16 +880,16 @@ pub fn check_override_dimension(
 /// cycle detection, so the same check applies whether the cycle is within
 /// a single file or spans multiple files.
 enum DagCycleFrame {
-    Enter(crate::syntax::dag_id::DagId),
-    Leave(crate::syntax::dag_id::DagId),
+    Enter(crate::dag_id::DagId),
+    Leave(crate::dag_id::DagId),
 }
 
 struct DagTargetCollector<'a, 'b> {
     /// Caller TIR — used to translate user-typed call paths to canonical
-    /// [`DagId`](crate::syntax::dag_id::DagId) keys via
+    /// [`DagId`](crate::dag_id::DagId) keys via
     /// [`crate::tir::typed::TIR::resolve_call_path`].
     tir: &'a crate::tir::typed::TIR,
-    out: &'b mut std::collections::BTreeSet<crate::syntax::dag_id::DagId>,
+    out: &'b mut std::collections::BTreeSet<crate::dag_id::DagId>,
 }
 
 impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Resolved>
@@ -917,7 +917,7 @@ impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Resolved>
 /// Collect inline dag call targets from a compiled DAG's body expressions.
 ///
 /// Walks every const/param/node RHS expression and records the canonical
-/// [`DagId`](crate::syntax::dag_id::DagId) for each `@dag(args).out` /
+/// [`DagId`](crate::dag_id::DagId) for each `@dag(args).out` /
 /// `@mod.dag(args).out` reference. The translation from user-typed
 /// `ModulePath` to canonical id goes through
 /// [`crate::tir::typed::TIR::resolve_call_path`] so cross-file qualified
@@ -925,7 +925,7 @@ impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Resolved>
 fn collect_dag_call_targets_from_dag(
     tir: &crate::tir::typed::TIR,
     dag: &crate::tir::typed::DagTIR,
-    out: &mut std::collections::BTreeSet<crate::syntax::dag_id::DagId>,
+    out: &mut std::collections::BTreeSet<crate::dag_id::DagId>,
 ) {
     use crate::syntax::visitor::ExprVisitor;
 
@@ -1027,7 +1027,7 @@ fn detect_cross_dag_cycles(
 ) -> Result<(), GraphcalError> {
     use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-    use crate::syntax::dag_id::DagId;
+    use crate::dag_id::DagId;
 
     let mut edges: BTreeMap<DagId, BTreeSet<DagId>> = BTreeMap::new();
     let mut spans: HashMap<DagId, crate::syntax::span::Span> = HashMap::new();

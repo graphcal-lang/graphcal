@@ -773,7 +773,7 @@ fn collect_imported_definitions(
     // Cache symbol tables per dag_id to avoid re-building for files referenced
     // by multiple import/include declarations.
     let mut table_cache: HashMap<
-        &graphcal_compiler::syntax::dag_id::DagId,
+        &graphcal_compiler::dag_id::DagId,
         (SymbolTable, Url, Arc<String>),
     > = HashMap::new();
 
