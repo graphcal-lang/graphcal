@@ -836,7 +836,7 @@ pub struct TypeDecl<P: Phase = Raw> {
 /// variant's payload (if any) is a record-shaped field list declared inline.
 #[derive(Debug, Clone)]
 pub struct UnionTypeDecl<P: Phase = Raw> {
-    pub visibility: Visibility,
+    pub visibility: BindableVisibility,
     pub name: Spanned<StructTypeName>,
     pub generic_params: Vec<GenericParam<P>>,
     pub members: Vec<UnionMember<P>>,

@@ -462,8 +462,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         }
     }
 
-    let pub_reexport_whole =
-        decl.visibility == graphcal_compiler::desugar::resolved_ast::Visibility::Public;
+    let pub_reexport_whole = include_decl.visibility.is_public();
     let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
         graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) => items
             .iter()
@@ -646,8 +645,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         }
     }
 
-    let pub_reexport_whole =
-        decl.visibility == graphcal_compiler::desugar::resolved_ast::Visibility::Public;
+    let pub_reexport_whole = include_decl.visibility.is_public();
     let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
         graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) => items
             .iter()

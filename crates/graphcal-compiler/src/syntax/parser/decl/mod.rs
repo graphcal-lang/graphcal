@@ -21,24 +21,21 @@ mod tests;
 mod type_decl;
 mod value;
 
-fn visibility_without_bindability(visibility: BindableVisibility) -> Visibility {
+const fn visibility_without_bindability(visibility: BindableVisibility) -> Visibility {
     match visibility {
         BindableVisibility::Private => Visibility::Private,
-        BindableVisibility::Public => Visibility::Public,
-        BindableVisibility::PublicBind => {
-            unreachable!("pub(bind) already rejected for this declaration kind")
-        }
+        BindableVisibility::Public | BindableVisibility::PublicBind => Visibility::Public,
     }
 }
 
-fn decl_accepts_bindable_visibility(decl: &Declaration) -> bool {
+const fn decl_accepts_bindable_visibility(decl: &Declaration) -> bool {
     matches!(
         decl.kind,
-        DeclKind::Dimension(_) | DeclKind::Type(_) | DeclKind::Index(_)
+        DeclKind::Dimension(_) | DeclKind::Type(_) | DeclKind::UnionType(_) | DeclKind::Index(_)
     )
 }
 
-fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibility) {
+const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibility) {
     match &mut decl.kind {
         DeclKind::Param(_) | DeclKind::Sugar(_) => {}
         DeclKind::Node(d) => d.visibility = visibility_without_bindability(visibility),
@@ -47,7 +44,7 @@ fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibility) {
         DeclKind::Dimension(d) => d.visibility = visibility,
         DeclKind::Unit(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Type(d) => d.visibility = visibility,
-        DeclKind::UnionType(d) => d.visibility = visibility_without_bindability(visibility),
+        DeclKind::UnionType(d) => d.visibility = visibility,
         DeclKind::Index(d) => d.visibility = visibility,
         DeclKind::Import(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Include(d) => d.visibility = visibility_without_bindability(visibility),

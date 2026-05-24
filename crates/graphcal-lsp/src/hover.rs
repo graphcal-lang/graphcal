@@ -1,6 +1,6 @@
 //! textDocument/hover handler.
 
-use graphcal_compiler::desugar::resolved_ast::Visibility;
+use graphcal_compiler::desugar::resolved_ast::BindableVisibility;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use crate::convert::LineIndex;
@@ -31,11 +31,11 @@ pub fn hover(analysis: &AnalysisResult, offset: usize) -> Option<Hover> {
 /// the empty string for `Private` or unknown visibility. `param` never
 /// carries an annotation (axiom A5), so we always use the empty string
 /// there regardless of the stored visibility.
-const fn visibility_prefix(vis: Option<Visibility>) -> &'static str {
+const fn visibility_prefix(vis: Option<BindableVisibility>) -> &'static str {
     match vis {
-        Some(Visibility::Public) => "pub ",
-        Some(Visibility::PublicBind) => "pub(bind) ",
-        Some(Visibility::Private) | None => "",
+        Some(BindableVisibility::Public) => "pub ",
+        Some(BindableVisibility::PublicBind) => "pub(bind) ",
+        Some(BindableVisibility::Private) | None => "",
     }
 }
 

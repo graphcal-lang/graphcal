@@ -423,6 +423,30 @@ fn rewrite_decl_exprs(
     }
 }
 
+pub(in crate::eval::project) fn decl_is_public(
+    decl: &graphcal_compiler::desugar::resolved_ast::Declaration,
+) -> bool {
+    match &decl.kind {
+        DeclKind::Param(_) => true,
+        DeclKind::Node(d) => d.visibility.is_public(),
+        DeclKind::ConstNode(d) => d.visibility.is_public(),
+        DeclKind::BaseDimension(d) => d.visibility.is_public(),
+        DeclKind::Dimension(d) => d.visibility.is_public(),
+        DeclKind::Unit(d) => d.visibility.is_public(),
+        DeclKind::Type(d) => d.visibility.is_public(),
+        DeclKind::UnionType(d) => d.visibility.is_public(),
+        DeclKind::Index(d) => d.visibility.is_public(),
+        DeclKind::Import(d) => d.visibility.is_public(),
+        DeclKind::Include(d) => d.visibility.is_public(),
+        DeclKind::Dag(d) => d.visibility.is_public(),
+        DeclKind::Assert(d) => d.visibility.is_public(),
+        DeclKind::Plot(d) => d.visibility.is_public(),
+        DeclKind::Figure(d) => d.visibility.is_public(),
+        DeclKind::Layer(d) => d.visibility.is_public(),
+        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+    }
+}
+
 /// Extract the set of names visible to importers of a file.
 ///
 /// Explicitly `pub`/`pub(bind)` declarations contribute. Params are
@@ -441,8 +465,7 @@ pub(in crate::eval::project) fn extract_pub_names(
 ) -> HashSet<DeclName> {
     let mut pub_names = HashSet::new();
     for decl in &file.declarations {
-        let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
-        if !decl.is_pub() && !implicitly_visible {
+        if !decl_is_public(decl) {
             match &decl.kind {
                 DeclKind::Import(d) => {
                     if let graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) =
@@ -591,14 +614,14 @@ pub(in crate::eval::project) fn file_exports_import_item(
 ) -> bool {
     file.declarations.iter().any(|decl| match &decl.kind {
         DeclKind::Type(t) => {
-            decl.is_pub()
+            t.visibility.is_public()
                 && ((namespace == ImportItemNamespace::Type && t.name.value.as_str() == name)
                     || (namespace == ImportItemNamespace::Default
                         && t.fields.is_some()
                         && t.name.value.as_str() == name))
         }
         DeclKind::UnionType(u) => {
-            decl.is_pub()
+            u.visibility.is_public()
                 && ((namespace == ImportItemNamespace::Type && u.name.value.as_str() == name)
                     || (namespace == ImportItemNamespace::Default
                         && u.members
@@ -617,8 +640,7 @@ pub(in crate::eval::project) fn file_exports_import_item(
         | DeclKind::Figure(_)
         | DeclKind::Layer(_)
         | DeclKind::Dag(_) => {
-            let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
-            (decl.is_pub() || implicitly_visible)
+            decl_is_public(decl)
                 && decl_identity(decl).is_some_and(|identity| {
                     import_namespace_matches(identity.kind, namespace) && identity.name == name
                 })

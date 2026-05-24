@@ -222,7 +222,7 @@ fn collect_local_declarations(
             DeclKind::Plot(d) => d.visibility.is_public(),
             DeclKind::Figure(d) => d.visibility.is_public(),
             DeclKind::Layer(d) => d.visibility.is_public(),
-            DeclKind::Sugar(s) => crate::syntax::phase::never(*s),
+            DeclKind::Sugar(_) => false,
         };
         if !is_visible {
             continue;
@@ -793,6 +793,10 @@ fn validate_attributes(
 /// Built-in type-system items (prelude dimensions like `Length`, and
 /// built-in types `Bool`, `Int`, `Dimensionless`, `Datetime`) are
 /// always considered visible.
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive declaration-kind validation is clearer in one pass"
+)]
 fn validate_private_in_public(
     file: &File,
     src: &NamedSource<Arc<String>>,
@@ -860,7 +864,7 @@ fn validate_private_in_public(
             DeclKind::Plot(d) => d.visibility.is_public(),
             DeclKind::Figure(d) => d.visibility.is_public(),
             DeclKind::Layer(d) => d.visibility.is_public(),
-            DeclKind::Sugar(s) => crate::syntax::phase::never(*s),
+            DeclKind::Sugar(_) => false,
         };
         if !is_visible {
             continue;
