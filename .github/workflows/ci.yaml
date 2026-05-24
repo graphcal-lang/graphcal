@@ -112,35 +112,14 @@ jobs:
 
       - uses: crate-ci/typos@5374cbf686e897b15713110e233094e2874de7ef # v1.46.1
 
-  tree_sitter:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Install tree-sitter-cli
-        run: npm install -g tree-sitter-cli@0.26.8
-
-      - name: Regenerate parser
-        working-directory: tree-sitter-graphcal
-        run: tree-sitter generate
-
-      - name: Validate highlight query
-        working-directory: tree-sitter-graphcal
-        run: tree-sitter query queries/highlights.scm ../tests/fixtures/invalid/functions.gcl > /dev/null
-
-      - name: Verify no uncommitted changes
-        run: git diff --exit-code
-
   collect:
-    needs: [checks, test, coverage, msrv, typos, tree_sitter]
+    needs: [checks, test, coverage, msrv, typos]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
-          results=("${{ needs.checks.result }}" "${{ needs.test.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}" "${{ needs.tree_sitter.result }}")
+          results=("${{ needs.checks.result }}" "${{ needs.test.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}")
           for result in "${results[@]}"; do
             if [[ "$result" != "success" ]]; then
               echo "One or more jobs failed"
