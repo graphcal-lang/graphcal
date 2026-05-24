@@ -209,23 +209,8 @@ impl Visibility {
 #[derive(Debug, Clone)]
 pub struct Declaration<P: Phase = Raw> {
     pub attributes: Vec<Attribute>,
-    pub visibility: Visibility,
     pub kind: DeclKind<P>,
     pub span: Span,
-}
-
-impl<P: Phase> Declaration<P> {
-    /// Returns `true` if this declaration is visible (`pub` or `pub(bind)`).
-    #[must_use]
-    pub const fn is_pub(&self) -> bool {
-        self.visibility.is_public()
-    }
-
-    /// Returns `true` if this declaration is bindable (`pub(bind)`).
-    #[must_use]
-    pub const fn is_bindable(&self) -> bool {
-        self.visibility.is_bindable()
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -289,6 +274,7 @@ impl<P: Phase> DeclKind<P> {
 /// Assert declarations are leaf nodes — they are evaluated after the entire graph.
 #[derive(Debug, Clone)]
 pub struct AssertDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     pub body: AssertBody<P>,
 }
@@ -403,6 +389,7 @@ pub struct PlotField<P: Phase = Raw> {
 /// They produce a plot specification, not a runtime `Value`.
 #[derive(Debug, Clone)]
 pub struct PlotDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     pub mark: MarkSpec<P>,
     pub encodings: Vec<Encoding<P>>,
@@ -415,6 +402,7 @@ pub struct PlotDecl<P: Phase = Raw> {
 /// with subplots. Like plots, they are leaf declarations.
 #[derive(Debug, Clone)]
 pub struct FigureDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     /// The plot names referenced by this figure (from the `plots: [...]` field).
     pub plot_names: Vec<Spanned<DeclName>>,
@@ -431,6 +419,7 @@ pub struct FigureDecl<P: Phase = Raw> {
 /// `"layer"` composition operator.
 #[derive(Debug, Clone)]
 pub struct LayerDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     /// The plot names to overlay (from the `plots: [...]` field).
     pub plot_names: Vec<Spanned<DeclName>>,
@@ -508,6 +497,7 @@ impl ModulePath {
 /// No param bindings — for DAG instantiation with param bindings, use `include`.
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
+    pub visibility: Visibility,
     pub path: ModulePath,
     pub kind: ImportKind,
 }
@@ -521,6 +511,7 @@ pub struct ImportDecl {
 /// outputs as nodes in the including DAG.
 #[derive(Debug, Clone)]
 pub struct IncludeDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub path: ModulePath,
     pub param_bindings: Vec<ParamBinding<P>>,
     pub kind: ImportKind,
@@ -532,6 +523,7 @@ pub struct IncludeDecl<P: Phase = Raw> {
 /// implemented — this phase only parses the syntax.
 #[derive(Debug, Clone)]
 pub struct DagDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     /// The DAG name.
     pub name: Spanned<DeclName>,
     /// Declarations inside the DAG block.
@@ -742,6 +734,7 @@ pub struct MultiDataRow<P: Phase = Raw> {
 /// Runtime node declaration: `node name: Type = expr;`
 #[derive(Debug, Clone)]
 pub struct NodeDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr<P>,
     pub value: Expr<P>,
@@ -750,6 +743,7 @@ pub struct NodeDecl<P: Phase = Raw> {
 /// Const node declaration: `const node name: Type = expr;`
 #[derive(Debug, Clone)]
 pub struct ConstNodeDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr<P>,
     pub value: Expr<P>,
@@ -758,6 +752,7 @@ pub struct ConstNodeDecl<P: Phase = Raw> {
 /// Base dimension declaration: `base dim Length;`
 #[derive(Debug, Clone)]
 pub struct BaseDimDecl {
+    pub visibility: Visibility,
     pub name: Spanned<DimName>,
 }
 
@@ -771,6 +766,7 @@ pub struct BaseDimDecl {
 ///   library is compiled standalone.
 #[derive(Debug, Clone)]
 pub struct DimDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub name: Spanned<DimName>,
     pub definition: Option<DimExpr<P>>,
 }
@@ -779,6 +775,7 @@ pub struct DimDecl<P: Phase = Raw> {
 /// or `base unit m: Length;`.
 #[derive(Debug, Clone)]
 pub struct UnitDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub name: Spanned<UnitName>,
     /// The dimension this unit measures.
     pub dim_type: DimExpr<P>,
@@ -804,6 +801,7 @@ pub struct UnitDef<P: Phase = Raw> {
 ///   outside; no body at declaration.
 #[derive(Debug, Clone)]
 pub struct TypeDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub name: Spanned<StructTypeName>,
     pub generic_params: Vec<GenericParam<P>>,
     /// Fields of the type:
@@ -819,6 +817,7 @@ pub struct TypeDecl<P: Phase = Raw> {
 /// variant's payload (if any) is a record-shaped field list declared inline.
 #[derive(Debug, Clone)]
 pub struct UnionTypeDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub name: Spanned<StructTypeName>,
     pub generic_params: Vec<GenericParam<P>>,
     pub members: Vec<UnionMember<P>>,
@@ -885,6 +884,7 @@ impl<P: Phase> IndexDeclKind<P> {
 /// or `index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);`
 #[derive(Debug, Clone)]
 pub struct IndexDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
     pub name: Spanned<IndexName>,
     pub kind: IndexDeclKind<P>,
 }
@@ -1974,7 +1974,6 @@ mod tests {
         let file: File<crate::syntax::phase::Desugared> = File {
             declarations: vec![Declaration {
                 attributes: vec![],
-                visibility: Visibility::Private,
                 kind: DeclKind::Param(ParamDecl {
                     name: Spanned::new(DeclName::new("x"), Span::new(6, 1)),
                     type_ann: TypeExpr {

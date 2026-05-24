@@ -34,8 +34,8 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
-                    visibility: Visibility::Private,
                     kind: DeclKind::Type(TypeDecl {
+                        visibility: Visibility::Private,
                         name,
                         generic_params,
                         fields: None,
@@ -98,8 +98,8 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
-                    visibility: Visibility::Private,
                     kind: DeclKind::UnionType(UnionTypeDecl {
+                        visibility: Visibility::Private,
                         name,
                         generic_params,
                         members,

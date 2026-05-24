@@ -375,7 +375,6 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
-            visibility: Visibility::Private,
             kind: DeclKind::Sugar(crate::syntax::ast::RawDeclSugar::Multi(multi)),
             span: surface_span,
         })
@@ -674,6 +673,13 @@ mod tests {
             .expect("file has one multi-decl")
     }
 
+    fn node_visibility(decl: &ast::Declaration) -> Visibility {
+        match &decl.kind {
+            DeclKind::Node(node) => node.visibility,
+            other => panic!("expected Node, got {other:?}"),
+        }
+    }
+
     #[test]
     fn multi_decl_homogeneous_1d() {
         let source = r"
@@ -845,8 +851,8 @@ pub node a: Int[Component], node b: Int[Component]
         assert_eq!(multi.slots[1].visibility, Visibility::Private);
 
         let desugared = expand_multi_decl(multi);
-        assert_eq!(desugared[0].visibility, Visibility::Public);
-        assert_eq!(desugared[1].visibility, Visibility::Private);
+        assert_eq!(node_visibility(&desugared[0]), Visibility::Public);
+        assert_eq!(node_visibility(&desugared[1]), Visibility::Private);
     }
 
     #[test]
@@ -868,8 +874,8 @@ node a: Int[Component], pub node b: Int[Component]
         assert_eq!(multi.slots[1].visibility, Visibility::Public);
 
         let desugared = expand_multi_decl(multi);
-        assert_eq!(desugared[0].visibility, Visibility::Private);
-        assert_eq!(desugared[1].visibility, Visibility::Public);
+        assert_eq!(node_visibility(&desugared[0]), Visibility::Private);
+        assert_eq!(node_visibility(&desugared[1]), Visibility::Public);
     }
 
     #[test]

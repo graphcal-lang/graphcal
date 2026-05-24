@@ -47,6 +47,7 @@ impl Parser<'_> {
                 let (_, semi_span) = self.expect(Token::Semicolon)?;
                 (
                     DeclKind::Node(NodeDecl {
+                        visibility: Visibility::Private,
                         name,
                         type_ann,
                         value,
@@ -60,6 +61,7 @@ impl Parser<'_> {
                 let (_, semi_span) = self.expect(Token::Semicolon)?;
                 (
                     DeclKind::ConstNode(ConstNodeDecl {
+                        visibility: Visibility::Private,
                         name,
                         type_ann,
                         value,
@@ -73,7 +75,6 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
-            visibility: Visibility::Private,
             kind: decl_kind,
             span,
         })
@@ -114,8 +115,11 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
-            visibility: Visibility::Private,
-            kind: DeclKind::Assert(AssertDecl { name, body }),
+            kind: DeclKind::Assert(AssertDecl {
+                visibility: Visibility::Private,
+                name,
+                body,
+            }),
             span,
         })
     }

@@ -19,6 +19,27 @@ mod tests;
 mod type_decl;
 mod value;
 
+fn set_decl_visibility(decl: &mut Declaration, visibility: Visibility) {
+    match &mut decl.kind {
+        DeclKind::Param(_) | DeclKind::Sugar(_) => {}
+        DeclKind::Node(d) => d.visibility = visibility,
+        DeclKind::ConstNode(d) => d.visibility = visibility,
+        DeclKind::BaseDimension(d) => d.visibility = visibility,
+        DeclKind::Dimension(d) => d.visibility = visibility,
+        DeclKind::Unit(d) => d.visibility = visibility,
+        DeclKind::Type(d) => d.visibility = visibility,
+        DeclKind::UnionType(d) => d.visibility = visibility,
+        DeclKind::Index(d) => d.visibility = visibility,
+        DeclKind::Import(d) => d.visibility = visibility,
+        DeclKind::Include(d) => d.visibility = visibility,
+        DeclKind::Dag(d) => d.visibility = visibility,
+        DeclKind::Assert(d) => d.visibility = visibility,
+        DeclKind::Plot(d) => d.visibility = visibility,
+        DeclKind::Figure(d) => d.visibility = visibility,
+        DeclKind::Layer(d) => d.visibility = visibility,
+    }
+}
+
 impl Parser<'_> {
     /// Parse one top-level declaration surface form. A multi-decl is
     /// represented as `DeclKind::Multi(MultiDecl)` and expanded later
@@ -131,7 +152,7 @@ impl Parser<'_> {
                     Some(Token::Unit) => {
                         // const unit: single decl only (no multi-decl sugar).
                         let mut decl = self.parse_const_unit(const_span)?;
-                        decl.visibility = visibility;
+                        set_decl_visibility(&mut decl, visibility);
                         if let Some(ps) = visibility_span {
                             decl.span = ps.merge(decl.span);
                         }
@@ -193,13 +214,13 @@ impl Parser<'_> {
         }?;
 
         // Set visibility
-        decl.visibility = visibility;
+        set_decl_visibility(&mut decl, visibility);
 
         // Mutual exclusion for re-exports (issue #452 / spec §4.1):
         // `pub import "X" { pub items };` mixes whole-module and selective
         // re-export forms. Reject at parse so the semantics of a single
         // re-export construct stays unambiguous.
-        if decl.visibility == Visibility::Public
+        if visibility == Visibility::Public
             && let Some(vis_span) = visibility_span
         {
             let selective_items = match &decl.kind {
@@ -269,7 +290,7 @@ impl Parser<'_> {
 
         // Single decl. Continue with the existing param/node/const-node path.
         let mut decl = self.finish_single_value_decl(header)?;
-        decl.visibility = visibility;
+        set_decl_visibility(&mut decl, visibility);
         if let Some(ps) = visibility_span {
             decl.span = ps.merge(decl.span);
         }

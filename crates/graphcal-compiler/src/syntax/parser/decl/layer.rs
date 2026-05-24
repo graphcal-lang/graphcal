@@ -56,8 +56,8 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
         Ok(Declaration {
             attributes: vec![],
-            visibility: Visibility::Private,
             kind: DeclKind::Layer(LayerDecl {
+                visibility: Visibility::Private,
                 name,
                 plot_names,
                 fields,

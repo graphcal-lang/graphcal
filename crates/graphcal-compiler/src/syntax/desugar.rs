@@ -187,11 +187,13 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
                 value: Some(table_expr),
             }),
             MultiSlotKind::Node => DeclKind::Node(NodeDecl {
+                visibility: slot.visibility,
                 name: slot.name.clone(),
                 type_ann: slot.type_ann.clone(),
                 value: table_expr,
             }),
             MultiSlotKind::ConstNode => DeclKind::ConstNode(ConstNodeDecl {
+                visibility: slot.visibility,
                 name: slot.name.clone(),
                 type_ann: slot.type_ann.clone(),
                 value: table_expr,
@@ -204,7 +206,6 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
 
         out.push(Declaration {
             attributes: vec![],
-            visibility: slot.visibility,
             kind,
             span: decl_span,
         });

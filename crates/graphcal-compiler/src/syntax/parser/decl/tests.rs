@@ -921,8 +921,10 @@ fn parse_pub_import_whole_module() {
     // `pub import path;` re-exports every pub item from `path`.
     let file = Parser::new("pub import helper;").parse_file().unwrap();
     let decl = &file.declarations[0];
-    assert_eq!(decl.visibility, crate::syntax::ast::Visibility::Public);
-    assert!(matches!(&decl.kind, DeclKind::Import(_)));
+    let DeclKind::Import(import) = &decl.kind else {
+        panic!("expected Import");
+    };
+    assert_eq!(import.visibility, crate::syntax::ast::Visibility::Public);
 }
 
 #[test]
@@ -931,10 +933,10 @@ fn parse_pub_include_whole_module_with_alias() {
         .parse_file()
         .unwrap();
     let decl = &file.declarations[0];
-    assert_eq!(decl.visibility, crate::syntax::ast::Visibility::Public);
     let DeclKind::Include(i) = &decl.kind else {
         panic!("expected Include");
     };
+    assert_eq!(i.visibility, crate::syntax::ast::Visibility::Public);
     let crate::syntax::ast::ImportKind::Module { alias } = &i.kind else {
         panic!("expected Module");
     };
@@ -948,10 +950,10 @@ fn parse_import_brace_list_pub_items() {
         .parse_file()
         .unwrap();
     let decl = &file.declarations[0];
-    assert_eq!(decl.visibility, crate::syntax::ast::Visibility::Private);
     let DeclKind::Import(u) = &decl.kind else {
         panic!("expected Import");
     };
+    assert_eq!(u.visibility, crate::syntax::ast::Visibility::Private);
     let crate::syntax::ast::ImportKind::Selective(items) = &u.kind else {
         panic!("expected Selective");
     };
@@ -1388,12 +1390,15 @@ fn parse_include_single_segment_dag_name() {
 
 #[test]
 fn parse_private_declaration_has_private_visibility() {
-    let file = Parser::new("param x: Dimensionless = 1.0;")
+    let file = Parser::new("node x: Dimensionless = 1.0;")
         .parse_file()
         .unwrap();
-    assert_eq!(file.declarations[0].visibility, Visibility::Private);
-    assert!(!file.declarations[0].is_pub());
-    assert!(!file.declarations[0].is_bindable());
+    let DeclKind::Node(node) = &file.declarations[0].kind else {
+        panic!("expected Node");
+    };
+    assert_eq!(node.visibility, Visibility::Private);
+    assert!(!node.visibility.is_public());
+    assert!(!node.visibility.is_bindable());
 }
 
 #[test]
@@ -1401,9 +1406,12 @@ fn parse_pub_declaration_has_public_visibility() {
     let file = Parser::new("pub node y: Dimensionless = 1.0;")
         .parse_file()
         .unwrap();
-    assert_eq!(file.declarations[0].visibility, Visibility::Public);
-    assert!(file.declarations[0].is_pub());
-    assert!(!file.declarations[0].is_bindable());
+    let DeclKind::Node(node) = &file.declarations[0].kind else {
+        panic!("expected Node");
+    };
+    assert_eq!(node.visibility, Visibility::Public);
+    assert!(node.visibility.is_public());
+    assert!(!node.visibility.is_bindable());
 }
 
 #[test]
@@ -1440,11 +1448,13 @@ fn parse_pub_bind_declaration_has_public_bind_visibility() {
     let file = Parser::new("pub(bind) index Phase = { Design, Test };")
         .parse_file()
         .unwrap();
-    assert_eq!(file.declarations[0].visibility, Visibility::PublicBind);
-    assert!(file.declarations[0].is_pub());
-    assert!(file.declarations[0].is_bindable());
     match &file.declarations[0].kind {
-        DeclKind::Index(idx) => assert_eq!(idx.name.value.as_str(), "Phase"),
+        DeclKind::Index(idx) => {
+            assert_eq!(idx.visibility, Visibility::PublicBind);
+            assert!(idx.visibility.is_public());
+            assert!(idx.visibility.is_bindable());
+            assert_eq!(idx.name.value.as_str(), "Phase");
+        }
         other => panic!("expected Index, got {other:?}"),
     }
 }

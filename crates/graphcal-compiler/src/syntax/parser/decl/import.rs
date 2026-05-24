@@ -33,8 +33,11 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
-            visibility: Visibility::Private,
-            kind: DeclKind::Import(crate::syntax::ast::ImportDecl { path, kind }),
+            kind: DeclKind::Import(crate::syntax::ast::ImportDecl {
+                visibility: Visibility::Private,
+                path,
+                kind,
+            }),
             span,
         })
     }
@@ -65,8 +68,8 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
-            visibility: Visibility::Private,
             kind: DeclKind::Include(crate::syntax::ast::IncludeDecl {
+                visibility: Visibility::Private,
                 path,
                 param_bindings,
                 kind,
