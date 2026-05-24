@@ -68,7 +68,7 @@ impl Parser<'_> {
                 let span = ident.span.merge(end_span);
                 TypeExpr {
                     kind: TypeExprKind::TypeApplication {
-                        name: ident.clone().into_spanned(),
+                        name: ident.into_spanned(),
                         type_args,
                     },
                     constraints: vec![],
@@ -266,7 +266,7 @@ impl Parser<'_> {
 
         Ok(DimTerm {
             span: name.span.merge(end_span),
-            name: name.clone().into_spanned(),
+            name: name.into_spanned(),
             power,
         })
     }
@@ -505,7 +505,7 @@ impl Parser<'_> {
             // Simple case: bare atom. Desugar appropriately.
             return match first_atom {
                 NatExpr::Literal(value, span) => Ok(IndexExpr::NatLiteral(value, span)),
-                NatExpr::Var(ident) => Ok(IndexExpr::Name(ident.clone().into_spanned())),
+                NatExpr::Var(ident) => Ok(IndexExpr::Name(ident.into_spanned())),
                 _ => Ok(IndexExpr::NatExpr(first_atom)),
             };
         }
