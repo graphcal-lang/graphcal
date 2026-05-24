@@ -1,5 +1,5 @@
 use crate::syntax::ast::{
-    DeclKind, Declaration, FieldDecl, TypeDecl, UnionMember, UnionTypeDecl, Visibility,
+    BindableVisibility, DeclKind, Declaration, FieldDecl, TypeDecl, UnionMember, UnionTypeDecl,
 };
 use crate::syntax::names::{ConstructorName, FieldName, StructTypeName};
 use crate::syntax::span::Span;
@@ -34,8 +34,8 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
-                    visibility: Visibility::Private,
                     kind: DeclKind::Type(TypeDecl {
+                        visibility: BindableVisibility::Private,
                         name,
                         generic_params,
                         fields: None,
@@ -98,8 +98,8 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
-                    visibility: Visibility::Private,
                     kind: DeclKind::UnionType(UnionTypeDecl {
+                        visibility: BindableVisibility::Private,
                         name,
                         generic_params,
                         members,

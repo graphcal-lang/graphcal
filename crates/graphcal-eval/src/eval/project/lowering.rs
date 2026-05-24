@@ -963,9 +963,8 @@ fn check_generics_leakage(
             DeclKind::UnionType(u) => (u.name.value.to_string(), "type"),
             _ => continue,
         };
-        let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
         let reexported = if pub_reexport_whole {
-            decl.is_pub() || implicitly_visible
+            decl_is_public(decl)
         } else {
             pub_reexport_items.contains(decl_name.as_str())
         };

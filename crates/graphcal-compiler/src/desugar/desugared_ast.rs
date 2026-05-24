@@ -69,9 +69,10 @@ pub type FieldDecl = crate::syntax::ast::FieldDecl<Desugared>;
 // ---------------------------------------------------------------------------
 
 pub use crate::syntax::ast::{
-    Attribute, AttributeArg, BaseDimDecl, BinOp, DomainBoundKind, EncodingChannel, ForBinding,
-    ForBindingIndex, GenericConstraint, Ident, ImportDecl, ImportItem, ImportKind, MapEntryKey,
-    MarkType, MatchPattern, ModulePath, MulDivOp, MultiDataRow, MultiDecl, MultiDeclSlice,
-    MultiDeclSlot, MultiHeaderCell, MultiSlotAxis, MultiSlotColumnSpan, MultiSlotKind, NatExpr,
-    PatternBinding, TableIndexSpec, UnaryOp, UnitExpr, UnitExprItem, Visibility,
+    Attribute, AttributeArg, BaseDimDecl, BinOp, BindableVisibility, DomainBoundKind,
+    EncodingChannel, ForBinding, ForBindingIndex, GenericConstraint, Ident, ImportDecl, ImportItem,
+    ImportKind, MapEntryKey, MarkType, MatchPattern, ModulePath, MulDivOp, MultiDataRow, MultiDecl,
+    MultiDeclSlice, MultiDeclSlot, MultiHeaderCell, MultiSlotAxis, MultiSlotColumnSpan,
+    MultiSlotKind, NatExpr, PatternBinding, TableIndexSpec, UnaryOp, UnitExpr, UnitExprItem,
+    Visibility,
 };

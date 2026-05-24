@@ -4,10 +4,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::desugar::resolved_ast::{
-    AssertDecl, BaseDimDecl, DagDecl, DeclKind, DimDecl, DimExpr, DomainBound, ExprKind,
-    FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl,
+    AssertDecl, BaseDimDecl, BindableVisibility, DagDecl, DeclKind, DimDecl, DimExpr, DomainBound,
+    ExprKind, FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl,
     PatternBinding, PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl, UnitExpr,
-    Visibility,
 };
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::span::Span;
@@ -145,7 +144,7 @@ pub struct DefinitionInfo {
     ///
     /// `None` for builtins, fields, and local variables (concepts that have
     /// no surface annotation).
-    pub visibility: Option<Visibility>,
+    pub visibility: Option<BindableVisibility>,
 }
 
 impl DefinitionInfo {
@@ -361,7 +360,7 @@ impl SymbolTable {
         category: SymbolCategory,
         type_description: Option<String>,
         detail: Option<String>,
-        visibility: Visibility,
+        visibility: BindableVisibility,
     ) {
         let name = name.as_ref().to_string();
         self.insert_definition(
@@ -445,26 +444,47 @@ pub fn build_from_ast(
     for decl in &ast.declarations {
         collect_attribute_refs(&decl.attributes, &mut table);
 
-        let vis = decl.visibility;
         match &decl.kind {
-            DeclKind::Param(p) => collect_param_decl(p, decl.span, vis, &mut table, &mut scopes),
-            DeclKind::Node(n) => collect_node_decl(n, decl.span, vis, &mut table, &mut scopes),
-            DeclKind::ConstNode(c) => {
-                collect_const_node_decl(c, decl.span, vis, &mut table, &mut scopes);
+            DeclKind::Param(p) => collect_param_decl(
+                p,
+                decl.span,
+                BindableVisibility::PublicBind,
+                &mut table,
+                &mut scopes,
+            ),
+            DeclKind::Node(n) => {
+                collect_node_decl(n, decl.span, n.visibility.into(), &mut table, &mut scopes);
             }
-            DeclKind::BaseDimension(d) => collect_base_dim_decl(d, decl.span, vis, &mut table),
-            DeclKind::Dimension(d) => collect_dim_decl(d, decl.span, vis, &mut table),
-            DeclKind::Unit(u) => collect_unit_decl(u, decl.span, vis, &mut table, &mut scopes),
-            DeclKind::Type(t) => collect_type_decl(t, decl.span, vis, &mut table),
-            DeclKind::UnionType(u) => collect_union_type_decl(u, decl.span, vis, &mut table),
-            DeclKind::Index(idx) => collect_index_decl(idx, decl.span, vis, &mut table),
-            DeclKind::Assert(a) => collect_assert_decl(a, decl.span, vis, &mut table, &mut scopes),
-            DeclKind::Plot(p) => collect_plot_decl(p, decl.span, vis, &mut table, &mut scopes),
-            DeclKind::Figure(f) => collect_figure_decl(f, decl.span, vis, &mut table, &mut scopes),
-            DeclKind::Layer(l) => collect_layer_decl(l, decl.span, vis, &mut table, &mut scopes),
+            DeclKind::ConstNode(c) => {
+                collect_const_node_decl(c, decl.span, c.visibility.into(), &mut table, &mut scopes);
+            }
+            DeclKind::BaseDimension(d) => {
+                collect_base_dim_decl(d, decl.span, d.visibility.into(), &mut table);
+            }
+            DeclKind::Dimension(d) => collect_dim_decl(d, decl.span, d.visibility, &mut table),
+            DeclKind::Unit(u) => {
+                collect_unit_decl(u, decl.span, u.visibility.into(), &mut table, &mut scopes);
+            }
+            DeclKind::Type(t) => collect_type_decl(t, decl.span, t.visibility, &mut table),
+            DeclKind::UnionType(u) => {
+                collect_union_type_decl(u, decl.span, u.visibility, &mut table);
+            }
+            DeclKind::Index(idx) => collect_index_decl(idx, decl.span, idx.visibility, &mut table),
+            DeclKind::Assert(a) => {
+                collect_assert_decl(a, decl.span, a.visibility.into(), &mut table, &mut scopes);
+            }
+            DeclKind::Plot(p) => {
+                collect_plot_decl(p, decl.span, p.visibility.into(), &mut table, &mut scopes);
+            }
+            DeclKind::Figure(f) => {
+                collect_figure_decl(f, decl.span, f.visibility.into(), &mut table, &mut scopes);
+            }
+            DeclKind::Layer(l) => {
+                collect_layer_decl(l, decl.span, l.visibility.into(), &mut table, &mut scopes);
+            }
             DeclKind::Import(u) => collect_import_decl(u, &mut table),
             DeclKind::Include(u) => collect_include_decl(u, &mut table),
-            DeclKind::Dag(d) => collect_dag_decl(d, decl.span, vis, &mut table),
+            DeclKind::Dag(d) => collect_dag_decl(d, decl.span, d.visibility.into(), &mut table),
             // `Sugar(_)` carries `Infallible` for the `Desugared` phase, so
             // this arm is statically unreachable. The deref of `&Infallible`
             // is sound (no value can be observed) — this is the canonical
@@ -538,7 +558,7 @@ fn collect_attribute_refs(
 fn collect_param_decl(
     p: &ParamDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -560,7 +580,7 @@ fn collect_param_decl(
 fn collect_node_decl(
     n: &NodeDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -580,7 +600,7 @@ fn collect_node_decl(
 fn collect_const_node_decl(
     c: &graphcal_compiler::desugar::resolved_ast::ConstNodeDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -600,7 +620,7 @@ fn collect_const_node_decl(
 fn collect_base_dim_decl(
     d: &BaseDimDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
 ) {
     table.register_top_level(
@@ -614,7 +634,12 @@ fn collect_base_dim_decl(
     );
 }
 
-fn collect_dim_decl(d: &DimDecl, decl_span: Span, visibility: Visibility, table: &mut SymbolTable) {
+fn collect_dim_decl(
+    d: &DimDecl,
+    decl_span: Span,
+    visibility: BindableVisibility,
+    table: &mut SymbolTable,
+) {
     table.register_top_level(
         &d.name.value,
         d.name.span,
@@ -632,7 +657,7 @@ fn collect_dim_decl(d: &DimDecl, decl_span: Span, visibility: Visibility, table:
 fn collect_unit_decl(
     u: &UnitDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -655,7 +680,7 @@ fn collect_unit_decl(
 fn collect_type_decl(
     t: &TypeDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
 ) {
     table.register_top_level(
@@ -678,7 +703,7 @@ fn collect_type_decl(
 fn collect_union_type_decl(
     u: &UnionTypeDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
 ) {
     table.register_top_level(
@@ -708,7 +733,7 @@ fn collect_union_type_decl(
 fn collect_index_decl(
     idx: &IndexDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
 ) {
     let name = idx.name.value.to_string();
@@ -753,7 +778,7 @@ fn collect_index_decl(
 fn collect_assert_decl(
     a: &AssertDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -786,7 +811,7 @@ fn collect_assert_decl(
 fn collect_plot_decl(
     p: &PlotDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -813,7 +838,7 @@ fn collect_plot_decl(
 fn collect_figure_decl(
     f: &FigureDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -834,7 +859,7 @@ fn collect_figure_decl(
 fn collect_layer_decl(
     l: &LayerDecl,
     decl_span: Span,
-    visibility: Visibility,
+    visibility: BindableVisibility,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -852,7 +877,12 @@ fn collect_layer_decl(
     }
 }
 
-fn collect_dag_decl(d: &DagDecl, decl_span: Span, visibility: Visibility, table: &mut SymbolTable) {
+fn collect_dag_decl(
+    d: &DagDecl,
+    decl_span: Span,
+    visibility: BindableVisibility,
+    table: &mut SymbolTable,
+) {
     table.register_top_level(
         d.name.value.as_str(),
         d.name.span,
@@ -891,7 +921,15 @@ fn collect_dag_decl(d: &DagDecl, decl_span: Span, visibility: Visibility, table:
                 decl_span: body_decl.span,
                 type_description: None,
                 detail: None,
-                visibility: Some(body_decl.visibility),
+                visibility: Some(match &body_decl.kind {
+                    graphcal_compiler::desugar::resolved_ast::DeclKind::Node(n) => {
+                        n.visibility.into()
+                    }
+                    graphcal_compiler::desugar::resolved_ast::DeclKind::ConstNode(c) => {
+                        c.visibility.into()
+                    }
+                    _ => BindableVisibility::Private,
+                }),
             },
         );
     }

@@ -24,8 +24,8 @@
 //! see N ordinary declarations.
 
 use crate::syntax::ast::{
-    self as ast, DeclKind, Declaration, Expr, MapEntryIndex, MapEntryKey, TableIndexSpec, TypeExpr,
-    Visibility,
+    self as ast, BindableVisibility, DeclKind, Declaration, Expr, MapEntryIndex, MapEntryKey,
+    TableIndexSpec, TypeExpr, Visibility,
 };
 use crate::syntax::names::{DeclName, IndexName, IndexVariantName};
 use crate::syntax::span::Span;
@@ -62,7 +62,7 @@ impl Parser<'_> {
     /// reject `pub(bind)`. Called once per multi-decl slot.
     pub(super) fn check_value_decl_visibility(
         &self,
-        visibility: Visibility,
+        visibility: BindableVisibility,
         visibility_span: Option<Span>,
         kind: SlotKind,
     ) -> Result<(), ParseError> {
@@ -70,17 +70,17 @@ impl Parser<'_> {
             return Ok(());
         };
         match (kind, visibility) {
-            (SlotKind::Param, Visibility::Public) => Err(self.unexpected_token(
+            (SlotKind::Param, BindableVisibility::Public) => Err(self.unexpected_token(
                 "no visibility annotation (params are always visible and bindable)",
                 "`pub`",
                 vis_span,
             )),
-            (SlotKind::Param, Visibility::PublicBind) => Err(self.unexpected_token(
+            (SlotKind::Param, BindableVisibility::PublicBind) => Err(self.unexpected_token(
                 "no visibility annotation (params are always visible and bindable)",
                 "`pub(bind)`",
                 vis_span,
             )),
-            (SlotKind::Node | SlotKind::ConstNode, Visibility::PublicBind) => {
+            (SlotKind::Node | SlotKind::ConstNode, BindableVisibility::PublicBind) => {
                 Err(self.unexpected_token(
                     "`pub` (nodes are computed values — `pub(bind)` is not meaningful; use `param` to declare a bindable input)",
                     "`pub(bind)`",
@@ -97,7 +97,7 @@ impl Parser<'_> {
     /// prefix is parsed before the kind keyword).
     pub(super) fn parse_slot_header_tail(
         &mut self,
-        visibility: Visibility,
+        visibility: BindableVisibility,
         kind: SlotKind,
         kind_span: Span,
     ) -> Result<SlotHeader, ParseError> {
@@ -106,7 +106,7 @@ impl Parser<'_> {
         let type_ann = self.parse_type_expr()?;
         let header_span = kind_span.merge(type_ann.span);
         Ok(SlotHeader {
-            visibility,
+            visibility: super::visibility_without_bindability(visibility),
             kind,
             kind_span,
             name,
@@ -130,7 +130,7 @@ impl Parser<'_> {
     pub(super) fn parse_multi_decl_rest(
         &mut self,
         first_slot: SlotHeader,
-        first_visibility: Visibility,
+        first_visibility: BindableVisibility,
         first_visibility_span: Option<Span>,
     ) -> Result<Declaration, ParseError> {
         // Validate the first slot's visibility against its kind. The
@@ -375,7 +375,6 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
-            visibility: Visibility::Private,
             kind: DeclKind::Sugar(crate::syntax::ast::RawDeclSugar::Multi(multi)),
             span: surface_span,
         })
@@ -674,6 +673,13 @@ mod tests {
             .expect("file has one multi-decl")
     }
 
+    fn node_visibility(decl: &ast::Declaration) -> Visibility {
+        match &decl.kind {
+            DeclKind::Node(node) => node.visibility,
+            other => panic!("expected Node, got {other:?}"),
+        }
+    }
+
     #[test]
     fn multi_decl_homogeneous_1d() {
         let source = r"
@@ -845,8 +851,8 @@ pub node a: Int[Component], node b: Int[Component]
         assert_eq!(multi.slots[1].visibility, Visibility::Private);
 
         let desugared = expand_multi_decl(multi);
-        assert_eq!(desugared[0].visibility, Visibility::Public);
-        assert_eq!(desugared[1].visibility, Visibility::Private);
+        assert_eq!(node_visibility(&desugared[0]), Visibility::Public);
+        assert_eq!(node_visibility(&desugared[1]), Visibility::Private);
     }
 
     #[test]
@@ -868,8 +874,8 @@ node a: Int[Component], pub node b: Int[Component]
         assert_eq!(multi.slots[1].visibility, Visibility::Public);
 
         let desugared = expand_multi_decl(multi);
-        assert_eq!(desugared[0].visibility, Visibility::Private);
-        assert_eq!(desugared[1].visibility, Visibility::Public);
+        assert_eq!(node_visibility(&desugared[0]), Visibility::Private);
+        assert_eq!(node_visibility(&desugared[1]), Visibility::Public);
     }
 
     #[test]

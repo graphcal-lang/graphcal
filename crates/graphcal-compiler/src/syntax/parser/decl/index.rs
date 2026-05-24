@@ -1,4 +1,4 @@
-use crate::syntax::ast::{DeclKind, Declaration, IndexDecl, IndexDeclKind, Visibility};
+use crate::syntax::ast::{BindableVisibility, DeclKind, Declaration, IndexDecl, IndexDeclKind};
 use crate::syntax::names::{IndexName, IndexVariantName};
 use crate::syntax::token::Token;
 
@@ -20,8 +20,8 @@ impl Parser<'_> {
             let span = start_span.merge(end_span);
             return Ok(Declaration {
                 attributes: vec![],
-                visibility: Visibility::Private,
                 kind: DeclKind::Index(IndexDecl {
+                    visibility: BindableVisibility::Private,
                     name,
                     kind: IndexDeclKind::RequiredNamed,
                 }),
@@ -37,8 +37,8 @@ impl Parser<'_> {
             let span = start_span.merge(end_span);
             return Ok(Declaration {
                 attributes: vec![],
-                visibility: Visibility::Private,
                 kind: DeclKind::Index(IndexDecl {
+                    visibility: BindableVisibility::Private,
                     name,
                     kind: IndexDeclKind::RequiredRange { dimension },
                 }),
@@ -73,8 +73,8 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
-                    visibility: Visibility::Private,
                     kind: DeclKind::Index(IndexDecl {
+                        visibility: BindableVisibility::Private,
                         name,
                         kind: IndexDeclKind::Named { variants },
                     }),
@@ -97,8 +97,8 @@ impl Parser<'_> {
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
                     attributes: vec![],
-                    visibility: Visibility::Private,
                     kind: DeclKind::Index(IndexDecl {
+                        visibility: BindableVisibility::Private,
                         name,
                         kind: IndexDeclKind::Range {
                             start: Box::new(start),

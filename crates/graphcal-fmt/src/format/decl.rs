@@ -40,11 +40,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
     };
 
     // Prepend the visibility annotation (if any).
-    let body = match decl.visibility {
-        Visibility::Private => body,
-        Visibility::Public => RcDoc::text("pub ").append(body),
-        Visibility::PublicBind => RcDoc::text("pub(bind) ").append(body),
-    };
+    let body = format_decl_visibility(&decl.kind).append(body);
 
     if decl.attributes.is_empty() {
         body
@@ -56,6 +52,44 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         }
         parts.push(body);
         RcDoc::concat(parts)
+    }
+}
+
+fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
+    match kind {
+        DeclKind::Param(_) | DeclKind::Sugar(_) => RcDoc::nil(),
+        DeclKind::Dimension(d) => bindable_visibility_prefix(d.visibility),
+        DeclKind::Type(d) => bindable_visibility_prefix(d.visibility),
+        DeclKind::Index(d) => bindable_visibility_prefix(d.visibility),
+        DeclKind::Node(d) => visibility_prefix(d.visibility),
+        DeclKind::ConstNode(d) => visibility_prefix(d.visibility),
+        DeclKind::BaseDimension(d) => visibility_prefix(d.visibility),
+        DeclKind::Unit(d) => visibility_prefix(d.visibility),
+        DeclKind::UnionType(d) => bindable_visibility_prefix(d.visibility),
+        DeclKind::Import(d) => visibility_prefix(d.visibility),
+        DeclKind::Include(d) => visibility_prefix(d.visibility),
+        DeclKind::Dag(d) => visibility_prefix(d.visibility),
+        DeclKind::Assert(d) => visibility_prefix(d.visibility),
+        DeclKind::Plot(d) => visibility_prefix(d.visibility),
+        DeclKind::Figure(d) => visibility_prefix(d.visibility),
+        DeclKind::Layer(d) => visibility_prefix(d.visibility),
+    }
+}
+
+fn bindable_visibility_prefix(
+    visibility: graphcal_compiler::syntax::ast::BindableVisibility,
+) -> RcDoc<'static> {
+    match visibility {
+        graphcal_compiler::syntax::ast::BindableVisibility::Private => RcDoc::nil(),
+        graphcal_compiler::syntax::ast::BindableVisibility::Public => RcDoc::text("pub "),
+        graphcal_compiler::syntax::ast::BindableVisibility::PublicBind => RcDoc::text("pub(bind) "),
+    }
+}
+
+fn visibility_prefix(visibility: Visibility) -> RcDoc<'static> {
+    match visibility {
+        Visibility::Private => RcDoc::nil(),
+        Visibility::Public => RcDoc::text("pub "),
     }
 }
 
@@ -690,7 +724,6 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
             match s.visibility {
                 Visibility::Private => kind.to_string(),
                 Visibility::Public => format!("pub {kind}"),
-                Visibility::PublicBind => format!("pub(bind) {kind}"),
             }
         })
         .collect();

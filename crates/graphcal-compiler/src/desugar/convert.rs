@@ -61,7 +61,6 @@ impl From<File<Raw>> for File<Desugared> {
 fn convert_decl(d: Declaration<Raw>) -> Vec<Declaration<Desugared>> {
     let Declaration {
         attributes,
-        visibility,
         kind,
         span,
     } = d;
@@ -78,7 +77,6 @@ fn convert_decl(d: Declaration<Raw>) -> Vec<Declaration<Desugared>> {
         }
         other => vec![Declaration {
             attributes,
-            visibility,
             kind: convert_decl_kind_non_sugar(other),
             span,
         }],
@@ -94,7 +92,6 @@ fn convert_decl(d: Declaration<Raw>) -> Vec<Declaration<Desugared>> {
 fn lift_non_sugar_decl(d: Declaration<Raw>) -> Declaration<Desugared> {
     Declaration {
         attributes: d.attributes,
-        visibility: d.visibility,
         kind: convert_decl_kind_non_sugar(d.kind),
         span: d.span,
     }
@@ -149,6 +146,7 @@ impl From<ParamDecl<Raw>> for ParamDecl<Desugared> {
 impl From<NodeDecl<Raw>> for NodeDecl<Desugared> {
     fn from(n: NodeDecl<Raw>) -> Self {
         Self {
+            visibility: n.visibility,
             name: n.name,
             type_ann: n.type_ann.into(),
             value: n.value.into(),
@@ -159,6 +157,7 @@ impl From<NodeDecl<Raw>> for NodeDecl<Desugared> {
 impl From<ConstNodeDecl<Raw>> for ConstNodeDecl<Desugared> {
     fn from(c: ConstNodeDecl<Raw>) -> Self {
         Self {
+            visibility: c.visibility,
             name: c.name,
             type_ann: c.type_ann.into(),
             value: c.value.into(),
@@ -169,6 +168,7 @@ impl From<ConstNodeDecl<Raw>> for ConstNodeDecl<Desugared> {
 impl From<crate::syntax::ast::DimDecl<Raw>> for crate::syntax::ast::DimDecl<Desugared> {
     fn from(d: crate::syntax::ast::DimDecl<Raw>) -> Self {
         Self {
+            visibility: d.visibility,
             name: d.name,
             definition: d.definition.map(convert_dim_expr),
         }
@@ -178,6 +178,7 @@ impl From<crate::syntax::ast::DimDecl<Raw>> for crate::syntax::ast::DimDecl<Desu
 impl From<UnitDecl<Raw>> for UnitDecl<Desugared> {
     fn from(u: UnitDecl<Raw>) -> Self {
         Self {
+            visibility: u.visibility,
             name: u.name,
             dim_type: convert_dim_expr(u.dim_type),
             definition: u.definition.map(Into::into),
@@ -198,6 +199,7 @@ impl From<UnitDef<Raw>> for UnitDef<Desugared> {
 impl From<TypeDecl<Raw>> for TypeDecl<Desugared> {
     fn from(t: TypeDecl<Raw>) -> Self {
         Self {
+            visibility: t.visibility,
             name: t.name,
             generic_params: t.generic_params.into_iter().map(Into::into).collect(),
             fields: t.fields.map(|fs| fs.into_iter().map(Into::into).collect()),
@@ -208,6 +210,7 @@ impl From<TypeDecl<Raw>> for TypeDecl<Desugared> {
 impl From<UnionTypeDecl<Raw>> for UnionTypeDecl<Desugared> {
     fn from(u: UnionTypeDecl<Raw>) -> Self {
         Self {
+            visibility: u.visibility,
             name: u.name,
             generic_params: u.generic_params.into_iter().map(Into::into).collect(),
             members: u.members.into_iter().map(Into::into).collect(),
@@ -247,6 +250,7 @@ impl From<GenericParam<Raw>> for GenericParam<Desugared> {
 impl From<IndexDecl<Raw>> for IndexDecl<Desugared> {
     fn from(i: IndexDecl<Raw>) -> Self {
         Self {
+            visibility: i.visibility,
             name: i.name,
             kind: i.kind.into(),
         }
@@ -273,6 +277,7 @@ impl From<IndexDeclKind<Raw>> for IndexDeclKind<Desugared> {
 impl From<IncludeDecl<Raw>> for IncludeDecl<Desugared> {
     fn from(i: IncludeDecl<Raw>) -> Self {
         Self {
+            visibility: i.visibility,
             path: i.path,
             param_bindings: i.param_bindings.into_iter().map(Into::into).collect(),
             kind: i.kind,
@@ -293,6 +298,7 @@ impl From<ParamBinding<Raw>> for ParamBinding<Desugared> {
 impl From<DagDecl<Raw>> for DagDecl<Desugared> {
     fn from(d: DagDecl<Raw>) -> Self {
         Self {
+            visibility: d.visibility,
             name: d.name,
             body: d.body.into_iter().flat_map(convert_decl).collect(),
             span: d.span,
@@ -303,6 +309,7 @@ impl From<DagDecl<Raw>> for DagDecl<Desugared> {
 impl From<AssertDecl<Raw>> for AssertDecl<Desugared> {
     fn from(a: AssertDecl<Raw>) -> Self {
         Self {
+            visibility: a.visibility,
             name: a.name,
             body: a.body.into(),
         }
@@ -335,6 +342,7 @@ impl From<AssertBody<Raw>> for AssertBody<Desugared> {
 impl From<PlotDecl<Raw>> for PlotDecl<Desugared> {
     fn from(p: PlotDecl<Raw>) -> Self {
         Self {
+            visibility: p.visibility,
             name: p.name,
             mark: p.mark.into(),
             encodings: p.encodings.into_iter().map(Into::into).collect(),
@@ -378,6 +386,7 @@ impl From<PlotField<Raw>> for PlotField<Desugared> {
 impl From<FigureDecl<Raw>> for FigureDecl<Desugared> {
     fn from(f: FigureDecl<Raw>) -> Self {
         Self {
+            visibility: f.visibility,
             name: f.name,
             plot_names: f.plot_names,
             fields: f.fields.into_iter().map(Into::into).collect(),
@@ -388,6 +397,7 @@ impl From<FigureDecl<Raw>> for FigureDecl<Desugared> {
 impl From<LayerDecl<Raw>> for LayerDecl<Desugared> {
     fn from(l: LayerDecl<Raw>) -> Self {
         Self {
+            visibility: l.visibility,
             name: l.name,
             plot_names: l.plot_names,
             fields: l.fields.into_iter().map(Into::into).collect(),

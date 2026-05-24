@@ -205,8 +205,26 @@ fn collect_local_declarations(
     // A5 and always contribute.
     let mut pub_names: HashSet<DeclName> = HashSet::new();
     for decl in &file.declarations {
-        let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
-        if !decl.is_pub() && !implicitly_visible {
+        let is_visible = match &decl.kind {
+            DeclKind::Param(_) => true,
+            DeclKind::Node(d) => d.visibility.is_public(),
+            DeclKind::ConstNode(d) => d.visibility.is_public(),
+            DeclKind::BaseDimension(d) => d.visibility.is_public(),
+            DeclKind::Dimension(d) => d.visibility.is_public(),
+            DeclKind::Unit(d) => d.visibility.is_public(),
+            DeclKind::Type(d) => d.visibility.is_public(),
+            DeclKind::UnionType(d) => d.visibility.is_public(),
+            DeclKind::Index(d) => d.visibility.is_public(),
+            DeclKind::Import(d) => d.visibility.is_public(),
+            DeclKind::Include(d) => d.visibility.is_public(),
+            DeclKind::Dag(d) => d.visibility.is_public(),
+            DeclKind::Assert(d) => d.visibility.is_public(),
+            DeclKind::Plot(d) => d.visibility.is_public(),
+            DeclKind::Figure(d) => d.visibility.is_public(),
+            DeclKind::Layer(d) => d.visibility.is_public(),
+            DeclKind::Sugar(_) => false,
+        };
+        if !is_visible {
             continue;
         }
         let Some((name, _)) = decl.kind.name_and_span() else {
@@ -223,7 +241,7 @@ fn collect_local_declarations(
     // `param`.
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::Index(idx) if idx.kind.is_required() && !decl.is_bindable() => {
+            DeclKind::Index(idx) if idx.kind.is_required() && !idx.visibility.is_bindable() => {
                 return Err(GraphcalError::RequiredItemMustBeBindable {
                     kind: "index".to_string(),
                     name: idx.name.value.to_string(),
@@ -231,7 +249,7 @@ fn collect_local_declarations(
                     span: idx.name.span.into(),
                 });
             }
-            DeclKind::Type(t) if t.fields.is_none() && !decl.is_bindable() => {
+            DeclKind::Type(t) if t.fields.is_none() && !t.visibility.is_bindable() => {
                 return Err(GraphcalError::RequiredItemMustBeBindable {
                     kind: "type".to_string(),
                     name: t.name.value.to_string(),
@@ -239,7 +257,7 @@ fn collect_local_declarations(
                     span: t.name.span.into(),
                 });
             }
-            DeclKind::Dimension(d) if d.definition.is_none() && !decl.is_bindable() => {
+            DeclKind::Dimension(d) if d.definition.is_none() && !d.visibility.is_bindable() => {
                 return Err(GraphcalError::RequiredItemMustBeBindable {
                     kind: "dim".to_string(),
                     name: d.name.value.to_string(),
@@ -259,16 +277,11 @@ fn collect_local_declarations(
     let pub_bind_index_names: HashSet<crate::syntax::names::IndexName> = file
         .declarations
         .iter()
-        .filter_map(|decl| {
-            if !decl.is_bindable() {
-                return None;
+        .filter_map(|decl| match &decl.kind {
+            DeclKind::Index(idx) if idx.visibility.is_bindable() && !idx.kind.is_required() => {
+                Some(idx.name.value.clone())
             }
-            if let DeclKind::Index(idx) = &decl.kind
-                && !idx.kind.is_required()
-            {
-                return Some(idx.name.value.clone());
-            }
-            None
+            _ => None,
         })
         .collect();
 
@@ -378,7 +391,7 @@ fn collect_local_declarations(
                     // so their bodies must abstract over pub(bind)
                     // indexes. Private sinks are pruned on include, so
                     // their literal mentions cannot orphan anything.
-                    if decl.is_pub() {
+                    if a.visibility.is_public() {
                         check_no_pub_index_variant_literals(body_expr, &pub_bind_index_names, src)?;
                     }
                 }
@@ -392,7 +405,7 @@ fn collect_local_declarations(
             DeclKind::Plot(p) => {
                 // Validate references in plot encoding and property expressions (plots CAN use @).
                 // A10(b): public sinks must abstract over pub(bind) indexes.
-                let pub_sink = decl.is_pub();
+                let pub_sink = p.visibility.is_public();
                 for encoding in &p.encodings {
                     let (_graph_refs, _const_refs) = extract_all_refs(
                         &encoding.value,
@@ -459,7 +472,7 @@ fn collect_local_declarations(
             }
             DeclKind::Figure(f) => {
                 // Validate references in figure field expressions (figures CAN use @).
-                let pub_sink = decl.is_pub();
+                let pub_sink = f.visibility.is_public();
                 for field in &f.fields {
                     let (_graph_refs, _const_refs) = extract_all_refs(
                         &field.value,
@@ -488,7 +501,7 @@ fn collect_local_declarations(
             }
             DeclKind::Layer(l) => {
                 // Validate references in layer field expressions (layers CAN use @).
-                let pub_sink = decl.is_pub();
+                let pub_sink = l.visibility.is_public();
                 for field in &l.fields {
                     let (_graph_refs, _const_refs) = extract_all_refs(
                         &field.value,
@@ -780,6 +793,10 @@ fn validate_attributes(
 /// Built-in type-system items (prelude dimensions like `Length`, and
 /// built-in types `Bool`, `Int`, `Dimensionless`, `Datetime`) are
 /// always considered visible.
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive declaration-kind validation is clearer in one pass"
+)]
 fn validate_private_in_public(
     file: &File,
     src: &NamedSource<Arc<String>>,
@@ -830,8 +847,26 @@ fn validate_private_in_public(
     for decl in &file.declarations {
         // `param` is always visible (A5 §4.0); other kinds only when
         // explicitly marked `pub` / `pub(bind)`.
-        let implicitly_visible = matches!(decl.kind, DeclKind::Param(_));
-        if !decl.is_pub() && !implicitly_visible {
+        let is_visible = match &decl.kind {
+            DeclKind::Param(_) => true,
+            DeclKind::Node(d) => d.visibility.is_public(),
+            DeclKind::ConstNode(d) => d.visibility.is_public(),
+            DeclKind::BaseDimension(d) => d.visibility.is_public(),
+            DeclKind::Dimension(d) => d.visibility.is_public(),
+            DeclKind::Unit(d) => d.visibility.is_public(),
+            DeclKind::Type(d) => d.visibility.is_public(),
+            DeclKind::UnionType(d) => d.visibility.is_public(),
+            DeclKind::Index(d) => d.visibility.is_public(),
+            DeclKind::Import(d) => d.visibility.is_public(),
+            DeclKind::Include(d) => d.visibility.is_public(),
+            DeclKind::Dag(d) => d.visibility.is_public(),
+            DeclKind::Assert(d) => d.visibility.is_public(),
+            DeclKind::Plot(d) => d.visibility.is_public(),
+            DeclKind::Figure(d) => d.visibility.is_public(),
+            DeclKind::Layer(d) => d.visibility.is_public(),
+            DeclKind::Sugar(_) => false,
+        };
+        if !is_visible {
             continue;
         }
 

@@ -61,8 +61,8 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
-            visibility: Visibility::Private,
             kind: DeclKind::Plot(PlotDecl {
+                visibility: Visibility::Private,
                 name,
                 mark,
                 encodings,

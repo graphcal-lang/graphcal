@@ -873,10 +873,9 @@ impl DagTIR {
         use crate::desugar::resolved_ast::DeclKind;
 
         for decl in body {
-            if !decl.visibility.is_public() {
-                continue;
-            }
-            if let DeclKind::Node(n) = &decl.kind {
+            if let DeclKind::Node(n) = &decl.kind
+                && n.visibility.is_public()
+            {
                 self.pub_nodes.insert(n.name.value.to_string());
             }
         }

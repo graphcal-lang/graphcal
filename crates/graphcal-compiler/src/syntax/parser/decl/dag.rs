@@ -30,8 +30,12 @@ impl Parser<'_> {
         let span = start_span.merge(end_span);
         Ok(Declaration {
             attributes: vec![],
-            visibility: Visibility::Private,
-            kind: DeclKind::Dag(DagDecl { name, body, span }),
+            kind: DeclKind::Dag(DagDecl {
+                visibility: Visibility::Private,
+                name,
+                body,
+                span,
+            }),
             span,
         })
     }

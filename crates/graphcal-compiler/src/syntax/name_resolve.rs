@@ -267,7 +267,6 @@ fn collect_names_from_decls(
 fn lift_decl(decl: src_ast::Declaration, ctx: &mut ResolveContext) -> dst_ast::Declaration {
     dst_ast::Declaration {
         attributes: decl.attributes,
-        visibility: decl.visibility,
         kind: lift_decl_kind(decl.kind, ctx),
         span: decl.span,
     }
@@ -285,21 +284,25 @@ fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast:
             value: p.value.map(|v| lift_expr(v, ctx)),
         }),
         src_ast::DeclKind::Node(n) => dst_ast::DeclKind::Node(dst_ast::NodeDecl {
+            visibility: n.visibility,
             name: n.name,
             type_ann: lift_type_expr(n.type_ann, ctx),
             value: lift_expr(n.value, ctx),
         }),
         src_ast::DeclKind::ConstNode(c) => dst_ast::DeclKind::ConstNode(dst_ast::ConstNodeDecl {
+            visibility: c.visibility,
             name: c.name,
             type_ann: lift_type_expr(c.type_ann, ctx),
             value: lift_expr(c.value, ctx),
         }),
         src_ast::DeclKind::BaseDimension(d) => dst_ast::DeclKind::BaseDimension(d),
         src_ast::DeclKind::Dimension(d) => dst_ast::DeclKind::Dimension(dst_ast::DimDecl {
+            visibility: d.visibility,
             name: d.name,
             definition: d.definition.map(|def| lift_dim_expr(def, ctx)),
         }),
         src_ast::DeclKind::Unit(u) => dst_ast::DeclKind::Unit(dst_ast::UnitDecl {
+            visibility: u.visibility,
             name: u.name,
             dim_type: lift_dim_expr(u.dim_type, ctx),
             definition: u.definition.map(|def| dst_ast::UnitDef {
@@ -313,6 +316,7 @@ fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast:
             dst_ast::DeclKind::UnionType(lift_union_type_decl(u, ctx))
         }
         src_ast::DeclKind::Index(i) => dst_ast::DeclKind::Index(dst_ast::IndexDecl {
+            visibility: i.visibility,
             name: i.name,
             kind: match i.kind {
                 src_ast::IndexDeclKind::Named { variants } => {
@@ -335,6 +339,7 @@ fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast:
         }),
         src_ast::DeclKind::Import(i) => dst_ast::DeclKind::Import(i),
         src_ast::DeclKind::Include(i) => dst_ast::DeclKind::Include(dst_ast::IncludeDecl {
+            visibility: i.visibility,
             path: i.path,
             param_bindings: i
                 .param_bindings
@@ -349,6 +354,7 @@ fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast:
         }),
         src_ast::DeclKind::Dag(d) => dst_ast::DeclKind::Dag(lift_dag(d, ctx)),
         src_ast::DeclKind::Assert(a) => dst_ast::DeclKind::Assert(dst_ast::AssertDecl {
+            visibility: a.visibility,
             name: a.name,
             body: match a.body {
                 src_ast::AssertBody::Expr(e) => dst_ast::AssertBody::Expr(lift_expr(e, ctx)),
@@ -366,6 +372,7 @@ fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast:
             },
         }),
         src_ast::DeclKind::Plot(p) => dst_ast::DeclKind::Plot(dst_ast::PlotDecl {
+            visibility: p.visibility,
             name: p.name,
             mark: dst_ast::MarkSpec {
                 mark_type: p.mark.mark_type,
@@ -395,6 +402,7 @@ fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast:
                 .collect(),
         }),
         src_ast::DeclKind::Figure(f) => dst_ast::DeclKind::Figure(dst_ast::FigureDecl {
+            visibility: f.visibility,
             name: f.name,
             plot_names: f.plot_names,
             fields: f
@@ -404,6 +412,7 @@ fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast:
                 .collect(),
         }),
         src_ast::DeclKind::Layer(l) => dst_ast::DeclKind::Layer(dst_ast::LayerDecl {
+            visibility: l.visibility,
             name: l.name,
             plot_names: l.plot_names,
             fields: l
@@ -461,6 +470,7 @@ fn lift_dag(dag: src_ast::DagDecl, ctx: &mut ResolveContext) -> dst_ast::DagDecl
     ctx.module_names = orig_modules;
 
     dst_ast::DagDecl {
+        visibility: dag.visibility,
         name: dag.name,
         body,
         span: dag.span,
@@ -487,6 +497,7 @@ fn lift_type_decl(t: src_ast::TypeDecl, ctx: &mut ResolveContext) -> dst_ast::Ty
         .map(|fs| fs.into_iter().map(|f| lift_field_decl(f, ctx)).collect());
     ctx.pop_generic_scope();
     dst_ast::TypeDecl {
+        visibility: t.visibility,
         name: t.name,
         generic_params,
         fields,
@@ -516,6 +527,7 @@ fn lift_union_type_decl(
         .collect();
     ctx.pop_generic_scope();
     dst_ast::UnionTypeDecl {
+        visibility: u.visibility,
         name: u.name,
         generic_params,
         members,
