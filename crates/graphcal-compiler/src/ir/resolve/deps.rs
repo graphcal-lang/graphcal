@@ -5,6 +5,7 @@ use crate::desugar::resolved_ast::{Expr, ExprKind, ParamBinding};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{classify_special_fn, is_aggregation_fn, is_time_scale_name};
 use crate::syntax::names::{DeclName, ScopedName};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::visitor::ExprVisitor;
 use miette::NamedSource;
 
@@ -174,8 +175,8 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for RefCollector<'_> {
     fn visit_tuple_match(
         &mut self,
         _expr: &Expr,
-        _scrutinees: &[Expr],
-        _arms: &[crate::desugar::resolved_ast::TupleMatchArm],
+        _scrutinees: &NonEmpty<Expr>,
+        _arms: &NonEmpty<crate::desugar::resolved_ast::TupleMatchArm>,
     ) -> Result<(), Self::Error> {
         // TupleMatch is desugared before resolution.
         #[expect(clippy::unreachable, reason = "invariant: desugared before resolution")]

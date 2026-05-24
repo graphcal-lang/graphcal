@@ -3,8 +3,10 @@ use std::marker::PhantomData;
 
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, FnName, GenericParamName, IndexName,
-    IndexVariantName, ScopedName, StructTypeName, UnitName,
+    IndexVariantName, LocalName, ModuleAliasName, PlotPropertyName, ScopedName, StructTypeName,
+    TypeLevelName, UnitName,
 };
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Phase, Raw, Resolved};
 use crate::syntax::span::{Span, Spanned};
 
@@ -12,18 +14,27 @@ impl Phase for Raw {
     type DeclSugar = RawDeclSugar;
     type ExprSugar = RawExprSugar;
     type RefSugar = UnresolvedRef;
+    type TypeApplicationName = TypeLevelName;
+    type DimTermName = TypeLevelName;
+    type IndexExprName = TypeLevelName;
 }
 
 impl Phase for Desugared {
     type DeclSugar = Infallible;
     type ExprSugar = Infallible;
     type RefSugar = UnresolvedRef;
+    type TypeApplicationName = TypeLevelName;
+    type DimTermName = TypeLevelName;
+    type IndexExprName = TypeLevelName;
 }
 
 impl Phase for Resolved {
     type DeclSugar = Infallible;
     type ExprSugar = Infallible;
     type RefSugar = Infallible;
+    type TypeApplicationName = TypeLevelName;
+    type DimTermName = TypeLevelName;
+    type IndexExprName = TypeLevelName;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +149,10 @@ pub struct Attribute {
 #[derive(Debug, Clone)]
 pub enum AttributeArg {
     /// A path of one or more `.`-separated segments: `foo`, `Index.Variant`.
-    Path { segments: Vec<Ident>, span: Span },
+    Path {
+        segments: NonEmpty<Ident>,
+        span: Span,
+    },
     /// A parenthesized group of args: `(Index.A, Index.B).`
     Group { elements: Vec<Self>, span: Span },
 }
@@ -158,7 +172,7 @@ impl AttributeArg {
     #[must_use]
     pub fn as_single_ident(&self) -> Option<&Ident> {
         match self {
-            Self::Path { segments, .. } if segments.len() == 1 => Some(&segments[0]),
+            Self::Path { segments, .. } if segments.len() == 1 => Some(segments.first()),
             _ => None,
         }
     }
@@ -220,7 +234,7 @@ pub enum DeclKind<P: Phase = Raw> {
     Node(NodeDecl<P>),
     ConstNode(ConstNodeDecl<P>),
     BaseDimension(BaseDimDecl),
-    Dimension(DimDecl),
+    Dimension(DimDecl<P>),
     Unit(UnitDecl<P>),
     Type(TypeDecl<P>),
     UnionType(UnionTypeDecl<P>),
@@ -377,7 +391,7 @@ pub struct Encoding<P: Phase = Raw> {
 #[derive(Debug, Clone)]
 pub struct PlotField<P: Phase = Raw> {
     /// The field name (e.g., "title", "width", "height").
-    pub name: Ident,
+    pub name: Spanned<PlotPropertyName>,
     /// The field value expression.
     pub value: Expr<P>,
     pub span: Span,
@@ -444,7 +458,9 @@ pub enum ImportKind {
     /// Brace-list selector: `path.{ X, Y as Z, ... }`.
     Selective(Vec<ImportItem>),
     /// Bare or aliased form.
-    Module { alias: Option<Ident> },
+    Module {
+        alias: Option<Spanned<ModuleAliasName>>,
+    },
 }
 
 /// A dot-separated module path: `nasa.rocket.dynamics`.
@@ -611,10 +627,8 @@ pub struct MultiDecl<P: Phase = Raw> {
     /// Slot headers in declaration order. Length = number of declarations
     /// this multi-decl expanded into.
     pub slots: Vec<MultiDeclSlot<P>>,
-    /// Shared axes from the bracket prefix `table[A, B, …, (…)]`. The
-    /// **last** entry is the row axis; earlier entries become slice axes
-    /// when there is more than one.
-    pub shared_axes: Vec<TableIndexSpec>,
+    /// Shared axes from the bracket prefix `table[A, B, …, (…)]`.
+    pub shared_axes: MultiDeclSharedAxes,
     /// Per-slot extra-axis annotation from the slot tuple. Same length
     /// as `slots`.
     pub slot_axes: Vec<MultiSlotAxis>,
@@ -756,9 +770,9 @@ pub struct BaseDimDecl {
 ///   dim bindings). Treated like an opaque base dimension when the
 ///   library is compiled standalone.
 #[derive(Debug, Clone)]
-pub struct DimDecl {
+pub struct DimDecl<P: Phase = Raw> {
     pub name: Spanned<DimName>,
-    pub definition: Option<DimExpr>,
+    pub definition: Option<DimExpr<P>>,
 }
 
 /// Unit declaration: `unit km: Length = 1000 m;`, `const unit km: Length = 1000 m;`,
@@ -767,7 +781,7 @@ pub struct DimDecl {
 pub struct UnitDecl<P: Phase = Raw> {
     pub name: Spanned<UnitName>,
     /// The dimension this unit measures.
-    pub dim_type: DimExpr,
+    pub dim_type: DimExpr<P>,
     /// Scale definition: `(scale_value, base_unit_expr)`.
     /// `None` iff this is a base unit (`base unit m: Length;`).
     pub definition: Option<UnitDef<P>>,
@@ -856,7 +870,7 @@ pub enum IndexDeclKind<P: Phase = Raw> {
     /// Required range index with dimension constraint: `index Foo: Time;`
     ///
     /// Must be bound via parameterized import.
-    RequiredRange { dimension: DimExpr },
+    RequiredRange { dimension: DimExpr<P> },
 }
 
 impl<P: Phase> IndexDeclKind<P> {
@@ -1005,21 +1019,21 @@ pub struct DomainBound<P: Phase = Raw> {
 /// In `Dimensionless[3, 4]`, `3` and `4` are `IndexExpr::NatLiteral`.
 /// In `D[N + 1]`, `N + 1` is an `IndexExpr::NatExpr`.
 #[derive(Debug, Clone)]
-pub enum IndexExpr {
+pub enum IndexExpr<P: Phase = Raw> {
     /// A named index or generic parameter: `Maneuver`, `I`, `N`
-    Name(Ident),
+    Name(Spanned<P::IndexExprName>),
     /// An integer literal in index position: `3` (desugars to `range(3)` internally)
     NatLiteral(u64, Span),
     /// A compound Nat expression in index position: `N + 1`, `M + N`
     NatExpr(NatExpr),
 }
 
-impl IndexExpr {
+impl<P: Phase> IndexExpr<P> {
     /// Get the source span of this index expression.
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
-            Self::Name(ident) => ident.span,
+            Self::Name(name) => name.span,
             Self::NatLiteral(_, span) => *span,
             Self::NatExpr(nat_expr) => nat_expr.span(),
         }
@@ -1054,17 +1068,17 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// built-in name.
     DatetimeApplication { type_args: Vec<TypeExpr<P>> },
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
-    DimExpr(DimExpr),
+    DimExpr(DimExpr<P>),
     /// An indexed type like `Velocity[Maneuver]`, `Dimensionless[3, 4]`, or `D[M, N]`
     Indexed {
         base: Box<TypeExpr<P>>,
-        indexes: Vec<IndexExpr>,
+        indexes: Vec<IndexExpr<P>>,
     },
     /// A user-defined generic type application like `Vec3<Length, ECI>`.
     /// Built-in parameterized types (currently only `Datetime<...>`) have their
     /// own variants instead — see [`Self::DatetimeApplication`].
     TypeApplication {
-        name: Ident,
+        name: Spanned<P::TypeApplicationName>,
         type_args: Vec<TypeExpr<P>>,
     },
 }
@@ -1072,23 +1086,23 @@ pub enum TypeExprKind<P: Phase = Raw> {
 /// A dimension expression: product/quotient of dimension terms.
 /// E.g., `Length^3 / Time^2`
 #[derive(Debug, Clone)]
-pub struct DimExpr {
-    pub terms: Vec<DimExprItem>,
+pub struct DimExpr<P: Phase = Raw> {
+    pub terms: Vec<DimExprItem<P>>,
     pub span: Span,
 }
 
 /// One term in a dimension expression with its combining operator.
 #[derive(Debug, Clone)]
-pub struct DimExprItem {
+pub struct DimExprItem<P: Phase = Raw> {
     /// `Mul` for the first term and for `*`, `Div` for `/`.
     pub op: MulDivOp,
-    pub term: DimTerm,
+    pub term: DimTerm<P>,
 }
 
 /// A single dimension term: `IDENT` or `IDENT ^ INTEGER`
 #[derive(Debug, Clone)]
-pub struct DimTerm {
-    pub name: Ident,
+pub struct DimTerm<P: Phase = Raw> {
+    pub name: Spanned<P::DimTermName>,
     /// `None` means exponent 1.
     pub power: Option<i32>,
     pub span: Span,
@@ -1236,8 +1250,8 @@ pub enum ExprKind<P: Phase = Raw> {
     Scan {
         source: Box<Expr<P>>,
         init: Box<Expr<P>>,
-        acc_name: Ident,
-        val_name: Ident,
+        acc_name: Spanned<LocalName>,
+        val_name: Spanned<LocalName>,
         body: Box<Expr<P>>,
     },
     /// Unfold: `unfold(init, |prev_i, i| body)`
@@ -1247,8 +1261,8 @@ pub enum ExprKind<P: Phase = Raw> {
     /// step indices, and the body can reference `@node_name[prev_i]`.
     Unfold {
         init: Box<Expr<P>>,
-        prev_name: Ident,
-        curr_name: Ident,
+        prev_name: Spanned<LocalName>,
+        curr_name: Spanned<LocalName>,
         body: Box<Expr<P>>,
     },
     /// Match expression: `match @status { Nominal => ..., Warning { message } => ... }`
@@ -1261,8 +1275,8 @@ pub enum ExprKind<P: Phase = Raw> {
     /// Preserved in the AST for formatting and tooling. Desugared to nested
     /// `If` / `BinOp(Eq)` chains before evaluation.
     TupleMatch {
-        scrutinees: Vec<Expr<P>>,
-        arms: Vec<TupleMatchArm<P>>,
+        scrutinees: NonEmpty<Expr<P>>,
+        arms: NonEmpty<TupleMatchArm<P>>,
     },
     /// Standalone index variant reference: `Maneuver.Departure`
     /// Used in comparisons with loop variables: `m == Maneuver.Departure`
@@ -1323,6 +1337,89 @@ pub enum TableIndexSpec {
     Named(Spanned<IndexName>),
     /// A Nat range literal: `3` (desugars to `range(3)`)
     NatRange(u64, Span),
+}
+
+/// Shared axes in a multi-declaration table prefix.
+///
+/// The final axis has a distinct semantic role: it is the row axis. Any axes
+/// before it are slice axes. This is intentionally not modeled as a generic
+/// `NonEmpty<TableIndexSpec>` because the tail element is special.
+#[derive(Debug, Clone)]
+pub struct MultiDeclSharedAxes {
+    slice_axes: Vec<TableIndexSpec>,
+    row_axis: TableIndexSpec,
+}
+
+impl MultiDeclSharedAxes {
+    /// Construct shared axes from zero or more slice axes and the always-present row axis.
+    #[must_use]
+    pub const fn new(slice_axes: Vec<TableIndexSpec>, row_axis: TableIndexSpec) -> Self {
+        Self {
+            slice_axes,
+            row_axis,
+        }
+    }
+
+    /// Convert a parser-order vector into semantic slice/row axes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::syntax::non_empty::EmptyVecError`] when `axes` is empty.
+    pub fn try_from_vec(
+        mut axes: Vec<TableIndexSpec>,
+    ) -> Result<Self, crate::syntax::non_empty::EmptyVecError> {
+        let row_axis = axes.pop().ok_or(crate::syntax::non_empty::EmptyVecError)?;
+        Ok(Self::new(axes, row_axis))
+    }
+
+    /// Slice axes preceding the row axis.
+    #[must_use]
+    pub fn slice_axes(&self) -> &[TableIndexSpec] {
+        &self.slice_axes
+    }
+
+    /// The row axis.
+    #[must_use]
+    pub const fn row_axis(&self) -> &TableIndexSpec {
+        &self.row_axis
+    }
+
+    /// Number of shared axes. Always at least 1.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.slice_axes.len() + 1
+    }
+
+    /// Returns `false`; provided for sequence-like callers.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Iterate over axes in source order: slice axes first, then row axis.
+    pub fn iter(&self) -> impl Iterator<Item = &TableIndexSpec> {
+        self.slice_axes
+            .iter()
+            .chain(std::iter::once(&self.row_axis))
+    }
+}
+
+impl std::ops::Index<usize> for MultiDeclSharedAxes {
+    type Output = TableIndexSpec;
+
+    #[expect(
+        clippy::panic,
+        reason = "Index implementations conventionally panic on out-of-bounds access"
+    )]
+    fn index(&self, index: usize) -> &Self::Output {
+        match index.cmp(&self.slice_axes.len()) {
+            std::cmp::Ordering::Less => &self.slice_axes[index],
+            std::cmp::Ordering::Equal => &self.row_axis,
+            std::cmp::Ordering::Greater => {
+                panic!("multi-decl shared axis index out of bounds")
+            }
+        }
+    }
 }
 
 /// An index key in a map literal entry.
@@ -1424,14 +1521,14 @@ pub struct MapEntryKey {
 /// Multi-axis:  `(Phase.Launch, Maneuver.Departure): 2.46 km/s` (keys has 2+ elements)
 #[derive(Debug, Clone)]
 pub struct MapEntry<P: Phase = Raw> {
-    pub keys: Vec<MapEntryKey>,
+    pub keys: NonEmpty<MapEntryKey>,
     pub value: Expr<P>,
 }
 
 /// A binding in a `for` comprehension: `m: Maneuver` or `i: range(3)`
 #[derive(Debug, Clone)]
 pub struct ForBinding {
-    pub var: Ident,
+    pub var: Spanned<LocalName>,
     pub index: ForBindingIndex,
 }
 
@@ -1543,7 +1640,7 @@ pub struct MatchArm<P: Phase = Raw> {
 #[derive(Debug, Clone)]
 pub struct TupleMatchArm<P: Phase = Raw> {
     /// `None` for the wildcard `_` arm.
-    pub patterns: Option<Vec<Expr<P>>>,
+    pub patterns: Option<NonEmpty<Expr<P>>>,
     pub body: Expr<P>,
     pub span: Span,
 }
@@ -1777,8 +1874,7 @@ fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
             desugar_expr(&mut arm.body);
         }
 
-        // Take ownership of arms (scrutinees are borrowed).
-        let arms = std::mem::take(arms);
+        let arms = arms.clone();
         let span = expr.span;
 
         expr.kind = desugar_tuple_match(scrutinees, arms, span);
@@ -1794,8 +1890,8 @@ fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
 /// else { e3 }
 /// ```
 fn desugar_tuple_match(
-    scrutinees: &[Expr<crate::syntax::phase::Desugared>],
-    arms: Vec<TupleMatchArm<crate::syntax::phase::Desugared>>,
+    scrutinees: &NonEmpty<Expr<crate::syntax::phase::Desugared>>,
+    arms: NonEmpty<TupleMatchArm<crate::syntax::phase::Desugared>>,
     span: Span,
 ) -> ExprKind<crate::syntax::phase::Desugared> {
     let false_expr = Expr::new(ExprKind::Bool(false), span);
@@ -1838,8 +1934,8 @@ fn desugar_tuple_match(
     reason = "invariant: parser guarantees arity >= 1"
 )]
 fn build_conjunction(
-    scrutinees: &[Expr<crate::syntax::phase::Desugared>],
-    patterns: &[Expr<crate::syntax::phase::Desugared>],
+    scrutinees: &NonEmpty<Expr<crate::syntax::phase::Desugared>>,
+    patterns: &NonEmpty<Expr<crate::syntax::phase::Desugared>>,
     span: Span,
 ) -> Expr<crate::syntax::phase::Desugared> {
     scrutinees

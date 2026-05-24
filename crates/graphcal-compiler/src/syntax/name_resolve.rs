@@ -26,12 +26,12 @@ use std::collections::{HashMap, HashSet};
 use crate::desugar::desugared_ast as src_ast;
 use crate::desugar::resolved_ast as dst_ast;
 use crate::registry::builtins::builtin_constants;
-use crate::registry::resolve_types::is_time_scale_name;
+use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::UnresolvedRef;
 use crate::syntax::ast::{ImportItemNamespace, ImportKind, TypeSystemRefKind};
 use crate::syntax::names::{
-    ConstructorName, DimName, IndexName, IndexVariantName, LocalName, ModuleAliasName, ScopedName,
-    StructTypeName,
+    ConstructorName, DimName, GenericParamName, IndexName, IndexVariantName, LocalName,
+    ModuleAliasName, ScopedName, StructTypeName,
 };
 use crate::syntax::phase::never;
 use crate::syntax::span::Spanned;
@@ -54,6 +54,8 @@ struct ResolveContext {
     module_names: HashSet<ModuleAliasName>,
     /// Stack of local scopes (for/scan/unfold/match bindings).
     local_scopes: Vec<HashSet<LocalName>>,
+    /// Stack of generic parameter scopes for type-level name resolution.
+    generic_scopes: Vec<HashMap<GenericParamName, src_ast::GenericConstraint>>,
 }
 
 impl ResolveContext {
@@ -67,6 +69,19 @@ impl ResolveContext {
 
     fn pop_scope(&mut self) {
         self.local_scopes.pop();
+    }
+
+    fn push_generic_scope(&mut self, params: &[src_ast::GenericParam]) {
+        self.generic_scopes.push(
+            params
+                .iter()
+                .map(|p| (p.name.value.clone(), p.constraint))
+                .collect(),
+        );
+    }
+
+    fn pop_generic_scope(&mut self) {
+        self.generic_scopes.pop();
     }
 }
 
@@ -92,6 +107,7 @@ pub fn resolve_standalone_expr(expr: src_ast::Expr) -> dst_ast::Expr {
         index_variants: HashMap::new(),
         module_names: HashSet::new(),
         local_scopes: Vec::new(),
+        generic_scopes: Vec::new(),
     };
     lift_expr(expr, &mut ctx)
 }
@@ -133,6 +149,7 @@ pub fn resolve_name_refs(file: src_ast::File) -> dst_ast::File {
         index_variants,
         module_names,
         local_scopes: Vec::new(),
+        generic_scopes: Vec::new(),
     };
 
     // Second pass: lift every declaration into the resolved AST.
@@ -194,7 +211,7 @@ fn collect_names_from_decls(
             }
             src_ast::DeclKind::Import(import) => {
                 if let ImportKind::Module { alias: Some(alias) } = &import.kind {
-                    module_names.insert(ModuleAliasName::new(&alias.name));
+                    module_names.insert(alias.value.clone());
                 }
                 if let ImportKind::Selective(items) = &import.kind {
                     for item in items {
@@ -218,7 +235,7 @@ fn collect_names_from_decls(
             }
             src_ast::DeclKind::Include(include) => {
                 if let ImportKind::Module { alias: Some(alias) } = &include.kind {
-                    module_names.insert(ModuleAliasName::new(&alias.name));
+                    module_names.insert(alias.value.clone());
                 }
                 if let ImportKind::Selective(items) = &include.kind {
                     for item in items {
@@ -278,56 +295,23 @@ fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast:
             value: lift_expr(c.value, ctx),
         }),
         src_ast::DeclKind::BaseDimension(d) => dst_ast::DeclKind::BaseDimension(d),
-        src_ast::DeclKind::Dimension(d) => dst_ast::DeclKind::Dimension(d),
+        src_ast::DeclKind::Dimension(d) => dst_ast::DeclKind::Dimension(dst_ast::DimDecl {
+            name: d.name,
+            definition: d.definition.map(|def| lift_dim_expr(def, ctx)),
+        }),
         src_ast::DeclKind::Unit(u) => dst_ast::DeclKind::Unit(dst_ast::UnitDecl {
             name: u.name,
-            dim_type: u.dim_type,
+            dim_type: lift_dim_expr(u.dim_type, ctx),
             definition: u.definition.map(|def| dst_ast::UnitDef {
                 scale_expr: lift_expr(def.scale_expr, ctx),
                 unit_expr: def.unit_expr,
                 span: def.span,
             }),
         }),
-        src_ast::DeclKind::Type(t) => dst_ast::DeclKind::Type(dst_ast::TypeDecl {
-            name: t.name,
-            generic_params: t
-                .generic_params
-                .into_iter()
-                .map(|g| lift_generic_param(g, ctx))
-                .collect(),
-            fields: t.fields.map(|fs| {
-                fs.into_iter()
-                    .map(|f| dst_ast::FieldDecl {
-                        name: f.name,
-                        type_ann: lift_type_expr(f.type_ann, ctx),
-                    })
-                    .collect()
-            }),
-        }),
-        src_ast::DeclKind::UnionType(u) => dst_ast::DeclKind::UnionType(dst_ast::UnionTypeDecl {
-            name: u.name,
-            generic_params: u
-                .generic_params
-                .into_iter()
-                .map(|g| lift_generic_param(g, ctx))
-                .collect(),
-            members: u
-                .members
-                .into_iter()
-                .map(|m| dst_ast::UnionMember {
-                    name: m.name,
-                    payload: m.payload.map(|fs| {
-                        fs.into_iter()
-                            .map(|f| dst_ast::FieldDecl {
-                                name: f.name,
-                                type_ann: lift_type_expr(f.type_ann, ctx),
-                            })
-                            .collect()
-                    }),
-                    span: m.span,
-                })
-                .collect(),
-        }),
+        src_ast::DeclKind::Type(t) => dst_ast::DeclKind::Type(lift_type_decl(t, ctx)),
+        src_ast::DeclKind::UnionType(u) => {
+            dst_ast::DeclKind::UnionType(lift_union_type_decl(u, ctx))
+        }
         src_ast::DeclKind::Index(i) => dst_ast::DeclKind::Index(dst_ast::IndexDecl {
             name: i.name,
             kind: match i.kind {
@@ -343,7 +327,9 @@ fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast:
                 }
                 src_ast::IndexDeclKind::RequiredNamed => dst_ast::IndexDeclKind::RequiredNamed,
                 src_ast::IndexDeclKind::RequiredRange { dimension } => {
-                    dst_ast::IndexDeclKind::RequiredRange { dimension }
+                    dst_ast::IndexDeclKind::RequiredRange {
+                        dimension: lift_dim_expr(dimension, ctx),
+                    }
                 }
             },
         }),
@@ -489,6 +475,60 @@ fn lift_plot_field(f: src_ast::PlotField, ctx: &mut ResolveContext) -> dst_ast::
     }
 }
 
+fn lift_type_decl(t: src_ast::TypeDecl, ctx: &mut ResolveContext) -> dst_ast::TypeDecl {
+    ctx.push_generic_scope(&t.generic_params);
+    let generic_params = t
+        .generic_params
+        .into_iter()
+        .map(|g| lift_generic_param(g, ctx))
+        .collect();
+    let fields = t
+        .fields
+        .map(|fs| fs.into_iter().map(|f| lift_field_decl(f, ctx)).collect());
+    ctx.pop_generic_scope();
+    dst_ast::TypeDecl {
+        name: t.name,
+        generic_params,
+        fields,
+    }
+}
+
+fn lift_union_type_decl(
+    u: src_ast::UnionTypeDecl,
+    ctx: &mut ResolveContext,
+) -> dst_ast::UnionTypeDecl {
+    ctx.push_generic_scope(&u.generic_params);
+    let generic_params = u
+        .generic_params
+        .into_iter()
+        .map(|g| lift_generic_param(g, ctx))
+        .collect();
+    let members = u
+        .members
+        .into_iter()
+        .map(|m| dst_ast::UnionMember {
+            name: m.name,
+            payload: m
+                .payload
+                .map(|fs| fs.into_iter().map(|f| lift_field_decl(f, ctx)).collect()),
+            span: m.span,
+        })
+        .collect();
+    ctx.pop_generic_scope();
+    dst_ast::UnionTypeDecl {
+        name: u.name,
+        generic_params,
+        members,
+    }
+}
+
+fn lift_field_decl(f: src_ast::FieldDecl, ctx: &mut ResolveContext) -> dst_ast::FieldDecl {
+    dst_ast::FieldDecl {
+        name: f.name,
+        type_ann: lift_type_expr(f.type_ann, ctx),
+    }
+}
+
 fn lift_generic_param(g: src_ast::GenericParam, ctx: &mut ResolveContext) -> dst_ast::GenericParam {
     dst_ast::GenericParam {
         name: g.name,
@@ -527,14 +567,17 @@ fn lift_type_expr_kind(
         src_ast::TypeExprKind::Bool => dst_ast::TypeExprKind::Bool,
         src_ast::TypeExprKind::Int => dst_ast::TypeExprKind::Int,
         src_ast::TypeExprKind::Datetime => dst_ast::TypeExprKind::Datetime,
-        src_ast::TypeExprKind::DimExpr(d) => dst_ast::TypeExprKind::DimExpr(d),
+        src_ast::TypeExprKind::DimExpr(d) => dst_ast::TypeExprKind::DimExpr(lift_dim_expr(d, ctx)),
         src_ast::TypeExprKind::Indexed { base, indexes } => dst_ast::TypeExprKind::Indexed {
             base: Box::new(lift_type_expr(*base, ctx)),
-            indexes,
+            indexes: indexes
+                .into_iter()
+                .map(|idx| lift_index_expr(idx, ctx))
+                .collect(),
         },
         src_ast::TypeExprKind::TypeApplication { name, type_args } => {
             dst_ast::TypeExprKind::TypeApplication {
-                name,
+                name: lift_type_application_name(&name, ctx),
                 type_args: type_args
                     .into_iter()
                     .map(|t| lift_type_expr(t, ctx))
@@ -549,6 +592,43 @@ fn lift_type_expr_kind(
                     .collect(),
             }
         }
+    }
+}
+
+fn lift_type_application_name(
+    name: &Spanned<crate::syntax::names::TypeLevelName>,
+    _ctx: &ResolveContext,
+) -> Spanned<crate::syntax::names::TypeLevelName> {
+    name.clone()
+}
+
+fn lift_dim_expr(d: src_ast::DimExpr, ctx: &ResolveContext) -> dst_ast::DimExpr {
+    dst_ast::DimExpr {
+        terms: d
+            .terms
+            .into_iter()
+            .map(|item| dst_ast::DimExprItem {
+                op: item.op,
+                term: lift_dim_term(&item.term, ctx),
+            })
+            .collect(),
+        span: d.span,
+    }
+}
+
+fn lift_dim_term(term: &src_ast::DimTerm, _ctx: &ResolveContext) -> dst_ast::DimTerm {
+    dst_ast::DimTerm {
+        name: term.name.clone(),
+        power: term.power,
+        span: term.span,
+    }
+}
+
+fn lift_index_expr(idx: src_ast::IndexExpr, _ctx: &ResolveContext) -> dst_ast::IndexExpr {
+    match idx {
+        src_ast::IndexExpr::Name(name) => dst_ast::IndexExpr::Name(name),
+        src_ast::IndexExpr::NatLiteral(n, span) => dst_ast::IndexExpr::NatLiteral(n, span),
+        src_ast::IndexExpr::NatExpr(nat_expr) => dst_ast::IndexExpr::NatExpr(nat_expr),
     }
 }
 
@@ -676,7 +756,7 @@ fn lift_expr_kind(
         S::ForComp { bindings, body } => {
             let mut scope = HashSet::new();
             for binding in &bindings {
-                scope.insert(LocalName::new(&binding.var.name));
+                scope.insert(binding.var.value.clone());
             }
             ctx.push_scope(scope);
             let body = Box::new(lift_expr(*body, ctx));
@@ -692,10 +772,7 @@ fn lift_expr_kind(
         } => {
             let source = Box::new(lift_expr(*source, ctx));
             let init = Box::new(lift_expr(*init, ctx));
-            let scope = HashSet::from([
-                LocalName::new(&acc_name.name),
-                LocalName::new(&val_name.name),
-            ]);
+            let scope = HashSet::from([acc_name.value.clone(), val_name.value.clone()]);
             ctx.push_scope(scope);
             let body = Box::new(lift_expr(*body, ctx));
             ctx.pop_scope();
@@ -714,10 +791,7 @@ fn lift_expr_kind(
             body,
         } => {
             let init = Box::new(lift_expr(*init, ctx));
-            let scope = HashSet::from([
-                LocalName::new(&prev_name.name),
-                LocalName::new(&curr_name.name),
-            ]);
+            let scope = HashSet::from([prev_name.value.clone(), curr_name.value.clone()]);
             ctx.push_scope(scope);
             let body = Box::new(lift_expr(*body, ctx));
             ctx.pop_scope();
@@ -752,17 +826,12 @@ fn lift_expr_kind(
             dst_ast::ExprKind::Match { scrutinee, arms }
         }
         S::TupleMatch { scrutinees, arms } => dst_ast::ExprKind::TupleMatch {
-            scrutinees: scrutinees.into_iter().map(|s| lift_expr(s, ctx)).collect(),
-            arms: arms
-                .into_iter()
-                .map(|arm| dst_ast::TupleMatchArm {
-                    patterns: arm
-                        .patterns
-                        .map(|ps| ps.into_iter().map(|p| lift_expr(p, ctx)).collect()),
-                    body: lift_expr(arm.body, ctx),
-                    span: arm.span,
-                })
-                .collect(),
+            scrutinees: scrutinees.map(|s| lift_expr(s, ctx)),
+            arms: arms.map(|arm| dst_ast::TupleMatchArm {
+                patterns: arm.patterns.map(|ps| ps.map(|p| lift_expr(p, ctx))),
+                body: lift_expr(arm.body, ctx),
+                span: arm.span,
+            }),
         },
         S::InlineDagRef { path, args, output } => dst_ast::ExprKind::InlineDagRef {
             path,
@@ -823,7 +892,7 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> d
         ));
     }
 
-    if is_time_scale_name(name) {
+    if name.parse::<TimeScale>().is_ok() {
         return dst_ast::ExprKind::ConstRef(Spanned::new(
             ScopedName::local(name.as_str()),
             ident.span,

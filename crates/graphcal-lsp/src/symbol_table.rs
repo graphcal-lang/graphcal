@@ -940,18 +940,18 @@ fn register_local_var(
     scopes: &mut ScopeStack,
     kind: ExprScopeKind,
     offset: usize,
-    name: &graphcal_compiler::desugar::resolved_ast::Ident,
+    name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::LocalName>,
     detail: &str,
 ) {
     let key = SymbolKey::ExprScoped {
         kind,
         offset,
-        local: name.name.clone(),
+        local: name.value.as_str().to_owned(),
     };
     table.insert_definition(
         key.clone(),
         DefinitionInfo {
-            name: name.name.clone(),
+            name: name.value.as_str().to_owned(),
             category: SymbolCategory::LocalVar,
             name_span: name.span,
             decl_span: name.span,
@@ -960,7 +960,7 @@ fn register_local_var(
             visibility: None,
         },
     );
-    scopes.insert(name.name.clone(), key);
+    scopes.insert(name.value.as_str().to_owned(), key);
 }
 
 /// Collect references from an expression, tracking local scopes.
@@ -1169,7 +1169,7 @@ fn collect_expr_refs(
                 if let Some(ri) = ref_info {
                     table.references.push(ri);
                 }
-                let var_name = binding.var.name.clone();
+                let var_name = binding.var.value.as_str().to_owned();
                 let key = SymbolKey::ExprScoped {
                     kind: ExprScopeKind::For,
                     offset: binding.var.span.offset(),
@@ -1421,7 +1421,7 @@ fn collect_type_expr_refs(
                     graphcal_compiler::desugar::resolved_ast::IndexExpr::Name(ident) => {
                         table.references.push(ReferenceInfo {
                             span: ident.span,
-                            target: SymbolKey::TopLevel(ident.name.clone()),
+                            target: SymbolKey::TopLevel(ident.as_str().to_string()),
                         });
                     }
                     graphcal_compiler::desugar::resolved_ast::IndexExpr::NatLiteral(_, _)
@@ -1434,7 +1434,7 @@ fn collect_type_expr_refs(
         TypeExprKind::TypeApplication { name, type_args } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
-                target: SymbolKey::TopLevel(name.name.clone()),
+                target: SymbolKey::TopLevel(name.as_str().to_string()),
             });
             for arg in type_args {
                 collect_type_expr_refs(arg, table);
@@ -1476,7 +1476,7 @@ fn collect_dim_expr_refs(dim_expr: &DimExpr, table: &mut SymbolTable) {
     for item in &dim_expr.terms {
         table.references.push(ReferenceInfo {
             span: item.term.span,
-            target: SymbolKey::TopLevel(item.term.name.name.clone()),
+            target: SymbolKey::TopLevel(item.term.name.as_str().to_string()),
         });
     }
 }

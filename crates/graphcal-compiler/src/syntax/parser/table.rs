@@ -1,10 +1,26 @@
 use crate::syntax::ast::{Expr, ExprKind, MapEntry, MapEntryIndex, MapEntryKey, TableIndexSpec};
 use crate::syntax::names::{IndexName, IndexVariantName};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
+
+fn table_entry_keys(
+    mut prefix: Vec<MapEntryKey>,
+    row: MapEntryKey,
+    column: MapEntryKey,
+) -> NonEmpty<MapEntryKey> {
+    if prefix.is_empty() {
+        NonEmpty::new(row, vec![column])
+    } else {
+        let first = prefix.remove(0);
+        prefix.push(row);
+        prefix.push(column);
+        NonEmpty::new(first, prefix)
+    }
+}
 
 impl Parser<'_> {
     // --- Table expression (desugars to MapLiteral) ---
@@ -118,10 +134,10 @@ impl Parser<'_> {
             let value = self.parse_expr()?;
             self.expect(Token::Semicolon)?;
             entries.push(MapEntry {
-                keys: vec![MapEntryKey {
+                keys: NonEmpty::singleton(MapEntryKey {
                     index: Self::named_index_spanned(index),
                     variant: label.into_spanned::<IndexVariantName>(),
-                }],
+                }),
                 value,
             });
         }
@@ -137,10 +153,10 @@ impl Parser<'_> {
             self.expect(Token::Semicolon)?;
             let i = entries.len() as u64;
             entries.push(MapEntry {
-                keys: vec![MapEntryKey {
+                keys: NonEmpty::singleton(MapEntryKey {
                     index: index.clone(),
                     variant: Self::nat_range_variant_spanned(i, value.span),
-                }],
+                }),
                 value,
             });
         }
@@ -263,16 +279,18 @@ impl Parser<'_> {
             }
 
             for (col_idx, value) in row_values.into_iter().enumerate() {
-                let mut keys: Vec<MapEntryKey> = prefix_keys.to_vec();
-                keys.push(MapEntryKey {
+                let row_key = MapEntryKey {
                     index: row_index_template.clone(),
                     variant: row_label.clone(),
-                });
-                keys.push(MapEntryKey {
+                };
+                let column_key = MapEntryKey {
                     index: col_index_template.clone(),
                     variant: col_labels[col_idx].clone(),
+                };
+                entries.push(MapEntry {
+                    keys: table_entry_keys(prefix_keys.to_vec(), row_key, column_key),
+                    value,
                 });
-                entries.push(MapEntry { keys, value });
             }
             row_index_counter += 1;
         }
@@ -378,10 +396,10 @@ impl Parser<'_> {
         self.expect(Token::Colon)?;
         let value = self.parse_expr()?;
         let mut entries = vec![MapEntry {
-            keys: vec![MapEntryKey {
+            keys: NonEmpty::singleton(MapEntryKey {
                 index: Self::named_index_spanned_owned(first_index),
                 variant: first_variant,
-            }],
+            }),
             value,
         }];
         // Parse remaining entries
@@ -396,10 +414,10 @@ impl Parser<'_> {
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             entries.push(MapEntry {
-                keys: vec![MapEntryKey {
+                keys: NonEmpty::singleton(MapEntryKey {
                     index: Self::named_index_spanned_owned(index),
                     variant,
-                }],
+                }),
                 value,
             });
         }
@@ -421,25 +439,31 @@ impl Parser<'_> {
                 break;
             }
             self.expect(Token::LParen)?;
-            let mut keys = Vec::new();
-            loop {
+            let index = self.parse_any_ident()?.into_spanned::<IndexName>();
+            self.expect(Token::Dot)?;
+            let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+            let first_key = MapEntryKey {
+                index: Self::named_index_spanned_owned(index),
+                variant,
+            };
+            let mut rest_keys = Vec::new();
+            while self.lexer.peek() == Some(&Token::Comma) {
+                self.lexer.next_token();
                 let index = self.parse_any_ident()?.into_spanned::<IndexName>();
                 self.expect(Token::Dot)?;
                 let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
-                keys.push(MapEntryKey {
+                rest_keys.push(MapEntryKey {
                     index: Self::named_index_spanned_owned(index),
                     variant,
                 });
-                if self.lexer.peek() == Some(&Token::Comma) {
-                    self.lexer.next_token();
-                } else {
-                    break;
-                }
             }
             self.expect(Token::RParen)?;
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
-            entries.push(MapEntry { keys, value });
+            entries.push(MapEntry {
+                keys: NonEmpty::new(first_key, rest_keys),
+                value,
+            });
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
             } else {

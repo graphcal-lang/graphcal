@@ -904,12 +904,12 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(String, Span)>) {
             collect_type_refs(base, refs);
             for idx in indexes {
                 if let IndexExpr::Name(ident) = idx {
-                    refs.push((ident.name.clone(), ident.span));
+                    refs.push((ident.as_str().to_string(), ident.span));
                 }
             }
         }
         TypeExprKind::TypeApplication { name, type_args } => {
-            refs.push((name.name.clone(), name.span));
+            refs.push((name.as_str().to_string(), name.span));
             for arg in type_args {
                 collect_type_refs(arg, refs);
             }
@@ -932,7 +932,7 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(String, Span)>) {
 /// Collect every term name in a [`DimExpr`] as a `(name, span)` reference.
 fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(String, Span)>) {
     for item in &dim_expr.terms {
-        refs.push((item.term.name.name.clone(), item.term.span));
+        refs.push((item.term.name.as_str().to_string(), item.term.span));
     }
 }
 

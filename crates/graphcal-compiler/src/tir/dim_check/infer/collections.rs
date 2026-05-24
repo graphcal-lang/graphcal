@@ -109,7 +109,7 @@ pub(super) fn infer_for_comp(
                 InferredType::Fin(normalize_nat_expr_lenient(arg))
             }
         };
-        inner_locals.insert(binding.var.name.clone(), var_type);
+        inner_locals.insert(binding.var.value.as_str().to_owned(), var_type);
     }
     let body_type = infer_type(
         body,
@@ -715,8 +715,8 @@ fn fin_plus_literal(
 pub(super) fn infer_scan(
     source: &Expr,
     init: &Expr,
-    acc_name: &crate::desugar::resolved_ast::Ident,
-    val_name: &crate::desugar::resolved_ast::Ident,
+    acc_name: &crate::syntax::span::Spanned<crate::syntax::names::LocalName>,
+    val_name: &crate::syntax::span::Spanned<crate::syntax::names::LocalName>,
     body: &Expr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
@@ -763,8 +763,8 @@ pub(super) fn infer_scan(
     }
     // Bind acc and val as locals with element type
     let mut scan_locals = local_types.clone();
-    scan_locals.insert(acc_name.name.clone(), *element.clone());
-    scan_locals.insert(val_name.name.clone(), *element.clone());
+    scan_locals.insert(acc_name.value.as_str().to_owned(), *element.clone());
+    scan_locals.insert(val_name.value.as_str().to_owned(), *element.clone());
     let body_type = infer_type(
         body,
         declared_types,
@@ -794,8 +794,8 @@ pub(super) fn infer_scan(
 /// owning declaration's type, rather than scanning all declared types.
 pub(super) fn infer_unfold(
     init: &Expr,
-    prev_name: &crate::desugar::resolved_ast::Ident,
-    curr_name: &crate::desugar::resolved_ast::Ident,
+    prev_name: &crate::syntax::span::Spanned<crate::syntax::names::LocalName>,
+    curr_name: &crate::syntax::span::Spanned<crate::syntax::names::LocalName>,
     body: &Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -842,22 +842,22 @@ pub(super) fn infer_unfold(
         };
         if let Some(dimension) = dimension {
             scan_locals.insert(
-                prev_name.name.clone(),
+                prev_name.value.as_str().to_owned(),
                 InferredType::Scalar(dimension.clone()),
             );
             scan_locals.insert(
-                curr_name.name.clone(),
+                curr_name.value.as_str().to_owned(),
                 InferredType::Scalar(dimension.clone()),
             );
         }
     } else {
         // Fallback: dimensionless when owner is unknown or not an indexed range type
         scan_locals.insert(
-            prev_name.name.clone(),
+            prev_name.value.as_str().to_owned(),
             InferredType::Scalar(crate::syntax::dimension::Dimension::dimensionless()),
         );
         scan_locals.insert(
-            curr_name.name.clone(),
+            curr_name.value.as_str().to_owned(),
             InferredType::Scalar(crate::syntax::dimension::Dimension::dimensionless()),
         );
     }

@@ -837,7 +837,7 @@ pub(in crate::eval::project) fn build_dep_import_values_for_kind(
         graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
             let module_name = alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(import_path),
-                |alias_ident| alias_ident.name.clone(),
+                |alias_ident| alias_ident.value.to_string(),
             );
             let import_span = import_path.span();
             imports::import_module_values(
@@ -890,19 +890,19 @@ fn collect_type_expr_names(
     match &type_expr.kind {
         TypeExprKind::DimExpr(dim_expr) => {
             for item in &dim_expr.terms {
-                refs.push(item.term.name.name.clone());
+                refs.push(item.term.name.as_str().to_string());
             }
         }
         TypeExprKind::Indexed { base, indexes } => {
             collect_type_expr_names(base, refs);
             for idx in indexes {
                 if let IndexExpr::Name(ident) = idx {
-                    refs.push(ident.name.clone());
+                    refs.push(ident.as_str().to_string());
                 }
             }
         }
         TypeExprKind::TypeApplication { name, type_args } => {
-            refs.push(name.name.clone());
+            refs.push(name.as_str().to_string());
             for arg in type_args {
                 collect_type_expr_names(arg, refs);
             }
@@ -981,13 +981,13 @@ fn check_generics_leakage(
             DeclKind::ConstNode(c) => collect_type_expr_names(&c.type_ann, &mut refs),
             DeclKind::Unit(u) => {
                 for item in &u.dim_type.terms {
-                    refs.push(item.term.name.name.clone());
+                    refs.push(item.term.name.as_str().to_string());
                 }
             }
             DeclKind::Dimension(d) => {
                 if let Some(def) = &d.definition {
                     for item in &def.terms {
-                        refs.push(item.term.name.name.clone());
+                        refs.push(item.term.name.as_str().to_string());
                     }
                 }
             }

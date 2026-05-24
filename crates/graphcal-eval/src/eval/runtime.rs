@@ -905,7 +905,8 @@ fn evaluate_plot(
     // Evaluate mark properties (e.g., stroke_width, opacity)
     let mut mark_properties = Vec::new();
     for prop in &decl.mark.properties {
-        let Some(mark_prop) = super::types::MarkProperty::from_name(&prop.name.name) else {
+        let Some(mark_prop) = super::types::MarkProperty::from_name(prop.name.value.as_str())
+        else {
             // Unknown mark property — skip (could be reported as a warning in the future)
             continue;
         };
@@ -916,7 +917,8 @@ fn evaluate_plot(
     // Evaluate top-level properties (e.g., title, width, height)
     let mut properties = Vec::new();
     for prop in &decl.properties {
-        let Some(plot_prop) = super::types::PlotProperty::from_name(&prop.name.name) else {
+        let Some(plot_prop) = super::types::PlotProperty::from_name(prop.name.value.as_str())
+        else {
             // Unknown plot property — skip
             continue;
         };
@@ -1015,7 +1017,9 @@ fn eval_composition_fields(
 ) {
     let mut properties = Vec::new();
     for field in fields {
-        let Some(comp_prop) = super::types::CompositionProperty::from_name(&field.name.name) else {
+        let Some(comp_prop) =
+            super::types::CompositionProperty::from_name(field.name.value.as_str())
+        else {
             continue;
         };
         if let graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(s) =

@@ -3,6 +3,7 @@ use crate::syntax::ast::{
     TupleMatchArm,
 };
 use crate::syntax::names::{FieldName, IndexName, IndexVariantName};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
@@ -22,16 +23,18 @@ impl Parser<'_> {
             self.lexer.next_token(); // consume '('
             let first = self.parse_expr()?;
             if self.lexer.peek() == Some(&Token::Comma) {
-                let mut scrutinees = vec![first];
+                let mut rest_scrutinees = Vec::new();
                 while self.lexer.peek() == Some(&Token::Comma) {
                     self.lexer.next_token();
-                    scrutinees.push(self.parse_expr()?);
+                    rest_scrutinees.push(self.parse_expr()?);
                 }
                 self.expect(Token::RParen)?;
                 self.expect(Token::LBrace)?;
-                let arms = self.parse_tuple_match_arms(scrutinees.len(), start_span)?;
+                let arity = rest_scrutinees.len() + 1;
+                let arms = self.parse_tuple_match_arms(arity, start_span)?;
                 let (_, end_span) = self.expect(Token::RBrace)?;
                 let span = start_span.merge(end_span);
+                let scrutinees = NonEmpty::new(first, rest_scrutinees);
                 return Ok(Expr::new(ExprKind::TupleMatch { scrutinees, arms }, span));
             }
             self.expect(Token::RParen)?;
@@ -60,7 +63,7 @@ impl Parser<'_> {
         &mut self,
         arity: usize,
         start_span: Span,
-    ) -> Result<Vec<TupleMatchArm>, ParseError> {
+    ) -> Result<NonEmpty<TupleMatchArm>, ParseError> {
         let mut arms = Vec::new();
 
         loop {
@@ -80,20 +83,18 @@ impl Parser<'_> {
                 });
             } else {
                 let (_, lparen_span) = self.expect(Token::LParen)?;
-                let mut pattern_elems = Vec::new();
-                loop {
-                    pattern_elems.push(self.parse_expr()?);
-                    if self.lexer.peek() == Some(&Token::Comma) {
-                        self.lexer.next_token();
-                    } else {
-                        break;
-                    }
+                let first_pattern = self.parse_expr()?;
+                let mut rest_patterns = Vec::new();
+                while self.lexer.peek() == Some(&Token::Comma) {
+                    self.lexer.next_token();
+                    rest_patterns.push(self.parse_expr()?);
                 }
                 self.expect(Token::RParen)?;
-                if pattern_elems.len() != arity {
+                let pattern_len = rest_patterns.len() + 1;
+                if pattern_len != arity {
                     return Err(self.unexpected_token(
                         &format!("tuple pattern of arity {arity}"),
-                        &format!("tuple pattern of arity {}", pattern_elems.len()),
+                        &format!("tuple pattern of arity {pattern_len}"),
                         start_span,
                     ));
                 }
@@ -101,7 +102,7 @@ impl Parser<'_> {
                 let body = self.parse_expr()?;
                 let span = lparen_span.merge(body.span);
                 arms.push(TupleMatchArm {
-                    patterns: Some(pattern_elems),
+                    patterns: Some(NonEmpty::new(first_pattern, rest_patterns)),
                     body,
                     span,
                 });
@@ -112,11 +113,8 @@ impl Parser<'_> {
             }
         }
 
-        if arms.is_empty() {
-            return Err(self.unexpected_eof("at least one tuple match arm"));
-        }
-
-        Ok(arms)
+        NonEmpty::try_from_vec(arms)
+            .map_err(|_| self.unexpected_eof("at least one tuple match arm"))
     }
 
     /// Parse a list of match arms until `}`.
@@ -241,7 +239,7 @@ impl Parser<'_> {
         let (_, start_span) = self.expect(Token::For)?;
         let mut bindings = Vec::new();
         loop {
-            let var = self.parse_any_ident()?;
+            let var = self.parse_any_ident()?.into_spanned();
             self.expect(Token::Colon)?;
             let index = self.parse_for_binding_index()?;
             bindings.push(ForBinding { var, index });
@@ -375,9 +373,9 @@ impl Parser<'_> {
         self.expect(Token::Comma)?;
         // Parse lambda: |acc, val| body
         self.expect(Token::Pipe)?;
-        let acc_name = self.parse_any_ident()?;
+        let acc_name = self.parse_any_ident()?.into_spanned();
         self.expect(Token::Comma)?;
-        let val_name = self.parse_any_ident()?;
+        let val_name = self.parse_any_ident()?.into_spanned();
         self.expect(Token::Pipe)?;
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;
@@ -404,9 +402,9 @@ impl Parser<'_> {
         let init = self.parse_expr()?;
         self.expect(Token::Comma)?;
         self.expect(Token::Pipe)?;
-        let prev_name = self.parse_any_ident()?;
+        let prev_name = self.parse_any_ident()?.into_spanned();
         self.expect(Token::Comma)?;
-        let curr_name = self.parse_any_ident()?;
+        let curr_name = self.parse_any_ident()?.into_spanned();
         self.expect(Token::Pipe)?;
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;
@@ -432,7 +430,7 @@ mod tests {
         match &te.kind {
             crate::syntax::ast::TypeExprKind::DimExpr(dim) => {
                 assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
-                dim.terms[0].term.name.name.as_str()
+                dim.terms[0].term.name.value.as_str()
             }
             other => panic!("expected DimExpr, got {other:?}"),
         }
@@ -514,7 +512,7 @@ mod tests {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ForComp { bindings, body } => {
                     assert_eq!(bindings.len(), 1);
-                    assert_eq!(bindings[0].var.name, "m");
+                    assert_eq!(bindings[0].var.value.as_str(), "m");
                     let ForBindingIndex::Named(spanned) = &bindings[0].index else {
                         panic!("expected Named")
                     };
@@ -535,12 +533,12 @@ mod tests {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ForComp { bindings, .. } => {
                     assert_eq!(bindings.len(), 2);
-                    assert_eq!(bindings[0].var.name, "r");
+                    assert_eq!(bindings[0].var.value.as_str(), "r");
                     let ForBindingIndex::Named(spanned) = &bindings[0].index else {
                         panic!("expected Named")
                     };
                     assert_eq!(spanned.value.as_str(), "Row");
-                    assert_eq!(bindings[1].var.name, "c");
+                    assert_eq!(bindings[1].var.value.as_str(), "c");
                     let ForBindingIndex::Named(spanned) = &bindings[1].index else {
                         panic!("expected Named")
                     };
@@ -612,8 +610,8 @@ mod tests {
                 ExprKind::Scan {
                     acc_name, val_name, ..
                 } => {
-                    assert_eq!(acc_name.name, "acc");
-                    assert_eq!(val_name.name, "val");
+                    assert_eq!(acc_name.value.as_str(), "acc");
+                    assert_eq!(val_name.value.as_str(), "val");
                 }
                 other => panic!("expected Scan, got {other:?}"),
             },
@@ -632,8 +630,8 @@ mod tests {
                     curr_name,
                     ..
                 } => {
-                    assert_eq!(prev_name.name, "prev_t");
-                    assert_eq!(curr_name.name, "t");
+                    assert_eq!(prev_name.value.as_str(), "prev_t");
+                    assert_eq!(curr_name.value.as_str(), "t");
                 }
                 other => panic!("expected Unfold, got {other:?}"),
             },

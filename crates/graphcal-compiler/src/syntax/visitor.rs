@@ -16,6 +16,7 @@
 //! only the leaf methods they care about.
 
 use crate::syntax::ast::{Expr, ExprKind, IndexArg};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::Phase;
 
 /// Read-only visitor for [`Expr`] trees, generic over [`Phase`].
@@ -238,8 +239,8 @@ pub(crate) trait ExprVisitor<P: Phase> {
     fn visit_tuple_match(
         &mut self,
         _expr: &Expr<P>,
-        scrutinees: &[Expr<P>],
-        arms: &[crate::syntax::ast::TupleMatchArm<P>],
+        scrutinees: &NonEmpty<Expr<P>>,
+        arms: &NonEmpty<crate::syntax::ast::TupleMatchArm<P>>,
     ) -> Result<(), Self::Error> {
         for s in scrutinees {
             self.visit_expr(s)?;

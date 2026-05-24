@@ -26,6 +26,7 @@ use graphcal_compiler::syntax::ast::{
 use graphcal_compiler::syntax::names::{
     ConstructorName, DeclName, FieldName, IndexName, IndexVariantName,
 };
+use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 
 /// A synthetic span used for all AST nodes constructed from JSON input.
@@ -309,13 +310,13 @@ fn convert_indexed(
         .map(|(variant, value)| {
             let value_expr = convert_value(value, &format!("{param_name}[{variant}]"))?;
             Ok(MapEntry {
-                keys: vec![MapEntryKey {
+                keys: NonEmpty::singleton(MapEntryKey {
                     index: Spanned::new(
                         MapEntryIndex::Named(IndexName::new(index_name)),
                         SYNTH_SPAN,
                     ),
                     variant: Spanned::new(IndexVariantName::new(variant), SYNTH_SPAN),
-                }],
+                }),
                 value: value_expr,
             })
         })

@@ -101,6 +101,11 @@ define_name_type! {
 }
 
 define_name_type! {
+    /// Syntax-level type-system reference whose semantic category is resolved later.
+    pub struct TypeLevelName;
+}
+
+define_name_type! {
     /// Name of a struct type (e.g., `"TransferResult"`).
     pub struct StructTypeName;
 }
@@ -205,6 +210,47 @@ define_name_type! {
 define_name_type! {
     /// Name of a module alias introduced by an import/include declaration (e.g., `"constants"`, `"std"`).
     pub struct ModuleAliasName;
+}
+
+define_name_type! {
+    /// Name of an open plot/figure/layer property (e.g., `"title"`, `"width"`, `"stroke_width"`).
+    pub struct PlotPropertyName;
+}
+
+/// Name of a built-in datetime time scale (e.g., `"UTC"`, `"TAI"`, `"TDB"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TimeScaleName(crate::registry::time_scale::TimeScale);
+
+impl TimeScaleName {
+    /// Create a time-scale name from an already-validated time scale.
+    #[must_use]
+    pub const fn new(scale: crate::registry::time_scale::TimeScale) -> Self {
+        Self(scale)
+    }
+
+    /// Get the underlying time scale.
+    #[must_use]
+    pub const fn scale(self) -> crate::registry::time_scale::TimeScale {
+        self.0
+    }
+
+    /// Get the canonical time-scale name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.0.name()
+    }
+}
+
+impl std::fmt::Display for TimeScaleName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for TimeScaleName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 
 // --- Module-scoped names ---

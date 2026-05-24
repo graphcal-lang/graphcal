@@ -379,19 +379,23 @@ fn resolve_dim_expr_impl(
     dimensions: &HashMap<DimName, Dimension>,
     expr: &DimExpr,
 ) -> Result<Option<Dimension>, RationalError> {
-    let mut result = Dimension::dimensionless();
-    for item in &expr.terms {
-        let Some(base) = dimensions.get(item.term.name.name.as_str()) else {
-            return Ok(None);
-        };
-        let exp = item.term.power.unwrap_or(1);
-        let powered = base.pow(Rational::from_int(exp))?;
-        result = match item.op {
-            MulDivOp::Mul => (result * powered)?,
-            MulDivOp::Div => (result / powered)?,
-        };
-    }
-    Ok(Some(result))
+    expr.terms
+        .iter()
+        .try_fold(Some(Dimension::dimensionless()), |acc, item| {
+            let Some(acc) = acc else {
+                return Ok(None);
+            };
+            let Some(base) = dimensions.get(item.term.name.value.as_str()) else {
+                return Ok(None);
+            };
+            let exp = item.term.power.unwrap_or(1);
+            let powered = base.pow(Rational::from_int(exp))?;
+            match item.op {
+                MulDivOp::Mul => acc * powered,
+                MulDivOp::Div => acc / powered,
+            }
+            .map(Some)
+        })
 }
 
 /// Shared implementation for resolving a `TypeExpr` to a concrete `Dimension`.
@@ -991,8 +995,9 @@ impl RegistryBuilder {
 mod tests {
     use super::*;
     use crate::registry::prelude::load_prelude;
-    use crate::syntax::ast::{DimExprItem, DimTerm, Ident, UnitExprItem};
+    use crate::syntax::ast::{DimExprItem, DimTerm, UnitExprItem};
     use crate::syntax::dimension::BaseDimId;
+    use crate::syntax::names::TypeLevelName;
     use crate::syntax::span::Span;
     use crate::syntax::span::Spanned;
 
@@ -1013,11 +1018,8 @@ mod tests {
         b.build()
     }
 
-    fn make_ident(name: &str) -> Ident {
-        Ident {
-            name: name.to_string(),
-            span: Span::new(0, 0),
-        }
+    fn make_dim_term_name(name: &str) -> Spanned<TypeLevelName> {
+        Spanned::new(TypeLevelName::new(name), Span::new(0, 0))
     }
 
     /// Create a simple dimension `TypeExpr` from a name string.
@@ -1028,7 +1030,7 @@ mod tests {
                 terms: vec![DimExprItem {
                     op: MulDivOp::Mul,
                     term: DimTerm {
-                        name: make_ident(name),
+                        name: make_dim_term_name(name),
                         power: None,
                         span: Span::new(0, 0),
                     },
@@ -1094,7 +1096,7 @@ mod tests {
                 DimExprItem {
                     op: MulDivOp::Mul,
                     term: DimTerm {
-                        name: make_ident("Length"),
+                        name: make_dim_term_name("Length"),
                         power: None,
                         span: Span::new(0, 0),
                     },
@@ -1102,7 +1104,7 @@ mod tests {
                 DimExprItem {
                     op: MulDivOp::Div,
                     term: DimTerm {
-                        name: make_ident("Time"),
+                        name: make_dim_term_name("Time"),
                         power: None,
                         span: Span::new(0, 0),
                     },

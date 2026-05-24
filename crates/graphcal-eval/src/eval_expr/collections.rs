@@ -4,6 +4,7 @@ use indexmap::IndexMap;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, MapEntry};
 use graphcal_compiler::syntax::names::{IndexVariantName, ScopedName};
+use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::error::GraphcalError;
@@ -143,8 +144,12 @@ pub(super) fn eval_index_access(
 pub(super) fn eval_scan(
     source: &Expr,
     init: &Expr,
-    acc_name: &graphcal_compiler::desugar::resolved_ast::Ident,
-    val_name: &graphcal_compiler::desugar::resolved_ast::Ident,
+    acc_name: &graphcal_compiler::syntax::span::Spanned<
+        graphcal_compiler::syntax::names::LocalName,
+    >,
+    val_name: &graphcal_compiler::syntax::span::Spanned<
+        graphcal_compiler::syntax::names::LocalName,
+    >,
     body: &Expr,
     values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -166,8 +171,8 @@ pub(super) fn eval_scan(
     // Reuse across iterations instead of cloning local_values each time.
     let mut scan_locals = local_values.clone();
     for (variant, val) in &source_entries {
-        scan_locals.insert(acc_name.name.clone(), acc);
-        scan_locals.insert(val_name.name.clone(), val.clone());
+        scan_locals.insert(acc_name.value.as_str().to_owned(), acc);
+        scan_locals.insert(val_name.value.as_str().to_owned(), val.clone());
         let body_val = eval_expr(body, values, &scan_locals, ctx)?;
         result_entries.insert(variant.clone(), body_val.clone());
         acc = body_val;
@@ -193,8 +198,12 @@ pub(super) fn eval_scan(
 pub(super) fn eval_unfold(
     expr: &Expr,
     init: &Expr,
-    prev_name: &graphcal_compiler::desugar::resolved_ast::Ident,
-    curr_name: &graphcal_compiler::desugar::resolved_ast::Ident,
+    prev_name: &graphcal_compiler::syntax::span::Spanned<
+        graphcal_compiler::syntax::names::LocalName,
+    >,
+    curr_name: &graphcal_compiler::syntax::span::Spanned<
+        graphcal_compiler::syntax::names::LocalName,
+    >,
     body: &Expr,
     values: &HashMap<ScopedName, RuntimeValue>,
     ctx: &EvalContext<'_>,
@@ -280,14 +289,14 @@ pub(super) fn eval_unfold(
         let curr_value = range_data.step_value(i);
 
         scan_locals.insert(
-            prev_name.name.clone(),
+            prev_name.value.as_str().to_owned(),
             RuntimeValue::RangeLabel {
                 step_index: i - 1,
                 value: prev_value,
             },
         );
         scan_locals.insert(
-            curr_name.name.clone(),
+            curr_name.value.as_str().to_owned(),
             RuntimeValue::RangeLabel {
                 step_index: i,
                 value: curr_value,
@@ -332,12 +341,7 @@ pub(super) fn eval_map_literal(
             graphcal_compiler::syntax::span::Span::new(0, 0),
         )
     })?;
-    let first_key = first.keys.first().ok_or_else(|| {
-        ctx.internal_error(
-            "map literal entry has no index keys".to_string(),
-            first.value.span,
-        )
-    })?;
+    let first_key = first.keys.first();
     let arity = first.keys.len();
     let idx_name = first_key.index.value.registry_name();
 
@@ -369,16 +373,21 @@ pub(super) fn eval_map_literal(
         // Collect entries whose first key matches this variant, stripping the first key
         let sub_entries: Vec<MapEntry> = entries
             .iter()
-            .filter(|e| {
-                e.keys
-                    .first()
-                    .is_some_and(|k| k.variant.value.as_str() == variant.as_str())
+            .filter(|e| e.keys.first().variant.value.as_str() == variant.as_str())
+            .map(|e| {
+                let keys =
+                    NonEmpty::try_from_vec(e.keys.as_slice()[1..].to_vec()).map_err(|_| {
+                        ctx.internal_error(
+                            "multi-axis map literal entry lost all index keys".to_string(),
+                            e.value.span,
+                        )
+                    })?;
+                Ok(MapEntry {
+                    keys,
+                    value: e.value.clone(),
+                })
             })
-            .map(|e| MapEntry {
-                keys: e.keys[1..].to_vec(),
-                value: e.value.clone(),
-            })
-            .collect();
+            .collect::<Result<_, GraphcalError>>()?;
 
         // A dim-checked program guarantees every variant has at least one
         // entry. If that invariant is violated (e.g. malformed IR), surface it
@@ -489,7 +498,7 @@ pub(super) fn eval_for_comp(
                 })?)
             }
         };
-        inner_locals.insert(binding.var.name.clone(), binding_value);
+        inner_locals.insert(binding.var.value.as_str().to_owned(), binding_value);
         let val = if remaining.is_empty() {
             eval_expr(body, values, &inner_locals, ctx)?
         } else {

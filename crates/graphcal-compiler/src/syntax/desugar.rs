@@ -52,8 +52,25 @@ use crate::syntax::ast::{
     ParamDecl, TableIndexSpec,
 };
 use crate::syntax::names::{IndexName, IndexVariantName};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Raw};
 use crate::syntax::span::Spanned;
+
+fn multi_entry_keys(
+    mut prefix: Vec<MapEntryKey>,
+    row: MapEntryKey,
+    extra: Option<MapEntryKey>,
+) -> NonEmpty<MapEntryKey> {
+    if prefix.is_empty() {
+        let rest = extra.into_iter().collect();
+        NonEmpty::new(row, rest)
+    } else {
+        let first = prefix.remove(0);
+        prefix.push(row);
+        prefix.extend(extra);
+        NonEmpty::new(first, prefix)
+    }
+}
 
 /// Expand every multi-decl in `file` into its N constituent ordinary
 /// declarations and return the result as [`File<Desugared>`].
@@ -76,12 +93,8 @@ pub fn desugar_multi_decls_in_file(file: File<Raw>) -> File<Desugared> {
     reason = "single cohesive routine for multi-decl expansion"
 )]
 pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
-    // Parser guarantees at least one shared axis; the `MultiDeclNoSharedAxis`
-    // error rejects the alternative at parse time.
-    let Some(row_index_spec) = multi.shared_axes.last().cloned() else {
-        return Vec::new();
-    };
-    let slice_axis_specs: &[TableIndexSpec] = &multi.shared_axes[..multi.shared_axes.len() - 1];
+    let row_index_spec = multi.shared_axes.row_axis().clone();
+    let slice_axis_specs: &[TableIndexSpec] = multi.shared_axes.slice_axes();
 
     let row_index_name = match &row_index_spec {
         TableIndexSpec::Named(s) => Spanned::new(MapEntryIndex::Named(s.value.clone()), s.span),
@@ -100,13 +113,12 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
             match col_span {
                 MultiSlotColumnSpan::Single(col_idx) => {
                     for row in &slice.rows {
-                        let mut keys = slice.prefix_keys.clone();
-                        keys.push(MapEntryKey {
+                        let row_key = MapEntryKey {
                             index: row_index_name.clone(),
                             variant: row.label.clone(),
-                        });
+                        };
                         slot_entries.push(MapEntry {
-                            keys,
+                            keys: multi_entry_keys(slice.prefix_keys.clone(), row_key, None),
                             value: row.values[*col_idx].clone(),
                         });
                     }
@@ -134,17 +146,20 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
                     for row in &slice.rows {
                         for (local_col, col_variant) in col_variants.iter().enumerate() {
                             let global_col = start + local_col;
-                            let mut keys = slice.prefix_keys.clone();
-                            keys.push(MapEntryKey {
+                            let row_key = MapEntryKey {
                                 index: row_index_name.clone(),
                                 variant: row.label.clone(),
-                            });
-                            keys.push(MapEntryKey {
+                            };
+                            let extra_key = MapEntryKey {
                                 index: extra_index_name.clone(),
                                 variant: col_variant.clone(),
-                            });
+                            };
                             slot_entries.push(MapEntry {
-                                keys,
+                                keys: multi_entry_keys(
+                                    slice.prefix_keys.clone(),
+                                    row_key,
+                                    Some(extra_key),
+                                ),
                                 value: row.values[global_col].clone(),
                             });
                         }

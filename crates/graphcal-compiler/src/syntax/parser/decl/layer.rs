@@ -1,5 +1,5 @@
 use crate::syntax::ast::{DeclKind, Declaration, LayerDecl, PlotField, Visibility};
-use crate::syntax::names::DeclName;
+use crate::syntax::names::{DeclName, PlotPropertyName};
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
@@ -39,7 +39,7 @@ impl Parser<'_> {
                 let value = self.parse_expr()?;
                 let field_end = value.span;
                 fields.push(PlotField {
-                    name: field_name,
+                    name: field_name.into_spanned::<PlotPropertyName>(),
                     value,
                     span: field_start.merge(field_end),
                 });
