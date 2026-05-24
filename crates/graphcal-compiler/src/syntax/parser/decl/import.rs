@@ -84,17 +84,18 @@ impl Parser<'_> {
     ) -> Result<ModulePath, ParseError> {
         let first = self.parse_any_ident()?;
         let path_start = first.span;
-        let mut segments = vec![first];
+        let mut rest = Vec::new();
 
         while self.lexer.peek() == Some(&Token::Dot)
             && self.lexer.peek_second() == Some(&Token::Ident)
         {
             self.advance()?; // consume `.`
             let seg = self.parse_any_ident()?;
-            segments.push(seg);
+            rest.push(seg);
         }
 
-        let path_end = segments.last().map_or(path_start, |s| s.span);
+        let segments = crate::syntax::non_empty::NonEmpty::new(first, rest);
+        let path_end = segments.last().span;
         Ok(ModulePath {
             segments,
             span: path_start.merge(path_end),

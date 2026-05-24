@@ -15,7 +15,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     let src = make_src(source);
     let ir = crate::ir::lower::lower(&file, &src)?;
     let parent_dag_id =
-        crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+        crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
     let mut tir = crate::tir::typed::type_resolve(ir, parent_dag_id.clone(), &src)?;
     compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id)?;
     check_dimensions_tir(&tir, &src)?;
@@ -28,7 +28,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
 fn compile_inline_dag_bodies_test(
     tir: &mut crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
-    parent_dag_id: &crate::syntax::dag_id::DagId,
+    parent_dag_id: &crate::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
     let dag_names: Vec<String> = tir
         .registry

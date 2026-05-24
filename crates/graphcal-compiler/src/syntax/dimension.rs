@@ -186,7 +186,7 @@ pub enum BaseDimId {
     Prelude(String),
     /// User-defined dimension, identified by the defining DAG's identity + name.
     UserDefined {
-        dag: super::dag_id::DagId,
+        dag: crate::dag_id::DagId,
         name: String,
     },
 }
@@ -659,7 +659,7 @@ mod tests {
     fn dimension_user_defined_base() {
         // User-defined base dimension gets a new ID
         let info_id = BaseDimId::UserDefined {
-            dag: crate::syntax::dag_id::DagId::root("test"),
+            dag: crate::dag_id::DagId::root("test"),
             name: "Information".to_string(),
         };
         let information = Dimension::base(info_id.clone());

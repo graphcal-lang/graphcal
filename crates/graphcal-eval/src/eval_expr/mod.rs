@@ -37,7 +37,7 @@ pub struct EvalContext<'a> {
     ///
     /// Used by [`eval_inline_dag_call`] to translate `@dag(args)::out` /
     /// `@alias.dag(args)::out` paths to canonical
-    /// [`DagId`](graphcal_compiler::syntax::dag_id::DagId)s via
+    /// [`DagId`](graphcal_compiler::dag_id::DagId)s via
     /// [`graphcal_compiler::tir::typed::TIR::lookup_call_target`] and to
     /// reach the file's flat per-DAG body map. Shared across nested inline
     /// calls so a dag body invoking another dag can still resolve it.

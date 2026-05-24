@@ -876,10 +876,9 @@ mod tests {
         let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
         let src = make_src(source);
         let ir = lower(&file, &src).unwrap();
-        let dag_id = graphcal_compiler::syntax::dag_id::DagId::from_relative_path(
-            std::path::Path::new("test.gcl"),
-        )
-        .unwrap();
+        let dag_id =
+            graphcal_compiler::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl"))
+                .unwrap();
         let tir = type_resolve(ir, dag_id, &src).unwrap();
         compile(&tir, &src)
     }

@@ -460,12 +460,14 @@ impl Parser<'_> {
         at_span: crate::syntax::span::Span,
         segments: Vec<Ident>,
     ) -> Result<Expr, ParseError> {
-        debug_assert!(
-            !segments.is_empty(),
-            "inline dag call must have at least one path segment"
-        );
-        let path_start = segments.first().map_or(at_span, |s| at_span.merge(s.span));
-        let path_end = segments.last().map_or(at_span, |s| s.span);
+        #[expect(
+            clippy::expect_used,
+            reason = "callers seed inline DAG paths with at least one segment"
+        )]
+        let segments = crate::syntax::non_empty::NonEmpty::try_from_vec(segments)
+            .expect("inline dag call must have at least one path segment");
+        let path_start = at_span.merge(segments.first().span);
+        let path_end = segments.last().span;
         let path = ModulePath {
             segments,
             span: path_start.merge(path_end),

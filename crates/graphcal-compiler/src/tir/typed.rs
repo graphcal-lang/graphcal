@@ -571,14 +571,14 @@ pub struct ResolvedDomainConstraint {
 // DAG registry
 // ---------------------------------------------------------------------------
 
-/// Map from canonical [`DagId`](crate::syntax::dag_id::DagId) to its
+/// Map from canonical [`DagId`](crate::dag_id::DagId) to its
 /// compiled per-DAG TIR.
 ///
 /// Holds every DAG in scope at this file: the file's own top-level body
 /// (keyed by [`TIR::root_dag_id`]), every inline `dag X { ... }` child
 /// (keyed by `parent_dag_id.child(name)`), and every dep DAG merged in
 /// by `merge_dep_dag_tirs` (keyed by the dep's canonical id).
-pub type DagRegistry = HashMap<crate::syntax::dag_id::DagId, DagTIR>;
+pub type DagRegistry = HashMap<crate::dag_id::DagId, DagTIR>;
 
 // ---------------------------------------------------------------------------
 // TIR struct
@@ -591,7 +591,7 @@ pub type DagRegistry = HashMap<crate::syntax::dag_id::DagId, DagTIR>;
 /// `dags[&root_dag_id]`; inline `dag X { ... }` children live at
 /// `dags[&root_dag_id.child(name)]`; cross-file dep DAGs merged in by
 /// `merge_dep_dag_tirs` live at their own canonical
-/// [`DagId`](crate::syntax::dag_id::DagId).
+/// [`DagId`](crate::dag_id::DagId).
 #[derive(Debug, Clone)]
 pub struct TIR {
     /// The type/unit/dimension/index/struct registry, shared by every DAG
@@ -599,7 +599,7 @@ pub struct TIR {
     pub registry: Registry,
     /// Canonical id of the file itself; the key under which the file's
     /// own top-level body lives in `dags`.
-    pub root_dag_id: crate::syntax::dag_id::DagId,
+    pub root_dag_id: crate::dag_id::DagId,
     /// Every DAG reachable from this file. Always contains an entry for
     /// `root_dag_id`. Inline children and merged dep DAGs are inserted by
     /// the project pipeline.
@@ -609,7 +609,7 @@ pub struct TIR {
     /// to translate user-typed `@alias.dag(args)` references into the
     /// canonical key under which the dep's DAGs were inserted by
     /// `merge_dep_dag_tirs`.
-    pub module_aliases: HashMap<String, crate::syntax::dag_id::DagId>,
+    pub module_aliases: HashMap<String, crate::dag_id::DagId>,
 }
 
 impl TIR {
@@ -693,7 +693,7 @@ impl TIR {
         self.dags.get(&id)
     }
 
-    /// Build the canonical [`DagId`](crate::syntax::dag_id::DagId) that
+    /// Build the canonical [`DagId`](crate::dag_id::DagId) that
     /// `path` refers to under this file's scope (alias-translated for
     /// multi-segment paths, file-root-scoped for single-segment paths).
     ///
@@ -703,17 +703,14 @@ impl TIR {
     pub fn resolve_call_path(
         &self,
         path: &crate::syntax::ast::ModulePath,
-    ) -> Option<crate::syntax::dag_id::DagId> {
-        if path.segments.is_empty() {
-            return None;
-        }
+    ) -> Option<crate::dag_id::DagId> {
         if path.segments.len() == 1 {
             return Some(self.root_dag_id.child(path.segments[0].name.as_str()));
         }
         let alias = path.segments[0].name.as_str();
         let dep_id = self.module_aliases.get(alias)?;
         let mut id = dep_id.clone();
-        for seg in &path.segments[1..] {
+        for seg in &path.segments.as_slice()[1..] {
             id = id.child(seg.name.as_str());
         }
         Some(id)
@@ -727,7 +724,7 @@ impl TIR {
     /// [`Self::lookup_call_target`] on it always returns `None`.
     #[must_use]
     pub fn empty_for_eval_helpers(registry: Registry) -> Self {
-        let root_dag_id = crate::syntax::dag_id::DagId::root("<eval-helper>");
+        let root_dag_id = crate::dag_id::DagId::root("<eval-helper>");
         let mut dags = DagRegistry::new();
         dags.insert(
             root_dag_id.clone(),
@@ -774,7 +771,7 @@ pub struct DagTIR {
     /// Canonical identity of this DAG. Equal to the key under which this
     /// `DagTIR` is stored in [`TIR::dags`]; carried inline so the struct
     /// is self-describing when passed by reference.
-    pub dag_id: crate::syntax::dag_id::DagId,
+    pub dag_id: crate::dag_id::DagId,
     /// Const declarations in source order.
     pub consts: Vec<crate::ir::lower::ConstEntry>,
     /// Param declarations in source order.
@@ -900,7 +897,7 @@ impl DagTIR {
 /// dimension, struct, or index.
 pub fn type_resolve(
     ir: IR,
-    root_dag_id: crate::syntax::dag_id::DagId,
+    root_dag_id: crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
 ) -> Result<TIR, GraphcalError> {
     let root_dag = type_resolve_dag(
@@ -949,7 +946,7 @@ pub fn type_resolve(
 /// dimension, struct, or index.
 pub fn type_resolve_single(
     ir: IR,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagTIR, GraphcalError> {
     Ok(
@@ -979,7 +976,7 @@ fn type_resolve_dag(
     nodes: Vec<crate::ir::lower::NodeEntry>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-    dag_id: &crate::syntax::dag_id::DagId,
+    dag_id: &crate::dag_id::DagId,
 ) -> Result<DagTIRSeed, GraphcalError> {
     let mut resolved_decl_types = HashMap::new();
     let no_generic_params: &[GenericParamName] = &[];
@@ -1031,7 +1028,7 @@ fn type_resolve_dag(
 /// by [`DagTIRSeed::with_body`] which fills in the rest of the per-DAG
 /// fields.
 struct DagTIRSeed {
-    dag_id: crate::syntax::dag_id::DagId,
+    dag_id: crate::dag_id::DagId,
     consts: Vec<crate::ir::lower::ConstEntry>,
     params: Vec<crate::ir::lower::ParamEntry>,
     nodes: Vec<crate::ir::lower::NodeEntry>,
@@ -2471,8 +2468,7 @@ mod tests {
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let ir = crate::ir::lower::lower(&file, &src)?;
         let parent_dag_id =
-            crate::syntax::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl"))
-                .unwrap();
+            crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
         let mut tir = type_resolve(ir, parent_dag_id.clone(), &src)?;
         compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id)?;
         Ok(tir)
@@ -2484,7 +2480,7 @@ mod tests {
     fn compile_inline_dag_bodies_test(
         tir: &mut TIR,
         src: &NamedSource<Arc<String>>,
-        parent_dag_id: &crate::syntax::dag_id::DagId,
+        parent_dag_id: &crate::dag_id::DagId,
     ) -> Result<(), GraphcalError> {
         let dag_names: Vec<String> = tir
             .registry

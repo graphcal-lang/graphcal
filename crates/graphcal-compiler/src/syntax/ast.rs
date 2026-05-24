@@ -472,7 +472,7 @@ pub enum ImportKind {
 /// and no `/` separators in the source language — only `.`.
 #[derive(Debug, Clone)]
 pub struct ModulePath {
-    pub segments: Vec<Ident>,
+    pub segments: NonEmpty<Ident>,
     pub span: Span,
 }
 
@@ -492,9 +492,9 @@ impl ModulePath {
             .join(".")
     }
 
-    /// Returns the leaf segment of the path, or `None` if empty.
+    /// Returns the leaf segment of the path.
     #[must_use]
-    pub fn leaf(&self) -> Option<&Ident> {
+    pub fn leaf(&self) -> &Ident {
         self.segments.last()
     }
 }

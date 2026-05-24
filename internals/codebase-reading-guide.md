@@ -222,7 +222,7 @@ The compiler crate owns the functional core through TIR.
 | `syntax/ast.rs`          | Phase-parameterized AST definitions                   |
 | `syntax/phase.rs`        | `Raw`, `Desugared`, `Resolved`, sugar slots, `never`  |
 | `syntax/names.rs`        | Typed name newtypes and `ScopedName`                  |
-| `syntax/dag_id.rs`       | Filesystem-independent DAG identity                   |
+| `dag_id.rs`              | Filesystem-independent DAG identity                   |
 | `syntax/parser/`         | Parser for declarations, expressions, types, tables   |
 | `syntax/name_resolve.rs` | Bare/dotted identifier rewrite to `File<Resolved>`    |
 | `desugar/`               | Phase walker and AST alias modules                    |
@@ -347,7 +347,7 @@ boundary representation. Core code should pattern-match the variant.
 
 ### 3.2 DAG Identity
 
-`syntax/dag_id.rs` defines `DagId`, the canonical identity for file roots and
+`dag_id.rs` defines `DagId`, the canonical identity for file roots and
 inline DAGs. It is a non-empty sequence of segments, not a path string.
 
 Examples:
@@ -602,7 +602,7 @@ just lint
 | -------------------------------- | ------------------- | ------------------------------------------------------------------- |
 | AST phases                       | `syntax/phase.rs`   | Parser-only constructs are statically excluded downstream           |
 | Typed names                      | `syntax/names.rs`   | Avoid mixing semantic identifier categories                         |
-| `DagId`                          | `syntax/dag_id.rs`  | Keep filesystem paths at loader boundaries                          |
+| `DagId`                          | `dag_id.rs`         | Keep filesystem paths at loader boundaries                          |
 | `ModulePathKey`                  | `loader.rs`         | Keep module paths structured instead of separator-joined            |
 | Trait-based I/O                  | `graphcal-io`       | Deterministic tests and editor integration                          |
 | Visitor pattern                  | `syntax/visitor.rs` | Centralized AST traversal                                           |
@@ -633,7 +633,7 @@ For a first pass, read in pipeline order:
 12. `crates/graphcal-compiler/src/ir/resolve/deps.rs`
 13. `crates/graphcal-compiler/src/ir/lower.rs`
 14. `crates/graphcal-compiler/src/registry/types.rs`
-15. `crates/graphcal-compiler/src/syntax/dag_id.rs`
+15. `crates/graphcal-compiler/src/dag_id.rs`
 16. `crates/graphcal-eval/src/loader.rs`
 17. `crates/graphcal-compiler/src/tir/typed.rs`
 18. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`

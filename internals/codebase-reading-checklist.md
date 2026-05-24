@@ -6,7 +6,7 @@ Files to read in library-consumer order. The goal is that implementation buildin
 
 - [ ] `crates/graphcal-compiler/src/syntax/span.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/token.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/dag_id.rs`
+- [ ] `crates/graphcal-compiler/src/dag_id.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/dimension.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/names.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/attribute.rs`
