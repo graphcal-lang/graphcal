@@ -14,7 +14,7 @@ use petgraph::graph::DiGraph;
 
 use crate::desugar::resolved_ast::{
     AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl, PlotDecl,
-    TypeExpr,
+    ResolvedDimTermName, TypeExpr,
 };
 use crate::ir::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
@@ -1205,9 +1205,18 @@ impl OverrideReconciliationChecker<'_> {
         match &type_expr.kind {
             TypeExprKind::DimExpr(dim_expr) => {
                 for item in &dim_expr.terms {
-                    let name = item.term.name.as_str();
-                    if self.type_bindings.contains_key(name) {
-                        return Err(self.orphan_error("type", name, format!("type `{name}`")));
+                    match &item.term.name.value {
+                        ResolvedDimTermName::StructType(name)
+                        | ResolvedDimTermName::ImportedTypeSystem(name)
+                            if self.type_bindings.contains_key(name.value.as_str()) =>
+                        {
+                            return Err(self.orphan_error(
+                                "type",
+                                name.value.as_str(),
+                                format!("type `{}`", name.value),
+                            ));
+                        }
+                        _ => {}
                     }
                 }
                 Ok(())

@@ -379,19 +379,28 @@ fn resolve_dim_expr_impl(
     dimensions: &HashMap<DimName, Dimension>,
     expr: &DimExpr,
 ) -> Result<Option<Dimension>, RationalError> {
-    let mut result = Dimension::dimensionless();
-    for item in &expr.terms {
-        let Some(base) = dimensions.get(item.term.name.as_str()) else {
-            return Ok(None);
-        };
-        let exp = item.term.power.unwrap_or(1);
-        let powered = base.pow(Rational::from_int(exp))?;
-        result = match item.op {
-            MulDivOp::Mul => (result * powered)?,
-            MulDivOp::Div => (result / powered)?,
-        };
-    }
-    Ok(Some(result))
+    expr.terms
+        .iter()
+        .try_fold(Some(Dimension::dimensionless()), |acc, item| {
+            let Some(acc) = acc else {
+                return Ok(None);
+            };
+            let crate::desugar::resolved_ast::ResolvedDimTermName::Dimension(name) =
+                &item.term.name.value
+            else {
+                return Ok(None);
+            };
+            let Some(base) = dimensions.get(name.value.as_str()) else {
+                return Ok(None);
+            };
+            let exp = item.term.power.unwrap_or(1);
+            let powered = base.pow(Rational::from_int(exp))?;
+            match item.op {
+                MulDivOp::Mul => acc * powered,
+                MulDivOp::Div => acc / powered,
+            }
+            .map(Some)
+        })
 }
 
 /// Shared implementation for resolving a `TypeExpr` to a concrete `Dimension`.
