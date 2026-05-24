@@ -1,4 +1,4 @@
-use crate::syntax::ast::{DeclKind, Declaration, IndexDecl, IndexDeclKind, Visibility};
+use crate::syntax::ast::{BindableVisibility, DeclKind, Declaration, IndexDecl, IndexDeclKind};
 use crate::syntax::names::{IndexName, IndexVariantName};
 use crate::syntax::token::Token;
 
@@ -21,7 +21,7 @@ impl Parser<'_> {
             return Ok(Declaration {
                 attributes: vec![],
                 kind: DeclKind::Index(IndexDecl {
-                    visibility: Visibility::Private,
+                    visibility: BindableVisibility::Private,
                     name,
                     kind: IndexDeclKind::RequiredNamed,
                 }),
@@ -38,7 +38,7 @@ impl Parser<'_> {
             return Ok(Declaration {
                 attributes: vec![],
                 kind: DeclKind::Index(IndexDecl {
-                    visibility: Visibility::Private,
+                    visibility: BindableVisibility::Private,
                     name,
                     kind: IndexDeclKind::RequiredRange { dimension },
                 }),
@@ -74,7 +74,7 @@ impl Parser<'_> {
                 Ok(Declaration {
                     attributes: vec![],
                     kind: DeclKind::Index(IndexDecl {
-                        visibility: Visibility::Private,
+                        visibility: BindableVisibility::Private,
                         name,
                         kind: IndexDeclKind::Named { variants },
                     }),
@@ -98,7 +98,7 @@ impl Parser<'_> {
                 Ok(Declaration {
                     attributes: vec![],
                     kind: DeclKind::Index(IndexDecl {
-                        visibility: Visibility::Private,
+                        visibility: BindableVisibility::Private,
                         name,
                         kind: IndexDeclKind::Range {
                             start: Box::new(start),

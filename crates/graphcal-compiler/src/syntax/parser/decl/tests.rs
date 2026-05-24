@@ -1,6 +1,6 @@
 use crate::syntax::ast::{
-    AttributeArg, DeclKind, ExprKind, GenericConstraint, ImportItemNamespace, ImportKind,
-    IndexDeclKind, MulDivOp, TypeExprKind, Visibility,
+    AttributeArg, BindableVisibility, DeclKind, ExprKind, GenericConstraint, ImportItemNamespace,
+    ImportKind, IndexDeclKind, MulDivOp, TypeExprKind, Visibility,
 };
 use crate::syntax::parser::Parser;
 
@@ -1398,7 +1398,6 @@ fn parse_private_declaration_has_private_visibility() {
     };
     assert_eq!(node.visibility, Visibility::Private);
     assert!(!node.visibility.is_public());
-    assert!(!node.visibility.is_bindable());
 }
 
 #[test]
@@ -1411,7 +1410,6 @@ fn parse_pub_declaration_has_public_visibility() {
     };
     assert_eq!(node.visibility, Visibility::Public);
     assert!(node.visibility.is_public());
-    assert!(!node.visibility.is_bindable());
 }
 
 #[test]
@@ -1450,7 +1448,7 @@ fn parse_pub_bind_declaration_has_public_bind_visibility() {
         .unwrap();
     match &file.declarations[0].kind {
         DeclKind::Index(idx) => {
-            assert_eq!(idx.visibility, Visibility::PublicBind);
+            assert_eq!(idx.visibility, BindableVisibility::PublicBind);
             assert!(idx.visibility.is_public());
             assert!(idx.visibility.is_bindable());
             assert_eq!(idx.name.value.as_str(), "Phase");

@@ -1,4 +1,6 @@
-use crate::syntax::ast::{BaseDimDecl, DeclKind, Declaration, DimDecl, Visibility};
+use crate::syntax::ast::{
+    BaseDimDecl, BindableVisibility, DeclKind, Declaration, DimDecl, Visibility,
+};
 use crate::syntax::names::{DimName, UnitName};
 use crate::syntax::token::Token;
 
@@ -46,7 +48,7 @@ impl Parser<'_> {
         Ok(Declaration {
             attributes: vec![],
             kind: DeclKind::Dimension(DimDecl {
-                visibility: Visibility::Private,
+                visibility: BindableVisibility::Private,
                 name,
                 definition,
             }),

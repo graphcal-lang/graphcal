@@ -1,5 +1,6 @@
 use crate::syntax::ast::{
-    DeclKind, Declaration, FieldDecl, TypeDecl, UnionMember, UnionTypeDecl, Visibility,
+    BindableVisibility, DeclKind, Declaration, FieldDecl, TypeDecl, UnionMember, UnionTypeDecl,
+    Visibility,
 };
 use crate::syntax::names::{ConstructorName, FieldName, StructTypeName};
 use crate::syntax::span::Span;
@@ -35,7 +36,7 @@ impl Parser<'_> {
                 Ok(Declaration {
                     attributes: vec![],
                     kind: DeclKind::Type(TypeDecl {
-                        visibility: Visibility::Private,
+                        visibility: BindableVisibility::Private,
                         name,
                         generic_params,
                         fields: None,

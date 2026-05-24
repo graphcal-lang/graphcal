@@ -178,20 +178,30 @@ impl AttributeArg {
     }
 }
 
-/// Visibility and bindability annotation on a declaration.
-///
-/// Tracks the two-axis split from the visibility / bindability axioms:
-/// - `Private`: no annotation — the declaration is not visible outside the library.
-/// - `Public`: `pub` — visible at the include boundary but not bindable.
-/// - `PublicBind`: `pub(bind)` — visible AND bindable via include param bindings.
+/// Visibility annotation for declaration kinds that can be public but cannot be bindable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Visibility {
+    Private,
+    Public,
+}
+
+impl Visibility {
+    /// Returns `true` for `Public`.
+    #[must_use]
+    pub const fn is_public(self) -> bool {
+        matches!(self, Self::Public)
+    }
+}
+
+/// Visibility and bindability annotation for declaration kinds that support `pub(bind)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindableVisibility {
     Private,
     Public,
     PublicBind,
 }
 
-impl Visibility {
+impl BindableVisibility {
     /// Returns `true` for `Public` and `PublicBind`.
     #[must_use]
     pub const fn is_public(self) -> bool {
@@ -202,6 +212,15 @@ impl Visibility {
     #[must_use]
     pub const fn is_bindable(self) -> bool {
         matches!(self, Self::PublicBind)
+    }
+}
+
+impl From<Visibility> for BindableVisibility {
+    fn from(visibility: Visibility) -> Self {
+        match visibility {
+            Visibility::Private => Self::Private,
+            Visibility::Public => Self::Public,
+        }
     }
 }
 
@@ -766,7 +785,7 @@ pub struct BaseDimDecl {
 ///   library is compiled standalone.
 #[derive(Debug, Clone)]
 pub struct DimDecl<P: Phase = Raw> {
-    pub visibility: Visibility,
+    pub visibility: BindableVisibility,
     pub name: Spanned<DimName>,
     pub definition: Option<DimExpr<P>>,
 }
@@ -801,7 +820,7 @@ pub struct UnitDef<P: Phase = Raw> {
 ///   outside; no body at declaration.
 #[derive(Debug, Clone)]
 pub struct TypeDecl<P: Phase = Raw> {
-    pub visibility: Visibility,
+    pub visibility: BindableVisibility,
     pub name: Spanned<StructTypeName>,
     pub generic_params: Vec<GenericParam<P>>,
     /// Fields of the type:
@@ -884,7 +903,7 @@ impl<P: Phase> IndexDeclKind<P> {
 /// or `index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);`
 #[derive(Debug, Clone)]
 pub struct IndexDecl<P: Phase = Raw> {
-    pub visibility: Visibility,
+    pub visibility: BindableVisibility,
     pub name: Spanned<IndexName>,
     pub kind: IndexDeclKind<P>,
 }

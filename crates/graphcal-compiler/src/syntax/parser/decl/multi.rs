@@ -24,8 +24,8 @@
 //! see N ordinary declarations.
 
 use crate::syntax::ast::{
-    self as ast, DeclKind, Declaration, Expr, MapEntryIndex, MapEntryKey, TableIndexSpec, TypeExpr,
-    Visibility,
+    self as ast, BindableVisibility, DeclKind, Declaration, Expr, MapEntryIndex, MapEntryKey,
+    TableIndexSpec, TypeExpr, Visibility,
 };
 use crate::syntax::names::{DeclName, IndexName, IndexVariantName};
 use crate::syntax::span::Span;
@@ -62,7 +62,7 @@ impl Parser<'_> {
     /// reject `pub(bind)`. Called once per multi-decl slot.
     pub(super) fn check_value_decl_visibility(
         &self,
-        visibility: Visibility,
+        visibility: BindableVisibility,
         visibility_span: Option<Span>,
         kind: SlotKind,
     ) -> Result<(), ParseError> {
@@ -70,17 +70,17 @@ impl Parser<'_> {
             return Ok(());
         };
         match (kind, visibility) {
-            (SlotKind::Param, Visibility::Public) => Err(self.unexpected_token(
+            (SlotKind::Param, BindableVisibility::Public) => Err(self.unexpected_token(
                 "no visibility annotation (params are always visible and bindable)",
                 "`pub`",
                 vis_span,
             )),
-            (SlotKind::Param, Visibility::PublicBind) => Err(self.unexpected_token(
+            (SlotKind::Param, BindableVisibility::PublicBind) => Err(self.unexpected_token(
                 "no visibility annotation (params are always visible and bindable)",
                 "`pub(bind)`",
                 vis_span,
             )),
-            (SlotKind::Node | SlotKind::ConstNode, Visibility::PublicBind) => {
+            (SlotKind::Node | SlotKind::ConstNode, BindableVisibility::PublicBind) => {
                 Err(self.unexpected_token(
                     "`pub` (nodes are computed values — `pub(bind)` is not meaningful; use `param` to declare a bindable input)",
                     "`pub(bind)`",
@@ -97,7 +97,7 @@ impl Parser<'_> {
     /// prefix is parsed before the kind keyword).
     pub(super) fn parse_slot_header_tail(
         &mut self,
-        visibility: Visibility,
+        visibility: BindableVisibility,
         kind: SlotKind,
         kind_span: Span,
     ) -> Result<SlotHeader, ParseError> {
@@ -106,7 +106,7 @@ impl Parser<'_> {
         let type_ann = self.parse_type_expr()?;
         let header_span = kind_span.merge(type_ann.span);
         Ok(SlotHeader {
-            visibility,
+            visibility: super::visibility_without_bindability(visibility),
             kind,
             kind_span,
             name,
@@ -130,7 +130,7 @@ impl Parser<'_> {
     pub(super) fn parse_multi_decl_rest(
         &mut self,
         first_slot: SlotHeader,
-        first_visibility: Visibility,
+        first_visibility: BindableVisibility,
         first_visibility_span: Option<Span>,
     ) -> Result<Declaration, ParseError> {
         // Validate the first slot's visibility against its kind. The
