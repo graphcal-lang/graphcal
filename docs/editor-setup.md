@@ -62,24 +62,68 @@ The Zed extension is not yet published. Install it as a dev extension for now:
 4. Navigate to the cloned `zed-graphcal` directory
 5. The extension will be installed and activated
 
-## Neovim / Helix
+## Helix
 
-For Neovim, Helix, and other editors that support tree-sitter:
+Helix can use the Graphcal tree-sitter grammar and the built-in LSP server.
 
-### Tree-Sitter Grammar
+Add the following to `~/.config/helix/languages.toml`:
 
-The tree-sitter grammar is in [`graphcal-lang/tree-sitter-graphcal`](https://github.com/graphcal-lang/tree-sitter-graphcal). Install it according to your editor's tree-sitter plugin instructions.
+```toml
+[[grammar]]
+name = "graphcal"
+source = { git = "https://github.com/graphcal-lang/tree-sitter-graphcal", rev = "main" }
+
+[language-server.graphcal-lsp]
+command = "graphcal"
+args = ["lsp"]
+
+[[language]]
+name = "graphcal"
+scope = "source.graphcal"
+file-types = ["gcl"]
+roots = ["graphcal.toml"]
+comment-token = "//"
+language-servers = ["graphcal-lsp"]
+indent = { tab-width = 2, unit = "  " }
+auto-format = true
+```
+
+Then fetch and build the grammar:
+
+```sh
+hx --grammar fetch
+hx --grammar build
+```
+
+Restart Helix and verify the setup:
+
+```sh
+hx --health graphcal
+```
+
+`graphcal` must be available on your `PATH`; otherwise, set `command` to the full path of the Graphcal binary.
+
+The configuration above is enough for file detection, grammar installation, formatting, and LSP features. Helix does not install query files from custom grammar repositories automatically; if `hx --health graphcal` reports `Highlight queries: ✘`, syntax highlighting is not enabled yet.
+
+To enable syntax highlighting, optionally install the highlight query from the tree-sitter grammar repository into Helix's runtime directory. Copying the query file is recommended over symlinking into Helix's grammar source cache, because `hx --grammar fetch` may replace that cache and leave the symlink broken.
+
+```sh
+mkdir -p ~/.config/helix/runtime/queries/graphcal
+curl -fsSL \
+  https://raw.githubusercontent.com/graphcal-lang/tree-sitter-graphcal/main/queries/highlights.scm \
+  -o ~/.config/helix/runtime/queries/graphcal/highlights.scm
+```
+
+## Neovim
 
 For Neovim with `nvim-treesitter`:
 
 1. Add `https://github.com/graphcal-lang/tree-sitter-graphcal` as the grammar source in your tree-sitter config
 2. Copy the highlight queries from the repository's `queries/highlights.scm`
 
-### LSP Configuration
+For LSP support, configure Neovim to run `graphcal lsp` over stdin/stdout for `.gcl` files.
 
-For any editor with LSP support, configure it to run `graphcal lsp` over stdin/stdout for `.gcl` files.
-
-Example Neovim configuration (with `nvim-lspconfig`):
+Example configuration with `nvim-lspconfig`:
 
 ```lua
 vim.api.nvim_create_autocmd("FileType", {
@@ -92,3 +136,7 @@ vim.api.nvim_create_autocmd("FileType", {
   end,
 })
 ```
+
+## Other editors
+
+For any editor with tree-sitter and LSP support, install the grammar from [`graphcal-lang/tree-sitter-graphcal`](https://github.com/graphcal-lang/tree-sitter-graphcal) and configure the language server to run `graphcal lsp` for `.gcl` files.
