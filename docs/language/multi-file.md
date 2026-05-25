@@ -185,7 +185,7 @@ in parentheses is **mandatory** (it may be empty), which makes
 
 ```graphcal
 // Bare: leaf becomes the alias; outputs accessed as @compute_thrust.<output>
-include nasa.rocket.compute_thrust(orbit: @o, dry_mass: 800 kg);
+include nasa.rocket.compute_thrust(orbit: @o, dry_mass: 800.0 kg);
 node t: Force = @compute_thrust.thrust;
 
 // Aliased: outputs accessed as @ct.<output>
@@ -219,9 +219,9 @@ dag mission {
     import nasa.rocket.{type Orbit};          // type for the param
     param o: Orbit;
 
-    include nasa.rocket.compute_thrust(orbit: @o, dry_mass: 800 kg).{ thrust };
+    include nasa.rocket.compute_thrust(orbit: @o, dry_mass: 800.0 kg).{ thrust };
 
-    node total: Force = @thrust + 100 N;
+    node total: Force = @thrust + 100.0 N;
 }
 ```
 
@@ -245,7 +245,7 @@ does, because `out` is a node belonging to the DAG instance `dag(args)`.
 dag mission {
     import nasa.rocket.{compute_thrust, type Orbit};
     param o: Orbit;
-    node t: Force = @compute_thrust(orbit: @o, dry_mass: 800 kg).thrust;
+    node t: Force = @compute_thrust(orbit: @o, dry_mass: 800.0 kg).thrust;
 }
 ```
 
@@ -270,7 +270,7 @@ which binds the leaf `rocket` as the module name) you can write:
 import nasa.rocket as rocket;
 
 param o: Orbit;
-node t: Force = @rocket.compute_thrust(orbit: @o, dry_mass: 800 kg).thrust;
+node t: Force = @rocket.compute_thrust(orbit: @o, dry_mass: 800.0 kg).thrust;
 ```
 
 The semantics are identical to the bare form — `compute_thrust(args).thrust`
@@ -293,7 +293,7 @@ extending the path:
 ```graphcal
 // orbit_analysis.gcl  (virtual package: orbit_analysis)
 dag analyze {
-    type IntermediateResult { IntermediateResult(value: Length) };
+    type IntermediateResult { IntermediateResult(value: Length) }
 
     dag deeper {
         import orbit_analysis.analyze.{type IntermediateResult};
@@ -340,14 +340,14 @@ In a virtual package, the file stem is the package name:
 
 ```graphcal
 // dynamics.gcl  (virtual package: dynamics)
-type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) };
-const earth_mu: GravParam = 3.986e5 km^3/s^2;
+type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) }
+const node earth_mu: GravParam = 3.986e5 km^3/s^2;
 
 dag analyze {
     dag energy {
         import dynamics.{type OrbitType, earth_mu};   // file's own name
         param o: OrbitType;
-        node e: SpecificEnergy = -earth_mu / (2.0 * @o.sma);
+        node e: SpecificEnergy = -@earth_mu / (2.0 * @o.sma);
     }
 }
 ```
@@ -357,7 +357,7 @@ In a real package, the same reference uses the full package path:
 ```graphcal
 // On disk: src/nasa/rocket/dynamics.gcl
 // Source address: nasa.rocket.dynamics
-type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) };
+type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) }
 
 dag analyze {
     dag energy {
@@ -381,7 +381,7 @@ either be declared inside it or imported by it explicitly.
 
 ```graphcal
 // dynamics.gcl
-type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) };
+type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) }
 
 dag analyze {
     // ERROR: `OrbitType` is not visible here without an import.
@@ -505,9 +505,9 @@ param dry_mass: Mass = 1200.0 kg;       // OK
 Declarations without an annotation are private:
 
 ```graphcal
-pub param dry_mass: Mass = 1200.0 kg;   // visible to importers
-param internal: Mass = 500.0 kg;        // private — but bindable because
-                                        // `param` is always bindable (A5)
+param dry_mass: Mass = 1200.0 kg;       // visible/bindable because `param` is special
+param internal: Mass = 500.0 kg;        // also bindable; use naming/module boundaries
+                                        // to separate public inputs from internals
 ```
 
 Importing a private non-`param` item produces error `V001`:
@@ -585,7 +585,7 @@ graph — error `V005`:
 ```graphcal
 // lib.gcl
 pub(bind) index Phase = { Design, Test };
-pub param cost: Dimensionless[Phase] = { Phase.Design: 1.0, Phase.Test: 2.0 };
+param cost: Dimensionless[Phase] = { Phase.Design: 1.0, Phase.Test: 2.0 };
 
 // main.gcl
 pub(bind) index NewPhase = { Review, Ship };
@@ -663,9 +663,11 @@ files, via `--set` / `--input` on the command line):
 
 ```graphcal
 // lib/rocket_engine.gcl
-pub param dry_mass: Mass;                 // required — must be provided
-pub param isp: Velocity = 320.0 s;        // optional — has default
+param dry_mass: Mass;                     // required — must be provided
+param fuel_mass: Mass;                    // required — must be provided
+param isp: Time = 320.0 s;                // optional — has default
 
+pub const node g0: Acceleration = 9.80665 m/s^2;
 pub node v_exhaust: Velocity = @isp * @g0;
 pub node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 pub node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
@@ -689,7 +691,7 @@ expression:
 // lib/budget.gcl
 pub(bind) index Phase;
 
-pub param cost: Dimensionless[Phase];
+param cost: Dimensionless[Phase];
 pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
 ```
 
@@ -812,9 +814,9 @@ with specific values:
 
 ```graphcal
 // src/project/lib/rocket.gcl
-pub param dry_mass: Mass;     // required
-pub param fuel_mass: Mass;    // required
-pub param isp: Time = 320 s;  // optional default
+param dry_mass: Mass;          // required
+param fuel_mass: Mass;         // required
+param isp: Time = 320.0 s;     // optional default
 
 pub const node g0: Acceleration = 9.80665 m/s^2;
 pub node v_exhaust: Velocity = @isp * @g0;
@@ -836,7 +838,7 @@ node total_dv: Velocity = @stage_1.delta_v + @stage_2.delta_v;
 // src/project/lib/budget.gcl
 pub(bind) index Phase;
 
-pub param cost: Dimensionless[Phase];
+param cost: Dimensionless[Phase];
 pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
 ```
 

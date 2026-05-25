@@ -142,4 +142,4 @@ A `base dim Information;` declaration creates a new base dimension.
 
 ## Next Step
 
-In [Step 3](step3-structs-and-blocks.md), you'll learn to group related values with struct types and use block expressions.
+In [Step 3](step3-structs-and-blocks.md), you'll learn to group related values with algebraic data types.

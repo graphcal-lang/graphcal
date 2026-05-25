@@ -134,9 +134,7 @@ The projected output after `.` is mandatory. Arguments are evaluated in the
 surrounding scope, so they may reference loop variables from an enclosing
 `for` comprehension or other local binders.
 
-The thing immediately after `@` must be a single in-scope identifier (the DAG
-itself); qualified forms like `@module.dag(args).out` are rejected. To call a
-DAG from another module, bring it into scope first with `import <pkg>.{dag};`.
+The thing immediately after `@` may be a DAG in scope or a module-qualified DAG path such as `@module.dag(args).out`. The projected output after the call is what makes the expression a graph reference.
 
 See [Multi-File: Inline-DAG Call Expression](./multi-file.md#inline-dag-call-expression)
 for the full semantics.

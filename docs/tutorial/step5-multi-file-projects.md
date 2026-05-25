@@ -54,9 +54,9 @@ pub const node g0: Acceleration = 9.80665 m/s^2;
 ### `params.gcl`
 
 ```graphcal
-pub param dry_mass: Mass = 1200.0 kg;
-pub param fuel_mass: Mass = 2800.0 kg;
-pub param isp: Time = 320.0 s;
+param dry_mass: Mass = 1200.0 kg;
+param fuel_mass: Mass = 2800.0 kg;
+param isp: Time = 320.0 s;
 ```
 
 ### `main.gcl`
@@ -154,7 +154,7 @@ self-reference path:
 
 ```graphcal
 // rocket.gcl  (standalone script, no graphcal.toml)
-type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) };
+type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) }
 
 dag analyze {
     import rocket.{type OrbitType};   // file's own name

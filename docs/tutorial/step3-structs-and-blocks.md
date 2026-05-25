@@ -35,17 +35,23 @@ node result: TransferResult = TransferResult(
 );
 ```
 
-When a node or local variable shares a name with a struct field, you can
-use shorthand and omit the value:
+Graph node fields are passed with explicit `@` references:
 
 ```
 node dv1: Velocity = 100.0 m/s;
 node dv2: Velocity = 200.0 m/s;
 node total_dv: Velocity = @dv1 + @dv2;
 
-node result: TransferResult =
-    TransferResult(dv1, dv2, total_dv, tof: 3600.0 s);
+node result: TransferResult = TransferResult(
+    dv1: @dv1,
+    dv2: @dv2,
+    total_dv: @total_dv,
+    tof: 3600.0 s,
+);
 ```
+
+Field shorthand is reserved for local variables (such as `for`/`match`
+bindings) with the same name as the field.
 
 ## Field Access
 
@@ -99,7 +105,7 @@ node tof_hours: Time = @transfer.tof -> hour;
 Every intermediate is a first-class node in the DAG. That makes them
 visible in the LSP outline and in `graphcal eval` output, which is part
 of why Graphcal exposes intermediates rather than hiding them inside a
-block expression.
+local block.
 
 In [Step 4](step4-functions.md), you'll learn how to package a chunk of
 this graph into a reusable, parameterized `dag` block.
@@ -109,5 +115,5 @@ this graph into a reusable, parameterized `dag` block.
 - **`type`** declarations as n-variant tagged unions (single-variant
   for record-shaped data)
 - **Struct construction** with the constructor-call form
-  `TypeName(field: value, ...)` and field shorthand
+  `TypeName(field: value, ...)`
 - **Field access** with `.` on values of single-variant unions
