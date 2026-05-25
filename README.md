@@ -49,7 +49,7 @@ delta_v    = 3778.220768 m/s
 Requires the Rust stable toolchain. Get it from [rustup.rs](https://rustup.rs/) if needed.
 
 ```sh
-cargo install --git https://github.com/graphcal-lang/graphcal --locked
+cargo install graphcal --locked
 ```
 
 ## Quickstart
@@ -80,15 +80,15 @@ Setup details for each editor are in the [Editor Setup guide](docs/editor-setup.
 
 ## Documentation
 
-The [`docs/`](docs/) directory contains the full tutorial, language reference, and CLI/editor guides.
+The full tutorial, language reference, and CLI/editor guides are available in the live documentation: <https://graphcal-lang.github.io/graphcal/>.
 
-- **[Tutorial](docs/tutorial/index.md)** -- learn Graphcal step by step
-- **[Language Reference](docs/language/index.md)** -- every feature, formally
-- **[Built-in Reference](docs/language/built-ins.md)** -- constants, math, type conversions, aggregations, prelude dimensions and units
-- **[Multi-file Projects](docs/language/multi-file.md)** -- `import`, `include`, and the `pub(bind)` visibility model
-- **[CLI Reference](docs/cli-reference.md)** -- `eval`, `format`, `check`, `lsp`
+- **[Tutorial](https://graphcal-lang.github.io/graphcal/tutorial/)** -- learn Graphcal step by step
+- **[Language Reference](https://graphcal-lang.github.io/graphcal/language/)** -- every feature, formally
+- **[Built-in Reference](https://graphcal-lang.github.io/graphcal/language/built-ins/)** -- constants, math, type conversions, aggregations, prelude dimensions and units
+- **[Multi-file Projects](https://graphcal-lang.github.io/graphcal/language/multi-file/)** -- `import`, `include`, and the `pub(bind)` visibility model
+- **[CLI Reference](https://graphcal-lang.github.io/graphcal/cli-reference/)** -- `eval`, `format`, `check`, `lsp`
 
-You can serve the docs locally with `zensical serve` and open `http://localhost:8000`.
+The [`docs/`](docs/) directory contains the Zensical source for the site. You can serve it locally with `zensical serve` and open `http://localhost:8000`.
 
 ## Vision
 

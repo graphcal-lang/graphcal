@@ -53,7 +53,7 @@ delta_v    = 3778.220768 m/s
 
     ---
 
-    Install Graphcal from source using Cargo.
+    Install Graphcal from crates.io using Cargo.
 
     [:octicons-arrow-right-24: Install Graphcal](installation.md)
 
