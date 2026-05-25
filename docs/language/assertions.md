@@ -119,7 +119,7 @@ This means there is no ambiguity in expressions like:
 assert rate_check = @rate ~= 0.20 +/- 10 %;
 ```
 
-This always means "within 10% of 0.20" (i.e., the range [0.18, 0.22]),
+This always means "within 10% of 0.20" (i.e., the range \[0.18, 0.22\]),
 because `%` is parsed as part of the tolerance syntax, not as a unit on the
 number `10`.
 
