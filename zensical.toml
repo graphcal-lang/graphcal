@@ -2,7 +2,7 @@
 site_name = "Graphcal Documentation"
 site_description = "Documentation for Graphcal, a type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations."
 site_author = "Shunichiro Nomura"
-# site_url = "https://graphcal-lang.github.io/graphcal/"
+site_url = "https://graphcal-lang.github.io/graphcal/"
 repo_name = "graphcal-lang/graphcal"
 repo_url = "https://github.com/graphcal-lang/graphcal"
 nav = [

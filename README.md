@@ -66,7 +66,7 @@ graphcal eval analysis.gcl --input params.json --format json
 graphcal eval analysis.gcl --plot browser
 ```
 
-See the [CLI reference](docs/cli-reference.md) for the full surface, including `format`, `check`, and `lsp`.
+See the [CLI reference](https://graphcal-lang.github.io/graphcal/cli-reference/) for the full surface, including `format`, `check`, and `lsp`.
 
 ## Editor Support
 
@@ -76,7 +76,7 @@ Inlay hints show computed values right next to the source -- install one of the 
 - **Zed** -- extension source in [`graphcal-lang/zed-graphcal`](https://github.com/graphcal-lang/zed-graphcal) (not yet published; install as a dev extension)
 - **Neovim / Helix** -- tree-sitter grammar in [`graphcal-lang/tree-sitter-graphcal`](https://github.com/graphcal-lang/tree-sitter-graphcal), plus the `graphcal lsp` server
 
-Setup details for each editor are in the [Editor Setup guide](docs/editor-setup.md).
+Setup details for each editor are in the [Editor Setup guide](https://graphcal-lang.github.io/graphcal/editor-setup/).
 
 ## Documentation
 
@@ -112,7 +112,7 @@ graphcal/
     graphcal-cli/       # CLI binary -- `eval`, `format`, `check`, `lsp`
     graphcal-lsp/       # LSP server (tower-lsp) -- diagnostics, symbols, hover, inlay hints
   grammar.ebnf          # formal grammar (source of truth for tree-sitter / TextMate)
-  docs/                 # user-facing documentation (Zensical site)
+  docs/                 # source for https://graphcal-lang.github.io/graphcal/
   tests/fixtures/       # .gcl test files: valid/, runtime_error/, invalid/
 
 Editor extensions and tree-sitter grammar live in separate repositories under github.com/graphcal-lang/.

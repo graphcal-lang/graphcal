@@ -85,7 +85,7 @@ delta_v    = 3778.220768 m/s
 
     ---
 
-    Set up VS Code, Zed, or Neovim with live inlay hints.
+    Install the VS Code extension, or set up Zed/Neovim with live inlay hints.
 
     [:octicons-arrow-right-24: Editor setup](editor-setup.md)
 
