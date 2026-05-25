@@ -49,7 +49,7 @@ delta_v    = 3778.220768 m/s
 Requires the Rust stable toolchain. Get it from [rustup.rs](https://rustup.rs/) if needed.
 
 ```sh
-cargo install --git https://github.com/graphcal-lang/graphcal --locked
+cargo install graphcal --locked
 ```
 
 ## Quickstart
@@ -66,29 +66,29 @@ graphcal eval analysis.gcl --input params.json --format json
 graphcal eval analysis.gcl --plot browser
 ```
 
-See the [CLI reference](docs/cli-reference.md) for the full surface, including `format`, `check`, and `lsp`.
+See the [CLI reference](https://graphcal-lang.github.io/graphcal/cli-reference/) for the full surface, including `format`, `check`, and `lsp`.
 
 ## Editor Support
 
 Inlay hints show computed values right next to the source -- install one of the supported integrations and your editor turns into a live notebook.
 
-- **VS Code** -- extension in [`graphcal-lang/vscode-graphcal`](https://github.com/graphcal-lang/vscode-graphcal)
-- **Zed** -- extension in [`graphcal-lang/zed-graphcal`](https://github.com/graphcal-lang/zed-graphcal)
+- **VS Code** -- install the published [Graphcal extension](https://marketplace.visualstudio.com/items?itemName=Graphcal.graphcal) from the Visual Studio Marketplace
+- **Zed** -- extension source in [`graphcal-lang/zed-graphcal`](https://github.com/graphcal-lang/zed-graphcal) (not yet published; install as a dev extension)
 - **Neovim / Helix** -- tree-sitter grammar in [`graphcal-lang/tree-sitter-graphcal`](https://github.com/graphcal-lang/tree-sitter-graphcal), plus the `graphcal lsp` server
 
-Setup details for each editor are in the [Editor Setup guide](docs/editor-setup.md).
+Setup details for each editor are in the [Editor Setup guide](https://graphcal-lang.github.io/graphcal/editor-setup/).
 
 ## Documentation
 
-The [`docs/`](docs/) directory contains the full tutorial, language reference, and CLI/editor guides.
+The full tutorial, language reference, and CLI/editor guides are available in the live documentation: <https://graphcal-lang.github.io/graphcal/>.
 
-- **[Tutorial](docs/tutorial/index.md)** -- learn Graphcal step by step
-- **[Language Reference](docs/language/index.md)** -- every feature, formally
-- **[Built-in Reference](docs/language/built-ins.md)** -- constants, math, type conversions, aggregations, prelude dimensions and units
-- **[Multi-file Projects](docs/language/multi-file.md)** -- `import`, `include`, and the `pub(bind)` visibility model
-- **[CLI Reference](docs/cli-reference.md)** -- `eval`, `format`, `check`, `lsp`
+- **[Tutorial](https://graphcal-lang.github.io/graphcal/tutorial/)** -- learn Graphcal step by step
+- **[Language Reference](https://graphcal-lang.github.io/graphcal/language/)** -- every feature, formally
+- **[Built-in Reference](https://graphcal-lang.github.io/graphcal/language/built-ins/)** -- constants, math, type conversions, aggregations, prelude dimensions and units
+- **[Multi-file Projects](https://graphcal-lang.github.io/graphcal/language/multi-file/)** -- `import`, `include`, and the `pub(bind)` visibility model
+- **[CLI Reference](https://graphcal-lang.github.io/graphcal/cli-reference/)** -- `eval`, `format`, `check`, `lsp`
 
-You can serve the docs locally with `zensical serve` and open `http://localhost:8000`.
+The [`docs/`](docs/) directory contains the Zensical source for the site. You can serve it locally with `zensical serve` and open `http://localhost:8000`.
 
 ## Vision
 
@@ -112,7 +112,7 @@ graphcal/
     graphcal-cli/       # CLI binary -- `eval`, `format`, `check`, `lsp`
     graphcal-lsp/       # LSP server (tower-lsp) -- diagnostics, symbols, hover, inlay hints
   grammar.ebnf          # formal grammar (source of truth for tree-sitter / TextMate)
-  docs/                 # user-facing documentation (Zensical site)
+  docs/                 # source for https://graphcal-lang.github.io/graphcal/
   tests/fixtures/       # .gcl test files: valid/, runtime_error/, invalid/
 
 Editor extensions and tree-sitter grammar live in separate repositories under github.com/graphcal-lang/.

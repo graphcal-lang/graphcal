@@ -31,27 +31,13 @@ The VS Code extension provides syntax highlighting (via TextMate grammar) and fu
 
 ### Installation
 
-1. Clone the extension repository:
+Install the published [Graphcal extension](https://marketplace.visualstudio.com/items?itemName=Graphcal.graphcal) from the Visual Studio Marketplace.
 
-    ```bash
-    git clone https://github.com/graphcal-lang/vscode-graphcal.git
-    cd vscode-graphcal
-    ```
+You can also install it from VS Code:
 
-2. Build the extension:
-
-    ```bash
-    npm install
-    npm run build
-    ```
-
-3. Install as a dev extension by symlinking into your VS Code extensions directory:
-
-    ```bash
-    ln -s "$(pwd)" ~/.vscode/extensions/graphcal
-    ```
-
-4. Restart VS Code.
+1. Open the Extensions view.
+2. Search for **Graphcal**.
+3. Install the extension published by **Graphcal**.
 
 ### Configuration
 
@@ -67,6 +53,8 @@ If `graphcal` is not on your `PATH`, set `graphcal.lsp.path` to the full path of
 The Zed extension provides syntax highlighting (via tree-sitter grammar) and LSP support.
 
 ### Setup
+
+The Zed extension is not yet published. Install it as a dev extension for now:
 
 1. Clone the extension repository: `https://github.com/graphcal-lang/zed-graphcal`
 2. Open the command palette in Zed
