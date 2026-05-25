@@ -467,7 +467,7 @@ Required indexes are used exactly like concrete indexes — in type annotations,
 ```
 pub(bind) index Phase;
 
-pub param cost: Dimensionless[Phase];
+param cost: Dimensionless[Phase];
 pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
 ```
 

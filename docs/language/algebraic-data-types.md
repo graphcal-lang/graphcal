@@ -56,13 +56,14 @@ node result: TransferResult = TransferResult(
 );
 ```
 
-Field shorthand: when a node name matches the field name, you can
-omit the value:
+Field shorthand is available only for local variables (for example,
+`for`/`match` bindings) with the same name as the field. Graph nodes
+must still be referenced explicitly with `@`:
 
 ```
 node dv1: Velocity = 100.0 m/s;
 node result: TransferResult =
-    TransferResult(dv1, dv2: 200.0 m/s, total_dv: 300.0 m/s, tof: 3600.0 s);
+    TransferResult(dv1: @dv1, dv2: 200.0 m/s, total_dv: 300.0 m/s, tof: 3600.0 s);
 ```
 
 ### Field Access

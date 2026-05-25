@@ -15,19 +15,17 @@ Graphcal's type system is organized into three levels:
 ```
 Level 1: Primitive  = Scalar(Dim) | Int | Bool | Datetime(TimeScale)
 Level 2: ValueType  = Primitive
+                    | Label(IndexName)
                     | Struct(name, fields: [ValueType])
                     | Union(name, members: [Type])
 Level 3: DeclType   = ValueType
                     | Indexed(ValueType, [Index])   -- written T[I] or T[I, J, ...]
-
-Expression-level:
-  Label(IndexName)  -- not a ValueType or DeclType; exists only in expressions
 ```
 
 - **Primitive** — An indivisible atomic datum.
-- **ValueType** — A single logical value. Primitives plus algebraic compositions (structs, union types). This is the type of one value: you can pass it to a function, return it, store it.
-- **DeclType** — What can appear in type annotations of `param`, `node`, and `const node` declarations, and in function parameter/return types. Either a ValueType or an indexed collection of ValueTypes.
-- **Label(IndexName)** — An expression-level type for named index labels (e.g., `Maneuver.Departure`). Labels are real values that can be compared, matched, and passed to functions, but they cannot appear in declaration type annotations. They exist only within expression contexts such as `for` loop bodies and match bindings.
+- **ValueType** — A single logical value. Primitives plus algebraic compositions (labels, structs, union types). This is the type of one value: you can store it in a node, pass it through a DAG parameter, or use it inside expressions.
+- **DeclType** — What can appear in type annotations of `param`, `node`, `const node`, and DAG parameter/output declarations. Either a ValueType or an indexed collection of ValueTypes.
+- **Label(IndexName)** — The type of named index labels (e.g., `Maneuver.Departure`). Labels are real values that can be stored, compared, matched, and passed through DAG params/nodes.
 
 ### DAG Correspondence
 
@@ -305,8 +303,6 @@ Named index labels are proper runtime values within expressions:
 - Compare: `m == Maneuver.Departure` works.
 - Pattern match: `match m { Maneuver.Departure => ..., ... }` works.
 - Use in constructor payloads: `type Config { Config(phase: Phase, maneuver: Maneuver) }` works.
-
-However, labels cannot be the type of a `param`, `node`, or `const node` declaration — they exist only within expression contexts.
 
 A fieldless tagged union (e.g., `type Foo { A, B }`) is NOT automatically an index. The `index` keyword explicitly marks an enumeration as usable in `T[I]`, preventing accidental use of marker types as collection axes.
 
@@ -603,13 +599,13 @@ expr[Index1.V1, Index2.V2] // multi-dimensional access
 ### Struct Construction
 
 ```
-TypeName { field1: expr1, field2 }
+TypeName(field1: expr1, field2: expr2)
 TypeName<Arg1, Arg2> { field1: expr1, field2 }
 MemberName                                        // unit type (no fields)
 ```
 
 - Each field expression must match the declared type of that field.
-- Field shorthand (`field2` without `: expr`) uses a local variable of the same name.
+- Field shorthand (`field` without `: expr`) is available only for local variables of the same name, such as `for`/`match` bindings. Use explicit `field: @node_name` when passing graph nodes.
 - The result type is the struct/union type.
 
 ### Variant Literal
@@ -757,7 +753,7 @@ param pos: Vec3<Length, Unframed> = ...;
 When using generic types, type parameters are inferred from context:
 
 ```
-param pos: Vec3<Length, Eci> = Vec3<Length, Eci> { x: 1.0 km, y: 0.0 km, z: 0.0 km };
+param pos: Vec3<Length, Eci> = Vec3<Length, Eci>(x: 1.0 km, y: 0.0 km, z: 0.0 km);
 ```
 
 The compiler performs **unification**: it matches the declared type parameters (which may contain generic variables) against the concrete types to determine bindings for each generic variable.
