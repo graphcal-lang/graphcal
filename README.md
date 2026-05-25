@@ -72,8 +72,8 @@ See the [CLI reference](docs/cli-reference.md) for the full surface, including `
 
 Inlay hints show computed values right next to the source -- install one of the supported integrations and your editor turns into a live notebook.
 
-- **VS Code** -- extension in [`graphcal-lang/vscode-graphcal`](https://github.com/graphcal-lang/vscode-graphcal)
-- **Zed** -- extension in [`graphcal-lang/zed-graphcal`](https://github.com/graphcal-lang/zed-graphcal)
+- **VS Code** -- install the published [Graphcal extension](https://marketplace.visualstudio.com/items?itemName=Graphcal.graphcal) from the Visual Studio Marketplace
+- **Zed** -- extension source in [`graphcal-lang/zed-graphcal`](https://github.com/graphcal-lang/zed-graphcal) (not yet published; install as a dev extension)
 - **Neovim / Helix** -- tree-sitter grammar in [`graphcal-lang/tree-sitter-graphcal`](https://github.com/graphcal-lang/tree-sitter-graphcal), plus the `graphcal lsp` server
 
 Setup details for each editor are in the [Editor Setup guide](docs/editor-setup.md).
