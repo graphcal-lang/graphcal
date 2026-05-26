@@ -125,8 +125,8 @@ unit kB: Information = 1000.0 byte;
 
 dim Bandwidth = Information / Time;
 
-param storage: Information = 500.0 kB;
-param rate: Bandwidth = 100.0 bit / s;
+node storage: Information = 500.0 kB;
+node rate: Bandwidth = 100.0 bit / s;
 node transfer_time: Time = @storage / @rate;
 ```
 

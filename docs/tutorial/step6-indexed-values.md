@@ -14,14 +14,14 @@ An `index` declaration defines a finite set of labels:
 index Maneuver = { Departure, Correction, Insertion };
 ```
 
-## Indexed Parameters
+## Indexed Values
 
-Use `[IndexName]` to declare an indexed parameter:
+Use `[IndexName]` to declare an indexed value:
 
 ```
 dim Velocity = Length / Time;
 
-param delta_v: Velocity[Maneuver] = {
+node delta_v: Velocity[Maneuver] = {
     Maneuver.Departure: 2.46 km/s,
     Maneuver.Correction: 0.12 km/s,
     Maneuver.Insertion: 1.83 km/s,
@@ -85,7 +85,7 @@ dim Velocity = Length / Time;
 
 index Maneuver = { Departure, Correction, Insertion };
 
-param delta_v: Velocity[Maneuver] = {
+node delta_v: Velocity[Maneuver] = {
     Maneuver.Departure: 2.46 km/s,
     Maneuver.Correction: 0.12 km/s,
     Maneuver.Insertion: 1.83 km/s,

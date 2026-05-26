@@ -109,10 +109,10 @@ index Region = { A, B };
 
 dag id_len {
     param v: Length;
-    node result: Length = @v;
+    pub node result: Length = @v;
 }
 
-param dist: Length[Region] = { Region.A: 1.0 m, Region.B: 2.0 m };
+node dist: Length[Region] = { Region.A: 1.0 m, Region.B: 2.0 m };
 
 node distances: Length[Region] = for r: Region {
     @id_len(v: @dist[r]).result

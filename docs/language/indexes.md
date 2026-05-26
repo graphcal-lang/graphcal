@@ -26,7 +26,7 @@ Annotate a type with `[IndexName]` to create an indexed value:
 ```
 dim Velocity = Length / Time;
 
-param delta_v: Velocity[Maneuver] = {
+node delta_v: Velocity[Maneuver] = {
     Maneuver.Departure: 2.46 km/s,
     Maneuver.Correction: 0.12 km/s,
     Maneuver.Insertion: 1.83 km/s,
@@ -110,7 +110,7 @@ Values can be indexed by multiple label indexes using tuple keys:
 ```
 index Phase = { Launch, Cruise, Arrival };
 
-param spacecraft_mass: Mass[Phase, Maneuver] = {
+node spacecraft_mass: Mass[Phase, Maneuver] = {
     (Phase.Launch, Maneuver.Departure): 5000.0 kg,
     (Phase.Launch, Maneuver.Correction): 0.0 kg,
     (Phase.Launch, Maneuver.Insertion): 0.0 kg,
@@ -141,7 +141,7 @@ The most common way to create a mixed-index value is with a multi-binding `for` 
 index Maneuver = { Departure, Correction, Insertion };
 index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
 
-param accel: Acceleration[Maneuver] = {
+node accel: Acceleration[Maneuver] = {
     Maneuver.Departure: 10.0 m/s^2,
     Maneuver.Correction: 5.0 m/s^2,
     Maneuver.Insertion: -3.0 m/s^2,
@@ -157,7 +157,7 @@ node v: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
 You can also use a map literal where the keys are label index variants and each value is a `for` comprehension over a range index:
 
 ```
-param v: Velocity[Maneuver, TimeStep] = {
+node v: Velocity[Maneuver, TimeStep] = {
     Maneuver.Departure: for t: TimeStep { @accel[Maneuver.Departure] * t },
     Maneuver.Correction: for t: TimeStep { @accel[Maneuver.Correction] * t },
     Maneuver.Insertion: for t: TimeStep { @accel[Maneuver.Insertion] * t },
@@ -289,7 +289,7 @@ The `table` expression is pure syntax sugar -- it desugars to a map literal at p
 A **multi-declaration** is a single surface form that introduces N parallel `param` / `node` / `const node` declarations sharing the same row axis. It aligns values that belong together on the same row:
 
 ```
-index Component = { ComponentA, ComponentB };
+pub index Component = { ComponentA, ComponentB };
 
 param      power_consumption: Power[Component],
 param      duty_cycle:        Dimensionless[Component],
@@ -308,8 +308,8 @@ const node mass_per_unit:     Mass[Component]
 Mixed 1-D / 2-D slots:
 
 ```
-index Component = { ComponentA, ComponentB };
-index OperationMode = { Safe, Nominal };
+pub index Component = { ComponentA, ComponentB };
+pub index OperationMode = { Safe, Nominal };
 
 param      power_consumption:  Power[Component],
 param      n_installed:        Int[Component],
@@ -329,9 +329,9 @@ In v2, at most one slot may carry an extra axis; multiple adjacent extra-axis sl
 When the shared-axis prefix has more than one axis, the body uses slice sections. Each slice section begins with a `[Axis.Variant, …]` label covering every shared axis **except the last** (which becomes the row axis), followed by a header row and data rows as usual.
 
 ```
-index Phase = { Launch, Cruise };
-index Component = { ComponentA, ComponentB };
-index OperationMode = { Safe, Nominal };
+pub index Phase = { Launch, Cruise };
+pub index Component = { ComponentA, ComponentB };
+pub index OperationMode = { Safe, Nominal };
 
 param      power_consumption: Power[Phase, Component],
 param      power_mode_active: Bool[Phase, Component, OperationMode]
@@ -433,7 +433,7 @@ Nat range indexes compose freely with named indexes:
 ```
 index Phase = { Launch, Cruise };
 
-param data: Dimensionless[3, Phase] = for i: range(3), p: Phase { 1.0 };
+node data: Dimensionless[3, Phase] = for i: range(3), p: Phase { 1.0 };
 ```
 
 ## Required Indexes
