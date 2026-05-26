@@ -95,7 +95,7 @@ pub struct UnionMemberDef {
 pub enum TypeDefKind {
     /// A required type with no body: `type Element;`. Bound from outside
     /// via parameterized include.
-    Unit,
+    Required,
     /// A tagged union: `type Maneuver { Impulsive(delta_v: Velocity), Coast }`
     /// or, as a single-variant special case,
     /// `type Position { Position(x: Length, y: Length) }`.
@@ -135,7 +135,7 @@ pub struct TypeGenericParam {
     pub default: Option<crate::desugar::resolved_ast::TypeExpr>,
 }
 
-/// A type definition: unit type, record type, or union type.
+/// A registered type definition: either a required type stub or a tagged union.
 #[derive(Debug, Clone)]
 pub struct TypeDef {
     pub name: StructTypeName,
@@ -151,7 +151,7 @@ impl TypeDef {
     pub fn union_members(&self) -> Option<&[UnionMemberDef]> {
         match &self.kind {
             TypeDefKind::Union { members } => Some(members),
-            TypeDefKind::Unit => None,
+            TypeDefKind::Required => None,
         }
     }
 
@@ -165,7 +165,7 @@ impl TypeDef {
     /// Returns `true` if this is a required type stub awaiting binding.
     #[must_use]
     pub const fn is_required(&self) -> bool {
-        matches!(self.kind, TypeDefKind::Unit)
+        matches!(self.kind, TypeDefKind::Required)
     }
 
     /// If this is a single-variant union whose sole constructor's name

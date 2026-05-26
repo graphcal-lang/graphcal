@@ -2523,7 +2523,7 @@ fn register_type_decl(t: &crate::desugar::resolved_ast::TypeDecl, registry: &mut
         .collect();
 
     let kind = match &t.body {
-        crate::desugar::resolved_ast::TypeDeclBody::Required => types::TypeDefKind::Unit,
+        crate::desugar::resolved_ast::TypeDeclBody::Required => types::TypeDefKind::Required,
         crate::desugar::resolved_ast::TypeDeclBody::Constructors(type_members) => {
             // Every constructor carries its payload inline; no per-constructor
             // TypeDef is synthesized. The constructor namespace lives on the
