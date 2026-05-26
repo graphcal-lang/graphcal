@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::desugar::resolved_ast::{
-    AssertDecl, BaseDimDecl, BindableVisibility, DagDecl, DeclKind, DimDecl, DimExpr, DomainBound,
-    ExprKind, FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl,
-    PatternBinding, PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl, UnitExpr,
+    AssertDecl, AttributeArg, BaseDimDecl, BindableVisibility, DagDecl, DeclKind, DimDecl, DimExpr,
+    DomainBound, ExprKind, FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl,
+    ParamDecl, PatternBinding, PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl,
+    UnitExpr,
 };
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::span::Span;
@@ -544,11 +545,15 @@ fn collect_attribute_refs(
     for attr in attributes {
         if attr.name.name.parse::<AttributeName>() == Ok(AttributeName::Assumes) {
             for arg in &attr.args {
-                if let Some(ident) = arg.as_single_ident() {
-                    table.references.push(ReferenceInfo {
-                        span: ident.span,
-                        target: SymbolKey::TopLevel(ident.name.clone()),
-                    });
+                match arg {
+                    AttributeArg::Path { segments, .. } if segments.len() == 1 => {
+                        let ident = segments.first();
+                        table.references.push(ReferenceInfo {
+                            span: ident.span,
+                            target: SymbolKey::TopLevel(ident.name.clone()),
+                        });
+                    }
+                    AttributeArg::Path { .. } | AttributeArg::Group { .. } => {}
                 }
             }
         }

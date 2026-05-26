@@ -165,17 +165,6 @@ impl AttributeArg {
             Self::Path { span, .. } | Self::Group { span, .. } => *span,
         }
     }
-
-    /// If this is a single-segment `Path`, return the identifier.
-    ///
-    /// Used for backward-compatible access where attributes expect plain identifiers.
-    #[must_use]
-    pub fn as_single_ident(&self) -> Option<&Ident> {
-        match self {
-            Self::Path { segments, .. } if segments.len() == 1 => Some(segments.first()),
-            _ => None,
-        }
-    }
 }
 
 /// Visibility annotation for declaration kinds that can be public but cannot be bindable.

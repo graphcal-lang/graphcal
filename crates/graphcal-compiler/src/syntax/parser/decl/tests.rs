@@ -1020,10 +1020,10 @@ fn parse_attribute_with_one_arg() {
     let attr = &file.declarations[0].attributes[0];
     assert_eq!(attr.name.name, "assumes");
     assert_eq!(attr.args.len(), 1);
-    assert_eq!(
-        attr.args[0].as_single_ident().unwrap().name,
-        "pressure_safe"
-    );
+    let AttributeArg::Path { segments, .. } = &attr.args[0] else {
+        panic!("expected attribute path arg");
+    };
+    assert_eq!(segments.as_slice()[0].name, "pressure_safe");
 }
 
 #[test]
@@ -1034,11 +1034,20 @@ fn parse_attribute_with_multiple_args() {
     let attr = &file.declarations[0].attributes[0];
     assert_eq!(attr.name.name, "assumes");
     assert_eq!(attr.args.len(), 2);
-    assert_eq!(
-        attr.args[0].as_single_ident().unwrap().name,
-        "pressure_safe"
-    );
-    assert_eq!(attr.args[1].as_single_ident().unwrap().name, "temp_bounded");
+    let AttributeArg::Path {
+        segments: first, ..
+    } = &attr.args[0]
+    else {
+        panic!("expected first attribute path arg");
+    };
+    let AttributeArg::Path {
+        segments: second, ..
+    } = &attr.args[1]
+    else {
+        panic!("expected second attribute path arg");
+    };
+    assert_eq!(first.as_slice()[0].name, "pressure_safe");
+    assert_eq!(second.as_slice()[0].name, "temp_bounded");
 }
 
 #[test]
