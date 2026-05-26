@@ -10,7 +10,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::{
-    AssertBody, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeExpr, TypeExprKind,
+    AssertBody, AttributeArg, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeExpr,
+    TypeExprKind,
 };
 use crate::registry::builtins::{builtin_constants, builtin_functions};
 use crate::registry::error::GraphcalError;
@@ -699,15 +700,20 @@ fn validate_attributes(
                     }
                     // Each argument must reference an existing assert declaration
                     for arg in &attr.args {
-                        let ident =
-                            arg.as_single_ident()
-                                .ok_or_else(|| GraphcalError::EvalError {
+                        let ident = match arg {
+                            AttributeArg::Path { segments, .. } if segments.len() == 1 => {
+                                segments.first()
+                            }
+                            AttributeArg::Path { .. } | AttributeArg::Group { .. } => {
+                                return Err(GraphcalError::EvalError {
                                     message:
                                         "`#[assumes(...)]` arguments must be plain identifiers"
                                             .to_string(),
                                     src: src.clone(),
                                     span: arg.span().into(),
-                                })?;
+                                });
+                            }
+                        };
                         let arg_name = ident.name.as_str();
                         if !assert_names.contains(arg_name) {
                             return Err(GraphcalError::UnknownAssertInAssumes {
