@@ -157,7 +157,11 @@ pub struct ImportItem {
     pub is_pub: bool,
     /// Which namespace this selective import targets.
     pub namespace: ImportItemNamespace,
-    /// The original name from the imported file.
+    /// The name requested from the imported module.
+    ///
+    /// Its span is the identifier's use-site span in this `import`/`include`
+    /// statement, not the definition-site span in the imported module. The AST
+    /// is produced before external module resolution.
     pub name: Ident,
     /// Optional local alias (introduced by `as`).
     pub alias: Option<Ident>,
