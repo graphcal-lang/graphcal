@@ -75,9 +75,6 @@ fn build_dep_decl_index(
             DeclKind::Type(t) => {
                 types.insert(t.name.value.clone());
             }
-            DeclKind::UnionType(t) => {
-                types.insert(t.name.value.clone());
-            }
             DeclKind::BaseDimension(dim) => {
                 dims.insert(dim.name.value.clone());
             }

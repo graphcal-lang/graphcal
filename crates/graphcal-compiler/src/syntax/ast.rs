@@ -230,7 +230,6 @@ pub enum DeclKind<P: Phase = Raw> {
     Dimension(DimDecl<P>),
     Unit(UnitDecl<P>),
     Type(TypeDecl<P>),
-    UnionType(UnionTypeDecl<P>),
     Index(IndexDecl<P>),
     Import(ImportDecl),
     Include(IncludeDecl<P>),
@@ -264,7 +263,6 @@ impl<P: Phase> DeclKind<P> {
             Self::Dimension(d) => Some((d.name.value.as_str(), d.name.span)),
             Self::Unit(u) => Some((u.name.value.as_str(), u.name.span)),
             Self::Type(t) => Some((t.name.value.as_str(), t.name.span)),
-            Self::UnionType(u) => Some((u.name.value.as_str(), u.name.span)),
             Self::Index(i) => Some((i.name.value.as_str(), i.name.span)),
             Self::Dag(d) => Some((d.name.value.as_str(), d.name.span)),
             Self::Assert(a) => Some((a.name.value.as_str(), a.name.span)),
@@ -800,38 +798,32 @@ pub struct UnitDef<P: Phase = Raw> {
     pub span: Span,
 }
 
-/// Type declaration: record types and required types.
+/// Type declaration: required type stubs and tagged-union bodies.
 ///
 /// Forms:
-/// - Record type: `type TransferResult { dv1: Velocity, dv2: Velocity }`
-/// - Empty record type (unit-like marker): `type Eci {}`
 /// - Required type: `type T;` — the library requires a type bound from
 ///   outside; no body at declaration.
+/// - Tagged union: `type Maneuver { Impulsive(delta_v: Velocity), Coast }`
+/// - Record-shaped type: `type Position { Position(x: Length, y: Length) }`,
+///   a single-variant union whose constructor name matches the type name.
 #[derive(Debug, Clone)]
 pub struct TypeDecl<P: Phase = Raw> {
     pub visibility: BindableVisibility,
     pub name: Spanned<StructTypeName>,
     pub generic_params: Vec<GenericParam<P>>,
-    /// Fields of the type:
-    /// - `None` — required type (`type T;`, no body).
-    /// - `Some(vec![])` — empty record (`type T {}`).
-    /// - `Some(non-empty)` — record with fields.
-    pub fields: Option<Vec<FieldDecl<P>>>,
+    pub body: TypeDeclBody<P>,
 }
 
-/// Union type declaration: `type Maneuver { Impulsive(delta_v: Velocity), Coast }`
-///
-/// Each member is a *constructor* of the union, not a standalone type. The
-/// variant's payload (if any) is a record-shaped field list declared inline.
+/// Body of a `type` declaration.
 #[derive(Debug, Clone)]
-pub struct UnionTypeDecl<P: Phase = Raw> {
-    pub visibility: BindableVisibility,
-    pub name: Spanned<StructTypeName>,
-    pub generic_params: Vec<GenericParam<P>>,
-    pub members: Vec<UnionMember<P>>,
+pub enum TypeDeclBody<P: Phase = Raw> {
+    /// Required type with no body: `type T;`.
+    Required,
+    /// Tagged-union constructor list: `type T { Ctor, Other(x: U) }`.
+    Constructors(Vec<UnionMember<P>>),
 }
 
-/// A member of a union type: a constructor with an optional payload.
+/// A member of a type declaration body: a constructor with an optional payload.
 ///
 /// Forms:
 /// - Unit: `Coast` — `payload` is `None`.
@@ -1776,7 +1768,6 @@ pub fn desugar_tuple_matches(file: &mut File<crate::syntax::phase::Desugared>) {
             | DeclKind::Dimension(_)
             | DeclKind::Index(_)
             | DeclKind::Type(_)
-            | DeclKind::UnionType(_)
             | DeclKind::Import(_)
             | DeclKind::Include(_) => {}
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),

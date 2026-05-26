@@ -176,14 +176,13 @@ fn collect_names_from_decls(
         match &decl.kind {
             src_ast::DeclKind::Type(t) => {
                 type_names.insert(t.name.value.clone());
-                if t.fields.is_some() {
-                    constructor_names.insert(ConstructorName::new(t.name.value.as_str()));
-                }
-            }
-            src_ast::DeclKind::UnionType(u) => {
-                type_names.insert(u.name.value.clone());
-                for member in &u.members {
-                    constructor_names.insert(member.name.value.clone());
+                match &t.body {
+                    src_ast::TypeDeclBody::Required => {}
+                    src_ast::TypeDeclBody::Constructors(members) => {
+                        for member in members {
+                            constructor_names.insert(member.name.value.clone());
+                        }
+                    }
                 }
             }
             // Dim names are recognized so that a bare `Velocity` in an
@@ -312,9 +311,6 @@ fn lift_decl_kind(kind: src_ast::DeclKind, ctx: &mut ResolveContext) -> dst_ast:
             }),
         }),
         src_ast::DeclKind::Type(t) => dst_ast::DeclKind::Type(lift_type_decl(t, ctx)),
-        src_ast::DeclKind::UnionType(u) => {
-            dst_ast::DeclKind::UnionType(lift_union_type_decl(u, ctx))
-        }
         src_ast::DeclKind::Index(i) => dst_ast::DeclKind::Index(dst_ast::IndexDecl {
             visibility: i.visibility,
             name: i.name,
@@ -492,45 +488,27 @@ fn lift_type_decl(t: src_ast::TypeDecl, ctx: &mut ResolveContext) -> dst_ast::Ty
         .into_iter()
         .map(|g| lift_generic_param(g, ctx))
         .collect();
-    let fields = t
-        .fields
-        .map(|fs| fs.into_iter().map(|f| lift_field_decl(f, ctx)).collect());
+    let body = match t.body {
+        src_ast::TypeDeclBody::Required => dst_ast::TypeDeclBody::Required,
+        src_ast::TypeDeclBody::Constructors(members) => dst_ast::TypeDeclBody::Constructors(
+            members
+                .into_iter()
+                .map(|m| dst_ast::UnionMember {
+                    name: m.name,
+                    payload: m
+                        .payload
+                        .map(|fs| fs.into_iter().map(|f| lift_field_decl(f, ctx)).collect()),
+                    span: m.span,
+                })
+                .collect(),
+        ),
+    };
     ctx.pop_generic_scope();
     dst_ast::TypeDecl {
         visibility: t.visibility,
         name: t.name,
         generic_params,
-        fields,
-    }
-}
-
-fn lift_union_type_decl(
-    u: src_ast::UnionTypeDecl,
-    ctx: &mut ResolveContext,
-) -> dst_ast::UnionTypeDecl {
-    ctx.push_generic_scope(&u.generic_params);
-    let generic_params = u
-        .generic_params
-        .into_iter()
-        .map(|g| lift_generic_param(g, ctx))
-        .collect();
-    let members = u
-        .members
-        .into_iter()
-        .map(|m| dst_ast::UnionMember {
-            name: m.name,
-            payload: m
-                .payload
-                .map(|fs| fs.into_iter().map(|f| lift_field_decl(f, ctx)).collect()),
-            span: m.span,
-        })
-        .collect();
-    ctx.pop_generic_scope();
-    dst_ast::UnionTypeDecl {
-        visibility: u.visibility,
-        name: u.name,
-        generic_params,
-        members,
+        body,
     }
 }
 

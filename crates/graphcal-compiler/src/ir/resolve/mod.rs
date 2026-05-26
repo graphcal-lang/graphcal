@@ -10,8 +10,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::{
-    AssertBody, AttributeArg, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeExpr,
-    TypeExprKind,
+    AssertBody, AttributeArg, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeDeclBody,
+    TypeExpr, TypeExprKind,
 };
 use crate::registry::builtins::{builtin_constants, builtin_functions};
 use crate::registry::error::GraphcalError;
@@ -124,23 +124,15 @@ fn check_value_namespace_collisions(
                 src,
             )?,
             DeclKind::Type(t) => {
-                if t.fields.is_some() {
-                    register_value_namespace_name(
-                        &mut value_names,
-                        t.name.value.to_string(),
-                        t.name.span,
-                        src,
-                    )?;
-                }
-            }
-            DeclKind::UnionType(u) => {
-                for member in &u.members {
-                    register_value_namespace_name(
-                        &mut value_names,
-                        member.name.value.to_string(),
-                        member.name.span,
-                        src,
-                    )?;
+                if let TypeDeclBody::Constructors(members) = &t.body {
+                    for member in members {
+                        register_value_namespace_name(
+                            &mut value_names,
+                            member.name.value.to_string(),
+                            member.name.span,
+                            src,
+                        )?;
+                    }
                 }
             }
             DeclKind::BaseDimension(_)
@@ -214,7 +206,6 @@ fn collect_local_declarations(
             DeclKind::Dimension(d) => d.visibility.is_public(),
             DeclKind::Unit(d) => d.visibility.is_public(),
             DeclKind::Type(d) => d.visibility.is_public(),
-            DeclKind::UnionType(d) => d.visibility.is_public(),
             DeclKind::Index(d) => d.visibility.is_public(),
             DeclKind::Import(d) => d.visibility.is_public(),
             DeclKind::Include(d) => d.visibility.is_public(),
@@ -250,7 +241,9 @@ fn collect_local_declarations(
                     span: idx.name.span.into(),
                 });
             }
-            DeclKind::Type(t) if t.fields.is_none() && !t.visibility.is_bindable() => {
+            DeclKind::Type(t)
+                if matches!(t.body, TypeDeclBody::Required) && !t.visibility.is_bindable() =>
+            {
                 return Err(GraphcalError::RequiredItemMustBeBindable {
                     kind: "type".to_string(),
                     name: t.name.value.to_string(),
@@ -301,7 +294,6 @@ fn collect_local_declarations(
             | DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
-            | DeclKind::UnionType(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_)
             | DeclKind::Include(_)
@@ -335,7 +327,6 @@ fn collect_local_declarations(
             | DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
-            | DeclKind::UnionType(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_)
             | DeclKind::Include(_)
@@ -358,7 +349,6 @@ fn collect_local_declarations(
             | DeclKind::Dimension(_)
             | DeclKind::Unit(_)
             | DeclKind::Type(_)
-            | DeclKind::UnionType(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_)
             | DeclKind::Include(_)
@@ -684,7 +674,7 @@ fn validate_attributes(
 
                         DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => Some("dim"),
                         DeclKind::Unit(_) => Some("unit"),
-                        DeclKind::Type(_) | DeclKind::UnionType(_) => Some("type"),
+                        DeclKind::Type(_) => Some("type"),
                         DeclKind::Index(_) => Some("cat/range"),
                         DeclKind::Import(_) => Some("import"),
                         DeclKind::Include(_) => Some("include"),
@@ -763,7 +753,7 @@ fn validate_attributes(
 
                         DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dim",
                         DeclKind::Unit(_) => "unit",
-                        DeclKind::Type(_) | DeclKind::UnionType(_) => "type",
+                        DeclKind::Type(_) => "type",
                         DeclKind::Index(_) => "cat/range",
                         DeclKind::Import(_) => "import",
                         DeclKind::Include(_) => "include",
@@ -818,7 +808,6 @@ fn validate_private_in_public(
             DeclKind::Dimension(d) => (d.name.value.to_string(), d.name.span),
             DeclKind::Index(idx) => (idx.name.value.to_string(), idx.name.span),
             DeclKind::Type(t) => (t.name.value.to_string(), t.name.span),
-            DeclKind::UnionType(u) => (u.name.value.to_string(), u.name.span),
             _ => continue,
         };
         local_type_names.insert(name, span);
@@ -861,7 +850,6 @@ fn validate_private_in_public(
             DeclKind::Dimension(d) => d.visibility.is_public(),
             DeclKind::Unit(d) => d.visibility.is_public(),
             DeclKind::Type(d) => d.visibility.is_public(),
-            DeclKind::UnionType(d) => d.visibility.is_public(),
             DeclKind::Index(d) => d.visibility.is_public(),
             DeclKind::Import(d) => d.visibility.is_public(),
             DeclKind::Include(d) => d.visibility.is_public(),
@@ -901,24 +889,18 @@ fn validate_private_in_public(
                 ("unit", u.name.value.to_string())
             }
             DeclKind::Type(t) => {
-                if let Some(fields) = &t.fields {
-                    for field in fields {
-                        collect_type_refs(&field.type_ann, &mut refs);
-                    }
-                }
-                ("type", t.name.value.to_string())
-            }
-            DeclKind::UnionType(u) => {
-                // Each variant's payload field types are part of the
-                // union's signature for A9 dependency tracking.
-                for member in &u.members {
-                    if let Some(fields) = &member.payload {
-                        for field in fields {
-                            collect_type_refs(&field.type_ann, &mut refs);
+                // Each constructor payload field type is part of the
+                // type's signature for A9 dependency tracking.
+                if let TypeDeclBody::Constructors(members) = &t.body {
+                    for member in members {
+                        if let Some(fields) = &member.payload {
+                            for field in fields {
+                                collect_type_refs(&field.type_ann, &mut refs);
+                            }
                         }
                     }
                 }
-                ("type", u.name.value.to_string())
+                ("type", t.name.value.to_string())
             }
             DeclKind::Index(idx) => {
                 if let IndexDeclKind::RequiredRange { dimension } = &idx.kind {
@@ -987,14 +969,13 @@ fn ref_kind_for(file: &File, ref_name: &str) -> &'static str {
             DeclKind::Dimension(d) => d.name.value.as_str() == ref_name,
             DeclKind::Index(idx) => idx.name.value.as_str() == ref_name,
             DeclKind::Type(t) => t.name.value.as_str() == ref_name,
-            DeclKind::UnionType(u) => u.name.value.as_str() == ref_name,
             _ => false,
         })
         .map(|d| &d.kind)
     {
         Some(DeclKind::BaseDimension(_) | DeclKind::Dimension(_)) => "dim",
         Some(DeclKind::Index(_)) => "index",
-        Some(DeclKind::Type(_) | DeclKind::UnionType(_)) => "type",
+        Some(DeclKind::Type(_)) => "type",
         _ => "item",
     }
 }
