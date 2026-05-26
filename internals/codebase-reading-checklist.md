@@ -13,6 +13,10 @@ Files to read in library-consumer order. The goal is that implementation buildin
 - [ ] `crates/graphcal-compiler/src/syntax/comments.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/lexer.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/phase.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/ast/common.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/ast/value.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/ast/decl.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/ast/tuple_desugar.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/visitor.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/mod.rs`
