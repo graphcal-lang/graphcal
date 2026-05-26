@@ -192,5 +192,5 @@ type Vec3<D: Dim, F: Type = Unframed> {
 }
 
 // Equivalent to Vec3<Length, Unframed>
-param pos: Vec3<Length> = Vec3<Length>(x: 1.0 m, y: 2.0 m, z: 3.0 m);
+node pos: Vec3<Length> = Vec3<Length>(x: 1.0 m, y: 2.0 m, z: 3.0 m);
 ```

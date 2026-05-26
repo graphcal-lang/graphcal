@@ -72,7 +72,7 @@ $ graphcal eval rocket.gcl
 dry_mass   = 1200 kg
 fuel_mass  = 2800 kg
 isp        = 320 s
-G0         = 9.80665 m/s^2
+g0         = 9.80665 m/s^2
 v_exhaust  = 3138.128 m/s
 mass_ratio = 3.333333
 delta_v    = 3778.220768 m/s
@@ -84,7 +84,7 @@ $ graphcal eval rocket.gcl --set 'dry_mass=1200.0 kg' --set 'fuel_mass=3500.0 kg
 dry_mass   = 1200 kg
 fuel_mass  = 3500 kg
 isp        = 320 s
-G0         = 9.80665 m/s^2
+g0         = 9.80665 m/s^2
 v_exhaust  = 3138.128 m/s
 mass_ratio = 3.916667
 delta_v    = 4284.300858 m/s
@@ -100,7 +100,7 @@ $ graphcal eval engine.gcl --set 'dry_mass=800.0 kg'
 $ graphcal eval rocket.gcl --format json
 {
   "const": {
-    "G0": {
+    "g0": {
       "display_value": 9.80665,
       "si_value": 9.80665,
       "unit": "m/s^2"
