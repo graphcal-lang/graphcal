@@ -8,7 +8,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::resolved_ast::{
-    DeclKind, Declaration, Expr, ExprKind, ImportItemNamespace, ModulePath,
+    DeclKind, Declaration, Expr, ExprKind, ImportItemNamespace, ModulePath, TypeDeclBody,
 };
 use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, StructTypeName};
 use graphcal_compiler::syntax::phase::Resolved;
@@ -75,7 +75,6 @@ pub(in crate::eval::project) fn decl_identity(
         DeclKind::Unit(u) => (u.name.value.as_str(), ProjectDeclKind::Unit),
         DeclKind::Index(idx) => (idx.name.value.as_str(), ProjectDeclKind::Index),
         DeclKind::Type(t) => (t.name.value.as_str(), ProjectDeclKind::Type),
-        DeclKind::UnionType(u) => (u.name.value.as_str(), ProjectDeclKind::Type),
         DeclKind::Plot(p) => (p.name.value.as_str(), ProjectDeclKind::Plot),
         DeclKind::Figure(f) => (f.name.value.as_str(), ProjectDeclKind::Figure),
         DeclKind::Layer(l) => (l.name.value.as_str(), ProjectDeclKind::Layer),
@@ -434,7 +433,6 @@ pub(in crate::eval::project) fn decl_is_public(
         DeclKind::Dimension(d) => d.visibility.is_public(),
         DeclKind::Unit(d) => d.visibility.is_public(),
         DeclKind::Type(d) => d.visibility.is_public(),
-        DeclKind::UnionType(d) => d.visibility.is_public(),
         DeclKind::Index(d) => d.visibility.is_public(),
         DeclKind::Import(d) => d.visibility.is_public(),
         DeclKind::Include(d) => d.visibility.is_public(),
@@ -520,7 +518,6 @@ pub(in crate::eval::project) fn file_has_declaration(
         | DeclKind::Unit(_)
         | DeclKind::Index(_)
         | DeclKind::Type(_)
-        | DeclKind::UnionType(_)
         | DeclKind::Plot(_)
         | DeclKind::Figure(_)
         | DeclKind::Layer(_)
@@ -564,15 +561,12 @@ pub(in crate::eval::project) fn file_has_import_item(
         DeclKind::Type(t) => {
             (namespace == ImportItemNamespace::Type && t.name.value.as_str() == name)
                 || (namespace == ImportItemNamespace::Default
-                    && t.fields.is_some()
-                    && t.name.value.as_str() == name)
-        }
-        DeclKind::UnionType(u) => {
-            (namespace == ImportItemNamespace::Type && u.name.value.as_str() == name)
-                || (namespace == ImportItemNamespace::Default
-                    && u.members
-                        .iter()
-                        .any(|member| member.name.value.as_str() == name))
+                    && match &t.body {
+                        TypeDeclBody::Required => false,
+                        TypeDeclBody::Constructors(members) => members
+                            .iter()
+                            .any(|member| member.name.value.as_str() == name),
+                    })
         }
         DeclKind::Param(_)
         | DeclKind::Node(_)
@@ -617,16 +611,12 @@ pub(in crate::eval::project) fn file_exports_import_item(
             t.visibility.is_public()
                 && ((namespace == ImportItemNamespace::Type && t.name.value.as_str() == name)
                     || (namespace == ImportItemNamespace::Default
-                        && t.fields.is_some()
-                        && t.name.value.as_str() == name))
-        }
-        DeclKind::UnionType(u) => {
-            u.visibility.is_public()
-                && ((namespace == ImportItemNamespace::Type && u.name.value.as_str() == name)
-                    || (namespace == ImportItemNamespace::Default
-                        && u.members
-                            .iter()
-                            .any(|member| member.name.value.as_str() == name)))
+                        && match &t.body {
+                            TypeDeclBody::Required => false,
+                            TypeDeclBody::Constructors(members) => members
+                                .iter()
+                                .any(|member| member.name.value.as_str() == name),
+                        }))
         }
         DeclKind::Param(_)
         | DeclKind::Node(_)

@@ -480,11 +480,10 @@ pub fn collect_type_system_names(file: &crate::desugar::resolved_ast::File) -> H
             }
             DeclKind::Type(t) => {
                 out.insert(t.name.value.to_string());
-            }
-            DeclKind::UnionType(u) => {
-                out.insert(u.name.value.to_string());
-                for m in &u.members {
-                    out.insert(m.name.value.to_string());
+                if let crate::desugar::resolved_ast::TypeDeclBody::Constructors(members) = &t.body {
+                    for m in members {
+                        out.insert(m.name.value.to_string());
+                    }
                 }
             }
             DeclKind::Index(i) => {
@@ -1910,9 +1909,6 @@ fn register_declarations_impl(
             DeclKind::Type(t) if should_register_type(t.name.value.as_str()) => {
                 register_type_decl(t, registry);
             }
-            DeclKind::UnionType(t) if should_register_type(t.name.value.as_str()) => {
-                register_union_type_decl(t, registry);
-            }
             DeclKind::Dag(d) if should_register_default(d.name.value.as_str()) => {
                 registry.register_dag(d.name.value.to_string(), d.clone());
             }
@@ -2526,57 +2522,37 @@ fn register_type_decl(t: &crate::desugar::resolved_ast::TypeDecl, registry: &mut
         })
         .collect();
 
-    // `DeclKind::Type` is reserved for the required-type stub
-    // (`type Element;`); record-shaped declarations parse as
-    // `DeclKind::UnionType` with a single-variant collision. The
-    // `fields` field on `TypeDecl` is preserved as `Option` only to
-    // keep phase-conversion plumbing uniform — the parser never
-    // populates it.
-    registry.register_type(types::TypeDef {
-        name: t.name.value.clone(),
-        generic_params,
-        kind: types::TypeDefKind::Unit,
-    });
-}
-
-fn register_union_type_decl(
-    t: &crate::desugar::resolved_ast::UnionTypeDecl,
-    registry: &mut RegistryBuilder,
-) {
-    let generic_params: Vec<types::TypeGenericParam> = t
-        .generic_params
-        .iter()
-        .map(|g| types::TypeGenericParam {
-            name: g.name.value.clone(),
-            constraint: g.constraint.into(),
-            default: g.default.clone(),
-        })
-        .collect();
-
-    // Every variant carries its payload inline; no per-variant TypeDef
-    // is synthesized. The constructor namespace lives on the registry
-    // and points back to this union.
-    let mut members: Vec<types::UnionMemberDef> = Vec::with_capacity(t.members.len());
-    for m in &t.members {
-        let variant_name = ConstructorName::new(m.name.value.as_str());
-        let fields = m.payload.as_ref().map_or_else(Vec::new, |fs| {
-            fs.iter()
-                .map(|f| types::StructField {
-                    name: f.name.value.clone(),
-                    type_ann: f.type_ann.clone(),
+    let kind = match &t.body {
+        crate::desugar::resolved_ast::TypeDeclBody::Required => types::TypeDefKind::Unit,
+        crate::desugar::resolved_ast::TypeDeclBody::Constructors(type_members) => {
+            // Every constructor carries its payload inline; no per-constructor
+            // TypeDef is synthesized. The constructor namespace lives on the
+            // registry and points back to this type.
+            let members = type_members
+                .iter()
+                .map(|m| {
+                    let fields = m.payload.as_ref().map_or_else(Vec::new, |fs| {
+                        fs.iter()
+                            .map(|f| types::StructField {
+                                name: f.name.value.clone(),
+                                type_ann: f.type_ann.clone(),
+                            })
+                            .collect()
+                    });
+                    types::UnionMemberDef {
+                        name: ConstructorName::new(m.name.value.as_str()),
+                        fields,
+                    }
                 })
-                .collect()
-        });
-        members.push(types::UnionMemberDef {
-            name: variant_name,
-            fields,
-        });
-    }
+                .collect();
+            types::TypeDefKind::Union { members }
+        }
+    };
 
     registry.register_type(types::TypeDef {
         name: t.name.value.clone(),
         generic_params,
-        kind: types::TypeDefKind::Union { members },
+        kind,
     });
 }
 

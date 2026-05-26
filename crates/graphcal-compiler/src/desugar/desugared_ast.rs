@@ -60,7 +60,7 @@ pub type TupleMatchArm = crate::syntax::ast::TupleMatchArm<Desugared>;
 pub type GenericArg = crate::syntax::ast::GenericArg<Desugared>;
 pub type GenericParam = crate::syntax::ast::GenericParam<Desugared>;
 pub type TypeDecl = crate::syntax::ast::TypeDecl<Desugared>;
-pub type UnionTypeDecl = crate::syntax::ast::UnionTypeDecl<Desugared>;
+pub type TypeDeclBody = crate::syntax::ast::TypeDeclBody<Desugared>;
 pub type UnionMember = crate::syntax::ast::UnionMember<Desugared>;
 pub type FieldDecl = crate::syntax::ast::FieldDecl<Desugared>;
 

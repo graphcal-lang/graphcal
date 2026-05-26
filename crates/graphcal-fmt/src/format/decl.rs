@@ -2,7 +2,7 @@ use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
     Encoding, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl, IncludeDecl,
     IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis, MultiSlotKind,
-    NodeDecl, ParamBinding, ParamDecl, PlotDecl, TableIndexSpec, TypeDecl, TypeExpr, UnionTypeDecl,
+    NodeDecl, ParamBinding, ParamDecl, PlotDecl, TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr,
     UnitDecl, UnitDef, Visibility,
 };
 use pretty::RcDoc;
@@ -25,7 +25,6 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Dimension(d) => format_dim_decl(d),
         DeclKind::Unit(d) => format_unit_decl(fmt, d),
         DeclKind::Type(d) => format_type_decl(fmt, d),
-        DeclKind::UnionType(d) => format_union_type_decl(fmt, d),
         DeclKind::Index(d) => format_index_decl(fmt, d),
         DeclKind::Import(d) => format_import_decl(fmt, d),
         DeclKind::Include(d) => format_include_decl(fmt, d),
@@ -65,7 +64,6 @@ fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
         DeclKind::ConstNode(d) => visibility_prefix(d.visibility),
         DeclKind::BaseDimension(d) => visibility_prefix(d.visibility),
         DeclKind::Unit(d) => visibility_prefix(d.visibility),
-        DeclKind::UnionType(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Import(d) => visibility_prefix(d.visibility),
         DeclKind::Include(d) => visibility_prefix(d.visibility),
         DeclKind::Dag(d) => visibility_prefix(d.visibility),
@@ -225,7 +223,7 @@ fn format_unit_def(fmt: &mut Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
         .append(format_unit_expr_inline(&def.unit_expr))
 }
 
-/// `type Name { ... }` or `type Name;` (required) or `type Name {}` (empty).
+/// `type Name;` (required) or `type Name { Ctor(field: Type, ...), Ctor, ... }`.
 fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
     let mut header = RcDoc::text("type ").append(RcDoc::text(d.name.value.as_str().to_string()));
 
@@ -233,35 +231,11 @@ fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
         header = header.append(format_generic_params(fmt, &d.generic_params));
     }
 
-    match &d.fields {
-        None => header.append(RcDoc::text(";")),
-        Some(fields) if fields.is_empty() => header.append(RcDoc::text(" {}")),
-        Some(fields) => {
-            let formatted = format_field_decls(fmt, fields);
-            header
-                .append(RcDoc::text(" {"))
-                .append(RcDoc::hardline().append(formatted).nest(INDENT))
-                .append(RcDoc::hardline())
-                .append(RcDoc::text("}"))
-        }
-    }
-}
+    let TypeDeclBody::Constructors(members) = &d.body else {
+        return header.append(RcDoc::text(";"));
+    };
 
-/// `type Name { Ctor(field: Type, ...), Ctor, ... }` — the constructor-list
-/// form of a tagged union.
-fn format_union_type_decl(fmt: &mut Formatter<'_>, d: &UnionTypeDecl) -> RcDoc<'static> {
-    let mut header = RcDoc::text("type ").append(RcDoc::text(d.name.value.as_str().to_string()));
-
-    if !d.generic_params.is_empty() {
-        header = header.append(format_generic_params(fmt, &d.generic_params));
-    }
-
-    if d.members.is_empty() {
-        return header.append(RcDoc::text(" {}"));
-    }
-
-    let member_docs: Vec<RcDoc<'static>> = d
-        .members
+    let member_docs: Vec<RcDoc<'static>> = members
         .iter()
         .map(|m| {
             let mut doc = RcDoc::text(m.name.value.as_str().to_string());
@@ -289,14 +263,6 @@ fn format_union_type_decl(fmt: &mut Formatter<'_>, d: &UnionTypeDecl) -> RcDoc<'
         .append(RcDoc::hardline().append(body).nest(INDENT))
         .append(RcDoc::hardline())
         .append(RcDoc::text("}"))
-}
-
-fn format_field_decls(fmt: &mut Formatter<'_>, fields: &[FieldDecl]) -> RcDoc<'static> {
-    let field_docs: Vec<RcDoc<'static>> = fields
-        .iter()
-        .map(|f| format_single_field_decl(fmt, f).append(RcDoc::text(",")))
-        .collect();
-    RcDoc::intersperse(field_docs, RcDoc::hardline())
 }
 
 fn format_single_field_decl(fmt: &mut Formatter<'_>, f: &FieldDecl) -> RcDoc<'static> {

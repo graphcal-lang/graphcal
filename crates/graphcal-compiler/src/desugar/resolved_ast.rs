@@ -61,7 +61,7 @@ pub type TupleMatchArm = crate::syntax::ast::TupleMatchArm<Resolved>;
 pub type GenericArg = crate::syntax::ast::GenericArg<Resolved>;
 pub type GenericParam = crate::syntax::ast::GenericParam<Resolved>;
 pub type TypeDecl = crate::syntax::ast::TypeDecl<Resolved>;
-pub type UnionTypeDecl = crate::syntax::ast::UnionTypeDecl<Resolved>;
+pub type TypeDeclBody = crate::syntax::ast::TypeDeclBody<Resolved>;
 pub type UnionMember = crate::syntax::ast::UnionMember<Resolved>;
 pub type FieldDecl = crate::syntax::ast::FieldDecl<Resolved>;
 

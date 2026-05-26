@@ -31,7 +31,7 @@ const fn visibility_without_bindability(visibility: BindableVisibility) -> Visib
 const fn decl_accepts_bindable_visibility(decl: &Declaration) -> bool {
     matches!(
         decl.kind,
-        DeclKind::Dimension(_) | DeclKind::Type(_) | DeclKind::UnionType(_) | DeclKind::Index(_)
+        DeclKind::Dimension(_) | DeclKind::Type(_) | DeclKind::Index(_)
     )
 }
 
@@ -44,7 +44,6 @@ const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibil
         DeclKind::Dimension(d) => d.visibility = visibility,
         DeclKind::Unit(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Type(d) => d.visibility = visibility,
-        DeclKind::UnionType(d) => d.visibility = visibility,
         DeclKind::Index(d) => d.visibility = visibility,
         DeclKind::Import(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Include(d) => d.visibility = visibility_without_bindability(visibility),

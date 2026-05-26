@@ -870,7 +870,6 @@ fn collect_local_type_names(
             DeclKind::Unit(u) => (u.name.value.to_string(), "unit"),
             DeclKind::Index(idx) => (idx.name.value.to_string(), "index"),
             DeclKind::Type(t) => (t.name.value.to_string(), "type"),
-            DeclKind::UnionType(u) => (u.name.value.to_string(), "type"),
             _ => continue,
         };
         names.insert(name, kind);
@@ -960,7 +959,6 @@ fn check_generics_leakage(
             DeclKind::Unit(u) => (u.name.value.to_string(), "unit"),
             DeclKind::Index(idx) => (idx.name.value.to_string(), "index"),
             DeclKind::Type(t) => (t.name.value.to_string(), "type"),
-            DeclKind::UnionType(u) => (u.name.value.to_string(), "type"),
             _ => continue,
         };
         let reexported = if pub_reexport_whole {
@@ -991,17 +989,15 @@ fn check_generics_leakage(
                 }
             }
             DeclKind::Type(t) => {
-                if let Some(fields) = &t.fields {
-                    for field in fields {
-                        collect_type_expr_names(&field.type_ann, &mut refs);
-                    }
-                }
-            }
-            DeclKind::UnionType(u) => {
-                for member in &u.members {
-                    if let Some(fields) = &member.payload {
-                        for field in fields {
-                            collect_type_expr_names(&field.type_ann, &mut refs);
+                if let graphcal_compiler::desugar::resolved_ast::TypeDeclBody::Constructors(
+                    members,
+                ) = &t.body
+                {
+                    for member in members {
+                        if let Some(fields) = &member.payload {
+                            for field in fields {
+                                collect_type_expr_names(&field.type_ann, &mut refs);
+                            }
                         }
                     }
                 }

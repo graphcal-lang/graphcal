@@ -6,7 +6,7 @@ use std::sync::Arc;
 use graphcal_compiler::desugar::resolved_ast::{
     AssertDecl, AttributeArg, BaseDimDecl, BindableVisibility, DagDecl, DeclKind, DimDecl, DimExpr,
     DomainBound, ExprKind, FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl,
-    ParamDecl, PatternBinding, PlotDecl, TypeDecl, TypeExpr, TypeExprKind, UnionTypeDecl, UnitDecl,
+    ParamDecl, PatternBinding, PlotDecl, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnitDecl,
     UnitExpr,
 };
 use graphcal_compiler::syntax::attribute::AttributeName;
@@ -467,9 +467,6 @@ pub fn build_from_ast(
                 collect_unit_decl(u, decl.span, u.visibility.into(), &mut table, &mut scopes);
             }
             DeclKind::Type(t) => collect_type_decl(t, decl.span, t.visibility, &mut table),
-            DeclKind::UnionType(u) => {
-                collect_union_type_decl(u, decl.span, u.visibility, &mut table);
-            }
             DeclKind::Index(idx) => collect_index_decl(idx, decl.span, idx.visibility, &mut table),
             DeclKind::Assert(a) => {
                 collect_assert_decl(a, decl.span, a.visibility.into(), &mut table, &mut scopes);
@@ -697,39 +694,17 @@ fn collect_type_decl(
         None,
         visibility,
     );
-    // Walk field type annotations (required types have no fields).
-    if let Some(fields) = &t.fields {
-        for field in fields {
-            collect_type_expr_refs(&field.type_ann, table);
-        }
-    }
-}
-
-fn collect_union_type_decl(
-    u: &UnionTypeDecl,
-    decl_span: Span,
-    visibility: BindableVisibility,
-    table: &mut SymbolTable,
-) {
-    table.register_top_level(
-        &u.name.value,
-        u.name.span,
-        decl_span,
-        SymbolCategory::StructType,
-        None,
-        None,
-        visibility,
-    );
-    // Each constructor refers to itself (the synthesized record type), and
-    // its payload field types are followed for cross-references.
-    for member in &u.members {
-        table.references.push(ReferenceInfo {
-            span: member.name.span,
-            target: SymbolKey::TopLevel(member.name.value.to_string()),
-        });
-        if let Some(fields) = &member.payload {
-            for field in fields {
-                collect_type_expr_refs(&field.type_ann, table);
+    // Walk constructor payload type annotations (required types have no fields).
+    if let TypeDeclBody::Constructors(members) = &t.body {
+        for member in members {
+            table.references.push(ReferenceInfo {
+                span: member.name.span,
+                target: SymbolKey::TopLevel(member.name.value.to_string()),
+            });
+            if let Some(fields) = &member.payload {
+                for field in fields {
+                    collect_type_expr_refs(&field.type_ann, table);
+                }
             }
         }
     }

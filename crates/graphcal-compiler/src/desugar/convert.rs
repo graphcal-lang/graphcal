@@ -36,7 +36,7 @@ use crate::syntax::ast::{
     DimTerm, DomainBound, Encoding, Expr, ExprKind, FieldDecl, FieldInit, FigureDecl, File,
     GenericArg, GenericParam, IncludeDecl, IndexArg, IndexDecl, IndexDeclKind, IndexExpr,
     LayerDecl, MapEntry, MarkSpec, MatchArm, NodeDecl, ParamBinding, ParamDecl, PlotDecl,
-    PlotField, TupleMatchArm, TypeDecl, TypeExpr, TypeExprKind, UnionMember, UnionTypeDecl,
+    PlotField, TupleMatchArm, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember,
     UnitDecl, UnitDef,
 };
 use crate::syntax::ast::{RawDeclSugar, RawExprSugar};
@@ -114,7 +114,6 @@ fn convert_decl_kind_non_sugar(k: DeclKind<Raw>) -> DeclKind<Desugared> {
         DeclKind::Dimension(d) => DeclKind::Dimension(d.into()),
         DeclKind::Unit(u) => DeclKind::Unit(u.into()),
         DeclKind::Type(t) => DeclKind::Type(t.into()),
-        DeclKind::UnionType(u) => DeclKind::UnionType(u.into()),
         DeclKind::Index(i) => DeclKind::Index(i.into()),
         DeclKind::Import(i) => DeclKind::Import(i),
         DeclKind::Include(i) => DeclKind::Include(i.into()),
@@ -202,18 +201,12 @@ impl From<TypeDecl<Raw>> for TypeDecl<Desugared> {
             visibility: t.visibility,
             name: t.name,
             generic_params: t.generic_params.into_iter().map(Into::into).collect(),
-            fields: t.fields.map(|fs| fs.into_iter().map(Into::into).collect()),
-        }
-    }
-}
-
-impl From<UnionTypeDecl<Raw>> for UnionTypeDecl<Desugared> {
-    fn from(u: UnionTypeDecl<Raw>) -> Self {
-        Self {
-            visibility: u.visibility,
-            name: u.name,
-            generic_params: u.generic_params.into_iter().map(Into::into).collect(),
-            members: u.members.into_iter().map(Into::into).collect(),
+            body: match t.body {
+                TypeDeclBody::Required => TypeDeclBody::Required,
+                TypeDeclBody::Constructors(members) => {
+                    TypeDeclBody::Constructors(members.into_iter().map(Into::into).collect())
+                }
+            },
         }
     }
 }
