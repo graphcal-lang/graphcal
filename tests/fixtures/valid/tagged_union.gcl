@@ -23,7 +23,7 @@ node maneuver: ManeuverKind = LowThrust(thrust: @thrust_level, duration: @burn_d
 // Match on the union — pattern bindings use constructor-call-style parens.
 node fuel_proxy: Force = match @maneuver {
     Impulsive(delta_v: _) => 0.0 N,
-    LowThrust(thrust, duration: _) => thrust,
+    LowThrust(thrust: thrust, duration: _) => thrust,
 };
 
 // Construct the single-variant union with the same parens form.
@@ -42,5 +42,5 @@ node current_status: Status = Nominal;
 
 node status_code: Dimensionless = match @current_status {
     Nominal => 0.0,
-    Warning(code) => code,
+    Warning(code: code) => code,
 };

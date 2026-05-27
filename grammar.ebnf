@@ -899,8 +899,7 @@ pattern_binding_list
 
 pattern_binding
    = IDENT, ":", "_"                                      (* wildcard *)
-   | IDENT, ":", IDENT                                    (* rename *)
-   | IDENT;                                               (* shorthand *)
+   | IDENT, ":", IDENT;                                  (* bind field to variable *)
 
 tuple_match_pattern
    = "_"

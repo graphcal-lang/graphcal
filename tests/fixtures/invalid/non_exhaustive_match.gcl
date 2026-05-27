@@ -9,5 +9,5 @@ param s: Status = Nominal;
 
 node result: Dimensionless = match @s {
     Nominal => 0.0,
-    Warning(code) => code,
+    Warning(code: code) => code,
 };

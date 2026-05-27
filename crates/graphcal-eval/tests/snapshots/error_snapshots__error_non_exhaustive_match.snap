@@ -11,7 +11,7 @@ snippet line 9:
 snippet line 10: node result: Dimensionless = match @s {
     label starting at line 10, column 30: error here
 snippet line 11:     Nominal => 0.0,
-snippet line 12:     Warning(code) => code,
+snippet line 12:     Warning(code: code) => code,
 snippet line 13: };
     label ending at line 13, column 1: error here
 diagnostic code: graphcal::E001

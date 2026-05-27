@@ -114,13 +114,13 @@ Use `match` to destructure union types:
 ```
 node fuel_proxy: Force = match @maneuver {
     Impulsive(delta_v: _) => 0.0 N,
-    LowThrust(thrust, duration: _) => thrust,
+    LowThrust(thrust: thrust, duration: _) => thrust,
 };
 ```
 
 - Each arm matches a member and binds its fields
 - `_` discards a field value
-- Field shorthand in patterns: `thrust` binds the field to a local variable of the same name
+- Each field binding must be explicit: `field: variable` or `field: _`
 
 ### Exhaustiveness Checking
 
@@ -145,8 +145,8 @@ All match arms must produce the same type and dimension:
 ```
 // ERROR: arms have different dimensions (Force vs Velocity)
 node bad: Force = match @maneuver {
-    Impulsive(delta_v) => delta_v,             // Velocity
-    LowThrust(thrust, duration: _) => thrust,  // Force
+    Impulsive(delta_v: delta_v) => delta_v,             // Velocity
+    LowThrust(thrust: thrust, duration: _) => thrust,   // Force
 };
 ```
 
