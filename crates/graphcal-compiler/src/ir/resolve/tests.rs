@@ -52,7 +52,7 @@ fn resolve_unknown_graph_ref() {
 
 #[test]
 fn resolve_unknown_bare_name_becomes_local_ref() {
-    // After lifting casing requirements, bare `NONEXISTENT` is parsed as NameRef
+    // After lifting casing requirements, bare `NONEXISTENT` is parsed as an unresolved path
     // and resolved to LocalRef (fallback). The resolve pass no longer rejects it;
     // the error is caught later in the TIR dim-check phase as UnknownLocalRef.
     let resolved = parse_and_resolve("node x: Dimensionless = NONEXISTENT + 1.0;").unwrap();
@@ -181,7 +181,7 @@ fn resolve_const_collision_with_param() {
 
 #[test]
 fn resolve_unknown_bare_name_in_const_becomes_local_ref() {
-    // After lifting casing requirements, bare `NONEXISTENT` is parsed as NameRef
+    // After lifting casing requirements, bare `NONEXISTENT` is parsed as an unresolved path
     // and resolved to LocalRef (fallback). The resolve pass no longer rejects it;
     // the error is caught later in the TIR dim-check phase as UnknownLocalRef.
     let resolved = parse_and_resolve("const node a: Dimensionless = NONEXISTENT + 1.0;").unwrap();

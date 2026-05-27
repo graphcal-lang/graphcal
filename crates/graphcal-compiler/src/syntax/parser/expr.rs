@@ -1,5 +1,5 @@
 use crate::syntax::ast::{
-    BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, ModulePath, TypeExpr, UnaryOp,
+    BinOp, Expr, ExprKind, FieldInit, Ident, IdentPath, IndexArg, ModulePath, TypeExpr, UnaryOp,
 };
 use crate::syntax::names::{
     ConstructorName, DeclName, FieldName, FnName, IndexName, IndexVariantName, ScopedName,
@@ -556,11 +556,13 @@ impl Parser<'_> {
     /// Parse an identifier-based expression.
     ///
     /// Dispatches on following tokens (syntax-based disambiguation):
-    /// - `ident.member` → `QualifiedNameRef` (resolved later to variant or const)
+    /// - `ident.member` / `ident.member.leaf` → unresolved identifier path
+    ///   (resolved later to variant or const)
     /// - `ident<T>(args)` or `ident(args)` — disambiguated structurally
     ///   by the first argument's shape: `IDENT :` → constructor call,
     ///   otherwise → function call
-    /// - bare `ident` → `NameRef` (resolved later to const, local, or unit constructor)
+    /// - bare `ident` → unresolved identifier path (resolved later to const,
+    ///   local, or unit constructor)
     ///
     /// The legacy brace-form construction `Name { field: val }` is no
     /// longer accepted — constructor calls use parens.
@@ -569,19 +571,23 @@ impl Parser<'_> {
         let name = self.lexer.slice_at(span).to_string();
 
         if self.peek_dot_then_ident() {
-            // Qualified reference: `ident.member`. After the alpha-4 module
-            // redesign there are no user-defined functions, so a `module.fn(...)`
-            // form has no resolution path; we always parse `ident.ident` (no
-            // following `(`) as an unresolved qualified name and let later
-            // passes resolve it to a variant or qualified const.
-            self.lexer.next_token(); // consume '.'
-            let member_ident = self.parse_any_ident()?;
-            let full_span = span.merge(member_ident.span);
+            let first_ident = crate::syntax::ast::Ident { name, span };
+            // Dotted identifier path: `ident.member` or `ident.member.leaf`.
+            // The parser records the complete path uniformly and leaves all
+            // semantic choices (index variant vs qualified const, and any
+            // segment-count restrictions) to name resolution.
+            let mut rest = Vec::new();
+            while self.peek_dot_then_ident() {
+                self.lexer.next_token(); // consume '.'
+                rest.push(self.parse_any_ident()?);
+            }
+            let full_span = first_ident
+                .span
+                .merge(rest.last().map_or(first_ident.span, |i| i.span));
             Ok(Expr::new(
-                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::QualifiedNameRef {
-                    qualifier: crate::syntax::ast::Ident { name, span },
-                    member: member_ident,
-                }),
+                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(IdentPath::new(
+                    crate::syntax::non_empty::NonEmpty::new(first_ident, rest),
+                ))),
                 full_span,
             ))
         } else if self.lexer.peek() == Some(&Token::LParen)
@@ -635,11 +641,14 @@ impl Parser<'_> {
                 call_span,
             ))
         } else {
-            // Bare identifier → NameRef (resolved later by name resolution pass)
+            // Bare identifier path (resolved later by name resolution pass).
             Ok(Expr::new(
-                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::NameRef(
-                    crate::syntax::ast::Ident { name, span },
-                )),
+                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(IdentPath::new(
+                    crate::syntax::non_empty::NonEmpty::singleton(crate::syntax::ast::Ident {
+                        name,
+                        span,
+                    }),
+                ))),
                 span,
             ))
         }
@@ -709,7 +718,7 @@ impl Parser<'_> {
     ///    immediately followed by another `Ident` to count as qualified;
     ///    otherwise we fall through to expression parsing.
     /// 2. Parse a full expression:
-    ///    - If it's a bare `NameRef(ident)` → convert to `IndexArg::Var`.
+    ///    - If it's a single-segment unresolved path → convert to `IndexArg::Var`.
     ///    - Otherwise → `IndexArg::Expr`.
     pub(super) fn parse_index_arg(&mut self) -> Result<IndexArg, ParseError> {
         // Check for qualified variant: Ident.Ident
@@ -730,13 +739,15 @@ impl Parser<'_> {
         // Parse a full expression
         let expr = self.parse_expr()?;
 
-        // If it's a bare name reference, use IndexArg::Var for backward compatibility
-        if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::NameRef(ident)) =
-            expr.kind
-        {
-            Ok(IndexArg::Var(ident))
-        } else {
-            Ok(IndexArg::Expr(Box::new(expr)))
+        // If it's a bare name reference, use IndexArg::Var for backward compatibility.
+        match expr.kind {
+            ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path))
+                if path.segments.len() == 1 =>
+            {
+                let mut segments = path.segments.into_vec();
+                Ok(IndexArg::Var(segments.remove(0)))
+            }
+            other => Ok(IndexArg::Expr(Box::new(Expr::new(other, expr.span)))),
         }
     }
 
@@ -1086,8 +1097,8 @@ mod tests {
         if let ExprKind::BinOp { lhs, .. } = &expr.kind {
             assert!(matches!(
                 &lhs.kind,
-                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::NameRef(id))
-                    if id.name.as_str() == "PI"
+                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path))
+                    if path.as_bare().is_some_and(|id| id.name.as_str() == "PI")
             ));
         } else {
             panic!("expected BinOp");
@@ -1554,8 +1565,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_qualified_name_ref() {
-        let file = Parser::new("node x: Dimensionless = constants.G0;")
+    fn parse_dotted_identifier_path_ref() {
+        let file = Parser::new("node x: Dimensionless = constants.physics.G0;")
             .parse_file()
             .unwrap();
         let decl = &file.declarations[0].kind;
@@ -1563,14 +1574,15 @@ mod tests {
             panic!("expected Node");
         };
         match &node.value.kind {
-            ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::QualifiedNameRef {
-                qualifier,
-                member,
-            }) => {
-                assert_eq!(qualifier.name, "constants");
-                assert_eq!(member.name.as_str(), "G0");
+            ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
+                let names = path
+                    .segments
+                    .iter()
+                    .map(|segment| segment.name.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(names, vec!["constants", "physics", "G0"]);
             }
-            other => panic!("expected QualifiedNameRef, got {other:?}"),
+            other => panic!("expected unresolved path, got {other:?}"),
         }
     }
 

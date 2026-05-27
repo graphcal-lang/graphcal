@@ -35,31 +35,95 @@ pub enum RawExprSugar {
 /// Unresolved reference, produced by the parser before name resolution.
 ///
 /// Carried by `ExprKind::UnresolvedRef(P::RefSugar)`. The parser emits these
-/// when the meaning of a bare or dotted identifier cannot be determined from
-/// syntax alone; the name-resolution pass rewrites them into concrete
-/// `ConstRef` / `LocalRef` / `VariantLiteral` / `StructConstruction` variants
-/// and produces a [`crate::syntax::phase::Resolved`] AST in which `RefSugar = Infallible`.
+/// when the meaning of an identifier path cannot be determined from syntax
+/// alone; the name-resolution pass rewrites them into concrete `ConstRef` /
+/// `LocalRef` / `VariantLiteral` / `StructConstruction` variants and produces a
+/// [`crate::syntax::phase::Resolved`] AST in which `RefSugar = Infallible`.
+///
+/// This indirection is necessary because the same token shape can mean
+/// different expression kinds depending on declarations and local scopes. For
+/// example, the dotted expression `Foo.Bar` is parsed as the unresolved path
+/// `Foo.Bar` in both of these programs:
+///
+/// ```graphcal
+/// index Foo = { Bar };
+/// node x: Dimensionless = Foo.Bar;
+/// ```
+///
+/// and:
+///
+/// ```graphcal
+/// node x: Dimensionless = Foo.Bar;
+/// ```
+///
+/// Only after collecting names from the file can resolution know whether
+/// `Foo` is an index. In the first program `Foo.Bar` becomes a
+/// `VariantLiteral`; in the second it becomes a qualified `ConstRef` whose
+/// validity is checked later.
+///
+/// Bare identifiers have the same issue. `PI` parses as the unresolved path
+/// `PI` both when it denotes the built-in constant:
+///
+/// ```graphcal
+/// node x: Dimensionless = PI;
+/// ```
+///
+/// and when a local binding shadows that constant:
+///
+/// ```graphcal
+/// index I = { A };
+/// node x: Dimensionless[I] = for PI: I { PI };
+/// ```
+///
+/// Name resolution turns the first `PI` into a `ConstRef`, but the loop body
+/// `PI` in the second program into a `LocalRef`.
+///
+/// The payload is a path rather than separate "bare" and "qualified" variants
+/// so the parser records the complete syntactic structure uniformly:
+/// `Foo`, `Foo.Bar`, and `Foo.Bar.Baz` are all identifier paths. Segment-count
+/// restrictions, such as index variants currently being two-segment paths, are
+/// semantic rules enforced by name resolution rather than parser artifacts.
 #[derive(Debug, Clone)]
 pub enum UnresolvedRef {
-    /// Unresolved bare identifier reference.
-    ///
-    /// Resolved to one of `ConstRef`, `LocalRef`, or `StructConstruction`
-    /// (bare variant) depending on context.
-    NameRef(Ident),
-    /// Unresolved qualified reference: `a.b`.
-    ///
-    /// Resolved to `VariantLiteral` (when `a` is a known index) or `ConstRef`
-    /// (module-qualified constant) depending on context.
-    QualifiedNameRef { qualifier: Ident, member: Ident },
+    /// Unresolved identifier path: `Foo`, `Foo.Bar`, or `Foo.Bar.Baz`.
+    Path(IdentPath),
+}
+
+/// A non-empty dot-separated identifier path in expression position.
+#[derive(Debug, Clone)]
+pub struct IdentPath {
+    pub segments: NonEmpty<Ident>,
+}
+
+impl IdentPath {
+    /// Construct a path from already-tokenized segments.
+    #[must_use]
+    pub const fn new(segments: NonEmpty<Ident>) -> Self {
+        Self { segments }
+    }
+
+    /// Returns the source span covering the whole path.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        self.segments.first().span.merge(self.segments.last().span)
+    }
+
+    /// Returns the only segment when this is a bare identifier path.
+    #[must_use]
+    pub fn as_bare(&self) -> Option<&Ident> {
+        match self.segments.as_slice() {
+            [ident] => Some(ident),
+            _ => None,
+        }
+    }
 }
 
 impl UnresolvedRef {
-    /// Returns the source span of the underlying identifier(s).
+    /// Returns the source span of the underlying identifier path.
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Self::NameRef(ident) => ident.span,
-            Self::QualifiedNameRef { qualifier, member } => qualifier.span.merge(member.span),
+            Self::Path(path) => path.span(),
         }
     }
 }
@@ -406,8 +470,8 @@ pub enum ExprKind<P: Phase = Raw> {
     /// Unresolved reference produced by the parser.
     ///
     /// Carries [`crate::syntax::ast::UnresolvedRef`] in [`Raw`] and
-    /// [`crate::syntax::phase::Desugared`], with `NameRef`/`QualifiedNameRef`
-    /// sub-variants. In [`crate::syntax::phase::Resolved`] the payload is
+    /// [`crate::syntax::phase::Desugared`], as an unresolved identifier path.
+    /// In [`crate::syntax::phase::Resolved`] the payload is
     /// [`core::convert::Infallible`] — the variant is statically unreachable
     /// after the name-resolution pass has run.
     UnresolvedRef(P::RefSugar),
