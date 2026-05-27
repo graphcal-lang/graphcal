@@ -773,17 +773,24 @@ ident_expr
                                                        constructor call *)
    | IDENT;                                        (* bare name ref *)
 
-(* The argument list of a call expression accepts both positional
-   args (function-call form: `sqrt(x)`) and named args (constructor-call
-   form: `LowThrust(thrust: 0.5 N, duration: 3600.0 s)`). Mixing
-   positional and named in the same call is rejected at name-resolution
-   time. *)
+(* The argument list of a call expression accepts positional args for
+   function calls (`sqrt(x)`) or named args for constructor calls
+   (`LowThrust(thrust: 0.5 N, duration: 3600.0 s)`). The parser
+   distinguishes the two forms by the first argument. Constructor fields
+   must always specify `: expr`; shorthand field initializers are not
+   supported. *)
 call_arg_list
-   = call_arg, { ",", call_arg }, [ "," ];
+   = named_call_arg_list
+   | positional_call_arg_list;
 
-call_arg
-   = IDENT, ":", expr           (* named arg (constructor-call form) *)
-   | expr;                      (* positional arg (function-call form) *)
+named_call_arg_list
+   = named_call_arg, { ",", named_call_arg }, [ "," ];
+
+named_call_arg
+   = IDENT, ":", expr;
+
+positional_call_arg_list
+   = expr, { ",", expr }, [ "," ];
 
 generic_arg_list
    = generic_arg, { ",", generic_arg }, [ "," ];
@@ -796,10 +803,8 @@ expr_list
    = expr, { ",", expr }, [ "," ];
 
 field_init
-   = IDENT, [ ":", expr ];
+   = IDENT, ":", expr;
 
-(* When the colon and expression are omitted, the field name is used
-   as a shorthand reference to a variable of the same name. *)
 (* --- Map literal --- *)
 (* Single-axis map literals use bare variant keys:
      { Index.Variant1: expr1, Index.Variant2: expr2, ... }

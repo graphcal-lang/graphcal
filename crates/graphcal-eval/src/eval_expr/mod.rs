@@ -247,26 +247,7 @@ pub fn eval_expr(
         } => {
             let mut field_map = IndexMap::new();
             for field_init in fields {
-                let val = if let Some(value_expr) = &field_init.value {
-                    eval_expr(value_expr, values, local_values, ctx)?
-                } else {
-                    // Shorthand: look up name in local scope, then graph scope.
-                    // Shorthand field names are always bare locals.
-                    let bare = field_init.name.value.as_str();
-                    local_values
-                        .get(bare)
-                        .or_else(|| values.get(&ScopedName::local(bare)))
-                        .cloned()
-                        .ok_or_else(|| {
-                            ctx.eval_error(
-                                format!(
-                                    "undefined variable `{}` for shorthand field",
-                                    field_init.name.value
-                                ),
-                                field_init.name.span,
-                            )
-                        })?
-                };
+                let val = eval_expr(&field_init.value, values, local_values, ctx)?;
                 // Validate against any field-level domain constraint declared
                 // on `<constructor>.<field_name>`. The check fires at the field's
                 // span so the diagnostic points at the offending value.
@@ -279,10 +260,7 @@ pub fn eval_expr(
                     && let Err(violation) =
                         crate::domain_check::check_domain_constraint(&val, constraint)
                 {
-                    let span = field_init
-                        .value
-                        .as_ref()
-                        .map_or(field_init.name.span, |e| e.span);
+                    let span = field_init.value.span;
                     return Err(ctx.eval_error(
                         format!(
                             "field `{}.{}` {}",

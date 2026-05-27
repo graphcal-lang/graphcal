@@ -56,9 +56,8 @@ node result: TransferResult = TransferResult(
 );
 ```
 
-Field shorthand is available only for local variables (for example,
-`for`/`match` bindings) with the same name as the field. Graph nodes
-must still be referenced explicitly with `@`:
+Constructor fields must always specify the field name and value. Graph
+nodes are referenced explicitly with `@`:
 
 ```
 node dv1: Velocity = 100.0 m/s;
@@ -121,7 +120,7 @@ node fuel_proxy: Force = match @maneuver {
 
 - Each arm matches a member and binds its fields
 - `_` discards a field value
-- Field shorthand: `thrust` binds the field to a local variable of the same name
+- Field shorthand in patterns: `thrust` binds the field to a local variable of the same name
 
 ### Exhaustiveness Checking
 

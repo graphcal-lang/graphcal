@@ -340,7 +340,7 @@ fn convert_field_inits(
             let field_expr = convert_value(field_val, &format!("{param_name}.{field_name}"))?;
             Ok(FieldInit {
                 name: Spanned::new(FieldName::new(field_name), SYNTH_SPAN),
-                value: Some(field_expr),
+                value: field_expr,
             })
         })
         .collect()

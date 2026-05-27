@@ -48,17 +48,12 @@ impl Parser<'_> {
     }
 
     /// Parse a single named field initializer for a constructor call:
-    /// `field: expr`, or shorthand `field` (referring to a same-name
-    /// variable). Used inside the paren-form `Ctor(field: expr, ...)`.
+    /// `field: expr`. Used inside the paren-form `Ctor(field: expr, ...)`.
     pub(super) fn parse_named_field_init(&mut self) -> Result<FieldInit, ParseError> {
         let ident = self.parse_any_ident()?;
         let name = Spanned::new(FieldName::new(&ident.name), ident.span);
-        let value = if self.lexer.peek() == Some(&Token::Colon) {
-            self.lexer.next_token();
-            Some(self.parse_expr()?)
-        } else {
-            None
-        };
+        self.expect(Token::Colon)?;
+        let value = self.parse_expr()?;
         Ok(FieldInit { name, value })
     }
 

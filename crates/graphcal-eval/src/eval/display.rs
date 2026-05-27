@@ -29,10 +29,8 @@ pub(super) fn attach_display_units(
         // Constructor call: recurse into each field initializer.
         (Value::Struct { fields, .. }, ExprKind::ConstructorCall { fields: inits, .. }) => {
             for init in inits {
-                if let Some(field_val) = fields.get_mut(&init.name.value)
-                    && let Some(init_expr) = &init.value
-                {
-                    attach_display_units(field_val, init_expr, registry, values);
+                if let Some(field_val) = fields.get_mut(&init.name.value) {
+                    attach_display_units(field_val, &init.value, registry, values);
                 }
             }
         }

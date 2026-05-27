@@ -1128,19 +1128,7 @@ fn collect_expr_refs(
                 }
             }
             for field in fields {
-                if let Some(value) = &field.value {
-                    collect_expr_refs(value, table, scopes);
-                } else {
-                    // Shorthand: `{ dv1 }` -- the field name is also a local reference.
-                    let target = scopes
-                        .resolve(field.name.value.as_str())
-                        .cloned()
-                        .unwrap_or_else(|| SymbolKey::TopLevel(field.name.value.to_string()));
-                    table.references.push(ReferenceInfo {
-                        span: field.name.span,
-                        target,
-                    });
-                }
+                collect_expr_refs(&field.value, table, scopes);
             }
         }
         ExprKind::MapLiteral { entries } => {

@@ -712,7 +712,7 @@ fn lift_expr_kind(
                 .into_iter()
                 .map(|f| dst_ast::FieldInit {
                     name: f.name,
-                    value: f.value.map(|v| lift_expr(v, ctx)),
+                    value: lift_expr(f.value, ctx),
                 })
                 .collect(),
         },

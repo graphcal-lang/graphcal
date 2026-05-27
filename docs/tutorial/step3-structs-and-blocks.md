@@ -50,8 +50,7 @@ node result: TransferResult = TransferResult(
 );
 ```
 
-Field shorthand is reserved for local variables (such as `for`/`match`
-bindings) with the same name as the field.
+Constructor fields must always be explicit: `field: expr`.
 
 ## Field Access
 

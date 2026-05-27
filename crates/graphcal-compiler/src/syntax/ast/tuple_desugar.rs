@@ -128,9 +128,7 @@ fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
         | ExprKind::IndexAccess { expr: inner, .. } => desugar_expr(inner),
         ExprKind::ConstructorCall { fields, .. } => {
             for f in fields {
-                if let Some(v) = &mut f.value {
-                    desugar_expr(v);
-                }
+                desugar_expr(&mut f.value);
             }
         }
         ExprKind::MapLiteral { entries } => {
