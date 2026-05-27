@@ -1441,9 +1441,8 @@ fn collect_type_expr_refs(
                             target: SymbolKey::TopLevel(ident.as_str().to_string()),
                         });
                     }
-                    graphcal_compiler::desugar::resolved_ast::IndexExpr::NatLiteral(_, _)
-                    | graphcal_compiler::desugar::resolved_ast::IndexExpr::NatExpr(_) => {
-                        // No reference to resolve for literal integers or nat expressions
+                    graphcal_compiler::desugar::resolved_ast::IndexExpr::NatExpr(_) => {
+                        // No reference to resolve for nat expressions
                     }
                 }
             }

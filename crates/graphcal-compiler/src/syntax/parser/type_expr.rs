@@ -490,7 +490,7 @@ impl Parser<'_> {
     /// `*` binds tighter than `+`, so `M + N * P` parses as `M + (N * P)`.
     ///
     /// - `Phase` → `IndexExpr::Name` (named index or generic param)
-    /// - `3` → `IndexExpr::NatLiteral` (desugars to `range(3)`)
+    /// - `3` → `IndexExpr::NatExpr(NatExpr::Literal(..))` (desugars to `range(3)`)
     /// - `N + 1` → `IndexExpr::NatExpr` (compound Nat expression)
     /// - `M * N` → `IndexExpr::NatExpr` (multiplication)
     /// - `M * N + 1` → `IndexExpr::NatExpr` (mixed arithmetic)
@@ -504,9 +504,10 @@ impl Parser<'_> {
         if !has_operator {
             // Simple case: bare atom. Desugar appropriately.
             return match first_atom {
-                NatExpr::Literal(value, span) => Ok(IndexExpr::NatLiteral(value, span)),
                 NatExpr::Var(ident) => Ok(IndexExpr::Name(ident.into_spanned())),
-                _ => Ok(IndexExpr::NatExpr(first_atom)),
+                NatExpr::Literal(..) | NatExpr::Add(..) | NatExpr::Mul(..) => {
+                    Ok(IndexExpr::NatExpr(first_atom))
+                }
             };
         }
 

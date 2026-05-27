@@ -173,15 +173,13 @@ pub struct DomainBound<P: Phase = Raw> {
 /// An expression in index position of an indexed type.
 ///
 /// In `Velocity[Maneuver]`, the `Maneuver` is an `IndexExpr::Name`.
-/// In `Dimensionless[3, 4]`, `3` and `4` are `IndexExpr::NatLiteral`.
+/// In `Dimensionless[3, 4]`, `3` and `4` are `IndexExpr::NatExpr(NatExpr::Literal(..))`.
 /// In `D[N + 1]`, `N + 1` is an `IndexExpr::NatExpr`.
 #[derive(Debug, Clone)]
 pub enum IndexExpr<P: Phase = Raw> {
     /// A named index or generic parameter: `Maneuver`, `I`, `N`
     Name(Spanned<P::IndexExprName>),
-    /// An integer literal in index position: `3` (desugars to `range(3)` internally)
-    NatLiteral(u64, Span),
-    /// A compound Nat expression in index position: `N + 1`, `M + N`
+    /// A type-level natural-number expression in index position: `3`, `N + 1`, `M + N`.
     NatExpr(NatExpr),
 }
 
@@ -191,7 +189,6 @@ impl<P: Phase> IndexExpr<P> {
     pub const fn span(&self) -> Span {
         match self {
             Self::Name(name) => name.span,
-            Self::NatLiteral(_, span) => *span,
             Self::NatExpr(nat_expr) => nat_expr.span(),
         }
     }

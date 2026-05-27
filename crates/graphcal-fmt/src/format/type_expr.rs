@@ -24,9 +24,6 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
                     graphcal_compiler::syntax::ast::IndexExpr::Name(ident) => {
                         RcDoc::text(ident.value.as_str().to_string())
                     }
-                    graphcal_compiler::syntax::ast::IndexExpr::NatLiteral(n, _) => {
-                        RcDoc::text(n.to_string())
-                    }
                     graphcal_compiler::syntax::ast::IndexExpr::NatExpr(nat_expr) => {
                         RcDoc::text(nat_expr.to_string())
                     }

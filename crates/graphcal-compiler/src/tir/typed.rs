@@ -1841,12 +1841,6 @@ pub fn resolve_type_expr(
             let mut resolved_indexes = Vec::with_capacity(indexes.len());
             for idx in indexes {
                 match idx {
-                    crate::desugar::resolved_ast::IndexExpr::NatLiteral(n, span) => {
-                        resolved_indexes.push(ResolvedIndex::NatExpr(
-                            NatPolyForm::from_constant(*n),
-                            *span,
-                        ));
-                    }
                     crate::desugar::resolved_ast::IndexExpr::NatExpr(nat_expr) => {
                         let form = normalize_nat_expr(nat_expr, nat_params, src)?;
                         resolved_indexes.push(ResolvedIndex::NatExpr(form, nat_expr.span()));
