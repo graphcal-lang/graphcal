@@ -120,9 +120,7 @@ mod tests {
         let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let mut desugared =
-            graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
-        graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
         let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
         let symbol_table = symbol_table::build_from_ast(&ast, source);
         AnalysisResult {

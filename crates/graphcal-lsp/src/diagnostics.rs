@@ -234,9 +234,8 @@ mod tests {
         parser
             .parse_file()
             .map(|raw_ast| {
-                let mut desugared =
+                let desugared =
                     graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
-                graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
                 let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
                 build_from_ast(&ast, source)
             })

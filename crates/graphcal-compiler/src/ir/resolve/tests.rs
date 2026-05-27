@@ -7,8 +7,7 @@ fn make_src(source: &str) -> NamedSource<Arc<String>> {
 
 fn parse_and_desugar(source: &str) -> crate::desugar::resolved_ast::File {
     let raw_file = Parser::new(source).parse_file().unwrap();
-    let mut desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-    crate::syntax::ast::desugar_tuple_matches(&mut desugared);
+    let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
     crate::syntax::name_resolve::resolve_name_refs(desugared)
 }
 

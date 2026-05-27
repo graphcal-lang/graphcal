@@ -188,9 +188,7 @@ impl LoadedProject {
         let named_source = graphcal_compiler::syntax::named_source(name, Arc::clone(&source));
         let raw_ast =
             graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
-        let mut desugared =
-            graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
-        graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
         let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
         let path = PathBuf::from(name);
         let dag_id = DagId::from_relative_path(&path).map_err(|e| {
@@ -337,8 +335,7 @@ fn load_file_dfs<F: FileSystemReader>(
     let named_source = graphcal_compiler::syntax::named_source(name, Arc::clone(&source));
     let raw_ast =
         graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
-    let mut desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
-    graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
+    let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
     let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
 
     // Collect inline DAG names so we can skip includes that reference them.

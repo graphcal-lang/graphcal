@@ -5,12 +5,10 @@ use crate::syntax::phase::{Desugared, Phase, Raw, Resolved};
 
 mod common;
 mod decl;
-mod tuple_desugar;
 mod value;
 
 pub use common::*;
 pub use decl::*;
-pub use tuple_desugar::desugar_tuple_matches;
 pub use value::*;
 
 impl Phase for Raw {

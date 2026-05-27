@@ -56,7 +56,6 @@ pub type MapEntry = crate::syntax::ast::MapEntry<Desugared>;
 pub type IndexArg = crate::syntax::ast::IndexArg<Desugared>;
 pub type FieldInit = crate::syntax::ast::FieldInit<Desugared>;
 pub type MatchArm = crate::syntax::ast::MatchArm<Desugared>;
-pub type TupleMatchArm = crate::syntax::ast::TupleMatchArm<Desugared>;
 pub type GenericArg = crate::syntax::ast::GenericArg<Desugared>;
 pub type GenericParam = crate::syntax::ast::GenericParam<Desugared>;
 pub type TypeDecl = crate::syntax::ast::TypeDecl<Desugared>;

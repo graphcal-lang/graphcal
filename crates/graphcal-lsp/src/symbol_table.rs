@@ -1383,19 +1383,6 @@ fn collect_expr_refs(
                 scopes.pop();
             }
         }
-        ExprKind::TupleMatch { scrutinees, arms } => {
-            for s in scrutinees {
-                collect_expr_refs(s, table, scopes);
-            }
-            for arm in arms {
-                if let Some(patterns) = &arm.patterns {
-                    for p in patterns {
-                        collect_expr_refs(p, table, scopes);
-                    }
-                }
-                collect_expr_refs(&arm.body, table, scopes);
-            }
-        }
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
@@ -1755,9 +1742,7 @@ mod tests {
         let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let mut desugared =
-            graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
         let table = build_from_ast(&file, source);
 
@@ -1794,9 +1779,7 @@ param q: Int[I]
         let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let mut desugared =
-            graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
         let table = build_from_ast(&file, source);
 
@@ -1831,9 +1814,7 @@ param q: Int[I]
         let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let mut desugared =
-            graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
         let table = build_from_ast(&file, source);
 

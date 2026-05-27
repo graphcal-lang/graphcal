@@ -1752,14 +1752,6 @@ pub(crate) fn substitute_type_names_in_expr(
                 substitute_type_names_in_expr(&mut arm.body, bindings);
             }
         }
-        // TupleMatch is desugared to If/BinOp(Eq) chains before this pass runs.
-        #[expect(
-            clippy::unreachable,
-            reason = "invariant: desugared before IR lowering"
-        )]
-        ExprKind::TupleMatch { .. } => {
-            unreachable!("TupleMatch should be desugared before substitute_type_names_in_expr")
-        }
         // `Sugar` and `UnresolvedRef` payloads are `Infallible` in `Resolved`
         // — both arms are statically unreachable.
         #[expect(
@@ -2756,8 +2748,7 @@ mod tests {
 
     fn parse_and_lower(source: &str) -> Result<IR, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
-        let mut desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        crate::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
         lower(&file, &make_src(source))
     }

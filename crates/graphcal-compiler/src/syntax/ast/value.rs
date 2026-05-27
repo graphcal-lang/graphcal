@@ -427,14 +427,6 @@ pub enum ExprKind<P: Phase = Raw> {
         scrutinee: Box<Expr<P>>,
         arms: Vec<MatchArm<P>>,
     },
-    /// Tuple match expression: `match (a, b) { (X, Y) => expr, _ => fallback }`
-    ///
-    /// Preserved in the AST for formatting and tooling. Desugared to nested
-    /// `If` / `BinOp(Eq)` chains before evaluation.
-    TupleMatch {
-        scrutinees: NonEmpty<Expr<P>>,
-        arms: NonEmpty<TupleMatchArm<P>>,
-    },
     /// Standalone index variant reference: `Maneuver.Departure`
     /// Used in comparisons with loop variables: `m == Maneuver.Departure`
     VariantLiteral {
@@ -788,15 +780,6 @@ pub struct FieldInit<P: Phase = Raw> {
 #[derive(Debug, Clone)]
 pub struct MatchArm<P: Phase = Raw> {
     pub pattern: MatchPattern,
-    pub body: Expr<P>,
-    pub span: Span,
-}
-
-/// One arm of a tuple `match` expression: `(X, Y) => expr` or `_ => fallback`
-#[derive(Debug, Clone)]
-pub struct TupleMatchArm<P: Phase = Raw> {
-    /// `None` for the wildcard `_` arm.
-    pub patterns: Option<NonEmpty<Expr<P>>>,
     pub body: Expr<P>,
     pub span: Span,
 }

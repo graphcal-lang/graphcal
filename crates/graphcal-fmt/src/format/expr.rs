@@ -1,6 +1,6 @@
 use graphcal_compiler::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, ForBinding, IndexArg, MapEntry, MatchArm, MatchPattern,
-    ModulePath, ParamBinding, PatternBinding, TableIndexSpec, TupleMatchArm, UnaryOp,
+    ModulePath, ParamBinding, PatternBinding, TableIndexSpec, UnaryOp,
 };
 use graphcal_compiler::syntax::names::{LocalName, ScopedName};
 use graphcal_compiler::syntax::span::Spanned;
@@ -125,9 +125,6 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             body,
         } => format_unfold(fmt, init, prev_name, curr_name, body),
         ExprKind::Match { scrutinee, arms } => format_match(fmt, scrutinee, arms),
-        ExprKind::TupleMatch { scrutinees, arms } => {
-            format_tuple_match(fmt, scrutinees.as_slice(), arms.as_slice())
-        }
         ExprKind::VariantLiteral { index, variant } => {
             RcDoc::text(format!("{}.{}", index.value, variant.value))
         }
@@ -871,47 +868,8 @@ pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
         .append(RcDoc::text(")"))
 }
 
-pub fn format_tuple_match(
-    fmt: &mut Formatter<'_>,
-    scrutinees: &[Expr],
-    arms: &[TupleMatchArm],
-) -> RcDoc<'static> {
-    let scrutinee_docs: Vec<RcDoc<'static>> =
-        scrutinees.iter().map(|s| format_expr(fmt, s)).collect();
-    let scrutinee_list = RcDoc::intersperse(scrutinee_docs, RcDoc::text(", "));
-
-    // Pattern formatting needs `fmt` (recurses into format_expr), so collect
-    // the pattern docs upfront before handing arm spans to the shared helper.
-    let pattern_docs: Vec<RcDoc<'static>> = arms
-        .iter()
-        .map(|arm| {
-            arm.patterns.as_ref().map_or_else(
-                || RcDoc::text("_"),
-                |patterns| {
-                    let pat_docs: Vec<RcDoc<'static>> =
-                        patterns.iter().map(|p| format_expr(fmt, p)).collect();
-                    RcDoc::text("(")
-                        .append(RcDoc::intersperse(pat_docs, RcDoc::text(", ")))
-                        .append(RcDoc::text(")"))
-                },
-            )
-        })
-        .collect();
-
-    let arm_docs = collect_arm_docs(fmt, arms.iter().map(|arm| (arm.span, &arm.body)), |i| {
-        pattern_docs[i].clone()
-    });
-
-    wrap_match_block(
-        RcDoc::text("match (")
-            .append(scrutinee_list)
-            .append(RcDoc::text(")")),
-        arm_docs,
-    )
-}
-
-/// Build per-arm docs for both `format_match` and `format_tuple_match`. Walks
-/// each arm's span, drains leading and trailing comments, formats the body
+/// Build per-arm docs for `format_match`. Walks each arm's span, drains
+/// leading and trailing comments, formats the body
 /// expression, and assembles `pattern => body,` with comments preserved.
 ///
 /// `pattern_for` returns the pre-formatted pattern doc for arm index `i`.

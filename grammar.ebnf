@@ -876,15 +876,10 @@ paren_expr
 
 (* --- Match expression --- *)
 match_expr
-   = "match", expr, "{", [ match_arm, { ",", match_arm }, [ "," ] ], "}"
-   | "match", "(", expr, ",", expr, { ",", expr }, ")",
-     "{", [ tuple_match_arm, { ",", tuple_match_arm }, [ "," ] ], "}";
+   = "match", expr, "{", [ match_arm, { ",", match_arm }, [ "," ] ], "}";
 
 match_arm
    = match_pattern, "=>", expr;
-
-tuple_match_arm
-   = tuple_match_pattern, "=>", expr;
 
 (* ================================================================== *)
 (* 8. Patterns                                                        *)
@@ -900,10 +895,6 @@ pattern_binding_list
 pattern_binding
    = IDENT, ":", "_"                                      (* wildcard *)
    | IDENT, ":", IDENT;                                  (* bind field to variable *)
-
-tuple_match_pattern
-   = "_"
-   | "(", expr, ",", expr, { ",", expr }, ")";
 
 (* ================================================================== *)
 (* 9. For, Scan, and Unfold Expressions                               *)
