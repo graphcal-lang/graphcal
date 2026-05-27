@@ -600,7 +600,7 @@ expr[Index1.V1, Index2.V2] // multi-dimensional access
 
 ```
 TypeName(field1: expr1, field2: expr2)
-TypeName<Arg1, Arg2> { field1: expr1, field2 }
+TypeName<Arg1, Arg2>(field1: expr1, field2)
 MemberName                                        // unit type (no fields)
 ```
 
@@ -622,7 +622,7 @@ IndexName.VariantName
 
 ```
 match scrutinee {
-    VariantA { field1, field2: binding } => expr_a,
+    VariantA(field1, field2: binding) => expr_a,
     VariantB => expr_b,
 }
 ```

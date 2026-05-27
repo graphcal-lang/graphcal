@@ -14,7 +14,7 @@ impl Parser<'_> {
     // --- Match expression ---
 
     /// Parse a match expression:
-    /// `match expr { Variant1 { field } => body, Variant2 => body }`
+    /// `match expr { Variant1(field) => body, Variant2 => body }`
     pub(super) fn parse_match_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, start_span) = self.expect(Token::Match)?;
         // Support tuple scrutinee syntax: `match (a, b) { ... }`
@@ -133,7 +133,7 @@ impl Parser<'_> {
         Ok(arms)
     }
 
-    /// Parse a single match arm: `VariantName { field1, field2: _ } => expr`
+    /// Parse a single match arm: `VariantName(field1, field2: _) => expr`
     fn parse_match_arm(&mut self) -> Result<MatchArm, ParseError> {
         let pattern = self.parse_match_pattern()?;
         self.expect(Token::FatArrow)?;
@@ -147,8 +147,8 @@ impl Parser<'_> {
     }
 
     /// Parse a match pattern:
-    /// - Tagged union: `VariantName { field1, field2: binding }` or bare `VariantName`
-    /// - Index variant: `Index.Variant` (qualified form)
+    /// - Type constructor: `VariantName(field1, field2: binding)` or bare `VariantName`
+    /// - Index label: `Index.Variant` (qualified form)
     fn parse_match_pattern(&mut self) -> Result<MatchPattern, ParseError> {
         let first_ident = self.parse_any_ident()?;
         let start_span = first_ident.span;
@@ -158,15 +158,15 @@ impl Parser<'_> {
             self.lexer.next_token(); // consume '.'
             let variant_ident = self.parse_any_ident()?;
             let end_span = variant_ident.span;
-            // Index variants are bare tags — `Index.Variant { … }` is not a
+            // Index labels are bare tags — `Index.Variant(…)` is not a
             // parse failure but a semantic constraint. Surface a dedicated
             // diagnostic instead of the generic "expected `=>`".
-            if let Some((tok, lbrace_span)) = self.lexer.peek_with_span()
-                && *tok == Token::LBrace
+            if let Some((tok, lparen_span)) = self.lexer.peek_with_span()
+                && *tok == Token::LParen
             {
                 return Err(ParseError::IndexVariantPatternWithBindings {
                     src: self.named_source(),
-                    span: lbrace_span.into(),
+                    span: lparen_span.into(),
                 });
             }
             return Ok(MatchPattern {
@@ -183,15 +183,15 @@ impl Parser<'_> {
             });
         }
 
-        // Tagged union pattern: bare VariantName or VariantName { fields }
+        // Type-constructor pattern: bare VariantName or VariantName(fields)
         let variant_name = Spanned::new(IndexVariantName::new(&first_ident.name), first_ident.span);
 
-        let (bindings, end_span) = if self.lexer.peek() == Some(&Token::LBrace) {
-            self.lexer.next_token(); // consume '{'
+        let (bindings, end_span) = if self.lexer.peek() == Some(&Token::LParen) {
+            self.lexer.next_token(); // consume '('
             let bindings =
-                self.parse_comma_separated(Token::RBrace, Self::parse_pattern_binding)?;
-            let (_, rbrace_span) = self.expect(Token::RBrace)?;
-            (bindings, rbrace_span)
+                self.parse_comma_separated(Token::RParen, Self::parse_pattern_binding)?;
+            let (_, rparen_span) = self.expect(Token::RParen)?;
+            (bindings, rparen_span)
         } else {
             // Bare variant: no bindings
             (Vec::new(), start_span)
@@ -692,5 +692,49 @@ mod tests {
             },
             _ => panic!("expected node"),
         }
+    }
+
+    #[test]
+    fn parse_match_constructor_pattern_with_parens() {
+        let source = "node fuel: Force = match @maneuver { LowThrust(thrust, duration: _) => thrust, Coast => 0.0 N };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Match { arms, .. } => {
+                    assert_eq!(arms.len(), 2);
+                    assert_eq!(arms[0].pattern.variant_name.value.as_str(), "LowThrust");
+                    assert_eq!(arms[0].pattern.bindings.len(), 2);
+                    match &arms[0].pattern.bindings[0] {
+                        PatternBinding::Bind { field, var } => {
+                            assert_eq!(field.value.as_str(), "thrust");
+                            assert_eq!(var.name, "thrust");
+                        }
+                        other @ PatternBinding::Wildcard { .. } => {
+                            panic!("expected bind, got {other:?}")
+                        }
+                    }
+                    match &arms[0].pattern.bindings[1] {
+                        PatternBinding::Wildcard { field, .. } => {
+                            assert_eq!(field.value.as_str(), "duration");
+                        }
+                        other @ PatternBinding::Bind { .. } => {
+                            panic!("expected wildcard, got {other:?}")
+                        }
+                    }
+                    assert!(arms[1].pattern.bindings.is_empty());
+                }
+                other => panic!("expected Match, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_index_label_pattern_rejects_bindings() {
+        let source = "node x: Dimensionless = match @phase { Phase.Launch(label) => 1.0 };";
+        assert!(matches!(
+            Parser::new(source).parse_file(),
+            Err(ParseError::IndexVariantPatternWithBindings { .. })
+        ));
     }
 }

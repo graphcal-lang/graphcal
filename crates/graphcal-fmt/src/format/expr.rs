@@ -873,9 +873,9 @@ pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
             }
         })
         .collect();
-    name.append(RcDoc::text(" { "))
+    name.append(RcDoc::text("("))
         .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
-        .append(RcDoc::text(" }"))
+        .append(RcDoc::text(")"))
 }
 
 pub fn format_tuple_match(

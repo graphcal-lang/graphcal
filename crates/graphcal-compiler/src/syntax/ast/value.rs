@@ -422,7 +422,7 @@ pub enum ExprKind<P: Phase = Raw> {
         curr_name: Spanned<LocalName>,
         body: Box<Expr<P>>,
     },
-    /// Match expression: `match @status { Nominal => ..., Warning { message } => ... }`
+    /// Match expression: `match @status { Nominal => ..., Warning(message) => ... }`
     Match {
         scrutinee: Box<Expr<P>>,
         arms: Vec<MatchArm<P>>,
@@ -785,7 +785,7 @@ pub struct FieldInit<P: Phase = Raw> {
     pub value: Option<Expr<P>>,
 }
 
-/// One arm of a `match` expression: `Impulsive { delta_v } => expr`
+/// One arm of a `match` expression: `Impulsive(delta_v) => expr`
 #[derive(Debug, Clone)]
 pub struct MatchArm<P: Phase = Raw> {
     pub pattern: MatchPattern,
@@ -802,11 +802,11 @@ pub struct TupleMatchArm<P: Phase = Raw> {
     pub span: Span,
 }
 
-/// A match pattern: `Impulsive { delta_v }`, `Nominal`, `Maneuver.Departure`
+/// A match pattern: `Impulsive(delta_v)`, `Nominal`, `Maneuver.Departure`
 #[derive(Debug, Clone)]
 pub struct MatchPattern {
-    /// For index variant match: `Maneuver.Departure` → `Some(Spanned<IndexName>)`
-    /// For tagged union match: `Nominal { ... }` → `None`
+    /// For index-label match: `Maneuver.Departure` → `Some(Spanned<IndexName>)`
+    /// For type-constructor match: `Nominal(...)` → `None`
     pub qualified_index: Option<Spanned<IndexName>>,
     pub variant_name: Spanned<IndexVariantName>,
     pub bindings: Vec<PatternBinding>,
