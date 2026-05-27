@@ -206,30 +206,21 @@ impl Parser<'_> {
     }
 
     /// Parse a single pattern binding:
-    /// - `field_name` (shorthand: bind to same name)
-    /// - `field_name: var_name` (rename)
+    /// - `field_name: var_name` (bind)
     /// - `field_name: _` (wildcard)
     fn parse_pattern_binding(&mut self) -> Result<PatternBinding, ParseError> {
         let field_ident = self.parse_any_ident()?;
         let field = Spanned::new(FieldName::new(&field_ident.name), field_ident.span);
 
-        if self.lexer.peek() == Some(&Token::Colon) {
-            self.lexer.next_token(); // consume ':'
-            // Check for wildcard `_`
-            if self.lexer.peek() == Some(&Token::Underscore) {
-                let (_, span) = self.advance()?;
-                return Ok(PatternBinding::Wildcard { field, span });
-            }
-            // Renamed binding: `field_name: var_name`
-            let var = self.parse_any_ident()?;
-            Ok(PatternBinding::Bind { field, var })
-        } else {
-            // Shorthand: bind to same name as field
-            Ok(PatternBinding::Bind {
-                field,
-                var: field_ident,
-            })
+        self.expect(Token::Colon)?;
+        // Check for wildcard `_`
+        if self.lexer.peek() == Some(&Token::Underscore) {
+            let (_, span) = self.advance()?;
+            return Ok(PatternBinding::Wildcard { field, span });
         }
+        // Binding: `field_name: var_name`
+        let var = self.parse_any_ident()?;
+        Ok(PatternBinding::Bind { field, var })
     }
 
     // --- For comprehension ---
@@ -700,7 +691,7 @@ mod tests {
 
     #[test]
     fn parse_match_constructor_pattern_with_parens() {
-        let source = "node fuel: Force = match @maneuver { LowThrust(thrust, duration: _) => thrust, Coast => 0.0 N };";
+        let source = "node fuel: Force = match @maneuver { LowThrust(thrust: thrust, duration: _) => thrust, Coast => 0.0 N };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
@@ -731,6 +722,12 @@ mod tests {
             },
             _ => panic!("expected node"),
         }
+    }
+
+    #[test]
+    fn parse_match_constructor_pattern_rejects_field_shorthand() {
+        let source = "node fuel: Force = match @maneuver { LowThrust(thrust, duration: _) => thrust, Coast => 0.0 N };";
+        assert!(Parser::new(source).parse_file().is_err());
     }
 
     #[test]

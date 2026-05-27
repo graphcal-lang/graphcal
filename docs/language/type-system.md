@@ -623,14 +623,14 @@ IndexName.VariantName
 
 ```
 match scrutinee {
-    VariantA(field1, field2: binding) => expr_a,
+    VariantA(field1: field1, field2: binding) => expr_a,
     VariantB => expr_b,
 }
 ```
 
 - `scrutinee` must be a union type or a `Label` type.
 - All members/labels must be covered (exhaustiveness check).
-- For union type scrutinees, arms use bare member names and can bind fields.
+- For union type scrutinees, arms use bare member names and can bind fields explicitly with `field: variable` or `field: _`.
 - For `Label` scrutinees, arms use qualified names (`Index.Label`) and cannot bind fields (labels are fieldless).
 - All arm expressions must have the same type.
 - The result type is the common type of the arms.

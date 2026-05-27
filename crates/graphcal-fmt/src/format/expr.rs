@@ -858,15 +858,9 @@ pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
         .bindings
         .iter()
         .map(|b| match b {
-            PatternBinding::Bind { field, var } => {
-                if field.value.as_str() == var.name {
-                    RcDoc::text(var.name.clone())
-                } else {
-                    RcDoc::text(field.value.as_str().to_string())
-                        .append(RcDoc::text(": "))
-                        .append(RcDoc::text(var.name.clone()))
-                }
-            }
+            PatternBinding::Bind { field, var } => RcDoc::text(field.value.as_str().to_string())
+                .append(RcDoc::text(": "))
+                .append(RcDoc::text(var.name.clone())),
             PatternBinding::Wildcard { field, .. } => {
                 RcDoc::text(field.value.as_str().to_string()).append(RcDoc::text(": _"))
             }
