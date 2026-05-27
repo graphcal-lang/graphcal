@@ -451,9 +451,7 @@ mod tests {
                     assert_eq!(constructor.value.as_str(), "TransferResult");
                     assert_eq!(fields.len(), 2);
                     assert_eq!(fields[0].name.value.as_str(), "dv1");
-                    assert!(fields[0].value.is_some());
                     assert_eq!(fields[1].name.value.as_str(), "dv2");
-                    assert!(fields[1].value.is_some());
                 }
                 other => panic!("expected ConstructorCall, got {other:?}"),
             },
@@ -474,6 +472,12 @@ mod tests {
             },
             _ => panic!("expected node"),
         }
+    }
+
+    #[test]
+    fn parse_constructor_call_rejects_field_shorthand() {
+        let source = "node t: Dimensionless = TransferResult(dv1: 1.0, dv2);";
+        assert!(Parser::new(source).parse_file().is_err());
     }
 
     #[test]

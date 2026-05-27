@@ -181,9 +181,7 @@ pub(crate) trait ExprVisitor<P: Phase> {
         fields: &[crate::syntax::ast::FieldInit<P>],
     ) -> Result<(), Self::Error> {
         for field in fields {
-            if let Some(val) = &field.value {
-                self.visit_expr(val)?;
-            }
+            self.visit_expr(&field.value)?;
         }
         Ok(())
     }
@@ -306,9 +304,7 @@ pub trait ExprVisitorMut<P: Phase> {
 
             ExprKind::ConstructorCall { fields, .. } => {
                 for field in fields {
-                    if let Some(val) = &mut field.value {
-                        self.visit_expr_mut(val)?;
-                    }
+                    self.visit_expr_mut(&mut field.value)?;
                 }
                 Ok(())
             }

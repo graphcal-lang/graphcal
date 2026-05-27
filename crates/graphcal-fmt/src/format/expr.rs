@@ -345,10 +345,9 @@ pub fn format_constructor_call(
         // Drain leading comments before this field
         let leading = fmt.drain_comments_before(f.name.span.offset());
         let name = RcDoc::text(f.name.value.as_str().to_string());
-        let field_doc = match &f.value {
-            Some(val) => name.append(RcDoc::text(": ")).append(format_expr(fmt, val)),
-            None => name, // shorthand
-        };
+        let field_doc = name
+            .append(RcDoc::text(": "))
+            .append(format_expr(fmt, &f.value));
         field_docs.push(prepend_comments(leading, field_doc));
     }
 

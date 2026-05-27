@@ -600,12 +600,13 @@ expr[Index1.V1, Index2.V2] // multi-dimensional access
 
 ```
 TypeName(field1: expr1, field2: expr2)
-TypeName<Arg1, Arg2>(field1: expr1, field2)
+TypeName<Arg1, Arg2>(field1: expr1, field2: expr2)
 MemberName                                        // unit type (no fields)
 ```
 
 - Each field expression must match the declared type of that field.
-- Field shorthand (`field` without `: expr`) is available only for local variables of the same name, such as `for`/`match` bindings. Use explicit `field: @node_name` when passing graph nodes.
+- Every constructor field must be written as `field: expr`; shorthand `field` is not supported.
+- Use explicit `field: @node_name` when passing graph nodes.
 - The result type is the struct/union type.
 
 ### Variant Literal

@@ -1341,9 +1341,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
             }
         }
         for f in fields {
-            if let Some(v) = &f.value {
-                self.visit_expr(v)?;
-            }
+            self.visit_expr(&f.value)?;
         }
         Ok(())
     }
@@ -1683,9 +1681,7 @@ pub(crate) fn substitute_type_names_in_expr(
                 }
             }
             for field in fields {
-                if let Some(val) = &mut field.value {
-                    substitute_type_names_in_expr(val, bindings);
-                }
+                substitute_type_names_in_expr(&mut field.value, bindings);
             }
         }
 

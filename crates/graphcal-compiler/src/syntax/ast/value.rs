@@ -781,8 +781,7 @@ pub enum IndexArg<P: Phase = Raw> {
 #[derive(Debug, Clone)]
 pub struct FieldInit<P: Phase = Raw> {
     pub name: Spanned<FieldName>,
-    /// `None` means shorthand: `{ dv1 }` is equivalent to `{ dv1: dv1 }`
-    pub value: Option<Expr<P>>,
+    pub value: Expr<P>,
 }
 
 /// One arm of a `match` expression: `Impulsive(delta_v) => expr`
@@ -816,7 +815,7 @@ pub struct MatchPattern {
 /// A binding in a match pattern.
 #[derive(Debug, Clone)]
 pub enum PatternBinding {
-    /// Bind a field to a variable: `delta_v` (shorthand) or `message: msg` (rename)
+    /// Bind a field to a variable: `message: msg`.
     Bind {
         field: Spanned<FieldName>,
         var: Ident,

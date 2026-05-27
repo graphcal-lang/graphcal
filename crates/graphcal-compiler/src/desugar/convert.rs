@@ -649,7 +649,7 @@ impl From<FieldInit<Raw>> for FieldInit<Desugared> {
     fn from(f: FieldInit<Raw>) -> Self {
         Self {
             name: f.name,
-            value: f.value.map(Into::into),
+            value: f.value.into(),
         }
     }
 }

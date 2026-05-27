@@ -1150,27 +1150,15 @@ pub(super) fn infer_constructor_call(
                 span: field_init.name.span.into(),
             })?;
 
-        let value_type = if let Some(value_expr) = &field_init.value {
-            infer_type(
-                value_expr,
-                declared_types,
-                local_types,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )?
-        } else {
-            // Shorthand: look up the local variable with the same name
-            local_types
-                .get(field_init.name.value.as_str())
-                .cloned()
-                .ok_or_else(|| GraphcalError::UnknownLocalRef {
-                    name: field_init.name.value.to_string(),
-                    src: src.clone(),
-                    span: field_init.name.span.into(),
-                })?
-        };
+        let value_type = infer_type(
+            &field_init.value,
+            declared_types,
+            local_types,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        )?;
 
         let expected_field_type = resolve_field_type(
             &field_def.type_ann,
