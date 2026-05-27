@@ -114,8 +114,8 @@ Use `match` to destructure union types:
 
 ```
 node fuel_proxy: Force = match @maneuver {
-    Impulsive { delta_v: _ } => 0.0 N,
-    LowThrust { thrust, duration: _ } => thrust,
+    Impulsive(delta_v: _) => 0.0 N,
+    LowThrust(thrust, duration: _) => thrust,
 };
 ```
 
@@ -146,8 +146,8 @@ All match arms must produce the same type and dimension:
 ```
 // ERROR: arms have different dimensions (Force vs Velocity)
 node bad: Force = match @maneuver {
-    Impulsive { delta_v } => delta_v,             // Velocity
-    LowThrust { thrust, duration: _ } => thrust,  // Force
+    Impulsive(delta_v) => delta_v,             // Velocity
+    LowThrust(thrust, duration: _) => thrust,  // Force
 };
 ```
 

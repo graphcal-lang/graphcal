@@ -182,15 +182,15 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
-    #[error("index variant patterns cannot have field bindings")]
+    #[error("index label patterns cannot have field bindings")]
     #[diagnostic(
         code(graphcal::P013),
-        help("index variants are bare tags; remove the `{{ ... }}` block")
+        help("index labels are bare tags; remove the parenthesized bindings")
     )]
     IndexVariantPatternWithBindings {
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("field-binding block here")]
+        #[label("field bindings here")]
         span: SourceSpan,
     },
 

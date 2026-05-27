@@ -1,5 +1,6 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 251
 expression: rendered
 ---
 duplicate match arm for `Nominal`
@@ -9,5 +10,5 @@ Begin snippet for duplicate_match_arm.gcl starting at line 10, column 1
 snippet line 10:     Nominal => 0.0,
 snippet line 11:     Nominal => 1.0,
     label at line 11, columns 5 to 11: error here
-snippet line 12:     Warning { code } => code,
+snippet line 12:     Warning(code) => code,
 diagnostic code: graphcal::E001

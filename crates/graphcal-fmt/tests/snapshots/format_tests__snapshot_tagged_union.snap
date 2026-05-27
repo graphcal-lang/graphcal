@@ -1,5 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 586
 expression: formatted
 ---
 // tagged_union.gcl -- Tagged union types and match expressions (issue #601 syntax)
@@ -24,10 +25,10 @@ param burn_duration: Time = 3600.0 s;
 // Construct a variant via the parens constructor-call form.
 node maneuver: ManeuverKind = LowThrust(thrust: @thrust_level, duration: @burn_duration);
 
-// Match on the union — pattern bindings are still brace-style.
+// Match on the union — pattern bindings use constructor-call-style parens.
 node fuel_proxy: Force = match @maneuver {
-    Impulsive { delta_v: _ } => 0.0 N,
-    LowThrust { thrust, duration: _ } => thrust,
+    Impulsive(delta_v: _) => 0.0 N,
+    LowThrust(thrust, duration: _) => thrust,
 };
 
 // Construct the single-variant union with the same parens form.
@@ -46,5 +47,5 @@ node current_status: Status = Nominal;
 
 node status_code: Dimensionless = match @current_status {
     Nominal => 0.0,
-    Warning { code } => code,
+    Warning(code) => code,
 };

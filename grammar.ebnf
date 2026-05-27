@@ -887,7 +887,7 @@ tuple_match_arm
 match_pattern
    = IDENT, ".", IDENT            (* qualified: Index.Variant *)
    | IDENT,
-     [ "{", [ pattern_binding_list ], "}" ];              (* union variant *)
+     [ "(", [ pattern_binding_list ], ")" ];              (* type constructor *)
 
 pattern_binding_list
    = pattern_binding, { ",", pattern_binding }, [ "," ];

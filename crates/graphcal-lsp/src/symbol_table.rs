@@ -1730,7 +1730,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     }
 
     // Register field definitions from struct types under their struct-qualified
-    // keys so that pattern bindings (`@s match { Variant { field: v } => …}`)
+    // keys so that pattern bindings (`@s match { Variant(field: v) => …}`)
     // resolve to the field of the right struct/variant, even when two structs
     // share a field name.
     for type_def in registry.types.all_types() {
