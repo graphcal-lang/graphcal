@@ -617,7 +617,6 @@ fn lift_dim_term(term: &src_ast::DimTerm, _ctx: &ResolveContext) -> dst_ast::Dim
 fn lift_index_expr(idx: src_ast::IndexExpr, _ctx: &ResolveContext) -> dst_ast::IndexExpr {
     match idx {
         src_ast::IndexExpr::Name(name) => dst_ast::IndexExpr::Name(name),
-        src_ast::IndexExpr::NatLiteral(n, span) => dst_ast::IndexExpr::NatLiteral(n, span),
         src_ast::IndexExpr::NatExpr(nat_expr) => dst_ast::IndexExpr::NatExpr(nat_expr),
     }
 }

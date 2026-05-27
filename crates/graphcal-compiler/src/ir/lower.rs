@@ -2364,10 +2364,6 @@ fn collect_nat_ranges_from_type_expr(
         collect_nat_ranges_from_type_expr(base, registry, src)?;
         for idx in indexes {
             match idx {
-                crate::desugar::resolved_ast::IndexExpr::NatLiteral(n, span) => {
-                    let size = nat_size_to_usize(*n, *span, src)?;
-                    registry.ensure_nat_range_index(size);
-                }
                 crate::desugar::resolved_ast::IndexExpr::NatExpr(nat_expr) => {
                     collect_nat_range_literals_from_nat_expr(nat_expr, registry, src)?;
                 }

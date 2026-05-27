@@ -456,7 +456,6 @@ fn convert_dim_expr(d: DimExpr<Raw>) -> DimExpr<Desugared> {
 fn convert_index_expr(idx: IndexExpr<Raw>) -> IndexExpr<Desugared> {
     match idx {
         IndexExpr::Name(name) => IndexExpr::Name(name),
-        IndexExpr::NatLiteral(n, span) => IndexExpr::NatLiteral(n, span),
         IndexExpr::NatExpr(expr) => IndexExpr::NatExpr(expr),
     }
 }
