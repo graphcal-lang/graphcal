@@ -1302,16 +1302,14 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
     ) -> Result<(), Self::Error> {
         self.visit_expr(scrutinee)?;
         for arm in arms {
-            if let Some(qi) = &arm.pattern.qualified_index
-                && self.index_bindings.contains_key(qi.value.as_str())
+            if let crate::desugar::resolved_ast::MatchPattern::IndexLabel { index, variant, .. } =
+                &arm.pattern
+                && self.index_bindings.contains_key(index.value.as_str())
             {
                 return Err(self.orphan_error(
                     "index",
-                    qi.value.as_ref(),
-                    format!(
-                        "`{}`",
-                        arm.pattern.variant_name.value.qualified_by(&qi.value)
-                    ),
+                    index.value.as_ref(),
+                    format!("`{}`", variant.value.qualified_by(&index.value)),
                 ));
             }
             self.visit_expr(&arm.body)?;
@@ -1504,10 +1502,11 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
         if let ExprKind::Match { scrutinee, arms } = &mut expr.kind {
             self.visit_expr_mut(scrutinee)?;
             for arm in arms {
-                if let Some(ref mut idx) = arm.pattern.qualified_index
-                    && let Some(new) = self.bindings.get(idx.value.as_str())
+                if let crate::desugar::resolved_ast::MatchPattern::IndexLabel { index, .. } =
+                    &mut arm.pattern
+                    && let Some(new) = self.bindings.get(index.value.as_str())
                 {
-                    idx.value = new.clone();
+                    index.value = new.clone();
                 }
                 self.visit_expr_mut(&mut arm.body)?;
             }

@@ -885,8 +885,14 @@ match_arm
 (* 8. Patterns                                                        *)
 (* ================================================================== *)
 match_pattern
-   = IDENT, ".", IDENT            (* qualified: Index.Variant *)
-   | IDENT,
+   = index_label_pattern
+   | constructor_pattern;
+
+index_label_pattern
+   = IDENT, ".", IDENT;                       (* qualified: Index.Variant; fieldless *)
+
+constructor_pattern
+   = IDENT,
      [ "(", [ pattern_binding_list ], ")" ];              (* type constructor *)
 
 pattern_binding_list

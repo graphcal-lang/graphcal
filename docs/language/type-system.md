@@ -628,10 +628,11 @@ match scrutinee {
 }
 ```
 
-- `scrutinee` must be a union type or a `Label` type.
+- `scrutinee` must be a union type or a named-index `Label` type.
+- `match` is for exhaustive case analysis over closed finite alternatives. Use `if` for ordinary boolean predicates and comparisons.
 - All members/labels must be covered (exhaustiveness check).
-- For union type scrutinees, arms use bare member names and can bind fields explicitly with `field: variable` or `field: _`.
-- For `Label` scrutinees, arms use qualified names (`Index.Label`) and cannot bind fields (labels are fieldless).
+- For union type scrutinees, arms use bare constructor patterns and can bind fields explicitly with `field: variable` or `field: _`.
+- For `Label` scrutinees, arms use qualified index-label patterns (`Index.Label`) and cannot bind fields (labels are fieldless).
 - All arm expressions must have the same type.
 - The result type is the common type of the arms.
 

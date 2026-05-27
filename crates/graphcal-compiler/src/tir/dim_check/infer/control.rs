@@ -6,7 +6,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::{Expr, MatchArm};
-use crate::syntax::names::{FieldName, IndexName, ScopedName, StructTypeName};
+use crate::syntax::names::{FieldName, ScopedName, StructTypeName};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
@@ -135,17 +135,27 @@ pub(super) fn infer_match(
             let mut arm_types: Vec<InferredType> = Vec::new();
 
             for arm in arms {
-                let variant_name_str = arm.pattern.variant_name.value.as_str();
+                let crate::desugar::resolved_ast::MatchPattern::IndexLabel {
+                    index,
+                    variant,
+                    span,
+                } = &arm.pattern
+                else {
+                    return Err(GraphcalError::EvalError {
+                        message: "label match arms must use qualified index-label patterns"
+                            .to_string(),
+                        src: src.clone(),
+                        span: arm.pattern.span().into(),
+                    });
+                };
+                let variant_name_str = variant.value.as_str();
 
-                // For label patterns, qualified_index must match the index name
-                if let Some(qualified) = &arm.pattern.qualified_index
-                    && qualified.value.as_str() != index_name.as_str()
-                {
+                if index.value.as_str() != index_name.as_str() {
                     return Err(GraphcalError::IndexMismatch {
                         expected: index_name.clone(),
-                        found: qualified.value.clone(),
+                        found: index.value.clone(),
                         src: src.clone(),
-                        span: qualified.span.into(),
+                        span: index.span.into(),
                     });
                 }
 
@@ -155,7 +165,7 @@ pub(super) fn infer_match(
                         type_name: StructTypeName::new(index_name.as_str()),
                         field_name: FieldName::new(variant_name_str),
                         src: src.clone(),
-                        span: arm.pattern.variant_name.span.into(),
+                        span: variant.span.into(),
                     });
                 }
 
@@ -164,20 +174,7 @@ pub(super) fn infer_match(
                     return Err(GraphcalError::EvalError {
                         message: format!("duplicate match arm for variant `{variant_name_str}`"),
                         src: src.clone(),
-                        span: arm.pattern.span.into(),
-                    });
-                }
-
-                // Labels are fieldless — no bindings allowed
-                if !arm.pattern.bindings.is_empty() {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "index label variant `{}` has no fields to bind",
-                            crate::syntax::names::IndexVariantName::new(variant_name_str)
-                                .qualified_by(index_name)
-                        ),
-                        src: src.clone(),
-                        span: arm.pattern.span.into(),
+                        span: (*span).into(),
                     });
                 }
 
@@ -225,17 +222,19 @@ pub(super) fn infer_match(
             let mut arm_types: Vec<InferredType> = Vec::new();
 
             for arm in arms {
-                let variant_name_str = arm.pattern.variant_name.value.as_str();
-                if let Some(qualified) = &arm.pattern.qualified_index
-                    && qualified.value.as_str() != type_name.as_str()
-                {
-                    return Err(GraphcalError::IndexMismatch {
-                        expected: IndexName::new(type_name.as_str()),
-                        found: qualified.value.clone(),
+                let crate::desugar::resolved_ast::MatchPattern::Constructor {
+                    name,
+                    bindings,
+                    span,
+                } = &arm.pattern
+                else {
+                    return Err(GraphcalError::EvalError {
+                        message: "union match arms must use constructor patterns".to_string(),
                         src: src.clone(),
-                        span: qualified.span.into(),
+                        span: arm.pattern.span().into(),
                     });
-                }
+                };
+                let variant_name_str = name.value.as_str();
 
                 // The match pattern names a constructor of `type_def`.
                 // Resolve it in the union's member list directly — there
@@ -247,7 +246,7 @@ pub(super) fn infer_match(
                             "internal: cannot match on required (unbound) type `{type_name}`"
                         ),
                         src: src.clone(),
-                        span: arm.pattern.span.into(),
+                        span: (*span).into(),
                     })?;
                 let variant_def = members
                     .iter()
@@ -256,7 +255,7 @@ pub(super) fn infer_match(
                         type_name: type_name.clone(),
                         field_name: FieldName::new(variant_name_str),
                         src: src.clone(),
-                        span: arm.pattern.variant_name.span.into(),
+                        span: name.span.into(),
                     })?;
 
                 // Check for duplicate arms
@@ -264,13 +263,13 @@ pub(super) fn infer_match(
                     return Err(GraphcalError::EvalError {
                         message: format!("duplicate match arm for `{variant_name_str}`"),
                         src: src.clone(),
-                        span: arm.pattern.span.into(),
+                        span: (*span).into(),
                     });
                 }
 
                 // Bind pattern variables as locals
                 let mut arm_locals = local_types.clone();
-                for binding in &arm.pattern.bindings {
+                for binding in bindings {
                     match binding {
                         crate::desugar::resolved_ast::PatternBinding::Bind { field, var } => {
                             let field_def = variant_def

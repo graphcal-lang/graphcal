@@ -795,7 +795,7 @@ fn lift_expr_kind(
                 .into_iter()
                 .map(|arm| {
                     let mut scope = HashSet::new();
-                    for binding in &arm.pattern.bindings {
+                    for binding in arm.pattern.bindings() {
                         if let crate::syntax::ast::PatternBinding::Bind { var, .. } = binding {
                             scope.insert(LocalName::new(&var.name));
                         }

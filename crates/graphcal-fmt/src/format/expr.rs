@@ -844,28 +844,33 @@ pub fn format_match(
 }
 
 pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
-    let name = p.qualified_index.as_ref().map_or_else(
-        || RcDoc::text(p.variant_name.value.as_str().to_string()),
-        |index| RcDoc::text(format!("{}.{}", index.value, p.variant_name.value)),
-    );
-    if p.bindings.is_empty() {
-        return name;
-    }
-    let binding_docs: Vec<RcDoc<'static>> = p
-        .bindings
-        .iter()
-        .map(|b| match b {
-            PatternBinding::Bind { field, var } => RcDoc::text(field.value.as_str().to_string())
-                .append(RcDoc::text(": "))
-                .append(RcDoc::text(var.name.clone())),
-            PatternBinding::Wildcard { field, .. } => {
-                RcDoc::text(field.value.as_str().to_string()).append(RcDoc::text(": _"))
+    match p {
+        MatchPattern::IndexLabel { index, variant, .. } => {
+            RcDoc::text(format!("{}.{}", index.value, variant.value))
+        }
+        MatchPattern::Constructor { name, bindings, .. } => {
+            let name = RcDoc::text(name.value.as_str().to_string());
+            if bindings.is_empty() {
+                return name;
             }
-        })
-        .collect();
-    name.append(RcDoc::text("("))
-        .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
-        .append(RcDoc::text(")"))
+            let binding_docs: Vec<RcDoc<'static>> = bindings
+                .iter()
+                .map(|b| match b {
+                    PatternBinding::Bind { field, var } => {
+                        RcDoc::text(field.value.as_str().to_string())
+                            .append(RcDoc::text(": "))
+                            .append(RcDoc::text(var.name.clone()))
+                    }
+                    PatternBinding::Wildcard { field, .. } => {
+                        RcDoc::text(field.value.as_str().to_string()).append(RcDoc::text(": _"))
+                    }
+                })
+                .collect();
+            name.append(RcDoc::text("("))
+                .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
+                .append(RcDoc::text(")"))
+        }
+    }
 }
 
 /// Build per-arm docs for `format_match`. Walks each arm's span, drains

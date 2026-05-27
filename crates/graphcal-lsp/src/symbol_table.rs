@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use graphcal_compiler::desugar::resolved_ast::{
     AssertDecl, AttributeArg, BaseDimDecl, BindableVisibility, DagDecl, DeclKind, DimDecl, DimExpr,
-    DomainBound, ExprKind, FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl,
-    ParamDecl, PatternBinding, PlotDecl, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnitDecl,
-    UnitExpr,
+    DomainBound, ExprKind, FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl,
+    MatchPattern, NodeDecl, ParamDecl, PatternBinding, PlotDecl, TypeDecl, TypeDeclBody, TypeExpr,
+    TypeExprKind, UnitDecl, UnitExpr,
 };
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::span::Span;
@@ -1313,33 +1313,32 @@ fn collect_expr_refs(
         ExprKind::Match { scrutinee, arms } => {
             collect_expr_refs(scrutinee, table, scopes);
             for arm in arms {
-                let variant_name = arm.pattern.variant_name.value.to_string();
-
-                // If the pattern has a qualified index (e.g., Maneuver.Departure),
-                // add a reference for the index name too.
-                if let Some(qi) = &arm.pattern.qualified_index {
-                    table.references.push(ReferenceInfo {
-                        span: qi.span,
-                        target: SymbolKey::TopLevel(qi.value.to_string()),
-                    });
-                    // Reference the qualified variant: Index::Variant
-                    table.references.push(ReferenceInfo {
-                        span: arm.pattern.variant_name.span,
-                        target: SymbolKey::Variant {
-                            parent: qi.value.to_string(),
-                            variant: variant_name.clone(),
-                        },
-                    });
-                } else {
-                    // Try to resolve variant as Type::Variant (tagged union).
-                    table.references.push(ReferenceInfo {
-                        span: arm.pattern.variant_name.span,
-                        target: SymbolKey::TopLevel(variant_name.clone()),
-                    });
-                }
+                let (variant_name, bindings) = match &arm.pattern {
+                    MatchPattern::IndexLabel { index, variant, .. } => {
+                        table.references.push(ReferenceInfo {
+                            span: index.span,
+                            target: SymbolKey::TopLevel(index.value.to_string()),
+                        });
+                        table.references.push(ReferenceInfo {
+                            span: variant.span,
+                            target: SymbolKey::Variant {
+                                parent: index.value.to_string(),
+                                variant: variant.value.to_string(),
+                            },
+                        });
+                        (variant.value.to_string(), &[][..])
+                    }
+                    MatchPattern::Constructor { name, bindings, .. } => {
+                        table.references.push(ReferenceInfo {
+                            span: name.span,
+                            target: SymbolKey::TopLevel(name.value.to_string()),
+                        });
+                        (name.value.to_string(), bindings.as_slice())
+                    }
+                };
 
                 scopes.push();
-                for binding in &arm.pattern.bindings {
+                for binding in bindings {
                     match binding {
                         PatternBinding::Bind { field, var } => {
                             table.references.push(ReferenceInfo {
