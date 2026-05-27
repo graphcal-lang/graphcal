@@ -1,14 +1,14 @@
 use graphcal_compiler::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, ForBinding, IndexArg, MapEntry, MatchArm, MatchPattern,
-    ModulePath, ParamBinding, PatternBinding, TableIndexSpec, TupleMatchArm, TypeExpr, UnaryOp,
+    ModulePath, ParamBinding, PatternBinding, TableIndexSpec, TupleMatchArm, UnaryOp,
 };
 use graphcal_compiler::syntax::names::{LocalName, ScopedName};
 use graphcal_compiler::syntax::span::Spanned;
 use pretty::RcDoc;
 
 use super::{
-    Formatter, INDENT, flat_alt_group, format_type_expr_inline, format_unit_expr_inline,
-    prepend_comments, render_doc_to_string,
+    Formatter, INDENT, flat_alt_group, format_unit_expr_inline, prepend_comments,
+    render_doc_to_string,
 };
 
 // ---------------------------------------------------------------------------
@@ -82,11 +82,11 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::FieldAccess { expr: inner, field } => format_expr(fmt, inner)
             .append(RcDoc::text("."))
             .append(RcDoc::text(field.value.as_str().to_string())),
-        ExprKind::StructConstruction {
-            type_name,
-            type_args,
+        ExprKind::ConstructorCall {
+            constructor,
+            generic_args,
             fields,
-        } => format_struct_construction(fmt, type_name, type_args, fields),
+        } => format_constructor_call(fmt, constructor, generic_args, fields),
         ExprKind::MapLiteral { entries } => format_map_literal(fmt, entries),
         ExprKind::Sugar(graphcal_compiler::syntax::ast::RawExprSugar::TableLiteral {
             indexes,
@@ -327,24 +327,17 @@ pub fn format_if(
     flat_alt_group(single_line, multi_line)
 }
 
-pub fn format_struct_construction(
+pub fn format_constructor_call(
     fmt: &mut Formatter<'_>,
-    type_name: &graphcal_compiler::syntax::span::Spanned<
+    constructor: &graphcal_compiler::syntax::span::Spanned<
         graphcal_compiler::syntax::names::ConstructorName,
     >,
-    type_args: &[TypeExpr],
+    generic_args: &[graphcal_compiler::syntax::ast::GenericArg],
     fields: &[FieldInit],
 ) -> RcDoc<'static> {
-    let mut header = RcDoc::text(type_name.value.as_str().to_string());
-    if !type_args.is_empty() {
-        let arg_docs: Vec<RcDoc<'static>> = type_args
-            .iter()
-            .map(|a| format_type_expr_inline(fmt, a))
-            .collect();
-        header = header
-            .append(RcDoc::text("<"))
-            .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
-            .append(RcDoc::text(">"));
+    let mut header = RcDoc::text(constructor.value.as_str().to_string());
+    if !generic_args.is_empty() {
+        header = header.append(format_generic_args(fmt, generic_args));
     }
 
     let mut field_docs: Vec<RcDoc<'static>> = Vec::new();

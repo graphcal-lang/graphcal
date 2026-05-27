@@ -186,12 +186,10 @@ fn collect_names_from_decls(
                 }
             }
             // Dim names are recognized so that a bare `Velocity` in an
-            // include-binding RHS (`Speed: Velocity`) lowers to a
-            // placeholder `StructConstruction` — the same shape the
-            // binding-extraction path already accepts for index/type
-            // bindings. Resolving "Velocity" elsewhere as a struct
-            // construction is benign — downstream type checking
-            // rejects the misuse with a precise diagnostic.
+            // include-binding RHS (`Speed: Velocity`) lowers to a typed
+            // type-system reference. Resolving "Velocity" elsewhere as a
+            // value is rejected by downstream type checking with a precise
+            // diagnostic.
             src_ast::DeclKind::BaseDimension(d) => {
                 dim_names.insert(d.name.value.clone());
             }
@@ -700,15 +698,15 @@ fn lift_expr_kind(
             expr: Box::new(lift_expr(*expr, ctx)),
             field,
         },
-        S::StructConstruction {
-            type_name,
-            type_args,
+        S::ConstructorCall {
+            constructor,
+            generic_args,
             fields,
-        } => dst_ast::ExprKind::StructConstruction {
-            type_name,
-            type_args: type_args
+        } => dst_ast::ExprKind::ConstructorCall {
+            constructor,
+            generic_args: generic_args
                 .into_iter()
-                .map(|t| lift_type_expr(t, ctx))
+                .map(|arg| lift_generic_arg(arg, ctx))
                 .collect(),
             fields: fields
                 .into_iter()
@@ -873,7 +871,7 @@ fn resolve_ident_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKin
 /// 1. Local scope (for/scan/unfold/match bindings) → `LocalRef`
 /// 2. Builtin constants (PI, E, etc.) → `ConstRef`
 /// 3. Time scale names (UTC, TAI, etc.) → `ConstRef`
-/// 4. Constructors → `StructConstruction` (bare, no fields)
+/// 4. Constructors → `ConstructorCall` (bare, no fields)
 /// 5. Type-system names → `TypeSystemRef`
 /// 6. Fallback → `LocalRef` (will be caught later by semantic validation)
 fn resolve_name_ref(ident: Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
@@ -898,9 +896,9 @@ fn resolve_name_ref(ident: Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
     }
 
     if ctx.constructor_names.contains(name.as_str()) {
-        return dst_ast::ExprKind::StructConstruction {
-            type_name: Spanned::new(ConstructorName::new(name), ident.span),
-            type_args: Vec::new(),
+        return dst_ast::ExprKind::ConstructorCall {
+            constructor: Spanned::new(ConstructorName::new(name), ident.span),
+            generic_args: Vec::new(),
             fields: Vec::new(),
         };
     }
@@ -1000,17 +998,17 @@ mod tests {
             _ => None,
         }
         .unwrap();
-        let (type_name, type_args, fields) = match &node.value.kind {
-            ExprKind::StructConstruction {
-                type_name,
-                type_args,
+        let (constructor, generic_args, fields) = match &node.value.kind {
+            ExprKind::ConstructorCall {
+                constructor,
+                generic_args,
                 fields,
-            } => Some((type_name, type_args, fields)),
+            } => Some((constructor, generic_args, fields)),
             _ => None,
         }
         .unwrap();
-        assert_eq!(type_name.value.as_str(), "WeightlessStudent");
-        assert!(type_args.is_empty());
+        assert_eq!(constructor.value.as_str(), "WeightlessStudent");
+        assert!(generic_args.is_empty());
         assert!(fields.is_empty());
     }
 

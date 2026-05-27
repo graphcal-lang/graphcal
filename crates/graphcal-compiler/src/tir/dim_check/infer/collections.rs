@@ -1,6 +1,6 @@
 //! Type inference for collection/indexed expressions:
 //! ForComp, MapLiteral, TableLiteral, IndexAccess, Scan, Unfold,
-//! FieldAccess, StructConstruction.
+//! FieldAccess, ConstructorCall.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::{
-    BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, IndexArg, NatExpr,
+    BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, GenericArg, IndexArg, NatExpr,
 };
 use crate::syntax::names::{
     ConstructorName, FieldName, GenericParamName, IndexName, ScopedName, StructTypeName,
@@ -16,7 +16,7 @@ use crate::syntax::names::{
 use crate::tir::typed::NatLinearForm;
 
 use crate::registry::error::GraphcalError;
-use crate::registry::types::Registry;
+use crate::registry::types::{Registry, TypeGenericConstraint};
 
 use super::super::helpers::{cartesian_product, format_inferred_type, resolve_field_type};
 use super::super::{DeclaredType, InferredType};
@@ -957,15 +957,15 @@ pub(super) fn infer_field_access(
     }
 }
 
-/// Infer the type of a struct construction expression.
+/// Infer the type of a constructor call expression.
 #[expect(
     clippy::too_many_lines,
-    reason = "exhaustive validation of struct construction"
+    reason = "exhaustive validation of constructor calls"
 )]
-pub(super) fn infer_struct_construction(
+pub(super) fn infer_constructor_call(
     expr: &Expr,
-    type_name: &crate::syntax::span::Spanned<ConstructorName>,
-    constructor_type_args: &[crate::desugar::resolved_ast::TypeExpr],
+    constructor: &crate::syntax::span::Spanned<ConstructorName>,
+    constructor_generic_args: &[GenericArg],
     fields: &[crate::desugar::resolved_ast::FieldInit],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
@@ -974,23 +974,23 @@ pub(super) fn infer_struct_construction(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    // Resolve the constructor through the constructor namespace. With
-    // every type stored as an n-variant union, struct construction
-    // always names a constructor — not a type. The union the
-    // constructor belongs to becomes the value's type.
+    // Resolve through the constructor namespace. With every user-defined
+    // `type` stored as an n-variant union, a constructor call names a
+    // constructor — not a type. The union the constructor belongs to becomes
+    // the value's type.
     let (type_def, variant) = registry
         .types
-        .lookup_ctor(&type_name.value)
+        .lookup_ctor(&constructor.value)
         .ok_or_else(|| GraphcalError::UnknownStructType {
-            name: StructTypeName::new(type_name.value.as_str()),
+            name: StructTypeName::new(constructor.value.as_str()),
             src: src.clone(),
-            span: type_name.span.into(),
+            span: constructor.span.into(),
         })?;
     let owning_type_name = type_def.name.clone();
     let variant_fields: &[crate::registry::types::StructField] = &variant.fields;
 
-    // Resolve constructor type args for generic structs
-    let resolved_type_args: Vec<InferredType> = if constructor_type_args.is_empty()
+    // Resolve constructor generic args for generic types.
+    let resolved_type_args: Vec<InferredType> = if constructor_generic_args.is_empty()
         && type_def.generic_params.is_empty()
     {
         vec![]
@@ -1001,8 +1001,8 @@ pub(super) fn infer_struct_construction(
             .iter()
             .take_while(|p| p.default.is_none())
             .count();
-        if constructor_type_args.len() < required_count
-            || constructor_type_args.len() > total_params
+        if constructor_generic_args.len() < required_count
+            || constructor_generic_args.len() > total_params
         {
             let hint = if required_count == total_params {
                 format!("{total_params}")
@@ -1011,35 +1011,69 @@ pub(super) fn infer_struct_construction(
             };
             return Err(GraphcalError::EvalError {
                 message: format!(
-                    "type `{}` expects {hint} type argument(s), got {}",
-                    type_name.value,
-                    constructor_type_args.len()
+                    "type `{}` expects {hint} generic argument(s), got {}",
+                    constructor.value,
+                    constructor_generic_args.len()
                 ),
                 src: src.clone(),
-                span: type_name.span.into(),
+                span: constructor.span.into(),
             });
         }
         let no_dim_params: &[GenericParamName] = &[];
         let no_index_params: &[GenericParamName] = &[];
         let no_nat_params: &[GenericParamName] = &[];
         let mut args = Vec::with_capacity(total_params);
-        for arg in constructor_type_args {
-            let resolved = crate::tir::typed::resolve_type_expr(
-                arg,
-                registry,
-                no_dim_params,
-                no_index_params,
-                no_nat_params,
-                src,
-            )?;
-            let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-            args.push(InferredType::from(&dt));
+        for (param, arg) in type_def.generic_params.iter().zip(constructor_generic_args) {
+            match (param.constraint, arg) {
+                (TypeGenericConstraint::Nat, GenericArg::Nat(nat_expr)) => {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "constructor generic argument `{}` for Nat parameter `{}` is not yet representable in value types",
+                            nat_expr, param.name
+                        ),
+                        src: src.clone(),
+                        span: nat_expr.span().into(),
+                    });
+                }
+                (TypeGenericConstraint::Nat, GenericArg::Type(type_expr)) => {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "generic parameter `{}` expects a Nat argument, got a type argument",
+                            param.name
+                        ),
+                        src: src.clone(),
+                        span: type_expr.span.into(),
+                    });
+                }
+                (_, GenericArg::Nat(nat_expr)) => {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "generic parameter `{}` expects a type argument, got Nat argument `{}`",
+                            param.name, nat_expr
+                        ),
+                        src: src.clone(),
+                        span: nat_expr.span().into(),
+                    });
+                }
+                (_, GenericArg::Type(type_expr)) => {
+                    let resolved = crate::tir::typed::resolve_type_expr(
+                        type_expr,
+                        registry,
+                        no_dim_params,
+                        no_index_params,
+                        no_nat_params,
+                        src,
+                    )?;
+                    let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
+                    args.push(InferredType::from(&dt));
+                }
+            }
         }
         // Fill in defaults for remaining params
         for param in type_def
             .generic_params
             .iter()
-            .skip(constructor_type_args.len())
+            .skip(constructor_generic_args.len())
         {
             let default_expr = param
                 .default
@@ -1050,7 +1084,7 @@ pub(super) fn infer_struct_construction(
                         param.name
                     ),
                     src: src.clone(),
-                    span: type_name.span.into(),
+                    span: constructor.span.into(),
                 })?;
             let resolved = crate::tir::typed::resolve_type_expr(
                 default_expr,
@@ -1079,7 +1113,7 @@ pub(super) fn infer_struct_construction(
         .collect();
     if !extra.is_empty() {
         return Err(GraphcalError::ExtraFields {
-            type_name: StructTypeName::new(type_name.value.as_str()),
+            type_name: StructTypeName::new(constructor.value.as_str()),
             extra,
             src: src.clone(),
             span: expr.span.into(),
@@ -1095,7 +1129,7 @@ pub(super) fn infer_struct_construction(
         .collect();
     if !missing.is_empty() {
         return Err(GraphcalError::MissingFields {
-            type_name: StructTypeName::new(type_name.value.as_str()),
+            type_name: StructTypeName::new(constructor.value.as_str()),
             missing,
             src: src.clone(),
             span: expr.span.into(),
@@ -1109,8 +1143,8 @@ pub(super) fn infer_struct_construction(
             .find(|f| f.name.as_str() == field_init.name.value.as_str())
             .ok_or_else(|| GraphcalError::EvalError {
                 message: format!(
-                    "internal: unknown field `{}` in struct `{}`",
-                    field_init.name.value, type_name.value
+                    "internal: unknown field `{}` in constructor `{}`",
+                    field_init.name.value, constructor.value
                 ),
                 src: src.clone(),
                 span: field_init.name.span.into(),
@@ -1147,7 +1181,7 @@ pub(super) fn infer_struct_construction(
         )?;
         if value_type != expected_field_type {
             return Err(GraphcalError::FieldDimensionMismatch {
-                type_name: StructTypeName::new(type_name.value.as_str()),
+                type_name: StructTypeName::new(constructor.value.as_str()),
                 field_name: field_init.name.value.clone(),
                 expected: format_inferred_type(&expected_field_type, registry),
                 found: format_inferred_type(&value_type, registry),

@@ -76,9 +76,7 @@ pub(crate) trait ExprVisitor<P: Phase> {
                 Ok(())
             }
 
-            ExprKind::StructConstruction { fields, .. } => {
-                self.visit_struct_construction(expr, fields)
-            }
+            ExprKind::ConstructorCall { fields, .. } => self.visit_constructor_call(expr, fields),
 
             ExprKind::MapLiteral { entries } => self.visit_map_entries(expr, entries),
 
@@ -177,7 +175,7 @@ pub(crate) trait ExprVisitor<P: Phase> {
         self.visit_expr(inner)
     }
 
-    fn visit_struct_construction(
+    fn visit_constructor_call(
         &mut self,
         _expr: &Expr<P>,
         fields: &[crate::syntax::ast::FieldInit<P>],
@@ -306,7 +304,7 @@ pub trait ExprVisitorMut<P: Phase> {
 
             ExprKind::IndexAccess { .. } => self.visit_index_access_mut(expr),
 
-            ExprKind::StructConstruction { fields, .. } => {
+            ExprKind::ConstructorCall { fields, .. } => {
                 for field in fields {
                     if let Some(val) = &mut field.value {
                         self.visit_expr_mut(val)?;

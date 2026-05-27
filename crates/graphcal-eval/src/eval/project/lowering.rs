@@ -667,10 +667,9 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
 /// Extract a `PascalCase` index name from a binding expression.
 ///
 /// Index bindings use the form `DepIndex = ImporterIndex`, where both sides are
-/// `PascalCase` identifiers. The parser produces `ExprKind::StructConstruction`
-/// (with empty `fields`/`type_args`) for bare `PascalCase` identifiers in
-/// expression position, because it cannot distinguish a bare type name from an
-/// index name at parse time.
+/// `PascalCase` identifiers. Name resolution can produce `ExprKind::ConstructorCall`
+/// (with empty `fields`/`generic_args`) for bare constructor identifiers in
+/// expression position; type/index names resolve to `TypeSystemRef`.
 pub(in crate::eval::project) fn extract_index_name_from_binding_expr(
     expr: &Expr,
     dep_index_name: &str,
@@ -681,11 +680,13 @@ pub(in crate::eval::project) fn extract_index_name_from_binding_expr(
             Ok(name.value.member().to_string())
         }
         ExprKind::TypeSystemRef(name) => Ok(name.value.as_str().to_string()),
-        ExprKind::StructConstruction {
-            type_name,
-            type_args,
+        ExprKind::ConstructorCall {
+            constructor,
+            generic_args,
             fields,
-        } if type_args.is_empty() && fields.is_empty() => Ok(type_name.value.as_str().to_string()),
+        } if generic_args.is_empty() && fields.is_empty() => {
+            Ok(constructor.value.as_str().to_string())
+        }
         _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
             name: dep_index_name.to_string(),
             src: file_src.clone(),
@@ -697,8 +698,8 @@ pub(in crate::eval::project) fn extract_index_name_from_binding_expr(
 /// Extract a `PascalCase` type name from a binding expression.
 ///
 /// Type bindings use the form `DepType: ImporterType` — the RHS is a bare
-/// `PascalCase` identifier, which the parser produces as a zero-arg
-/// `StructConstruction` (same shape as the index-binding RHS).
+/// `PascalCase` identifier, which resolves to `TypeSystemRef` for type/index
+/// names or a zero-arg `ConstructorCall` for bare constructors.
 pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
     expr: &Expr,
     dep_type_name: &str,
@@ -709,11 +710,13 @@ pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
             Ok(name.value.member().to_string())
         }
         ExprKind::TypeSystemRef(name) => Ok(name.value.as_str().to_string()),
-        ExprKind::StructConstruction {
-            type_name,
-            type_args,
+        ExprKind::ConstructorCall {
+            constructor,
+            generic_args,
             fields,
-        } if type_args.is_empty() && fields.is_empty() => Ok(type_name.value.as_str().to_string()),
+        } if generic_args.is_empty() && fields.is_empty() => {
+            Ok(constructor.value.as_str().to_string())
+        }
         _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
             name: dep_type_name.to_string(),
             src: file_src.clone(),

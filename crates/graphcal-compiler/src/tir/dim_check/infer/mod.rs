@@ -351,14 +351,14 @@ pub(super) fn infer_type_with_owner(
             src,
         ),
 
-        ExprKind::StructConstruction {
-            type_name,
-            type_args: constructor_type_args,
+        ExprKind::ConstructorCall {
+            constructor,
+            generic_args: constructor_generic_args,
             fields,
-        } => collections::infer_struct_construction(
+        } => collections::infer_constructor_call(
             expr,
-            type_name,
-            constructor_type_args,
+            constructor,
+            constructor_generic_args,
             fields,
             declared_types,
             local_types,

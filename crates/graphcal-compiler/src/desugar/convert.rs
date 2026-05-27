@@ -551,13 +551,13 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
                 expr: Box::new((*expr).into()),
                 field,
             },
-            ExprKind::StructConstruction {
-                type_name,
-                type_args,
+            ExprKind::ConstructorCall {
+                constructor,
+                generic_args,
                 fields,
-            } => Self::StructConstruction {
-                type_name,
-                type_args: type_args.into_iter().map(Into::into).collect(),
+            } => Self::ConstructorCall {
+                constructor,
+                generic_args: generic_args.into_iter().map(Into::into).collect(),
                 fields: fields.into_iter().map(Into::into).collect(),
             },
             ExprKind::MapLiteral { entries } => Self::MapLiteral {

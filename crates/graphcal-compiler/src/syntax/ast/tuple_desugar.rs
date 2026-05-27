@@ -126,7 +126,7 @@ fn desugar_expr(expr: &mut Expr<crate::syntax::phase::Desugared>) {
         | ExprKind::DisplayTimezone { expr: inner, .. }
         | ExprKind::FieldAccess { expr: inner, .. }
         | ExprKind::IndexAccess { expr: inner, .. } => desugar_expr(inner),
-        ExprKind::StructConstruction { fields, .. } => {
+        ExprKind::ConstructorCall { fields, .. } => {
             for f in fields {
                 if let Some(v) = &mut f.value {
                     desugar_expr(v);

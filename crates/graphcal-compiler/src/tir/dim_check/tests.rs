@@ -836,7 +836,7 @@ node bad: Length = (1.0 foobar).altitude;";
     );
 }
 
-// --- Error propagation through struct construction field value ---
+// --- Error propagation through constructor-call field value ---
 
 #[test]
 fn check_struct_construction_error_in_field_value() {

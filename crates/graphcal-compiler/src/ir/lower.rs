@@ -1319,23 +1319,25 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
         Ok(())
     }
 
-    fn visit_struct_construction(
+    fn visit_constructor_call(
         &mut self,
         expr: &Expr,
         fields: &[crate::desugar::resolved_ast::FieldInit],
     ) -> Result<(), Self::Error> {
-        if let ExprKind::StructConstruction {
-            type_name,
-            type_args,
+        if let ExprKind::ConstructorCall {
+            constructor,
+            generic_args,
             ..
         } = &expr.kind
         {
-            let n = type_name.value.as_str();
+            let n = constructor.value.as_str();
             if self.type_bindings.contains_key(n) {
-                return Err(self.orphan_error("type", n, format!("constructor `{n} {{ ... }}`")));
+                return Err(self.orphan_error("type", n, format!("constructor `{n}(...)`")));
             }
-            for ty in type_args {
-                self.check_type_expr(ty)?;
+            for arg in generic_args {
+                if let crate::desugar::resolved_ast::GenericArg::Type(ty) = arg {
+                    self.check_type_expr(ty)?;
+                }
             }
         }
         for f in fields {
@@ -1633,9 +1635,9 @@ where
 
 /// Rewrite struct-type names within an expression according to a binding map.
 ///
-/// Covers `StructConstruction.type_name`, `StructConstruction.type_args`,
+/// Covers `ConstructorCall.constructor`, `ConstructorCall.generic_args`,
 /// and `FnCall.type_args`. Recurses through child expressions so nested
-/// struct constructions are also rewritten.
+/// constructor calls are also rewritten.
 #[expect(
     clippy::too_many_lines,
     reason = "single recursion covering every ExprKind variant"
@@ -1667,16 +1669,18 @@ pub(crate) fn substitute_type_names_in_expr(
             }
         }
 
-        ExprKind::StructConstruction {
-            type_name,
-            type_args,
+        ExprKind::ConstructorCall {
+            constructor,
+            generic_args,
             fields,
         } => {
-            if let Some(new_name) = bindings.get(type_name.value.as_str()) {
-                type_name.value = ConstructorName::new(new_name.as_str());
+            if let Some(new_name) = bindings.get(constructor.value.as_str()) {
+                constructor.value = ConstructorName::new(new_name.as_str());
             }
-            for ty in type_args.iter_mut() {
-                substitute_type_expr_nominal_names(ty, bindings);
+            for arg in generic_args.iter_mut() {
+                if let GenericArg::Type(ty) = arg {
+                    substitute_type_expr_nominal_names(ty, bindings);
+                }
             }
             for field in fields {
                 if let Some(val) = &mut field.value {

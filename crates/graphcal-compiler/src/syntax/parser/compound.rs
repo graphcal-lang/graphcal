@@ -443,17 +443,19 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::StructConstruction {
-                    type_name, fields, ..
+                ExprKind::ConstructorCall {
+                    constructor,
+                    fields,
+                    ..
                 } => {
-                    assert_eq!(type_name.value.as_str(), "TransferResult");
+                    assert_eq!(constructor.value.as_str(), "TransferResult");
                     assert_eq!(fields.len(), 2);
                     assert_eq!(fields[0].name.value.as_str(), "dv1");
                     assert!(fields[0].value.is_some());
                     assert_eq!(fields[1].name.value.as_str(), "dv2");
                     assert!(fields[1].value.is_some());
                 }
-                other => panic!("expected StructConstruction, got {other:?}"),
+                other => panic!("expected ConstructorCall, got {other:?}"),
             },
             _ => panic!("expected node"),
         }
@@ -465,10 +467,10 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::StructConstruction { fields, .. } => {
+                ExprKind::ConstructorCall { fields, .. } => {
                     assert_eq!(fields.len(), 2);
                 }
-                other => panic!("expected StructConstruction, got {other:?}"),
+                other => panic!("expected ConstructorCall, got {other:?}"),
             },
             _ => panic!("expected node"),
         }
@@ -480,18 +482,54 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::StructConstruction {
-                    type_name,
-                    type_args,
+                ExprKind::ConstructorCall {
+                    constructor,
+                    generic_args,
                     fields,
                 } => {
-                    assert_eq!(type_name.value.as_str(), "Vec3");
-                    assert_eq!(type_args.len(), 2);
-                    assert_eq!(dim_expr_name(&type_args[0]), "Length");
-                    assert_eq!(dim_expr_name(&type_args[1]), "ECI");
+                    assert_eq!(constructor.value.as_str(), "Vec3");
+                    assert_eq!(generic_args.len(), 2);
+                    match &generic_args[0] {
+                        crate::syntax::ast::GenericArg::Type(type_arg) => {
+                            assert_eq!(dim_expr_name(type_arg), "Length");
+                        }
+                        other @ crate::syntax::ast::GenericArg::Nat(_) => {
+                            panic!("expected type generic arg, got {other:?}")
+                        }
+                    }
+                    match &generic_args[1] {
+                        crate::syntax::ast::GenericArg::Type(type_arg) => {
+                            assert_eq!(dim_expr_name(type_arg), "ECI");
+                        }
+                        other @ crate::syntax::ast::GenericArg::Nat(_) => {
+                            panic!("expected type generic arg, got {other:?}")
+                        }
+                    }
                     assert_eq!(fields.len(), 3);
                 }
-                other => panic!("expected StructConstruction, got {other:?}"),
+                other => panic!("expected ConstructorCall, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_constructor_call_preserves_nat_generic_arg() {
+        let source = "node v: Dimensionless = FixedVec<3>(x: 1.0);";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::ConstructorCall { generic_args, .. } => {
+                    assert_eq!(generic_args.len(), 1);
+                    assert!(matches!(
+                        generic_args[0],
+                        crate::syntax::ast::GenericArg::Nat(crate::syntax::ast::NatExpr::Literal(
+                            3,
+                            _
+                        ))
+                    ));
+                }
+                other => panic!("expected ConstructorCall, got {other:?}"),
             },
             _ => panic!("expected node"),
         }

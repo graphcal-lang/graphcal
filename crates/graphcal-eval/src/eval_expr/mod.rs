@@ -44,7 +44,7 @@ pub struct EvalContext<'a> {
     pub tir: &'a graphcal_compiler::tir::typed::TIR,
     /// Resolved domain constraints declared on struct/union member fields,
     /// keyed by `(struct type name, field name)`. Looked up at every
-    /// `ExprKind::StructConstruction` to validate field values immediately.
+    /// `ExprKind::ConstructorCall` to validate field values immediately.
     /// `None` means "skip the check" (used by paths that haven't resolved
     /// constraints yet, e.g. const-bound evaluation inside `exec_plan`).
     pub struct_field_constraints:
@@ -239,9 +239,11 @@ pub fn eval_expr(
             }
         }
 
-        // --- Struct construction ---
-        ExprKind::StructConstruction {
-            type_name, fields, ..
+        // --- Constructor call ---
+        ExprKind::ConstructorCall {
+            constructor,
+            fields,
+            ..
         } => {
             let mut field_map = IndexMap::new();
             for field_init in fields {
@@ -266,13 +268,14 @@ pub fn eval_expr(
                         })?
                 };
                 // Validate against any field-level domain constraint declared
-                // on `<type_name>.<field_name>`. The check fires at the field's
+                // on `<constructor>.<field_name>`. The check fires at the field's
                 // span so the diagnostic points at the offending value.
-                let constructor_name =
-                    graphcal_compiler::syntax::names::StructTypeName::new(type_name.value.as_str());
+                let constructor_type_name = graphcal_compiler::syntax::names::StructTypeName::new(
+                    constructor.value.as_str(),
+                );
                 if let Some(field_constraints) = ctx.struct_field_constraints
                     && let Some(constraint) = field_constraints
-                        .get(&(constructor_name.clone(), field_init.name.value.clone()))
+                        .get(&(constructor_type_name.clone(), field_init.name.value.clone()))
                     && let Err(violation) =
                         crate::domain_check::check_domain_constraint(&val, constraint)
                 {
@@ -283,7 +286,7 @@ pub fn eval_expr(
                     return Err(ctx.eval_error(
                         format!(
                             "field `{}.{}` {}",
-                            type_name.value, field_init.name.value, violation.message
+                            constructor.value, field_init.name.value, violation.message
                         ),
                         span,
                     ));
@@ -292,7 +295,7 @@ pub fn eval_expr(
             }
             Ok(RuntimeValue::Struct {
                 type_name: graphcal_compiler::syntax::names::StructTypeName::new(
-                    type_name.value.as_str(),
+                    constructor.value.as_str(),
                 ),
                 fields: field_map,
             })
