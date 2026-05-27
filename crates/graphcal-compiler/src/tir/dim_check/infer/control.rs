@@ -153,7 +153,7 @@ pub(super) fn infer_match(
                 if index.value.as_str() != index_name.as_str() {
                     return Err(GraphcalError::IndexMismatch {
                         expected: index_name.clone(),
-                        found: index.value.clone(),
+                        found: index.value.index().clone(),
                         src: src.clone(),
                         span: index.span.into(),
                     });

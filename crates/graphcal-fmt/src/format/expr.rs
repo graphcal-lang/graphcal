@@ -845,6 +845,34 @@ pub fn format_match(
 
 pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
     match p {
+        MatchPattern::Path { path, bindings, .. } => {
+            let name = RcDoc::text(
+                path.segments
+                    .iter()
+                    .map(|segment| segment.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            );
+            if bindings.is_empty() {
+                return name;
+            }
+            let binding_docs: Vec<RcDoc<'static>> = bindings
+                .iter()
+                .map(|b| match b {
+                    PatternBinding::Bind { field, var } => {
+                        RcDoc::text(field.value.as_str().to_string())
+                            .append(RcDoc::text(": "))
+                            .append(RcDoc::text(var.name.clone()))
+                    }
+                    PatternBinding::Wildcard { field, .. } => {
+                        RcDoc::text(field.value.as_str().to_string()).append(RcDoc::text(": _"))
+                    }
+                })
+                .collect();
+            name.append(RcDoc::text("("))
+                .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
+                .append(RcDoc::text(")"))
+        }
         MatchPattern::IndexLabel { index, variant, .. } => {
             RcDoc::text(format!("{}.{}", index.value, variant.value))
         }

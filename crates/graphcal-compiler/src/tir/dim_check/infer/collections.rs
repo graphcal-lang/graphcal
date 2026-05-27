@@ -25,7 +25,7 @@ use super::infer_type;
 /// Get the index name for a for binding.
 fn for_binding_index_name(index: &ForBindingIndex) -> IndexName {
     match index {
-        ForBindingIndex::Named(spanned) => spanned.value.clone(),
+        ForBindingIndex::Named(spanned) => spanned.value.index().clone(),
         ForBindingIndex::Range { arg, .. } => IndexName::new(nat_expr_to_index_name_str(arg)),
     }
 }
@@ -83,7 +83,7 @@ pub(super) fn infer_for_comp(
                 let idx_name = spanned_idx.value.as_str();
                 let idx_def = registry.indexes.get_index(idx_name).ok_or_else(|| {
                     GraphcalError::UnknownIndex {
-                        name: spanned_idx.value.clone(),
+                        name: spanned_idx.value.index().clone(),
                         src: src.clone(),
                         span: spanned_idx.span.into(),
                     }
@@ -91,7 +91,7 @@ pub(super) fn infer_for_comp(
                 match &idx_def.kind {
                     crate::registry::types::IndexKind::Named { .. }
                     | crate::registry::types::IndexKind::RequiredNamed => {
-                        InferredType::Label(spanned_idx.value.clone())
+                        InferredType::Label(spanned_idx.value.index().clone())
                     }
                     crate::registry::types::IndexKind::Range(
                         crate::registry::types::RangeIndexData { dimension, .. },
@@ -449,7 +449,7 @@ pub(super) fn infer_index_access(
                 if index.value.as_str() != idx_name.as_str() {
                     return Err(GraphcalError::IndexMismatch {
                         expected: idx_name,
-                        found: index.value.clone(),
+                        found: index.value.index().clone(),
                         src: src.clone(),
                         span: index.span.into(),
                     });

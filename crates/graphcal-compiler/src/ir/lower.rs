@@ -1441,7 +1441,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
         if let ExprKind::VariantLiteral { index, .. } = &mut expr.kind
             && let Some(new) = self.bindings.get(index.value.as_str())
         {
-            index.value = new.clone();
+            index.value = new.clone().into();
         }
         Ok(())
     }
@@ -1453,7 +1453,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
                     b.index
                     && let Some(new) = self.bindings.get(spanned_idx.value.as_str())
                 {
-                    spanned_idx.value = new.clone();
+                    spanned_idx.value = new.clone().into();
                 }
             }
             self.visit_expr_mut(body)?;
@@ -1468,7 +1468,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
                 match arg {
                     IndexArg::Variant { index, .. } => {
                         if let Some(new) = self.bindings.get(index.value.as_str()) {
-                            index.value = new.clone();
+                            index.value = new.clone().into();
                         }
                     }
                     IndexArg::Expr(e) => {
@@ -1489,7 +1489,8 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
                     if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
                         && let Some(new) = self.bindings.get(index_name.as_str())
                     {
-                        key.index.value = crate::syntax::ast::MapEntryIndex::Named(new.clone());
+                        key.index.value =
+                            crate::syntax::ast::MapEntryIndex::Named(new.clone().into());
                     }
                 }
                 self.visit_expr_mut(&mut entry.value)?;
@@ -1506,7 +1507,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
                     &mut arm.pattern
                     && let Some(new) = self.bindings.get(index.value.as_str())
                 {
-                    index.value = new.clone();
+                    index.value = new.clone().into();
                 }
                 self.visit_expr_mut(&mut arm.body)?;
             }

@@ -1,7 +1,8 @@
 use crate::syntax::ast::{
-    Expr, ExprKind, ForBinding, ForBindingIndex, MatchArm, MatchPattern, NatExpr, PatternBinding,
+    Expr, ExprKind, ForBinding, ForBindingIndex, IdentPath, MatchArm, MatchPattern, NatExpr,
+    PatternBinding,
 };
-use crate::syntax::names::{ConstructorName, FieldName, IndexName, IndexVariantName};
+use crate::syntax::names::FieldName;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
@@ -54,41 +55,21 @@ impl Parser<'_> {
         })
     }
 
-    /// Parse a match pattern:
-    /// - Type constructor: `VariantName(field1, field2: binding)` or bare `VariantName`
-    /// - Index label: `Index.Variant` (qualified form)
+    /// Parse a match pattern as syntax first.
+    ///
+    /// The parser records the complete path and any constructor-style bindings,
+    /// but deliberately does not decide whether the path denotes a union
+    /// constructor or an index label. That categorization requires name
+    /// resolution.
     fn parse_match_pattern(&mut self) -> Result<MatchPattern, ParseError> {
         let first_ident = self.parse_any_ident()?;
         let start_span = first_ident.span;
-
-        if self.lexer.peek() == Some(&Token::Dot) {
-            // Qualified index variant pattern: Index.Variant
-            self.lexer.next_token(); // consume '.'
-            let variant_ident = self.parse_any_ident()?;
-            let end_span = variant_ident.span;
-            // Index labels are bare tags — `Index.Variant(…)` is not a
-            // parse failure but a semantic constraint. Surface a dedicated
-            // diagnostic instead of the generic "expected `=>`".
-            if let Some((tok, lparen_span)) = self.lexer.peek_with_span()
-                && *tok == Token::LParen
-            {
-                return Err(ParseError::IndexVariantPatternWithBindings {
-                    src: self.named_source(),
-                    span: lparen_span.into(),
-                });
-            }
-            return Ok(MatchPattern::IndexLabel {
-                index: Spanned::new(IndexName::new(&first_ident.name), first_ident.span),
-                variant: Spanned::new(
-                    IndexVariantName::new(&variant_ident.name),
-                    variant_ident.span,
-                ),
-                span: start_span.merge(end_span),
-            });
+        let mut rest = Vec::new();
+        while self.lexer.peek() == Some(&Token::Dot) {
+            self.lexer.next_token();
+            rest.push(self.parse_any_ident()?);
         }
-
-        // Type-constructor pattern: bare VariantName or VariantName(fields)
-        let name = Spanned::new(ConstructorName::new(&first_ident.name), first_ident.span);
+        let path = IdentPath::new(crate::syntax::non_empty::NonEmpty::new(first_ident, rest));
 
         let (bindings, end_span) = if self.lexer.peek() == Some(&Token::LParen) {
             self.lexer.next_token(); // consume '('
@@ -97,12 +78,11 @@ impl Parser<'_> {
             let (_, rparen_span) = self.expect(Token::RParen)?;
             (bindings, rparen_span)
         } else {
-            // Bare variant: no bindings
-            (Vec::new(), start_span)
+            (Vec::new(), path.span())
         };
 
-        Ok(MatchPattern::Constructor {
-            name,
+        Ok(MatchPattern::Path {
+            path,
             bindings,
             span: start_span.merge(end_span),
         })
@@ -192,8 +172,15 @@ impl Parser<'_> {
             }
         }
         // Named index
-        let index = self.parse_any_ident()?.into_spanned::<IndexName>();
-        Ok(ForBindingIndex::Named(index))
+        let first = self.parse_any_ident()?;
+        let mut segments = vec![first];
+        while self.lexer.peek() == Some(&Token::Dot) {
+            self.lexer.next_token();
+            segments.push(self.parse_any_ident()?);
+        }
+        Ok(ForBindingIndex::Named(Self::index_name_path_from_segments(
+            &segments,
+        )))
     }
 
     /// Parse a nat expression: supports literals, identifiers, addition, and multiplication.
@@ -600,10 +587,10 @@ mod tests {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Match { arms, .. } => {
                     assert_eq!(arms.len(), 2);
-                    let MatchPattern::Constructor { name, bindings, .. } = &arms[0].pattern else {
-                        panic!("expected constructor pattern");
+                    let MatchPattern::Path { path, bindings, .. } = &arms[0].pattern else {
+                        panic!("expected syntactic path pattern");
                     };
-                    assert_eq!(name.value.as_str(), "LowThrust");
+                    assert_eq!(path.as_bare().unwrap().name, "LowThrust");
                     assert_eq!(bindings.len(), 2);
                     match &bindings[0] {
                         PatternBinding::Bind { field, var } => {
@@ -622,8 +609,8 @@ mod tests {
                             panic!("expected wildcard, got {other:?}")
                         }
                     }
-                    let MatchPattern::Constructor { bindings, .. } = &arms[1].pattern else {
-                        panic!("expected constructor pattern");
+                    let MatchPattern::Path { bindings, .. } = &arms[1].pattern else {
+                        panic!("expected syntactic path pattern");
                     };
                     assert!(bindings.is_empty());
                 }
@@ -640,12 +627,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_index_label_pattern_rejects_bindings() {
-        let source = "node x: Dimensionless = match @phase { Phase.Launch(label) => 1.0 };";
-        assert!(matches!(
-            Parser::new(source).parse_file(),
-            Err(ParseError::IndexVariantPatternWithBindings { .. })
-        ));
+    fn parse_dotted_match_pattern_with_bindings_remains_syntactic() {
+        let source = "node x: Dimensionless = match @phase { Phase.Launch(label: value) => 1.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Match { arms, .. } => {
+                    let MatchPattern::Path { path, bindings, .. } = &arms[0].pattern else {
+                        panic!("expected syntactic path pattern");
+                    };
+                    assert_eq!(path.segments.len(), 2);
+                    assert_eq!(bindings.len(), 1);
+                }
+                other => panic!("expected Match, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
     }
 
     #[test]

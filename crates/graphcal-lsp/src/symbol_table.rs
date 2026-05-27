@@ -1335,6 +1335,21 @@ fn collect_expr_refs(
                         });
                         (name.value.to_string(), bindings.as_slice())
                     }
+                    MatchPattern::Path { path, bindings, .. } => {
+                        let pattern_name = path
+                            .segments
+                            .iter()
+                            .map(|segment| segment.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(".");
+                        for segment in &path.segments {
+                            table.references.push(ReferenceInfo {
+                                span: segment.span,
+                                target: SymbolKey::TopLevel(segment.name.clone()),
+                            });
+                        }
+                        (pattern_name, bindings.as_slice())
+                    }
                 };
 
                 scopes.push();

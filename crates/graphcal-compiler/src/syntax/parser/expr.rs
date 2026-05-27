@@ -2,9 +2,10 @@ use crate::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, Ident, IdentPath, IndexArg, ModulePath, UnaryOp,
 };
 use crate::syntax::names::{
-    ConstructorName, DeclName, FieldName, FnName, IndexName, IndexVariantName, ScopedName,
+    ConstructorName, DeclName, FieldName, FnName, IndexName, IndexNamePath, IndexVariantName,
+    ScopedName,
 };
-use crate::syntax::span::Spanned;
+use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
@@ -647,21 +648,13 @@ impl Parser<'_> {
         // Consume '{' and peek at what follows
         let (_, start_span) = self.advance()?;
         if let Some((Token::Ident, ident_span)) = self.lexer.peek_with_span() {
-            // Could be map literal: { Ident.Variant: expr, ... }
+            // Could be map literal: { Index.Variant: expr, ... }
             let saved_text = self.lexer.slice_at(ident_span).to_string();
-            // Consume the ident to peek at what's next
-            let (_, saved_span) = self.advance()?;
-            if self.lexer.peek() == Some(&Token::Dot) {
-                // Consume `.` and variant, then check next token.
-                self.lexer.next_token(); // consume '.'
-                let variant_ident = self.parse_any_ident()?;
+            if self.lexer.peek_second() == Some(&Token::Dot) {
+                let (index, variant, _) = self.parse_index_variant_path()?;
                 if self.lexer.peek() == Some(&Token::Colon) {
                     // Map literal: { Index.Variant: expr, ... }
-                    self.parse_map_literal_after_first_entry(
-                        start_span,
-                        Spanned::new(IndexName::new(saved_text), saved_span),
-                        variant_ident.into_spanned::<IndexVariantName>(),
-                    )
+                    self.parse_map_literal_after_first_entry(start_span, index, variant)
                 } else {
                     let found = self
                         .lexer
@@ -699,29 +692,64 @@ impl Parser<'_> {
 
     // --- Index access ---
 
-    /// Parse an index argument: `Index.Variant`, a loop variable `m`, or an expression `i + 1`.
+    pub(super) fn index_name_path_from_segments(
+        index_segments: &[Ident],
+    ) -> Spanned<IndexNamePath> {
+        let index_ident = index_segments
+            .last()
+            .expect("index variant paths always have an index segment");
+        let span = index_segments
+            .first()
+            .map_or(index_ident.span, |first| first.span.merge(index_ident.span));
+        let qualifier = index_segments[..index_segments.len().saturating_sub(1)]
+            .iter()
+            .map(|ident| ident.name.clone());
+        Spanned::new(
+            IndexNamePath::qualified_path(qualifier, IndexName::new(&index_ident.name)),
+            span,
+        )
+    }
+
+    pub(super) fn parse_index_variant_path(
+        &mut self,
+    ) -> Result<(Spanned<IndexNamePath>, Spanned<IndexVariantName>, Span), ParseError> {
+        let first = self.parse_any_ident()?;
+        let start_span = first.span;
+        self.expect(Token::Dot)?;
+        let second = self.parse_any_ident()?;
+        let mut segments = vec![first, second];
+        while self.lexer.peek() == Some(&Token::Dot) {
+            self.lexer.next_token();
+            segments.push(self.parse_any_ident()?);
+        }
+        let variant_ident = segments
+            .pop()
+            .expect("index variant paths always have a variant segment");
+        let full_span = start_span.merge(variant_ident.span);
+        let index = Self::index_name_path_from_segments(&segments);
+        let variant = Spanned::new(
+            IndexVariantName::new(variant_ident.name),
+            variant_ident.span,
+        );
+        Ok((index, variant, full_span))
+    }
+
+    /// Parse an index argument: `Index.Variant`, `module.Index.Variant`, a loop variable `m`, or an expression `i + 1`.
     ///
     /// Strategy:
-    /// 1. Peek for `Ident.Ident` (qualified variant). The leading `.` must be
-    ///    immediately followed by another `Ident` to count as qualified;
-    ///    otherwise we fall through to expression parsing.
+    /// 1. Peek for a dotted identifier path (qualified variant). The parser
+    ///    treats the last segment as the variant and all preceding segments as
+    ///    a structurally scoped index name.
     /// 2. Parse a full expression:
     ///    - If it's a single-segment unresolved path → convert to `IndexArg::Var`.
     ///    - Otherwise → `IndexArg::Expr`.
     pub(super) fn parse_index_arg(&mut self) -> Result<IndexArg, ParseError> {
-        // Check for qualified variant: Ident.Ident
         if self.lexer.peek() == Some(&Token::Ident)
             && self.lexer.peek_second() == Some(&Token::Dot)
             && self.lexer.peek_third() == Some(&Token::Ident)
         {
-            let (_, span) = self.advance()?;
-            let name = self.lexer.slice_at(span).to_string();
-            self.lexer.next_token(); // consume '.'
-            let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
-            return Ok(IndexArg::Variant {
-                index: Spanned::new(IndexName::new(name), span),
-                variant,
-            });
+            let (index, variant, _) = self.parse_index_variant_path()?;
+            return Ok(IndexArg::Variant { index, variant });
         }
 
         // Parse a full expression

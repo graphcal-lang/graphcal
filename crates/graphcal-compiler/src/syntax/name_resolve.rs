@@ -30,8 +30,8 @@ use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
 use crate::syntax::ast::{ImportItemNamespace, ImportKind, TypeSystemRefKind};
 use crate::syntax::names::{
-    ConstructorName, DimName, GenericParamName, IndexName, IndexVariantName, LocalName,
-    ModuleAliasName, ScopedName, StructTypeName,
+    ConstructorName, DimName, GenericParamName, IndexName, IndexNamePath, IndexVariantName,
+    LocalName, ModuleAliasName, ScopedName, StructTypeName,
 };
 use crate::syntax::phase::never;
 use crate::syntax::span::Spanned;
@@ -804,7 +804,7 @@ fn lift_expr_kind(
                     let body = lift_expr(arm.body, ctx);
                     ctx.pop_scope();
                     dst_ast::MatchArm {
-                        pattern: arm.pattern,
+                        pattern: lift_match_pattern(arm.pattern, ctx),
                         body,
                         span: arm.span,
                     }
@@ -828,6 +828,72 @@ fn lift_expr_kind(
         // `ExprSugar(_)` payload is `Infallible` in `Desugared` — statically
         // unreachable.
         S::Sugar(s) => never(s),
+    }
+}
+
+fn lift_match_pattern(
+    pattern: src_ast::MatchPattern,
+    ctx: &ResolveContext,
+) -> dst_ast::MatchPattern {
+    match pattern {
+        src_ast::MatchPattern::Path {
+            path,
+            bindings,
+            span,
+        } => match path.segments.as_slice() {
+            [index_ident, variant_ident]
+                if bindings.is_empty()
+                    && ctx
+                        .index_variants
+                        .get(&IndexName::new(&index_ident.name))
+                        .is_some_and(|variants| {
+                            variants.contains(&IndexVariantName::new(&variant_ident.name))
+                        }) =>
+            {
+                dst_ast::MatchPattern::IndexLabel {
+                    index: Spanned::new(
+                        IndexNamePath::local(IndexName::new(&index_ident.name)),
+                        index_ident.span,
+                    ),
+                    variant: Spanned::new(
+                        IndexVariantName::new(&variant_ident.name),
+                        variant_ident.span,
+                    ),
+                    span,
+                }
+            }
+            [constructor_ident] => dst_ast::MatchPattern::Constructor {
+                name: Spanned::new(
+                    ConstructorName::new(&constructor_ident.name),
+                    constructor_ident.span,
+                ),
+                bindings,
+                span,
+            },
+            _ => dst_ast::MatchPattern::Path {
+                path,
+                bindings,
+                span,
+            },
+        },
+        src_ast::MatchPattern::Constructor {
+            name,
+            bindings,
+            span,
+        } => dst_ast::MatchPattern::Constructor {
+            name,
+            bindings,
+            span,
+        },
+        src_ast::MatchPattern::IndexLabel {
+            index,
+            variant,
+            span,
+        } => dst_ast::MatchPattern::IndexLabel {
+            index,
+            variant,
+            span,
+        },
     }
 }
 
@@ -951,7 +1017,7 @@ fn resolve_dotted_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKi
         && ctx.index_variants.contains_key(qualifier.name.as_str())
     {
         return dst_ast::ExprKind::VariantLiteral {
-            index: Spanned::new(IndexName::new(&qualifier.name), qualifier.span),
+            index: Spanned::new(IndexName::new(&qualifier.name).into(), qualifier.span),
             variant: Spanned::new(IndexVariantName::new(&member.name), member.span),
         };
     }

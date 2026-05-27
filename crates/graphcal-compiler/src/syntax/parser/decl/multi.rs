@@ -27,7 +27,7 @@ use crate::syntax::ast::{
     self as ast, BindableVisibility, DeclKind, Declaration, Expr, MapEntryIndex, MapEntryKey,
     TableIndexSpec, TypeExpr, Visibility,
 };
-use crate::syntax::names::{DeclName, IndexName, IndexVariantName};
+use crate::syntax::names::{DeclName, IndexName, IndexNamePath, IndexVariantName};
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
@@ -547,7 +547,7 @@ impl Parser<'_> {
             }
             Some(Token::Ident) => {
                 let ident = self.parse_any_ident()?;
-                Ok(TableIndexSpec::Named(ident.into_spanned::<IndexName>()))
+                Ok(TableIndexSpec::Named(ident.into_spanned::<IndexNamePath>()))
             }
             _ => {
                 let (tok, span) = self.advance()?;

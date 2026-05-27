@@ -365,6 +365,112 @@ impl From<DeclName> for ScopedName {
     }
 }
 
+/// A syntactic index-name path, optionally qualified by one or more leading
+/// path segments.
+///
+/// This type preserves the source-level split in forms such as `Index` and
+/// `module.Index` without claiming that `module` has already been resolved to a
+/// concrete module. It is a parsed path shape, not a proof that the referenced
+/// index exists. Semantic resolution should either validate it in a context-rich
+/// resolver or keep it as syntax rather than flattening it into an [`IndexName`]
+/// string.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct IndexNamePath {
+    qualifier: Arc<[Arc<str>]>,
+    index: IndexName,
+}
+
+impl IndexNamePath {
+    /// Create an unqualified local index name.
+    #[must_use]
+    pub fn local(index: IndexName) -> Self {
+        Self {
+            qualifier: Arc::from([] as [Arc<str>; 0]),
+            index,
+        }
+    }
+
+    /// Create an index name qualified by an arbitrary-depth module path.
+    #[must_use]
+    pub fn qualified_path(
+        qualifier: impl IntoIterator<Item = impl Into<Arc<str>>>,
+        index: IndexName,
+    ) -> Self {
+        Self {
+            qualifier: qualifier.into_iter().map(Into::into).collect(),
+            index,
+        }
+    }
+
+    /// Returns the module qualifier path segments. Empty means local.
+    #[must_use]
+    pub fn qualifier(&self) -> &[Arc<str>] {
+        &self.qualifier
+    }
+
+    /// Returns the index-name leaf.
+    #[must_use]
+    pub const fn index(&self) -> &IndexName {
+        &self.index
+    }
+
+    /// Returns the leaf index as a string. This deliberately ignores the
+    /// qualifier and is intended for legacy local registries while qualified
+    /// index resolution is being pushed into name resolution.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.index.as_str()
+    }
+
+    /// Returns whether this index reference is qualified.
+    #[must_use]
+    pub fn is_qualified(&self) -> bool {
+        !self.qualifier.is_empty()
+    }
+}
+
+impl From<IndexName> for IndexNamePath {
+    fn from(name: IndexName) -> Self {
+        Self::local(name)
+    }
+}
+
+impl From<String> for IndexNamePath {
+    fn from(s: String) -> Self {
+        Self::local(IndexName::new(s))
+    }
+}
+
+impl From<&str> for IndexNamePath {
+    fn from(s: &str) -> Self {
+        Self::local(IndexName::new(s))
+    }
+}
+
+impl std::ops::Deref for IndexNamePath {
+    type Target = IndexName;
+
+    fn deref(&self) -> &Self::Target {
+        &self.index
+    }
+}
+
+impl AsRef<str> for IndexNamePath {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for IndexNamePath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for segment in self.qualifier.iter() {
+            f.write_str(segment)?;
+            f.write_str(".")?;
+        }
+        write!(f, "{}", self.index)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

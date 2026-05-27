@@ -132,7 +132,7 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
                         extra_axis_name = Some(extra_axis.clone());
                     }
                     let extra_index_name = Spanned::new(
-                        MapEntryIndex::Named(extra_axis.value.clone()),
+                        MapEntryIndex::Named(extra_axis.value.clone().into()),
                         extra_axis.span,
                     );
                     let col_variants: Vec<Spanned<IndexVariantName>> = slice.header_cells
@@ -169,7 +169,10 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
         }
 
         if let Some(extra) = extra_axis_name {
-            slot_indexes.push(TableIndexSpec::Named(extra));
+            slot_indexes.push(TableIndexSpec::Named(Spanned::new(
+                extra.value.into(),
+                extra.span,
+            )));
         }
 
         let table_expr = Expr::new(

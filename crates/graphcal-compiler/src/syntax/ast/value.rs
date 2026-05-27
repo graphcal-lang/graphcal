@@ -2,8 +2,8 @@ use std::marker::PhantomData;
 
 use crate::syntax::ast::common::{Ident, ModulePath};
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, FnName, IndexName, IndexVariantName, LocalName,
-    ScopedName, StructTypeName, UnitName,
+    ConstructorName, DeclName, DimName, FieldName, FnName, IndexName, IndexNamePath,
+    IndexVariantName, LocalName, ScopedName, StructTypeName, UnitName,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Phase, Raw};
@@ -427,10 +427,13 @@ pub enum ExprKind<P: Phase = Raw> {
         scrutinee: Box<Expr<P>>,
         arms: Vec<MatchArm<P>>,
     },
-    /// Standalone index variant reference: `Maneuver.Departure`
-    /// Used in comparisons with loop variables: `m == Maneuver.Departure`
+    /// Standalone index variant reference after name resolution has proven a
+    /// local `Index.Variant` reference.
+    ///
+    /// Qualified module variants currently stay as syntactic paths until a
+    /// module-aware resolver can prove the target index.
     VariantLiteral {
-        index: Spanned<IndexName>,
+        index: Spanned<IndexNamePath>,
         variant: Spanned<IndexVariantName>,
     },
     /// Inline DAG invocation: `@dag(args).out` or `@module.dag(args).out`.
@@ -482,8 +485,8 @@ pub enum ExprKind<P: Phase = Raw> {
 /// desugar to `range(N)` with synthetic variants `#0`, `#1`, etc.
 #[derive(Debug, Clone)]
 pub enum TableIndexSpec {
-    /// A named index: `Phase`, `Maneuver`
-    Named(Spanned<IndexName>),
+    /// A named index: `Phase`, `Maneuver`, or `module.Maneuver`
+    Named(Spanned<IndexNamePath>),
     /// A Nat range literal: `3` (desugars to `range(3)`)
     NatRange(u64, Span),
 }
@@ -579,7 +582,7 @@ impl std::ops::Index<usize> for MultiDeclSharedAxes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MapEntryIndex {
     /// A declared named index.
-    Named(IndexName),
+    Named(IndexNamePath),
     /// A Nat range literal index, `range(N)`.
     NatRange(u64),
 }
@@ -589,7 +592,7 @@ impl MapEntryIndex {
     #[must_use]
     pub fn registry_name(&self) -> IndexName {
         match self {
-            Self::Named(name) => name.clone(),
+            Self::Named(name) => name.index().clone(),
             Self::NatRange(size) => {
                 IndexName::new(crate::registry::types::nat_range_index_name(*size))
             }
@@ -599,6 +602,12 @@ impl MapEntryIndex {
 
 impl From<IndexName> for MapEntryIndex {
     fn from(value: IndexName) -> Self {
+        Self::Named(IndexNamePath::local(value))
+    }
+}
+
+impl From<IndexNamePath> for MapEntryIndex {
+    fn from(value: IndexNamePath) -> Self {
         Self::Named(value)
     }
 }
@@ -684,8 +693,8 @@ pub struct ForBinding {
 /// The index in a for binding: either a named index or a `range(...)` expression.
 #[derive(Debug, Clone)]
 pub enum ForBindingIndex {
-    /// A named index: `for m: Maneuver { ... }`
-    Named(Spanned<IndexName>),
+    /// A named index: `for m: Maneuver { ... }` or `for m: module.Maneuver { ... }`
+    Named(Spanned<IndexNamePath>),
     /// A range expression: `for i: range(3) { ... }` or `for i: range(N) { ... }`
     Range {
         /// The argument to `range(...)` — a nat literal or generic nat param.
@@ -758,9 +767,9 @@ impl<P: Phase> GenericArg<P> {
 /// An argument in an index access: a qualified variant, a loop variable, or an expression.
 #[derive(Debug, Clone)]
 pub enum IndexArg<P: Phase = Raw> {
-    /// Qualified variant: `Maneuver.Departure`
+    /// Qualified variant: `Maneuver.Departure` or `module.Maneuver.Departure`
     Variant {
-        index: Spanned<IndexName>,
+        index: Spanned<IndexNamePath>,
         variant: Spanned<IndexVariantName>,
     },
     /// Loop variable: `m`
@@ -787,6 +796,18 @@ pub struct MatchArm<P: Phase = Raw> {
 /// A match pattern: `Impulsive(delta_v: dv)`, `Nominal`, `Maneuver.Departure`.
 #[derive(Debug, Clone)]
 pub enum MatchPattern {
+    /// Syntactic path pattern before semantic categorization.
+    ///
+    /// The parser emits this for both constructor-looking and index-label-looking
+    /// patterns. Name resolution may rewrite it to [`Self::Constructor`] or
+    /// [`Self::IndexLabel`] only when it can prove that categorization from the
+    /// local symbol context. Qualified paths that require module-aware lookup
+    /// remain syntactic paths instead of being half-resolved.
+    Path {
+        path: IdentPath,
+        bindings: Vec<PatternBinding>,
+        span: Span,
+    },
     /// Tagged-union constructor pattern: `Impulsive(delta_v: dv)` or `Nominal`.
     Constructor {
         name: Spanned<ConstructorName>,
@@ -796,9 +817,10 @@ pub enum MatchPattern {
     /// Named-index label pattern: `Maneuver.Departure`.
     ///
     /// Index labels are fieldless, so this variant deliberately has no
-    /// binding payload.
+    /// binding payload. This variant is semantic: producers should construct it
+    /// only after proving that the path denotes an index variant.
     IndexLabel {
-        index: Spanned<IndexName>,
+        index: Spanned<IndexNamePath>,
         variant: Spanned<IndexVariantName>,
         span: Span,
     },
@@ -808,14 +830,16 @@ impl MatchPattern {
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
-            Self::Constructor { span, .. } | Self::IndexLabel { span, .. } => *span,
+            Self::Path { span, .. }
+            | Self::Constructor { span, .. }
+            | Self::IndexLabel { span, .. } => *span,
         }
     }
 
     #[must_use]
     pub fn bindings(&self) -> &[PatternBinding] {
         match self {
-            Self::Constructor { bindings, .. } => bindings,
+            Self::Path { bindings, .. } | Self::Constructor { bindings, .. } => bindings,
             Self::IndexLabel { .. } => &[],
         }
     }

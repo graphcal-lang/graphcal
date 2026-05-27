@@ -312,7 +312,7 @@ fn convert_indexed(
             Ok(MapEntry {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: Spanned::new(
-                        MapEntryIndex::Named(IndexName::new(index_name)),
+                        MapEntryIndex::Named(IndexName::new(index_name).into()),
                         SYNTH_SPAN,
                     ),
                     variant: Spanned::new(IndexVariantName::new(variant), SYNTH_SPAN),

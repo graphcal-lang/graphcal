@@ -49,7 +49,7 @@ pub(super) fn eval_match(
                     MatchPattern::IndexLabel { variant: v, .. } => {
                         v.value.as_str() == variant.as_str()
                     }
-                    MatchPattern::Constructor { .. } => false,
+                    MatchPattern::Constructor { .. } | MatchPattern::Path { .. } => false,
                 })
                 .ok_or_else(|| {
                     ctx.eval_error(format!("no match arm for label `{variant}`"), expr.span)
@@ -69,7 +69,7 @@ pub(super) fn eval_match(
                     MatchPattern::Constructor { name, .. } => {
                         name.value.as_str() == type_name.as_str()
                     }
-                    MatchPattern::IndexLabel { .. } => false,
+                    MatchPattern::IndexLabel { .. } | MatchPattern::Path { .. } => false,
                 })
                 .ok_or_else(|| {
                     ctx.eval_error(format!("no match arm for variant `{type_name}`"), expr.span)

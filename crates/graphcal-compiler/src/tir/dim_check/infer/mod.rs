@@ -87,7 +87,7 @@ pub(super) fn infer_type_with_owner(
                 .indexes
                 .get_index(index.value.as_str())
                 .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: index.value.clone(),
+                    name: index.value.index().clone(),
                     src: src.clone(),
                     span: index.span.into(),
                 })?;
@@ -98,13 +98,13 @@ pub(super) fn infer_type_with_owner(
                 .any(|v| v.as_str() == variant.value.as_str())
             {
                 return Err(GraphcalError::UnknownVariant {
-                    index_name: index.value.clone(),
+                    index_name: index.value.index().clone(),
                     variant_name: variant.value.clone(),
                     src: src.clone(),
                     span: variant.span.into(),
                 });
             }
-            Ok(InferredType::Label(index.value.clone()))
+            Ok(InferredType::Label(index.value.index().clone()))
         }
 
         ExprKind::UnitLiteral { unit, .. } => {
