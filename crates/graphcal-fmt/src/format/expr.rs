@@ -30,13 +30,16 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             format_inline_dag_ref(fmt, path, args, output.value.as_str())
         }
         ExprKind::ConstRef(name) => RcDoc::text(format_scoped_surface(&name.value)),
-        ExprKind::LocalRef(ident)
-        | ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::NameRef(ident)) => {
-            RcDoc::text(ident.name.clone())
+        ExprKind::LocalRef(ident) => RcDoc::text(ident.name.clone()),
+        ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => {
+            RcDoc::text(
+                path.segments
+                    .iter()
+                    .map(|segment| segment.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            )
         }
-        ExprKind::UnresolvedRef(
-            graphcal_compiler::syntax::ast::UnresolvedRef::QualifiedNameRef { qualifier, member },
-        ) => RcDoc::text(format!("{}.{}", qualifier.name, member.name)),
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
             let op_str = match op {

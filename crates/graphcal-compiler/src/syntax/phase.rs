@@ -55,10 +55,10 @@ pub trait Phase: 'static + sealed::Sealed {
     /// Phase-specific unresolved-reference variants.
     ///
     /// Carried by `ExprKind::UnresolvedRef(_)`. For [`Raw`] and [`Desugared`]
-    /// this is [`crate::syntax::ast::UnresolvedRef`] (the parser produces `NameRef`/`QualifiedNameRef`
-    /// variants); for [`Resolved`] it is [`Infallible`] so the variant cannot
-    /// be constructed and the name-resolution pass is statically known to
-    /// have eliminated every unresolved reference.
+    /// this is [`crate::syntax::ast::UnresolvedRef`] (the parser produces
+    /// unresolved identifier paths); for [`Resolved`] it is [`Infallible`] so
+    /// the variant cannot be constructed and the name-resolution pass is
+    /// statically known to have eliminated every unresolved reference.
     type RefSugar: Debug + Clone;
 
     /// Phase-specific name carried by `TypeExprKind::TypeApplication`.
@@ -82,9 +82,8 @@ impl sealed::Sealed for Raw {}
 
 /// Post-desugar phase: surface-sugar variants are statically impossible.
 ///
-/// Produced by [`crate::desugar`]. Unresolved references (`NameRef`,
-/// `QualifiedNameRef`) are still representable until the name-resolution
-/// pass runs.
+/// Produced by [`crate::desugar`]. Unresolved identifier paths are still
+/// representable until the name-resolution pass runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Desugared {}
 

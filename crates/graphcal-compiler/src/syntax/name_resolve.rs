@@ -27,7 +27,7 @@ use crate::desugar::desugared_ast as src_ast;
 use crate::desugar::resolved_ast as dst_ast;
 use crate::registry::builtins::builtin_constants;
 use crate::registry::time_scale::TimeScale;
-use crate::syntax::ast::UnresolvedRef;
+use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
 use crate::syntax::ast::{ImportItemNamespace, ImportKind, TypeSystemRefKind};
 use crate::syntax::names::{
     ConstructorName, DimName, GenericParamName, IndexName, IndexVariantName, LocalName,
@@ -852,14 +852,23 @@ fn resolve_unresolved_ref(
     _span: crate::syntax::span::Span,
 ) -> dst_ast::ExprKind {
     match r {
-        UnresolvedRef::NameRef(ident) => resolve_name_ref(ident, ctx),
-        UnresolvedRef::QualifiedNameRef { qualifier, member } => {
-            resolve_qualified_name_ref(qualifier, member, ctx)
-        }
+        UnresolvedRef::Path(path) => resolve_ident_path(path, ctx),
     }
 }
 
-/// Resolve a bare `NameRef` to a concrete [`dst_ast::ExprKind`].
+/// Resolve an identifier path to a concrete [`dst_ast::ExprKind`].
+fn resolve_ident_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKind {
+    match path.segments.len() {
+        1 => {
+            let mut segments = path.segments.into_vec();
+            let ident = segments.remove(0);
+            resolve_name_ref(ident, ctx)
+        }
+        _ => resolve_dotted_path(path, ctx),
+    }
+}
+
+/// Resolve a bare identifier path to a concrete [`dst_ast::ExprKind`].
 ///
 /// Priority:
 /// 1. Local scope (for/scan/unfold/match bindings) → `LocalRef`
@@ -868,7 +877,7 @@ fn resolve_unresolved_ref(
 /// 4. Constructors → `StructConstruction` (bare, no fields)
 /// 5. Type-system names → `TypeSystemRef`
 /// 6. Fallback → `LocalRef` (will be caught later by semantic validation)
-fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
+fn resolve_name_ref(ident: Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
     let name = &ident.name;
 
     if ctx.is_local(name) {
@@ -937,28 +946,33 @@ fn resolve_name_ref(ident: crate::syntax::ast::Ident, ctx: &ResolveContext) -> d
     dst_ast::ExprKind::LocalRef(ident)
 }
 
-/// Resolve a `QualifiedNameRef` (`a.b`) to a concrete [`dst_ast::ExprKind`].
+/// Resolve a dotted identifier path (`a.b`, `a.b.c`, ...) to a concrete
+/// [`dst_ast::ExprKind`].
 ///
 /// Priority:
-/// 1. If `qualifier` is a known index name → `VariantLiteral`
+/// 1. If this is a two-segment path and the head is a known index name →
+///    `VariantLiteral`
 /// 2. Otherwise → `ConstRef` carrying a qualified `ScopedName`
 ///    (module-qualified constant, validated later)
-fn resolve_qualified_name_ref(
-    qualifier: crate::syntax::ast::Ident,
-    member: crate::syntax::ast::Ident,
-    ctx: &ResolveContext,
-) -> dst_ast::ExprKind {
-    if ctx.index_variants.contains_key(qualifier.name.as_str()) {
+fn resolve_dotted_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKind {
+    let span = path.span();
+    let segments = path.segments;
+
+    if let [qualifier, member] = segments.as_slice()
+        && ctx.index_variants.contains_key(qualifier.name.as_str())
+    {
         return dst_ast::ExprKind::VariantLiteral {
             index: Spanned::new(IndexName::new(&qualifier.name), qualifier.span),
             variant: Spanned::new(IndexVariantName::new(&member.name), member.span),
         };
     }
 
-    let merged_span = qualifier.span.merge(member.span);
+    let qualifier_names = segments.as_slice()[..segments.len() - 1]
+        .iter()
+        .map(|segment| segment.name.clone());
     dst_ast::ExprKind::ConstRef(Spanned::new(
-        ScopedName::qualified(qualifier.name, member.name),
-        merged_span,
+        ScopedName::qualified_path(qualifier_names, segments.last().name.clone()),
+        span,
     ))
 }
 
