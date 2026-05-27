@@ -84,7 +84,7 @@ pub struct ExecPlan {
     pub(crate) domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>,
     /// Resolved domain constraints for struct/union member fields, keyed by
     /// `(struct type name, field name)`. Looked up at every
-    /// `ExprKind::StructConstruction` evaluation to validate field values.
+    /// `ExprKind::ConstructorCall` evaluation to validate field values.
     pub(crate) struct_field_constraints:
         HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>,
 }

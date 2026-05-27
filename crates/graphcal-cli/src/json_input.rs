@@ -228,7 +228,7 @@ fn convert_object(
     }
 }
 
-/// Convert `{"variant": "Name", "fields": {...}}` to a `StructConstruction` expr.
+/// Convert `{"variant": "Name", "fields": {...}}` to a `ConstructorCall` expr.
 ///
 /// Also handles bare variants: `{"variant": "Nominal"}`.
 fn convert_tagged_union(
@@ -252,14 +252,14 @@ fn convert_tagged_union(
         Vec::new()
     };
 
-    Ok(synth_expr(ExprKind::StructConstruction {
-        type_name: Spanned::new(ConstructorName::new(variant_name), SYNTH_SPAN),
-        type_args: Vec::new(),
+    Ok(synth_expr(ExprKind::ConstructorCall {
+        constructor: Spanned::new(ConstructorName::new(variant_name), SYNTH_SPAN),
+        generic_args: Vec::new(),
         fields,
     }))
 }
 
-/// Convert `{"type": "TypeName", "fields": {"x": "...", ...}}` to a `StructConstruction` expr.
+/// Convert `{"type": "TypeName", "fields": {"x": "...", ...}}` to a `ConstructorCall` expr.
 ///
 /// The struct type name is provided explicitly via the `"type"` key.
 fn convert_struct(
@@ -279,9 +279,9 @@ fn convert_struct(
         })?;
     let fields = convert_field_inits(fields_obj, param_name)?;
 
-    Ok(synth_expr(ExprKind::StructConstruction {
-        type_name: Spanned::new(ConstructorName::new(type_name_str), SYNTH_SPAN),
-        type_args: Vec::new(),
+    Ok(synth_expr(ExprKind::ConstructorCall {
+        constructor: Spanned::new(ConstructorName::new(type_name_str), SYNTH_SPAN),
+        generic_args: Vec::new(),
         fields,
     }))
 }
@@ -394,13 +394,15 @@ mod tests {
         let overrides = json_to_overrides(json).unwrap();
         let expr = &overrides[&DeclName::new("transfer")];
         match &expr.kind {
-            ExprKind::StructConstruction {
-                type_name, fields, ..
+            ExprKind::ConstructorCall {
+                constructor,
+                fields,
+                ..
             } => {
-                assert_eq!(type_name.value.as_str(), "TransferResult");
+                assert_eq!(constructor.value.as_str(), "TransferResult");
                 assert_eq!(fields.len(), 2);
             }
-            other => panic!("expected StructConstruction, got {other:?}"),
+            other => panic!("expected ConstructorCall, got {other:?}"),
         }
     }
 
@@ -422,13 +424,15 @@ mod tests {
         let overrides = json_to_overrides(json).unwrap();
         let expr = &overrides[&DeclName::new("maneuver")];
         match &expr.kind {
-            ExprKind::StructConstruction {
-                type_name, fields, ..
+            ExprKind::ConstructorCall {
+                constructor,
+                fields,
+                ..
             } => {
-                assert_eq!(type_name.value.as_str(), "LowThrust");
+                assert_eq!(constructor.value.as_str(), "LowThrust");
                 assert_eq!(fields.len(), 2);
             }
-            other => panic!("expected StructConstruction, got {other:?}"),
+            other => panic!("expected ConstructorCall, got {other:?}"),
         }
     }
 
@@ -438,13 +442,15 @@ mod tests {
         let overrides = json_to_overrides(json).unwrap();
         let expr = &overrides[&DeclName::new("status")];
         match &expr.kind {
-            ExprKind::StructConstruction {
-                type_name, fields, ..
+            ExprKind::ConstructorCall {
+                constructor,
+                fields,
+                ..
             } => {
-                assert_eq!(type_name.value.as_str(), "Nominal");
+                assert_eq!(constructor.value.as_str(), "Nominal");
                 assert!(fields.is_empty());
             }
-            other => panic!("expected StructConstruction, got {other:?}"),
+            other => panic!("expected ConstructorCall, got {other:?}"),
         }
     }
 

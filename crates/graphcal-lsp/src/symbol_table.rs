@@ -1111,17 +1111,21 @@ fn collect_expr_refs(
             // and the registry-driven definition pass below still record
             // precisely-keyed `Field { struct_name, field_name }` entries.
         }
-        ExprKind::StructConstruction {
-            type_name,
-            type_args,
+        ExprKind::ConstructorCall {
+            constructor,
+            generic_args,
             fields,
         } => {
             table.references.push(ReferenceInfo {
-                span: type_name.span,
-                target: SymbolKey::TopLevel(type_name.value.to_string()),
+                span: constructor.span,
+                target: SymbolKey::TopLevel(constructor.value.to_string()),
             });
-            for type_arg in type_args {
-                collect_type_expr_refs(type_arg, table);
+            for generic_arg in generic_args {
+                if let graphcal_compiler::desugar::resolved_ast::GenericArg::Type(type_arg) =
+                    generic_arg
+                {
+                    collect_type_expr_refs(type_arg, table);
+                }
             }
             for field in fields {
                 if let Some(value) = &field.value {

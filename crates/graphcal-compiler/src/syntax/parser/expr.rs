@@ -1,5 +1,5 @@
 use crate::syntax::ast::{
-    BinOp, Expr, ExprKind, FieldInit, Ident, IdentPath, IndexArg, ModulePath, TypeExpr, UnaryOp,
+    BinOp, Expr, ExprKind, FieldInit, Ident, IdentPath, IndexArg, ModulePath, UnaryOp,
 };
 use crate::syntax::names::{
     ConstructorName, DeclName, FieldName, FnName, IndexName, IndexVariantName, ScopedName,
@@ -599,7 +599,7 @@ impl Parser<'_> {
             // the first argument starts with `IDENT :`. The same surface
             // form serves both; name resolution decides which binding
             // the identifier refers to.
-            let type_args = if self.lexer.peek() == Some(&Token::Lt) {
+            let generic_args = if self.lexer.peek() == Some(&Token::Lt) {
                 self.parse_generic_arg_list()?
             } else {
                 vec![]
@@ -611,17 +611,10 @@ impl Parser<'_> {
                     self.parse_comma_separated(Token::RParen, Self::parse_named_field_init)?;
                 let (_, rparen_span) = self.expect(Token::RParen)?;
                 let call_span = span.merge(rparen_span);
-                let type_args_te: Vec<TypeExpr> = type_args
-                    .into_iter()
-                    .filter_map(|ga| match ga {
-                        crate::syntax::ast::GenericArg::Type(te) => Some(te),
-                        crate::syntax::ast::GenericArg::Nat(_) => None,
-                    })
-                    .collect();
                 return Ok(Expr::new(
-                    ExprKind::StructConstruction {
-                        type_name: Spanned::new(ConstructorName::new(name), span),
-                        type_args: type_args_te,
+                    ExprKind::ConstructorCall {
+                        constructor: Spanned::new(ConstructorName::new(name), span),
+                        generic_args,
                         fields,
                     },
                     call_span,
@@ -635,7 +628,7 @@ impl Parser<'_> {
             Ok(Expr::new(
                 ExprKind::FnCall {
                     name: Spanned::new(FnName::new(name), span),
-                    type_args,
+                    type_args: generic_args,
                     args,
                 },
                 call_span,

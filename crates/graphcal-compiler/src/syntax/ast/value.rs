@@ -37,7 +37,7 @@ pub enum RawExprSugar {
 /// Carried by `ExprKind::UnresolvedRef(P::RefSugar)`. The parser emits these
 /// when the meaning of an identifier path cannot be determined from syntax
 /// alone; the name-resolution pass rewrites them into concrete `ConstRef` /
-/// `LocalRef` / `VariantLiteral` / `StructConstruction` variants and produces a
+/// `LocalRef` / `VariantLiteral` / `ConstructorCall` variants and produces a
 /// [`crate::syntax::phase::Resolved`] AST in which `RefSugar = Infallible`.
 ///
 /// This indirection is necessary because the same token shape can mean
@@ -381,11 +381,14 @@ pub enum ExprKind<P: Phase = Raw> {
         expr: Box<Expr<P>>,
         field: Spanned<FieldName>,
     },
-    /// Struct construction: `TransferResult { dv1, dv2: a + b, total_dv: dv1 + dv2 }`
-    /// or with type args: `Vec3<Length, ECI> { x: 1 km, y: 0 km, z: 0 km }`
-    StructConstruction {
-        type_name: Spanned<ConstructorName>,
-        type_args: Vec<TypeExpr<P>>,
+    /// Constructor call for values of user-defined unified `type` declarations.
+    ///
+    /// Payload constructors use named arguments, e.g.
+    /// `TransferResult(dv1: @dv1, dv2: @dv2)`. Unit constructors may be used as
+    /// bare identifiers after name resolution, e.g. `Coast`.
+    ConstructorCall {
+        constructor: Spanned<ConstructorName>,
+        generic_args: Vec<GenericArg<P>>,
         fields: Vec<FieldInit<P>>,
     },
     /// Map literal: `{ Maneuver.Departure: 2.46 km/s, Maneuver.Correction: 0.05 km/s }`
@@ -774,7 +777,7 @@ pub enum IndexArg<P: Phase = Raw> {
     Expr(Box<Expr<P>>),
 }
 
-/// A field initializer in struct construction.
+/// A field initializer in a constructor call.
 #[derive(Debug, Clone)]
 pub struct FieldInit<P: Phase = Raw> {
     pub name: Spanned<FieldName>,

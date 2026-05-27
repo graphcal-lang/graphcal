@@ -26,8 +26,8 @@ pub(super) fn attach_display_units(
         (Value::Scalar { display_unit, .. }, ExprKind::Convert { target, .. }) => {
             *display_unit = resolve_unit_to_display(target, registry, values);
         }
-        // Struct construction: recurse into each field initializer
-        (Value::Struct { fields, .. }, ExprKind::StructConstruction { fields: inits, .. }) => {
+        // Constructor call: recurse into each field initializer.
+        (Value::Struct { fields, .. }, ExprKind::ConstructorCall { fields: inits, .. }) => {
             for init in inits {
                 if let Some(field_val) = fields.get_mut(&init.name.value)
                     && let Some(init_expr) = &init.value

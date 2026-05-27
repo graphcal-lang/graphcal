@@ -114,6 +114,6 @@ this graph into a reusable, parameterized `dag` block.
 
 - **`type`** declarations as n-variant tagged unions (single-variant
   for record-shaped data)
-- **Struct construction** with the constructor-call form
-  `TypeName(field: value, ...)`
+- **Constructor calls** for unified `type` declarations with
+  `ConstructorName(field: value, ...)`
 - **Field access** with `.` on values of single-variant unions

@@ -88,9 +88,9 @@ IDENT
    - UPPER_SNAKE_CASE for: built-in constants (PI, E, TAU).
    - PascalCase for: type, index, variant names.
    - Uppercase-starting for: indexed type parameters.
-   The parser accepts any IDENT in all positions. Struct construction
-   syntax (`Name { ... }`) requires the identifier to start with an
-   uppercase letter to avoid ambiguity with block delimiters. A
+   The parser accepts any IDENT in all positions. Constructor calls use
+   parens with named arguments (`Name(field: expr, ...)`) and are
+   resolved against the constructor namespace during name resolution. A
    name-resolution pass resolves bare identifiers and qualified
    references after parsing. *)
 
@@ -754,13 +754,11 @@ inline_dag_call_suffix
 
 (* --- Identifier expression --- *)
 (* Dispatches based on the token(s) following the identifier:
-   - IDENT<T>{ ... } or IDENT{ ... }  → struct construction
-     (requires uppercase-starting identifier to avoid ambiguity)
    - IDENT.IDENT  → qualified name ref (resolved to variant or const)
    - IDENT<T>(...) or IDENT(...)  → call expression: either a built-in
      function call or a tagged-union constructor call (parens-with-
      named-args, `Ctor(field: expr, ...)`). The two are distinguished
-     at name-resolution time: the same surface form parses identically.
+     structurally by argument shape, then validated at name-resolution time.
    - IDENT  → name ref (resolved to local, const, bare struct, or a
      unit-constructor of a tagged union)
    Qualified forms can chain into a longer dotted path via the
@@ -769,10 +767,6 @@ inline_dag_call_suffix
    function-call form — qualified `.fn(...)` is unparsable. *)
 ident_expr
    = IDENT, ".", IDENT                             (* qualified name ref *)
-   | IDENT,
-     [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ],
-     "{", [ field_init, { ",", field_init }, [ "," ] ], "}"
-                                                    (* struct construction *)
    | IDENT,
      [ "<", generic_arg_list, ">" ],
      "(", [ call_arg_list ], ")"                   (* function call or
