@@ -16,8 +16,7 @@
 //! File<Raw> ──┬─► (walker) ──┬─► File<Desugared>
 //!             │               │
 //!             ├─ MultiDecl ───┘ via DesugarSugar
-//!             ├─ TableLiteral ──► (desugar to MapLiteral)
-//!             └─ (future) TupleMatch ──► (desugar to If/BinOp)
+//!             └─ TableLiteral ──► (desugar to MapLiteral)
 //! ```
 //!
 //! # Adding a new customer

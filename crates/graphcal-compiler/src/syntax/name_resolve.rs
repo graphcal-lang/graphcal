@@ -812,14 +812,6 @@ fn lift_expr_kind(
                 .collect();
             dst_ast::ExprKind::Match { scrutinee, arms }
         }
-        S::TupleMatch { scrutinees, arms } => dst_ast::ExprKind::TupleMatch {
-            scrutinees: scrutinees.map(|s| lift_expr(s, ctx)),
-            arms: arms.map(|arm| dst_ast::TupleMatchArm {
-                patterns: arm.patterns.map(|ps| ps.map(|p| lift_expr(p, ctx))),
-                body: lift_expr(arm.body, ctx),
-                span: arm.span,
-            }),
-        },
         S::InlineDagRef { path, args, output } => dst_ast::ExprKind::InlineDagRef {
             path,
             args: args
@@ -981,8 +973,7 @@ mod tests {
 
     fn resolve_source(source: &str) -> dst_ast::File {
         let raw_file = Parser::new(source).parse_file().unwrap();
-        let mut desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        crate::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         resolve_name_refs(desugared)
     }
 

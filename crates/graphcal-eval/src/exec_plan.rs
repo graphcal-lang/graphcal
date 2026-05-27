@@ -870,9 +870,7 @@ mod tests {
 
     fn compile_source(source: &str) -> Result<ExecPlan, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
-        let mut desugared =
-            graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        graphcal_compiler::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
         let src = make_src(source);
         let ir = lower(&file, &src).unwrap();

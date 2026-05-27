@@ -16,7 +16,6 @@
 //! only the leaf methods they care about.
 
 use crate::syntax::ast::{Expr, ExprKind, IndexArg};
-use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::Phase;
 
 /// Read-only visitor for [`Expr`] trees, generic over [`Phase`].
@@ -89,10 +88,6 @@ pub(crate) trait ExprVisitor<P: Phase> {
             ExprKind::Unfold { init, body, .. } => self.visit_unfold(expr, init, body),
 
             ExprKind::Match { scrutinee, arms } => self.visit_match(expr, scrutinee, arms),
-
-            ExprKind::TupleMatch { scrutinees, arms } => {
-                self.visit_tuple_match(expr, scrutinees, arms)
-            }
 
             // Phase-specific sugar. Default: ignore — Raw consumers that need
             // to walk into sugar (formatter) bypass the visitor; Desugared
@@ -231,26 +226,6 @@ pub(crate) trait ExprVisitor<P: Phase> {
         }
         Ok(())
     }
-
-    fn visit_tuple_match(
-        &mut self,
-        _expr: &Expr<P>,
-        scrutinees: &NonEmpty<Expr<P>>,
-        arms: &NonEmpty<crate::syntax::ast::TupleMatchArm<P>>,
-    ) -> Result<(), Self::Error> {
-        for s in scrutinees {
-            self.visit_expr(s)?;
-        }
-        for arm in arms {
-            if let Some(patterns) = &arm.patterns {
-                for p in patterns {
-                    self.visit_expr(p)?;
-                }
-            }
-            self.visit_expr(&arm.body)?;
-        }
-        Ok(())
-    }
 }
 
 /// Mutable visitor for in-place rewriting of [`Expr`] trees, generic over [`Phase`].
@@ -325,20 +300,6 @@ pub trait ExprVisitorMut<P: Phase> {
                 self.visit_expr_mut(body)
             }
             ExprKind::Match { .. } => self.visit_match_mut(expr),
-            ExprKind::TupleMatch { scrutinees, arms } => {
-                for s in scrutinees {
-                    self.visit_expr_mut(s)?;
-                }
-                for arm in arms {
-                    if let Some(patterns) = &mut arm.patterns {
-                        for p in patterns {
-                            self.visit_expr_mut(p)?;
-                        }
-                    }
-                    self.visit_expr_mut(&mut arm.body)?;
-                }
-                Ok(())
-            }
         }
     }
 

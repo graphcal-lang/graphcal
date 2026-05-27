@@ -1,9 +1,7 @@
 use crate::syntax::ast::{
     Expr, ExprKind, ForBinding, ForBindingIndex, MatchArm, MatchPattern, NatExpr, PatternBinding,
-    TupleMatchArm,
 };
 use crate::syntax::names::{FieldName, IndexName, IndexVariantName};
-use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
@@ -17,34 +15,6 @@ impl Parser<'_> {
     /// `match expr { Variant1(field) => body, Variant2 => body }`
     pub(super) fn parse_match_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, start_span) = self.expect(Token::Match)?;
-        // Support tuple scrutinee syntax: `match (a, b) { ... }`
-        // Produces an ExprKind::TupleMatch node (desugared later).
-        if self.lexer.peek() == Some(&Token::LParen) {
-            self.lexer.next_token(); // consume '('
-            let first = self.parse_expr()?;
-            if self.lexer.peek() == Some(&Token::Comma) {
-                let mut rest_scrutinees = Vec::new();
-                while self.lexer.peek() == Some(&Token::Comma) {
-                    self.lexer.next_token();
-                    rest_scrutinees.push(self.parse_expr()?);
-                }
-                self.expect(Token::RParen)?;
-                self.expect(Token::LBrace)?;
-                let arity = rest_scrutinees.len() + 1;
-                let arms = self.parse_tuple_match_arms(arity, start_span)?;
-                let (_, end_span) = self.expect(Token::RBrace)?;
-                let span = start_span.merge(end_span);
-                let scrutinees = NonEmpty::new(first, rest_scrutinees);
-                return Ok(Expr::new(ExprKind::TupleMatch { scrutinees, arms }, span));
-            }
-            self.expect(Token::RParen)?;
-            self.expect(Token::LBrace)?;
-            let scrutinee = Box::new(first);
-            let arms = self.parse_match_arm_list()?;
-            let (_, end_span) = self.expect(Token::RBrace)?;
-            let span = start_span.merge(end_span);
-            return Ok(Expr::new(ExprKind::Match { scrutinee, arms }, span));
-        }
         let scrutinee = Box::new(self.parse_expr()?);
         self.expect(Token::LBrace)?;
 
@@ -53,68 +23,6 @@ impl Parser<'_> {
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
         Ok(Expr::new(ExprKind::Match { scrutinee, arms }, span))
-    }
-
-    /// Parse tuple-match arms into a `TupleMatch` AST node.
-    ///
-    /// Supported form:
-    /// `match (a, b) { (X, Y) => expr, _ => fallback }`
-    fn parse_tuple_match_arms(
-        &mut self,
-        arity: usize,
-        start_span: Span,
-    ) -> Result<NonEmpty<TupleMatchArm>, ParseError> {
-        let mut arms = Vec::new();
-
-        loop {
-            if self.lexer.peek() == Some(&Token::RBrace) {
-                break;
-            }
-
-            if self.lexer.peek() == Some(&Token::Underscore) {
-                let (_, underscore_span) = self.advance()?;
-                self.expect(Token::FatArrow)?;
-                let body = self.parse_expr()?;
-                let span = underscore_span.merge(body.span);
-                arms.push(TupleMatchArm {
-                    patterns: None,
-                    body,
-                    span,
-                });
-            } else {
-                let (_, lparen_span) = self.expect(Token::LParen)?;
-                let first_pattern = self.parse_expr()?;
-                let mut rest_patterns = Vec::new();
-                while self.lexer.peek() == Some(&Token::Comma) {
-                    self.lexer.next_token();
-                    rest_patterns.push(self.parse_expr()?);
-                }
-                self.expect(Token::RParen)?;
-                let pattern_len = rest_patterns.len() + 1;
-                if pattern_len != arity {
-                    return Err(self.unexpected_token(
-                        &format!("tuple pattern of arity {arity}"),
-                        &format!("tuple pattern of arity {pattern_len}"),
-                        start_span,
-                    ));
-                }
-                self.expect(Token::FatArrow)?;
-                let body = self.parse_expr()?;
-                let span = lparen_span.merge(body.span);
-                arms.push(TupleMatchArm {
-                    patterns: Some(NonEmpty::new(first_pattern, rest_patterns)),
-                    body,
-                    span,
-                });
-            }
-
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-            }
-        }
-
-        NonEmpty::try_from_vec(arms)
-            .map_err(|_| self.unexpected_eof("at least one tuple match arm"))
     }
 
     /// Parse a list of match arms until `}`.
@@ -737,5 +645,11 @@ mod tests {
             Parser::new(source).parse_file(),
             Err(ParseError::IndexVariantPatternWithBindings { .. })
         ));
+    }
+
+    #[test]
+    fn parse_tuple_match_rejected() {
+        let source = "node x: Dimensionless = match (Phase.Launch, Mode.Nominal) { (Phase.Launch, Mode.Nominal) => 1.0, _ => 0.0 };";
+        assert!(Parser::new(source).parse_file().is_err());
     }
 }

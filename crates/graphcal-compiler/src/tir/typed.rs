@@ -2242,8 +2242,7 @@ mod tests {
         // Wrap in a param declaration so the parser can handle it
         let full = format!("param x: {source} = 0.0;");
         let raw_file = Parser::new(&full).parse_file().unwrap();
-        let mut desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        crate::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
         match &file.declarations[0].kind {
             crate::desugar::resolved_ast::DeclKind::Param(p) => p.type_ann.clone(),
@@ -2455,8 +2454,7 @@ mod tests {
     /// fall out of the unprocessed body).
     fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
-        let mut desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        crate::syntax::ast::desugar_tuple_matches(&mut desugared);
+        let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let ir = crate::ir::lower::lower(&file, &src)?;

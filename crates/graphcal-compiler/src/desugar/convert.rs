@@ -36,8 +36,7 @@ use crate::syntax::ast::{
     DimTerm, DomainBound, Encoding, Expr, ExprKind, FieldDecl, FieldInit, FigureDecl, File,
     GenericArg, GenericParam, IncludeDecl, IndexArg, IndexDecl, IndexDeclKind, IndexExpr,
     LayerDecl, MapEntry, MarkSpec, MatchArm, NodeDecl, ParamBinding, ParamDecl, PlotDecl,
-    PlotField, TupleMatchArm, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember,
-    UnitDecl, UnitDef,
+    PlotField, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember, UnitDecl, UnitDef,
 };
 use crate::syntax::ast::{RawDeclSugar, RawExprSugar};
 use crate::syntax::phase::{Desugared, Raw};
@@ -599,10 +598,6 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
                 scrutinee: Box::new((*scrutinee).into()),
                 arms: arms.into_iter().map(Into::into).collect(),
             },
-            ExprKind::TupleMatch { scrutinees, arms } => Self::TupleMatch {
-                scrutinees: scrutinees.map(Into::into),
-                arms: arms.map(Into::into),
-            },
             ExprKind::InlineDagRef { path, args, output } => Self::InlineDagRef {
                 path,
                 args: args.into_iter().map(Into::into).collect(),
@@ -658,16 +653,6 @@ impl From<MatchArm<Raw>> for MatchArm<Desugared> {
     fn from(a: MatchArm<Raw>) -> Self {
         Self {
             pattern: a.pattern,
-            body: a.body.into(),
-            span: a.span,
-        }
-    }
-}
-
-impl From<TupleMatchArm<Raw>> for TupleMatchArm<Desugared> {
-    fn from(a: TupleMatchArm<Raw>) -> Self {
-        Self {
-            patterns: a.patterns.map(|ps| ps.map(Into::into)),
             body: a.body.into(),
             span: a.span,
         }
