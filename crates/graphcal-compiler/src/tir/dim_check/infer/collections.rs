@@ -12,7 +12,7 @@ use crate::desugar::resolved_ast::{
 };
 use crate::syntax::names::{
     FieldName, GenericParamName, IndexName, IndexVariantName, NamePath, ResolvedIndexVariant,
-    ScopedName, StructTypeName,
+    ScopedName,
 };
 use crate::syntax::span::Span;
 use crate::tir::typed::NatLinearForm;
@@ -1173,26 +1173,43 @@ pub(super) fn infer_constructor_call(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let Some(constructor) = callee.as_bare() else {
-        return Err(GraphcalError::UnknownStructType {
-            name: callee.display_path(),
-            src: src.clone(),
-            span: callee.span().into(),
-        });
-    };
-    let constructor_name = crate::syntax::names::ConstructorName::new(&constructor.name);
+    let resolved_target = dag
+        .and_then(|dag| dag.resolved_constructor_refs.as_ref())
+        .and_then(|refs| refs.constructor_calls.get(&callee.span()));
+
     // Resolve through the constructor namespace. With every user-defined
     // `type` stored as an n-variant union, a constructor call names a
     // constructor — not a type. The union the constructor belongs to becomes
     // the value's type.
-    let (type_def, variant) = registry
-        .types
-        .lookup_ctor(&constructor_name)
-        .ok_or_else(|| GraphcalError::UnknownStructType {
-            name: constructor.name.to_string(),
-            src: src.clone(),
-            span: constructor.span.into(),
-        })?;
+    let (type_def, variant, constructor_name, constructor_span) = match resolved_target {
+        Some(target) => (
+            &target.type_def,
+            &target.variant,
+            target.variant.name.clone(),
+            callee.span(),
+        ),
+        None => {
+            let Some(constructor) = callee.as_bare() else {
+                return Err(GraphcalError::UnknownStructType {
+                    name: callee.display_path(),
+                    src: src.clone(),
+                    span: callee.span().into(),
+                });
+            };
+            let constructor_name =
+                crate::syntax::names::ConstructorName::from_atom(constructor.name.clone());
+            let (type_def, variant) =
+                registry
+                    .types
+                    .lookup_ctor(&constructor_name)
+                    .ok_or_else(|| GraphcalError::UnknownStructType {
+                        name: constructor.name.to_string(),
+                        src: src.clone(),
+                        span: constructor.span.into(),
+                    })?;
+            (type_def, variant, constructor_name, constructor.span)
+        }
+    };
     let owning_type_name = type_def.name.clone();
     let variant_fields: &[crate::registry::types::StructField] = &variant.fields;
 
@@ -1219,11 +1236,11 @@ pub(super) fn infer_constructor_call(
             return Err(GraphcalError::EvalError {
                 message: format!(
                     "type `{}` expects {hint} generic argument(s), got {}",
-                    constructor.name,
+                    owning_type_name,
                     constructor_generic_args.len()
                 ),
                 src: src.clone(),
-                span: constructor.span.into(),
+                span: constructor_span.into(),
             });
         }
         let no_dim_params: &[GenericParamName] = &[];
@@ -1291,7 +1308,7 @@ pub(super) fn infer_constructor_call(
                         param.name
                     ),
                     src: src.clone(),
-                    span: constructor.span.into(),
+                    span: constructor_span.into(),
                 })?;
             let resolved = crate::tir::typed::resolve_type_expr(
                 default_expr,
@@ -1320,7 +1337,7 @@ pub(super) fn infer_constructor_call(
         .collect();
     if !extra.is_empty() {
         return Err(GraphcalError::ExtraFields {
-            type_name: StructTypeName::new(&constructor.name),
+            type_name: owning_type_name.clone(),
             extra,
             src: src.clone(),
             span: expr.span.into(),
@@ -1336,7 +1353,7 @@ pub(super) fn infer_constructor_call(
         .collect();
     if !missing.is_empty() {
         return Err(GraphcalError::MissingFields {
-            type_name: StructTypeName::new(&constructor.name),
+            type_name: owning_type_name.clone(),
             missing,
             src: src.clone(),
             span: expr.span.into(),
@@ -1351,7 +1368,7 @@ pub(super) fn infer_constructor_call(
             .ok_or_else(|| GraphcalError::EvalError {
                 message: format!(
                     "internal: unknown field `{}` in constructor `{}`",
-                    field_init.name.value, constructor.name
+                    field_init.name.value, constructor_name
                 ),
                 src: src.clone(),
                 span: field_init.name.span.into(),
@@ -1377,7 +1394,7 @@ pub(super) fn infer_constructor_call(
         )?;
         if value_type != expected_field_type {
             return Err(GraphcalError::FieldDimensionMismatch {
-                type_name: StructTypeName::new(&constructor.name),
+                type_name: owning_type_name.clone(),
                 field_name: field_init.name.value.clone(),
                 expected: format_inferred_type(&expected_field_type, registry),
                 found: format_inferred_type(&value_type, registry),

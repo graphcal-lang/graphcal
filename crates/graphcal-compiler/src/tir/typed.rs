@@ -16,13 +16,15 @@ use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
     DeclName, DimName, GenericParamName, IndexName, NamePath, StructTypeName,
 };
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
 
 use crate::ir::lower::IR;
 use crate::ir::resolve::{DeclCategory, ExpectedFail};
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{IndexDef, Registry, RegistryBuilder, TypeDef, TypeGenericConstraint};
+use crate::registry::types::{
+    IndexDef, Registry, RegistryBuilder, TypeDef, TypeGenericConstraint, UnionMemberDef,
+};
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
 use crate::syntax::names::{ResolvedName, ScopedName, namespace};
 
@@ -638,6 +640,28 @@ impl ModuleTypeRegistry {
     pub fn get_struct_type(&self, name: &ResolvedName<namespace::StructType>) -> Option<&TypeDef> {
         self.struct_types.get(name)
     }
+
+    /// Look up the owner type and union member for a canonical constructor identity.
+    #[must_use]
+    pub fn lookup_constructor(
+        &self,
+        constructor: &ResolvedName<namespace::Constructor>,
+    ) -> Option<(
+        ResolvedName<namespace::StructType>,
+        &TypeDef,
+        &UnionMemberDef,
+    )> {
+        self.struct_types
+            .iter()
+            .filter(|(type_name, _)| type_name.owner() == constructor.owner())
+            .find_map(|(type_name, type_def)| {
+                let member = type_def
+                    .union_members()?
+                    .iter()
+                    .find(|member| member.name.as_str() == constructor.as_str())?;
+                Some((type_name.clone(), type_def, member))
+            })
+    }
 }
 
 /// Module-aware type-resolution context for one DAG body.
@@ -734,6 +758,46 @@ pub struct ResolvedCollectionRefs {
     pub map_entry_variants: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
     /// Full `Index.Variant` argument span -> resolved index variant.
     pub index_access_variants: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
+}
+
+/// Canonical HIR-derived constructor references used by constructor and match inference.
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedConstructorRefs {
+    /// Canonical constructor definitions observed while collecting the refs below.
+    pub constructor_defs: HashMap<ResolvedName<namespace::Constructor>, ResolvedConstructorTarget>,
+    /// Constructor-call callee span -> resolved constructor target.
+    pub constructor_calls: HashMap<Span, ResolvedConstructorTarget>,
+    /// Constructor match-pattern path/name span -> resolved constructor pattern.
+    pub match_pattern_constructors: HashMap<Span, ResolvedConstructorPattern>,
+}
+
+/// A resolved constructor and the tagged-union member it constructs.
+#[derive(Debug, Clone)]
+pub struct ResolvedConstructorTarget {
+    pub constructor: ResolvedName<namespace::Constructor>,
+    pub owning_type: ResolvedName<namespace::StructType>,
+    pub type_def: TypeDef,
+    pub variant: UnionMemberDef,
+}
+
+/// A resolved constructor match pattern, including lexical HIR pattern bindings.
+#[derive(Debug, Clone)]
+pub struct ResolvedConstructorPattern {
+    pub target: ResolvedConstructorTarget,
+    pub bindings: Vec<ResolvedPatternBinding>,
+}
+
+/// A binding inside a resolved constructor match pattern.
+#[derive(Debug, Clone)]
+pub enum ResolvedPatternBinding {
+    Bind {
+        field: Spanned<crate::syntax::names::FieldName>,
+        local: hir::LocalDef,
+    },
+    Wildcard {
+        field: Spanned<crate::syntax::names::FieldName>,
+        span: Span,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -897,6 +961,7 @@ impl TIR {
                 const_deps: HashMap::new(),
                 resolved_deps: None,
                 resolved_collection_refs: None,
+                resolved_constructor_refs: None,
                 source_order: Vec::new(),
                 assert_names: std::collections::HashSet::new(),
                 assumes_map: HashMap::new(),
@@ -956,6 +1021,8 @@ pub struct DagTIR {
     pub resolved_deps: Option<ResolvedDagDependencies>,
     /// Canonical HIR-derived collection/index references for dim-check inference.
     pub resolved_collection_refs: Option<ResolvedCollectionRefs>,
+    /// Canonical HIR-derived constructor calls and match patterns for dim-check inference.
+    pub resolved_constructor_refs: Option<ResolvedConstructorRefs>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// Set of all assert names. Membership-only, never iterated.
@@ -1262,6 +1329,8 @@ fn type_resolve_dag(
         module_ctx.and_then(|ctx| collect_resolved_dag_dependencies(&consts, &params, &nodes, ctx));
     let resolved_collection_refs = module_ctx
         .and_then(|ctx| collect_resolved_collection_refs(&consts, &params, &nodes, ctx, registry));
+    let resolved_constructor_refs =
+        module_ctx.and_then(|ctx| collect_resolved_constructor_refs(&consts, &params, &nodes, ctx));
 
     Ok(DagTIRSeed {
         dag_id: dag_id.clone(),
@@ -1271,6 +1340,7 @@ fn type_resolve_dag(
         resolved_decl_types,
         resolved_deps,
         resolved_collection_refs,
+        resolved_constructor_refs,
     })
 }
 
@@ -1511,6 +1581,181 @@ fn collect_resolved_collection_refs_from_expr(
     }
 }
 
+fn collect_resolved_constructor_refs(
+    consts: &[crate::ir::lower::ConstEntry],
+    params: &[crate::ir::lower::ParamEntry],
+    nodes: &[crate::ir::lower::NodeEntry],
+    ctx: ModuleTypeContext<'_>,
+) -> Option<ResolvedConstructorRefs> {
+    let generic_scope = hir::GenericScope::new();
+    let prelude = hir::PreludeTypeScope::graphcal();
+    let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
+        .with_prelude(&prelude);
+    let mut refs = ResolvedConstructorRefs::default();
+
+    for entry in consts {
+        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
+        collect_resolved_constructor_refs_from_expr(&hir_expr, ctx, &mut refs)?;
+    }
+    for entry in params {
+        let Some(expr) = &entry.default_expr else {
+            continue;
+        };
+        let hir_expr = hir::lower_expr(expr, expr_ctx).ok()?;
+        collect_resolved_constructor_refs_from_expr(&hir_expr, ctx, &mut refs)?;
+    }
+    for entry in nodes {
+        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
+        collect_resolved_constructor_refs_from_expr(&hir_expr, ctx, &mut refs)?;
+    }
+
+    Some(refs)
+}
+
+fn record_resolved_constructor_target(
+    constructor: &ResolvedName<namespace::Constructor>,
+    ctx: ModuleTypeContext<'_>,
+    refs: &mut ResolvedConstructorRefs,
+) -> Option<ResolvedConstructorTarget> {
+    if let Some(target) = refs.constructor_defs.get(constructor) {
+        return Some(target.clone());
+    }
+
+    let (owning_type, type_def, variant) = ctx.types.lookup_constructor(constructor)?;
+    let target = ResolvedConstructorTarget {
+        constructor: constructor.clone(),
+        owning_type,
+        type_def: type_def.clone(),
+        variant: variant.clone(),
+    };
+    refs.constructor_defs
+        .insert(constructor.clone(), target.clone());
+    Some(target)
+}
+
+fn collect_resolved_constructor_refs_from_expr(
+    expr: &hir::Expr,
+    ctx: ModuleTypeContext<'_>,
+    refs: &mut ResolvedConstructorRefs,
+) -> Option<()> {
+    match &expr.kind {
+        hir::ExprKind::Number(_)
+        | hir::ExprKind::Integer(_)
+        | hir::ExprKind::Bool(_)
+        | hir::ExprKind::StringLiteral(_)
+        | hir::ExprKind::TypeSystemRef(_)
+        | hir::ExprKind::GraphRef(_)
+        | hir::ExprKind::ConstRef(_)
+        | hir::ExprKind::LocalRef(_)
+        | hir::ExprKind::UnitLiteral { .. }
+        | hir::ExprKind::VariantLiteral(_) => Some(()),
+        hir::ExprKind::BinOp { lhs, rhs, .. } => {
+            collect_resolved_constructor_refs_from_expr(lhs, ctx, refs)?;
+            collect_resolved_constructor_refs_from_expr(rhs, ctx, refs)
+        }
+        hir::ExprKind::UnaryOp { operand, .. } => {
+            collect_resolved_constructor_refs_from_expr(operand, ctx, refs)
+        }
+        hir::ExprKind::FnCall { args, .. } => {
+            for arg in args {
+                collect_resolved_constructor_refs_from_expr(arg, ctx, refs)?;
+            }
+            Some(())
+        }
+        hir::ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_resolved_constructor_refs_from_expr(condition, ctx, refs)?;
+            collect_resolved_constructor_refs_from_expr(then_branch, ctx, refs)?;
+            collect_resolved_constructor_refs_from_expr(else_branch, ctx, refs)
+        }
+        hir::ExprKind::Convert { expr, .. }
+        | hir::ExprKind::DisplayTimezone { expr, .. }
+        | hir::ExprKind::FieldAccess { expr, .. } => {
+            collect_resolved_constructor_refs_from_expr(expr, ctx, refs)
+        }
+        hir::ExprKind::ConstructorCall { callee, fields, .. } => {
+            let target = record_resolved_constructor_target(&callee.value, ctx, refs)?;
+            refs.constructor_calls.insert(callee.span, target);
+            for field in fields {
+                collect_resolved_constructor_refs_from_expr(&field.value, ctx, refs)?;
+            }
+            Some(())
+        }
+        hir::ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                collect_resolved_constructor_refs_from_expr(&entry.value, ctx, refs)?;
+            }
+            Some(())
+        }
+        hir::ExprKind::ForComp { body, .. } => {
+            collect_resolved_constructor_refs_from_expr(body, ctx, refs)
+        }
+        hir::ExprKind::IndexAccess { expr, args } => {
+            collect_resolved_constructor_refs_from_expr(expr, ctx, refs)?;
+            for arg in args {
+                if let hir::expr::IndexArg::Expr(expr) = arg {
+                    collect_resolved_constructor_refs_from_expr(expr, ctx, refs)?;
+                }
+            }
+            Some(())
+        }
+        hir::ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            collect_resolved_constructor_refs_from_expr(source, ctx, refs)?;
+            collect_resolved_constructor_refs_from_expr(init, ctx, refs)?;
+            collect_resolved_constructor_refs_from_expr(body, ctx, refs)
+        }
+        hir::ExprKind::Unfold { init, body, .. } => {
+            collect_resolved_constructor_refs_from_expr(init, ctx, refs)?;
+            collect_resolved_constructor_refs_from_expr(body, ctx, refs)
+        }
+        hir::ExprKind::Match { scrutinee, arms } => {
+            collect_resolved_constructor_refs_from_expr(scrutinee, ctx, refs)?;
+            for arm in arms {
+                if let hir::expr::MatchPattern::Constructor {
+                    constructor,
+                    bindings,
+                    ..
+                } = &arm.pattern
+                {
+                    let target = record_resolved_constructor_target(&constructor.value, ctx, refs)?;
+                    let pattern = ResolvedConstructorPattern {
+                        target,
+                        bindings: bindings.iter().map(resolved_pattern_binding).collect(),
+                    };
+                    refs.match_pattern_constructors
+                        .insert(constructor.span, pattern);
+                }
+                collect_resolved_constructor_refs_from_expr(&arm.body, ctx, refs)?;
+            }
+            Some(())
+        }
+        hir::ExprKind::InlineDagRef { args, .. } => {
+            for arg in args {
+                collect_resolved_constructor_refs_from_expr(&arg.value, ctx, refs)?;
+            }
+            Some(())
+        }
+    }
+}
+
+fn resolved_pattern_binding(binding: &hir::expr::PatternBinding) -> ResolvedPatternBinding {
+    match binding {
+        hir::expr::PatternBinding::Bind { field, local } => ResolvedPatternBinding::Bind {
+            field: field.clone(),
+            local: local.clone(),
+        },
+        hir::expr::PatternBinding::Wildcard { field, span } => ResolvedPatternBinding::Wildcard {
+            field: field.clone(),
+            span: *span,
+        },
+    }
+}
+
 fn resolved_decl_key(
     owner: &crate::dag_id::DagId,
     name: &ScopedName,
@@ -1533,6 +1778,7 @@ struct DagTIRSeed {
     resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     resolved_deps: Option<ResolvedDagDependencies>,
     resolved_collection_refs: Option<ResolvedCollectionRefs>,
+    resolved_constructor_refs: Option<ResolvedConstructorRefs>,
 }
 
 impl DagTIRSeed {
@@ -1575,6 +1821,7 @@ impl DagTIRSeed {
             const_deps,
             resolved_deps: self.resolved_deps,
             resolved_collection_refs: self.resolved_collection_refs,
+            resolved_constructor_refs: self.resolved_constructor_refs,
             source_order,
             assert_names,
             assumes_map,

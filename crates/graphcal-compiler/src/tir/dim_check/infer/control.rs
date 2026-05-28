@@ -5,11 +5,12 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::resolved_ast::{Expr, MatchArm};
-use crate::syntax::names::{FieldName, IndexName, ScopedName, StructTypeName};
-
+use crate::desugar::resolved_ast::{Expr, MatchArm, MatchPattern};
 use crate::registry::error::GraphcalError;
-use crate::registry::types::Registry;
+use crate::registry::types::{Registry, TypeDef, UnionMemberDef};
+use crate::syntax::names::{FieldName, IndexName, ScopedName, StructTypeName};
+use crate::syntax::span::Span;
+use crate::tir::typed::{ResolvedConstructorPattern, ResolvedPatternBinding};
 
 use super::super::helpers::{check_arm_types_match, format_inferred_type, resolve_field_type};
 use super::super::{DeclaredType, InferredType};
@@ -80,6 +81,116 @@ pub(super) fn infer_if(
     }
 
     Ok(then_type)
+}
+
+enum ConstructorPatternBindings<'a> {
+    Legacy(&'a [crate::desugar::resolved_ast::PatternBinding]),
+    Resolved(&'a [ResolvedPatternBinding]),
+}
+
+fn constructor_pattern_lookup_span(pattern: &MatchPattern) -> Option<Span> {
+    match pattern {
+        MatchPattern::Constructor { name, .. } => Some(name.span),
+        MatchPattern::Path { path, .. } => Some(path.span()),
+        MatchPattern::IndexLabel { .. } => None,
+    }
+}
+
+fn resolved_constructor_pattern<'a>(
+    dag: Option<&'a crate::tir::typed::DagTIR>,
+    pattern: &MatchPattern,
+) -> Option<&'a ResolvedConstructorPattern> {
+    let span = constructor_pattern_lookup_span(pattern)?;
+    dag.and_then(|dag| dag.resolved_constructor_refs.as_ref())
+        .and_then(|refs| refs.match_pattern_constructors.get(&span))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "threads match-pattern binding context through one compatibility boundary"
+)]
+fn bind_constructor_pattern_locals(
+    arm_locals: &mut HashMap<String, InferredType>,
+    bindings: ConstructorPatternBindings<'_>,
+    variant_def: &UnionMemberDef,
+    type_name: &StructTypeName,
+    type_def: &TypeDef,
+    scrutinee_type_args: &[InferredType],
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    match bindings {
+        ConstructorPatternBindings::Legacy(bindings) => {
+            for binding in bindings {
+                match binding {
+                    crate::desugar::resolved_ast::PatternBinding::Bind { field, var } => {
+                        let field_type = constructor_field_type(
+                            field,
+                            variant_def,
+                            type_name,
+                            type_def,
+                            scrutinee_type_args,
+                            registry,
+                            src,
+                        )?;
+                        arm_locals.insert(var.name.to_string(), field_type);
+                    }
+                    crate::desugar::resolved_ast::PatternBinding::Wildcard { .. } => {}
+                }
+            }
+        }
+        ConstructorPatternBindings::Resolved(bindings) => {
+            for binding in bindings {
+                match binding {
+                    ResolvedPatternBinding::Bind { field, local } => {
+                        let field_type = constructor_field_type(
+                            field,
+                            variant_def,
+                            type_name,
+                            type_def,
+                            scrutinee_type_args,
+                            registry,
+                            src,
+                        )?;
+                        // The HIR local ID has already proven which lexical binding this field
+                        // introduces; expression inference still consumes the legacy name-keyed
+                        // local map until HIR expressions become authoritative end-to-end.
+                        arm_locals.insert(local.name.to_string(), field_type);
+                    }
+                    ResolvedPatternBinding::Wildcard { .. } => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn constructor_field_type(
+    field: &crate::syntax::span::Spanned<FieldName>,
+    variant_def: &UnionMemberDef,
+    type_name: &StructTypeName,
+    type_def: &TypeDef,
+    scrutinee_type_args: &[InferredType],
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    let field_def = variant_def
+        .fields
+        .iter()
+        .find(|field_def| field_def.name.as_str() == field.value.as_str())
+        .ok_or_else(|| GraphcalError::UnknownField {
+            type_name: type_name.clone(),
+            field_name: field.value.clone(),
+            src: src.clone(),
+            span: field.span.into(),
+        })?;
+    resolve_field_type(
+        &field_def.type_ann,
+        type_def,
+        scrutinee_type_args,
+        registry,
+        src,
+    )
 }
 
 /// Infer the type of a match expression.
@@ -228,82 +339,102 @@ pub(super) fn infer_match(
 
             let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
             let mut arm_types: Vec<InferredType> = Vec::new();
+            let mut resolved_type_def = None;
 
             for arm in arms {
-                let crate::desugar::resolved_ast::MatchPattern::Constructor {
-                    name,
-                    bindings,
-                    span,
-                } = &arm.pattern
-                else {
-                    return Err(GraphcalError::EvalError {
-                        message: "union match arms must use constructor patterns".to_string(),
-                        src: src.clone(),
-                        span: arm.pattern.span().into(),
-                    });
-                };
-                let variant_name_str = name.value.as_str();
+                let resolved_pattern = resolved_constructor_pattern(dag, &arm.pattern);
+                let (variant_name_str, pattern_span, pattern_type_def, variant_def, bindings) =
+                    match resolved_pattern {
+                        Some(pattern) => {
+                            if pattern.target.type_def.name != *type_name {
+                                return Err(GraphcalError::UnknownField {
+                                    type_name: type_name.clone(),
+                                    field_name: FieldName::new(
+                                        pattern.target.variant.name.as_str(),
+                                    ),
+                                    src: src.clone(),
+                                    span: constructor_pattern_lookup_span(&arm.pattern)
+                                        .unwrap_or_else(|| arm.pattern.span())
+                                        .into(),
+                                });
+                            }
+                            resolved_type_def.get_or_insert(&pattern.target.type_def);
+                            (
+                                pattern.target.variant.name.as_str(),
+                                arm.pattern.span(),
+                                &pattern.target.type_def,
+                                &pattern.target.variant,
+                                ConstructorPatternBindings::Resolved(&pattern.bindings),
+                            )
+                        }
+                        None => {
+                            let MatchPattern::Constructor {
+                                name,
+                                bindings,
+                                span,
+                            } = &arm.pattern
+                            else {
+                                return Err(GraphcalError::EvalError {
+                                    message: "union match arms must use constructor patterns"
+                                        .to_string(),
+                                    src: src.clone(),
+                                    span: arm.pattern.span().into(),
+                                });
+                            };
+                            let variant_name_str = name.value.as_str();
 
-                // The match pattern names a constructor of `type_def`.
-                // Resolve it in the union's member list directly — there
-                // are no per-variant TypeDefs.
-                let members = type_def
-                    .union_members()
-                    .ok_or_else(|| GraphcalError::EvalError {
-                        message: format!(
-                            "internal: cannot match on required (unbound) type `{type_name}`"
-                        ),
-                        src: src.clone(),
-                        span: (*span).into(),
-                    })?;
-                let variant_def = members
-                    .iter()
-                    .find(|m| m.name.as_str() == variant_name_str)
-                    .ok_or_else(|| GraphcalError::UnknownField {
-                        type_name: type_name.clone(),
-                        field_name: FieldName::new(variant_name_str),
-                        src: src.clone(),
-                        span: name.span.into(),
-                    })?;
+                            // The match pattern names a constructor of `type_def`.
+                            // Resolve it in the union's member list directly — there
+                            // are no per-variant TypeDefs.
+                            let members = type_def.union_members().ok_or_else(|| {
+                                GraphcalError::EvalError {
+                                    message: format!(
+                                        "internal: cannot match on required (unbound) type `{type_name}`"
+                                    ),
+                                    src: src.clone(),
+                                    span: (*span).into(),
+                                }
+                            })?;
+                            let variant_def = members
+                                .iter()
+                                .find(|m| m.name.as_str() == variant_name_str)
+                                .ok_or_else(|| GraphcalError::UnknownField {
+                                    type_name: type_name.clone(),
+                                    field_name: FieldName::new(variant_name_str),
+                                    src: src.clone(),
+                                    span: name.span.into(),
+                                })?;
+                            (
+                                variant_name_str,
+                                *span,
+                                type_def,
+                                variant_def,
+                                ConstructorPatternBindings::Legacy(bindings),
+                            )
+                        }
+                    };
 
                 // Check for duplicate arms
                 if !covered.insert(variant_name_str.to_string()) {
                     return Err(GraphcalError::EvalError {
                         message: format!("duplicate match arm for `{variant_name_str}`"),
                         src: src.clone(),
-                        span: (*span).into(),
+                        span: pattern_span.into(),
                     });
                 }
 
                 // Bind pattern variables as locals
                 let mut arm_locals = local_types.clone();
-                for binding in bindings {
-                    match binding {
-                        crate::desugar::resolved_ast::PatternBinding::Bind { field, var } => {
-                            let field_def = variant_def
-                                .fields
-                                .iter()
-                                .find(|f| f.name.as_str() == field.value.as_str())
-                                .ok_or_else(|| GraphcalError::UnknownField {
-                                    type_name: type_name.clone(),
-                                    field_name: field.value.clone(),
-                                    src: src.clone(),
-                                    span: field.span.into(),
-                                })?;
-                            let field_type = resolve_field_type(
-                                &field_def.type_ann,
-                                type_def,
-                                scrutinee_type_args,
-                                registry,
-                                src,
-                            )?;
-                            arm_locals.insert(var.name.to_string(), field_type);
-                        }
-                        crate::desugar::resolved_ast::PatternBinding::Wildcard { .. } => {
-                            // Wildcard: no binding needed
-                        }
-                    }
-                }
+                bind_constructor_pattern_locals(
+                    &mut arm_locals,
+                    bindings,
+                    variant_def,
+                    type_name,
+                    pattern_type_def,
+                    scrutinee_type_args,
+                    registry,
+                    src,
+                )?;
 
                 // Infer arm body type
                 let arm_type = infer_type(
@@ -319,8 +450,10 @@ pub(super) fn infer_match(
                 arm_types.push(arm_type);
             }
 
+            let exhaustiveness_type_def = resolved_type_def.unwrap_or(type_def);
+
             // Check exhaustiveness: all members/variants must be covered
-            if let Some(members) = type_def.union_members() {
+            if let Some(members) = exhaustiveness_type_def.union_members() {
                 for member in members {
                     if !covered.contains(member.name.as_str()) {
                         return Err(GraphcalError::EvalError {
