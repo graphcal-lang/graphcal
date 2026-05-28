@@ -159,7 +159,7 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
             .declarations
             .iter()
             .find_map(|d| match &d.kind {
-                DeclKind::Dag(dag) if dag.name.value.as_str() == dag_name => Some(dag),
+                DeclKind::Dag(dag) if dag.name.value.as_str() == dag_name.as_str() => Some(dag),
                 _ => None,
             })
             .ok_or_else(|| {
@@ -601,7 +601,7 @@ pub(in crate::eval::project) fn route_overrides_to_files(
                         // Verify it's actually a param in the source file.
                         let dep_file = &project.files[import_canonical];
                         let is_param = dep_file.ast.declarations.iter().any(|d| {
-                            matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name)
+                            matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name.as_str())
                         });
                         if is_param {
                             result.insert(

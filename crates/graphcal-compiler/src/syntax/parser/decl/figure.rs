@@ -1,5 +1,5 @@
 use crate::syntax::ast::{DeclKind, Declaration, FigureDecl, PlotField, Visibility};
-use crate::syntax::names::{DeclName, PlotPropertyName};
+use crate::syntax::names::{DeclName, PlotPropertyName, ScopedName};
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
@@ -25,7 +25,7 @@ impl Parser<'_> {
                 // Parse plots: [name1, name2, ...]
                 self.expect(Token::LBracket)?;
                 while self.lexer.peek() != Some(&Token::RBracket) {
-                    let plot_name = self.parse_any_ident()?.into_spanned::<DeclName>();
+                    let plot_name = self.parse_any_ident()?.into_spanned::<ScopedName>();
                     plot_names.push(plot_name);
                     if self.lexer.peek() == Some(&Token::Comma) {
                         self.expect(Token::Comma)?;

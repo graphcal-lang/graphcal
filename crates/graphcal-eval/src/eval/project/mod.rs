@@ -103,7 +103,7 @@ pub(in crate::eval::project) struct ImportAlias {
 pub(in crate::eval::project) fn derive_module_name_from_import_path(
     import_path: &ModulePath,
 ) -> String {
-    import_path.leaf().name.clone()
+    import_path.leaf().name.to_string()
 }
 
 /// Visitor that recognizes `FieldAccess(GraphRef(alias), field)` and rewrites

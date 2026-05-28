@@ -373,7 +373,7 @@ impl InferCtx<'_> {
         }
 
         Err(GraphcalError::UnknownFunction {
-            name: self.name.value.clone(),
+            name: self.name.value.to_string(),
             src: self.src.clone(),
             span: self.name.span.into(),
         })
@@ -393,7 +393,7 @@ pub(super) fn infer_fn_call(
 ) -> Result<InferredType, GraphcalError> {
     let Some(segment) = callee.as_bare() else {
         return Err(GraphcalError::UnknownFunction {
-            name: FnName::new(callee.display_path()),
+            name: callee.display_path(),
             src: src.clone(),
             span: callee.span().into(),
         });

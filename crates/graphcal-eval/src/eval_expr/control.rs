@@ -97,7 +97,7 @@ pub(super) fn eval_match(
                                     field.span,
                                 )
                             })?;
-                        arm_locals.insert(var.name.clone(), field_val.clone());
+                        arm_locals.insert(var.name.to_string(), field_val.clone());
                     }
                     graphcal_compiler::desugar::resolved_ast::PatternBinding::Wildcard {
                         ..

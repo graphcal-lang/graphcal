@@ -82,7 +82,7 @@ pub(super) fn eval_index_access(
                 variant.value.clone()
             }
             graphcal_compiler::desugar::resolved_ast::IndexArg::Var(ident) => {
-                let var_val = local_values.get(&ident.name).ok_or_else(|| {
+                let var_val = local_values.get(ident.name.as_str()).ok_or_else(|| {
                     ctx.eval_error(
                         format!("undefined loop variable `{}`", ident.name),
                         ident.span,

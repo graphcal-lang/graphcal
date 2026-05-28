@@ -587,7 +587,7 @@ fn format_composition_decl(
     keyword: &str,
     name: &str,
     plot_names: &[graphcal_compiler::syntax::span::Spanned<
-        graphcal_compiler::syntax::names::DeclName,
+        graphcal_compiler::syntax::names::ScopedName,
     >],
     fields: &[graphcal_compiler::syntax::ast::PlotField],
 ) -> RcDoc<'static> {
@@ -599,7 +599,7 @@ fn format_composition_decl(
     if !plot_names.is_empty() {
         let names: Vec<RcDoc<'static>> = plot_names
             .iter()
-            .map(|p| RcDoc::text(p.value.as_str().to_string()))
+            .map(|p| RcDoc::text(p.value.to_string()))
             .collect();
         field_docs.push(
             RcDoc::text("plots: [")

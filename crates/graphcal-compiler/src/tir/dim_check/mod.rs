@@ -996,7 +996,7 @@ fn detect_decl_cycles(
                 .copied()
                 .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
             GraphcalError::CyclicDependency {
-                name: crate::syntax::names::DeclName::new(cycle_node.clone()),
+                name: cycle_node.clone(),
                 src: src.clone(),
                 span: span.into(),
             }
@@ -1070,7 +1070,7 @@ fn detect_cross_dag_cycles(
                             .copied()
                             .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
                         return Err(GraphcalError::CyclicDependency {
-                            name: crate::syntax::names::DeclName::new(key.to_string()),
+                            name: key.to_string(),
                             src: src.clone(),
                             span: span.into(),
                         });

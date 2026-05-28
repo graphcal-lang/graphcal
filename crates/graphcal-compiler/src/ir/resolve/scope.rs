@@ -54,7 +54,7 @@ pub(super) fn check_no_runtime_graph_refs(
         src,
         make_error: |name: &ScopedName, src: &NamedSource<Arc<String>>, span: Span| {
             GraphcalError::GraphRefInConst {
-                name: name.to_string().into(),
+                name: name.clone(),
                 src: src.clone(),
                 span: span.into(),
             }

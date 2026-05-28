@@ -1,9 +1,170 @@
-//! Typed newtype wrappers for string identifiers.
+//! Typed name atoms and namespace-specific name wrappers.
 //!
-//! Each newtype represents a distinct semantic category of name in the graphcal
-//! language, preventing accidental mixing at compile time.
+//! Source identifiers are path segments first; semantic namespace wrappers are
+//! layered on top only at definition or resolution boundaries. The wrappers in
+//! this module therefore store a [`NameAtom`] rather than an arbitrary flat
+//! string, making it impossible to represent a dotted path as a leaf name.
 
-/// Macro to define a newtype wrapper around `String` with standard trait impls.
+/// Error returned when constructing a [`NameAtom`] from invalid text.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NameAtomError {
+    /// Name atoms are leaf segments and cannot be empty.
+    #[error("name atom cannot be empty")]
+    Empty,
+    /// Dots separate path segments; they are not valid inside a single atom.
+    #[error("name atom cannot contain `.`")]
+    ContainsDot,
+}
+
+/// A single name segment with no path separators.
+///
+/// `NameAtom` deliberately models only the leaf/segment invariant. It does not
+/// attempt to encode the full lexer grammar because some internal names, such
+/// as synthetic range variants (`#0`, `#1`, ...), are not source identifiers but
+/// still must never contain `.`.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NameAtom(String);
+
+impl NameAtom {
+    /// Parse a raw string into a single name segment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NameAtomError::Empty`] for empty strings and
+    /// [`NameAtomError::ContainsDot`] when the text contains a path separator.
+    pub fn parse(s: impl Into<String>) -> Result<Self, NameAtomError> {
+        let s = s.into();
+        if s.is_empty() {
+            return Err(NameAtomError::Empty);
+        }
+        if s.contains('.') {
+            return Err(NameAtomError::ContainsDot);
+        }
+        Ok(Self(s))
+    }
+
+    /// Construct an atom from lexer-produced identifier text.
+    ///
+    /// The parser has already tokenized this as a single `IDENT`, so the same
+    /// invariant is asserted here without making parser code handle an
+    /// impossible error path.
+    #[must_use]
+    pub(crate) fn new_unchecked_for_parser(s: String) -> Self {
+        debug_assert!(NameAtom::parse(s.as_str()).is_ok());
+        Self(s)
+    }
+
+    /// Get the underlying string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume and return the inner `String`.
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl std::fmt::Debug for NameAtom {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl std::fmt::Display for NameAtom {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::ops::Deref for NameAtom {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl PartialEq<str> for NameAtom {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for NameAtom {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<String> for NameAtom {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<NameAtom> for str {
+    fn eq(&self, other: &NameAtom) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<NameAtom> for &str {
+    fn eq(&self, other: &NameAtom) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl AsRef<str> for NameAtom {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::borrow::Borrow<str> for NameAtom {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl From<NameAtom> for String {
+    fn from(atom: NameAtom) -> Self {
+        atom.into_inner()
+    }
+}
+
+impl From<&NameAtom> for String {
+    fn from(atom: &NameAtom) -> Self {
+        atom.as_str().to_string()
+    }
+}
+
+impl<'a> From<NameAtom> for std::borrow::Cow<'a, str> {
+    fn from(atom: NameAtom) -> Self {
+        Self::Owned(atom.into_inner())
+    }
+}
+
+impl TryFrom<String> for NameAtom {
+    type Error = NameAtomError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(value)
+    }
+}
+
+impl TryFrom<&str> for NameAtom {
+    type Error = NameAtomError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::parse(value)
+    }
+}
+
+/// Macro to define a namespace-specific wrapper around [`NameAtom`] with
+/// standard trait impls.
 macro_rules! define_name_type {
     (
         $(#[$meta:meta])*
@@ -11,7 +172,7 @@ macro_rules! define_name_type {
     ) => {
         $(#[$meta])*
         #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        $vis struct $Name(String);
+        $vis struct $Name(NameAtom);
 
         impl std::fmt::Debug for $Name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -22,64 +183,99 @@ macro_rules! define_name_type {
         }
 
         impl $Name {
-            /// Create a new name from a string.
+            /// Create a new leaf name from a string.
+            ///
+            /// # Panics
+            ///
+            /// Panics if the string is empty or contains `.`. Use
+            /// [`Self::try_new`] when validating external input.
             #[must_use]
             pub fn new(s: impl Into<String>) -> Self {
-                Self(s.into())
+                Self::try_new(s).unwrap_or_else(|err| {
+                    panic!("invalid {} leaf name: {err}", stringify!($Name));
+                })
+            }
+
+            /// Try to create a new leaf name from a string.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`NameAtomError`] when the string is empty or contains
+            /// a path separator.
+            pub fn try_new(s: impl Into<String>) -> Result<Self, NameAtomError> {
+                NameAtom::parse(s).map(Self)
+            }
+
+            /// Create this namespace-specific name from an existing atom.
+            #[must_use]
+            pub const fn from_atom(atom: NameAtom) -> Self {
+                Self(atom)
+            }
+
+            /// Get the underlying atom.
+            #[must_use]
+            pub const fn atom(&self) -> &NameAtom {
+                &self.0
             }
 
             /// Get the underlying string slice.
             #[must_use]
             pub fn as_str(&self) -> &str {
-                &self.0
+                self.0.as_str()
             }
 
             /// Consume and return the inner `String`.
             #[must_use]
             pub fn into_inner(self) -> String {
-                self.0
+                self.0.into_inner()
             }
         }
 
         impl std::fmt::Display for $Name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(&self.0)
+                f.write_str(self.as_str())
             }
         }
 
         impl PartialEq<str> for $Name {
             fn eq(&self, other: &str) -> bool {
-                self.0 == other
+                self.as_str() == other
             }
         }
 
         impl PartialEq<&str> for $Name {
             fn eq(&self, other: &&str) -> bool {
-                self.0 == *other
+                self.as_str() == *other
             }
         }
 
         impl AsRef<str> for $Name {
             fn as_ref(&self) -> &str {
-                &self.0
+                self.as_str()
             }
         }
 
         impl std::borrow::Borrow<str> for $Name {
             fn borrow(&self) -> &str {
-                &self.0
+                self.as_str()
+            }
+        }
+
+        impl From<NameAtom> for $Name {
+            fn from(atom: NameAtom) -> Self {
+                Self::from_atom(atom)
             }
         }
 
         impl From<String> for $Name {
             fn from(s: String) -> Self {
-                Self(s)
+                Self::new(s)
             }
         }
 
         impl From<&str> for $Name {
             fn from(s: &str) -> Self {
-                Self(s.to_string())
+                Self::new(s)
             }
         }
     };
@@ -346,11 +542,18 @@ impl std::fmt::Display for ScopedName {
     }
 }
 
-impl From<String> for ScopedName {
-    /// Wrap a bare string as a local `ScopedName`. This is what
+impl From<NameAtom> for ScopedName {
+    /// Wrap a bare atom as a local `ScopedName`. This is what
     /// [`crate::syntax::ast::Ident::into_spanned`] uses to lift parser
     /// identifiers into the typed name; qualified forms are constructed
     /// explicitly via [`ScopedName::qualified`] or [`ScopedName::qualified_path`].
+    fn from(atom: NameAtom) -> Self {
+        Self::local(atom.into_inner())
+    }
+}
+
+impl From<String> for ScopedName {
+    /// Wrap a bare string as a local `ScopedName`.
     fn from(s: String) -> Self {
         Self::local(s)
     }
@@ -435,6 +638,12 @@ impl From<IndexName> for IndexNamePath {
     }
 }
 
+impl From<NameAtom> for IndexNamePath {
+    fn from(atom: NameAtom) -> Self {
+        Self::local(IndexName::from_atom(atom))
+    }
+}
+
 impl From<String> for IndexNamePath {
     fn from(s: String) -> Self {
         Self::local(IndexName::new(s))
@@ -475,6 +684,24 @@ impl std::fmt::Display for IndexNamePath {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn name_atom_rejects_dotted_paths() {
+        assert_eq!(
+            NameAtom::parse("module.Value"),
+            Err(NameAtomError::ContainsDot)
+        );
+        assert_eq!(
+            DeclName::try_new("module.Value"),
+            Err(NameAtomError::ContainsDot)
+        );
+    }
+
+    #[test]
+    fn name_atom_accepts_internal_leaf_names() {
+        let atom = NameAtom::parse("#0").unwrap();
+        assert_eq!(atom.as_str(), "#0");
+    }
 
     #[test]
     fn newtype_display() {

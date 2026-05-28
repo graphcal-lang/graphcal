@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::desugar::resolved_ast::{Expr, ExprKind, ParamBinding};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{classify_special_fn, is_aggregation_fn, is_time_scale_name};
-use crate::syntax::names::{DeclName, ScopedName};
+use crate::syntax::names::ScopedName;
 use crate::syntax::visitor::ExprVisitor;
 use miette::NamedSource;
 
@@ -52,7 +52,7 @@ impl RefCollector<'_> {
                     Ok(())
                 } else {
                     Err(GraphcalError::UnknownConstRef {
-                        name: DeclName::new(scoped.to_string()),
+                        name: scoped.clone(),
                         src: self.src.clone(),
                         span: ident.span.into(),
                     })
@@ -72,7 +72,7 @@ impl RefCollector<'_> {
                     Ok(())
                 } else {
                     Err(GraphcalError::UnknownGraphRef {
-                        name: DeclName::new(scoped.to_string()),
+                        name: scoped.clone(),
                         src: self.src.clone(),
                         span: ident.span.into(),
                     })
@@ -95,7 +95,7 @@ impl RefCollector<'_> {
             Ok(())
         } else {
             Err(GraphcalError::UnknownConstRef {
-                name: DeclName::new(ident.value.to_string()),
+                name: ident.value.clone(),
                 src: self.src.clone(),
                 span: ident.span.into(),
             })
@@ -109,7 +109,7 @@ impl RefCollector<'_> {
     ) -> Result<(), GraphcalError> {
         let Some(name) = callee.as_bare() else {
             return Err(GraphcalError::UnknownFunction {
-                name: crate::syntax::names::FnName::new(callee.display_path()),
+                name: callee.display_path(),
                 src: self.src.clone(),
                 span: callee.span().into(),
             });
@@ -117,7 +117,7 @@ impl RefCollector<'_> {
         let name_str = name.name.as_str();
         if !self.builtin_fns.contains_key(name_str) && classify_special_fn(name_str).is_none() {
             return Err(GraphcalError::UnknownFunction {
-                name: crate::syntax::names::FnName::new(name_str),
+                name: name_str.to_string(),
                 src: self.src.clone(),
                 span: name.span.into(),
             });

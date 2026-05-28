@@ -510,7 +510,7 @@ pub fn normalize_nat_expr(
         NatExpr::Var(ident) => {
             let gp = nat_params
                 .iter()
-                .find(|p| p.as_str() == ident.name)
+                .find(|p| p.as_str() == ident.name.as_str())
                 .ok_or_else(|| GraphcalError::UnknownIndex {
                     name: IndexName::new(&ident.name),
                     src: src.clone(),
@@ -2086,7 +2086,7 @@ fn resolve_type_application(
 
     let type_def = registry.types.get_type(type_name.as_str()).ok_or_else(|| {
         GraphcalError::UnknownStructType {
-            name: type_name.clone(),
+            name: type_name.to_string(),
             src: src.clone(),
             span: name.span.into(),
         }

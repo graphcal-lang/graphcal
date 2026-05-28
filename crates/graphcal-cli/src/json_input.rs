@@ -23,7 +23,9 @@ use std::fmt;
 use graphcal_compiler::syntax::ast::{
     Expr, ExprKind, FieldInit, Ident, IdentPath, MapEntry, MapEntryIndex, MapEntryKey,
 };
-use graphcal_compiler::syntax::names::{DeclName, FieldName, IndexName, IndexVariantName};
+use graphcal_compiler::syntax::names::{
+    DeclName, FieldName, IndexName, IndexVariantName, NameAtom,
+};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 
@@ -32,7 +34,7 @@ const SYNTH_SPAN: Span = Span::new(0, 0);
 
 fn synth_ident_path(name: &str) -> IdentPath {
     IdentPath::new(NonEmpty::singleton(Ident {
-        name: name.to_string(),
+        name: NameAtom::parse(name).expect("JSON-generated identifier paths must be leaf names"),
         span: SYNTH_SPAN,
     }))
 }

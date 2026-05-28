@@ -142,7 +142,7 @@ impl Parser<'_> {
                 "max" => crate::syntax::ast::DomainBoundKind::Max,
                 _ => {
                     return Err(ParseError::InvalidDomainBoundKey {
-                        key: ident.name,
+                        key: ident.name.to_string(),
                         src: self.named_source(),
                         span: kind_span.into(),
                     });

@@ -18,7 +18,7 @@ use crate::desugar::resolved_ast::{Expr, ExprKind};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{DeclName, ScopedName, UnitName};
+use crate::syntax::names::{ScopedName, UnitName};
 
 use super::{DeclaredType, InferredType};
 
@@ -139,7 +139,7 @@ pub(super) fn infer_type_with_owner(
                 declared_types
                     .get(&ident.value)
                     .ok_or_else(|| GraphcalError::UnknownConstRef {
-                        name: DeclName::new(ident.value.to_string()),
+                        name: ident.value.clone(),
                         src: src.clone(),
                         span: ident.span.into(),
                     })?;
@@ -151,7 +151,7 @@ pub(super) fn infer_type_with_owner(
                 declared_types
                     .get(&ident.value)
                     .ok_or_else(|| GraphcalError::UnknownGraphRef {
-                        name: DeclName::new(ident.value.to_string()),
+                        name: ident.value.clone(),
                         src: src.clone(),
                         span: ident.span.into(),
                     })?;
@@ -160,10 +160,10 @@ pub(super) fn infer_type_with_owner(
 
         ExprKind::LocalRef(ident) => {
             local_types
-                .get(&ident.name)
+                .get(ident.name.as_str())
                 .cloned()
                 .ok_or_else(|| GraphcalError::UnknownLocalRef {
-                    name: ident.name.clone(),
+                    name: ident.name.to_string(),
                     src: src.clone(),
                     span: ident.span.into(),
                 })

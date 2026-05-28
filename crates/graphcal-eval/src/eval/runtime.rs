@@ -386,7 +386,7 @@ pub(super) fn evaluate_plan(
         .filter_map(|entry| {
             evaluate_plot(
                 &entry.decl,
-                entry.name.member(),
+                &entry.name,
                 entry.is_pub,
                 &values,
                 &empty_locals,
@@ -409,7 +409,7 @@ pub(super) fn evaluate_plan(
                 &ctx,
             );
             super::types::FigureSpec {
-                name: DeclName::new(entry.name.member()),
+                name: entry.name.clone(),
                 plot_names,
                 properties,
             }
@@ -429,7 +429,7 @@ pub(super) fn evaluate_plan(
                 &ctx,
             );
             super::types::LayerSpec {
-                name: DeclName::new(entry.name.member()),
+                name: entry.name.clone(),
                 plot_names,
                 properties,
             }
@@ -880,7 +880,7 @@ fn eval_plot_property(
 /// Returns `None` if any expression evaluation fails (plots are best-effort).
 fn evaluate_plot(
     decl: &graphcal_compiler::desugar::resolved_ast::PlotDecl,
-    name: &str,
+    name: &ScopedName,
     is_pub: bool,
     values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
@@ -927,7 +927,7 @@ fn evaluate_plot(
     }
 
     Some(PlotSpec {
-        name: DeclName::new(name),
+        name: name.clone(),
         mark_type: decl.mark.mark_type,
         encodings,
         encoding_meta,
@@ -1007,13 +1007,13 @@ fn dimension_label_from_declared_type(
 /// Evaluate composition fields (properties and plot names) shared by figures and layers.
 fn eval_composition_fields(
     fields: &[graphcal_compiler::desugar::resolved_ast::PlotField],
-    plot_name_spans: &[graphcal_compiler::syntax::span::Spanned<DeclName>],
+    plot_name_spans: &[graphcal_compiler::syntax::span::Spanned<ScopedName>],
     values: &HashMap<ScopedName, RuntimeValue>,
     empty_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> (
     Vec<(super::types::CompositionProperty, PlotFieldValue)>,
-    Vec<DeclName>,
+    Vec<ScopedName>,
 ) {
     let mut properties = Vec::new();
     for field in fields {

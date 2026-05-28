@@ -476,14 +476,13 @@ pub(super) fn infer_index_access(
             }
             IndexArg::Var(ident) => {
                 // Must be a loop variable with matching index
-                let var_type =
-                    local_types
-                        .get(&ident.name)
-                        .ok_or_else(|| GraphcalError::UnknownLocalRef {
-                            name: ident.name.clone(),
-                            src: src.clone(),
-                            span: ident.span.into(),
-                        })?;
+                let var_type = local_types.get(ident.name.as_str()).ok_or_else(|| {
+                    GraphcalError::UnknownLocalRef {
+                        name: ident.name.to_string(),
+                        src: src.clone(),
+                        span: ident.span.into(),
+                    }
+                })?;
                 match var_type {
                     InferredType::Label(label_index) => {
                         if label_index.as_str() != idx_name.as_str() {
@@ -671,7 +670,7 @@ fn compute_index_fin_bound(
     local_types: &HashMap<String, InferredType>,
 ) -> Option<NatLinearForm> {
     match &expr.kind {
-        ExprKind::LocalRef(ident) => match local_types.get(&ident.name)? {
+        ExprKind::LocalRef(ident) => match local_types.get(ident.name.as_str())? {
             InferredType::Fin(bound) => Some(bound.clone()),
             _ => None,
         },
@@ -915,7 +914,7 @@ pub(super) fn infer_field_access(
         InferredType::Struct(type_name, type_args) => {
             let type_def = registry.types.get_type(type_name.as_str()).ok_or_else(|| {
                 GraphcalError::UnknownStructType {
-                    name: type_name.clone(),
+                    name: type_name.to_string(),
                     src: src.clone(),
                     span: inner.span.into(),
                 }
@@ -974,7 +973,7 @@ pub(super) fn infer_constructor_call(
 ) -> Result<InferredType, GraphcalError> {
     let Some(constructor) = callee.as_bare() else {
         return Err(GraphcalError::UnknownStructType {
-            name: StructTypeName::new(callee.display_path()),
+            name: callee.display_path(),
             src: src.clone(),
             span: callee.span().into(),
         });
@@ -988,7 +987,7 @@ pub(super) fn infer_constructor_call(
         .types
         .lookup_ctor(&constructor_name)
         .ok_or_else(|| GraphcalError::UnknownStructType {
-            name: StructTypeName::new(&constructor.name),
+            name: constructor.name.to_string(),
             src: src.clone(),
             span: constructor.span.into(),
         })?;

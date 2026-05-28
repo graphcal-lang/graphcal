@@ -2,7 +2,7 @@ use crate::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, Ident, IdentPath, IndexArg, ModulePath, UnaryOp,
 };
 use crate::syntax::names::{
-    DeclName, FieldName, IndexName, IndexNamePath, IndexVariantName, ScopedName,
+    DeclName, FieldName, IndexName, IndexNamePath, IndexVariantName, NameAtom, ScopedName,
 };
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::Token;
@@ -564,7 +564,7 @@ impl Parser<'_> {
     fn parse_identifier_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, span) = self.advance()?;
         let first_ident = crate::syntax::ast::Ident {
-            name: self.lexer.slice_at(span).to_string(),
+            name: NameAtom::new_unchecked_for_parser(self.lexer.slice_at(span).to_string()),
             span,
         };
         let mut rest = Vec::new();
@@ -681,7 +681,7 @@ impl Parser<'_> {
             .map_or(index_ident.span, |first| first.span.merge(index_ident.span));
         let qualifier = index_segments[..index_segments.len().saturating_sub(1)]
             .iter()
-            .map(|ident| ident.name.clone());
+            .map(|ident| ident.name.to_string());
         Spanned::new(
             IndexNamePath::qualified_path(qualifier, IndexName::new(&index_ident.name)),
             span,

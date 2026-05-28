@@ -181,14 +181,14 @@ fn classify_param_bindings(
         }
         if let Some(kind) = dep_index.other.get(binding_name.as_str()) {
             return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
-                name: binding_name.clone(),
+                name: binding_name.to_string(),
                 actual_kind: kind.as_str().to_string(),
                 src: file_src.clone(),
                 span: binding.name.span.into(),
             }));
         }
         return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
-            name: binding_name.clone(),
+            name: binding_name.to_string(),
             file_path: dep_path_for_error.to_string(),
             src: file_src.clone(),
             span: binding.name.span.into(),
@@ -312,7 +312,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
 
         if importer_idx_ast.is_none() && importer_idx_from_registry.is_none() {
             return Err(CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
-                dep_index: binding_name.clone(),
+                dep_index: binding_name.to_string(),
                 value: rhs_name,
                 src: file_src.clone(),
                 span: binding.value.span.into(),
@@ -342,7 +342,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
             && dep_is_named != imp_named
         {
             return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
-                dep_index: binding_name.clone(),
+                dep_index: binding_name.to_string(),
                 dep_kind: if dep_is_named { "named" } else { "range" }.to_string(),
                 bound_index: rhs_name,
                 bound_kind: if imp_named { "named" } else { "range" }.to_string(),
@@ -370,7 +370,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 // Verify the name exists in the dependency.
                 if !file_has_declaration(&dep_loaded.ast, orig_name) {
                     return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                        name: orig_name.clone(),
+                        name: orig_name.to_string(),
                         file_path: include_decl.path.display_path(),
                         src: file_src.clone(),
                         span: import_item.name.span.into(),
@@ -566,7 +566,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                 // Verify the name exists in the DAG body.
                 if !file_has_declaration(&dag_body, orig_name) {
                     return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                        name: orig_name.clone(),
+                        name: orig_name.to_string(),
                         file_path: dag_name.to_string(),
                         src: file_src.clone(),
                         span: import_item.name.span.into(),
@@ -580,11 +580,11 @@ pub(in crate::eval::project) fn process_inline_dag_include(
 
                 // Register the local name in scope.
                 let is_const = dag_body.declarations.iter().any(|d| {
-                    matches!(&d.kind, DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name)
+                    matches!(&d.kind, DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name.as_str())
                 });
                 let is_runtime = dag_body.declarations.iter().any(|d| {
-                    matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name)
-                        || matches!(&d.kind, DeclKind::Node(n) if n.name.value.as_str() == orig_name)
+                    matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name.as_str())
+                        || matches!(&d.kind, DeclKind::Node(n) if n.name.value.as_str() == orig_name.as_str())
                 });
                 let scoped = ScopedName::local(local_name.as_str());
                 let span = import_item.name.span;
@@ -700,7 +700,7 @@ pub(in crate::eval::project) fn is_bare_module_dag_ref(
         .ast
         .declarations
         .iter()
-        .any(|d| matches!(&d.kind, DeclKind::Dag(dag) if dag.name.value.as_str() == last_segment))
+        .any(|d| matches!(&d.kind, DeclKind::Dag(dag) if dag.name.value.as_str() == last_segment.as_str()))
 }
 
 /// Process a non-instantiated import or include (no param bindings), importing values and
@@ -749,14 +749,14 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                         file_has_import_item(&dep_loaded.ast, orig_name, import_item.namespace);
                     if exists {
                         return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
-                            name: orig_name.clone(),
+                            name: orig_name.to_string(),
                             file_path: import_path.display_path(),
                             src: file_src.clone(),
                             span: import_item.name.span.into(),
                         }));
                     }
                     return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                        name: orig_name.clone(),
+                        name: orig_name.to_string(),
                         file_path: import_path.display_path(),
                         src: file_src.clone(),
                         span: import_item.name.span.into(),
@@ -787,7 +787,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                     SelectiveImportResult::Runtime => {
                         if is_import {
                             return Err(CompileError::Eval(GraphcalError::ImportRuntimeItem {
-                                name: orig_name.clone(),
+                                name: orig_name.to_string(),
                                 src: file_src.clone(),
                                 span: import_item.name.span.into(),
                             }));
@@ -814,7 +814,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                                 .insert_default(orig_name.clone());
                         } else {
                             return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                                name: orig_name.clone(),
+                                name: orig_name.to_string(),
                                 file_path: import_path.display_path(),
                                 src: file_src.clone(),
                                 span: import_item.name.span.into(),
@@ -1134,7 +1134,7 @@ mod tests {
 
         let import_item = graphcal_compiler::desugar::resolved_ast::ImportItem {
             name: graphcal_compiler::desugar::resolved_ast::Ident {
-                name: "runtime".to_string(),
+                name: graphcal_compiler::syntax::names::NameAtom::parse("runtime").unwrap(),
                 span: Span::new(0, 7),
             },
             alias: None,
@@ -1147,7 +1147,7 @@ mod tests {
         let path = graphcal_compiler::desugar::resolved_ast::ModulePath {
             segments: graphcal_compiler::syntax::non_empty::NonEmpty::singleton(
                 graphcal_compiler::desugar::resolved_ast::Ident {
-                    name: "dep".to_string(),
+                    name: graphcal_compiler::syntax::names::NameAtom::parse("dep").unwrap(),
                     span: Span::new(0, 3),
                 },
             ),

@@ -1024,9 +1024,9 @@ fn resolve_dotted_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKi
 
     let qualifier_names = segments.as_slice()[..segments.len() - 1]
         .iter()
-        .map(|segment| segment.name.clone());
+        .map(|segment| segment.name.to_string());
     dst_ast::ExprKind::ConstRef(Spanned::new(
-        ScopedName::qualified_path(qualifier_names, segments.last().name.clone()),
+        ScopedName::qualified_path(qualifier_names, segments.last().name.to_string()),
         span,
     ))
 }

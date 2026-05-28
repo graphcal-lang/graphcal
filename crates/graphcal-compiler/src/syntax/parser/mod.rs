@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::syntax::ast::{Expr, Ident};
 use crate::syntax::comments::SourceMetadata;
 use crate::syntax::lexer::Lexer;
+use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
@@ -447,7 +448,7 @@ impl<'src> Parser<'src> {
     pub(super) fn parse_any_ident(&mut self) -> Result<Ident, ParseError> {
         match self.lexer.next_token() {
             Some((Token::Ident, span)) => Ok(Ident {
-                name: self.lexer.slice_at(span).to_string(),
+                name: NameAtom::new_unchecked_for_parser(self.lexer.slice_at(span).to_string()),
                 span,
             }),
             Some((tok, span)) => Err(self.unexpected_token("identifier", &tok.to_string(), span)),

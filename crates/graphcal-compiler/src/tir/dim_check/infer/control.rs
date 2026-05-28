@@ -212,7 +212,7 @@ pub(super) fn infer_match(
         InferredType::Struct(type_name, scrutinee_type_args) => {
             let type_def = registry.types.get_type(type_name.as_str()).ok_or_else(|| {
                 GraphcalError::UnknownStructType {
-                    name: type_name.clone(),
+                    name: type_name.to_string(),
                     src: src.clone(),
                     span: scrutinee.span.into(),
                 }
@@ -289,7 +289,7 @@ pub(super) fn infer_match(
                                 registry,
                                 src,
                             )?;
-                            arm_locals.insert(var.name.clone(), field_type);
+                            arm_locals.insert(var.name.to_string(), field_type);
                         }
                         crate::desugar::resolved_ast::PatternBinding::Wildcard { .. } => {
                             // Wildcard: no binding needed

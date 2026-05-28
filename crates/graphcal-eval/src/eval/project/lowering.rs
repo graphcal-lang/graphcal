@@ -686,7 +686,7 @@ pub(in crate::eval::project) fn extract_index_name_from_binding_expr(
             fields,
         } if generic_args.is_empty() && fields.is_empty() => callee
             .as_bare()
-            .map(|ident| ident.name.clone())
+            .map(|ident| ident.name.to_string())
             .ok_or_else(|| {
                 CompileError::Eval(GraphcalError::BindingTargetsIndex {
                     name: dep_index_name.to_string(),
@@ -723,7 +723,7 @@ pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
             fields,
         } if generic_args.is_empty() && fields.is_empty() => callee
             .as_bare()
-            .map(|ident| ident.name.clone())
+            .map(|ident| ident.name.to_string())
             .ok_or_else(|| {
                 CompileError::Eval(GraphcalError::BindingTargetsIndex {
                     name: dep_type_name.to_string(),

@@ -7,7 +7,7 @@ use thiserror::Error;
 use graphcal_compiler::desugar::resolved_ast::EncodingChannel;
 use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::syntax::names::{
-    DeclName, FieldName, IndexName, IndexVariantName, StructTypeName,
+    DeclName, FieldName, IndexName, IndexVariantName, ScopedName, StructTypeName,
 };
 use graphcal_compiler::syntax::span::Span;
 
@@ -508,7 +508,7 @@ impl CompositionProperty {
 #[derive(Debug, Clone)]
 pub struct PlotSpec {
     /// The plot declaration name.
-    pub name: DeclName,
+    pub name: ScopedName,
     /// The mark type (point, line, bar, area, rect, tick).
     pub mark_type: graphcal_compiler::desugar::resolved_ast::MarkType,
     /// Evaluated encoding channels (x, y, color, etc.) with their data.
@@ -529,9 +529,9 @@ pub struct PlotSpec {
 #[derive(Debug, Clone)]
 pub struct FigureSpec {
     /// The figure declaration name.
-    pub name: DeclName,
+    pub name: ScopedName,
     /// The plot names referenced by this figure.
-    pub plot_names: Vec<DeclName>,
+    pub plot_names: Vec<ScopedName>,
     /// Additional evaluated properties (e.g., title).
     pub properties: Vec<(CompositionProperty, PlotFieldValue)>,
 }
@@ -540,9 +540,9 @@ pub struct FigureSpec {
 #[derive(Debug, Clone)]
 pub struct LayerSpec {
     /// The layer declaration name.
-    pub name: DeclName,
+    pub name: ScopedName,
     /// The plot names to overlay in this layer.
-    pub plot_names: Vec<DeclName>,
+    pub plot_names: Vec<ScopedName>,
     /// Additional evaluated properties (e.g., title, width, height).
     pub properties: Vec<(CompositionProperty, PlotFieldValue)>,
 }

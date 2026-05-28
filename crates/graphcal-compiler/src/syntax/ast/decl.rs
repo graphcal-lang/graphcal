@@ -6,7 +6,7 @@ use crate::syntax::ast::value::{
 };
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
-    PlotPropertyName, StructTypeName, UnitName,
+    PlotPropertyName, ScopedName, StructTypeName, UnitName,
 };
 use crate::syntax::phase::{Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
@@ -249,7 +249,7 @@ pub struct FigureDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     /// The plot names referenced by this figure (from the `plots: [...]` field).
-    pub plot_names: Vec<Spanned<DeclName>>,
+    pub plot_names: Vec<Spanned<ScopedName>>,
     /// Additional fields (e.g., `title`).
     pub fields: Vec<PlotField<P>>,
 }
@@ -266,7 +266,7 @@ pub struct LayerDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     /// The plot names to overlay (from the `plots: [...]` field).
-    pub plot_names: Vec<Spanned<DeclName>>,
+    pub plot_names: Vec<Spanned<ScopedName>>,
     /// Additional fields (e.g., `title`).
     pub fields: Vec<PlotField<P>>,
 }

@@ -194,7 +194,7 @@ pub fn preprocess_dag_body_self_imports(
 
                     if !exists_as_type_system && !parent_values.contains(orig_name.as_str()) {
                         return Err(GraphcalError::ImportNameNotFound {
-                            name: orig_name.clone(),
+                            name: orig_name.to_string(),
                             file_path: import_decl.path.display_path(),
                             src: src.clone(),
                             span: span.into(),
@@ -203,7 +203,7 @@ pub fn preprocess_dag_body_self_imports(
 
                     if !parent_pub_names.contains(orig_name.as_str()) {
                         return Err(GraphcalError::ImportPrivateItem {
-                            name: orig_name.clone(),
+                            name: orig_name.to_string(),
                             file_path: import_decl.path.display_path(),
                             src: src.clone(),
                             span: span.into(),
@@ -223,7 +223,7 @@ pub fn preprocess_dag_body_self_imports(
                         );
                     } else if is_runtime {
                         return Err(GraphcalError::ImportRuntimeItem {
-                            name: orig_name.clone(),
+                            name: orig_name.to_string(),
                             src: src.clone(),
                             span: span.into(),
                         });

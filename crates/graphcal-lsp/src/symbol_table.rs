@@ -63,13 +63,13 @@ pub enum SymbolKey {
 
 fn symbol_key_for_path(path: &graphcal_compiler::syntax::ast::IdentPath) -> SymbolKey {
     match path.segments.as_slice() {
-        [single] => SymbolKey::TopLevel(single.name.clone()),
+        [single] => SymbolKey::TopLevel(single.name.to_string()),
         segments => SymbolKey::Qualified {
             module: segments[..segments.len() - 1]
                 .iter()
-                .map(|segment| segment.name.clone())
+                .map(|segment| segment.name.to_string())
                 .collect(),
-            name: segments[segments.len() - 1].name.clone(),
+            name: segments[segments.len() - 1].name.to_string(),
         },
     }
 }
@@ -560,7 +560,7 @@ fn collect_attribute_refs(
                         let ident = segments.first();
                         table.references.push(ReferenceInfo {
                             span: ident.span,
-                            target: SymbolKey::TopLevel(ident.name.clone()),
+                            target: SymbolKey::TopLevel(ident.name.to_string()),
                         });
                     }
                     AttributeArg::Path { .. } | AttributeArg::Group { .. } => {}
@@ -949,13 +949,13 @@ fn collect_import_or_include_names(
         for import_item in names {
             table.references.push(ReferenceInfo {
                 span: import_item.name.span,
-                target: SymbolKey::TopLevel(import_item.name.name.clone()),
+                target: SymbolKey::TopLevel(import_item.name.name.to_string()),
             });
             // If aliased, the alias also resolves to the same target.
             if let Some(alias) = &import_item.alias {
                 table.references.push(ReferenceInfo {
                     span: alias.span,
-                    target: SymbolKey::TopLevel(import_item.name.name.clone()),
+                    target: SymbolKey::TopLevel(import_item.name.name.to_string()),
                 });
             }
         }
@@ -1036,12 +1036,12 @@ fn collect_expr_refs(
                 SymbolKey::Qualified {
                     module: path.segments.as_slice()[..path.segments.len() - 1]
                         .iter()
-                        .map(|s| s.name.clone())
+                        .map(|s| s.name.to_string())
                         .collect(),
-                    name: leaf.name.clone(),
+                    name: leaf.name.to_string(),
                 }
             } else {
-                SymbolKey::TopLevel(leaf.name.clone())
+                SymbolKey::TopLevel(leaf.name.to_string())
             };
             table.references.push(ReferenceInfo {
                 span: leaf.span,
@@ -1055,7 +1055,7 @@ fn collect_expr_refs(
             table.references.push(ReferenceInfo {
                 span: output.span,
                 target: SymbolKey::Qualified {
-                    module: path.segments.iter().map(|s| s.name.clone()).collect(),
+                    module: path.segments.iter().map(|s| s.name.to_string()).collect(),
                     name: output.value.to_string(),
                 },
             });
@@ -1076,7 +1076,7 @@ fn collect_expr_refs(
             let target = scopes
                 .resolve(&ident.name)
                 .cloned()
-                .unwrap_or_else(|| SymbolKey::TopLevel(ident.name.clone()));
+                .unwrap_or_else(|| SymbolKey::TopLevel(ident.name.to_string()));
             table.references.push(ReferenceInfo {
                 span: ident.span,
                 target,
@@ -1238,7 +1238,7 @@ fn collect_expr_refs(
                         let target = scopes
                             .resolve(&ident.name)
                             .cloned()
-                            .unwrap_or_else(|| SymbolKey::TopLevel(ident.name.clone()));
+                            .unwrap_or_else(|| SymbolKey::TopLevel(ident.name.to_string()));
                         table.references.push(ReferenceInfo {
                             span: ident.span,
                             target,
@@ -1358,7 +1358,7 @@ fn collect_expr_refs(
                         for segment in &path.segments {
                             table.references.push(ReferenceInfo {
                                 span: segment.span,
-                                target: SymbolKey::TopLevel(segment.name.clone()),
+                                target: SymbolKey::TopLevel(segment.name.to_string()),
                             });
                         }
                         (pattern_name, bindings.as_slice())
@@ -1379,12 +1379,12 @@ fn collect_expr_refs(
                             let var_key = SymbolKey::ExprScoped {
                                 kind: ExprScopeKind::Match,
                                 offset: arm.span.offset(),
-                                local: var.name.clone(),
+                                local: var.name.to_string(),
                             };
                             table.insert_definition(
                                 var_key.clone(),
                                 DefinitionInfo {
-                                    name: var.name.clone(),
+                                    name: var.name.to_string(),
                                     category: SymbolCategory::LocalVar,
                                     name_span: var.span,
                                     decl_span: var.span,
@@ -1393,7 +1393,7 @@ fn collect_expr_refs(
                                     visibility: None,
                                 },
                             );
-                            scopes.insert(var.name.clone(), var_key);
+                            scopes.insert(var.name.to_string(), var_key);
                         }
                         PatternBinding::Wildcard { field, .. } => {
                             table.references.push(ReferenceInfo {

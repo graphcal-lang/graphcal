@@ -28,7 +28,7 @@ use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{self, Registry, RegistryBuilder, UnitScale};
 use crate::syntax::dimension::Rational;
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, IndexName, ScopedName, StructTypeName,
+    ConstructorName, DeclName, DimName, IndexName, NameAtom, ScopedName, StructTypeName,
 };
 use crate::syntax::span::Span;
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
@@ -1043,11 +1043,8 @@ impl UnfrozenIR {
             }
             // Prefix plot names referenced by the figure
             for plot_name in &mut entry.decl.plot_names {
-                if dep_names.contains(plot_name.value.as_str()) {
-                    plot_name.value = crate::syntax::names::DeclName::new(format!(
-                        "{prefix}.{}",
-                        plot_name.value
-                    ));
+                if dep_names.contains(plot_name.value.member()) {
+                    plot_name.value = plot_name.value.with_prefix(prefix);
                 }
             }
             let prefixed = entry.name.with_prefix(prefix);
@@ -1068,11 +1065,8 @@ impl UnfrozenIR {
             }
             // Prefix plot names referenced by the layer
             for plot_name in &mut entry.decl.plot_names {
-                if dep_names.contains(plot_name.value.as_str()) {
-                    plot_name.value = crate::syntax::names::DeclName::new(format!(
-                        "{prefix}.{}",
-                        plot_name.value
-                    ));
+                if dep_names.contains(plot_name.value.member()) {
+                    plot_name.value = plot_name.value.with_prefix(prefix);
                 }
             }
             let prefixed = entry.name.with_prefix(prefix);
@@ -1677,7 +1671,8 @@ pub(crate) fn substitute_type_names_in_expr(
             if let Some(constructor) = callee.as_bare_mut()
                 && let Some(new_name) = bindings.get(constructor.name.as_str())
             {
-                constructor.name = new_name.to_string();
+                constructor.name = NameAtom::parse(new_name.as_ref())
+                    .expect("type substitution names must be leaf names");
             }
             for arg in generic_args.iter_mut() {
                 if let GenericArg::Type(ty) = arg {

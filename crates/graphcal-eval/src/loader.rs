@@ -26,7 +26,7 @@ impl ModulePathKey {
     /// this layer.
     #[must_use]
     pub fn from_path(path: &ModulePath) -> Self {
-        Self(path.segments.iter().map(|s| s.name.clone()).collect())
+        Self(path.segments.iter().map(|s| s.name.to_string()).collect())
     }
 
     /// Segments in order, without separators.
@@ -840,7 +840,7 @@ fn resolve_module_path<F: FileSystemReader>(
         // Real package: first segment must match the package name.
         if !segments.is_empty() && segments[0].name != m.package_name {
             return Err(CompileError::Eval(GraphcalError::PackageNameMismatch {
-                path_first: segments[0].name.clone(),
+                path_first: segments[0].name.to_string(),
                 package_name: m.package_name.clone(),
                 src: src.clone(),
                 span: span.into(),
@@ -850,7 +850,7 @@ fn resolve_module_path<F: FileSystemReader>(
         // Build path: <project_root>/<source_dir>/seg0/seg1/.../segN.gcl
         let mut file_path = project_root.join(&m.source_dir);
         for seg in segments {
-            file_path = file_path.join(&seg.name);
+            file_path = file_path.join(seg.name.as_str());
         }
         file_path.set_extension("gcl");
 
@@ -864,7 +864,7 @@ fn resolve_module_path<F: FileSystemReader>(
         if segments.len() >= 2 {
             let mut parent_path = project_root.join(&m.source_dir);
             for seg in &segments[..segments.len() - 1] {
-                parent_path = parent_path.join(&seg.name);
+                parent_path = parent_path.join(seg.name.as_str());
             }
             parent_path.set_extension("gcl");
             if let Ok(canonical) = fs.canonicalize(&parent_path) {

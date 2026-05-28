@@ -347,7 +347,7 @@ fn eval_inline_dag_call(
     let mut dag_values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
     for binding in args {
         let value = eval_expr(&binding.value, caller_values, caller_locals, ctx)?;
-        dag_values.insert(ScopedName::local(binding.name.name.clone()), value);
+        dag_values.insert(ScopedName::local(binding.name.name.as_str()), value);
     }
 
     // Resolve explicit DAG-body imports. Cross-file qualified calls receive

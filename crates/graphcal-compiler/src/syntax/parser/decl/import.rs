@@ -3,7 +3,7 @@ use crate::syntax::ast::Declaration;
 use crate::syntax::ast::ImportKind;
 use crate::syntax::ast::ModulePath;
 use crate::syntax::ast::Visibility;
-use crate::syntax::names::ModuleAliasName;
+use crate::syntax::names::{ModuleAliasName, NameAtom};
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
@@ -199,7 +199,10 @@ impl Parser<'_> {
 
             // Accept any identifier (imports can be any casing).
             let (name_str, name_span) = match p.lexer.next_token() {
-                Some((Token::Ident, span)) => (p.lexer.slice_at(span).to_string(), span),
+                Some((Token::Ident, span)) => (
+                    NameAtom::new_unchecked_for_parser(p.lexer.slice_at(span).to_string()),
+                    span,
+                ),
                 Some((tok, span)) => {
                     return Err(p.unexpected_token("an identifier", &tok.to_string(), span));
                 }
@@ -213,7 +216,9 @@ impl Parser<'_> {
                 p.lexer.next_token(); // consume `as`
                 match p.lexer.next_token() {
                     Some((Token::Ident, alias_span)) => {
-                        let alias_str = p.lexer.slice_at(alias_span).to_string();
+                        let alias_str = NameAtom::new_unchecked_for_parser(
+                            p.lexer.slice_at(alias_span).to_string(),
+                        );
                         Some(crate::syntax::ast::Ident {
                             name: alias_str,
                             span: alias_span,

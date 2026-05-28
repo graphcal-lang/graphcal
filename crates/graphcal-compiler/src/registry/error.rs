@@ -4,7 +4,8 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::syntax::names::{
-    DeclName, DimName, FieldName, FnName, IndexName, IndexVariantName, StructTypeName, UnitName,
+    DeclName, DimName, FieldName, FnName, IndexName, IndexVariantName, ScopedName, StructTypeName,
+    UnitName,
 };
 
 /// Rich diagnostic error types for graphcal evaluation.
@@ -28,7 +29,7 @@ pub enum GraphcalError {
         help("graph references must point to a `param` or `node`")
     )]
     UnknownGraphRef {
-        name: DeclName,
+        name: ScopedName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not found")]
@@ -41,7 +42,7 @@ pub enum GraphcalError {
         help("constant references must point to a `const` or built-in constant (PI, E)")
     )]
     UnknownConstRef {
-        name: DeclName,
+        name: ScopedName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not found")]
@@ -54,7 +55,7 @@ pub enum GraphcalError {
         help("check function name and ensure it is defined")
     )]
     UnknownFunction {
-        name: FnName,
+        name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unknown function")]
@@ -69,7 +70,7 @@ pub enum GraphcalError {
         )
     )]
     GraphRefInConst {
-        name: DeclName,
+        name: ScopedName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("@ reference not allowed here")]
@@ -79,7 +80,7 @@ pub enum GraphcalError {
     #[error("graph reference `@{name}` not allowed in function body")]
     #[diagnostic(code(graphcal::F001))]
     GraphRefInFn {
-        name: DeclName,
+        name: ScopedName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("@ reference not allowed here")]
@@ -149,7 +150,7 @@ pub enum GraphcalError {
         help("declarations cannot form dependency cycles")
     )]
     CyclicDependency {
-        name: DeclName,
+        name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("involved in cycle")]
@@ -301,7 +302,7 @@ pub enum GraphcalError {
         help("struct types must be declared with `type` before use")
     )]
     UnknownStructType {
-        name: StructTypeName,
+        name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not found")]

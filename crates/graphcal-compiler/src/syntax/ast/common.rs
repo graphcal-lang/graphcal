@@ -1,6 +1,6 @@
 use crate::syntax::names::{
     DeclName, DimName, FieldName, FnName, GenericParamName, IndexName, IndexVariantName,
-    ModuleAliasName, StructTypeName, UnitName,
+    ModuleAliasName, NameAtom, StructTypeName, UnitName,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
@@ -182,7 +182,9 @@ impl ImportItem {
     /// Returns the alias if present, otherwise the original name.
     #[must_use]
     pub fn local_name(&self) -> &str {
-        self.alias.as_ref().map_or(&self.name.name, |a| &a.name)
+        self.alias
+            .as_ref()
+            .map_or(self.name.name.as_str(), |a| a.name.as_str())
     }
 
     /// The span of the local name (alias span if aliased, otherwise original name span).
@@ -194,14 +196,14 @@ impl ImportItem {
 /// An identifier with its source span.
 #[derive(Debug, Clone)]
 pub struct Ident {
-    pub name: String,
+    pub name: NameAtom,
     pub span: Span,
 }
 
 impl Ident {
     /// Convert this identifier into a `Spanned<T>`, consuming the name and span.
     #[must_use]
-    pub fn into_spanned<T: From<String>>(self) -> Spanned<T> {
+    pub fn into_spanned<T: From<NameAtom>>(self) -> Spanned<T> {
         Spanned::new(T::from(self.name), self.span)
     }
 
