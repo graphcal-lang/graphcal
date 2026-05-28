@@ -25,12 +25,17 @@
 //! expression/value consumers should move to HIR rather than adding more
 //! compatibility lookups to the syntax AST.
 
+pub mod expr;
 pub mod lower;
 pub mod types;
 
+pub use expr::{
+    BuiltinConst, BuiltinFnName, ConstRef, Expr, ExprKind, ExprLowerError, ExprLoweringContext,
+    FunctionRef, LocalDef, LocalId, lower_expr,
+};
 pub use lower::{
     GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope, TypeLoweringContext,
-    lower_generic_params, lower_type_expr,
+    lower_generic_params, lower_nat_expr, lower_type_expr,
 };
 pub use types::{
     BuiltinType, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericParamDef, GenericParamId,

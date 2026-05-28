@@ -590,7 +590,13 @@ fn lower_index_expr_name(
         })
 }
 
-fn lower_nat_expr(
+/// Lower a syntax type-level natural-number expression into HIR.
+///
+/// # Errors
+///
+/// Returns [`HirLowerError`] if the expression references an unknown generic
+/// parameter or a generic parameter whose constraint is not `Nat`.
+pub fn lower_nat_expr(
     nat_expr: &ast::NatExpr,
     ctx: TypeLoweringContext<'_>,
 ) -> Result<NatExpr, HirLowerError> {

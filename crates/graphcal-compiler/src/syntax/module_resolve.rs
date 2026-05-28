@@ -856,10 +856,29 @@ impl ModuleResolver {
                 path: path.display_path(),
             }
         })?;
-        let resolved_index = self.resolve_index_path(owner, &index_path)?;
+        self.resolve_index_variant_parts(
+            owner,
+            &index_path,
+            &IndexVariantName::from_atom(variant_atom.clone()),
+        )
+    }
+
+    /// Resolve an already-split index path plus variant leaf to a canonical
+    /// index-variant identity.
+    ///
+    /// This is the HIR-facing form for parser positions that preserve the
+    /// index path and variant leaf separately (map keys, index arguments, and
+    /// match labels). It avoids reconstructing a dotted string or re-parsing
+    /// source text just to validate the variant against the canonical index.
+    pub fn resolve_index_variant_parts(
+        &self,
+        owner: &DagId,
+        index_path: &NamePath,
+        variant: &IndexVariantName,
+    ) -> Result<ResolvedIndexVariant, ModuleResolveError> {
+        let resolved_index = self.resolve_index_path(owner, index_path)?;
         let index_owner = resolved_index.owner().clone();
         let index_name = IndexName::from_atom(resolved_index.atom().clone());
-        let variant = IndexVariantName::from_atom(variant_atom.clone());
         let target_symbols = self.module_symbols(&index_owner)?;
         let index_symbol = target_symbols
             .indexes
@@ -872,10 +891,38 @@ impl ModuleResolver {
         if !index_symbol.variants.contains_key(variant.as_str()) {
             return Err(ModuleResolveError::UnknownIndexVariant {
                 index: resolved_index,
-                variant,
+                variant: variant.clone(),
             });
         }
-        Ok(ResolvedIndexVariant::new(resolved_index, variant))
+        Ok(ResolvedIndexVariant::new(resolved_index, variant.clone()))
+    }
+
+    /// Resolve a source inline-DAG/module path to its canonical [`DagId`].
+    ///
+    /// Single-segment paths name inline DAG children of `owner`. Qualified
+    /// paths use the first segment as a module alias and append the remaining
+    /// segments to the alias target. The returned identity is canonical; source
+    /// qualifier text is not carried beyond this resolver boundary.
+    pub fn resolve_module_path(
+        &self,
+        owner: &DagId,
+        path: &ModulePath,
+    ) -> Result<DagId, ModuleResolveError> {
+        if let [leaf] = path.segments() {
+            let target = owner.child(leaf.name.as_str());
+            if self.modules.contains_key(&target) {
+                return Ok(target);
+            }
+            return Err(ModuleResolveError::UnknownModule { owner: target });
+        }
+
+        let atoms = path
+            .segments()
+            .iter()
+            .map(|segment| segment.name.clone())
+            .collect::<Vec<_>>();
+        self.resolve_module_qualifier(owner, &atoms)
+            .map(|resolved| resolved.owner)
     }
 
     fn import_additions(
