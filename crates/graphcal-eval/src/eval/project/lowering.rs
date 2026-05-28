@@ -92,6 +92,13 @@ pub(in crate::eval::project) fn lower_and_finalize(
         .build_module_resolver()
         .map_err(|err| module_resolve_compile_error(err, file_src))?;
     let mut module_types = graphcal_compiler::tir::typed::ModuleTypeRegistry::default();
+    module_types
+        .insert_graphcal_prelude()
+        .map_err(|err| GraphcalError::InternalError {
+            message: format!("failed to build prelude type registry: {err}"),
+            src: file_src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
     module_types.insert_registry(file_dag_id, &ir.registry);
     for (dep_dag_id, evaluated) in evaluated_files {
         module_types.insert_registry(dep_dag_id, &evaluated.registry);

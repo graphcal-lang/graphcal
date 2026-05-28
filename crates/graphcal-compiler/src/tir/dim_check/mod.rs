@@ -473,6 +473,7 @@ fn check_domain_constraint_targets_dag(
             | crate::tir::typed::ResolvedTypeExpr::Dimensionless
             | crate::tir::typed::ResolvedTypeExpr::Int
             | crate::tir::typed::ResolvedTypeExpr::GenericDimParam(_, _)
+            | crate::tir::typed::ResolvedTypeExpr::GenericTypeParam(_, _)
             | crate::tir::typed::ResolvedTypeExpr::GenericDimExpr { .. }
             | crate::tir::typed::ResolvedTypeExpr::Indexed { .. } => continue,
         };

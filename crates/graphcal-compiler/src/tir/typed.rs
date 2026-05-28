@@ -11,6 +11,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::{MulDivOp, TypeExpr, TypeExprKind};
+use crate::hir;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{DimName, GenericParamName, IndexName, NamePath, StructTypeName};
 use crate::syntax::span::Span;
@@ -19,7 +20,7 @@ use crate::ir::lower::IR;
 use crate::ir::resolve::{DeclCategory, ExpectedFail};
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{IndexDef, Registry, TypeDef};
+use crate::registry::types::{IndexDef, Registry, RegistryBuilder, TypeDef, TypeGenericConstraint};
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
 use crate::syntax::names::{ResolvedName, ScopedName, namespace};
 
@@ -55,6 +56,8 @@ pub enum ResolvedTypeExpr {
     },
     /// A single generic dimension parameter, e.g. `D`
     GenericDimParam(GenericParamName, Span),
+    /// A generic type parameter, e.g. `F: Type`.
+    GenericTypeParam(GenericParamName, Span),
     /// A compound dimension expression containing at least one generic param, e.g. `D^2`
     GenericDimExpr {
         terms: Vec<ResolvedDimTerm>,
@@ -98,7 +101,7 @@ impl ResolvedTypeExpr {
                 let args: Vec<String> = type_args.iter().map(|a| a.format(registry)).collect();
                 format!("{}<{}>", name, args.join(", "))
             }
-            Self::GenericDimParam(name, _) => name.to_string(),
+            Self::GenericDimParam(name, _) | Self::GenericTypeParam(name, _) => name.to_string(),
             Self::GenericDimExpr { terms, .. } => {
                 let parts: Vec<String> = terms.iter().map(|t| t.format(registry)).collect();
                 parts.join(" ")
@@ -561,6 +564,30 @@ pub struct ModuleTypeRegistry {
 }
 
 impl ModuleTypeRegistry {
+    /// Insert canonical Graphcal prelude dimensions under the synthetic prelude owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a rational arithmetic error only if the built-in prelude itself
+    /// fails to construct, which would be a compiler bug.
+    pub fn insert_graphcal_prelude(
+        &mut self,
+    ) -> Result<(), crate::syntax::dimension::RationalError> {
+        let mut builder = RegistryBuilder::new();
+        crate::registry::prelude::load_prelude(&mut builder)?;
+        let registry = builder.build();
+        let owner = crate::registry::prelude::prelude_dag_id();
+        for name in crate::registry::prelude::PRELUDE_DIMENSION_NAMES {
+            if let Some(dim) = registry.dimensions.get_dimension(name) {
+                self.dimensions.insert(
+                    ResolvedName::from_def(owner.clone(), DimName::new(*name)),
+                    dim.clone(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Insert every type-system definition from `registry` under `owner`.
     ///
     /// This is intentionally an owner-qualified view over existing registries,
@@ -993,10 +1020,11 @@ pub fn type_resolve(
 /// resolution for syntactic paths.
 ///
 /// Qualified source paths such as `lib.Length`, `lib.Vec3<...>`, and
-/// `lib.Phase` are resolved through `module_resolver` to canonical
-/// [`ResolvedName`] owners before the corresponding definition is read from
-/// `module_types`. The returned TIR still exposes legacy leaf names at runtime
-/// boundaries, but lookup itself no longer depends on source alias strings.
+/// `lib.Phase` are first lowered into HIR canonical references using
+/// `module_resolver`; TIR then consumes those HIR references and reads the
+/// corresponding definition from `module_types`. The returned TIR still exposes
+/// legacy leaf names at runtime boundaries, but lookup itself no longer depends
+/// on source alias strings.
 pub fn type_resolve_with_modules(
     ir: IR,
     root_dag_id: crate::dag_id::DagId,
@@ -1275,6 +1303,11 @@ pub fn resolved_to_declared_type(
         }
         ResolvedTypeExpr::GenericDimParam(name, span) => Err(GraphcalError::EvalError {
             message: format!("cannot use generic dimension parameter `{name}` as a concrete type"),
+            src: src.clone(),
+            span: (*span).into(),
+        }),
+        ResolvedTypeExpr::GenericTypeParam(name, span) => Err(GraphcalError::EvalError {
+            message: format!("cannot use generic type parameter `{name}` as a concrete type"),
             src: src.clone(),
             span: (*span).into(),
         }),
@@ -1706,6 +1739,14 @@ pub fn unify_resolved_type(
             })
         }
 
+        ResolvedTypeExpr::GenericTypeParam(gp, gp_span) => Err(GraphcalError::EvalError {
+            message: format!(
+                "cannot infer unconstrained generic type parameter `{gp}` in this position yet"
+            ),
+            src: src.clone(),
+            span: (*gp_span).into(),
+        }),
+
         ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
             let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
 
@@ -1855,6 +1896,12 @@ pub fn substitute_resolved_type(
             |dim| Ok(InferredType::Scalar(dim.clone())),
         ),
 
+        ResolvedTypeExpr::GenericTypeParam(gp, span) => Err(GraphcalError::EvalError {
+            message: format!("generic type parameter `{gp}` not bound during substitution"),
+            src: src.clone(),
+            span: (*span).into(),
+        }),
+
         ResolvedTypeExpr::GenericDimExpr { terms, span } => {
             let overflow_err = || GraphcalError::DimensionOverflow {
                 src: src.clone(),
@@ -1989,6 +2036,400 @@ fn module_resolve_error(
 
 fn module_lookup_is_absent(err: &ModuleResolveError) -> bool {
     matches!(err, ModuleResolveError::UnknownName { .. })
+}
+
+fn hir_lower_error_to_graphcal(
+    err: hir::HirLowerError,
+    src: &NamedSource<Arc<String>>,
+) -> GraphcalError {
+    let span = match &err {
+        hir::HirLowerError::ModuleResolve { span, .. }
+        | hir::HirLowerError::UnknownTypePath { span, .. }
+        | hir::HirLowerError::GenericConstraintMismatch { span, .. }
+        | hir::HirLowerError::UnknownGenericParam { span, .. }
+        | hir::HirLowerError::ExpectedTimeScaleName { span }
+        | hir::HirLowerError::UnknownTimeScale { span, .. } => *span,
+        hir::HirLowerError::DuplicateGenericParam { duplicate, .. } => *duplicate,
+        hir::HirLowerError::WrongDatetimeArgCount { span, .. } => *span,
+    };
+    GraphcalError::EvalError {
+        message: err.to_string(),
+        src: src.clone(),
+        span: span.into(),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct HirTypeResolutionContext<'a> {
+    registry: &'a Registry,
+    src: &'a NamedSource<Arc<String>>,
+    resolver: &'a ModuleResolver,
+    module_types: &'a ModuleTypeRegistry,
+    prelude: &'a hir::PreludeTypeScope,
+}
+
+/// Resolve an already-lowered HIR type expression into the legacy TIR type
+/// representation.
+///
+/// This is the new semantic entry point for module-aware TIR type resolution:
+/// source paths should be lowered to HIR first, then TIR consumes canonical
+/// `ResolvedName<Ns>` and lexical generic IDs from HIR instead of performing
+/// source-path lookup itself.
+pub fn resolve_hir_type_expr(
+    type_ann: &hir::TypeExpr,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    module_ctx: ModuleTypeContext<'_>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let prelude = hir::PreludeTypeScope::graphcal();
+    let ctx = HirTypeResolutionContext {
+        registry,
+        src,
+        resolver: module_ctx.resolver,
+        module_types: module_ctx.types,
+        prelude: &prelude,
+    };
+    resolve_hir_type_expr_inner(type_ann, ctx)
+}
+
+fn resolve_ast_type_expr_via_hir(
+    type_ann: &TypeExpr,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    module_ctx: ModuleTypeContext<'_>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let generic_scope = hir::GenericScope::new();
+    let prelude = hir::PreludeTypeScope::graphcal();
+    let lower_ctx =
+        hir::TypeLoweringContext::new(module_ctx.owner, module_ctx.resolver, &generic_scope)
+            .with_prelude(&prelude);
+    let hir_type = match hir::lower_type_expr(type_ann, lower_ctx) {
+        Ok(hir_type) => hir_type,
+        Err(hir::HirLowerError::UnknownTypePath { .. }) => {
+            // Compatibility boundary: inline DAG bodies and a few legacy IR
+            // construction paths still inherit bare type-system definitions via
+            // the local registry without corresponding `ModuleResolver` symbols.
+            // Keep this fallback narrow: module/private/wrong-namespace errors
+            // remain HIR diagnostics, and qualified paths still fail in the
+            // legacy resolver because they are not local leaf names.
+            return resolve_type_expr_inner(type_ann, registry, &[], &[], &[], src, None);
+        }
+        Err(err) => return Err(hir_lower_error_to_graphcal(err, src)),
+    };
+    let resolve_ctx = HirTypeResolutionContext {
+        registry,
+        src,
+        resolver: module_ctx.resolver,
+        module_types: module_ctx.types,
+        prelude: &prelude,
+    };
+    resolve_hir_type_expr_inner(&hir_type, resolve_ctx)
+}
+
+fn resolve_hir_type_expr_inner(
+    type_ann: &hir::TypeExpr,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    match &type_ann.kind {
+        hir::TypeExprKind::Builtin(builtin) => Ok(resolve_hir_builtin_type(*builtin)),
+        hir::TypeExprKind::DimExpr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),
+        hir::TypeExprKind::Label(index) => {
+            let resolved_index = hir_index_name(&index.value, index.span, ctx)?;
+            Ok(ResolvedTypeExpr::Label(resolved_index, index.span))
+        }
+        hir::TypeExprKind::Struct(name) => {
+            hir_struct_type_def(&name.value, name.span, ctx)?;
+            Ok(ResolvedTypeExpr::Struct(
+                name.value.to_def_name(),
+                name.span,
+            ))
+        }
+        hir::TypeExprKind::GenericTypeParam(param) => Ok(ResolvedTypeExpr::GenericTypeParam(
+            param.value.name.clone(),
+            param.span,
+        )),
+        hir::TypeExprKind::TypeApplication { name, type_args } => {
+            resolve_hir_type_application(type_ann, name, type_args, ctx)
+        }
+        hir::TypeExprKind::Indexed { base, indexes } => {
+            let resolved_base = resolve_hir_type_expr_inner(base, ctx)?;
+            let resolved_indexes = indexes
+                .iter()
+                .map(|index| resolve_hir_index_ref(index, ctx))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ResolvedTypeExpr::Indexed {
+                base: Box::new(resolved_base),
+                indexes: resolved_indexes,
+            })
+        }
+    }
+}
+
+fn resolve_hir_builtin_type(builtin: hir::BuiltinType) -> ResolvedTypeExpr {
+    match builtin {
+        hir::BuiltinType::Dimensionless => ResolvedTypeExpr::Dimensionless,
+        hir::BuiltinType::Bool => ResolvedTypeExpr::Bool,
+        hir::BuiltinType::Int => ResolvedTypeExpr::Int,
+        hir::BuiltinType::Datetime(scale) => ResolvedTypeExpr::Datetime(scale.scale()),
+    }
+}
+
+fn hir_dimension(
+    name: &ResolvedName<namespace::Dim>,
+    span: Span,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<Dimension, GraphcalError> {
+    ctx.module_types
+        .get_dimension(name)
+        .cloned()
+        .or_else(|| {
+            ctx.registry
+                .dimensions
+                .get_dimension(name.as_str())
+                .cloned()
+        })
+        .ok_or_else(|| GraphcalError::UnknownDimension {
+            name: name.to_def_name(),
+            src: ctx.src.clone(),
+            span: span.into(),
+        })
+}
+
+fn hir_index_name(
+    name: &ResolvedName<namespace::Index>,
+    span: Span,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<IndexName, GraphcalError> {
+    if ctx
+        .module_types
+        .get_index(name)
+        .or_else(|| ctx.registry.indexes.get_index(name.as_str()))
+        .is_some()
+    {
+        Ok(name.to_def_name())
+    } else {
+        Err(GraphcalError::UnknownIndex {
+            name: name.to_def_name(),
+            src: ctx.src.clone(),
+            span: span.into(),
+        })
+    }
+}
+
+fn hir_struct_type_def<'a>(
+    name: &ResolvedName<namespace::StructType>,
+    span: Span,
+    ctx: HirTypeResolutionContext<'a>,
+) -> Result<&'a TypeDef, GraphcalError> {
+    ctx.module_types
+        .get_struct_type(name)
+        .or_else(|| ctx.registry.types.get_type(name.as_str()))
+        .ok_or_else(|| GraphcalError::UnknownStructType {
+            name: name.to_string(),
+            src: ctx.src.clone(),
+            span: span.into(),
+        })
+}
+
+fn resolve_hir_dim_expr(
+    dim_expr: &hir::DimExpr,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let terms = dim_expr
+        .terms
+        .iter()
+        .map(|item| resolve_hir_dim_expr_item(item, ctx))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if let [
+        ResolvedDimTerm::GenericParam {
+            name,
+            power: 1,
+            op: MulDivOp::Mul,
+            span,
+        },
+    ] = terms.as_slice()
+    {
+        return Ok(ResolvedTypeExpr::GenericDimParam(name.clone(), *span));
+    }
+
+    let has_generic = terms
+        .iter()
+        .any(|term| matches!(term, ResolvedDimTerm::GenericParam { .. }));
+    if has_generic {
+        return Ok(ResolvedTypeExpr::GenericDimExpr {
+            terms,
+            span: dim_expr.span,
+        });
+    }
+
+    let result = terms.iter().try_fold(
+        Dimension::dimensionless(),
+        |acc, term| -> Result<Dimension, GraphcalError> {
+            let ResolvedDimTerm::Concrete { dim, power, op } = term else {
+                return Err(GraphcalError::InternalError {
+                    message: "generic dimension term reached concrete dimension folding"
+                        .to_string(),
+                    src: ctx.src.clone(),
+                    span: dim_expr.span.into(),
+                });
+            };
+            let overflow_err = || GraphcalError::DimensionOverflow {
+                src: ctx.src.clone(),
+                span: dim_expr.span.into(),
+            };
+            let powered = dim
+                .pow(Rational::from_int(*power))
+                .map_err(|_| overflow_err())?;
+            match op {
+                MulDivOp::Mul => (acc * powered).map_err(|_| overflow_err()),
+                MulDivOp::Div => (acc / powered).map_err(|_| overflow_err()),
+            }
+        },
+    )?;
+    Ok(ResolvedTypeExpr::Scalar(result))
+}
+
+fn resolve_hir_dim_expr_item(
+    item: &hir::DimExprItem,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<ResolvedDimTerm, GraphcalError> {
+    let power = item.term.power.unwrap_or(1);
+    match &item.term.target {
+        hir::DimTermTarget::Dimension(name) => Ok(ResolvedDimTerm::Concrete {
+            dim: hir_dimension(&name.value, name.span, ctx)?,
+            power,
+            op: item.op,
+        }),
+        hir::DimTermTarget::GenericParam(param) => Ok(ResolvedDimTerm::GenericParam {
+            name: param.value.name.clone(),
+            power,
+            op: item.op,
+            span: item.term.span,
+        }),
+    }
+}
+
+fn resolve_hir_index_ref(
+    index: &hir::IndexRef,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<ResolvedIndex, GraphcalError> {
+    match index {
+        hir::IndexRef::Concrete(name) => hir_index_name(&name.value, name.span, ctx)
+            .map(|index_name| ResolvedIndex::Concrete(index_name, name.span)),
+        hir::IndexRef::GenericParam(param) => Ok(ResolvedIndex::GenericParam(
+            param.value.name.clone(),
+            param.span,
+        )),
+        hir::IndexRef::NatExpr(nat_expr) => Ok(ResolvedIndex::NatExpr(
+            normalize_hir_nat_expr(nat_expr),
+            nat_expr.span(),
+        )),
+    }
+}
+
+fn normalize_hir_nat_expr(expr: &hir::NatExpr) -> NatPolyForm {
+    match expr {
+        hir::NatExpr::Literal(value, _) => NatPolyForm::from_constant(*value),
+        hir::NatExpr::Param(param) => NatPolyForm::from_var(param.value.name.clone()),
+        hir::NatExpr::Add(lhs, rhs, _) => {
+            normalize_hir_nat_expr(lhs).add(&normalize_hir_nat_expr(rhs))
+        }
+        hir::NatExpr::Mul(lhs, rhs, _) => {
+            normalize_hir_nat_expr(lhs).mul(&normalize_hir_nat_expr(rhs))
+        }
+    }
+}
+
+fn resolve_hir_type_application(
+    type_ann: &hir::TypeExpr,
+    name: &crate::syntax::span::Spanned<ResolvedName<namespace::StructType>>,
+    type_args: &[hir::TypeExpr],
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let type_def = hir_struct_type_def(&name.value, name.span, ctx)?;
+    let total_params = type_def.generic_params.len();
+    let required_count = type_def
+        .generic_params
+        .iter()
+        .take_while(|p| p.default.is_none())
+        .count();
+    if type_args.len() < required_count || type_args.len() > total_params {
+        let hint = if required_count == total_params {
+            format!("{total_params}")
+        } else {
+            format!("{required_count}..{total_params}")
+        };
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "type `{}` expects {hint} type argument(s), got {}",
+                name.value.as_str(),
+                type_args.len()
+            ),
+            src: ctx.src.clone(),
+            span: type_ann.span.into(),
+        });
+    }
+
+    let mut resolved_args = type_args
+        .iter()
+        .map(|arg| resolve_hir_type_expr_inner(arg, ctx))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for param in type_def.generic_params.iter().skip(type_args.len()) {
+        let default_expr = param
+            .default
+            .as_ref()
+            .ok_or_else(|| GraphcalError::EvalError {
+                message: format!(
+                    "internal: generic parameter `{}` has no default",
+                    param.name
+                ),
+                src: ctx.src.clone(),
+                span: type_ann.span.into(),
+            })?;
+        let default_hir = lower_type_generic_default(default_expr, &name.value, type_def, ctx)?;
+        resolved_args.push(resolve_hir_type_expr_inner(&default_hir, ctx)?);
+    }
+
+    Ok(ResolvedTypeExpr::GenericStruct {
+        name: name.value.to_def_name(),
+        type_args: resolved_args,
+        span: type_ann.span,
+    })
+}
+
+fn lower_type_generic_default(
+    default_expr: &TypeExpr,
+    type_owner: &ResolvedName<namespace::StructType>,
+    type_def: &TypeDef,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<hir::TypeExpr, GraphcalError> {
+    let mut scope = hir::GenericScope::new();
+    for param in &type_def.generic_params {
+        let constraint = match param.constraint {
+            TypeGenericConstraint::Dim => crate::syntax::ast::GenericConstraint::Dim,
+            TypeGenericConstraint::Index => crate::syntax::ast::GenericConstraint::Index,
+            TypeGenericConstraint::Nat => crate::syntax::ast::GenericConstraint::Nat,
+            TypeGenericConstraint::Unconstrained => crate::syntax::ast::GenericConstraint::Type,
+        };
+        let id = hir::GenericParamId::new(
+            hir::GenericParamOwner::Type(type_owner.clone()),
+            param.name.clone(),
+        );
+        scope
+            .insert_binding(hir::GenericParamBinding::new(
+                id,
+                constraint,
+                default_expr.span,
+            ))
+            .map_err(|err| hir_lower_error_to_graphcal(err, ctx.src))?;
+    }
+
+    let lower_ctx = hir::TypeLoweringContext::new(type_owner.owner(), ctx.resolver, &scope)
+        .with_prelude(ctx.prelude);
+    hir::lower_type_expr(default_expr, lower_ctx)
+        .map_err(|err| hir_lower_error_to_graphcal(err, ctx.src))
 }
 
 fn resolve_index_expr_name(
@@ -2233,6 +2674,14 @@ fn resolve_type_expr_inner(
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
+    if let Some(ctx) = module_ctx
+        && dim_params.is_empty()
+        && index_params.is_empty()
+        && nat_params.is_empty()
+    {
+        return resolve_ast_type_expr_via_hir(type_ann, registry, src, ctx);
+    }
+
     match &type_ann.kind {
         TypeExprKind::Dimensionless => Ok(ResolvedTypeExpr::Dimensionless),
         TypeExprKind::Bool => Ok(ResolvedTypeExpr::Bool),

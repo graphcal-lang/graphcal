@@ -1,7 +1,42 @@
+use crate::dag_id::DagId;
 use crate::syntax::dimension::{Dimension, RationalError};
 use crate::syntax::names::{DimName, UnitName};
 
 use crate::registry::types::RegistryBuilder;
+
+/// Canonical synthetic owner for Graphcal prelude type-system symbols.
+///
+/// Prelude names are implicitly in scope, so they do not have a source module
+/// alias. HIR still needs a canonical owner for resolved names; this synthetic
+/// [`DagId`] is that owner at the compiler boundary.
+pub const PRELUDE_DAG_ID_SEGMENT: &str = "__graphcal_prelude__";
+
+/// Dimension names provided by the Graphcal prelude.
+pub const PRELUDE_DIMENSION_NAMES: &[&str] = &[
+    "Length",
+    "Time",
+    "Mass",
+    "Temperature",
+    "ElectricCurrent",
+    "Amount",
+    "LuminousIntensity",
+    "Angle",
+    "Velocity",
+    "Acceleration",
+    "Force",
+    "Energy",
+    "Power",
+    "Frequency",
+    "Pressure",
+    "Area",
+    "Volume",
+];
+
+/// Canonical synthetic owner for Graphcal prelude symbols.
+#[must_use]
+pub fn prelude_dag_id() -> DagId {
+    DagId::root(PRELUDE_DAG_ID_SEGMENT)
+}
 
 /// Base dimension IDs returned by `load_base_dimensions`.
 ///

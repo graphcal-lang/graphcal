@@ -817,6 +817,7 @@ fn validate_constraint_target(
             })
         }
         graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericDimParam(_, _)
+        | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericTypeParam(_, _)
         | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericDimExpr { .. } => {
             // Generic types in function signatures — constraints don't apply here
             Ok(())

@@ -19,18 +19,18 @@
 //!   string dispatch;
 //! - no HIR reference field stores a dotted source alias string.
 //!
-//! This module currently defines the boundary types, starting with type-level
-//! references because those are the positions already exercised by the
-//! module-aware TIR bridge. Lowering from the syntax AST into these types is the
-//! next migration step; downstream IR/TIR/eval consumers should then move to HIR
-//! rather than adding more compatibility lookups to the syntax AST.
+//! This module currently defines and lowers the first boundary slice: type-level
+//! references. Module-aware TIR type resolution consumes this HIR slice before
+//! converting back to its legacy runtime-facing type representation. Remaining
+//! expression/value consumers should move to HIR rather than adding more
+//! compatibility lookups to the syntax AST.
 
 pub mod lower;
 pub mod types;
 
 pub use lower::{
-    GenericParamBinding, GenericScope, HirLowerError, TypeLoweringContext, lower_generic_params,
-    lower_type_expr,
+    GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope, TypeLoweringContext,
+    lower_generic_params, lower_type_expr,
 };
 pub use types::{
     BuiltinType, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericParamDef, GenericParamId,

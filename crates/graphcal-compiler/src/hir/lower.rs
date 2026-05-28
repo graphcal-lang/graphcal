@@ -5,8 +5,8 @@
 //! `ResolvedName<Ns>` values or lexical `GenericParamId`s instead of carrying
 //! syntax paths forward.
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 
@@ -15,7 +15,9 @@ use crate::desugar::resolved_ast as ast;
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
-use crate::syntax::names::{GenericParamName, NameAtom, NamePath, TimeScaleName};
+use crate::syntax::names::{
+    DimName, GenericParamName, NameAtom, NamePath, ResolvedName, TimeScaleName, namespace,
+};
 use crate::syntax::span::{Span, Spanned};
 
 use super::types::{
@@ -69,6 +71,48 @@ pub enum HirLowerError {
         expected: &'static str,
         span: Span,
     },
+}
+
+/// Implicit prelude type-level symbols visible without an import.
+///
+/// The module resolver intentionally resolves source module aliases only. The
+/// Graphcal prelude is different: it is implicitly in scope in every module but
+/// still needs a canonical owner once we cross into HIR. This small typed scope
+/// models that boundary without falling back to flat strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreludeTypeScope {
+    owner: DagId,
+    dimensions: HashSet<DimName>,
+}
+
+impl PreludeTypeScope {
+    /// Create a prelude type scope from its canonical owner and dimension names.
+    #[must_use]
+    pub fn new(owner: DagId, dimensions: impl IntoIterator<Item = DimName>) -> Self {
+        Self {
+            owner,
+            dimensions: dimensions.into_iter().collect(),
+        }
+    }
+
+    /// Create the built-in Graphcal prelude type scope.
+    #[must_use]
+    pub fn graphcal() -> Self {
+        Self::new(
+            crate::registry::prelude::prelude_dag_id(),
+            crate::registry::prelude::PRELUDE_DIMENSION_NAMES
+                .iter()
+                .copied()
+                .map(DimName::new),
+        )
+    }
+
+    fn resolve_dimension_path(&self, path: &NamePath) -> Option<ResolvedName<namespace::Dim>> {
+        let atom = path.as_bare()?;
+        self.dimensions
+            .contains(atom.as_str())
+            .then(|| ResolvedName::new(self.owner.clone(), atom.clone()))
+    }
 }
 
 /// A generic parameter binding in a lexical generic scope.
@@ -136,16 +180,30 @@ impl GenericScope {
         param: &ast::GenericParam,
     ) -> Result<(), HirLowerError> {
         let id = GenericParamId::new(owner, param.name.value.clone());
-        let binding = GenericParamBinding::new(id, param.constraint, param.name.span);
-        match self.params.entry(param.name.value.clone()) {
+        self.insert_binding(GenericParamBinding::new(
+            id,
+            param.constraint,
+            param.name.span,
+        ))
+    }
+
+    /// Insert an already-built generic parameter binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HirLowerError::DuplicateGenericParam`] if a parameter with the
+    /// same leaf name is already in scope.
+    pub fn insert_binding(&mut self, binding: GenericParamBinding) -> Result<(), HirLowerError> {
+        let name = binding.id.name.clone();
+        match self.params.entry(name.clone()) {
             Entry::Vacant(entry) => {
                 entry.insert(binding);
                 Ok(())
             }
             Entry::Occupied(entry) => Err(HirLowerError::DuplicateGenericParam {
-                name: param.name.value.clone(),
+                name,
                 first: entry.get().span,
-                duplicate: param.name.span,
+                duplicate: binding.span,
             }),
         }
     }
@@ -168,6 +226,7 @@ pub struct TypeLoweringContext<'a> {
     pub owner: &'a DagId,
     pub resolver: &'a ModuleResolver,
     pub generic_scope: &'a GenericScope,
+    pub prelude: Option<&'a PreludeTypeScope>,
 }
 
 impl<'a> TypeLoweringContext<'a> {
@@ -182,7 +241,27 @@ impl<'a> TypeLoweringContext<'a> {
             owner,
             resolver,
             generic_scope,
+            prelude: None,
         }
+    }
+
+    /// Add implicit prelude type symbols to this lowering context.
+    #[must_use]
+    pub const fn with_prelude(self, prelude: &'a PreludeTypeScope) -> Self {
+        Self {
+            owner: self.owner,
+            resolver: self.resolver,
+            generic_scope: self.generic_scope,
+            prelude: Some(prelude),
+        }
+    }
+
+    fn resolve_prelude_dimension_path(
+        self,
+        path: &NamePath,
+    ) -> Option<ResolvedName<namespace::Dim>> {
+        self.prelude
+            .and_then(|prelude| prelude.resolve_dimension_path(path))
     }
 }
 
@@ -437,19 +516,24 @@ fn lower_dim_term(
         };
     }
 
-    let resolved = ctx
+    let resolved = match ctx
         .resolver
         .resolve_dimension_path(ctx.owner, &term.name.value)
-        .map_err(|source| match source {
-            ModuleResolveError::UnknownName { .. } => HirLowerError::UnknownTypePath {
+    {
+        Ok(resolved) => resolved,
+        Err(ModuleResolveError::UnknownName { .. }) => ctx
+            .resolve_prelude_dimension_path(&term.name.value)
+            .ok_or_else(|| HirLowerError::UnknownTypePath {
                 path: term.name.value.display_path(),
                 span: term.name.span,
-            },
-            source => HirLowerError::ModuleResolve {
+            })?,
+        Err(source) => {
+            return Err(HirLowerError::ModuleResolve {
                 source,
                 span: term.name.span,
-            },
-        })?;
+            });
+        }
+    };
 
     Ok(DimTermRef {
         target: DimTermTarget::Dimension(Spanned::new(resolved, term.name.span)),
