@@ -247,18 +247,19 @@ pub fn eval_consts_from_tir(
     let mut visible_values = visible_values_with_imports(dag, &HashMap::new());
     let mut local_const_values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
 
-    let ctx = EvalContext {
-        builtin_consts,
-        builtin_fns,
-        registry: &tir.registry,
-        src,
-        unfold_context: None,
-        tir,
-        struct_field_constraints: None,
-    };
-
     for name in sorted_names {
         let expr = const_exprs[&name];
+        let ctx = EvalContext {
+            builtin_consts,
+            builtin_fns,
+            registry: &tir.registry,
+            src,
+            unfold_context: None,
+            tir,
+            current_dag: Some(tir.root()),
+            root_values: Some(&visible_values),
+            struct_field_constraints: None,
+        };
         let value = eval_expr(expr, &visible_values, &empty_locals, &ctx)?;
         visible_values.insert(name.clone(), value.clone());
         local_const_values.insert(name, value);
@@ -570,6 +571,7 @@ pub fn resolve_domain_constraints(
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let ctx = EvalContext {
         builtin_consts,
@@ -578,9 +580,10 @@ pub fn resolve_domain_constraints(
         src,
         unfold_context: None,
         tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&visible_const_values),
         struct_field_constraints: None,
     };
-    let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let mut constraints = HashMap::new();
 
@@ -724,6 +727,7 @@ pub fn resolve_struct_field_constraints(
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let ctx = EvalContext {
         builtin_consts,
@@ -732,9 +736,10 @@ pub fn resolve_struct_field_constraints(
         src,
         unfold_context: None,
         tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&visible_const_values),
         struct_field_constraints: None,
     };
-    let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let mut constraints = HashMap::new();
 

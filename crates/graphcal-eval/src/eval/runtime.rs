@@ -210,6 +210,8 @@ pub(super) fn run_eval_loop(
             src,
             unfold_context: Some(unfold_ctx),
             tir,
+            current_dag: Some(tir.root()),
+            root_values: Some(&values),
             struct_field_constraints: Some(&plan.struct_field_constraints),
         };
 
@@ -292,6 +294,9 @@ pub(super) fn evaluate_plan(
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
 
+    let EvalLoopResult { values, errors } =
+        run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
+
     let ctx = EvalContext {
         builtin_consts,
         builtin_fns,
@@ -299,11 +304,10 @@ pub(super) fn evaluate_plan(
         src,
         unfold_context: None,
         tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&values),
         struct_field_constraints: Some(&plan.struct_field_constraints),
     };
-
-    let EvalLoopResult { values, errors } =
-        run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
 
     // Build a map from name -> expression for display unit extraction.
     // Top-level decls are always `Local`-form names.

@@ -771,6 +771,23 @@ pub struct ResolvedConstructorRefs {
     pub match_pattern_constructors: HashMap<Span, ResolvedConstructorPattern>,
 }
 
+/// Canonical HIR-derived inline-DAG calls used by dim-check/eval routing.
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedInlineDagRefs {
+    /// Full inline-DAG call expression span -> resolved call routing metadata.
+    pub calls: HashMap<Span, ResolvedInlineDagCall>,
+}
+
+/// A resolved inline-DAG invocation target, bindings, and projected output.
+#[derive(Debug, Clone)]
+pub struct ResolvedInlineDagCall {
+    pub target: crate::dag_id::DagId,
+    /// Param binding name span -> canonical declaration in the target DAG.
+    pub arg_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
+    /// Canonical projected declaration in the target DAG.
+    pub output: Spanned<ResolvedName<namespace::Decl>>,
+}
+
 /// A resolved constructor and the tagged-union member it constructs.
 #[derive(Debug, Clone)]
 pub struct ResolvedConstructorTarget {
@@ -962,6 +979,7 @@ impl TIR {
                 resolved_deps: None,
                 resolved_collection_refs: None,
                 resolved_constructor_refs: None,
+                resolved_inline_dag_refs: None,
                 source_order: Vec::new(),
                 assert_names: std::collections::HashSet::new(),
                 assumes_map: HashMap::new(),
@@ -1023,6 +1041,8 @@ pub struct DagTIR {
     pub resolved_collection_refs: Option<ResolvedCollectionRefs>,
     /// Canonical HIR-derived constructor calls and match patterns for dim-check inference.
     pub resolved_constructor_refs: Option<ResolvedConstructorRefs>,
+    /// Canonical HIR-derived inline-DAG routing identities for calls from this DAG.
+    pub resolved_inline_dag_refs: Option<ResolvedInlineDagRefs>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// Set of all assert names. Membership-only, never iterated.
@@ -1331,6 +1351,8 @@ fn type_resolve_dag(
         .and_then(|ctx| collect_resolved_collection_refs(&consts, &params, &nodes, ctx, registry));
     let resolved_constructor_refs =
         module_ctx.and_then(|ctx| collect_resolved_constructor_refs(&consts, &params, &nodes, ctx));
+    let resolved_inline_dag_refs =
+        module_ctx.and_then(|ctx| collect_resolved_inline_dag_refs(&consts, &params, &nodes, ctx));
 
     Ok(DagTIRSeed {
         dag_id: dag_id.clone(),
@@ -1341,6 +1363,7 @@ fn type_resolve_dag(
         resolved_deps,
         resolved_collection_refs,
         resolved_constructor_refs,
+        resolved_inline_dag_refs,
     })
 }
 
@@ -1743,6 +1766,135 @@ fn collect_resolved_constructor_refs_from_expr(
     }
 }
 
+fn collect_resolved_inline_dag_refs(
+    consts: &[crate::ir::lower::ConstEntry],
+    params: &[crate::ir::lower::ParamEntry],
+    nodes: &[crate::ir::lower::NodeEntry],
+    ctx: ModuleTypeContext<'_>,
+) -> Option<ResolvedInlineDagRefs> {
+    let generic_scope = hir::GenericScope::new();
+    let prelude = hir::PreludeTypeScope::graphcal();
+    let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
+        .with_prelude(&prelude);
+    let mut refs = ResolvedInlineDagRefs::default();
+
+    for entry in consts {
+        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
+        collect_resolved_inline_dag_refs_from_expr(&hir_expr, &mut refs);
+    }
+    for entry in params {
+        let Some(expr) = &entry.default_expr else {
+            continue;
+        };
+        let hir_expr = hir::lower_expr(expr, expr_ctx).ok()?;
+        collect_resolved_inline_dag_refs_from_expr(&hir_expr, &mut refs);
+    }
+    for entry in nodes {
+        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
+        collect_resolved_inline_dag_refs_from_expr(&hir_expr, &mut refs);
+    }
+
+    Some(refs)
+}
+
+fn collect_resolved_inline_dag_refs_from_expr(expr: &hir::Expr, refs: &mut ResolvedInlineDagRefs) {
+    match &expr.kind {
+        hir::ExprKind::Number(_)
+        | hir::ExprKind::Integer(_)
+        | hir::ExprKind::Bool(_)
+        | hir::ExprKind::StringLiteral(_)
+        | hir::ExprKind::TypeSystemRef(_)
+        | hir::ExprKind::GraphRef(_)
+        | hir::ExprKind::ConstRef(_)
+        | hir::ExprKind::LocalRef(_)
+        | hir::ExprKind::UnitLiteral { .. }
+        | hir::ExprKind::VariantLiteral(_) => {}
+        hir::ExprKind::BinOp { lhs, rhs, .. } => {
+            collect_resolved_inline_dag_refs_from_expr(lhs, refs);
+            collect_resolved_inline_dag_refs_from_expr(rhs, refs);
+        }
+        hir::ExprKind::UnaryOp { operand, .. }
+        | hir::ExprKind::Convert { expr: operand, .. }
+        | hir::ExprKind::DisplayTimezone { expr: operand, .. }
+        | hir::ExprKind::FieldAccess { expr: operand, .. } => {
+            collect_resolved_inline_dag_refs_from_expr(operand, refs);
+        }
+        hir::ExprKind::FnCall { args, .. } => {
+            for arg in args {
+                collect_resolved_inline_dag_refs_from_expr(arg, refs);
+            }
+        }
+        hir::ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_resolved_inline_dag_refs_from_expr(condition, refs);
+            collect_resolved_inline_dag_refs_from_expr(then_branch, refs);
+            collect_resolved_inline_dag_refs_from_expr(else_branch, refs);
+        }
+        hir::ExprKind::ConstructorCall { fields, .. } => {
+            for field in fields {
+                collect_resolved_inline_dag_refs_from_expr(&field.value, refs);
+            }
+        }
+        hir::ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                collect_resolved_inline_dag_refs_from_expr(&entry.value, refs);
+            }
+        }
+        hir::ExprKind::ForComp { body, .. } => {
+            collect_resolved_inline_dag_refs_from_expr(body, refs);
+        }
+        hir::ExprKind::IndexAccess { expr, args } => {
+            collect_resolved_inline_dag_refs_from_expr(expr, refs);
+            for arg in args {
+                if let hir::expr::IndexArg::Expr(expr) = arg {
+                    collect_resolved_inline_dag_refs_from_expr(expr, refs);
+                }
+            }
+        }
+        hir::ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            collect_resolved_inline_dag_refs_from_expr(source, refs);
+            collect_resolved_inline_dag_refs_from_expr(init, refs);
+            collect_resolved_inline_dag_refs_from_expr(body, refs);
+        }
+        hir::ExprKind::Unfold { init, body, .. } => {
+            collect_resolved_inline_dag_refs_from_expr(init, refs);
+            collect_resolved_inline_dag_refs_from_expr(body, refs);
+        }
+        hir::ExprKind::Match { scrutinee, arms } => {
+            collect_resolved_inline_dag_refs_from_expr(scrutinee, refs);
+            for arm in arms {
+                collect_resolved_inline_dag_refs_from_expr(&arm.body, refs);
+            }
+        }
+        hir::ExprKind::InlineDagRef {
+            target,
+            args,
+            output,
+        } => {
+            let arg_targets = args
+                .iter()
+                .map(|arg| (arg.target.span, arg.target.value.clone()))
+                .collect();
+            refs.calls.insert(
+                expr.span,
+                ResolvedInlineDagCall {
+                    target: target.value.clone(),
+                    arg_targets,
+                    output: output.clone(),
+                },
+            );
+            for arg in args {
+                collect_resolved_inline_dag_refs_from_expr(&arg.value, refs);
+            }
+        }
+    }
+}
+
 fn resolved_pattern_binding(binding: &hir::expr::PatternBinding) -> ResolvedPatternBinding {
     match binding {
         hir::expr::PatternBinding::Bind { field, local } => ResolvedPatternBinding::Bind {
@@ -1779,6 +1931,7 @@ struct DagTIRSeed {
     resolved_deps: Option<ResolvedDagDependencies>,
     resolved_collection_refs: Option<ResolvedCollectionRefs>,
     resolved_constructor_refs: Option<ResolvedConstructorRefs>,
+    resolved_inline_dag_refs: Option<ResolvedInlineDagRefs>,
 }
 
 impl DagTIRSeed {
@@ -1822,6 +1975,7 @@ impl DagTIRSeed {
             resolved_deps: self.resolved_deps,
             resolved_collection_refs: self.resolved_collection_refs,
             resolved_constructor_refs: self.resolved_constructor_refs,
+            resolved_inline_dag_refs: self.resolved_inline_dag_refs,
             source_order,
             assert_names,
             assumes_map,

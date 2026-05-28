@@ -429,13 +429,10 @@ fn infer_decl_ref_type(
 
 /// Infer the type of an inline DAG invocation `@<path>(args).<out>`.
 ///
-/// Looks up the called dag via `tir`, indexed by [`DagKey`]: the bare
-/// DAG name for same-file calls (`@dag(args).out`) or a `(module-alias,
-/// dag-name)` pair for cross-file qualified calls (`@module.dag(args).out`,
-/// matching the key inserted by the cross-file dag-merge step). Both
-/// variants share the same compiled-TIR resolution path: param types come
-/// from `dag_tir.resolved_decl_types`, and `dag_tir.pub_nodes` gates
-/// projection of non-`pub` outputs.
+/// Module-aware TIRs carry HIR-derived [`ResolvedInlineDagCall`] sidecars for
+/// call routing. When present, those canonical `DagId` / `ResolvedName<Decl>`
+/// identities are authoritative; standalone TIRs retain the legacy source-path
+/// lookup by `path` and leaf param/output names.
 #[expect(
     clippy::too_many_arguments,
     reason = "passes inference context through"
@@ -453,50 +450,94 @@ fn infer_inline_dag_ref(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let display_path = path.display_path();
-    let dag_tir = tir
-        .lookup_call_target(path)
-        .ok_or_else(|| GraphcalError::UnknownDag {
-            name: display_path.clone(),
-            src: src.clone(),
-            span: path.span.into(),
-        })?;
+    use crate::syntax::names::{ResolvedName, namespace};
 
-    // Map param/node member names to their pre-resolved declared types.
-    // Using the compiled TIR (not the raw AST) means the same code path
-    // serves same-file and cross-file calls — the dep's TIR has already
-    // resolved its type annotations in its own registry's scope.
-    //
-    // Locals only here: param/node binding names at a call site are bare
-    // identifiers, so a `String`-keyed table is the right shape.
+    type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+
+    let display_path = path.display_path();
+    let resolved_call = dag
+        .and_then(|dag| dag.resolved_inline_dag_refs.as_ref())
+        .and_then(|refs| refs.calls.get(&expr.span));
+    let dag_tir = match resolved_call {
+        Some(call) => tir
+            .dags
+            .get(&call.target)
+            .ok_or_else(|| GraphcalError::UnknownDag {
+                name: call.target.to_string(),
+                src: src.clone(),
+                span: path.span.into(),
+            })?,
+        None => tir
+            .lookup_call_target(path)
+            .ok_or_else(|| GraphcalError::UnknownDag {
+                name: display_path.clone(),
+                src: src.clone(),
+                span: path.span.into(),
+            })?,
+    };
+
     let mut param_decl_types: HashMap<String, DeclaredType> = HashMap::new();
+    let mut param_decl_types_by_key: HashMap<ResolvedDeclKey, DeclaredType> = HashMap::new();
     for p in &dag_tir.params {
         if let Some(resolved) = dag_tir.resolved_decl_types.get(&p.name) {
             let dt = crate::tir::typed::resolved_to_declared_type(resolved, src)?;
-            param_decl_types.insert(p.name.member().to_string(), dt);
+            param_decl_types.insert(p.name.member().to_string(), dt.clone());
+            if let Some(key) = dag_tir.resolved_decl_key_for_local(&p.name) {
+                param_decl_types_by_key.insert(key, dt);
+            }
         }
     }
     let mut node_decl_types: HashMap<String, DeclaredType> = HashMap::new();
+    let mut node_decl_types_by_key: HashMap<ResolvedDeclKey, DeclaredType> = HashMap::new();
     for n in &dag_tir.nodes {
         if let Some(resolved) = dag_tir.resolved_decl_types.get(&n.name) {
             let dt = crate::tir::typed::resolved_to_declared_type(resolved, src)?;
-            node_decl_types.insert(n.name.member().to_string(), dt);
+            node_decl_types.insert(n.name.member().to_string(), dt.clone());
+            if let Some(key) = dag_tir.resolved_decl_key_for_local(&n.name) {
+                node_decl_types_by_key.insert(key, dt);
+            }
         }
     }
 
-    // Check each binding names a real param and type-matches its annotation.
     let mut bound_names: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(args.len());
+    let mut bound_resolved_names: std::collections::HashSet<ResolvedDeclKey> =
         std::collections::HashSet::with_capacity(args.len());
     for binding in args {
         let binding_name = binding.name.name.as_str();
-        let expected = param_decl_types.get(binding_name).ok_or_else(|| {
-            GraphcalError::UnknownInlineDagParam {
-                name: binding_name.to_string(),
-                dag_name: display_path.clone(),
-                src: src.clone(),
-                span: binding.name.span.into(),
+        let expected = match resolved_call {
+            Some(call) => {
+                let target = call.arg_targets.get(&binding.name.span).ok_or_else(|| {
+                    GraphcalError::InternalError {
+                        message: format!(
+                            "resolved inline-DAG sidecar has no arg target for binding `{binding_name}`"
+                        ),
+                        src: src.clone(),
+                        span: binding.name.span.into(),
+                    }
+                })?;
+                bound_resolved_names.insert(target.clone());
+                param_decl_types_by_key.get(target).ok_or_else(|| {
+                    GraphcalError::UnknownInlineDagParam {
+                        name: target.as_str().to_string(),
+                        dag_name: display_path.clone(),
+                        src: src.clone(),
+                        span: binding.name.span.into(),
+                    }
+                })?
             }
-        })?;
+            None => {
+                bound_names.insert(binding_name.to_string());
+                param_decl_types.get(binding_name).ok_or_else(|| {
+                    GraphcalError::UnknownInlineDagParam {
+                        name: binding_name.to_string(),
+                        dag_name: display_path.clone(),
+                        src: src.clone(),
+                        span: binding.name.span.into(),
+                    }
+                })?
+            }
+        };
         let found = infer_type(
             &binding.value,
             declared_types,
@@ -516,38 +557,71 @@ fn infer_inline_dag_ref(
                 span: binding.value.span.into(),
             });
         }
-        bound_names.insert(binding_name.to_string());
     }
 
-    // Every param declared in the dag must be bound at the call site.
-    let mut missing: Vec<String> = param_decl_types
-        .keys()
-        .filter(|p| !bound_names.contains(p.as_str()))
-        .cloned()
-        .collect();
-    if !missing.is_empty() {
-        missing.sort();
-        return Err(GraphcalError::MissingInlineDagBindings {
-            missing,
-            dag_name: display_path.clone(),
-            src: src.clone(),
-            span: expr.span.into(),
-        });
-    }
-
-    // Project the output node; reject projection of a non-`pub` node with
-    // the same shape as the `include lib_dag(args) { private_result }` form.
-    let output_decl = node_decl_types.get(output.value.as_str()).ok_or_else(|| {
-        GraphcalError::UnknownInlineDagOutput {
-            name: output.value.to_string(),
-            dag_name: display_path.clone(),
-            src: src.clone(),
-            span: output.span.into(),
+    match resolved_call {
+        Some(_) => {
+            let mut missing: Vec<String> = param_decl_types_by_key
+                .keys()
+                .filter(|p| !bound_resolved_names.contains(*p))
+                .map(|p| p.as_str().to_string())
+                .collect();
+            if !missing.is_empty() {
+                missing.sort();
+                return Err(GraphcalError::MissingInlineDagBindings {
+                    missing,
+                    dag_name: display_path.clone(),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                });
+            }
         }
-    })?;
-    if !dag_tir.pub_nodes.contains(output.value.as_str()) {
+        None => {
+            let mut missing: Vec<String> = param_decl_types
+                .keys()
+                .filter(|p| !bound_names.contains(p.as_str()))
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
+                missing.sort();
+                return Err(GraphcalError::MissingInlineDagBindings {
+                    missing,
+                    dag_name: display_path.clone(),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                });
+            }
+        }
+    }
+
+    let (output_name, output_decl) = match resolved_call {
+        Some(call) => {
+            let output_key = &call.output.value;
+            let output_decl = node_decl_types_by_key.get(output_key).ok_or_else(|| {
+                GraphcalError::UnknownInlineDagOutput {
+                    name: output_key.as_str().to_string(),
+                    dag_name: display_path.clone(),
+                    src: src.clone(),
+                    span: output.span.into(),
+                }
+            })?;
+            (output_key.as_str(), output_decl)
+        }
+        None => {
+            let output_decl = node_decl_types.get(output.value.as_str()).ok_or_else(|| {
+                GraphcalError::UnknownInlineDagOutput {
+                    name: output.value.to_string(),
+                    dag_name: display_path.clone(),
+                    src: src.clone(),
+                    span: output.span.into(),
+                }
+            })?;
+            (output.value.as_str(), output_decl)
+        }
+    };
+    if !dag_tir.pub_nodes.contains(output_name) {
         return Err(GraphcalError::ImportPrivateItem {
-            name: output.value.to_string(),
+            name: output_name.to_string(),
             file_path: display_path,
             src: src.clone(),
             span: output.span.into(),

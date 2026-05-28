@@ -18,7 +18,9 @@ use graphcal_compiler::registry::builtins::BuiltinFunction;
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{Registry, UnitScale};
-use graphcal_compiler::tir::typed::{DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint};
+use graphcal_compiler::tir::typed::{
+    DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint, ResolvedInlineDagCall,
+};
 
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
@@ -37,13 +39,19 @@ pub struct EvalContext<'a> {
     pub unfold_context: Option<UnfoldContext<'a>>,
     /// The enclosing file's full TIR.
     ///
-    /// Used by [`eval_inline_dag_call`] to translate `@dag(args)::out` /
-    /// `@alias.dag(args)::out` paths to canonical
-    /// [`DagId`](graphcal_compiler::dag_id::DagId)s via
-    /// [`graphcal_compiler::tir::typed::TIR::lookup_call_target`] and to
-    /// reach the file's flat per-DAG body map. Shared across nested inline
-    /// calls so a dag body invoking another dag can still resolve it.
+    /// Used by [`eval_inline_dag_call`] to reach the file's flat per-DAG body
+    /// map. Module-aware TIRs route calls through [`current_dag`]'s resolved
+    /// inline-DAG sidecar; legacy standalone TIRs fall back to source-path
+    /// lookup on this TIR.
     pub tir: &'a graphcal_compiler::tir::typed::TIR,
+    /// DAG whose expression is currently being evaluated. When present, inline
+    /// DAG calls can use HIR-derived canonical `DagId` / `ResolvedName<Decl>`
+    /// identities instead of resolving source paths again at eval time.
+    pub current_dag: Option<&'a graphcal_compiler::tir::typed::DagTIR>,
+    /// Root-file values visible to nested inline DAG calls. This lets DAG-body
+    /// self-imports route by their canonical source `DagId` rather than by a
+    /// same-leaf name in the immediate caller's local value map.
+    pub root_values: Option<&'a HashMap<ScopedName, RuntimeValue>>,
     /// Resolved domain constraints declared on struct/union member fields,
     /// keyed by `(struct type name, field name)`. Looked up at every
     /// `ExprKind::ConstructorCall` to validate field values immediately.
@@ -304,6 +312,34 @@ pub fn eval_expr(
     }
 }
 
+fn resolved_inline_call<'a>(
+    expr: &Expr,
+    ctx: &'a EvalContext<'_>,
+) -> Option<&'a ResolvedInlineDagCall> {
+    ctx.current_dag
+        .and_then(|dag| dag.resolved_inline_dag_refs.as_ref())
+        .and_then(|refs| refs.calls.get(&expr.span))
+}
+
+fn resolved_decl_local_key(name: &ResolvedName<namespace::Decl>) -> ScopedName {
+    ScopedName::local(name.as_str())
+}
+
+fn imported_value_source_value<'a>(
+    source: &graphcal_compiler::ir::lower::ImportedValueSource,
+    caller_values: &'a HashMap<ScopedName, RuntimeValue>,
+    ctx: &'a EvalContext<'_>,
+) -> Option<&'a RuntimeValue> {
+    let source_key = ScopedName::local(source.source_name.as_str());
+    match ctx.current_dag {
+        Some(caller_dag) if source.dag_id.eq(&caller_dag.dag_id) => caller_values.get(&source_key),
+        _ if source.dag_id.eq(&ctx.tir.root_dag_id) => {
+            ctx.root_values.and_then(|values| values.get(&source_key))
+        }
+        _ => None,
+    }
+}
+
 /// Evaluate an inline DAG invocation `@<path>(args).<out>`.
 ///
 /// Semantics (from issue #451):
@@ -316,16 +352,13 @@ pub fn eval_expr(
 ///   order), so forward references across body nodes resolve correctly.
 /// - The projected output's value is returned.
 ///
-/// The dag body is evaluated against the pre-compiled [`TIR`] stored on the
-/// enclosing file's TIR and carried in [`EvalContext::compiled_dags`]. The
-/// dag's own registry is used for all nested lookups so sibling dag calls
-/// from inside the body resolve through the same pipeline.
-///
-/// `ctx.compiled_dags` is keyed by [`DagKey`](graphcal_compiler::tir::typed::DagKey):
-/// a single-segment key for same-file calls (`@dag(args).out`) and a two-
-/// segment `(module-alias, dag-name)` key for cross-file qualified calls
-/// (`@module.dag(args).out`) brought into scope via `import path as module;`
-/// or `import path;`.
+/// The dag body is evaluated against the pre-compiled [`TIR`] carried in
+/// [`EvalContext::tir`]. Module-aware callers use the current DAG's
+/// HIR-derived sidecar to route directly to a canonical
+/// [`DagId`](graphcal_compiler::dag_id::DagId); legacy callers fall back to
+/// source-path lookup through the enclosing TIR. The dag's own registry is used
+/// for all nested lookups so sibling dag calls from inside the body resolve
+/// through the same pipeline.
 fn eval_inline_dag_call(
     _call_expr: &Expr,
     path: &graphcal_compiler::syntax::ast::ModulePath,
@@ -336,14 +369,26 @@ fn eval_inline_dag_call(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let display_path = path.display_path();
-    let dag_tir = ctx.tir.lookup_call_target(path).ok_or_else(|| {
-        ctx.internal_error(
-            format!(
-                "dag `{display_path}` has no compiled TIR (should have been caught by dim-check)"
-            ),
-            path.span,
-        )
-    })?;
+    let resolved_call = resolved_inline_call(_call_expr, ctx);
+    let dag_tir = match resolved_call {
+        Some(call) => ctx.tir.dags.get(&call.target).ok_or_else(|| {
+            ctx.internal_error(
+                format!(
+                    "dag `{}` has no compiled TIR (should have been caught by dim-check)",
+                    call.target
+                ),
+                path.span,
+            )
+        })?,
+        None => ctx.tir.lookup_call_target(path).ok_or_else(|| {
+            ctx.internal_error(
+                format!(
+                    "dag `{display_path}` has no compiled TIR (should have been caught by dim-check)"
+                ),
+                path.span,
+            )
+        })?,
+    };
 
     // Evaluate argument expressions in the caller's scope so loop variables
     // and other enclosing bindings resolve correctly. Param-binding names are
@@ -351,13 +396,20 @@ fn eval_inline_dag_call(
     let mut dag_values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
     for binding in args {
         let value = eval_expr(&binding.value, caller_values, caller_locals, ctx)?;
-        dag_values.insert(ScopedName::local(binding.name.name.as_str()), value);
+        let target_name = resolved_call
+            .and_then(|call| call.arg_targets.get(&binding.name.span))
+            .map_or_else(
+                || ScopedName::local(binding.name.name.as_str()),
+                resolved_decl_local_key,
+            );
+        dag_values.insert(target_name, value);
     }
 
     // Resolve explicit DAG-body imports. Cross-file qualified calls receive
     // concrete imported values when the dependency dag TIR is cloned into the
-    // caller; same-file calls resolve through the source binding map against
-    // the caller's current values.
+    // caller; same-file calls route source bindings by their canonical source
+    // DAG so nested inline calls do not accidentally capture same-leaf values
+    // from the immediate caller.
     let own_names: std::collections::HashSet<&str> = dag_tir
         .consts
         .iter()
@@ -384,9 +436,7 @@ fn eval_inline_dag_call(
                 dag_tir
                     .imported_value_sources
                     .get(scoped)
-                    .and_then(|source| {
-                        caller_values.get(&ScopedName::local(source.source_name.as_str()))
-                    })
+                    .and_then(|source| imported_value_source_value(source, caller_values, ctx))
             });
         if let Some(value) = value {
             dag_values.insert(local_key, value.clone());
@@ -404,6 +454,8 @@ fn eval_inline_dag_call(
         src: ctx.src,
         unfold_context: None,
         tir: ctx.tir,
+        current_dag: Some(dag_tir),
+        root_values: ctx.root_values,
         struct_field_constraints: ctx.struct_field_constraints,
     };
 
@@ -426,18 +478,19 @@ fn eval_inline_dag_call(
         dag_values.insert(local_key, value);
     }
 
-    dag_values
-        .get(&ScopedName::local(output.value.as_str()))
-        .cloned()
-        .ok_or_else(|| {
-            ctx.internal_error(
-                format!(
-                    "dag `{display_path}` has no node `{}` after evaluation (should have been caught by dim-check)",
-                    output.value,
-                ),
-                output.span,
-            )
-        })
+    let output_key = resolved_call.map_or_else(
+        || ScopedName::local(output.value.as_str()),
+        |call| resolved_decl_local_key(&call.output.value),
+    );
+    dag_values.get(&output_key).cloned().ok_or_else(|| {
+        ctx.internal_error(
+            format!(
+                "dag `{display_path}` has no node `{}` after evaluation (should have been caught by dim-check)",
+                output.value,
+            ),
+            output.span,
+        )
+    })
 }
 
 /// Kahn-style topological sort over a dag body's combined dep graph.

@@ -1079,10 +1079,12 @@ impl ModuleResolver {
 
     /// Resolve a source inline-DAG/module path to its canonical [`DagId`].
     ///
-    /// Single-segment paths name inline DAG children of `owner`. Qualified
-    /// paths use the first segment as a module alias and append the remaining
-    /// segments to the alias target. The returned identity is canonical; source
-    /// qualifier text is not carried beyond this resolver boundary.
+    /// Single-segment paths first name inline DAG children of `owner`; when
+    /// called from an inline DAG body and no nested child exists, they may also
+    /// name sibling DAGs under the parent file. Qualified paths use the first
+    /// segment as a module alias and append the remaining segments to the alias
+    /// target. The returned identity is canonical; source qualifier text is not
+    /// carried beyond this resolver boundary.
     pub fn resolve_module_path(
         &self,
         owner: &DagId,
@@ -1092,6 +1094,12 @@ impl ModuleResolver {
             let target = owner.child(leaf.name.as_str());
             if self.modules.contains_key(&target) {
                 return Ok(target);
+            }
+            if let Some(parent) = owner.parent() {
+                let sibling = parent.child(leaf.name.as_str());
+                if self.modules.contains_key(&sibling) {
+                    return Ok(sibling);
+                }
             }
             return Err(ModuleResolveError::UnknownModule { owner: target });
         }

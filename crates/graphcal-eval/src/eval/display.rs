@@ -136,6 +136,8 @@ fn resolve_display_unit_scale(
         src: &empty_src,
         unfold_context: None,
         tir: &stub_tir,
+        current_dag: None,
+        root_values: None,
         struct_field_constraints: None,
     };
     let empty_locals = HashMap::new();

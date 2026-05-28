@@ -1770,6 +1770,65 @@ node out: Length = @forward(v: @src).b;
 }
 
 #[test]
+fn eval_cross_file_inline_dag_nested_call_uses_canonical_target_with_same_leaf_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub dag helper {\n\
+             pub node result: Dimensionless = 2.0;\n\
+         }\n\
+         pub dag outer {\n\
+             pub node result: Dimensionless = @helper().result + 10.0;\n\
+         }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub dag helper {\n\
+             pub node result: Dimensionless = 100.0;\n\
+         }\n\
+         pub dag outer {\n\
+             pub node result: Dimensionless = @helper().result + 1000.0;\n\
+         }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         dag helper {\n\
+             pub node result: Dimensionless = 10000.0;\n\
+         }\n\
+         node out_a: Dimensionless = @a.outer().result;\n\
+         node out_b: Dimensionless = @b.outer().result;\n\
+         node out_local: Dimensionless = @helper().result;\n\
+         node total: Dimensionless = @out_a + @out_b + @out_local;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let out_a = find_value(&result, "out_a");
+    let out_b = find_value(&result, "out_b");
+    let out_local = find_value(&result, "out_local");
+    let total = find_value(&result, "total");
+    assert!((out_a - 12.0).abs() < 1e-10, "out_a = {out_a}");
+    assert!((out_b - 1100.0).abs() < 1e-10, "out_b = {out_b}");
+    assert!(
+        (out_local - 10000.0).abs() < 1e-10,
+        "out_local = {out_local}"
+    );
+    assert!((total - 11112.0).abs() < 1e-10, "total = {total}");
+}
+
+#[test]
 fn eval_inline_dag_call_indexed_output_projection() {
     // Projected output is itself indexed; the call site reads one cell.
     let source = "\

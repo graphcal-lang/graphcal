@@ -1016,18 +1016,20 @@ impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Resolved>
 
 /// Collect inline dag call targets from a compiled DAG's body expressions.
 ///
-/// Walks every const/param/node RHS expression and records the canonical
-/// [`DagId`](crate::dag_id::DagId) for each `@dag(args).out` /
-/// `@mod.dag(args).out` reference. The translation from user-typed
-/// `ModulePath` to canonical id goes through
-/// [`crate::tir::typed::TIR::resolve_call_path`] so cross-file qualified
-/// calls use the importer's `module_aliases` map.
+/// Module-aware TIRs carry HIR-derived canonical call targets, which are
+/// authoritative when present. Standalone/legacy TIRs fall back to walking the
+/// syntax AST and resolving source paths through the caller `TIR`.
 fn collect_dag_call_targets_from_dag(
     tir: &crate::tir::typed::TIR,
     dag: &crate::tir::typed::DagTIR,
     out: &mut std::collections::BTreeSet<crate::dag_id::DagId>,
 ) {
     use crate::syntax::visitor::ExprVisitor;
+
+    if let Some(refs) = &dag.resolved_inline_dag_refs {
+        out.extend(refs.calls.values().map(|call| call.target.clone()));
+        return;
+    }
 
     let mut collector = DagTargetCollector { tir, out };
     for entry in &dag.consts {
