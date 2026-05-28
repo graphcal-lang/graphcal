@@ -11,7 +11,8 @@ use crate::desugar::resolved_ast::{
     BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, GenericArg, IndexArg, NatExpr,
 };
 use crate::syntax::names::{
-    FieldName, GenericParamName, IndexName, NamePath, ScopedName, StructTypeName,
+    FieldName, GenericParamName, IndexName, IndexVariantName, NamePath, ResolvedIndexVariant,
+    ScopedName, StructTypeName,
 };
 use crate::syntax::span::Span;
 use crate::tir::typed::NatLinearForm;
@@ -132,6 +133,69 @@ fn index_def_for_inferred<'a>(
             resolved_collection_refs(dag).and_then(|refs| refs.index_defs.get(resolved))
         })
         .or_else(|| registry.indexes.get_index(index.name().as_str()))
+}
+
+fn resolved_map_entry_variant_for_key<'a>(
+    key: &crate::desugar::resolved_ast::MapEntryKey,
+    dag: Option<&'a crate::tir::typed::DagTIR>,
+) -> Option<&'a ResolvedIndexVariant> {
+    let span = key.index.span.merge(key.variant.span);
+    resolved_collection_refs(dag).and_then(|refs| refs.map_entry_variants.get(&span))
+}
+
+fn inferred_index_for_map_entry_key(
+    key: &crate::desugar::resolved_ast::MapEntryKey,
+    dag: Option<&crate::tir::typed::DagTIR>,
+) -> InferredIndex {
+    resolved_map_entry_variant_for_key(key, dag).map_or_else(
+        || InferredIndex::legacy(key.index.value.registry_name()),
+        |variant| InferredIndex::from_resolved(variant.index().clone()),
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum MapLiteralVariantKey {
+    Resolved(ResolvedIndexVariant),
+    Legacy {
+        index: IndexName,
+        variant: IndexVariantName,
+    },
+}
+
+impl MapLiteralVariantKey {
+    fn variant(&self) -> &IndexVariantName {
+        match self {
+            Self::Resolved(resolved) => resolved.variant(),
+            Self::Legacy { variant, .. } => variant,
+        }
+    }
+
+    fn display_index<'a>(&'a self, fallback: &'a IndexName) -> &'a IndexName {
+        match self {
+            Self::Resolved(_) => fallback,
+            Self::Legacy { index, .. } => index,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MapLiteralAxis {
+    index: InferredIndex,
+    variants: Vec<IndexVariantName>,
+}
+
+impl MapLiteralAxis {
+    fn variant_key(&self, variant: IndexVariantName) -> MapLiteralVariantKey {
+        match self.index.resolved() {
+            Some(index) => {
+                MapLiteralVariantKey::Resolved(ResolvedIndexVariant::new(index.clone(), variant))
+            }
+            None => MapLiteralVariantKey::Legacy {
+                index: self.index.name().clone(),
+                variant,
+            },
+        }
+    }
 }
 
 /// Infer the type of a for comprehension.
@@ -269,43 +333,25 @@ pub(super) fn infer_map_or_table_literal(
     }
     for entry in entries {
         for key in &entry.keys {
-            if let crate::syntax::ast::MapEntryIndex::Named(path) = &key.index.value {
+            if let crate::syntax::ast::MapEntryIndex::Named(path) = &key.index.value
+                && resolved_map_entry_variant_for_key(key, dag).is_none()
+            {
                 validate_index_path_module_scope(path, tir, src, key.index.span)?;
             }
         }
     }
 
-    // Validate index names: all entries must use the same indexes in the same order
-    let index_names: Vec<IndexName> = entries[0]
-        .keys
-        .iter()
-        .map(|k| k.index.value.registry_name())
-        .collect();
-    for entry in &entries[1..] {
-        for (i, key) in entry.keys.iter().enumerate() {
-            let key_index_name = key.index.value.registry_name();
-            if key_index_name != index_names[i] {
-                return Err(GraphcalError::IndexMismatch {
-                    expected: index_names[i].clone(),
-                    found: key_index_name,
-                    src: src.clone(),
-                    span: key.index.span.into(),
-                });
-            }
-        }
-    }
-    // Validate each index exists, reject range indexes as keys, and collect variant lists
-    let mut axes_variants: Vec<Vec<crate::syntax::names::IndexVariantName>> = Vec::new();
+    // Validate index identities: all entries must use the same indexes in the same order.
+    let mut axes = Vec::with_capacity(arity);
     for key in &entries[0].keys {
-        let key_index_name = key.index.value.registry_name();
-        let idx_def = registry
-            .indexes
-            .get_index(key_index_name.as_str())
-            .ok_or_else(|| GraphcalError::UnknownIndex {
-                name: key_index_name.clone(),
+        let index = inferred_index_for_map_entry_key(key, dag);
+        let idx_def = index_def_for_inferred(&index, dag, registry).ok_or_else(|| {
+            GraphcalError::UnknownIndex {
+                name: index.name().clone(),
                 src: src.clone(),
                 span: key.index.span.into(),
-            })?;
+            }
+        })?;
         if idx_def.is_range() {
             return Err(GraphcalError::EvalError {
                 message: format!(
@@ -316,19 +362,52 @@ pub(super) fn infer_map_or_table_literal(
                 span: key.index.span.into(),
             });
         }
-        axes_variants.push(idx_def.variants());
+        axes.push(MapLiteralAxis {
+            index,
+            variants: idx_def.variants(),
+        });
     }
-    // Check totality over the Cartesian product
-    let mut expected_tuples: std::collections::HashSet<Vec<&str>> =
+    for entry in &entries[1..] {
+        for (i, key) in entry.keys.iter().enumerate() {
+            let key_index = inferred_index_for_map_entry_key(key, dag);
+            if key_index != axes[i].index {
+                return Err(GraphcalError::IndexMismatch {
+                    expected: axes[i].index.name().clone(),
+                    found: key_index.name().clone(),
+                    src: src.clone(),
+                    span: key.index.span.into(),
+                });
+            }
+        }
+    }
+
+    // Check totality over the Cartesian product, preserving resolved index owners where known.
+    let axes_variant_keys: Vec<Vec<MapLiteralVariantKey>> = axes
+        .iter()
+        .map(|axis| {
+            axis.variants
+                .iter()
+                .cloned()
+                .map(|variant| axis.variant_key(variant))
+                .collect()
+        })
+        .collect();
+    let mut expected_tuples: std::collections::HashSet<Vec<MapLiteralVariantKey>> =
         std::collections::HashSet::new();
-    cartesian_product(&axes_variants, &mut Vec::new(), &mut expected_tuples);
-    let mut provided_tuples: std::collections::HashSet<Vec<&str>> =
+    cartesian_product(&axes_variant_keys, &mut Vec::new(), &mut expected_tuples);
+    let mut provided_tuples: std::collections::HashSet<Vec<MapLiteralVariantKey>> =
         std::collections::HashSet::new();
     for entry in entries {
-        let tuple: Vec<&str> = entry
+        let tuple: Vec<MapLiteralVariantKey> = entry
             .keys
             .iter()
-            .map(|k| k.variant.value.as_str())
+            .enumerate()
+            .map(|(i, key)| {
+                resolved_map_entry_variant_for_key(key, dag)
+                    .cloned()
+                    .map(MapLiteralVariantKey::Resolved)
+                    .unwrap_or_else(|| axes[i].variant_key(key.variant.value.clone()))
+            })
             .collect();
         if !provided_tuples.insert(tuple.clone()) {
             return Err(GraphcalError::EvalError {
@@ -337,12 +416,12 @@ pub(super) fn infer_map_or_table_literal(
                     entry
                         .keys
                         .iter()
-                        .map(|k| {
-                            k.variant
-                                .value
-                                .qualified_by(&k.index.value.registry_name())
-                                .to_string()
-                        })
+                        .enumerate()
+                        .map(|(i, k)| k
+                            .variant
+                            .value
+                            .qualified_by(axes[i].index.name())
+                            .to_string())
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
@@ -355,13 +434,12 @@ pub(super) fn infer_map_or_table_literal(
         // handles it with more specific error types (ExtraVariants/MissingVariants).
         if arity > 1 {
             for (i, key) in entry.keys.iter().enumerate() {
-                if !axes_variants[i]
-                    .iter()
-                    .any(|v| v.as_str() == key.variant.value.as_str())
-                {
+                let key_variant = resolved_map_entry_variant_for_key(key, dag)
+                    .map_or(&key.variant.value, ResolvedIndexVariant::variant);
+                if !axes[i].variants.iter().any(|v| v == key_variant) {
                     return Err(GraphcalError::UnknownVariant {
-                        index_name: key.index.value.registry_name(),
-                        variant_name: key.variant.value.clone(),
+                        index_name: axes[i].index.name().clone(),
+                        variant_name: key_variant.clone(),
                         src: src.clone(),
                         span: key.variant.span.into(),
                     });
@@ -370,18 +448,16 @@ pub(super) fn infer_map_or_table_literal(
         }
     }
     // Check for extra variants (provided but not in expected set)
-    let extra: Vec<Vec<&str>> = provided_tuples
+    let extra: Vec<Vec<MapLiteralVariantKey>> = provided_tuples
         .difference(&expected_tuples)
         .cloned()
         .collect();
     if !extra.is_empty() {
         if arity == 1 {
-            let extra_variants: Vec<crate::syntax::names::IndexVariantName> = extra
-                .iter()
-                .map(|t| crate::syntax::names::IndexVariantName::new(t[0]))
-                .collect();
+            let extra_variants: Vec<IndexVariantName> =
+                extra.iter().map(|t| t[0].variant().clone()).collect();
             return Err(GraphcalError::ExtraVariants {
-                index_name: index_names[0].clone(),
+                index_name: axes[0].index.name().clone(),
                 extra: extra_variants,
                 src: src.clone(),
                 span: expr.span.into(),
@@ -393,8 +469,8 @@ pub(super) fn infer_map_or_table_literal(
                 t.iter()
                     .enumerate()
                     .map(|(i, v)| {
-                        crate::syntax::names::IndexVariantName::new(*v)
-                            .qualified_by(&index_names[i])
+                        v.variant()
+                            .qualified_by(v.display_index(axes[i].index.name()))
                             .to_string()
                     })
                     .collect::<Vec<_>>()
@@ -411,18 +487,16 @@ pub(super) fn infer_map_or_table_literal(
         });
     }
     // Check for missing tuples
-    let missing: Vec<Vec<&str>> = expected_tuples
+    let missing: Vec<Vec<MapLiteralVariantKey>> = expected_tuples
         .difference(&provided_tuples)
         .cloned()
         .collect();
     if !missing.is_empty() {
         if arity == 1 {
-            let missing_variants: Vec<crate::syntax::names::IndexVariantName> = missing
-                .iter()
-                .map(|t| crate::syntax::names::IndexVariantName::new(t[0]))
-                .collect();
+            let missing_variants: Vec<IndexVariantName> =
+                missing.iter().map(|t| t[0].variant().clone()).collect();
             return Err(GraphcalError::MissingVariants {
-                index_name: index_names[0].clone(),
+                index_name: axes[0].index.name().clone(),
                 missing: missing_variants,
                 src: src.clone(),
                 span: expr.span.into(),
@@ -434,8 +508,8 @@ pub(super) fn infer_map_or_table_literal(
                 t.iter()
                     .enumerate()
                     .map(|(i, v)| {
-                        crate::syntax::names::IndexVariantName::new(*v)
-                            .qualified_by(&index_names[i])
+                        v.variant()
+                            .qualified_by(v.display_index(axes[i].index.name()))
                             .to_string()
                     })
                     .collect::<Vec<_>>()
@@ -467,10 +541,8 @@ pub(super) fn infer_map_or_table_literal(
     // Allow when the inner index is a range index, enabling mixed-index construction:
     //   { LabelIndex.Variant: for t: RangeIndex { ... }, ... }
     if let InferredType::Indexed { index, .. } = &first_type {
-        let inner_is_label = registry
-            .indexes
-            .get_index(index.name().as_str())
-            .is_some_and(|def| !def.is_range());
+        let inner_is_label =
+            index_def_for_inferred(index, dag, registry).is_some_and(|def| !def.is_range());
         if inner_is_label {
             return Err(GraphcalError::EvalError {
                 message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
@@ -501,10 +573,10 @@ pub(super) fn infer_map_or_table_literal(
     }
     // Wrap in nested Indexed layers (reverse order, matching `for` comprehension)
     let mut result = first_type;
-    for idx_name in index_names.iter().rev() {
+    for axis in axes.iter().rev() {
         result = InferredType::Indexed {
             element: Box::new(result),
-            index: InferredIndex::legacy((*idx_name).clone()),
+            index: axis.index.clone(),
         };
     }
     Ok(result)

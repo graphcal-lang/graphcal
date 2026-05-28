@@ -722,14 +722,16 @@ pub struct ResolvedDagDependencies {
 ///
 /// The legacy registry remains leaf-keyed, so these maps are deliberately a
 /// sidecar keyed by syntax spans. They let dim-check compare index owners for
-/// `for p: module.Index` and `value[module.Index.Variant]` without resolving
-/// source paths again in the syntax-AST consumer.
+/// `for p: module.Index`, map/table keys, and `value[module.Index.Variant]`
+/// without resolving source paths again in the syntax-AST consumer.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedCollectionRefs {
     /// Canonical index definitions observed while collecting the refs below.
     pub index_defs: HashMap<ResolvedName<namespace::Index>, IndexDef>,
     /// `ForBindingIndex::Named` span -> resolved index owner/name.
     pub for_binding_indexes: HashMap<Span, ResolvedName<namespace::Index>>,
+    /// Full map/table `Index.Variant` key span -> resolved index variant.
+    pub map_entry_variants: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
     /// Full `Index.Variant` argument span -> resolved index variant.
     pub index_access_variants: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
 }
@@ -1428,6 +1430,21 @@ fn collect_resolved_collection_refs_from_expr(
         }
         hir::ExprKind::MapLiteral { entries } => {
             for entry in entries {
+                for key in &entry.keys {
+                    match key {
+                        hir::expr::MapEntryKey::IndexVariant(variant) => {
+                            record_resolved_collection_index(
+                                variant.value.index(),
+                                ctx,
+                                registry,
+                                refs,
+                            )?;
+                            refs.map_entry_variants
+                                .insert(variant.span, variant.value.clone());
+                        }
+                        hir::expr::MapEntryKey::NatRangeVariant { .. } => {}
+                    }
+                }
                 collect_resolved_collection_refs_from_expr(&entry.value, ctx, registry, refs)?;
             }
             Some(())

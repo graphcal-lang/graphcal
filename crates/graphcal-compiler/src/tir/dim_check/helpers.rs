@@ -7,7 +7,7 @@ use crate::desugar::resolved_ast::Expr;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{GenericParamName, IndexName, IndexVariantName};
+use crate::syntax::names::{GenericParamName, IndexName};
 
 use super::{DeclaredType, InferredIndex, InferredType};
 use crate::tir::typed::{ResolvedIndex, ResolvedTypeExpr};
@@ -364,11 +364,11 @@ pub(super) fn expect_scalar(
     }
 }
 
-/// Build the Cartesian product of variant name slices across multiple axes.
-pub(super) fn cartesian_product<'a>(
-    axes: &'a [Vec<IndexVariantName>],
-    current: &mut Vec<&'a str>,
-    result: &mut std::collections::HashSet<Vec<&'a str>>,
+/// Build the Cartesian product of variant-key slices across multiple axes.
+pub(super) fn cartesian_product<T: Clone + Eq + std::hash::Hash>(
+    axes: &[Vec<T>],
+    current: &mut Vec<T>,
+    result: &mut std::collections::HashSet<Vec<T>>,
 ) {
     if current.len() == axes.len() {
         result.insert(current.clone());
@@ -376,7 +376,7 @@ pub(super) fn cartesian_product<'a>(
     }
     let axis_idx = current.len();
     for variant in &axes[axis_idx] {
-        current.push(variant.as_str());
+        current.push(variant.clone());
         cartesian_product(axes, current, result);
         current.pop();
     }
