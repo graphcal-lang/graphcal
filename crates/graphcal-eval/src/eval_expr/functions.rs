@@ -21,15 +21,25 @@ use super::eval_expr;
 /// Evaluate a built-in function call expression (`FnCall`).
 pub(super) fn eval_fn_call(
     expr: &Expr,
-    name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FnName>,
+    callee: &graphcal_compiler::syntax::ast::IdentPath,
     args: &[Expr],
     values: &HashMap<ScopedName, RuntimeValue>,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    let Some(segment) = callee.as_bare() else {
+        return Err(ctx.eval_error(
+            format!("unknown function `{}`", callee.display_path()),
+            callee.span(),
+        ));
+    };
+    let name = graphcal_compiler::syntax::span::Spanned::new(
+        graphcal_compiler::syntax::names::FnName::new(&segment.name),
+        segment.span,
+    );
     let fn_ctx = FnDispatch {
         expr,
-        name,
+        name: &name,
         args,
         values,
         local_values,
@@ -40,11 +50,11 @@ pub(super) fn eval_fn_call(
             fn_ctx.dispatch_aggregation(kind)
         }
         Some(SpecialFnKind::TypeConversion(kind)) => {
-            eval_conversion_fn(kind, expr, name, args, values, local_values, ctx)
+            eval_conversion_fn(kind, expr, &name, args, values, local_values, ctx)
         }
         Some(SpecialFnKind::TimeScaleConversion(scale)) => fn_ctx.dispatch_timescale(scale),
         Some(SpecialFnKind::Constructor(kind)) => {
-            eval_datetime_constructor(kind, expr, name, args, ctx.src)
+            eval_datetime_constructor(kind, expr, &name, args, ctx.src)
         }
         Some(SpecialFnKind::DatetimeExtract(kind)) => fn_ctx.dispatch_datetime_extract(kind),
         Some(SpecialFnKind::DatetimeFrom(kind)) => fn_ctx.dispatch_datetime_from(kind),

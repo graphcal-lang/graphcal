@@ -172,8 +172,8 @@ pub fn eval_expr(
         }
 
         // --- Function calls (delegated) ---
-        ExprKind::FnCall { name, args, .. } => {
-            functions::eval_fn_call(expr, name, args, values, local_values, ctx)
+        ExprKind::FnCall { callee, args, .. } => {
+            functions::eval_fn_call(expr, callee, args, values, local_values, ctx)
         }
 
         // --- Control flow (delegated) ---
@@ -240,20 +240,21 @@ pub fn eval_expr(
         }
 
         // --- Constructor call ---
-        ExprKind::ConstructorCall {
-            constructor,
-            fields,
-            ..
-        } => {
+        ExprKind::ConstructorCall { callee, fields, .. } => {
+            let Some(constructor) = callee.as_bare() else {
+                return Err(ctx.eval_error(
+                    format!("unknown constructor `{}`", callee.display_path()),
+                    callee.span(),
+                ));
+            };
             let mut field_map = IndexMap::new();
             for field_init in fields {
                 let val = eval_expr(&field_init.value, values, local_values, ctx)?;
                 // Validate against any field-level domain constraint declared
                 // on `<constructor>.<field_name>`. The check fires at the field's
                 // span so the diagnostic points at the offending value.
-                let constructor_type_name = graphcal_compiler::syntax::names::StructTypeName::new(
-                    constructor.value.as_str(),
-                );
+                let constructor_type_name =
+                    graphcal_compiler::syntax::names::StructTypeName::new(&constructor.name);
                 if let Some(field_constraints) = ctx.struct_field_constraints
                     && let Some(constraint) = field_constraints
                         .get(&(constructor_type_name.clone(), field_init.name.value.clone()))
@@ -264,7 +265,7 @@ pub fn eval_expr(
                     return Err(ctx.eval_error(
                         format!(
                             "field `{}.{}` {}",
-                            constructor.value, field_init.name.value, violation.message
+                            constructor.name, field_init.name.value, violation.message
                         ),
                         span,
                     ));
@@ -272,9 +273,7 @@ pub fn eval_expr(
                 field_map.insert(field_init.name.value.clone(), val);
             }
             Ok(RuntimeValue::Struct {
-                type_name: graphcal_compiler::syntax::names::StructTypeName::new(
-                    constructor.value.as_str(),
-                ),
+                type_name: graphcal_compiler::syntax::names::StructTypeName::new(&constructor.name),
                 fields: field_map,
             })
         }

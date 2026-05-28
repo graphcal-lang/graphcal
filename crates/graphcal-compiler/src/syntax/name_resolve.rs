@@ -666,11 +666,11 @@ fn lift_expr_kind(
             operand: Box::new(lift_expr(*operand, ctx)),
         },
         S::FnCall {
-            name,
+            callee,
             type_args,
             args,
         } => dst_ast::ExprKind::FnCall {
-            name,
+            callee,
             type_args: type_args
                 .into_iter()
                 .map(|t| lift_generic_arg(t, ctx))
@@ -699,11 +699,11 @@ fn lift_expr_kind(
             field,
         },
         S::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             fields,
         } => dst_ast::ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args: generic_args
                 .into_iter()
                 .map(|arg| lift_generic_arg(arg, ctx))
@@ -955,7 +955,7 @@ fn resolve_name_ref(ident: Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
 
     if ctx.constructor_names.contains(name.as_str()) {
         return dst_ast::ExprKind::ConstructorCall {
-            constructor: Spanned::new(ConstructorName::new(name), ident.span),
+            callee: IdentPath::new(crate::syntax::non_empty::NonEmpty::singleton(ident)),
             generic_args: Vec::new(),
             fields: Vec::new(),
         };
@@ -1055,16 +1055,16 @@ mod tests {
             _ => None,
         }
         .unwrap();
-        let (constructor, generic_args, fields) = match &node.value.kind {
+        let (callee, generic_args, fields) = match &node.value.kind {
             ExprKind::ConstructorCall {
-                constructor,
+                callee,
                 generic_args,
                 fields,
-            } => Some((constructor, generic_args, fields)),
+            } => Some((callee, generic_args, fields)),
             _ => None,
         }
         .unwrap();
-        assert_eq!(constructor.value.as_str(), "WeightlessStudent");
+        assert_eq!(callee.as_bare().unwrap().name, "WeightlessStudent");
         assert!(generic_args.is_empty());
         assert!(fields.is_empty());
     }

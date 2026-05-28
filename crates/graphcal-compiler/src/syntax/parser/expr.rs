@@ -2,8 +2,7 @@ use crate::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, Ident, IdentPath, IndexArg, ModulePath, UnaryOp,
 };
 use crate::syntax::names::{
-    ConstructorName, DeclName, FieldName, FnName, IndexName, IndexNamePath, IndexVariantName,
-    ScopedName,
+    DeclName, FieldName, IndexName, IndexNamePath, IndexVariantName, ScopedName,
 };
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::Token;
@@ -564,81 +563,60 @@ impl Parser<'_> {
     /// longer accepted — constructor calls use parens.
     fn parse_identifier_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, span) = self.advance()?;
-        let name = self.lexer.slice_at(span).to_string();
+        let first_ident = crate::syntax::ast::Ident {
+            name: self.lexer.slice_at(span).to_string(),
+            span,
+        };
+        let mut rest = Vec::new();
+        while self.peek_dot_then_ident() {
+            self.lexer.next_token(); // consume '.'
+            rest.push(self.parse_any_ident()?);
+        }
+        let path = IdentPath::new(crate::syntax::non_empty::NonEmpty::new(first_ident, rest));
 
-        if self.peek_dot_then_ident() {
-            let first_ident = crate::syntax::ast::Ident { name, span };
-            // Dotted identifier path: `ident.member` or `ident.member.leaf`.
-            // The parser records the complete path uniformly and leaves all
-            // semantic choices (index variant vs qualified const, and any
-            // segment-count restrictions) to name resolution.
-            let mut rest = Vec::new();
-            while self.peek_dot_then_ident() {
-                self.lexer.next_token(); // consume '.'
-                rest.push(self.parse_any_ident()?);
-            }
-            let full_span = first_ident
-                .span
-                .merge(rest.last().map_or(first_ident.span, |i| i.span));
-            Ok(Expr::new(
-                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(IdentPath::new(
-                    crate::syntax::non_empty::NonEmpty::new(first_ident, rest),
-                ))),
-                full_span,
-            ))
-        } else if self.lexer.peek() == Some(&Token::LParen)
+        if self.lexer.peek() == Some(&Token::LParen)
             || (self.lexer.peek() == Some(&Token::Lt) && self.is_type_args_followed_by_paren())
         {
-            // `IDENT(args)` or `IDENT<T>(args)`. Disambiguate constructor
-            // calls (named args, `Ctor(field: expr, ...)`) from function
-            // calls (positional args) purely structurally — by whether
-            // the first argument starts with `IDENT :`. The same surface
-            // form serves both; name resolution decides which binding
-            // the identifier refers to.
+            // `path(args)` or `path<T>(args)`. The path is syntactic: bare
+            // and qualified callees have the same AST representation. We only
+            // use argument shape to distinguish constructor-call syntax (named
+            // args) from function-call syntax (positional args).
             let generic_args = if self.lexer.peek() == Some(&Token::Lt) {
                 self.parse_generic_arg_list()?
             } else {
                 vec![]
             };
             if self.is_named_arg_call() {
-                // Constructor call: `IDENT(field: expr, field: expr, ...)`
                 self.lexer.next_token(); // consume `(`
                 let fields =
                     self.parse_comma_separated(Token::RParen, Self::parse_named_field_init)?;
                 let (_, rparen_span) = self.expect(Token::RParen)?;
-                let call_span = span.merge(rparen_span);
+                let call_span = path.span().merge(rparen_span);
                 return Ok(Expr::new(
                     ExprKind::ConstructorCall {
-                        constructor: Spanned::new(ConstructorName::new(name), span),
+                        callee: path,
                         generic_args,
                         fields,
                     },
                     call_span,
                 ));
             }
-            // Function call: name(args...) or name<TypeArgs>(args...)
             self.lexer.next_token(); // consume '('
             let args = self.parse_arg_list()?;
             let (_, rparen_span) = self.expect(Token::RParen)?;
-            let call_span = span.merge(rparen_span);
+            let call_span = path.span().merge(rparen_span);
             Ok(Expr::new(
                 ExprKind::FnCall {
-                    name: Spanned::new(FnName::new(name), span),
+                    callee: path,
                     type_args: generic_args,
                     args,
                 },
                 call_span,
             ))
         } else {
-            // Bare identifier path (resolved later by name resolution pass).
             Ok(Expr::new(
-                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(IdentPath::new(
-                    crate::syntax::non_empty::NonEmpty::singleton(crate::syntax::ast::Ident {
-                        name,
-                        span,
-                    }),
-                ))),
-                span,
+                ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path.clone())),
+                path.span(),
             ))
         }
     }
@@ -1124,8 +1102,8 @@ mod tests {
     #[test]
     fn parse_function_call_one_arg() {
         let expr = parse_node_expr("sqrt(@x)");
-        if let ExprKind::FnCall { name, args, .. } = &expr.kind {
-            assert_eq!(name.value.as_str(), "sqrt");
+        if let ExprKind::FnCall { callee, args, .. } = &expr.kind {
+            assert_eq!(callee.as_bare().unwrap().name, "sqrt");
             assert_eq!(args.len(), 1);
             assert!(matches!(&args[0].kind, ExprKind::GraphRef(id) if id.value.member() == "x"));
         } else {
@@ -1134,10 +1112,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_qualified_function_call_preserves_callee_path() {
+        let expr = parse_node_expr("module.sqrt(@x)");
+        if let ExprKind::FnCall { callee, args, .. } = &expr.kind {
+            assert_eq!(callee.segments.len(), 2);
+            assert_eq!(callee.segments[0].name, "module");
+            assert_eq!(callee.segments[1].name, "sqrt");
+            assert_eq!(args.len(), 1);
+        } else {
+            panic!("expected FnCall");
+        }
+    }
+
+    #[test]
     fn parse_function_call_two_args() {
         let expr = parse_node_expr("atan2(@a, @b)");
-        if let ExprKind::FnCall { name, args, .. } = &expr.kind {
-            assert_eq!(name.value.as_str(), "atan2");
+        if let ExprKind::FnCall { callee, args, .. } = &expr.kind {
+            assert_eq!(callee.as_bare().unwrap().name, "atan2");
             assert_eq!(args.len(), 2);
         } else {
             panic!("expected FnCall");
@@ -1147,8 +1138,8 @@ mod tests {
     #[test]
     fn parse_function_call_zero_args() {
         let expr = parse_node_expr("foo()");
-        if let ExprKind::FnCall { name, args, .. } = &expr.kind {
-            assert_eq!(name.value.as_str(), "foo");
+        if let ExprKind::FnCall { callee, args, .. } = &expr.kind {
+            assert_eq!(callee.as_bare().unwrap().name, "foo");
             assert_eq!(args.len(), 0);
         } else {
             panic!("expected FnCall");
@@ -1159,12 +1150,12 @@ mod tests {
     fn parse_turbofish_nat_arg() {
         let expr = parse_node_expr("eye<3>()");
         if let ExprKind::FnCall {
-            name,
+            callee,
             type_args,
             args,
         } = &expr.kind
         {
-            assert_eq!(name.value.as_str(), "eye");
+            assert_eq!(callee.as_bare().unwrap().name, "eye");
             assert_eq!(type_args.len(), 1);
             assert!(matches!(
                 &type_args[0],
@@ -1180,12 +1171,12 @@ mod tests {
     fn parse_turbofish_type_arg() {
         let expr = parse_node_expr("make<Length>(@x)");
         if let ExprKind::FnCall {
-            name,
+            callee,
             type_args,
             args,
         } = &expr.kind
         {
-            assert_eq!(name.value.as_str(), "make");
+            assert_eq!(callee.as_bare().unwrap().name, "make");
             assert_eq!(type_args.len(), 1);
             assert!(matches!(
                 &type_args[0],
@@ -1201,12 +1192,12 @@ mod tests {
     fn parse_turbofish_multiple_args() {
         let expr = parse_node_expr("foo<3, Length>(@x)");
         if let ExprKind::FnCall {
-            name,
+            callee,
             type_args,
             args,
         } = &expr.kind
         {
-            assert_eq!(name.value.as_str(), "foo");
+            assert_eq!(callee.as_bare().unwrap().name, "foo");
             assert_eq!(type_args.len(), 2);
             assert!(matches!(
                 &type_args[0],
@@ -1318,7 +1309,7 @@ mod tests {
                 matches!(&lhs.kind, ExprKind::GraphRef(id) if id.value.member() == "v_exhaust")
             );
             assert!(
-                matches!(&rhs.kind, ExprKind::FnCall { name, .. } if name.value.as_str() == "ln")
+                matches!(&rhs.kind, ExprKind::FnCall { callee, .. } if callee.as_bare().is_some_and(|name| name.name == "ln"))
             );
         } else {
             panic!("expected Mul");

@@ -681,12 +681,19 @@ pub(in crate::eval::project) fn extract_index_name_from_binding_expr(
         }
         ExprKind::TypeSystemRef(name) => Ok(name.value.as_str().to_string()),
         ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             fields,
-        } if generic_args.is_empty() && fields.is_empty() => {
-            Ok(constructor.value.as_str().to_string())
-        }
+        } if generic_args.is_empty() && fields.is_empty() => callee
+            .as_bare()
+            .map(|ident| ident.name.clone())
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::BindingTargetsIndex {
+                    name: dep_index_name.to_string(),
+                    src: file_src.clone(),
+                    span: expr.span.into(),
+                })
+            }),
         _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
             name: dep_index_name.to_string(),
             src: file_src.clone(),
@@ -711,12 +718,19 @@ pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
         }
         ExprKind::TypeSystemRef(name) => Ok(name.value.as_str().to_string()),
         ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             fields,
-        } if generic_args.is_empty() && fields.is_empty() => {
-            Ok(constructor.value.as_str().to_string())
-        }
+        } if generic_args.is_empty() && fields.is_empty() => callee
+            .as_bare()
+            .map(|ident| ident.name.clone())
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::BindingTargetsIndex {
+                    name: dep_type_name.to_string(),
+                    src: file_src.clone(),
+                    span: expr.span.into(),
+                })
+            }),
         _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
             name: dep_type_name.to_string(),
             src: file_src.clone(),

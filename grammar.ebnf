@@ -753,25 +753,22 @@ inline_dag_call_suffix
    both use their names directly; graph declarations require `@`. *)
 
 (* --- Identifier expression --- *)
-(* Dispatches based on the token(s) following the identifier:
-   - IDENT.IDENT  → qualified name ref (resolved to variant or const)
-   - IDENT<T>(...) or IDENT(...)  → call expression: either a built-in
-     function call or a tagged-union constructor call (parens-with-
-     named-args, `Ctor(field: expr, ...)`). The two are distinguished
-     structurally by argument shape, then validated at name-resolution time.
-   - IDENT  → name ref (resolved to local, const, bare struct, or a
-     unit-constructor of a tagged union)
-   Qualified forms can chain into a longer dotted path via the
-   postfix `.IDENT` operator (field access). User-defined functions do
-   not exist in graphcal, so there is no `module.fn(...)` qualified
-   function-call form — qualified `.fn(...)` is unparsable. *)
+(* Dispatches based on the token(s) following an identifier path:
+   - ident_path  → unresolved name path (resolved later to local, const,
+     variant, constructor, type-system ref, etc.)
+   - ident_path<T>(...) or ident_path(...) → call syntax. Bare and
+     qualified callees have the same parsed shape; argument form
+     distinguishes function-call syntax (positional args) from
+     constructor-call syntax (named args). Semantic resolution happens later. *)
+ident_path
+   = IDENT, { ".", IDENT };
+
 ident_expr
-   = IDENT, ".", IDENT                             (* qualified name ref *)
-   | IDENT,
+   = ident_path,
      [ "<", generic_arg_list, ">" ],
      "(", [ call_arg_list ], ")"                   (* function call or
                                                        constructor call *)
-   | IDENT;                                        (* bare name ref *)
+   | ident_path;                                   (* unresolved name path *)
 
 (* The argument list of a call expression accepts positional args for
    function calls (`sqrt(x)`) or named args for constructor calls
@@ -820,11 +817,11 @@ map_entry
    | tuple_key_entry;
 
 single_key_entry
-   = IDENT, ".", IDENT, ":", expr;
+   = ident_path, ":", expr;              (* path must contain at least two segments *)
 
 tuple_key_entry
-   = "(", IDENT, ".", IDENT,
-     { ",", IDENT, ".", IDENT }, ")", ":", expr;
+   = "(", ident_path,
+     { ",", ident_path }, ")", ":", expr;  (* each key path must contain at least two segments *)
 
 (* --- Table expression (syntax sugar, desugars to map_literal) ---     *)
 (*                                                                      *)
@@ -868,7 +865,7 @@ table_data_row_1d
    = [ IDENT, ":" ], expr, ";";
 
 qualified_variant
-   = IDENT, ".", IDENT;
+   = ident_path;                         (* path must contain at least two segments *)
 
 (* --- Parenthesized expression --- *)
 paren_expr
@@ -885,15 +882,12 @@ match_arm
 (* 8. Patterns                                                        *)
 (* ================================================================== *)
 match_pattern
-   = index_label_pattern
-   | constructor_pattern;
+   = ident_path,
+     [ "(", [ pattern_binding_list ], ")" ];
 
-index_label_pattern
-   = IDENT, ".", IDENT;                       (* qualified: Index.Variant; fieldless *)
-
-constructor_pattern
-   = IDENT,
-     [ "(", [ pattern_binding_list ], ")" ];              (* type constructor *)
+(* Whether a pattern path is a constructor or an index label is semantic.
+   The parser preserves the path and optional bindings; name resolution
+   categorizes only when it has enough context. *)
 
 pattern_binding_list
    = pattern_binding, { ",", pattern_binding }, [ "," ];

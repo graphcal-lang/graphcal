@@ -61,6 +61,19 @@ pub enum SymbolKey {
     },
 }
 
+fn symbol_key_for_path(path: &graphcal_compiler::syntax::ast::IdentPath) -> SymbolKey {
+    match path.segments.as_slice() {
+        [single] => SymbolKey::TopLevel(single.name.clone()),
+        segments => SymbolKey::Qualified {
+            module: segments[..segments.len() - 1]
+                .iter()
+                .map(|segment| segment.name.clone())
+                .collect(),
+            name: segments[segments.len() - 1].name.clone(),
+        },
+    }
+}
+
 impl std::fmt::Display for SymbolKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1050,10 +1063,10 @@ fn collect_expr_refs(
                 collect_expr_refs(&binding.value, table, scopes);
             }
         }
-        ExprKind::FnCall { name, args, .. } => {
+        ExprKind::FnCall { callee, args, .. } => {
             table.references.push(ReferenceInfo {
-                span: name.span,
-                target: SymbolKey::TopLevel(name.value.to_string()),
+                span: callee.span(),
+                target: symbol_key_for_path(callee),
             });
             for arg in args {
                 collect_expr_refs(arg, table, scopes);
@@ -1112,13 +1125,13 @@ fn collect_expr_refs(
             // precisely-keyed `Field { struct_name, field_name }` entries.
         }
         ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             fields,
         } => {
             table.references.push(ReferenceInfo {
-                span: constructor.span,
-                target: SymbolKey::TopLevel(constructor.value.to_string()),
+                span: callee.span(),
+                target: symbol_key_for_path(callee),
             });
             for generic_arg in generic_args {
                 if let graphcal_compiler::desugar::resolved_ast::GenericArg::Type(type_arg) =

@@ -521,11 +521,11 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
                 operand: Box::new((*operand).into()),
             },
             ExprKind::FnCall {
-                name,
+                callee,
                 type_args,
                 args,
             } => Self::FnCall {
-                name,
+                callee,
                 type_args: type_args.into_iter().map(Into::into).collect(),
                 args: args.into_iter().map(Into::into).collect(),
             },
@@ -551,11 +551,11 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
                 field,
             },
             ExprKind::ConstructorCall {
-                constructor,
+                callee,
                 generic_args,
                 fields,
             } => Self::ConstructorCall {
-                constructor,
+                callee,
                 generic_args: generic_args.into_iter().map(Into::into).collect(),
                 fields: fields.into_iter().map(Into::into).collect(),
             },

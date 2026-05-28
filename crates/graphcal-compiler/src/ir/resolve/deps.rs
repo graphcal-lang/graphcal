@@ -104,13 +104,20 @@ impl RefCollector<'_> {
 
     fn handle_fn_call(
         &self,
-        name: &crate::syntax::span::Spanned<crate::syntax::names::FnName>,
+        callee: &crate::syntax::ast::IdentPath,
         args: &[Expr],
     ) -> Result<(), GraphcalError> {
-        let name_str = name.value.as_str();
+        let Some(name) = callee.as_bare() else {
+            return Err(GraphcalError::UnknownFunction {
+                name: crate::syntax::names::FnName::new(callee.display_path()),
+                src: self.src.clone(),
+                span: callee.span().into(),
+            });
+        };
+        let name_str = name.name.as_str();
         if !self.builtin_fns.contains_key(name_str) && classify_special_fn(name_str).is_none() {
             return Err(GraphcalError::UnknownFunction {
-                name: name.value.clone(),
+                name: crate::syntax::names::FnName::new(name_str),
                 src: self.src.clone(),
                 span: name.span.into(),
             });
@@ -122,7 +129,7 @@ impl RefCollector<'_> {
             && !is_aggregation_fn(name_str)
         {
             return Err(GraphcalError::WrongArity {
-                name: name.value.clone(),
+                name: crate::syntax::names::FnName::new(name_str),
                 expected: builtin.arity(),
                 got: args.len(),
                 src: self.src.clone(),
@@ -151,8 +158,8 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for RefCollector<'_> {
     }
 
     fn visit_fn_call(&mut self, expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
-        if let ExprKind::FnCall { name, .. } = &expr.kind {
-            self.handle_fn_call(name, args)?;
+        if let ExprKind::FnCall { callee, .. } = &expr.kind {
+            self.handle_fn_call(callee, args)?;
         }
         for arg in args {
             self.visit_expr(arg)?;

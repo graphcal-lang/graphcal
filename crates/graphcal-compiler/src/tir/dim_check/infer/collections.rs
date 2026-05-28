@@ -10,9 +10,7 @@ use miette::NamedSource;
 use crate::desugar::resolved_ast::{
     BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, GenericArg, IndexArg, NatExpr,
 };
-use crate::syntax::names::{
-    ConstructorName, FieldName, GenericParamName, IndexName, ScopedName, StructTypeName,
-};
+use crate::syntax::names::{FieldName, GenericParamName, IndexName, ScopedName, StructTypeName};
 use crate::tir::typed::NatLinearForm;
 
 use crate::registry::error::GraphcalError;
@@ -964,7 +962,7 @@ pub(super) fn infer_field_access(
 )]
 pub(super) fn infer_constructor_call(
     expr: &Expr,
-    constructor: &crate::syntax::span::Spanned<ConstructorName>,
+    callee: &crate::syntax::ast::IdentPath,
     constructor_generic_args: &[GenericArg],
     fields: &[crate::desugar::resolved_ast::FieldInit],
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -974,15 +972,23 @@ pub(super) fn infer_constructor_call(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
+    let Some(constructor) = callee.as_bare() else {
+        return Err(GraphcalError::UnknownStructType {
+            name: StructTypeName::new(callee.display_path()),
+            src: src.clone(),
+            span: callee.span().into(),
+        });
+    };
+    let constructor_name = crate::syntax::names::ConstructorName::new(&constructor.name);
     // Resolve through the constructor namespace. With every user-defined
     // `type` stored as an n-variant union, a constructor call names a
     // constructor — not a type. The union the constructor belongs to becomes
     // the value's type.
     let (type_def, variant) = registry
         .types
-        .lookup_ctor(&constructor.value)
+        .lookup_ctor(&constructor_name)
         .ok_or_else(|| GraphcalError::UnknownStructType {
-            name: StructTypeName::new(constructor.value.as_str()),
+            name: StructTypeName::new(&constructor.name),
             src: src.clone(),
             span: constructor.span.into(),
         })?;
@@ -1012,7 +1018,7 @@ pub(super) fn infer_constructor_call(
             return Err(GraphcalError::EvalError {
                 message: format!(
                     "type `{}` expects {hint} generic argument(s), got {}",
-                    constructor.value,
+                    constructor.name,
                     constructor_generic_args.len()
                 ),
                 src: src.clone(),
@@ -1113,7 +1119,7 @@ pub(super) fn infer_constructor_call(
         .collect();
     if !extra.is_empty() {
         return Err(GraphcalError::ExtraFields {
-            type_name: StructTypeName::new(constructor.value.as_str()),
+            type_name: StructTypeName::new(&constructor.name),
             extra,
             src: src.clone(),
             span: expr.span.into(),
@@ -1129,7 +1135,7 @@ pub(super) fn infer_constructor_call(
         .collect();
     if !missing.is_empty() {
         return Err(GraphcalError::MissingFields {
-            type_name: StructTypeName::new(constructor.value.as_str()),
+            type_name: StructTypeName::new(&constructor.name),
             missing,
             src: src.clone(),
             span: expr.span.into(),
@@ -1144,7 +1150,7 @@ pub(super) fn infer_constructor_call(
             .ok_or_else(|| GraphcalError::EvalError {
                 message: format!(
                     "internal: unknown field `{}` in constructor `{}`",
-                    field_init.name.value, constructor.value
+                    field_init.name.value, constructor.name
                 ),
                 src: src.clone(),
                 span: field_init.name.span.into(),
@@ -1169,7 +1175,7 @@ pub(super) fn infer_constructor_call(
         )?;
         if value_type != expected_field_type {
             return Err(GraphcalError::FieldDimensionMismatch {
-                type_name: StructTypeName::new(constructor.value.as_str()),
+                type_name: StructTypeName::new(&constructor.name),
                 field_name: field_init.name.value.clone(),
                 expected: format_inferred_type(&expected_field_type, registry),
                 found: format_inferred_type(&value_type, registry),

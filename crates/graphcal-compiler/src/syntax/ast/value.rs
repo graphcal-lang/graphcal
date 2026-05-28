@@ -2,8 +2,8 @@ use std::marker::PhantomData;
 
 use crate::syntax::ast::common::{Ident, ModulePath};
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, FnName, IndexName, IndexNamePath,
-    IndexVariantName, LocalName, ScopedName, StructTypeName, UnitName,
+    ConstructorName, DeclName, DimName, FieldName, IndexName, IndexNamePath, IndexVariantName,
+    LocalName, ScopedName, StructTypeName, UnitName,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Phase, Raw};
@@ -115,6 +115,24 @@ impl IdentPath {
             [ident] => Some(ident),
             _ => None,
         }
+    }
+
+    /// Mutably returns the only segment when this is a bare identifier path.
+    pub fn as_bare_mut(&mut self) -> Option<&mut Ident> {
+        match self.segments.as_mut_slice() {
+            [ident] => Some(ident),
+            _ => None,
+        }
+    }
+
+    /// Human-readable path string for diagnostics and formatting boundaries.
+    #[must_use]
+    pub fn display_path(&self) -> String {
+        self.segments
+            .iter()
+            .map(|segment| segment.name.as_str())
+            .collect::<Vec<_>>()
+            .join(".")
     }
 }
 
@@ -350,9 +368,12 @@ pub enum ExprKind<P: Phase = Raw> {
     },
     /// Unary operation: `-x`, `!x`
     UnaryOp { op: UnaryOp, operand: Box<Expr<P>> },
-    /// Function call: `sqrt(x)`, `atan2(y, x)`, `eye<3>()`
+    /// Function call syntax: `sqrt(x)`, `atan2(y, x)`, `eye<3>()`, or `module.fn(x)`.
+    ///
+    /// The callee is a syntactic path. Bare calls and qualified calls have the
+    /// same AST shape; semantic categorization/resolution happens later.
     FnCall {
-        name: Spanned<FnName>,
+        callee: IdentPath,
         type_args: Vec<GenericArg<P>>,
         args: Vec<Expr<P>>,
     },
@@ -381,13 +402,14 @@ pub enum ExprKind<P: Phase = Raw> {
         expr: Box<Expr<P>>,
         field: Spanned<FieldName>,
     },
-    /// Constructor call for values of user-defined unified `type` declarations.
+    /// Constructor-call syntax for values of user-defined unified `type` declarations.
     ///
     /// Payload constructors use named arguments, e.g.
-    /// `TransferResult(dv1: @dv1, dv2: @dv2)`. Unit constructors may be used as
-    /// bare identifiers after name resolution, e.g. `Coast`.
+    /// `TransferResult(dv1: @dv1, dv2: @dv2)` or
+    /// `module.TransferResult(dv1: @dv1)`. The callee is a syntactic path; name
+    /// resolution decides whether it denotes a constructor.
     ConstructorCall {
-        constructor: Spanned<ConstructorName>,
+        callee: IdentPath,
         generic_args: Vec<GenericArg<P>>,
         fields: Vec<FieldInit<P>>,
     },

@@ -8,6 +8,7 @@ use miette::NamedSource;
 use crate::desugar::resolved_ast::{Expr, ExprKind};
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{FnName, ScopedName};
+use crate::syntax::span::Spanned;
 
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{
@@ -381,7 +382,7 @@ impl InferCtx<'_> {
 
 /// Infer the type of a function call (FnCall only; built-in functions).
 pub(super) fn infer_fn_call(
-    name: &crate::syntax::span::Spanned<FnName>,
+    callee: &crate::syntax::ast::IdentPath,
     args: &[Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
@@ -390,8 +391,16 @@ pub(super) fn infer_fn_call(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
+    let Some(segment) = callee.as_bare() else {
+        return Err(GraphcalError::UnknownFunction {
+            name: FnName::new(callee.display_path()),
+            src: src.clone(),
+            span: callee.span().into(),
+        });
+    };
+    let name = Spanned::new(FnName::new(&segment.name), segment.span);
     let ctx = InferCtx {
-        name,
+        name: &name,
         args,
         declared_types,
         local_types,

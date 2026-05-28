@@ -32,13 +32,7 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::ConstRef(name) => RcDoc::text(format_scoped_surface(&name.value)),
         ExprKind::LocalRef(ident) => RcDoc::text(ident.name.clone()),
         ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => {
-            RcDoc::text(
-                path.segments
-                    .iter()
-                    .map(|segment| segment.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join("."),
-            )
+            RcDoc::text(format_ident_path(path))
         }
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
@@ -49,10 +43,10 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             RcDoc::text(op_str).append(format_unary_operand(fmt, operand))
         }
         ExprKind::FnCall {
-            name,
+            callee,
             type_args,
             args,
-        } => format_fn_call_expr(fmt, name.value.as_str(), type_args, args),
+        } => format_fn_call_expr(fmt, callee, type_args, args),
         ExprKind::If {
             condition,
             then_branch,
@@ -83,10 +77,10 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             .append(RcDoc::text("."))
             .append(RcDoc::text(field.value.as_str().to_string())),
         ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             fields,
-        } => format_constructor_call(fmt, constructor, generic_args, fields),
+        } => format_constructor_call(fmt, callee, generic_args, fields),
         ExprKind::MapLiteral { entries } => format_map_literal(fmt, entries),
         ExprKind::Sugar(graphcal_compiler::syntax::ast::RawExprSugar::TableLiteral {
             indexes,
@@ -245,9 +239,17 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
 }
 
 /// Format a `FnCall` expression with comment handling per argument.
+fn format_ident_path(path: &graphcal_compiler::syntax::ast::IdentPath) -> String {
+    path.segments
+        .iter()
+        .map(|segment| segment.name.as_str())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
 pub fn format_fn_call_expr(
     fmt: &mut Formatter<'_>,
-    fn_name: &str,
+    callee: &graphcal_compiler::syntax::ast::IdentPath,
     type_args: &[graphcal_compiler::syntax::ast::GenericArg],
     args: &[Expr],
 ) -> RcDoc<'static> {
@@ -265,7 +267,7 @@ pub fn format_fn_call_expr(
     }
     let sep = RcDoc::text(",").append(RcDoc::line());
     let inner = RcDoc::intersperse(arg_docs, sep);
-    let mut doc = RcDoc::text(fn_name.to_string());
+    let mut doc = RcDoc::text(format_ident_path(callee));
     if !type_args.is_empty() {
         doc = doc.append(format_generic_args(fmt, type_args));
     }
@@ -326,13 +328,11 @@ pub fn format_if(
 
 pub fn format_constructor_call(
     fmt: &mut Formatter<'_>,
-    constructor: &graphcal_compiler::syntax::span::Spanned<
-        graphcal_compiler::syntax::names::ConstructorName,
-    >,
+    callee: &graphcal_compiler::syntax::ast::IdentPath,
     generic_args: &[graphcal_compiler::syntax::ast::GenericArg],
     fields: &[FieldInit],
 ) -> RcDoc<'static> {
-    let mut header = RcDoc::text(constructor.value.as_str().to_string());
+    let mut header = RcDoc::text(format_ident_path(callee));
     if !generic_args.is_empty() {
         header = header.append(format_generic_args(fmt, generic_args));
     }

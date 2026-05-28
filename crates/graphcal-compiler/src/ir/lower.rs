@@ -1323,14 +1323,16 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
         fields: &[crate::desugar::resolved_ast::FieldInit],
     ) -> Result<(), Self::Error> {
         if let ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             ..
         } = &expr.kind
         {
-            let n = constructor.value.as_str();
-            if self.type_bindings.contains_key(n) {
-                return Err(self.orphan_error("type", n, format!("constructor `{n}(...)`")));
+            if let Some(constructor) = callee.as_bare() {
+                let n = constructor.name.as_str();
+                if self.type_bindings.contains_key(n) {
+                    return Err(self.orphan_error("type", n, format!("constructor `{n}(...)`")));
+                }
             }
             for arg in generic_args {
                 if let crate::desugar::resolved_ast::GenericArg::Type(ty) = arg {
@@ -1668,12 +1670,14 @@ pub(crate) fn substitute_type_names_in_expr(
         }
 
         ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             fields,
         } => {
-            if let Some(new_name) = bindings.get(constructor.value.as_str()) {
-                constructor.value = ConstructorName::new(new_name.as_str());
+            if let Some(constructor) = callee.as_bare_mut()
+                && let Some(new_name) = bindings.get(constructor.name.as_str())
+            {
+                constructor.name = new_name.to_string();
             }
             for arg in generic_args.iter_mut() {
                 if let GenericArg::Type(ty) = arg {

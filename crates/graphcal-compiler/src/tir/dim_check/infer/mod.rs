@@ -224,8 +224,8 @@ pub(super) fn infer_type_with_owner(
         ),
 
         // --- Function calls ---
-        ExprKind::FnCall { name, args, .. } => functions::infer_fn_call(
-            name,
+        ExprKind::FnCall { callee, args, .. } => functions::infer_fn_call(
+            callee,
             args,
             declared_types,
             local_types,
@@ -352,12 +352,12 @@ pub(super) fn infer_type_with_owner(
         ),
 
         ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args: constructor_generic_args,
             fields,
         } => collections::infer_constructor_call(
             expr,
-            constructor,
+            callee,
             constructor_generic_args,
             fields,
             declared_types,

@@ -21,16 +21,21 @@ use std::collections::HashMap;
 use std::fmt;
 
 use graphcal_compiler::syntax::ast::{
-    Expr, ExprKind, FieldInit, MapEntry, MapEntryIndex, MapEntryKey,
+    Expr, ExprKind, FieldInit, Ident, IdentPath, MapEntry, MapEntryIndex, MapEntryKey,
 };
-use graphcal_compiler::syntax::names::{
-    ConstructorName, DeclName, FieldName, IndexName, IndexVariantName,
-};
+use graphcal_compiler::syntax::names::{DeclName, FieldName, IndexName, IndexVariantName};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 
 /// A synthetic span used for all AST nodes constructed from JSON input.
 const SYNTH_SPAN: Span = Span::new(0, 0);
+
+fn synth_ident_path(name: &str) -> IdentPath {
+    IdentPath::new(NonEmpty::singleton(Ident {
+        name: name.to_string(),
+        span: SYNTH_SPAN,
+    }))
+}
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -253,7 +258,7 @@ fn convert_tagged_union(
     };
 
     Ok(synth_expr(ExprKind::ConstructorCall {
-        constructor: Spanned::new(ConstructorName::new(variant_name), SYNTH_SPAN),
+        callee: synth_ident_path(variant_name),
         generic_args: Vec::new(),
         fields,
     }))
@@ -280,7 +285,7 @@ fn convert_struct(
     let fields = convert_field_inits(fields_obj, param_name)?;
 
     Ok(synth_expr(ExprKind::ConstructorCall {
-        constructor: Spanned::new(ConstructorName::new(type_name_str), SYNTH_SPAN),
+        callee: synth_ident_path(type_name_str),
         generic_args: Vec::new(),
         fields,
     }))
@@ -394,12 +399,8 @@ mod tests {
         let overrides = json_to_overrides(json).unwrap();
         let expr = &overrides[&DeclName::new("transfer")];
         match &expr.kind {
-            ExprKind::ConstructorCall {
-                constructor,
-                fields,
-                ..
-            } => {
-                assert_eq!(constructor.value.as_str(), "TransferResult");
+            ExprKind::ConstructorCall { callee, fields, .. } => {
+                assert_eq!(callee.as_bare().unwrap().name, "TransferResult");
                 assert_eq!(fields.len(), 2);
             }
             other => panic!("expected ConstructorCall, got {other:?}"),
@@ -424,12 +425,8 @@ mod tests {
         let overrides = json_to_overrides(json).unwrap();
         let expr = &overrides[&DeclName::new("maneuver")];
         match &expr.kind {
-            ExprKind::ConstructorCall {
-                constructor,
-                fields,
-                ..
-            } => {
-                assert_eq!(constructor.value.as_str(), "LowThrust");
+            ExprKind::ConstructorCall { callee, fields, .. } => {
+                assert_eq!(callee.as_bare().unwrap().name, "LowThrust");
                 assert_eq!(fields.len(), 2);
             }
             other => panic!("expected ConstructorCall, got {other:?}"),
@@ -442,12 +439,8 @@ mod tests {
         let overrides = json_to_overrides(json).unwrap();
         let expr = &overrides[&DeclName::new("status")];
         match &expr.kind {
-            ExprKind::ConstructorCall {
-                constructor,
-                fields,
-                ..
-            } => {
-                assert_eq!(constructor.value.as_str(), "Nominal");
+            ExprKind::ConstructorCall { callee, fields, .. } => {
+                assert_eq!(callee.as_bare().unwrap().name, "Nominal");
                 assert!(fields.is_empty());
             }
             other => panic!("expected ConstructorCall, got {other:?}"),

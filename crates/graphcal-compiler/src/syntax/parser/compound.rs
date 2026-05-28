@@ -324,15 +324,29 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::ConstructorCall {
-                    constructor,
-                    fields,
-                    ..
-                } => {
-                    assert_eq!(constructor.value.as_str(), "TransferResult");
+                ExprKind::ConstructorCall { callee, fields, .. } => {
+                    assert_eq!(callee.as_bare().unwrap().name, "TransferResult");
                     assert_eq!(fields.len(), 2);
                     assert_eq!(fields[0].name.value.as_str(), "dv1");
                     assert_eq!(fields[1].name.value.as_str(), "dv2");
+                }
+                other => panic!("expected ConstructorCall, got {other:?}"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_constructor_call_preserves_callee_path() {
+        let source = "node t: Dimensionless = module.TransferResult(dv1: @a);";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::ConstructorCall { callee, fields, .. } => {
+                    assert_eq!(callee.segments.len(), 2);
+                    assert_eq!(callee.segments[0].name, "module");
+                    assert_eq!(callee.segments[1].name, "TransferResult");
+                    assert_eq!(fields.len(), 1);
                 }
                 other => panic!("expected ConstructorCall, got {other:?}"),
             },
@@ -368,11 +382,11 @@ mod tests {
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ConstructorCall {
-                    constructor,
+                    callee,
                     generic_args,
                     fields,
                 } => {
-                    assert_eq!(constructor.value.as_str(), "Vec3");
+                    assert_eq!(callee.as_bare().unwrap().name, "Vec3");
                     assert_eq!(generic_args.len(), 2);
                     match &generic_args[0] {
                         crate::syntax::ast::GenericArg::Type(type_arg) => {
