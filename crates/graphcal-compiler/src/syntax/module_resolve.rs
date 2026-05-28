@@ -500,11 +500,16 @@ impl ModuleAliasTarget {
 pub struct ImportedSymbol<Ns: NameNamespace> {
     resolved: ResolvedName<Ns>,
     span: Span,
+    visibility: SymbolVisibility,
 }
 
 impl<Ns: NameNamespace> ImportedSymbol<Ns> {
-    fn new(resolved: ResolvedName<Ns>, span: Span) -> Self {
-        Self { resolved, span }
+    fn new(resolved: ResolvedName<Ns>, span: Span, visibility: SymbolVisibility) -> Self {
+        Self {
+            resolved,
+            span,
+            visibility,
+        }
     }
 
     /// Canonical target identity of the imported symbol.
@@ -517,6 +522,12 @@ impl<Ns: NameNamespace> ImportedSymbol<Ns> {
     #[must_use]
     pub const fn span(&self) -> Span {
         self.span
+    }
+
+    /// Visibility of this selective import when the importing module is itself imported.
+    #[must_use]
+    pub const fn visibility(&self) -> SymbolVisibility {
+        self.visibility
     }
 }
 
@@ -550,26 +561,32 @@ enum ImportAddition {
     Decl {
         local: Spanned<DeclName>,
         target: ResolvedName<namespace::Decl>,
+        visibility: SymbolVisibility,
     },
     Dimension {
         local: Spanned<DimName>,
         target: ResolvedName<namespace::Dim>,
+        visibility: SymbolVisibility,
     },
     Unit {
         local: Spanned<UnitName>,
         target: ResolvedName<namespace::Unit>,
+        visibility: SymbolVisibility,
     },
     StructType {
         local: Spanned<StructTypeName>,
         target: ResolvedName<namespace::StructType>,
+        visibility: SymbolVisibility,
     },
     Index {
         local: Spanned<IndexName>,
         target: ResolvedName<namespace::Index>,
+        visibility: SymbolVisibility,
     },
     Constructor {
         local: Spanned<ConstructorName>,
         target: ResolvedName<namespace::Constructor>,
+        visibility: SymbolVisibility,
     },
 }
 
@@ -795,23 +812,34 @@ impl ModuleResolver {
             .expect("qualified path has a qualifier");
         let target_ref = self.resolve_module_qualifier(owner, qualifier)?;
         let target = self.module_symbols(&target_ref.owner)?;
-        let symbol =
-            target
-                .indexes
-                .get(leaf.as_str())
-                .ok_or_else(|| ModuleResolveError::UnknownName {
-                    owner: target_ref.owner.clone(),
+        if let Some(symbol) = target.indexes.get(leaf.as_str()) {
+            if target_ref.access.requires_public() && !symbol.visibility().is_public() {
+                return Err(ModuleResolveError::PrivateName {
+                    owner: target_ref.owner,
                     namespace: namespace::Index::DISPLAY_NAME,
                     name: leaf.to_string(),
-                })?;
-        if target_ref.access.requires_public() && !symbol.visibility().is_public() {
-            return Err(ModuleResolveError::PrivateName {
-                owner: target_ref.owner,
-                namespace: namespace::Index::DISPLAY_NAME,
-                name: leaf.to_string(),
-            });
+                });
+            }
+            return Ok(symbol.resolved().clone());
         }
-        Ok(symbol.resolved().clone())
+
+        let target_scope = self.module_scope(&target_ref.owner)?;
+        if let Some(imported) = target_scope.selected_indexes.get(leaf.as_str()) {
+            if target_ref.access.requires_public() && !imported.visibility().is_public() {
+                return Err(ModuleResolveError::PrivateName {
+                    owner: target_ref.owner,
+                    namespace: namespace::Index::DISPLAY_NAME,
+                    name: leaf.to_string(),
+                });
+            }
+            return Ok(imported.resolved().clone());
+        }
+
+        Err(ModuleResolveError::UnknownName {
+            owner: target_ref.owner,
+            namespace: namespace::Index::DISPLAY_NAME,
+            name: leaf.to_string(),
+        })
     }
 
     /// Resolve a syntactic index-variant path such as `Index.Variant` or
@@ -888,20 +916,31 @@ impl ModuleResolver {
         item: &ImportItem,
         access: ModuleAccess,
     ) -> Result<Vec<ImportAddition>, ModuleResolveError> {
-        let target_symbols = self.module_symbols(target)?;
         let source_atom = &item.name.name;
         let local_atom = item
             .alias
             .as_ref()
             .map_or_else(|| item.name.name.clone(), |alias| alias.name.clone());
         let local_span = item.local_span();
+        let local_visibility = if item.is_pub {
+            SymbolVisibility::Public
+        } else {
+            SymbolVisibility::Private
+        };
 
         match item.namespace {
             ImportItemNamespace::Type => {
-                match exported_symbol(target_symbols.struct_types(), source_atom, access) {
+                match self.exported_symbol_for_import(
+                    target,
+                    source_atom,
+                    access,
+                    ModuleSymbols::struct_types,
+                    |scope| &scope.selected_struct_types,
+                )? {
                     ExportLookup::Public(target_name) => Ok(vec![ImportAddition::StructType {
                         local: Spanned::new(StructTypeName::from_atom(local_atom), local_span),
                         target: target_name,
+                        visibility: local_visibility,
                     }]),
                     ExportLookup::Private => Err(ModuleResolveError::PrivateName {
                         owner: target.clone(),
@@ -919,45 +958,74 @@ impl ModuleResolver {
                 let mut additions = Vec::new();
                 let mut saw_private = false;
 
-                match exported_symbol(target_symbols.decls(), source_atom, access) {
+                match self.exported_symbol_for_import(
+                    target,
+                    source_atom,
+                    access,
+                    ModuleSymbols::decls,
+                    |scope| &scope.selected_decls,
+                )? {
                     ExportLookup::Public(target_name) => additions.push(ImportAddition::Decl {
                         local: Spanned::new(DeclName::from_atom(local_atom.clone()), local_span),
                         target: target_name,
+                        visibility: local_visibility,
                     }),
                     ExportLookup::Private => saw_private = true,
                     ExportLookup::Missing => {}
                 }
-                match exported_symbol(target_symbols.dimensions(), source_atom, access) {
+                match self.exported_symbol_for_import(
+                    target,
+                    source_atom,
+                    access,
+                    ModuleSymbols::dimensions,
+                    |scope| &scope.selected_dimensions,
+                )? {
                     ExportLookup::Public(target_name) => {
                         additions.push(ImportAddition::Dimension {
                             local: Spanned::new(DimName::from_atom(local_atom.clone()), local_span),
                             target: target_name,
+                            visibility: local_visibility,
                         })
                     }
                     ExportLookup::Private => saw_private = true,
                     ExportLookup::Missing => {}
                 }
-                match exported_symbol(target_symbols.units(), source_atom, access) {
+                match self.exported_symbol_for_import(
+                    target,
+                    source_atom,
+                    access,
+                    ModuleSymbols::units,
+                    |scope| &scope.selected_units,
+                )? {
                     ExportLookup::Public(target_name) => additions.push(ImportAddition::Unit {
                         local: Spanned::new(UnitName::from_atom(local_atom.clone()), local_span),
                         target: target_name,
+                        visibility: local_visibility,
                     }),
                     ExportLookup::Private => saw_private = true,
                     ExportLookup::Missing => {}
                 }
-                match exported_index_symbol(target_symbols.indexes(), source_atom, access) {
+                match self.exported_index_for_import(target, source_atom, access)? {
                     ExportLookup::Public(target_name) => additions.push(ImportAddition::Index {
                         local: Spanned::new(IndexName::from_atom(local_atom.clone()), local_span),
                         target: target_name,
+                        visibility: local_visibility,
                     }),
                     ExportLookup::Private => saw_private = true,
                     ExportLookup::Missing => {}
                 }
-                match exported_symbol(target_symbols.constructors(), source_atom, access) {
+                match self.exported_symbol_for_import(
+                    target,
+                    source_atom,
+                    access,
+                    ModuleSymbols::constructors,
+                    |scope| &scope.selected_constructors,
+                )? {
                     ExportLookup::Public(target_name) => {
                         additions.push(ImportAddition::Constructor {
                             local: Spanned::new(ConstructorName::from_atom(local_atom), local_span),
                             target: target_name,
+                            visibility: local_visibility,
                         })
                     }
                     ExportLookup::Private => saw_private = true,
@@ -981,6 +1049,48 @@ impl ModuleResolver {
                 }
             }
         }
+    }
+
+    fn exported_symbol_for_import<Ns: NameNamespace>(
+        &self,
+        target: &DagId,
+        atom: &NameAtom,
+        access: ModuleAccess,
+        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, ModuleSymbol<Ns>>,
+        selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
+    ) -> Result<ExportLookup<Ns>, ModuleResolveError> {
+        let target_symbols = self.module_symbols(target)?;
+        match exported_symbol(local_symbols(target_symbols), atom, access) {
+            ExportLookup::Missing => {}
+            found => return Ok(found),
+        }
+
+        let target_scope = self.module_scope(target)?;
+        Ok(exported_imported_symbol(
+            selected_symbols(target_scope),
+            atom,
+            access,
+        ))
+    }
+
+    fn exported_index_for_import(
+        &self,
+        target: &DagId,
+        atom: &NameAtom,
+        access: ModuleAccess,
+    ) -> Result<ExportLookup<namespace::Index>, ModuleResolveError> {
+        let target_symbols = self.module_symbols(target)?;
+        match exported_index_symbol(target_symbols.indexes(), atom, access) {
+            ExportLookup::Missing => {}
+            found => return Ok(found),
+        }
+
+        let target_scope = self.module_scope(target)?;
+        Ok(exported_imported_symbol(
+            &target_scope.selected_indexes,
+            atom,
+            access,
+        ))
     }
 
     fn resolve_symbol_path<Ns: NameNamespace>(
@@ -1011,21 +1121,34 @@ impl ModuleResolver {
             .expect("qualified path has a qualifier");
         let target_ref = self.resolve_module_qualifier(owner, qualifier)?;
         let target = self.module_symbols(&target_ref.owner)?;
-        let symbol = local_symbols(target).get(leaf.as_str()).ok_or_else(|| {
-            ModuleResolveError::UnknownName {
-                owner: target_ref.owner.clone(),
-                namespace: Ns::DISPLAY_NAME,
-                name: leaf.to_string(),
+        if let Some(symbol) = local_symbols(target).get(leaf.as_str()) {
+            if target_ref.access.requires_public() && !symbol.visibility().is_public() {
+                return Err(ModuleResolveError::PrivateName {
+                    owner: target_ref.owner,
+                    namespace: Ns::DISPLAY_NAME,
+                    name: leaf.to_string(),
+                });
             }
-        })?;
-        if target_ref.access.requires_public() && !symbol.visibility().is_public() {
-            return Err(ModuleResolveError::PrivateName {
-                owner: target_ref.owner,
-                namespace: Ns::DISPLAY_NAME,
-                name: leaf.to_string(),
-            });
+            return Ok(symbol.resolved().clone());
         }
-        Ok(symbol.resolved().clone())
+
+        let target_scope = self.module_scope(&target_ref.owner)?;
+        if let Some(imported) = selected_symbols(target_scope).get(leaf.as_str()) {
+            if target_ref.access.requires_public() && !imported.visibility().is_public() {
+                return Err(ModuleResolveError::PrivateName {
+                    owner: target_ref.owner,
+                    namespace: Ns::DISPLAY_NAME,
+                    name: leaf.to_string(),
+                });
+            }
+            return Ok(imported.resolved().clone());
+        }
+
+        Err(ModuleResolveError::UnknownName {
+            owner: target_ref.owner,
+            namespace: Ns::DISPLAY_NAME,
+            name: leaf.to_string(),
+        })
     }
 
     fn resolve_module_qualifier(
@@ -1095,46 +1218,76 @@ impl ModuleScope {
                 access,
                 namespace::ModuleAlias::DISPLAY_NAME,
             ),
-            ImportAddition::Decl { local, target } => insert_imported_symbol(
+            ImportAddition::Decl {
+                local,
+                target,
+                visibility,
+            } => insert_imported_symbol(
                 owner,
                 &mut self.selected_decls,
                 local,
                 target,
+                visibility,
                 namespace::Decl::DISPLAY_NAME,
             ),
-            ImportAddition::Dimension { local, target } => insert_imported_symbol(
+            ImportAddition::Dimension {
+                local,
+                target,
+                visibility,
+            } => insert_imported_symbol(
                 owner,
                 &mut self.selected_dimensions,
                 local,
                 target,
+                visibility,
                 namespace::Dim::DISPLAY_NAME,
             ),
-            ImportAddition::Unit { local, target } => insert_imported_symbol(
+            ImportAddition::Unit {
+                local,
+                target,
+                visibility,
+            } => insert_imported_symbol(
                 owner,
                 &mut self.selected_units,
                 local,
                 target,
+                visibility,
                 namespace::Unit::DISPLAY_NAME,
             ),
-            ImportAddition::StructType { local, target } => insert_imported_symbol(
+            ImportAddition::StructType {
+                local,
+                target,
+                visibility,
+            } => insert_imported_symbol(
                 owner,
                 &mut self.selected_struct_types,
                 local,
                 target,
+                visibility,
                 namespace::StructType::DISPLAY_NAME,
             ),
-            ImportAddition::Index { local, target } => insert_imported_symbol(
+            ImportAddition::Index {
+                local,
+                target,
+                visibility,
+            } => insert_imported_symbol(
                 owner,
                 &mut self.selected_indexes,
                 local,
                 target,
+                visibility,
                 namespace::Index::DISPLAY_NAME,
             ),
-            ImportAddition::Constructor { local, target } => insert_imported_symbol(
+            ImportAddition::Constructor {
+                local,
+                target,
+                visibility,
+            } => insert_imported_symbol(
                 owner,
                 &mut self.selected_constructors,
                 local,
                 target,
+                visibility,
                 namespace::Constructor::DISPLAY_NAME,
             ),
         }
@@ -1174,6 +1327,7 @@ fn insert_imported_symbol<Ns: NameNamespace>(
     map: &mut HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
     local: Spanned<NameDef<Ns>>,
     target: ResolvedName<Ns>,
+    visibility: SymbolVisibility,
     namespace_name: &'static str,
 ) -> Result<(), ModuleResolveError> {
     if let Some(first) = map.get(local.value.as_str()) {
@@ -1185,7 +1339,10 @@ fn insert_imported_symbol<Ns: NameNamespace>(
             duplicate: local.span,
         });
     }
-    map.insert(local.value, ImportedSymbol::new(target, local.span));
+    map.insert(
+        local.value,
+        ImportedSymbol::new(target, local.span, visibility),
+    );
     Ok(())
 }
 
@@ -1198,6 +1355,21 @@ enum ExportLookup<Ns: NameNamespace> {
 
 fn exported_symbol<Ns: NameNamespace>(
     map: &HashMap<NameDef<Ns>, ModuleSymbol<Ns>>,
+    atom: &NameAtom,
+    access: ModuleAccess,
+) -> ExportLookup<Ns> {
+    map.get(atom.as_str())
+        .map_or(ExportLookup::Missing, |symbol| {
+            if !access.requires_public() || symbol.visibility().is_public() {
+                ExportLookup::Public(symbol.resolved().clone())
+            } else {
+                ExportLookup::Private
+            }
+        })
+}
+
+fn exported_imported_symbol<Ns: NameNamespace>(
+    map: &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
     atom: &NameAtom,
     access: ModuleAccess,
 ) -> ExportLookup<Ns> {
@@ -1445,5 +1617,46 @@ mod tests {
 
         assert_eq!(resolved.owner(), &lib_id);
         assert_eq!(resolved.as_str(), "Impulsive");
+    }
+
+    #[test]
+    fn selective_pub_reexport_resolves_to_original_owner() {
+        let leaf_id = DagId::root("leaf");
+        let middle_id = DagId::root("middle");
+        let main_id = DagId::root("main");
+        let leaf = resolved_source("pub dim Acceleration = Length / Time^2;");
+        let middle = resolved_source("import leaf.{ pub Acceleration };");
+        let main = resolved_source("import middle.{ Acceleration };");
+        let (middle_import_path, middle_import_kind) = first_import(&middle);
+        let (main_import_path, main_import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(leaf_id.clone(), &leaf.declarations)
+            .unwrap();
+        resolver
+            .add_module(middle_id.clone(), &middle.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(
+                &middle_id,
+                middle_import_path,
+                middle_import_kind,
+                leaf_id.clone(),
+            )
+            .unwrap();
+        resolver
+            .register_import(&main_id, main_import_path, main_import_kind, middle_id)
+            .unwrap();
+
+        let resolved = resolver
+            .resolve_dimension_path(&main_id, &path(&["Acceleration"]))
+            .unwrap();
+
+        assert_eq!(resolved.owner(), &leaf_id);
+        assert_eq!(resolved.as_str(), "Acceleration");
     }
 }

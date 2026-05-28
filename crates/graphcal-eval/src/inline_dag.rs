@@ -26,8 +26,11 @@ use graphcal_compiler::ir::lower::{
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::syntax::module_resolve::ModuleResolver;
 use graphcal_compiler::syntax::names::DeclName;
-use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type, type_resolve_single};
+use graphcal_compiler::tir::typed::{
+    ModuleTypeRegistry, TIR, resolved_to_declared_type, type_resolve_single_with_modules,
+};
 
 use crate::loader::LoadedDag;
 
@@ -74,6 +77,8 @@ pub fn compile_inline_dag_bodies(
     parent_dag_id: &DagId,
     parent_pub_names: &HashSet<DeclName>,
     inline_dags: &[LoadedDag],
+    module_resolver: &ModuleResolver,
+    module_types: &ModuleTypeRegistry,
 ) -> Result<(), GraphcalError> {
     // Read parent's value decls directly from the (already type-resolved)
     // root DagTIR. With the flat registry, `tir.root()` IS the parent
@@ -106,7 +111,13 @@ pub fn compile_inline_dag_bodies(
             src,
             parent_dag_id,
         )?;
-        let mut compiled_dag = type_resolve_single(dag_body_ir, &loaded_dag.dag_id, src)?;
+        let mut compiled_dag = type_resolve_single_with_modules(
+            dag_body_ir,
+            &loaded_dag.dag_id,
+            src,
+            module_resolver,
+            module_types,
+        )?;
         compiled_dag.populate_pub_nodes(&loaded_dag.body);
         tir.dags.insert(loaded_dag.dag_id.clone(), compiled_dag);
     }

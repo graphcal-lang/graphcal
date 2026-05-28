@@ -19,8 +19,9 @@ use crate::ir::lower::IR;
 use crate::ir::resolve::{DeclCategory, ExpectedFail};
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::Registry;
-use crate::syntax::names::ScopedName;
+use crate::registry::types::{IndexDef, Registry, TypeDef};
+use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
+use crate::syntax::names::{ResolvedName, ScopedName, namespace};
 
 // ---------------------------------------------------------------------------
 // Resolved type types
@@ -545,6 +546,92 @@ pub enum ResolvedIndex {
     NatExpr(NatPolyForm, Span),
 }
 
+/// Canonical type-system definitions keyed by [`ResolvedName`] identities.
+///
+/// The legacy [`Registry`] remains leaf-keyed for now because runtime values and
+/// declaration types still use local names. This registry is the module-aware
+/// lookup side table used by TIR resolution: qualified source paths are first
+/// resolved through [`ModuleResolver`] to canonical owners, then looked up here
+/// instead of by source alias text or a dotted string.
+#[derive(Debug, Default, Clone)]
+pub struct ModuleTypeRegistry {
+    dimensions: HashMap<ResolvedName<namespace::Dim>, Dimension>,
+    indexes: HashMap<ResolvedName<namespace::Index>, IndexDef>,
+    struct_types: HashMap<ResolvedName<namespace::StructType>, TypeDef>,
+}
+
+impl ModuleTypeRegistry {
+    /// Insert every type-system definition from `registry` under `owner`.
+    ///
+    /// This is intentionally an owner-qualified view over existing registries,
+    /// not a new source of truth. It lets module-aware resolution validate that
+    /// `alias.Name` denotes the definition owned by the dependency selected by
+    /// the loader.
+    pub fn insert_registry(&mut self, owner: &crate::dag_id::DagId, registry: &Registry) {
+        for (name, dim) in registry.dimensions.all_dimensions() {
+            self.dimensions.insert(
+                ResolvedName::from_def(owner.clone(), name.clone()),
+                dim.clone(),
+            );
+        }
+        for index in registry.indexes.all_indexes() {
+            self.indexes.insert(
+                ResolvedName::from_def(owner.clone(), index.name.clone()),
+                index.clone(),
+            );
+        }
+        for type_def in registry.types.all_types() {
+            self.struct_types.insert(
+                ResolvedName::from_def(owner.clone(), type_def.name.clone()),
+                type_def.clone(),
+            );
+        }
+    }
+
+    #[must_use]
+    pub fn get_dimension(&self, name: &ResolvedName<namespace::Dim>) -> Option<&Dimension> {
+        self.dimensions.get(name)
+    }
+
+    #[must_use]
+    pub fn get_index(&self, name: &ResolvedName<namespace::Index>) -> Option<&IndexDef> {
+        self.indexes.get(name)
+    }
+
+    #[must_use]
+    pub fn get_struct_type(&self, name: &ResolvedName<namespace::StructType>) -> Option<&TypeDef> {
+        self.struct_types.get(name)
+    }
+}
+
+/// Module-aware type-resolution context for one DAG body.
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleTypeContext<'a> {
+    owner: &'a crate::dag_id::DagId,
+    resolver: &'a ModuleResolver,
+    types: &'a ModuleTypeRegistry,
+}
+
+impl<'a> ModuleTypeContext<'a> {
+    #[must_use]
+    pub const fn new(
+        owner: &'a crate::dag_id::DagId,
+        resolver: &'a ModuleResolver,
+        types: &'a ModuleTypeRegistry,
+    ) -> Self {
+        Self {
+            owner,
+            resolver,
+            types,
+        }
+    }
+
+    #[must_use]
+    pub const fn owner(self) -> &'a crate::dag_id::DagId {
+        self.owner
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Resolved domain constraints
 // ---------------------------------------------------------------------------
@@ -899,6 +986,35 @@ pub fn type_resolve(
     root_dag_id: crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
 ) -> Result<TIR, GraphcalError> {
+    type_resolve_impl(ir, root_dag_id, src, None)
+}
+
+/// Resolve all type annotations in an `IR` using module-aware type-system
+/// resolution for syntactic paths.
+///
+/// Qualified source paths such as `lib.Length`, `lib.Vec3<...>`, and
+/// `lib.Phase` are resolved through `module_resolver` to canonical
+/// [`ResolvedName`] owners before the corresponding definition is read from
+/// `module_types`. The returned TIR still exposes legacy leaf names at runtime
+/// boundaries, but lookup itself no longer depends on source alias strings.
+pub fn type_resolve_with_modules(
+    ir: IR,
+    root_dag_id: crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    module_types: &ModuleTypeRegistry,
+) -> Result<TIR, GraphcalError> {
+    let owner_for_ctx = root_dag_id.clone();
+    let ctx = ModuleTypeContext::new(&owner_for_ctx, module_resolver, module_types);
+    type_resolve_impl(ir, root_dag_id, src, Some(ctx))
+}
+
+fn type_resolve_impl(
+    ir: IR,
+    root_dag_id: crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
+) -> Result<TIR, GraphcalError> {
     let root_dag = type_resolve_dag(
         ir.consts,
         ir.params,
@@ -906,6 +1022,7 @@ pub fn type_resolve(
         &ir.registry,
         src,
         &root_dag_id,
+        module_ctx,
     )?
     .with_body(
         ir.asserts,
@@ -948,23 +1065,52 @@ pub fn type_resolve_single(
     dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagTIR, GraphcalError> {
-    Ok(
-        type_resolve_dag(ir.consts, ir.params, ir.nodes, &ir.registry, src, dag_id)?.with_body(
-            ir.asserts,
-            ir.plots,
-            ir.figures,
-            ir.layers,
-            ir.runtime_deps,
-            ir.const_deps,
-            ir.source_order,
-            ir.assert_names,
-            ir.assumes_map,
-            ir.expected_fail,
-            ir.imported_values,
-            ir.imported_decl_types,
-            ir.imported_value_sources,
-        ),
-    )
+    type_resolve_single_impl(ir, dag_id, src, None)
+}
+
+/// Resolve type annotations for one DAG body with module-aware type-system
+/// path lookup.
+pub fn type_resolve_single_with_modules(
+    ir: IR,
+    dag_id: &crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    module_types: &ModuleTypeRegistry,
+) -> Result<DagTIR, GraphcalError> {
+    let ctx = ModuleTypeContext::new(dag_id, module_resolver, module_types);
+    type_resolve_single_impl(ir, dag_id, src, Some(ctx))
+}
+
+fn type_resolve_single_impl(
+    ir: IR,
+    dag_id: &crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
+) -> Result<DagTIR, GraphcalError> {
+    Ok(type_resolve_dag(
+        ir.consts,
+        ir.params,
+        ir.nodes,
+        &ir.registry,
+        src,
+        dag_id,
+        module_ctx,
+    )?
+    .with_body(
+        ir.asserts,
+        ir.plots,
+        ir.figures,
+        ir.layers,
+        ir.runtime_deps,
+        ir.const_deps,
+        ir.source_order,
+        ir.assert_names,
+        ir.assumes_map,
+        ir.expected_fail,
+        ir.imported_values,
+        ir.imported_decl_types,
+        ir.imported_value_sources,
+    ))
 }
 
 /// Internal helper: resolve type annotations for the const/param/node
@@ -976,40 +1122,44 @@ fn type_resolve_dag(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
+    module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<DagTIRSeed, GraphcalError> {
     let mut resolved_decl_types = HashMap::new();
     let no_generic_params: &[GenericParamName] = &[];
 
     for entry in &consts {
-        let resolved = resolve_type_expr(
+        let resolved = resolve_type_expr_inner(
             &entry.type_ann,
             registry,
             no_generic_params,
             no_generic_params,
             no_generic_params,
             src,
+            module_ctx,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
     for entry in &params {
-        let resolved = resolve_type_expr(
+        let resolved = resolve_type_expr_inner(
             &entry.type_ann,
             registry,
             no_generic_params,
             no_generic_params,
             no_generic_params,
             src,
+            module_ctx,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
     for entry in &nodes {
-        let resolved = resolve_type_expr(
+        let resolved = resolve_type_expr_inner(
             &entry.type_ann,
             registry,
             no_generic_params,
             no_generic_params,
             no_generic_params,
             src,
+            module_ctx,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
@@ -1817,10 +1967,212 @@ fn require_local_type_level_path<'a>(
     path.as_bare()
         .map(|atom| atom.as_str())
         .ok_or_else(|| GraphcalError::EvalError {
-            message: format!("qualified type-level reference `{path}` is not supported yet"),
+            message: format!(
+                "qualified type-level reference `{path}` needs module-aware resolution"
+            ),
             src: src.clone(),
             span: span.into(),
         })
+}
+
+fn module_resolve_error(
+    err: ModuleResolveError,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    GraphcalError::EvalError {
+        message: err.to_string(),
+        src: src.clone(),
+        span: span.into(),
+    }
+}
+
+fn module_lookup_is_absent(err: &ModuleResolveError) -> bool {
+    matches!(err, ModuleResolveError::UnknownName { .. })
+}
+
+fn resolve_index_expr_name(
+    path: &NamePath,
+    span: Span,
+    registry: &Registry,
+    index_params: &[GenericParamName],
+    nat_params: &[GenericParamName],
+    src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
+) -> Result<ResolvedIndex, GraphcalError> {
+    if let Some(atom) = path.as_bare() {
+        let text = atom.as_str();
+        if let Some(gp) = nat_params.iter().find(|p| p.as_str() == text) {
+            return Ok(ResolvedIndex::NatExpr(
+                NatPolyForm::from_var(gp.clone()),
+                span,
+            ));
+        }
+        if let Some(gp) = index_params.iter().find(|p| p.as_str() == text) {
+            return Ok(ResolvedIndex::GenericParam(gp.clone(), span));
+        }
+    }
+
+    if let Some(ctx) = module_ctx {
+        match ctx.resolver.resolve_index_path(ctx.owner, path) {
+            Ok(resolved) => {
+                if ctx.types.get_index(&resolved).is_some()
+                    || registry.indexes.get_index(resolved.as_str()).is_some()
+                {
+                    return Ok(ResolvedIndex::Concrete(resolved.to_def_name(), span));
+                }
+                return Err(GraphcalError::UnknownIndex {
+                    name: resolved.to_def_name(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+            Err(err) if path.is_bare() && module_lookup_is_absent(&err) => {}
+            Err(err) => return Err(module_resolve_error(err, src, span)),
+        }
+    }
+
+    let text = require_local_type_level_path(path, span, src)?;
+    if registry.indexes.get_index(text).is_some() {
+        Ok(ResolvedIndex::Concrete(IndexName::new(text), span))
+    } else {
+        Err(GraphcalError::UnknownIndex {
+            name: IndexName::new(text),
+            src: src.clone(),
+            span: span.into(),
+        })
+    }
+}
+
+fn resolve_concrete_index_path(
+    path: &NamePath,
+    span: Span,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
+) -> Result<Option<IndexName>, GraphcalError> {
+    if let Some(ctx) = module_ctx {
+        match ctx.resolver.resolve_index_path(ctx.owner, path) {
+            Ok(resolved) => {
+                let Some(index) = ctx
+                    .types
+                    .get_index(&resolved)
+                    .or_else(|| registry.indexes.get_index(resolved.as_str()))
+                else {
+                    return Err(GraphcalError::UnknownIndex {
+                        name: resolved.to_def_name(),
+                        src: src.clone(),
+                        span: span.into(),
+                    });
+                };
+                if matches!(
+                    index.kind,
+                    crate::registry::types::IndexKind::Named { .. }
+                        | crate::registry::types::IndexKind::RequiredNamed
+                ) {
+                    return Ok(Some(resolved.to_def_name()));
+                }
+                return Ok(None);
+            }
+            Err(err) if module_lookup_is_absent(&err) => {}
+            Err(_) if path.is_bare() => {
+                // A bare non-local name may still be a prelude or registry-only
+                // compatibility entry. Fall through to the legacy registry.
+            }
+            Err(err) => return Err(module_resolve_error(err, src, span)),
+        }
+    }
+
+    let Some(atom) = path.as_bare() else {
+        return Ok(None);
+    };
+    let Some(index) = registry.indexes.get_index(atom.as_str()) else {
+        return Ok(None);
+    };
+    Ok(matches!(
+        index.kind,
+        crate::registry::types::IndexKind::Named { .. }
+            | crate::registry::types::IndexKind::RequiredNamed
+    )
+    .then(|| IndexName::from_atom(atom.clone())))
+}
+
+fn resolve_struct_type_path<'a>(
+    path: &NamePath,
+    span: Span,
+    registry: &'a Registry,
+    src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'a>>,
+) -> Result<Option<(StructTypeName, &'a TypeDef, Option<crate::dag_id::DagId>)>, GraphcalError> {
+    if let Some(ctx) = module_ctx {
+        match ctx.resolver.resolve_struct_type_path(ctx.owner, path) {
+            Ok(resolved) => {
+                if let Some(type_def) = ctx
+                    .types
+                    .get_struct_type(&resolved)
+                    .or_else(|| registry.types.get_type(resolved.as_str()))
+                {
+                    return Ok(Some((
+                        resolved.to_def_name(),
+                        type_def,
+                        Some(resolved.owner().clone()),
+                    )));
+                }
+                return Err(GraphcalError::UnknownStructType {
+                    name: resolved.to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+            Err(err) if module_lookup_is_absent(&err) => {}
+            Err(_err) if path.is_bare() => {}
+            Err(err) => return Err(module_resolve_error(err, src, span)),
+        }
+    }
+
+    let Some(atom) = path.as_bare() else {
+        return Ok(None);
+    };
+    Ok(registry
+        .types
+        .get_type(atom.as_str())
+        .map(|type_def| (StructTypeName::from_atom(atom.clone()), type_def, None)))
+}
+
+fn resolve_dimension_path(
+    path: &NamePath,
+    span: Span,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
+) -> Result<Option<Dimension>, GraphcalError> {
+    if let Some(ctx) = module_ctx {
+        match ctx.resolver.resolve_dimension_path(ctx.owner, path) {
+            Ok(resolved) => {
+                return ctx
+                    .types
+                    .get_dimension(&resolved)
+                    .cloned()
+                    .or_else(|| {
+                        registry
+                            .dimensions
+                            .get_dimension(resolved.as_str())
+                            .cloned()
+                    })
+                    .map(Some)
+                    .ok_or_else(|| GraphcalError::UnknownDimension {
+                        name: resolved.to_def_name(),
+                        src: src.clone(),
+                        span: span.into(),
+                    });
+            }
+            Err(err) if path.is_bare() && module_lookup_is_absent(&err) => {}
+            Err(err) => return Err(module_resolve_error(err, src, span)),
+        }
+    }
+
+    let text = require_local_type_level_path(path, span, src)?;
+    Ok(registry.dimensions.get_dimension(text).cloned())
 }
 
 /// Resolve a `TypeExpr` into a `ResolvedTypeExpr`.
@@ -1840,6 +2192,47 @@ pub fn resolve_type_expr(
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
+    resolve_type_expr_inner(
+        type_ann,
+        registry,
+        dim_params,
+        index_params,
+        nat_params,
+        src,
+        None,
+    )
+}
+
+/// Resolve a `TypeExpr` with an optional module-aware path context.
+pub fn resolve_type_expr_with_modules(
+    type_ann: &TypeExpr,
+    registry: &Registry,
+    dim_params: &[GenericParamName],
+    index_params: &[GenericParamName],
+    nat_params: &[GenericParamName],
+    src: &NamedSource<Arc<String>>,
+    module_ctx: ModuleTypeContext<'_>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    resolve_type_expr_inner(
+        type_ann,
+        registry,
+        dim_params,
+        index_params,
+        nat_params,
+        src,
+        Some(module_ctx),
+    )
+}
+
+fn resolve_type_expr_inner(
+    type_ann: &TypeExpr,
+    registry: &Registry,
+    dim_params: &[GenericParamName],
+    index_params: &[GenericParamName],
+    nat_params: &[GenericParamName],
+    src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
     match &type_ann.kind {
         TypeExprKind::Dimensionless => Ok(ResolvedTypeExpr::Dimensionless),
         TypeExprKind::Bool => Ok(ResolvedTypeExpr::Bool),
@@ -1850,8 +2243,15 @@ pub fn resolve_type_expr(
         }
 
         TypeExprKind::Indexed { base, indexes } => {
-            let resolved_base =
-                resolve_type_expr(base, registry, dim_params, index_params, nat_params, src)?;
+            let resolved_base = resolve_type_expr_inner(
+                base,
+                registry,
+                dim_params,
+                index_params,
+                nat_params,
+                src,
+                module_ctx,
+            )?;
             let mut resolved_indexes = Vec::with_capacity(indexes.len());
             for idx in indexes {
                 match idx {
@@ -1860,25 +2260,15 @@ pub fn resolve_type_expr(
                         resolved_indexes.push(ResolvedIndex::NatExpr(form, nat_expr.span()));
                     }
                     crate::desugar::resolved_ast::IndexExpr::Name(path) => {
-                        let text = require_local_type_level_path(&path.value, path.span, src)?;
-                        if let Some(gp) = nat_params.iter().find(|p| p.as_str() == text) {
-                            resolved_indexes.push(ResolvedIndex::NatExpr(
-                                NatPolyForm::from_var(gp.clone()),
-                                path.span,
-                            ));
-                        } else if let Some(gp) = index_params.iter().find(|p| p.as_str() == text) {
-                            resolved_indexes
-                                .push(ResolvedIndex::GenericParam(gp.clone(), path.span));
-                        } else if registry.indexes.get_index(text).is_some() {
-                            resolved_indexes
-                                .push(ResolvedIndex::Concrete(IndexName::new(text), path.span));
-                        } else {
-                            return Err(GraphcalError::UnknownIndex {
-                                name: IndexName::new(text),
-                                src: src.clone(),
-                                span: path.span.into(),
-                            });
-                        }
+                        resolved_indexes.push(resolve_index_expr_name(
+                            &path.value,
+                            path.span,
+                            registry,
+                            index_params,
+                            nat_params,
+                            src,
+                            module_ctx,
+                        )?);
                     }
                 }
             }
@@ -1888,7 +2278,9 @@ pub fn resolve_type_expr(
             })
         }
 
-        TypeExprKind::DimExpr(dim_expr) => resolve_dim_expr(dim_expr, registry, dim_params, src),
+        TypeExprKind::DimExpr(dim_expr) => {
+            resolve_dim_expr(dim_expr, registry, dim_params, src, module_ctx)
+        }
 
         TypeExprKind::TypeApplication { name, type_args } => resolve_type_application(
             type_ann,
@@ -1899,6 +2291,7 @@ pub fn resolve_type_expr(
             index_params,
             nat_params,
             src,
+            module_ctx,
         ),
     }
 }
@@ -1915,28 +2308,29 @@ fn resolve_dim_expr(
     registry: &Registry,
     dim_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
     // Single-term, no power: may be a nominal type-level reference rather than
     // a scalar dimension expression.
     if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() {
         let term = &dim_expr.terms[0].term;
-        let text = require_local_type_level_path(&term.name.value, term.name.span, src)?;
-        if let Some(idx_def) = registry.indexes.get_index(text)
-            && matches!(
-                idx_def.kind,
-                crate::registry::types::IndexKind::Named { .. }
-                    | crate::registry::types::IndexKind::RequiredNamed
-            )
+        if let Some(index) = resolve_concrete_index_path(
+            &term.name.value,
+            term.name.span,
+            registry,
+            src,
+            module_ctx,
+        )? {
+            return Ok(ResolvedTypeExpr::Label(index, term.span));
+        }
+        if let Some((type_name, _, _)) =
+            resolve_struct_type_path(&term.name.value, term.name.span, registry, src, module_ctx)?
         {
-            return Ok(ResolvedTypeExpr::Label(IndexName::new(text), term.span));
+            return Ok(ResolvedTypeExpr::Struct(type_name, term.span));
         }
-        if registry.types.get_type(text).is_some() {
-            return Ok(ResolvedTypeExpr::Struct(
-                StructTypeName::new(text),
-                term.span,
-            ));
-        }
-        if let Some(gp) = dim_params.iter().find(|p| p.as_str() == text) {
+        if let Some(atom) = term.name.value.as_bare()
+            && let Some(gp) = dim_params.iter().find(|p| p.as_str() == atom.as_str())
+        {
             return Ok(ResolvedTypeExpr::GenericDimParam(gp.clone(), term.span));
         }
     }
@@ -1953,7 +2347,9 @@ fn resolve_dim_expr(
         let terms = dim_expr
             .terms
             .iter()
-            .map(|item| resolve_dim_term_in_generic_expr(item, registry, dim_params, src))
+            .map(|item| {
+                resolve_dim_term_in_generic_expr(item, registry, dim_params, src, module_ctx)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(ResolvedTypeExpr::GenericDimExpr {
             terms,
@@ -1963,7 +2359,7 @@ fn resolve_dim_expr(
         let result = dim_expr.terms.iter().try_fold(
             Dimension::dimensionless(),
             |acc, item| -> Result<Dimension, GraphcalError> {
-                let base = concrete_dimension_for_term(item, registry, src)?;
+                let base = concrete_dimension_for_term(item, registry, src, module_ctx)?;
                 let exp = item.term.power.unwrap_or(1);
                 let overflow_err = || GraphcalError::DimensionOverflow {
                     src: src.clone(),
@@ -1987,44 +2383,50 @@ fn resolve_dim_term_in_generic_expr(
     registry: &Registry,
     dim_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<ResolvedDimTerm, GraphcalError> {
     let power = item.term.power.unwrap_or(1);
     let op = item.op;
-    let text = require_local_type_level_path(&item.term.name.value, item.term.name.span, src)?;
-    dim_params.iter().find(|p| p.as_str() == text).map_or_else(
-        || {
-            concrete_dimension_for_term(item, registry, src).map(|dim| ResolvedDimTerm::Concrete {
-                dim,
-                power,
-                op,
-            })
-        },
-        |gp| {
-            Ok(ResolvedDimTerm::GenericParam {
-                name: gp.clone(),
-                power,
-                op,
-                span: item.term.span,
-            })
-        },
-    )
+    if let Some(atom) = item.term.name.value.as_bare()
+        && let Some(gp) = dim_params.iter().find(|p| p.as_str() == atom.as_str())
+    {
+        return Ok(ResolvedDimTerm::GenericParam {
+            name: gp.clone(),
+            power,
+            op,
+            span: item.term.span,
+        });
+    }
+    concrete_dimension_for_term(item, registry, src, module_ctx)
+        .map(|dim| ResolvedDimTerm::Concrete { dim, power, op })
 }
 
 fn concrete_dimension_for_term(
     item: &crate::desugar::resolved_ast::DimExprItem,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<Dimension, GraphcalError> {
-    let text = require_local_type_level_path(&item.term.name.value, item.term.name.span, src)?;
-    registry
-        .dimensions
-        .get_dimension(text)
-        .cloned()
-        .ok_or_else(|| GraphcalError::UnknownDimension {
-            name: DimName::new(text),
+    resolve_dimension_path(
+        &item.term.name.value,
+        item.term.name.span,
+        registry,
+        src,
+        module_ctx,
+    )?
+    .ok_or_else(|| {
+        let name = item
+            .term
+            .name
+            .value
+            .as_bare()
+            .map_or_else(|| item.term.name.value.display_path(), ToString::to_string);
+        GraphcalError::UnknownDimension {
+            name: DimName::new(name),
             src: src.clone(),
             span: item.term.span.into(),
-        })
+        }
+    })
 }
 
 /// Resolve a `Datetime<TimeScale>` application to a [`ResolvedTypeExpr::Datetime`].
@@ -2097,17 +2499,16 @@ fn resolve_type_application(
     index_params: &[GenericParamName],
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let name_text = require_local_type_level_path(&name.value, name.span, src)?;
-    let type_name = StructTypeName::new(name_text);
-
-    let type_def = registry.types.get_type(type_name.as_str()).ok_or_else(|| {
-        GraphcalError::UnknownStructType {
-            name: type_name.to_string(),
-            src: src.clone(),
-            span: name.span.into(),
-        }
-    })?;
+    let (type_name, type_def, definition_owner) =
+        resolve_struct_type_path(&name.value, name.span, registry, src, module_ctx)?.ok_or_else(
+            || GraphcalError::UnknownStructType {
+                name: name.value.display_path(),
+                src: src.clone(),
+                span: name.span.into(),
+            },
+        )?;
     let total_params = type_def.generic_params.len();
     let required_count = type_def
         .generic_params
@@ -2133,7 +2534,15 @@ fn resolve_type_application(
     // Resolve each explicit type argument, then fill in defaults
     let mut resolved_args = Vec::with_capacity(total_params);
     for arg in type_args {
-        let resolved = resolve_type_expr(arg, registry, dim_params, index_params, nat_params, src)?;
+        let resolved = resolve_type_expr_inner(
+            arg,
+            registry,
+            dim_params,
+            index_params,
+            nat_params,
+            src,
+            module_ctx,
+        )?;
         resolved_args.push(resolved);
     }
     // Fill in defaults for any remaining params
@@ -2149,13 +2558,20 @@ fn resolve_type_application(
                 src: src.clone(),
                 span: type_ann.span.into(),
             })?;
-        let resolved = resolve_type_expr(
+        let default_ctx = match (module_ctx, definition_owner.as_ref()) {
+            (Some(ctx), Some(owner)) => {
+                Some(ModuleTypeContext::new(owner, ctx.resolver, ctx.types))
+            }
+            _ => module_ctx,
+        };
+        let resolved = resolve_type_expr_inner(
             default_expr,
             registry,
             dim_params,
             index_params,
             nat_params,
             src,
+            default_ctx,
         )?;
         resolved_args.push(resolved);
     }

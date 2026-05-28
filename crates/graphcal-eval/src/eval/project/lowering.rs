@@ -88,14 +88,31 @@ pub(in crate::eval::project) fn lower_and_finalize(
     // explicitly (loader supplies the per-file self-import set and the
     // canonical parent `DagId`). Cross-file dep dag TIRs are merged in
     // afterward by `merge_dep_dag_tirs`.
+    let module_resolver = project
+        .build_module_resolver()
+        .map_err(|err| module_resolve_compile_error(err, file_src))?;
+    let mut module_types = graphcal_compiler::tir::typed::ModuleTypeRegistry::default();
+    module_types.insert_registry(file_dag_id, &ir.registry);
+    for (dep_dag_id, evaluated) in evaluated_files {
+        module_types.insert_registry(dep_dag_id, &evaluated.registry);
+    }
+
     let parent_pub_names = ir.pub_names.clone();
-    let mut tir = graphcal_compiler::tir::typed::type_resolve(ir, file_dag_id.clone(), file_src)?;
+    let mut tir = graphcal_compiler::tir::typed::type_resolve_with_modules(
+        ir,
+        file_dag_id.clone(),
+        file_src,
+        &module_resolver,
+        &module_types,
+    )?;
     crate::inline_dag::compile_inline_dag_bodies(
         &mut tir,
         file_src,
         file_dag_id,
         &parent_pub_names,
         &importer_loaded.inline_dags,
+        &module_resolver,
+        &module_types,
     )?;
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
     graphcal_compiler::tir::dim_check::check_dimensions_tir(&tir, file_src)?;
@@ -137,6 +154,28 @@ pub(in crate::eval::project) fn lower_and_finalize(
         declared_types,
         imported_values: saved_imported_values,
         imported_source_order: ctx.imported_source_order,
+    })
+}
+
+fn module_resolve_compile_error(
+    err: graphcal_compiler::syntax::module_resolve::ModuleResolveError,
+    src: &NamedSource<Arc<String>>,
+) -> CompileError {
+    let span = match &err {
+        graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateSymbol {
+            duplicate,
+            ..
+        }
+        | graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateImportName {
+            duplicate,
+            ..
+        } => *duplicate,
+        _ => Span::new(0, 0),
+    };
+    CompileError::Eval(GraphcalError::EvalError {
+        message: err.to_string(),
+        src: src.clone(),
+        span: span.into(),
     })
 }
 

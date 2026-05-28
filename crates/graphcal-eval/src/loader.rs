@@ -256,6 +256,7 @@ impl LoadedProject {
                 &loaded.dag_id,
                 &loaded.ast.declarations,
                 &loaded.resolved_imports,
+                &self.files,
             )?;
             for inline in &loaded.inline_dags {
                 register_inline_module_imports(
@@ -263,6 +264,7 @@ impl LoadedProject {
                     &inline.dag_id,
                     &inline.body,
                     &inline.resolved_imports,
+                    &self.files,
                 )?;
             }
         }
@@ -276,13 +278,19 @@ fn register_file_module_imports(
     owner: &DagId,
     declarations: &[Declaration],
     resolved_imports: &HashMap<ModulePathKey, DagId>,
+    files: &HashMap<DagId, LoadedFile>,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
     for decl in declarations {
         match &decl.kind {
             DeclKind::Import(import) => {
                 if let Some(target) = resolved_imports.get(&ModulePathKey::from_path(&import.path))
                 {
-                    resolver.register_import(owner, &import.path, &import.kind, target.clone())?;
+                    resolver.register_import(
+                        owner,
+                        &import.path,
+                        &import.kind,
+                        module_resolver_target_for_path(&import.path, target, files),
+                    )?;
                 }
             }
             DeclKind::Include(include) => {
@@ -292,7 +300,7 @@ fn register_file_module_imports(
                         owner,
                         &include.path,
                         &include.kind,
-                        target.clone(),
+                        module_resolver_target_for_path(&include.path, target, files),
                     )?;
                 }
             }
@@ -307,6 +315,7 @@ fn register_inline_module_imports(
     owner: &DagId,
     declarations: &[Declaration],
     resolved_imports: &HashMap<ModulePathKey, InlineBodyImportResolution>,
+    files: &HashMap<DagId, LoadedFile>,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
     for decl in declarations {
         let DeclKind::Import(import) = &decl.kind else {
@@ -315,10 +324,43 @@ fn register_inline_module_imports(
         if let Some(InlineBodyImportResolution::Resolved(target)) =
             resolved_imports.get(&ModulePathKey::from_path(&import.path))
         {
-            resolver.register_import(owner, &import.path, &import.kind, target.clone())?;
+            resolver.register_import(
+                owner,
+                &import.path,
+                &import.kind,
+                module_resolver_target_for_path(&import.path, target, files),
+            )?;
         }
     }
     Ok(())
+}
+
+/// Refine a loader-resolved file target to an inline-DAG child target when
+/// the source module path used the loader's `parent-file + dag leaf` fallback.
+///
+/// The loader still owns filesystem resolution: `file_target` is the canonical
+/// file chosen for `path`. This helper only maps that already-loaded file to
+/// its already-lifted inline DAG child when the path leaf names one.
+fn module_resolver_target_for_path(
+    path: &ModulePath,
+    file_target: &DagId,
+    files: &HashMap<DagId, LoadedFile>,
+) -> DagId {
+    let leaf = path.leaf().name.as_str();
+    if leaf == file_target.name() {
+        return file_target.clone();
+    }
+
+    files
+        .get(file_target)
+        .and_then(|loaded| {
+            loaded
+                .inline_dags
+                .iter()
+                .find(|inline| inline.name.as_str() == leaf)
+                .map(|inline| inline.dag_id.clone())
+        })
+        .unwrap_or_else(|| file_target.clone())
 }
 
 /// Load a project starting from `root_path`, recursively loading all

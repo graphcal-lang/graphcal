@@ -891,6 +891,39 @@ fn project_instantiated_import_graph_ref() {
     );
 }
 
+#[test]
+fn project_qualified_index_type_annotation_and_variant_arg() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/mission");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"mission\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("lib.gcl"),
+        "pub index Phase = { Burn, Coast };\n\
+         pub dim Acceleration = Length / Time^2;\n\
+         pub node thrust: Dimensionless[Phase] = { Phase.Burn: 3.0, Phase.Coast: 5.0 };\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import mission.lib as lib;\n\
+         node thrust: Dimensionless[lib.Phase] = { lib.Phase.Burn: 3.0, lib.Phase.Coast: 5.0 };\n\
+         node burn: Dimensionless = @thrust[lib.Phase.Burn];\n\
+         node accel: lib.Acceleration = 9.80665 m/s^2;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+
+    assert!((find_value(&result, "burn") - 3.0).abs() < f64::EPSILON);
+    assert!((find_value(&result, "accel") - 9.80665).abs() < f64::EPSILON);
+}
+
 // ---- Bare module path eval tests ----
 mod prop {
     use super::*;

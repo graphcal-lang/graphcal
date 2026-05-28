@@ -13,6 +13,7 @@ use crate::desugar::resolved_ast::{
 use crate::syntax::names::{
     FieldName, GenericParamName, IndexName, NamePath, ScopedName, StructTypeName,
 };
+use crate::syntax::span::Span;
 use crate::tir::typed::NatLinearForm;
 
 use crate::registry::error::GraphcalError;
@@ -68,6 +69,29 @@ fn normalize_nat_expr_lenient(expr: &NatExpr) -> NatLinearForm {
     }
 }
 
+fn validate_index_path_module_scope(
+    path: &crate::syntax::names::NamePath,
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), GraphcalError> {
+    let Some((qualifier, _)) = path.qualifier_and_leaf() else {
+        return Ok(());
+    };
+    let Some(alias) = qualifier.first() else {
+        return Ok(());
+    };
+    if tir.module_aliases.contains_key(alias.as_str()) {
+        Ok(())
+    } else {
+        Err(GraphcalError::EvalError {
+            message: format!("module alias `{alias}` is not in scope for index path `{path}`"),
+            src: src.clone(),
+            span: span.into(),
+        })
+    }
+}
+
 /// Infer the type of a for comprehension.
 pub(super) fn infer_for_comp(
     bindings: &[ForBinding],
@@ -84,6 +108,7 @@ pub(super) fn infer_for_comp(
     for binding in bindings {
         let var_type = match &binding.index {
             ForBindingIndex::Named(spanned_idx) => {
+                validate_index_path_module_scope(&spanned_idx.value, tir, src, spanned_idx.span)?;
                 let idx_name = spanned_idx.value.leaf_str();
                 let idx_def = registry.indexes.get_index(idx_name).ok_or_else(|| {
                     GraphcalError::UnknownIndex {
@@ -179,6 +204,14 @@ pub(super) fn infer_map_or_table_literal(
             });
         }
     }
+    for entry in entries {
+        for key in &entry.keys {
+            if let crate::syntax::ast::MapEntryIndex::Named(path) = &key.index.value {
+                validate_index_path_module_scope(path, tir, src, key.index.span)?;
+            }
+        }
+    }
+
     // Validate index names: all entries must use the same indexes in the same order
     let index_names: Vec<IndexName> = entries[0]
         .keys
@@ -450,6 +483,7 @@ pub(super) fn infer_index_access(
         // Validate the argument matches the index
         match arg {
             IndexArg::Variant { index, variant } => {
+                validate_index_path_module_scope(&index.value, tir, src, index.span)?;
                 if index.value.leaf_str() != idx_name.as_str() {
                     return Err(GraphcalError::IndexMismatch {
                         expected: idx_name,
