@@ -1014,6 +1014,24 @@ impl DagTIR {
             }
         }
     }
+
+    /// Return the canonical resolved declaration key for a declaration owned by this DAG.
+    ///
+    /// This is the narrow compatibility bridge from legacy local [`ScopedName`]
+    /// declaration keys to canonical [`ResolvedName`] identities. Qualified
+    /// `ScopedName`s do not name declarations owned by this DAG and therefore
+    /// return `None`.
+    #[must_use]
+    pub fn resolved_decl_key_for_local(
+        &self,
+        name: &ScopedName,
+    ) -> Option<ResolvedName<namespace::Decl>> {
+        if name.is_qualified() {
+            return None;
+        }
+        let name = DeclName::try_new(name.member()).ok()?;
+        Some(ResolvedName::from_def(self.dag_id.clone(), name))
+    }
 }
 
 /// Resolve all type annotations in an `IR`, producing a [`TIR`] whose

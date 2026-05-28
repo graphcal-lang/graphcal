@@ -9,7 +9,9 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::resolved_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
-use graphcal_compiler::syntax::names::{FieldName, ScopedName, StructTypeName};
+use graphcal_compiler::syntax::names::{
+    FieldName, ResolvedName, ScopedName, StructTypeName, namespace,
+};
 use graphcal_compiler::syntax::span::Span;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
@@ -17,7 +19,9 @@ use petgraph::graph::DiGraph;
 use crate::eval_expr::{EvalContext, RuntimeValue, eval_expr};
 use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::tir::typed::{ResolvedDomainConstraint, TIR};
+use graphcal_compiler::tir::typed::{
+    DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint, TIR,
+};
 
 /// An assert body entry for execution.
 #[derive(Debug, Clone)]
@@ -183,6 +187,41 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
     })
 }
 
+type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+
+fn local_resolved_decl_key(
+    dag: &DagTIR,
+    name: &ScopedName,
+    span: Span,
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedDeclKey, GraphcalError> {
+    dag.resolved_decl_key_for_local(name)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!(
+                "resolved dependency sidecar contains no local canonical key for declaration `{name}`"
+            ),
+            src: src.clone(),
+            span: span.into(),
+        })
+}
+
+fn visible_values_with_imports(
+    dag: &DagTIR,
+    local_const_values: &HashMap<ScopedName, RuntimeValue>,
+) -> HashMap<ScopedName, RuntimeValue> {
+    let mut values: HashMap<ScopedName, RuntimeValue> = dag
+        .imported_values
+        .iter()
+        .map(|(name, (value, _))| (name.clone(), value.clone()))
+        .collect();
+    values.extend(
+        local_const_values
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone())),
+    );
+    values
+}
+
 /// Topologically sort and evaluate const declarations from a TIR.
 pub fn eval_consts_from_tir(
     tir: &TIR,
@@ -190,56 +229,23 @@ pub fn eval_consts_from_tir(
 ) -> Result<HashMap<ScopedName, RuntimeValue>, GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
+    let dag = tir.root();
 
-    if tir.root().consts.is_empty() {
+    if dag.consts.is_empty() {
         return Ok(HashMap::new());
     }
 
-    let mut graph = DiGraph::<ScopedName, ()>::new();
-    let mut index_map: HashMap<ScopedName, petgraph::graph::NodeIndex> = HashMap::new();
+    let sorted_names = const_eval_order(dag, src)?;
 
-    // Sort consts by name for canonical tie-breaking among incomparable nodes.
-    let mut sorted_consts: Vec<&_> = tir.root().consts.iter().collect();
-    sorted_consts.sort_by(|a, b| a.name.cmp(&b.name));
-    for entry in &sorted_consts {
-        let idx = graph.add_node(entry.name.clone());
-        index_map.insert(entry.name.clone(), idx);
-    }
-
-    for entry in &tir.root().consts {
-        if let Some(deps) = tir.root().const_deps.get(&entry.name) {
-            let from = index_map[&entry.name];
-            for dep in deps {
-                let to = index_map[dep];
-                graph.add_edge(to, from, ());
-            }
-        }
-    }
-
-    let sorted = toposort(&graph, None).map_err(|cycle| {
-        let cycle_node = &graph[cycle.node_id()];
-        let span = tir
-            .root()
-            .consts
-            .iter()
-            .find(|e| &e.name == cycle_node)
-            .map_or_else(|| Span::new(0, 0), |e| e.span);
-        GraphcalError::CyclicDependency {
-            name: cycle_node.to_string().into(),
-            src: src.clone(),
-            span: span.into(),
-        }
-    })?;
-
-    let const_exprs: HashMap<ScopedName, &Expr> = tir
-        .root()
+    let const_exprs: HashMap<ScopedName, &Expr> = dag
         .consts
         .iter()
         .map(|entry| (entry.name.clone(), &entry.expr))
         .collect();
 
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
-    let mut const_values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
+    let mut visible_values = visible_values_with_imports(dag, &HashMap::new());
+    let mut local_const_values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
 
     let ctx = EvalContext {
         builtin_consts,
@@ -251,14 +257,122 @@ pub fn eval_consts_from_tir(
         struct_field_constraints: None,
     };
 
-    for idx in sorted {
-        let name = &graph[idx];
-        let expr = const_exprs[name];
-        let val = eval_expr(expr, &const_values, &empty_locals, &ctx)?;
-        const_values.insert(name.clone(), val);
+    for name in sorted_names {
+        let expr = const_exprs[&name];
+        let value = eval_expr(expr, &visible_values, &empty_locals, &ctx)?;
+        visible_values.insert(name.clone(), value.clone());
+        local_const_values.insert(name, value);
     }
 
-    Ok(const_values)
+    Ok(local_const_values)
+}
+
+fn const_eval_order(
+    dag: &DagTIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Vec<ScopedName>, GraphcalError> {
+    match &dag.resolved_deps {
+        Some(deps) => const_eval_order_resolved(dag, deps, src),
+        None => const_eval_order_legacy(dag, src),
+    }
+}
+
+fn const_eval_order_resolved(
+    dag: &DagTIR,
+    deps: &ResolvedDagDependencies,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Vec<ScopedName>, GraphcalError> {
+    let mut graph = DiGraph::<ResolvedDeclKey, ()>::new();
+    let mut index_map: HashMap<ResolvedDeclKey, petgraph::graph::NodeIndex> = HashMap::new();
+    let mut local_name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
+    let mut span_by_key: HashMap<ResolvedDeclKey, Span> = HashMap::new();
+
+    // Sort consts by name for canonical tie-breaking among incomparable nodes.
+    let mut sorted_consts: Vec<&_> = dag.consts.iter().collect();
+    sorted_consts.sort_by(|a, b| a.name.cmp(&b.name));
+    for entry in &sorted_consts {
+        let key = local_resolved_decl_key(dag, &entry.name, entry.span, src)?;
+        let idx = graph.add_node(key.clone());
+        index_map.insert(key.clone(), idx);
+        local_name_by_key.insert(key.clone(), entry.name.clone());
+        span_by_key.insert(key, entry.span);
+    }
+
+    for (name, dep_set) in &deps.const_deps {
+        let Some(&dependent_idx) = index_map.get(name) else {
+            continue;
+        };
+        for dep in dep_set {
+            if let Some(&dep_idx) = index_map.get(dep) {
+                graph.add_edge(dep_idx, dependent_idx, ());
+            }
+        }
+    }
+
+    let sorted = toposort(&graph, None).map_err(|cycle| {
+        let cycle_node = &graph[cycle.node_id()];
+        let span = span_by_key
+            .get(cycle_node)
+            .copied()
+            .unwrap_or_else(|| Span::new(0, 0));
+        let name = local_name_by_key
+            .get(cycle_node)
+            .map_or_else(|| cycle_node.to_string(), |name| name.to_string());
+        GraphcalError::CyclicDependency {
+            name: name.into(),
+            src: src.clone(),
+            span: span.into(),
+        }
+    })?;
+
+    Ok(sorted
+        .into_iter()
+        .filter_map(|idx| local_name_by_key.get(&graph[idx]).cloned())
+        .collect())
+}
+
+fn const_eval_order_legacy(
+    dag: &DagTIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Vec<ScopedName>, GraphcalError> {
+    let mut graph = DiGraph::<ScopedName, ()>::new();
+    let mut index_map: HashMap<ScopedName, petgraph::graph::NodeIndex> = HashMap::new();
+
+    // Sort consts by name for canonical tie-breaking among incomparable nodes.
+    let mut sorted_consts: Vec<&_> = dag.consts.iter().collect();
+    sorted_consts.sort_by(|a, b| a.name.cmp(&b.name));
+    for entry in &sorted_consts {
+        let idx = graph.add_node(entry.name.clone());
+        index_map.insert(entry.name.clone(), idx);
+    }
+
+    for entry in &dag.consts {
+        if let Some(deps) = dag.const_deps.get(&entry.name)
+            && let Some(&dependent_idx) = index_map.get(&entry.name)
+        {
+            for dep in deps {
+                if let Some(&dep_idx) = index_map.get(dep) {
+                    graph.add_edge(dep_idx, dependent_idx, ());
+                }
+            }
+        }
+    }
+
+    let sorted = toposort(&graph, None).map_err(|cycle| {
+        let cycle_node = &graph[cycle.node_id()];
+        let span = dag
+            .consts
+            .iter()
+            .find(|e| &e.name == cycle_node)
+            .map_or_else(|| Span::new(0, 0), |e| e.span);
+        GraphcalError::CyclicDependency {
+            name: cycle_node.to_string().into(),
+            src: src.clone(),
+            span: span.into(),
+        }
+    })?;
+
+    Ok(sorted.into_iter().map(|idx| graph[idx].clone()).collect())
 }
 
 /// Build a topologically sorted runtime DAG from params and nodes in a TIR.
@@ -289,27 +403,21 @@ fn build_runtime_dag(
         }
     }
 
-    let mut graph = DiGraph::<ScopedName, ()>::new();
-    let mut index_map: HashMap<ScopedName, petgraph::graph::NodeIndex> = HashMap::new();
+    let dag = tir.root();
     let mut expressions: HashMap<ScopedName, Expr> = HashMap::new();
-    // Lookup used to recover source spans for cycle-error reporting without
-    // re-iterating params/nodes on the error path.
-    let mut span_by_name: HashMap<ScopedName, Span> = HashMap::new();
+    let mut decl_spans: Vec<(ScopedName, Span)> = Vec::new();
 
-    let mut all_decls: Vec<DeclRef<'_>> = tir
-        .root()
+    let mut all_decls: Vec<DeclRef<'_>> = dag
         .params
         .iter()
         .map(DeclRef::Param)
-        .chain(tir.root().nodes.iter().map(DeclRef::Node))
+        .chain(dag.nodes.iter().map(DeclRef::Node))
         .collect();
     all_decls.sort_by(|a, b| a.name().cmp(b.name()));
 
     for decl in &all_decls {
         let name = decl.name().clone();
-        let idx = graph.add_node(name.clone());
-        index_map.insert(name.clone(), idx);
-        span_by_name.insert(name.clone(), decl.span());
+        decl_spans.push((name.clone(), decl.span()));
         match decl {
             DeclRef::Param(entry) => match &entry.default_expr {
                 Some(expr) => {
@@ -329,11 +437,93 @@ fn build_runtime_dag(
         }
     }
 
-    for (name, deps) in &tir.root().runtime_deps {
-        if let Some(&to_idx) = index_map.get(name) {
+    let topo_order = runtime_eval_order(dag, &decl_spans, src)?;
+    Ok((topo_order, expressions))
+}
+
+fn runtime_eval_order(
+    dag: &DagTIR,
+    decl_spans: &[(ScopedName, Span)],
+    src: &NamedSource<Arc<String>>,
+) -> Result<Vec<ScopedName>, GraphcalError> {
+    match &dag.resolved_deps {
+        Some(deps) => runtime_eval_order_resolved(dag, decl_spans, deps, src),
+        None => runtime_eval_order_legacy(dag, decl_spans, src),
+    }
+}
+
+fn runtime_eval_order_resolved(
+    dag: &DagTIR,
+    decl_spans: &[(ScopedName, Span)],
+    deps: &ResolvedDagDependencies,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Vec<ScopedName>, GraphcalError> {
+    let mut graph = DiGraph::<ResolvedDeclKey, ()>::new();
+    let mut index_map: HashMap<ResolvedDeclKey, petgraph::graph::NodeIndex> = HashMap::new();
+    let mut local_name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
+    let mut span_by_key: HashMap<ResolvedDeclKey, Span> = HashMap::new();
+
+    for (name, span) in decl_spans {
+        let key = local_resolved_decl_key(dag, name, *span, src)?;
+        let idx = graph.add_node(key.clone());
+        index_map.insert(key.clone(), idx);
+        local_name_by_key.insert(key.clone(), name.clone());
+        span_by_key.insert(key, *span);
+    }
+
+    for (name, dep_set) in &deps.runtime_deps {
+        let Some(&dependent_idx) = index_map.get(name) else {
+            continue;
+        };
+        for dep in dep_set {
+            if let Some(&dep_idx) = index_map.get(dep) {
+                graph.add_edge(dep_idx, dependent_idx, ());
+            }
+        }
+    }
+
+    let topo_indices = toposort(&graph, None).map_err(|cycle| {
+        let cycle_node = &graph[cycle.node_id()];
+        let span = span_by_key
+            .get(cycle_node)
+            .copied()
+            .unwrap_or_else(|| Span::new(0, 0));
+        let name = local_name_by_key
+            .get(cycle_node)
+            .map_or_else(|| cycle_node.to_string(), |name| name.to_string());
+        GraphcalError::CyclicDependency {
+            name: name.into(),
+            src: src.clone(),
+            span: span.into(),
+        }
+    })?;
+
+    Ok(topo_indices
+        .into_iter()
+        .filter_map(|idx| local_name_by_key.get(&graph[idx]).cloned())
+        .collect())
+}
+
+fn runtime_eval_order_legacy(
+    dag: &DagTIR,
+    decl_spans: &[(ScopedName, Span)],
+    src: &NamedSource<Arc<String>>,
+) -> Result<Vec<ScopedName>, GraphcalError> {
+    let mut graph = DiGraph::<ScopedName, ()>::new();
+    let mut index_map: HashMap<ScopedName, petgraph::graph::NodeIndex> = HashMap::new();
+    let mut span_by_name: HashMap<ScopedName, Span> = HashMap::new();
+
+    for (name, span) in decl_spans {
+        let idx = graph.add_node(name.clone());
+        index_map.insert(name.clone(), idx);
+        span_by_name.insert(name.clone(), *span);
+    }
+
+    for (name, deps) in &dag.runtime_deps {
+        if let Some(&dependent_idx) = index_map.get(name) {
             for dep in deps {
-                if let Some(&from_idx) = index_map.get(dep) {
-                    graph.add_edge(from_idx, to_idx, ());
+                if let Some(&dep_idx) = index_map.get(dep) {
+                    graph.add_edge(dep_idx, dependent_idx, ());
                 }
             }
         }
@@ -352,12 +542,10 @@ fn build_runtime_dag(
         }
     })?;
 
-    let topo_order: Vec<ScopedName> = topo_indices
+    Ok(topo_indices
         .into_iter()
         .map(|idx| graph[idx].clone())
-        .collect();
-
-    Ok((topo_order, expressions))
+        .collect())
 }
 
 /// Resolve domain constraints from type annotations on consts, params, and nodes.
@@ -392,6 +580,7 @@ pub fn resolve_domain_constraints(
         tir,
         struct_field_constraints: None,
     };
+    let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let mut constraints = HashMap::new();
 
@@ -438,7 +627,7 @@ pub fn resolve_domain_constraints(
 
         for bound in domain_bounds {
             // Evaluate the bound expression.
-            let rv = eval_expr(&bound.value, const_values, &empty_locals, &ctx)?;
+            let rv = eval_expr(&bound.value, &visible_const_values, &empty_locals, &ctx)?;
 
             let si_value = match &rv {
                 RuntimeValue::Scalar(v) => *v,
@@ -545,6 +734,7 @@ pub fn resolve_struct_field_constraints(
         tir,
         struct_field_constraints: None,
     };
+    let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let mut constraints = HashMap::new();
 
@@ -575,7 +765,7 @@ pub fn resolve_struct_field_constraints(
             let display_name = format!("{}.{}", variant.name, field.name);
 
             for bound in domain_bounds {
-                let rv = eval_expr(&bound.value, const_values, &empty_locals, &ctx)?;
+                let rv = eval_expr(&bound.value, &visible_const_values, &empty_locals, &ctx)?;
                 let si_value = match &rv {
                     RuntimeValue::Scalar(v) => *v,
                     #[expect(
@@ -862,14 +1052,22 @@ fn format_bound_display(
 mod tests {
     use super::*;
     use graphcal_compiler::ir::lower::lower;
+    use graphcal_compiler::syntax::names::DeclName;
     use graphcal_compiler::syntax::parser::Parser;
-    use graphcal_compiler::tir::typed::type_resolve;
+    use graphcal_compiler::tir::typed::{ResolvedDagDependencies, type_resolve};
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
         NamedSource::new("test.gcl", Arc::new(source.to_string()))
     }
 
     fn compile_source(source: &str) -> Result<ExecPlan, GraphcalError> {
+        let (tir, src) = tir_from_source(source);
+        compile(&tir, &src)
+    }
+
+    fn tir_from_source(
+        source: &str,
+    ) -> (graphcal_compiler::tir::typed::TIR, NamedSource<Arc<String>>) {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
@@ -879,7 +1077,7 @@ mod tests {
             graphcal_compiler::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl"))
                 .unwrap();
         let tir = type_resolve(ir, dag_id, &src).unwrap();
-        compile(&tir, &src)
+        (tir, src)
     }
 
     fn scalar(rv: &RuntimeValue) -> f64 {
@@ -947,6 +1145,80 @@ mod tests {
             compile_source("node a: Dimensionless = @b + 1.0;\nnode b: Dimensionless = @a + 1.0;")
                 .unwrap_err();
         assert!(matches!(err, GraphcalError::CyclicDependency { .. }));
+    }
+
+    #[test]
+    fn compile_prefers_resolved_const_deps_when_present() {
+        use std::collections::BTreeSet;
+
+        let (mut tir, src) = tir_from_source(
+            "const node a: Dimensionless = 1.0;\n\
+             const node b: Dimensionless = @a + 1.0;",
+        );
+        let dag_id = tir.root_dag_id.clone();
+        let a = ResolvedName::from_def(dag_id.clone(), DeclName::new("a"));
+        let b = ResolvedName::from_def(dag_id, DeclName::new("b"));
+        let mut resolved = ResolvedDagDependencies::default();
+        resolved.const_deps.insert(a.clone(), BTreeSet::new());
+        resolved.const_deps.insert(b, BTreeSet::from([a]));
+        tir.root_mut().resolved_deps = Some(resolved);
+
+        // If compile-time const ordering still reads the legacy map, this
+        // artificial cycle wins and compilation fails. The HIR sidecar above is
+        // acyclic and must be authoritative when present.
+        tir.root_mut().const_deps.insert(
+            ScopedName::local("a"),
+            BTreeSet::from([ScopedName::local("b")]),
+        );
+        tir.root_mut().const_deps.insert(
+            ScopedName::local("b"),
+            BTreeSet::from([ScopedName::local("a")]),
+        );
+
+        let plan = compile(&tir, &src).unwrap();
+        assert!((scalar(&plan.const_values[&ScopedName::local("b")]) - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn compile_prefers_resolved_runtime_deps_when_present() {
+        use std::collections::BTreeSet;
+
+        let (mut tir, src) = tir_from_source(
+            "node a: Dimensionless = 1.0;\n\
+             node b: Dimensionless = @a + 1.0;",
+        );
+        let dag_id = tir.root_dag_id.clone();
+        let a = ResolvedName::from_def(dag_id.clone(), DeclName::new("a"));
+        let b = ResolvedName::from_def(dag_id, DeclName::new("b"));
+        let mut resolved = ResolvedDagDependencies::default();
+        resolved.runtime_deps.insert(a.clone(), BTreeSet::new());
+        resolved.runtime_deps.insert(b, BTreeSet::from([a]));
+        tir.root_mut().resolved_deps = Some(resolved);
+
+        // If runtime graph construction still reads the legacy map, this
+        // artificial cycle wins and compilation fails. The HIR sidecar above is
+        // acyclic and must be authoritative when present.
+        tir.root_mut().runtime_deps.insert(
+            ScopedName::local("a"),
+            BTreeSet::from([ScopedName::local("b")]),
+        );
+        tir.root_mut().runtime_deps.insert(
+            ScopedName::local("b"),
+            BTreeSet::from([ScopedName::local("a")]),
+        );
+
+        let plan = compile(&tir, &src).unwrap();
+        let a_pos = plan
+            .topo_order
+            .iter()
+            .position(|name| name == &ScopedName::local("a"))
+            .unwrap();
+        let b_pos = plan
+            .topo_order
+            .iter()
+            .position(|name| name == &ScopedName::local("b"))
+            .unwrap();
+        assert!(a_pos < b_pos);
     }
 
     // -----------------------------------------------------------------------

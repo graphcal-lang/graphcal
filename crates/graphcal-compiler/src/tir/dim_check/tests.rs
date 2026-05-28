@@ -1,6 +1,6 @@
 use super::*;
 use crate::syntax::dimension::BaseDimId;
-use crate::syntax::names::ScopedName;
+use crate::syntax::names::{DeclName, ResolvedName, ScopedName, namespace};
 use crate::syntax::parser::Parser;
 
 fn make_src(source: &str) -> NamedSource<Arc<String>> {
@@ -58,6 +58,56 @@ fn compile_inline_dag_bodies_test(
         tir.dags.insert(dag_id, compiled_dag);
     }
     Ok(())
+}
+
+#[test]
+fn cycle_detection_prefers_resolved_dependency_sidecar_when_present() {
+    use std::collections::BTreeSet;
+
+    let source = "const node a: Dimensionless = 1.0;\n\
+                  const node b: Dimensionless = @a + 1.0;\n\
+                  node x: Dimensionless = 1.0;\n\
+                  node y: Dimensionless = @x + 1.0;";
+    let raw_file = Parser::new(source).parse_file().unwrap();
+    let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
+    let src = make_src(source);
+    let ir = crate::ir::lower::lower(&file, &src).unwrap();
+    let dag_id =
+        crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+    let mut tir = crate::tir::typed::type_resolve(ir, dag_id.clone(), &src).unwrap();
+
+    let a = ResolvedName::from_def(dag_id.clone(), DeclName::new("a"));
+    let b = ResolvedName::from_def(dag_id.clone(), DeclName::new("b"));
+    let x = ResolvedName::from_def(dag_id.clone(), DeclName::new("x"));
+    let y = ResolvedName::<namespace::Decl>::from_def(dag_id, DeclName::new("y"));
+
+    let mut resolved = crate::tir::typed::ResolvedDagDependencies::default();
+    resolved.const_deps.insert(a.clone(), BTreeSet::new());
+    resolved.const_deps.insert(b.clone(), BTreeSet::from([a]));
+    resolved.runtime_deps.insert(x.clone(), BTreeSet::new());
+    resolved.runtime_deps.insert(y.clone(), BTreeSet::from([x]));
+
+    let root = tir.root_mut();
+    root.resolved_deps = Some(resolved);
+    root.const_deps.insert(
+        ScopedName::local("a"),
+        BTreeSet::from([ScopedName::local("b")]),
+    );
+    root.const_deps.insert(
+        ScopedName::local("b"),
+        BTreeSet::from([ScopedName::local("a")]),
+    );
+    root.runtime_deps.insert(
+        ScopedName::local("x"),
+        BTreeSet::from([ScopedName::local("y")]),
+    );
+    root.runtime_deps.insert(
+        ScopedName::local("y"),
+        BTreeSet::from([ScopedName::local("x")]),
+    );
+
+    check_dimensions_tir(&tir, &src).unwrap();
 }
 
 #[test]

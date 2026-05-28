@@ -1363,6 +1363,78 @@ fn eval_import_namespace_alias_at_field() {
 }
 
 #[test]
+fn eval_qualified_const_refs_with_colliding_leaf_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub const node shared: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub const node shared: Dimensionless = 3.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         const node combined: Dimensionless = @a.shared + @b.shared;\n\
+         const node shared: Dimensionless = @combined + 1.0;\n\
+         node out: Dimensionless = @shared;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let out = find_value(&result, "out");
+    assert!((out - 6.0).abs() < 1e-10, "out = {out}");
+}
+
+#[test]
+fn eval_qualified_runtime_refs_with_colliding_leaf_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub node shared: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub node shared: Dimensionless = 3.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include collide.a() as a;\n\
+         include collide.b() as b;\n\
+         node total: Dimensionless = @a.shared + @b.shared;\n\
+         node shared: Dimensionless = @total + 1.0;\n\
+         node out: Dimensionless = @shared;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let out = find_value(&result, "out");
+    assert!((out - 6.0).abs() < 1e-10, "out = {out}");
+}
+
+#[test]
 fn eval_inline_dag_include_cross_file_self_import() {
     // Cross-file `include` of a DAG whose body has `import <self>.{...}`
     // (resolved against the dag's parent file). The parent's value must

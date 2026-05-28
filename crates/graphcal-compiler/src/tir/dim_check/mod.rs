@@ -967,31 +967,48 @@ fn detect_decl_cycles(
     use petgraph::algo::toposort;
     use petgraph::graph::DiGraph;
 
-    use crate::syntax::names::ScopedName;
+    use crate::syntax::names::{ResolvedName, ScopedName, namespace};
 
-    fn check<'a>(
+    type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+
+    fn local_resolved_decl_key(
+        dag: &crate::tir::typed::DagTIR,
+        name: &ScopedName,
+        span: crate::syntax::span::Span,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<ResolvedDeclKey, GraphcalError> {
+        dag.resolved_decl_key_for_local(name)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!(
+                    "resolved dependency sidecar contains no local canonical key for declaration `{name}`"
+                ),
+                src: src.clone(),
+                span: span.into(),
+            })
+    }
+
+    fn check_legacy<'a>(
         names_with_spans: impl Iterator<Item = (&'a ScopedName, crate::syntax::span::Span)>,
         deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
-        let mut graph = DiGraph::<String, ()>::new();
-        let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
-        let mut spans: HashMap<String, crate::syntax::span::Span> = HashMap::new();
+        let mut graph = DiGraph::<ScopedName, ()>::new();
+        let mut index_map: HashMap<ScopedName, petgraph::graph::NodeIndex> = HashMap::new();
+        let mut spans: HashMap<ScopedName, crate::syntax::span::Span> = HashMap::new();
         for (name, span) in names_with_spans {
-            let key = name.to_string();
-            let idx = graph.add_node(key.clone());
-            index_map.insert(key.clone(), idx);
-            spans.insert(key, span);
+            let idx = graph.add_node(name.clone());
+            index_map.insert(name.clone(), idx);
+            spans.insert(name.clone(), span);
         }
         if index_map.is_empty() {
             return Ok(());
         }
         for (name, dep_set) in deps {
-            let Some(&to) = index_map.get(name.to_string().as_str()) else {
+            let Some(&to) = index_map.get(name) else {
                 continue;
             };
             for dep in dep_set {
-                if let Some(&from) = index_map.get(dep.to_string().as_str()) {
+                if let Some(&from) = index_map.get(dep) {
                     graph.add_edge(from, to, ());
                 }
             }
@@ -1003,7 +1020,54 @@ fn detect_decl_cycles(
                 .copied()
                 .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
             GraphcalError::CyclicDependency {
-                name: cycle_node.clone(),
+                name: cycle_node.to_string(),
+                src: src.clone(),
+                span: span.into(),
+            }
+        })
+    }
+
+    fn check_resolved<'a>(
+        dag: &crate::tir::typed::DagTIR,
+        names_with_spans: impl Iterator<Item = (&'a ScopedName, crate::syntax::span::Span)>,
+        deps: &HashMap<ResolvedDeclKey, BTreeSet<ResolvedDeclKey>>,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<(), GraphcalError> {
+        let mut graph = DiGraph::<ResolvedDeclKey, ()>::new();
+        let mut index_map: HashMap<ResolvedDeclKey, petgraph::graph::NodeIndex> = HashMap::new();
+        let mut local_name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
+        let mut span_by_key: HashMap<ResolvedDeclKey, crate::syntax::span::Span> = HashMap::new();
+        for (name, span) in names_with_spans {
+            let key = local_resolved_decl_key(dag, name, span, src)?;
+            let idx = graph.add_node(key.clone());
+            index_map.insert(key.clone(), idx);
+            local_name_by_key.insert(key.clone(), name.clone());
+            span_by_key.insert(key, span);
+        }
+        if index_map.is_empty() {
+            return Ok(());
+        }
+        for (name, dep_set) in deps {
+            let Some(&to) = index_map.get(name) else {
+                continue;
+            };
+            for dep in dep_set {
+                if let Some(&from) = index_map.get(dep) {
+                    graph.add_edge(from, to, ());
+                }
+            }
+        }
+        toposort(&graph, None).map(|_| ()).map_err(|cycle| {
+            let cycle_node = &graph[cycle.node_id()];
+            let span = span_by_key
+                .get(cycle_node)
+                .copied()
+                .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
+            let name = local_name_by_key
+                .get(cycle_node)
+                .map_or_else(|| cycle_node.to_string(), |name| name.to_string());
+            GraphcalError::CyclicDependency {
+                name,
                 src: src.clone(),
                 span: span.into(),
             }
@@ -1011,19 +1075,40 @@ fn detect_decl_cycles(
     }
 
     for dag in tir.dags.values() {
-        check(
-            dag.consts.iter().map(|e| (&e.name, e.span)),
-            &dag.const_deps,
-            src,
-        )?;
-        check(
-            dag.params
-                .iter()
-                .map(|e| (&e.name, e.span))
-                .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
-            &dag.runtime_deps,
-            src,
-        )?;
+        match &dag.resolved_deps {
+            Some(deps) => {
+                check_resolved(
+                    dag,
+                    dag.consts.iter().map(|e| (&e.name, e.span)),
+                    &deps.const_deps,
+                    src,
+                )?;
+                check_resolved(
+                    dag,
+                    dag.params
+                        .iter()
+                        .map(|e| (&e.name, e.span))
+                        .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
+                    &deps.runtime_deps,
+                    src,
+                )?;
+            }
+            None => {
+                check_legacy(
+                    dag.consts.iter().map(|e| (&e.name, e.span)),
+                    &dag.const_deps,
+                    src,
+                )?;
+                check_legacy(
+                    dag.params
+                        .iter()
+                        .map(|e| (&e.name, e.span))
+                        .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
+                    &dag.runtime_deps,
+                    src,
+                )?;
+            }
+        }
     }
     Ok(())
 }

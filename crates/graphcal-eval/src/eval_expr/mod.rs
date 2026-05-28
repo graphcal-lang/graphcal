@@ -10,13 +10,15 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, ExprKind, MulDivOp, UnitExpr};
-use graphcal_compiler::syntax::names::{FieldName, ScopedName, StructTypeName};
+use graphcal_compiler::syntax::names::{
+    FieldName, ResolvedName, ScopedName, StructTypeName, namespace,
+};
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{Registry, UnitScale};
-use graphcal_compiler::tir::typed::ResolvedDomainConstraint;
+use graphcal_compiler::tir::typed::{DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint};
 
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
@@ -443,7 +445,88 @@ fn eval_inline_dag_call(
 /// Produces an order in which each const/param/node appears after every one
 /// of its runtime and const dependencies. Cycles are impossible in a
 /// well-typed dag body because compile-time dep collection rejects them.
-fn topo_order_for_dag_body(dag_tir: &graphcal_compiler::tir::typed::DagTIR) -> Vec<ScopedName> {
+fn topo_order_for_dag_body(dag_tir: &DagTIR) -> Vec<ScopedName> {
+    match &dag_tir.resolved_deps {
+        Some(deps) => topo_order_for_dag_body_resolved(dag_tir, deps),
+        None => topo_order_for_dag_body_legacy(dag_tir),
+    }
+}
+
+type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+
+fn topo_order_for_dag_body_resolved(
+    dag_tir: &DagTIR,
+    deps: &ResolvedDagDependencies,
+) -> Vec<ScopedName> {
+    use std::collections::BTreeSet;
+
+    let mut names: Vec<ScopedName> = dag_tir
+        .source_order
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    names.sort();
+
+    let mut key_by_name: HashMap<ScopedName, ResolvedDeclKey> = HashMap::new();
+    let mut name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
+    for name in &names {
+        let Some(key) = dag_tir.resolved_decl_key_for_local(name) else {
+            return topo_order_for_dag_body_legacy(dag_tir);
+        };
+        key_by_name.insert(name.clone(), key.clone());
+        name_by_key.insert(key, name.clone());
+    }
+
+    let mut incoming: HashMap<ResolvedDeclKey, usize> = HashMap::new();
+    let mut outgoing: HashMap<ResolvedDeclKey, Vec<ResolvedDeclKey>> = HashMap::new();
+    for key in key_by_name.values() {
+        incoming.insert(key.clone(), 0);
+        outgoing.insert(key.clone(), Vec::new());
+    }
+
+    let add_edge =
+        |from: &ResolvedDeclKey,
+         to: &ResolvedDeclKey,
+         incoming: &mut HashMap<ResolvedDeclKey, usize>,
+         outgoing: &mut HashMap<ResolvedDeclKey, Vec<ResolvedDeclKey>>| {
+            if let (Some(out), Some(deg)) = (outgoing.get_mut(from), incoming.get_mut(to)) {
+                out.push(to.clone());
+                *deg += 1;
+            }
+        };
+
+    for (name, dep_set) in deps.runtime_deps.iter().chain(deps.const_deps.iter()) {
+        for dep in dep_set {
+            add_edge(dep, name, &mut incoming, &mut outgoing);
+        }
+    }
+
+    let mut ready: BTreeSet<ResolvedDeclKey> = incoming
+        .iter()
+        .filter(|(_, deg)| **deg == 0)
+        .map(|(name, _)| name.clone())
+        .collect();
+    let mut order = Vec::with_capacity(names.len());
+    while let Some(key) = ready.iter().next().cloned() {
+        ready.remove(&key);
+        if let Some(name) = name_by_key.get(&key) {
+            order.push(name.clone());
+        }
+        if let Some(succs) = outgoing.remove(&key) {
+            for succ in succs {
+                if let Some(deg) = incoming.get_mut(&succ) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        ready.insert(succ);
+                    }
+                }
+            }
+        }
+    }
+    order
+}
+
+fn topo_order_for_dag_body_legacy(dag_tir: &DagTIR) -> Vec<ScopedName> {
     use std::collections::BTreeSet;
 
     // All declaration names in a stable order.

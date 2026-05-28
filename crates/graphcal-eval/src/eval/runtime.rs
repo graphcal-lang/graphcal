@@ -185,18 +185,11 @@ pub(super) fn run_eval_loop(
             continue;
         }
 
-        // Check if any dependency has failed
-        let failed_deps: Vec<DeclName> = tir
-            .root()
-            .runtime_deps
-            .get(name)
-            .map(|deps| {
-                deps.iter()
-                    .filter(|dep| errors.contains_key(dep.member()))
-                    .map(|dep| DeclName::new(dep.member()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Check if any local runtime dependency has failed. Module-aware TIRs
+        // carry canonical dependency identities; use those when present so a
+        // qualified imported dependency with the same leaf as a local failure
+        // cannot be mistaken for the local declaration.
+        let failed_deps = failed_runtime_dependencies(tir.root(), name, &errors);
 
         if !failed_deps.is_empty() {
             errors.insert(name_str, NodeError::DependencyFailed { failed_deps });
@@ -250,6 +243,35 @@ pub(super) fn run_eval_loop(
     }
 
     EvalLoopResult { values, errors }
+}
+
+fn failed_runtime_dependencies(
+    dag: &graphcal_compiler::tir::typed::DagTIR,
+    name: &ScopedName,
+    errors: &HashMap<String, NodeError>,
+) -> Vec<DeclName> {
+    match &dag.resolved_deps {
+        Some(resolved_deps) => dag
+            .resolved_decl_key_for_local(name)
+            .and_then(|key| resolved_deps.runtime_deps.get(&key))
+            .map(|deps| {
+                deps.iter()
+                    .filter(|dep| dep.owner() == &dag.dag_id && errors.contains_key(dep.as_str()))
+                    .map(|dep| DeclName::from_atom(dep.atom().clone()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        None => dag
+            .runtime_deps
+            .get(name)
+            .map(|deps| {
+                deps.iter()
+                    .filter(|dep| !dep.is_qualified() && errors.contains_key(dep.member()))
+                    .map(|dep| DeclName::new(dep.member()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
 }
 
 /// Evaluate using TIR + `ExecPlan` (new linear pipeline).
