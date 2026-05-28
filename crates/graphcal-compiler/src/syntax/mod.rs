@@ -6,6 +6,7 @@ pub mod comments;
 pub mod desugar;
 pub mod dimension;
 pub mod lexer;
+pub mod module_resolve;
 pub mod name_resolve;
 pub mod names;
 pub mod non_empty;
