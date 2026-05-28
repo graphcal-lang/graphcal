@@ -3,7 +3,7 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
-use crate::syntax::ast::{Expr, Ident};
+use crate::syntax::ast::{Expr, Ident, IdentPath};
 use crate::syntax::comments::SourceMetadata;
 use crate::syntax::lexer::Lexer;
 use crate::syntax::names::NameAtom;
@@ -454,6 +454,21 @@ impl<'src> Parser<'src> {
             Some((tok, span)) => Err(self.unexpected_token("identifier", &tok.to_string(), span)),
             None => Err(self.unexpected_eof("identifier")),
         }
+    }
+
+    /// Parse a non-empty dot-separated identifier path.
+    pub(super) fn parse_ident_path(&mut self) -> Result<IdentPath, ParseError> {
+        let first = self.parse_any_ident()?;
+        let mut rest = Vec::new();
+        while self.lexer.peek() == Some(&Token::Dot)
+            && self.lexer.peek_second() == Some(&Token::Ident)
+        {
+            self.lexer.next_token(); // consume `.`
+            rest.push(self.parse_any_ident()?);
+        }
+        Ok(IdentPath::new(crate::syntax::non_empty::NonEmpty::new(
+            first, rest,
+        )))
     }
 }
 

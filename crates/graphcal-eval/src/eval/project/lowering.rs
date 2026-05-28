@@ -906,19 +906,19 @@ fn collect_type_expr_names(
     match &type_expr.kind {
         TypeExprKind::DimExpr(dim_expr) => {
             for item in &dim_expr.terms {
-                refs.push(item.term.name.as_str().to_string());
+                refs.push(item.term.name.value.display_path());
             }
         }
         TypeExprKind::Indexed { base, indexes } => {
             collect_type_expr_names(base, refs);
             for idx in indexes {
-                if let IndexExpr::Name(ident) = idx {
-                    refs.push(ident.as_str().to_string());
+                if let IndexExpr::Name(path) = idx {
+                    refs.push(path.value.display_path());
                 }
             }
         }
         TypeExprKind::TypeApplication { name, type_args } => {
-            refs.push(name.as_str().to_string());
+            refs.push(name.value.display_path());
             for arg in type_args {
                 collect_type_expr_names(arg, refs);
             }
@@ -995,13 +995,13 @@ fn check_generics_leakage(
             DeclKind::ConstNode(c) => collect_type_expr_names(&c.type_ann, &mut refs),
             DeclKind::Unit(u) => {
                 for item in &u.dim_type.terms {
-                    refs.push(item.term.name.as_str().to_string());
+                    refs.push(item.term.name.value.display_path());
                 }
             }
             DeclKind::Dimension(d) => {
                 if let Some(def) = &d.definition {
                     for item in &def.terms {
-                        refs.push(item.term.name.as_str().to_string());
+                        refs.push(item.term.name.value.display_path());
                     }
                 }
             }

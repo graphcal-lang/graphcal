@@ -1199,10 +1199,12 @@ impl OverrideReconciliationChecker<'_> {
             TypeExprKind::DimExpr(dim_expr) => {
                 for item in &dim_expr.terms {
                     let name = &item.term.name.value;
-                    if self.type_bindings.contains_key(name.as_str()) {
+                    if let Some(atom) = name.as_bare()
+                        && self.type_bindings.contains_key(atom.as_str())
+                    {
                         return Err(self.orphan_error(
                             "type",
-                            name.as_str(),
+                            atom.as_str(),
                             format!("type `{name}`"),
                         ));
                     }
@@ -1210,9 +1212,14 @@ impl OverrideReconciliationChecker<'_> {
                 Ok(())
             }
             TypeExprKind::TypeApplication { name, type_args } => {
-                let n = name.as_str();
-                if self.type_bindings.contains_key(n) {
-                    return Err(self.orphan_error("type", n, format!("type `{n}`")));
+                if let Some(atom) = name.value.as_bare()
+                    && self.type_bindings.contains_key(atom.as_str())
+                {
+                    return Err(self.orphan_error(
+                        "type",
+                        atom.as_str(),
+                        format!("type `{}`", name.value),
+                    ));
                 }
                 for arg in type_args {
                     self.check_type_expr(arg)?;
@@ -1550,10 +1557,11 @@ pub fn substitute_type_expr_index_names(
     match &mut type_expr.kind {
         TypeExprKind::Indexed { base, indexes } => {
             for idx_expr in indexes.iter_mut() {
-                if let crate::desugar::resolved_ast::IndexExpr::Name(ident) = idx_expr
-                    && let Some(new_name) = bindings.get(ident.as_str())
+                if let crate::desugar::resolved_ast::IndexExpr::Name(path) = idx_expr
+                    && let Some(atom) = path.value.as_bare()
+                    && let Some(new_name) = bindings.get(atom.as_str())
                 {
-                    ident.value = crate::syntax::names::TypeLevelName::new(new_name.as_str());
+                    path.value = crate::syntax::names::NamePath::from(new_name.as_str());
                 }
             }
             substitute_type_expr_index_names(base, bindings);
@@ -1596,9 +1604,10 @@ where
     match &mut type_expr.kind {
         TypeExprKind::DimExpr(dim_expr) => {
             for item in &mut dim_expr.terms {
-                if let Some(new_name) = bindings.get(item.term.name.as_str()) {
-                    item.term.name.value =
-                        crate::syntax::names::TypeLevelName::new(new_name.as_ref());
+                if let Some(atom) = item.term.name.value.as_bare()
+                    && let Some(new_name) = bindings.get(atom.as_str())
+                {
+                    item.term.name.value = crate::syntax::names::NamePath::from(new_name.as_ref());
                 }
             }
         }
@@ -1606,8 +1615,10 @@ where
             substitute_type_expr_nominal_names(base, bindings);
         }
         TypeExprKind::TypeApplication { name, type_args } => {
-            if let Some(new_name) = bindings.get(name.as_str()) {
-                name.value = crate::syntax::names::TypeLevelName::new(new_name.as_ref());
+            if let Some(atom) = name.value.as_bare()
+                && let Some(new_name) = bindings.get(atom.as_str())
+            {
+                name.value = crate::syntax::names::NamePath::from(new_name.as_ref());
             }
             for arg in type_args {
                 substitute_type_expr_nominal_names(arg, bindings);
@@ -1992,7 +2003,9 @@ fn topo_sort_derived_dims<'a>(
             continue;
         };
         for item in &definition.terms {
-            let dep_name = item.term.name.as_str();
+            let Some(dep_name) = item.term.name.value.as_bare().map(|atom| atom.as_str()) else {
+                continue;
+            };
             if dep_name != self_name
                 && let Some(&to) = name_to_idx.get(dep_name)
             {

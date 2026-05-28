@@ -303,11 +303,6 @@ define_name_type! {
 }
 
 define_name_type! {
-    /// Syntax-level type-system reference whose semantic category is resolved later.
-    pub struct TypeLevelName;
-}
-
-define_name_type! {
     /// Name of a struct type (e.g., `"TransferResult"`).
     pub struct StructTypeName;
 }

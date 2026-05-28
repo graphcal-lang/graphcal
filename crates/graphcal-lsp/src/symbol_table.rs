@@ -1441,10 +1441,10 @@ fn collect_type_expr_refs(
             collect_type_expr_refs(base, table);
             for idx in indexes {
                 match idx {
-                    graphcal_compiler::desugar::resolved_ast::IndexExpr::Name(ident) => {
+                    graphcal_compiler::desugar::resolved_ast::IndexExpr::Name(path) => {
                         table.references.push(ReferenceInfo {
-                            span: ident.span,
-                            target: SymbolKey::TopLevel(ident.as_str().to_string()),
+                            span: path.span,
+                            target: SymbolKey::TopLevel(path.value.display_path()),
                         });
                     }
                     graphcal_compiler::desugar::resolved_ast::IndexExpr::NatExpr(_) => {
@@ -1456,7 +1456,7 @@ fn collect_type_expr_refs(
         TypeExprKind::TypeApplication { name, type_args } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
-                target: SymbolKey::TopLevel(name.as_str().to_string()),
+                target: SymbolKey::TopLevel(name.value.display_path()),
             });
             for arg in type_args {
                 collect_type_expr_refs(arg, table);
@@ -1498,7 +1498,7 @@ fn collect_dim_expr_refs(dim_expr: &DimExpr, table: &mut SymbolTable) {
     for item in &dim_expr.terms {
         table.references.push(ReferenceInfo {
             span: item.term.span,
-            target: SymbolKey::TopLevel(item.term.name.as_str().to_string()),
+            target: SymbolKey::TopLevel(item.term.name.value.display_path()),
         });
     }
 }

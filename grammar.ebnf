@@ -580,18 +580,18 @@ type_constraints
 type_constraint
    = ( "min" | "max" ), ":", expr;
 
-(* Generic type application: Vec3<Length, ECI>, Timestamp<UTC> *)
+(* Generic type application: Vec3<Length, ECI>, Timestamp<UTC>, module.Vec3<Length> *)
 type_application
-   = IDENT, "<", type_expr, { ",", type_expr }, [ "," ], ">";
+   = ident_path, "<", type_expr, { ",", type_expr }, [ "," ], ">";
 
-(* Index expressions in indexed types: T[I], T[3], T[N + 1], T[M * N] *)
+(* Index expressions in indexed types: T[I], T[3], T[N + 1], T[M * N], T[module.I] *)
 index_expr_list
    = index_expr, { ",", index_expr };
 
 index_expr
    = nat_add_expr
    | nat_mul_expr
-   | IDENT
+   | ident_path
    | NAT_LITERAL;
 
 nat_add_expr
@@ -613,7 +613,7 @@ dim_expr
    = dim_term, { ( "*" | "/" ), dim_term };
 
 dim_term
-   = IDENT, [ "^", signed_integer ]
+   = ident_path, [ "^", signed_integer ]
    | "(", dim_expr, ")", [ "^", signed_integer ];
 
 signed_integer

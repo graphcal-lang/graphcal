@@ -584,9 +584,9 @@ fn lift_type_expr_kind(
 }
 
 fn lift_type_application_name(
-    name: &Spanned<crate::syntax::names::TypeLevelName>,
+    name: &Spanned<crate::syntax::names::NamePath>,
     _ctx: &ResolveContext,
-) -> Spanned<crate::syntax::names::TypeLevelName> {
+) -> Spanned<crate::syntax::names::NamePath> {
     name.clone()
 }
 

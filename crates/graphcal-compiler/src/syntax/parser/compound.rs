@@ -311,7 +311,7 @@ mod tests {
         match &te.kind {
             crate::syntax::ast::TypeExprKind::DimExpr(dim) => {
                 assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
-                dim.terms[0].term.name.value.as_str()
+                dim.terms[0].term.name.value.leaf_str()
             }
             other => panic!("expected DimExpr, got {other:?}"),
         }

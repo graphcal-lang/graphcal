@@ -1,7 +1,5 @@
-use crate::syntax::ast::{
-    BinOp, Expr, ExprKind, FieldInit, Ident, IdentPath, IndexArg, ModulePath, UnaryOp,
-};
-use crate::syntax::names::{DeclName, FieldName, IndexVariantName, NameAtom, NamePath, ScopedName};
+use crate::syntax::ast::{BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, ModulePath, UnaryOp};
+use crate::syntax::names::{DeclName, FieldName, IndexVariantName, NamePath, ScopedName};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::Token;
 
@@ -560,17 +558,7 @@ impl Parser<'_> {
     /// The legacy brace-form construction `Name { field: val }` is no
     /// longer accepted — constructor calls use parens.
     fn parse_identifier_expr(&mut self) -> Result<Expr, ParseError> {
-        let (_, span) = self.advance()?;
-        let first_ident = crate::syntax::ast::Ident {
-            name: NameAtom::new_unchecked_for_parser(self.lexer.slice_at(span).to_string()),
-            span,
-        };
-        let mut rest = Vec::new();
-        while self.peek_dot_then_ident() {
-            self.lexer.next_token(); // consume '.'
-            rest.push(self.parse_any_ident()?);
-        }
-        let path = IdentPath::new(crate::syntax::non_empty::NonEmpty::new(first_ident, rest));
+        let path = self.parse_ident_path()?;
 
         if self.lexer.peek() == Some(&Token::LParen)
             || (self.lexer.peek() == Some(&Token::Lt) && self.is_type_args_followed_by_paren())
@@ -773,16 +761,6 @@ impl Parser<'_> {
             pos += 1;
         }
         false
-    }
-
-    /// Look ahead to check if the next token is `.` followed by an identifier.
-    ///
-    /// Used to distinguish `IDENT.IDENT` (a qualified-reference candidate) from
-    /// `IDENT.{...}` (a brace-list selector that doesn't appear in expression
-    /// position) and from a stray `.` followed by a non-identifier token.
-    /// This consumes neither the `.` nor the following token.
-    pub(super) fn peek_dot_then_ident(&mut self) -> bool {
-        self.lexer.peek() == Some(&Token::Dot) && self.lexer.peek_second() == Some(&Token::Ident)
     }
 
     /// Look ahead to check if `(` starts tuple-key sugar: `(ident, ident, ...) =>`.

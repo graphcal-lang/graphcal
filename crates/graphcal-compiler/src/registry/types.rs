@@ -385,7 +385,10 @@ fn resolve_dim_expr_impl(
             let Some(acc) = acc else {
                 return Ok(None);
             };
-            let Some(base) = dimensions.get(item.term.name.value.as_str()) else {
+            let Some(atom) = item.term.name.value.as_bare() else {
+                return Ok(None);
+            };
+            let Some(base) = dimensions.get(atom.as_str()) else {
                 return Ok(None);
             };
             let exp = item.term.power.unwrap_or(1);
@@ -997,7 +1000,7 @@ mod tests {
     use crate::registry::prelude::load_prelude;
     use crate::syntax::ast::{DimExprItem, DimTerm, UnitExprItem};
     use crate::syntax::dimension::BaseDimId;
-    use crate::syntax::names::TypeLevelName;
+    use crate::syntax::names::NamePath;
     use crate::syntax::span::Span;
     use crate::syntax::span::Spanned;
 
@@ -1018,8 +1021,8 @@ mod tests {
         b.build()
     }
 
-    fn make_dim_term_name(name: &str) -> Spanned<TypeLevelName> {
-        Spanned::new(TypeLevelName::new(name), Span::new(0, 0))
+    fn make_dim_term_name(name: &str) -> Spanned<NamePath> {
+        Spanned::new(NamePath::from(name), Span::new(0, 0))
     }
 
     /// Create a simple dimension `TypeExpr` from a name string.

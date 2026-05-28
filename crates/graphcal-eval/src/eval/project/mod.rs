@@ -677,8 +677,14 @@ pub(super) fn resolve_field_declared_type(
         && dim_expr.terms.len() == 1
         && dim_expr.terms[0].term.power.is_none()
     {
-        let name = dim_expr.terms[0].term.name.as_str();
-        if let Some(concrete) = generic_sub.get(name) {
+        if let Some(name) = dim_expr.terms[0]
+            .term
+            .name
+            .value
+            .as_bare()
+            .map(|atom| atom.as_str())
+            && let Some(concrete) = generic_sub.get(name)
+        {
             return Some((*concrete).clone());
         }
     }

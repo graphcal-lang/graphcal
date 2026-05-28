@@ -1,6 +1,6 @@
 use core::convert::Infallible;
 
-use crate::syntax::names::TypeLevelName;
+use crate::syntax::names::NamePath;
 use crate::syntax::phase::{Desugared, Phase, Raw, Resolved};
 
 mod common;
@@ -15,27 +15,27 @@ impl Phase for Raw {
     type DeclSugar = RawDeclSugar;
     type ExprSugar = RawExprSugar;
     type RefSugar = UnresolvedRef;
-    type TypeApplicationName = TypeLevelName;
-    type DimTermName = TypeLevelName;
-    type IndexExprName = TypeLevelName;
+    type TypeApplicationName = NamePath;
+    type DimTermName = NamePath;
+    type IndexExprName = NamePath;
 }
 
 impl Phase for Desugared {
     type DeclSugar = Infallible;
     type ExprSugar = Infallible;
     type RefSugar = UnresolvedRef;
-    type TypeApplicationName = TypeLevelName;
-    type DimTermName = TypeLevelName;
-    type IndexExprName = TypeLevelName;
+    type TypeApplicationName = NamePath;
+    type DimTermName = NamePath;
+    type IndexExprName = NamePath;
 }
 
 impl Phase for Resolved {
     type DeclSugar = Infallible;
     type ExprSugar = Infallible;
     type RefSugar = Infallible;
-    type TypeApplicationName = TypeLevelName;
-    type DimTermName = TypeLevelName;
-    type IndexExprName = TypeLevelName;
+    type TypeApplicationName = NamePath;
+    type DimTermName = NamePath;
+    type IndexExprName = NamePath;
 }
 
 #[cfg(test)]

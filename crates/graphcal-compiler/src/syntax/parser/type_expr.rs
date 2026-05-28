@@ -1,6 +1,6 @@
 use crate::syntax::ast::{
-    DimExpr, DimExprItem, DimTerm, Expr, ExprKind, GenericConstraint, GenericParam, IndexExpr,
-    MulDivOp, NatExpr, TypeExpr, TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
+    DimExpr, DimExprItem, DimTerm, Expr, ExprKind, GenericConstraint, GenericParam, IdentPath,
+    IndexExpr, MulDivOp, NatExpr, TypeExpr, TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::syntax::names::{GenericParamName, UnitName};
 use crate::syntax::span::Span;
@@ -8,79 +8,87 @@ use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
 
+#[derive(Debug, Clone)]
+enum IndexExprAtom {
+    Path(IdentPath),
+    Nat(NatExpr),
+}
+
 impl Parser<'_> {
     // --- Type expressions ---
 
     /// Parse a type expression: `Dimensionless` or a dimension expression.
     pub(super) fn parse_type_expr(&mut self) -> Result<TypeExpr, ParseError> {
-        // Parse the base type first
-        let mut base = if let Some((Token::Ident, span)) = self.lexer.peek_with_span() {
-            let text = self.lexer.slice_at(span);
-            if text == "Dimensionless" {
-                let (_, span) = self.advance()?;
-                TypeExpr {
+        // Parse the base type first. Identifier-shaped type references are
+        // parsed as paths before any semantic categorization; bare built-ins
+        // are recognized only when the path has exactly one segment.
+        let mut base = if self.lexer.peek() == Some(&Token::Ident) {
+            let path = self.parse_ident_path()?;
+            let path_span = path.span();
+            let bare_name = path.as_bare().map(|ident| ident.name.as_str().to_string());
+            let leaf_starts_upper = path
+                .leaf()
+                .name
+                .as_str()
+                .starts_with(|c: char| c.is_ascii_uppercase());
+
+            match bare_name.as_deref() {
+                Some("Dimensionless") => TypeExpr {
                     kind: TypeExprKind::Dimensionless,
                     constraints: vec![],
-                    span,
-                }
-            } else if text == "Bool" {
-                let (_, span) = self.advance()?;
-                TypeExpr {
+                    span: path_span,
+                },
+                Some("Bool") => TypeExpr {
                     kind: TypeExprKind::Bool,
                     constraints: vec![],
-                    span,
-                }
-            } else if text == "Int" {
-                let (_, span) = self.advance()?;
-                TypeExpr {
+                    span: path_span,
+                },
+                Some("Int") => TypeExpr {
                     kind: TypeExprKind::Int,
                     constraints: vec![],
-                    span,
+                    span: path_span,
+                },
+                Some("Datetime") => {
+                    if self.lexer.peek() == Some(&Token::Lt) {
+                        // Datetime<TT> — built-in parameterized type, kept in
+                        // its own variant so TIR resolution doesn't need to
+                        // string-match the built-in type name.
+                        let type_args = self.parse_type_arg_list()?;
+                        let end_span = type_args.last().map_or(path_span, |a| a.span);
+                        TypeExpr {
+                            kind: TypeExprKind::DatetimeApplication { type_args },
+                            constraints: vec![],
+                            span: path_span.merge(end_span),
+                        }
+                    } else {
+                        // Bare Datetime (= Datetime<UTC>)
+                        TypeExpr {
+                            kind: TypeExprKind::Datetime,
+                            constraints: vec![],
+                            span: path_span,
+                        }
+                    }
                 }
-            } else if text == "Datetime" {
-                let ident = self.parse_any_ident()?;
-                if self.is_lt_after_ident(ident.span) {
-                    // Datetime<TT> — built-in parameterized type, kept in its
-                    // own variant so TIR resolution doesn't need to string-match.
+                _ if leaf_starts_upper && self.lexer.peek() == Some(&Token::Lt) => {
+                    // Type application: Vec3<Length, ECI> or module.Vec3<Length>.
+                    let name = path.into_spanned_name_path();
                     let type_args = self.parse_type_arg_list()?;
-                    let end_span = type_args.last().map_or(ident.span, |a| a.span);
-                    let span = ident.span.merge(end_span);
+                    let end_span = type_args.last().map_or(name.span, |a| a.span);
+                    let span = name.span.merge(end_span);
                     TypeExpr {
-                        kind: TypeExprKind::DatetimeApplication { type_args },
+                        kind: TypeExprKind::TypeApplication { name, type_args },
                         constraints: vec![],
                         span,
                     }
-                } else {
-                    // Bare Datetime (= Datetime<UTC>)
+                }
+                _ => {
+                    let dim_expr = self.parse_dim_expr_after_first_path(path)?;
+                    let span = dim_expr.span;
                     TypeExpr {
-                        kind: TypeExprKind::Datetime,
+                        kind: TypeExprKind::DimExpr(dim_expr),
                         constraints: vec![],
-                        span: ident.span,
+                        span,
                     }
-                }
-            } else if text.starts_with(|c: char| c.is_ascii_uppercase())
-                && self.is_lt_after_ident(span)
-            {
-                // Type application: Vec3<Length, ECI>
-                let ident = self.parse_any_ident()?;
-                let type_args = self.parse_type_arg_list()?;
-                let end_span = type_args.last().map_or(ident.span, |a| a.span);
-                let span = ident.span.merge(end_span);
-                TypeExpr {
-                    kind: TypeExprKind::TypeApplication {
-                        name: ident.into_spanned(),
-                        type_args,
-                    },
-                    constraints: vec![],
-                    span,
-                }
-            } else {
-                let dim_expr = self.parse_dim_expr()?;
-                let span = dim_expr.span;
-                TypeExpr {
-                    kind: TypeExprKind::DimExpr(dim_expr),
-                    constraints: vec![],
-                    span,
                 }
             }
         } else {
@@ -177,11 +185,26 @@ impl Parser<'_> {
 
     /// Parse a dimension expression: `DimTermOrGroup (("*" | "/") DimTermOrGroup)*`
     ///
-    /// A term-or-group is either `IDENT ("^" INTEGER)?` or `"(" DimExpr ")" ("^" INTEGER)?`.
+    /// A term-or-group is either `ident_path ("^" INTEGER)?` or `"(" DimExpr ")" ("^" INTEGER)?`.
     /// Parenthesized groups are flattened: `(A * B / C)^2` becomes `A^2 * B^2 / C^2`,
     /// and `D / (A * B)` becomes `D / A / B`.
     pub(super) fn parse_dim_expr(&mut self) -> Result<DimExpr, ParseError> {
         let first_items = self.parse_dim_term_or_group()?;
+        self.parse_dim_expr_after_first_items(first_items)
+    }
+
+    fn parse_dim_expr_after_first_path(&mut self, path: IdentPath) -> Result<DimExpr, ParseError> {
+        let term = self.parse_dim_term_after_path(path)?;
+        self.parse_dim_expr_after_first_items(vec![DimExprItem {
+            op: MulDivOp::Mul,
+            term,
+        }])
+    }
+
+    fn parse_dim_expr_after_first_items(
+        &mut self,
+        first_items: Vec<DimExprItem>,
+    ) -> Result<DimExpr, ParseError> {
         let start_span = first_items[0].term.span;
         let mut terms: Vec<DimExprItem> = first_items;
 
@@ -220,7 +243,7 @@ impl Parser<'_> {
 
     /// Parse a single dimension term or a parenthesized group, returning flattened items.
     ///
-    /// - `IDENT ("^" INTEGER)?` → single item with op=Mul
+    /// - `ident_path ("^" INTEGER)?` → single item with op=Mul
     /// - `"(" DimExpr ")" ("^" INTEGER)?` → flattened items with powers multiplied
     fn parse_dim_term_or_group(&mut self) -> Result<Vec<DimExprItem>, ParseError> {
         if self.lexer.peek() == Some(&Token::LParen) {
@@ -257,16 +280,21 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse a single dimension term: `IDENT ("^" INTEGER)?`
+    /// Parse a single dimension term: `ident_path ("^" INTEGER)?`
     fn parse_dim_term(&mut self) -> Result<DimTerm, ParseError> {
-        let name = self.parse_any_ident()?;
-        let mut end_span = name.span;
+        let path = self.parse_ident_path()?;
+        self.parse_dim_term_after_path(path)
+    }
+
+    fn parse_dim_term_after_path(&mut self, path: IdentPath) -> Result<DimTerm, ParseError> {
+        let name_span = path.span();
+        let mut end_span = name_span;
 
         let power = self.parse_term_power(&mut end_span)?;
 
         Ok(DimTerm {
-            span: name.span.merge(end_span),
-            name: name.into_spanned(),
+            span: name_span.merge(end_span),
+            name: path.into_spanned_name_path(),
             power,
         })
     }
@@ -489,31 +517,34 @@ impl Parser<'_> {
     /// Supports names, literals, addition, and multiplication with correct precedence:
     /// `*` binds tighter than `+`, so `M + N * P` parses as `M + (N * P)`.
     ///
-    /// - `Phase` → `IndexExpr::Name` (named index or generic param)
+    /// - `Phase` / `module.Phase` → `IndexExpr::Name` (named index or generic param path)
     /// - `3` → `IndexExpr::NatExpr(NatExpr::Literal(..))` (desugars to `range(3)`)
     /// - `N + 1` → `IndexExpr::NatExpr` (compound Nat expression)
     /// - `M * N` → `IndexExpr::NatExpr` (multiplication)
     /// - `M * N + 1` → `IndexExpr::NatExpr` (mixed arithmetic)
     fn parse_index_expr(&mut self) -> Result<IndexExpr, ParseError> {
         // Parse the first multiplicative term
-        let first_atom = self.parse_nat_atom_in_index()?;
+        let first_atom = self.parse_index_expr_atom()?;
 
         // Check if this is followed by an operator (* or +)
         let has_operator = matches!(self.lexer.peek(), Some(&Token::Star | &Token::Plus));
 
         if !has_operator {
-            // Simple case: bare atom. Desugar appropriately.
+            // Simple case: a path is an index/type-level name; a literal is a
+            // nat expression. Semantic resolution later decides whether the
+            // path names a concrete index or an in-scope generic parameter.
             return match first_atom {
-                NatExpr::Var(ident) => Ok(IndexExpr::Name(ident.into_spanned())),
-                NatExpr::Literal(..) | NatExpr::Add(..) | NatExpr::Mul(..) => {
-                    Ok(IndexExpr::NatExpr(first_atom))
-                }
+                IndexExprAtom::Path(path) => Ok(IndexExpr::Name(path.into_spanned_name_path())),
+                IndexExprAtom::Nat(nat_expr) => Ok(IndexExpr::NatExpr(nat_expr)),
             };
         }
 
-        // Has operators: parse as a full nat additive expression.
-        // First, finish parsing the current multiplicative term.
-        let mut lhs = self.parse_nat_mul_continuation(first_atom)?;
+        // Has operators: parse as a full nat additive expression. Arithmetic
+        // nat expressions currently accept only bare generic Nat variables;
+        // qualified paths remain syntactic names in non-arithmetic index
+        // position and are rejected here rather than flattened.
+        let first_nat = self.index_expr_atom_into_nat_expr(first_atom)?;
+        let mut lhs = self.parse_nat_mul_continuation(first_nat)?;
 
         // Then parse additive continuation: `+ term + term + ...`
         while self.lexer.peek() == Some(&Token::Plus) {
@@ -530,8 +561,9 @@ impl Parser<'_> {
     ///
     /// This is a complete multiplicative term (starts by parsing an atom).
     fn parse_nat_mul_term_in_index(&mut self) -> Result<NatExpr, ParseError> {
-        let atom = self.parse_nat_atom_in_index()?;
-        self.parse_nat_mul_continuation(atom)
+        let atom = self.parse_index_expr_atom()?;
+        let nat_expr = self.index_expr_atom_into_nat_expr(atom)?;
+        self.parse_nat_mul_continuation(nat_expr)
     }
 
     /// Given an already-parsed left-hand atom, continue parsing `* atom * atom ...`
@@ -539,15 +571,16 @@ impl Parser<'_> {
         let mut lhs = first;
         while self.lexer.peek() == Some(&Token::Star) {
             self.lexer.next_token(); // consume '*'
-            let rhs = self.parse_nat_atom_in_index()?;
+            let rhs_atom = self.parse_index_expr_atom()?;
+            let rhs = self.index_expr_atom_into_nat_expr(rhs_atom)?;
             let full_span = lhs.span().merge(rhs.span());
             lhs = NatExpr::Mul(Box::new(lhs), Box::new(rhs), full_span);
         }
         Ok(lhs)
     }
 
-    /// Parse a single nat atom in index position (literal or variable).
-    fn parse_nat_atom_in_index(&mut self) -> Result<NatExpr, ParseError> {
+    /// Parse a single index-expression atom: a literal or identifier path.
+    fn parse_index_expr_atom(&mut self) -> Result<IndexExprAtom, ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
@@ -557,23 +590,13 @@ impl Parser<'_> {
                     src: self.named_source(),
                     span: span.into(),
                 })?;
-                Ok(NatExpr::Literal(value, span))
+                Ok(IndexExprAtom::Nat(NatExpr::Literal(value, span)))
             }
-            Some(
-                Token::Ident
-                | Token::Linspace
-                | Token::Step
-                | Token::Scan
-                | Token::Unfold
-                | Token::Index,
-            ) => {
-                let ident = self.parse_any_ident()?;
-                Ok(NatExpr::Var(ident))
-            }
+            Some(Token::Ident) => Ok(IndexExprAtom::Path(self.parse_ident_path()?)),
             _ => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token(
-                    "integer literal or Nat parameter name",
+                    "integer literal or type-level name path",
                     &tok.to_string(),
                     span,
                 ))
@@ -581,15 +604,18 @@ impl Parser<'_> {
         }
     }
 
-    /// Check if `<` follows the current ident token (used for type application detection).
-    /// Scans the raw source after the ident span to find `<` (skipping whitespace).
-    pub(super) fn is_lt_after_ident(&self, ident_span: crate::syntax::span::Span) -> bool {
-        let bytes = self.source.as_bytes();
-        let mut pos = ident_span.offset() + ident_span.len();
-        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-            pos += 1;
+    fn index_expr_atom_into_nat_expr(&self, atom: IndexExprAtom) -> Result<NatExpr, ParseError> {
+        match atom {
+            IndexExprAtom::Nat(nat_expr) => Ok(nat_expr),
+            IndexExprAtom::Path(path) => match path.into_bare() {
+                Ok(ident) => Ok(NatExpr::Var(ident)),
+                Err(path) => Err(self.unexpected_token(
+                    "bare Nat parameter name in arithmetic index expression",
+                    &path.display_path(),
+                    path.span(),
+                )),
+            },
         }
-        pos < bytes.len() && bytes[pos] == b'<'
     }
 
     /// Parse generic parameters: `<D: Dim, E: Dim>`.
@@ -648,7 +674,7 @@ mod tests {
         match &te.kind {
             TypeExprKind::DimExpr(dim) => {
                 assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
-                dim.terms[0].term.name.value.as_str()
+                dim.terms[0].term.name.value.leaf_str()
             }
             other => panic!("expected DimExpr, got {other:?}"),
         }
@@ -661,7 +687,7 @@ mod tests {
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
                 TypeExprKind::TypeApplication { name, type_args } => {
-                    assert_eq!(name.value.as_str(), "Vec3");
+                    assert_eq!(name.value.leaf_str(), "Vec3");
                     assert_eq!(type_args.len(), 2);
                     assert_eq!(dim_expr_name(&type_args[0]), "Length");
                     assert_eq!(dim_expr_name(&type_args[1]), "ECI");
@@ -679,11 +705,68 @@ mod tests {
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
                 TypeExprKind::TypeApplication { name, type_args } => {
-                    assert_eq!(name.value.as_str(), "Timestamp");
+                    assert_eq!(name.value.leaf_str(), "Timestamp");
                     assert_eq!(type_args.len(), 1);
                     assert_eq!(dim_expr_name(&type_args[0]), "UTC");
                 }
                 other => panic!("expected TypeApplication, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_type_application_preserves_name_path() {
+        let source = "param v: math.Vec3<Length> = 1.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::TypeApplication { name, type_args } => {
+                    assert_eq!(name.value.display_path(), "math.Vec3");
+                    assert_eq!(name.value.leaf_str(), "Vec3");
+                    assert_eq!(type_args.len(), 1);
+                }
+                other => panic!("expected TypeApplication, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_dim_term_preserves_name_path() {
+        let source = "param v: physics.Length / Time = 1.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::DimExpr(dim_expr) => {
+                    assert_eq!(dim_expr.terms.len(), 2);
+                    assert_eq!(
+                        dim_expr.terms[0].term.name.value.display_path(),
+                        "physics.Length"
+                    );
+                    assert_eq!(dim_expr.terms[1].term.name.value.display_path(), "Time");
+                }
+                other => panic!("expected DimExpr, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_index_expr_preserves_name_path() {
+        let source = "param xs: Dimensionless[mesh.Row] = 0.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.type_ann.kind {
+                TypeExprKind::Indexed { indexes, .. } => {
+                    assert_eq!(indexes.len(), 1);
+                    let IndexExpr::Name(index_path) = &indexes[0] else {
+                        panic!("expected Name")
+                    };
+                    assert_eq!(index_path.value.display_path(), "mesh.Row");
+                    assert_eq!(index_path.value.leaf_str(), "Row");
+                }
+                other => panic!("expected Indexed type, got {other:?}"),
             },
             _ => panic!("expected param"),
         }
@@ -750,7 +833,7 @@ mod tests {
                         let IndexExpr::Name(ident) = &indexes[0] else {
                             panic!("expected Name")
                         };
-                        assert_eq!(ident.value, "Maneuver");
+                        assert_eq!(ident.value.leaf_str(), "Maneuver");
                     }
                     other => panic!("expected Indexed type, got {other:?}"),
                 }
@@ -770,11 +853,11 @@ mod tests {
                     let IndexExpr::Name(ident) = &indexes[0] else {
                         panic!("expected Name")
                     };
-                    assert_eq!(ident.value, "Row");
+                    assert_eq!(ident.value.leaf_str(), "Row");
                     let IndexExpr::Name(ident) = &indexes[1] else {
                         panic!("expected Name")
                     };
-                    assert_eq!(ident.value, "Col");
+                    assert_eq!(ident.value.leaf_str(), "Col");
                 }
                 other => panic!("expected Indexed type, got {other:?}"),
             },
@@ -857,7 +940,7 @@ mod tests {
                     let IndexExpr::Name(ident) = &indexes[0] else {
                         panic!("expected Name")
                     };
-                    assert_eq!(ident.value, "Maneuver");
+                    assert_eq!(ident.value.leaf_str(), "Maneuver");
                 }
                 other => panic!("expected Indexed type, got {other:?}"),
             },

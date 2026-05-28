@@ -216,6 +216,19 @@ impl IdentPath {
         }
     }
 
+    /// Convert this spanned syntax path into a span-less [`NamePath`].
+    #[must_use]
+    pub fn into_name_path(self) -> NamePath {
+        NamePath::new(self.segments.map(|ident| ident.name))
+    }
+
+    /// Convert this syntax path into a [`NamePath`] paired with the path's full span.
+    #[must_use]
+    pub fn into_spanned_name_path(self) -> Spanned<NamePath> {
+        let span = self.span();
+        Spanned::new(self.into_name_path(), span)
+    }
+
     /// Human-readable path string for diagnostics and formatting boundaries.
     #[must_use]
     pub fn display_path(&self) -> String {
@@ -299,12 +312,13 @@ pub struct DomainBound<P: Phase = Raw> {
 /// A type expression (dimension annotation on declarations).
 /// An expression in index position of an indexed type.
 ///
-/// In `Velocity[Maneuver]`, the `Maneuver` is an `IndexExpr::Name`.
+/// In `Velocity[Maneuver]` or `Velocity[module.Maneuver]`, the index path is
+/// an `IndexExpr::Name`.
 /// In `Dimensionless[3, 4]`, `3` and `4` are `IndexExpr::NatExpr(NatExpr::Literal(..))`.
 /// In `D[N + 1]`, `N + 1` is an `IndexExpr::NatExpr`.
 #[derive(Debug, Clone)]
 pub enum IndexExpr<P: Phase = Raw> {
-    /// A named index or generic parameter: `Maneuver`, `I`, `N`
+    /// A named index or generic parameter path: `Maneuver`, `I`, `N`, `module.Maneuver`
     Name(Spanned<P::IndexExprName>),
     /// A type-level natural-number expression in index position: `3`, `N + 1`, `M + N`.
     NatExpr(NatExpr),
@@ -380,7 +394,7 @@ pub struct DimExprItem<P: Phase = Raw> {
     pub term: DimTerm<P>,
 }
 
-/// A single dimension term: `IDENT` or `IDENT ^ INTEGER`
+/// A single dimension term: `ident_path` or `ident_path ^ INTEGER`
 #[derive(Debug, Clone)]
 pub struct DimTerm<P: Phase = Raw> {
     pub name: Spanned<P::DimTermName>,

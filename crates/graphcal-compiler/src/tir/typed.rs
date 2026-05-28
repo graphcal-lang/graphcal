@@ -1,6 +1,6 @@
 //! Typed Intermediate Representation (TIR) — type annotations resolved to semantic types.
 //!
-//! The TIR layer resolves ambiguous syntax-level type names (`TypeLevelName` in
+//! The TIR layer resolves ambiguous syntax-level type paths (`NamePath` in
 //! `DimTerm::name`, type applications, and `TypeExprKind::Indexed::indexes`) into
 //! concrete dimensions, struct types, generic dimension parameters, or generic
 //! index parameters.
@@ -12,7 +12,7 @@ use miette::NamedSource;
 
 use crate::desugar::resolved_ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::syntax::dimension::{Dimension, Rational};
-use crate::syntax::names::{DimName, GenericParamName, IndexName, StructTypeName};
+use crate::syntax::names::{DimName, GenericParamName, IndexName, NamePath, StructTypeName};
 use crate::syntax::span::Span;
 
 use crate::ir::lower::IR;
@@ -1809,6 +1809,20 @@ fn expect_scalar_from_inferred(
 // Type resolution (single TypeExpr)
 // ---------------------------------------------------------------------------
 
+fn require_local_type_level_path<'a>(
+    path: &'a NamePath,
+    span: Span,
+    src: &NamedSource<Arc<String>>,
+) -> Result<&'a str, GraphcalError> {
+    path.as_bare()
+        .map(|atom| atom.as_str())
+        .ok_or_else(|| GraphcalError::EvalError {
+            message: format!("qualified type-level reference `{path}` is not supported yet"),
+            src: src.clone(),
+            span: span.into(),
+        })
+}
+
 /// Resolve a `TypeExpr` into a `ResolvedTypeExpr`.
 ///
 /// `dim_params` and `index_params` are the generic parameters in scope (empty
@@ -1845,24 +1859,24 @@ pub fn resolve_type_expr(
                         let form = normalize_nat_expr(nat_expr, nat_params, src)?;
                         resolved_indexes.push(ResolvedIndex::NatExpr(form, nat_expr.span()));
                     }
-                    crate::desugar::resolved_ast::IndexExpr::Name(ident) => {
-                        let text = ident.value.as_str();
+                    crate::desugar::resolved_ast::IndexExpr::Name(path) => {
+                        let text = require_local_type_level_path(&path.value, path.span, src)?;
                         if let Some(gp) = nat_params.iter().find(|p| p.as_str() == text) {
                             resolved_indexes.push(ResolvedIndex::NatExpr(
                                 NatPolyForm::from_var(gp.clone()),
-                                ident.span,
+                                path.span,
                             ));
                         } else if let Some(gp) = index_params.iter().find(|p| p.as_str() == text) {
                             resolved_indexes
-                                .push(ResolvedIndex::GenericParam(gp.clone(), ident.span));
+                                .push(ResolvedIndex::GenericParam(gp.clone(), path.span));
                         } else if registry.indexes.get_index(text).is_some() {
                             resolved_indexes
-                                .push(ResolvedIndex::Concrete(IndexName::new(text), ident.span));
+                                .push(ResolvedIndex::Concrete(IndexName::new(text), path.span));
                         } else {
                             return Err(GraphcalError::UnknownIndex {
                                 name: IndexName::new(text),
                                 src: src.clone(),
-                                span: ident.span.into(),
+                                span: path.span.into(),
                             });
                         }
                     }
@@ -1906,7 +1920,7 @@ fn resolve_dim_expr(
     // a scalar dimension expression.
     if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() {
         let term = &dim_expr.terms[0].term;
-        let text = term.name.value.as_str();
+        let text = require_local_type_level_path(&term.name.value, term.name.span, src)?;
         if let Some(idx_def) = registry.indexes.get_index(text)
             && matches!(
                 idx_def.kind,
@@ -1928,9 +1942,11 @@ fn resolve_dim_expr(
     }
 
     let has_generic = dim_expr.terms.iter().any(|item| {
-        dim_params
-            .iter()
-            .any(|p| p.as_str() == item.term.name.value.as_str())
+        item.term
+            .name
+            .value
+            .as_bare()
+            .is_some_and(|atom| dim_params.iter().any(|p| p.as_str() == atom.as_str()))
     });
 
     if has_generic {
@@ -1974,7 +1990,7 @@ fn resolve_dim_term_in_generic_expr(
 ) -> Result<ResolvedDimTerm, GraphcalError> {
     let power = item.term.power.unwrap_or(1);
     let op = item.op;
-    let text = item.term.name.value.as_str();
+    let text = require_local_type_level_path(&item.term.name.value, item.term.name.span, src)?;
     dim_params.iter().find(|p| p.as_str() == text).map_or_else(
         || {
             concrete_dimension_for_term(item, registry, src).map(|dim| ResolvedDimTerm::Concrete {
@@ -1999,7 +2015,7 @@ fn concrete_dimension_for_term(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
-    let text = item.term.name.value.as_str();
+    let text = require_local_type_level_path(&item.term.name.value, item.term.name.span, src)?;
     registry
         .dimensions
         .get_dimension(text)
@@ -2038,14 +2054,14 @@ fn resolve_datetime_application(
         TypeExprKind::DimExpr(dim_expr)
             if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() =>
         {
-            let name = &dim_expr.terms[0].term.name.value;
-            name.as_str().parse::<TimeScale>().map_or_else(
+            let term = &dim_expr.terms[0].term;
+            let name = require_local_type_level_path(&term.name.value, term.name.span, src)?;
+            name.parse::<TimeScale>().map_or_else(
                 |_| {
                     Err(GraphcalError::EvalError {
                         message: format!(
-                            "unknown time scale `{}`; \
-                         expected one of: UTC, TAI, TT, TDB, ET, GPST, GST, BDT",
-                            name.as_str()
+                            "unknown time scale `{name}`; \
+                         expected one of: UTC, TAI, TT, TDB, ET, GPST, GST, BDT"
                         ),
                         src: src.clone(),
                         span: arg.span.into(),
@@ -2074,7 +2090,7 @@ fn resolve_datetime_application(
 )]
 fn resolve_type_application(
     type_ann: &TypeExpr,
-    name: &crate::syntax::span::Spanned<crate::syntax::names::TypeLevelName>,
+    name: &crate::syntax::span::Spanned<NamePath>,
     type_args: &[TypeExpr],
     registry: &Registry,
     dim_params: &[GenericParamName],
@@ -2082,7 +2098,8 @@ fn resolve_type_application(
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let type_name = StructTypeName::new(name.value.as_str());
+    let name_text = require_local_type_level_path(&name.value, name.span, src)?;
+    let type_name = StructTypeName::new(name_text);
 
     let type_def = registry.types.get_type(type_name.as_str()).ok_or_else(|| {
         GraphcalError::UnknownStructType {
@@ -2165,9 +2182,9 @@ mod tests {
 
     fn make_dim_term_name(
         name: &str,
-    ) -> crate::syntax::span::Spanned<crate::syntax::names::TypeLevelName> {
+    ) -> crate::syntax::span::Spanned<crate::syntax::names::NamePath> {
         crate::syntax::span::Spanned::new(
-            crate::syntax::names::TypeLevelName::new(name),
+            crate::syntax::names::NamePath::from(name),
             Span::new(0, 0),
         )
     }

@@ -61,13 +61,13 @@ pub trait Phase: 'static + sealed::Sealed {
     /// statically known to have eliminated every unresolved reference.
     type RefSugar: Debug + Clone;
 
-    /// Phase-specific name carried by `TypeExprKind::TypeApplication`.
+    /// Phase-specific syntactic path carried by `TypeExprKind::TypeApplication`.
     type TypeApplicationName: Debug + Clone;
 
-    /// Phase-specific name carried by dimension terms in type expressions.
+    /// Phase-specific syntactic path carried by dimension terms in type expressions.
     type DimTermName: Debug + Clone;
 
-    /// Phase-specific name carried by `IndexExpr::Name`.
+    /// Phase-specific syntactic path carried by `IndexExpr::Name`.
     type IndexExprName: Debug + Clone;
 }
 
