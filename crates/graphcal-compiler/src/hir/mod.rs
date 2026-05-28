@@ -25,8 +25,13 @@
 //! next migration step; downstream IR/TIR/eval consumers should then move to HIR
 //! rather than adding more compatibility lookups to the syntax AST.
 
+pub mod lower;
 pub mod types;
 
+pub use lower::{
+    GenericParamBinding, GenericScope, HirLowerError, TypeLoweringContext, lower_generic_params,
+    lower_type_expr,
+};
 pub use types::{
     BuiltinType, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericParamDef, GenericParamId,
     GenericParamOwner, IndexRef, NatExpr, TypeExpr, TypeExprKind,
