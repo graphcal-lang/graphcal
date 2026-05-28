@@ -163,169 +163,329 @@ impl TryFrom<&str> for NameAtom {
     }
 }
 
-/// Macro to define a namespace-specific wrapper around [`NameAtom`] with
-/// standard trait impls.
-macro_rules! define_name_type {
-    (
-        $(#[$meta:meta])*
-        $vis:vis struct $Name:ident;
-    ) => {
-        $(#[$meta])*
-        #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        $vis struct $Name(NameAtom);
+use std::marker::PhantomData;
 
-        impl std::fmt::Debug for $Name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                // Delegate to the inner String's Debug so that Vec<$Name> formats
-                // as ["foo", "bar"] rather than [TypeName("foo"), TypeName("bar")].
-                std::fmt::Debug::fmt(&self.0, f)
-            }
-        }
-
-        impl $Name {
-            /// Create a new leaf name from a string.
-            ///
-            /// # Panics
-            ///
-            /// Panics if the string is empty or contains `.`. Use
-            /// [`Self::try_new`] when validating external input.
-            #[must_use]
-            pub fn new(s: impl Into<String>) -> Self {
-                Self::try_new(s).unwrap_or_else(|err| {
-                    panic!("invalid {} leaf name: {err}", stringify!($Name));
-                })
-            }
-
-            /// Try to create a new leaf name from a string.
-            ///
-            /// # Errors
-            ///
-            /// Returns [`NameAtomError`] when the string is empty or contains
-            /// a path separator.
-            pub fn try_new(s: impl Into<String>) -> Result<Self, NameAtomError> {
-                NameAtom::parse(s).map(Self)
-            }
-
-            /// Create this namespace-specific name from an existing atom.
-            #[must_use]
-            pub const fn from_atom(atom: NameAtom) -> Self {
-                Self(atom)
-            }
-
-            /// Get the underlying atom.
-            #[must_use]
-            pub const fn atom(&self) -> &NameAtom {
-                &self.0
-            }
-
-            /// Get the underlying string slice.
-            #[must_use]
-            pub fn as_str(&self) -> &str {
-                self.0.as_str()
-            }
-
-            /// Consume and return the inner atom.
-            #[must_use]
-            pub fn into_atom(self) -> NameAtom {
-                self.0
-            }
-
-            /// Consume and return the inner `String`.
-            #[must_use]
-            pub fn into_inner(self) -> String {
-                self.0.into_inner()
-            }
-        }
-
-        impl std::fmt::Display for $Name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(self.as_str())
-            }
-        }
-
-        impl PartialEq<str> for $Name {
-            fn eq(&self, other: &str) -> bool {
-                self.as_str() == other
-            }
-        }
-
-        impl PartialEq<&str> for $Name {
-            fn eq(&self, other: &&str) -> bool {
-                self.as_str() == *other
-            }
-        }
-
-        impl AsRef<str> for $Name {
-            fn as_ref(&self) -> &str {
-                self.as_str()
-            }
-        }
-
-        impl std::borrow::Borrow<str> for $Name {
-            fn borrow(&self) -> &str {
-                self.as_str()
-            }
-        }
-
-        impl From<NameAtom> for $Name {
-            fn from(atom: NameAtom) -> Self {
-                Self::from_atom(atom)
-            }
-        }
-
-        impl From<String> for $Name {
-            fn from(s: String) -> Self {
-                Self::new(s)
-            }
-        }
-
-        impl From<&str> for $Name {
-            fn from(s: &str) -> Self {
-                Self::new(s)
-            }
-        }
-    };
+/// Marker trait for a semantic name namespace.
+///
+/// Namespaces are zero-sized marker types used by [`NameDef`] and
+/// [`ResolvedName`] to make it impossible to mix, for example, a function name
+/// with an index name. The marker's [`NameNamespace::DISPLAY_NAME`] is used
+/// only for diagnostics and panic messages at construction boundaries.
+pub trait NameNamespace:
+    std::fmt::Debug + Clone + Copy + PartialEq + Eq + std::hash::Hash + PartialOrd + Ord + 'static
+{
+    /// Human-readable alias/newtype name for this namespace.
+    const DISPLAY_NAME: &'static str;
 }
 
-define_name_type! {
-    /// Name of a const, param, or node declaration (e.g., `"G0"`, `"dry_mass"`, `"dv_total"`).
-    pub struct DeclName;
+/// Semantic name namespace markers.
+///
+/// These are marker types only; values of these types are never constructed.
+pub mod namespace {
+    use super::NameNamespace;
+
+    macro_rules! define_namespace {
+        ($($(#[$meta:meta])* $Name:ident => $display:literal;)+) => {
+            $(
+                $(#[$meta])*
+                #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+                pub enum $Name {}
+
+                impl NameNamespace for $Name {
+                    const DISPLAY_NAME: &'static str = $display;
+                }
+            )+
+        };
+    }
+
+    define_namespace! {
+        /// Const/param/node declaration namespace.
+        Decl => "DeclName";
+        /// Dimension namespace.
+        Dim => "DimName";
+        /// Unit namespace.
+        Unit => "UnitName";
+        /// Struct/tagged-union type namespace.
+        StructType => "StructTypeName";
+        /// Index type namespace.
+        Index => "IndexName";
+        /// Function namespace.
+        Fn => "FnName";
+        /// Struct/constructor field namespace.
+        Field => "FieldName";
+        /// Index variant namespace.
+        IndexVariant => "IndexVariantName";
+        /// Tagged-union constructor namespace.
+        Constructor => "ConstructorName";
+        /// Generic parameter namespace.
+        GenericParam => "GenericParamName";
+        /// Built-in dimension-variable namespace.
+        DimVar => "DimVarName";
+        /// Local expression-binding namespace.
+        Local => "LocalName";
+        /// Module alias namespace.
+        ModuleAlias => "ModuleAliasName";
+        /// Plot/figure/layer property namespace.
+        PlotProperty => "PlotPropertyName";
+    }
 }
 
-define_name_type! {
-    /// Name of a dimension (e.g., `"Length"`, `"Velocity"`).
-    pub struct DimName;
+/// A definition-site leaf name in a semantic namespace.
+///
+/// `NameDef<Ns>` is intentionally a single [`NameAtom`]. It is suitable for
+/// names introduced by syntax positions whose namespace is fixed by the
+/// grammar, such as `type Foo`, `index Phase`, or `unit m`. Reference positions
+/// that may be qualified should stay as [`NamePath`](crate::syntax::names::NamePath)
+/// / [`IdentPath`](crate::syntax::ast::IdentPath) until module-aware
+/// resolution can produce a [`ResolvedName`].
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NameDef<Ns: NameNamespace> {
+    atom: NameAtom,
+    _ns: PhantomData<Ns>,
 }
 
-define_name_type! {
-    /// Name of a unit (e.g., `"m"`, `"km"`, `"hour"`).
-    pub struct UnitName;
+impl<Ns: NameNamespace> std::fmt::Debug for NameDef<Ns> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Delegate to the inner string's Debug so that Vec<DeclName> formats
+        // as ["foo", "bar"] rather than [NameDef { ... }].
+        std::fmt::Debug::fmt(&self.atom, f)
+    }
 }
 
-define_name_type! {
-    /// Name of a struct type (e.g., `"TransferResult"`).
-    pub struct StructTypeName;
+impl<Ns: NameNamespace> NameDef<Ns> {
+    /// Create a new leaf name from a string.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the string is empty or contains `.`. Use [`Self::try_new`]
+    /// when validating external input.
+    #[must_use]
+    pub fn new(s: impl Into<String>) -> Self {
+        Self::try_new(s).unwrap_or_else(|err| {
+            panic!("invalid {} leaf name: {err}", Ns::DISPLAY_NAME);
+        })
+    }
+
+    /// Try to create a new leaf name from a string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NameAtomError`] when the string is empty or contains a path
+    /// separator.
+    pub fn try_new(s: impl Into<String>) -> Result<Self, NameAtomError> {
+        NameAtom::parse(s).map(Self::from_atom)
+    }
+
+    /// Create this namespace-specific name from an existing atom.
+    #[must_use]
+    pub const fn from_atom(atom: NameAtom) -> Self {
+        Self {
+            atom,
+            _ns: PhantomData,
+        }
+    }
+
+    /// Get the underlying atom.
+    #[must_use]
+    pub const fn atom(&self) -> &NameAtom {
+        &self.atom
+    }
+
+    /// Get the underlying string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.atom.as_str()
+    }
+
+    /// Consume and return the inner atom.
+    #[must_use]
+    pub fn into_atom(self) -> NameAtom {
+        self.atom
+    }
+
+    /// Consume and return the inner `String`.
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.atom.into_inner()
+    }
 }
 
-define_name_type! {
-    /// Name of an index type (e.g., `"Maneuver"`).
-    pub struct IndexName;
+impl<Ns: NameNamespace> std::fmt::Display for NameDef<Ns> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
-define_name_type! {
-    /// Name of a function (e.g., `"sqrt"`, `"lerp"`).
-    pub struct FnName;
+impl<Ns: NameNamespace> PartialEq<str> for NameDef<Ns> {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
 }
 
-define_name_type! {
-    /// Name of a struct field (e.g., `"dv1"`, `"altitude"`).
-    pub struct FieldName;
+impl<Ns: NameNamespace> PartialEq<&str> for NameDef<Ns> {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
 }
 
-define_name_type! {
-    /// Name of an index variant (e.g., `"Departure"`, `"Correction"`).
-    pub struct IndexVariantName;
+impl<Ns: NameNamespace> AsRef<str> for NameDef<Ns> {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
+
+impl<Ns: NameNamespace> std::borrow::Borrow<str> for NameDef<Ns> {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl<Ns: NameNamespace> From<NameAtom> for NameDef<Ns> {
+    fn from(atom: NameAtom) -> Self {
+        Self::from_atom(atom)
+    }
+}
+
+impl<Ns: NameNamespace> From<String> for NameDef<Ns> {
+    fn from(s: String) -> Self {
+        Self::new(s)
+    }
+}
+
+impl<Ns: NameNamespace> From<&str> for NameDef<Ns> {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+/// A fully resolved reference in a semantic namespace.
+///
+/// Unlike [`NamePath`], this no longer stores source qualifier text. The
+/// `owner` is the canonical DAG/module identity chosen by module-aware
+/// resolution; `name` is the declaration leaf inside that owner.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ResolvedName<Ns: NameNamespace> {
+    owner: crate::dag_id::DagId,
+    name: NameAtom,
+    _ns: PhantomData<Ns>,
+}
+
+impl<Ns: NameNamespace> std::fmt::Debug for ResolvedName<Ns> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedName")
+            .field("namespace", &Ns::DISPLAY_NAME)
+            .field("owner", &self.owner)
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
+impl<Ns: NameNamespace> ResolvedName<Ns> {
+    /// Construct a resolved name from its canonical owner and leaf atom.
+    #[must_use]
+    pub const fn new(owner: crate::dag_id::DagId, name: NameAtom) -> Self {
+        Self {
+            owner,
+            name,
+            _ns: PhantomData,
+        }
+    }
+
+    /// Resolve an existing definition-site name into a canonical owner.
+    #[must_use]
+    pub fn from_def(owner: crate::dag_id::DagId, name: NameDef<Ns>) -> Self {
+        Self::new(owner, name.into_atom())
+    }
+
+    /// The canonical DAG/module that owns this name.
+    #[must_use]
+    pub const fn owner(&self) -> &crate::dag_id::DagId {
+        &self.owner
+    }
+
+    /// The leaf atom inside [`Self::owner`].
+    #[must_use]
+    pub const fn atom(&self) -> &NameAtom {
+        &self.name
+    }
+
+    /// The leaf string inside [`Self::owner`].
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.name.as_str()
+    }
+
+    /// Return a definition-site name with the same leaf namespace.
+    ///
+    /// This deliberately drops the owner and should only be used at temporary
+    /// legacy boundaries that still key local data by leaf name.
+    #[must_use]
+    pub fn to_def_name(&self) -> NameDef<Ns> {
+        NameDef::from_atom(self.name.clone())
+    }
+
+    /// Consume this value and return the canonical owner plus leaf atom.
+    #[must_use]
+    pub fn into_parts(self) -> (crate::dag_id::DagId, NameAtom) {
+        (self.owner, self.name)
+    }
+}
+
+impl<Ns: NameNamespace> std::fmt::Display for ResolvedName<Ns> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.owner, self.name)
+    }
+}
+
+/// Name of a const, param, or node declaration (e.g., `"G0"`, `"dry_mass"`, `"dv_total"`).
+pub type DeclName = NameDef<namespace::Decl>;
+
+/// Name of a dimension (e.g., `"Length"`, `"Velocity"`).
+pub type DimName = NameDef<namespace::Dim>;
+
+/// Name of a unit (e.g., `"m"`, `"km"`, `"hour"`).
+pub type UnitName = NameDef<namespace::Unit>;
+
+/// Name of a struct type (e.g., `"TransferResult"`).
+pub type StructTypeName = NameDef<namespace::StructType>;
+
+/// Name of an index type (e.g., `"Maneuver"`).
+pub type IndexName = NameDef<namespace::Index>;
+
+/// Name of a function (e.g., `"sqrt"`, `"lerp"`).
+pub type FnName = NameDef<namespace::Fn>;
+
+/// Name of a struct field (e.g., `"dv1"`, `"altitude"`).
+pub type FieldName = NameDef<namespace::Field>;
+
+/// Name of an index variant (e.g., `"Departure"`, `"Correction"`).
+pub type IndexVariantName = NameDef<namespace::IndexVariant>;
+
+/// Name of a tagged-union constructor (e.g., `"LowThrust"`, `"Coast"`).
+///
+/// Constructors live in a *separate namespace* from types: a single lexeme can
+/// name both a type and a constructor (and will, once the single-variant sugar
+/// lands). Keeping these distinct marker namespaces enforces the boundary at
+/// the type level.
+pub type ConstructorName = NameDef<namespace::Constructor>;
+
+/// Name of a generic type parameter (e.g., `"D"`, `"I"`).
+pub type GenericParamName = NameDef<namespace::GenericParam>;
+
+/// Name of a dimension variable in a built-in function signature (e.g., `"D"`).
+///
+/// Built-in signatures use these variables to relate argument and result
+/// dimensions, such as `sqrt: D -> D^(1/2)` or `min: (D, D) -> D`.
+pub type DimVarName = NameDef<namespace::DimVar>;
+
+/// Name of a local expression binding (e.g., `"x"`, `"stage_mass"`).
+pub type LocalName = NameDef<namespace::Local>;
+
+/// Name of a module alias introduced by an import/include declaration (e.g., `"constants"`, `"std"`).
+pub type ModuleAliasName = NameDef<namespace::ModuleAlias>;
+
+/// Name of an open plot/figure/layer property (e.g., `"title"`, `"width"`, `"stroke_width"`).
+pub type PlotPropertyName = NameDef<namespace::PlotProperty>;
 
 impl IndexVariantName {
     /// Build the variant name for the `n`-th step of a range index
@@ -376,42 +536,57 @@ impl std::fmt::Display for QualifiedIndexVariantName {
     }
 }
 
-define_name_type! {
-    /// Name of a tagged-union constructor (e.g., `"LowThrust"`, `"Coast"`).
-    ///
-    /// Constructors live in a *separate namespace* from types: a single
-    /// lexeme can name both a type and a constructor (and will, once the
-    /// single-variant sugar lands). Keeping these as distinct newtypes
-    /// enforces the namespace boundary at the type level.
-    pub struct ConstructorName;
+/// A fully resolved index variant reference.
+///
+/// Index variants are owned by an index declaration rather than directly by a
+/// DAG/module. This type therefore resolves the index itself to a canonical
+/// owner, then stores the variant as a leaf in that index's variant set.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ResolvedIndexVariant {
+    index: ResolvedName<namespace::Index>,
+    variant: IndexVariantName,
 }
 
-define_name_type! {
-    /// Name of a generic type parameter (e.g., `"D"`, `"I"`).
-    pub struct GenericParamName;
+impl ResolvedIndexVariant {
+    /// Create a resolved index-variant reference from its resolved index and
+    /// variant leaf.
+    #[must_use]
+    pub const fn new(index: ResolvedName<namespace::Index>, variant: IndexVariantName) -> Self {
+        Self { index, variant }
+    }
+
+    /// The resolved index that owns this variant.
+    #[must_use]
+    pub const fn index(&self) -> &ResolvedName<namespace::Index> {
+        &self.index
+    }
+
+    /// The variant leaf inside [`Self::index`].
+    #[must_use]
+    pub const fn variant(&self) -> &IndexVariantName {
+        &self.variant
+    }
+
+    /// Consume this value and return its typed parts.
+    #[must_use]
+    pub fn into_parts(self) -> (ResolvedName<namespace::Index>, IndexVariantName) {
+        (self.index, self.variant)
+    }
 }
 
-define_name_type! {
-    /// Name of a dimension variable in a built-in function signature (e.g., `"D"`).
-    ///
-    /// Built-in signatures use these variables to relate argument and result
-    /// dimensions, such as `sqrt: D -> D^(1/2)` or `min: (D, D) -> D`.
-    pub struct DimVarName;
+impl std::fmt::Debug for ResolvedIndexVariant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedIndexVariant")
+            .field("index", &self.index)
+            .field("variant", &self.variant)
+            .finish()
+    }
 }
 
-define_name_type! {
-    /// Name of a local expression binding (e.g., `"x"`, `"stage_mass"`).
-    pub struct LocalName;
-}
-
-define_name_type! {
-    /// Name of a module alias introduced by an import/include declaration (e.g., `"constants"`, `"std"`).
-    pub struct ModuleAliasName;
-}
-
-define_name_type! {
-    /// Name of an open plot/figure/layer property (e.g., `"title"`, `"width"`, `"stroke_width"`).
-    pub struct PlotPropertyName;
+impl std::fmt::Display for ResolvedIndexVariant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.index, self.variant)
+    }
 }
 
 /// Name of a built-in datetime time scale (e.g., `"UTC"`, `"TAI"`, `"TDB"`).
@@ -828,6 +1003,50 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["module"]
         );
+    }
+
+    #[test]
+    fn name_def_aliases_keep_namespace_and_leaf_invariant() {
+        let decl = DeclName::new("x");
+        let index = IndexName::new("x");
+
+        assert_eq!(decl.as_str(), index.as_str());
+        assert_eq!(
+            DeclName::try_new("module.x"),
+            Err(NameAtomError::ContainsDot)
+        );
+        assert_eq!(
+            IndexName::try_new("module.x"),
+            Err(NameAtomError::ContainsDot)
+        );
+    }
+
+    #[test]
+    fn resolved_name_carries_canonical_owner_and_leaf() {
+        let name = DeclName::new("dry_mass");
+        let resolved = ResolvedName::<namespace::Decl>::from_def(
+            crate::dag_id::DagId::new("helpers", ["mass"]),
+            name,
+        );
+
+        assert_eq!(resolved.owner().to_string(), "helpers.mass");
+        assert_eq!(resolved.as_str(), "dry_mass");
+        assert_eq!(resolved.to_string(), "helpers.mass.dry_mass");
+        assert_eq!(resolved.to_def_name(), DeclName::new("dry_mass"));
+    }
+
+    #[test]
+    fn resolved_index_variant_carries_resolved_index_owner() {
+        let index = ResolvedName::<namespace::Index>::from_def(
+            crate::dag_id::DagId::root("mission"),
+            IndexName::new("Phase"),
+        );
+        let variant = ResolvedIndexVariant::new(index, IndexVariantName::new("Burn"));
+
+        assert_eq!(variant.index().owner().to_string(), "mission");
+        assert_eq!(variant.index().as_str(), "Phase");
+        assert_eq!(variant.variant().as_str(), "Burn");
+        assert_eq!(variant.to_string(), "mission.Phase.Burn");
     }
 
     #[test]
