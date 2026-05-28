@@ -6,7 +6,7 @@
 //! IDs. Source paths (`NamePath` / `IdentPath` / `ScopedName`) are consumed at
 //! this boundary and are not stored in HIR reference fields.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use thiserror::Error;
 
@@ -474,6 +474,109 @@ pub enum ExprKind {
     },
 }
 
+/// Canonical declaration dependencies observed in one HIR expression tree.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExprDependencies {
+    /// Runtime graph dependencies reached through `@name` references.
+    pub graph_refs: BTreeSet<ResolvedName<namespace::Decl>>,
+    /// Compile-time const dependencies reached through const-like value refs.
+    pub const_refs: BTreeSet<ResolvedName<namespace::Decl>>,
+}
+
+/// Collect canonical declaration dependencies from an already-lowered HIR expression.
+#[must_use]
+pub fn collect_expr_dependencies(expr: &Expr) -> ExprDependencies {
+    let mut deps = ExprDependencies::default();
+    collect_expr_dependencies_into(expr, &mut deps);
+    deps
+}
+
+fn collect_expr_dependencies_into(expr: &Expr, deps: &mut ExprDependencies) {
+    match &expr.kind {
+        ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::TypeSystemRef(_)
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral(_) => {}
+        ExprKind::GraphRef(target) => {
+            deps.graph_refs.insert(target.value.clone());
+        }
+        ExprKind::ConstRef(target) => {
+            if let ConstRef::Decl(resolved) = &target.value {
+                deps.const_refs.insert(resolved.clone());
+            }
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            collect_expr_dependencies_into(lhs, deps);
+            collect_expr_dependencies_into(rhs, deps);
+        }
+        ExprKind::UnaryOp { operand, .. }
+        | ExprKind::Convert { expr: operand, .. }
+        | ExprKind::DisplayTimezone { expr: operand, .. }
+        | ExprKind::FieldAccess { expr: operand, .. } => {
+            collect_expr_dependencies_into(operand, deps);
+        }
+        ExprKind::FnCall { args, .. } => {
+            for arg in args {
+                collect_expr_dependencies_into(arg, deps);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_expr_dependencies_into(condition, deps);
+            collect_expr_dependencies_into(then_branch, deps);
+            collect_expr_dependencies_into(else_branch, deps);
+        }
+        ExprKind::UnitLiteral { .. } => {}
+        ExprKind::ConstructorCall { fields, .. } => {
+            for field in fields {
+                collect_expr_dependencies_into(&field.value, deps);
+            }
+        }
+        ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                collect_expr_dependencies_into(&entry.value, deps);
+            }
+        }
+        ExprKind::ForComp { body, .. } => collect_expr_dependencies_into(body, deps),
+        ExprKind::IndexAccess { expr, args } => {
+            collect_expr_dependencies_into(expr, deps);
+            for arg in args {
+                if let IndexArg::Expr(expr) = arg {
+                    collect_expr_dependencies_into(expr, deps);
+                }
+            }
+        }
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            collect_expr_dependencies_into(source, deps);
+            collect_expr_dependencies_into(init, deps);
+            collect_expr_dependencies_into(body, deps);
+        }
+        ExprKind::Unfold { init, body, .. } => {
+            collect_expr_dependencies_into(init, deps);
+            collect_expr_dependencies_into(body, deps);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_expr_dependencies_into(scrutinee, deps);
+            for arm in arms {
+                collect_expr_dependencies_into(&arm.body, deps);
+            }
+        }
+        ExprKind::InlineDagRef { args, .. } => {
+            for arg in args {
+                collect_expr_dependencies_into(&arg.value, deps);
+            }
+        }
+    }
+}
+
 /// Type-system identifier used as a value expression, usually in include bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeSystemRef {
@@ -648,10 +751,16 @@ impl<'a> ExprLowerer<'a> {
                 self.lower_const_ref(&name.value, name.span)?,
                 name.span,
             )),
-            ast::ExprKind::LocalRef(ident) => ExprKind::LocalRef(Spanned::new(
-                self.lookup_local(&LocalName::from_atom(ident.name.clone()), ident.span)?,
-                ident.span,
-            )),
+            ast::ExprKind::LocalRef(ident) => match self
+                .lookup_local(&LocalName::from_atom(ident.name.clone()), ident.span)
+            {
+                Ok(local) => ExprKind::LocalRef(Spanned::new(local, ident.span)),
+                Err(ExprLowerError::UnknownLocalRef { .. }) => ExprKind::ConstRef(Spanned::new(
+                    self.lower_const_ref(&ScopedName::local(ident.name.as_str()), ident.span)?,
+                    ident.span,
+                )),
+                Err(err) => return Err(err),
+            },
             ast::ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op: *op,
                 lhs: Box::new(self.lower_expr(lhs)?),
@@ -933,7 +1042,11 @@ impl<'a> ExprLowerer<'a> {
         let path = scoped_name_to_path(name, span)?;
         let mut first_error = None;
 
-        match self.ctx.resolver.resolve_decl_path(self.ctx.owner, &path) {
+        match self
+            .ctx
+            .resolver
+            .resolve_const_decl_path(self.ctx.owner, &path)
+        {
             Ok(resolved) => return Ok(ConstRef::Decl(resolved)),
             Err(err) => first_error.get_or_insert(err),
         };
@@ -1286,16 +1399,6 @@ mod tests {
         crate::syntax::name_resolve::resolve_name_refs(desugared)
     }
 
-    fn first_import(file: &ast::File) -> (&ast::ModulePath, &ast::ImportKind) {
-        file.declarations
-            .iter()
-            .find_map(|decl| match &decl.kind {
-                ast::DeclKind::Import(import) => Some((&import.path, &import.kind)),
-                _ => None,
-            })
-            .expect("source should contain an import")
-    }
-
     fn node_value<'a>(file: &'a ast::File, name: &str) -> &'a ast::Expr {
         file.declarations
             .iter()
@@ -1312,7 +1415,6 @@ mod tests {
         lib: &ast::File,
         main: &ast::File,
     ) -> ModuleResolver {
-        let (import_path, import_kind) = first_import(main);
         let mut resolver = ModuleResolver::default();
         resolver
             .add_module(lib_id.clone(), &lib.declarations)
@@ -1320,9 +1422,14 @@ mod tests {
         resolver
             .add_module(main_id.clone(), &main.declarations)
             .unwrap();
-        resolver
-            .register_import(main_id, import_path, import_kind, lib_id.clone())
-            .unwrap();
+        for decl in &main.declarations {
+            let ast::DeclKind::Import(import) = &decl.kind else {
+                continue;
+            };
+            resolver
+                .register_import(main_id, &import.path, &import.kind, lib_id.clone())
+                .unwrap();
+        }
         resolver
     }
 
@@ -1451,5 +1558,60 @@ mod tests {
             panic!("expected local ref body, got {:?}", first.body);
         };
         assert_eq!(local.id, body_ref.value);
+    }
+
+    #[test]
+    fn collects_canonical_decl_dependencies_from_hir_expr() {
+        let lib_id = DagId::root("lib");
+        let main_id = DagId::root("main");
+        let lib = resolved_source("pub const node C: Dimensionless = 1.0; param p: Dimensionless;");
+        let main = resolved_source(
+            "import lib as mission; import lib.{p}; node x: Dimensionless = @p + mission.C;",
+        );
+        let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
+        let scope = GenericScope::new();
+
+        let expr = lower_expr(
+            node_value(&main, "x"),
+            ExprLoweringContext::new(&main_id, &resolver, &scope),
+        )
+        .unwrap();
+        let deps = collect_expr_dependencies(&expr);
+
+        let graph_refs = deps.graph_refs.into_iter().collect::<Vec<_>>();
+        let const_refs = deps.const_refs.into_iter().collect::<Vec<_>>();
+        let [graph_ref] = graph_refs.as_slice() else {
+            panic!("expected one graph dep, got {graph_refs:?}");
+        };
+        let [const_ref] = const_refs.as_slice() else {
+            panic!("expected one const dep, got {const_refs:?}");
+        };
+        assert_eq!(graph_ref.owner(), &lib_id);
+        assert_eq!(graph_ref.as_str(), "p");
+        assert_eq!(const_ref.owner(), &lib_id);
+        assert_eq!(const_ref.as_str(), "C");
+    }
+
+    #[test]
+    fn const_ref_to_runtime_decl_is_rejected_by_decl_kind() {
+        let owner = DagId::root("main");
+        let file = resolved_source("param p: Dimensionless; node x: Dimensionless = p;");
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(owner.clone(), &file.declarations)
+            .unwrap();
+        let scope = GenericScope::new();
+
+        let err = lower_expr(
+            node_value(&file, "x"),
+            ExprLoweringContext::new(&owner, &resolver, &scope),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("expected const declaration `main.p`, found param"),
+            "unexpected error: {err}"
+        );
     }
 }

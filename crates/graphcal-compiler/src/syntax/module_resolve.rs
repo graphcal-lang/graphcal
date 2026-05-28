@@ -69,6 +69,44 @@ impl From<ast::BindableVisibility> for SymbolVisibility {
     }
 }
 
+/// Semantic kind of a value/declaration namespace symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeclSymbolKind {
+    Const,
+    Param,
+    Node,
+    Assert,
+    Plot,
+    Figure,
+    Layer,
+    Dag,
+}
+
+impl DeclSymbolKind {
+    /// Returns whether this declaration can be referenced from const-like
+    /// expression positions.
+    #[must_use]
+    pub const fn is_const(self) -> bool {
+        matches!(self, Self::Const)
+    }
+}
+
+impl std::fmt::Display for DeclSymbolKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::Const => "const",
+            Self::Param => "param",
+            Self::Node => "node",
+            Self::Assert => "assert",
+            Self::Plot => "plot",
+            Self::Figure => "figure",
+            Self::Layer => "layer",
+            Self::Dag => "dag",
+        };
+        f.write_str(label)
+    }
+}
+
 /// Visibility rule applied by a module alias or selective import edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModuleAccess {
@@ -122,6 +160,77 @@ impl<Ns: NameNamespace> ModuleSymbol<Ns> {
     }
 }
 
+trait ModuleSymbolLookup<Ns: NameNamespace> {
+    fn resolved(&self) -> &ResolvedName<Ns>;
+    fn visibility(&self) -> SymbolVisibility;
+}
+
+impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ModuleSymbol<Ns> {
+    fn resolved(&self) -> &ResolvedName<Ns> {
+        self.resolved()
+    }
+
+    fn visibility(&self) -> SymbolVisibility {
+        self.visibility()
+    }
+}
+
+/// Value/declaration symbol plus its semantic declaration kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleDeclSymbol {
+    symbol: ModuleSymbol<namespace::Decl>,
+    kind: DeclSymbolKind,
+}
+
+impl ModuleDeclSymbol {
+    fn new(
+        owner: &DagId,
+        name: DeclName,
+        visibility: SymbolVisibility,
+        span: Span,
+        kind: DeclSymbolKind,
+    ) -> Self {
+        Self {
+            symbol: ModuleSymbol::new(owner, name, visibility, span),
+            kind,
+        }
+    }
+
+    /// Canonical resolved identity for this declaration.
+    #[must_use]
+    pub const fn resolved(&self) -> &ResolvedName<namespace::Decl> {
+        self.symbol.resolved()
+    }
+
+    /// Visibility of this declaration across module boundaries.
+    #[must_use]
+    pub const fn visibility(&self) -> SymbolVisibility {
+        self.symbol.visibility()
+    }
+
+    /// Source span of the definition-site name.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.symbol.span()
+    }
+
+    /// Semantic declaration kind.
+    #[must_use]
+    pub const fn kind(&self) -> DeclSymbolKind {
+        self.kind
+    }
+}
+
+impl ModuleSymbolLookup<namespace::Decl> for ModuleDeclSymbol {
+    fn resolved(&self) -> &ResolvedName<namespace::Decl> {
+        self.resolved()
+    }
+
+    fn visibility(&self) -> SymbolVisibility {
+        self.visibility()
+    }
+}
+
 /// Index symbol plus the variants declared by that index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleIndexSymbol {
@@ -159,7 +268,7 @@ impl ModuleIndexSymbol {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleSymbols {
     owner: DagId,
-    decls: HashMap<DeclName, ModuleSymbol<namespace::Decl>>,
+    decls: HashMap<DeclName, ModuleDeclSymbol>,
     dimensions: HashMap<DimName, ModuleSymbol<namespace::Dim>>,
     units: HashMap<UnitName, ModuleSymbol<namespace::Unit>>,
     struct_types: HashMap<StructTypeName, ModuleSymbol<namespace::StructType>>,
@@ -203,7 +312,7 @@ impl ModuleSymbols {
 
     /// Value/declaration namespace symbols.
     #[must_use]
-    pub const fn decls(&self) -> &HashMap<DeclName, ModuleSymbol<namespace::Decl>> {
+    pub const fn decls(&self) -> &HashMap<DeclName, ModuleDeclSymbol> {
         &self.decls
     }
 
@@ -251,41 +360,49 @@ impl ModuleSymbols {
                     &p.name,
                     SymbolVisibility::PublicBind,
                     namespace::Decl::DISPLAY_NAME,
+                    DeclSymbolKind::Param,
                 )?,
                 ast::DeclKind::Node(n) => self.insert_decl(
                     &n.name,
                     SymbolVisibility::from(n.visibility),
                     namespace::Decl::DISPLAY_NAME,
+                    DeclSymbolKind::Node,
                 )?,
                 ast::DeclKind::ConstNode(c) => self.insert_decl(
                     &c.name,
                     SymbolVisibility::from(c.visibility),
                     namespace::Decl::DISPLAY_NAME,
+                    DeclSymbolKind::Const,
                 )?,
                 ast::DeclKind::Assert(a) => self.insert_decl(
                     &a.name,
                     SymbolVisibility::from(a.visibility),
                     namespace::Decl::DISPLAY_NAME,
+                    DeclSymbolKind::Assert,
                 )?,
                 ast::DeclKind::Plot(p) => self.insert_decl(
                     &p.name,
                     SymbolVisibility::from(p.visibility),
                     namespace::Decl::DISPLAY_NAME,
+                    DeclSymbolKind::Plot,
                 )?,
                 ast::DeclKind::Figure(f) => self.insert_decl(
                     &f.name,
                     SymbolVisibility::from(f.visibility),
                     namespace::Decl::DISPLAY_NAME,
+                    DeclSymbolKind::Figure,
                 )?,
                 ast::DeclKind::Layer(l) => self.insert_decl(
                     &l.name,
                     SymbolVisibility::from(l.visibility),
                     namespace::Decl::DISPLAY_NAME,
+                    DeclSymbolKind::Layer,
                 )?,
                 ast::DeclKind::Dag(d) => self.insert_decl(
                     &d.name,
                     SymbolVisibility::from(d.visibility),
                     namespace::Decl::DISPLAY_NAME,
+                    DeclSymbolKind::Dag,
                 )?,
                 ast::DeclKind::BaseDimension(d) => self.insert_dimension(
                     &d.name,
@@ -332,13 +449,15 @@ impl ModuleSymbols {
         name: &Spanned<DeclName>,
         visibility: SymbolVisibility,
         namespace_name: &'static str,
+        kind: DeclSymbolKind,
     ) -> Result<(), ModuleResolveError> {
-        insert_symbol(
+        insert_decl_symbol(
             &self.owner,
             &mut self.decls,
             name,
             visibility,
             namespace_name,
+            kind,
         )
     }
 
@@ -463,6 +582,30 @@ fn insert_symbol<Ns: NameNamespace>(
     map.insert(
         name.value.clone(),
         ModuleSymbol::new(owner, name.value.clone(), visibility, name.span),
+    );
+    Ok(())
+}
+
+fn insert_decl_symbol(
+    owner: &DagId,
+    map: &mut HashMap<DeclName, ModuleDeclSymbol>,
+    name: &Spanned<DeclName>,
+    visibility: SymbolVisibility,
+    namespace_name: &'static str,
+    kind: DeclSymbolKind,
+) -> Result<(), ModuleResolveError> {
+    if let Some(first) = map.get(name.value.as_str()) {
+        return Err(ModuleResolveError::DuplicateSymbol {
+            owner: owner.clone(),
+            namespace: namespace_name,
+            name: name.value.to_string(),
+            first: first.span(),
+            duplicate: name.span,
+        });
+    }
+    map.insert(
+        name.value.clone(),
+        ModuleDeclSymbol::new(owner, name.value.clone(), visibility, name.span, kind),
     );
     Ok(())
 }
@@ -729,6 +872,43 @@ impl ModuleResolver {
         self.resolve_symbol_path(owner, path, ModuleSymbols::decls, |scope| {
             &scope.selected_decls
         })
+    }
+
+    /// Resolve a declaration path and require that it names a const declaration.
+    pub fn resolve_const_decl_path(
+        &self,
+        owner: &DagId,
+        path: &NamePath,
+    ) -> Result<ResolvedName<namespace::Decl>, ModuleResolveError> {
+        let resolved = self.resolve_decl_path(owner, path)?;
+        let actual = self.decl_symbol_kind(&resolved)?;
+        if actual.is_const() {
+            Ok(resolved)
+        } else {
+            Err(ModuleResolveError::UnexpectedDeclKind {
+                name: resolved,
+                expected: "const",
+                actual,
+            })
+        }
+    }
+
+    /// Return the semantic kind of a resolved declaration symbol.
+    pub fn decl_symbol_kind(
+        &self,
+        name: &ResolvedName<namespace::Decl>,
+    ) -> Result<DeclSymbolKind, ModuleResolveError> {
+        let symbols = self.module_symbols(name.owner())?;
+        let def_name = DeclName::from_atom(name.atom().clone());
+        symbols
+            .decls
+            .get(def_name.as_str())
+            .map(ModuleDeclSymbol::kind)
+            .ok_or_else(|| ModuleResolveError::UnknownName {
+                owner: name.owner().clone(),
+                namespace: namespace::Decl::DISPLAY_NAME,
+                name: name.as_str().to_string(),
+            })
     }
 
     /// Resolve a syntactic dimension path to a canonical owner + leaf.
@@ -1098,14 +1278,18 @@ impl ModuleResolver {
         }
     }
 
-    fn exported_symbol_for_import<Ns: NameNamespace>(
+    fn exported_symbol_for_import<Ns, S>(
         &self,
         target: &DagId,
         atom: &NameAtom,
         access: ModuleAccess,
-        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, ModuleSymbol<Ns>>,
+        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
         selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
-    ) -> Result<ExportLookup<Ns>, ModuleResolveError> {
+    ) -> Result<ExportLookup<Ns>, ModuleResolveError>
+    where
+        Ns: NameNamespace,
+        S: ModuleSymbolLookup<Ns>,
+    {
         let target_symbols = self.module_symbols(target)?;
         match exported_symbol(local_symbols(target_symbols), atom, access) {
             ExportLookup::Missing => {}
@@ -1140,13 +1324,17 @@ impl ModuleResolver {
         ))
     }
 
-    fn resolve_symbol_path<Ns: NameNamespace>(
+    fn resolve_symbol_path<Ns, S>(
         &self,
         owner: &DagId,
         path: &NamePath,
-        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, ModuleSymbol<Ns>>,
+        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
         selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
-    ) -> Result<ResolvedName<Ns>, ModuleResolveError> {
+    ) -> Result<ResolvedName<Ns>, ModuleResolveError>
+    where
+        Ns: NameNamespace,
+        S: ModuleSymbolLookup<Ns>,
+    {
         if let Some(atom) = path.as_bare() {
             let local = self.module_symbols(owner)?;
             if let Some(symbol) = local_symbols(local).get(atom.as_str()) {
@@ -1400,11 +1588,15 @@ enum ExportLookup<Ns: NameNamespace> {
     Missing,
 }
 
-fn exported_symbol<Ns: NameNamespace>(
-    map: &HashMap<NameDef<Ns>, ModuleSymbol<Ns>>,
+fn exported_symbol<Ns, S>(
+    map: &HashMap<NameDef<Ns>, S>,
     atom: &NameAtom,
     access: ModuleAccess,
-) -> ExportLookup<Ns> {
+) -> ExportLookup<Ns>
+where
+    Ns: NameNamespace,
+    S: ModuleSymbolLookup<Ns>,
+{
     map.get(atom.as_str())
         .map_or(ExportLookup::Missing, |symbol| {
             if !access.requires_public() || symbol.visibility().is_public() {
@@ -1502,6 +1694,13 @@ pub enum ModuleResolveError {
         owner: DagId,
         namespace: &'static str,
         name: String,
+    },
+    /// A name exists but has the wrong declaration kind for the use site.
+    #[error("expected {expected} declaration `{name}`, found {actual}")]
+    UnexpectedDeclKind {
+        name: ResolvedName<namespace::Decl>,
+        expected: &'static str,
+        actual: DeclSymbolKind,
     },
     /// A name exists but is not public across module boundaries.
     #[error("private {namespace} `{name}` in module `{owner}`")]

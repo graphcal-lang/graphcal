@@ -13,7 +13,9 @@ use miette::NamedSource;
 use crate::desugar::resolved_ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::hir;
 use crate::syntax::dimension::{Dimension, Rational};
-use crate::syntax::names::{DimName, GenericParamName, IndexName, NamePath, StructTypeName};
+use crate::syntax::names::{
+    DeclName, DimName, GenericParamName, IndexName, NamePath, StructTypeName,
+};
 use crate::syntax::span::Span;
 
 use crate::ir::lower::IR;
@@ -694,6 +696,21 @@ pub struct ResolvedDomainConstraint {
 /// by `merge_dep_dag_tirs` (keyed by the dep's canonical id).
 pub type DagRegistry = HashMap<crate::dag_id::DagId, DagTIR>;
 
+/// Canonical dependency maps for one DAG body, collected from HIR expressions.
+///
+/// This supplements the legacy [`ScopedName`]-keyed dependency maps while
+/// downstream eval/runtime code is still being migrated. It is populated only
+/// by module-aware TIR resolution, where a [`ModuleResolver`] is available to
+/// lower expression references into canonical owners.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedDagDependencies {
+    /// For each param/node declaration, the canonical declarations it reads via `@`.
+    pub runtime_deps:
+        HashMap<ResolvedName<namespace::Decl>, BTreeSet<ResolvedName<namespace::Decl>>>,
+    /// For each const declaration, the canonical const declarations it reads.
+    pub const_deps: HashMap<ResolvedName<namespace::Decl>, BTreeSet<ResolvedName<namespace::Decl>>>,
+}
+
 // ---------------------------------------------------------------------------
 // TIR struct
 // ---------------------------------------------------------------------------
@@ -853,6 +870,7 @@ impl TIR {
                 layers: Vec::new(),
                 runtime_deps: HashMap::new(),
                 const_deps: HashMap::new(),
+                resolved_deps: None,
                 source_order: Vec::new(),
                 assert_names: std::collections::HashSet::new(),
                 assumes_map: HashMap::new(),
@@ -908,6 +926,8 @@ pub struct DagTIR {
     /// Outer map: key-lookup only, order irrelevant.
     /// Inner set: `BTreeSet` for deterministic iteration when building the DAG.
     pub const_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
+    /// Canonical HIR-derived dependency maps when this DAG was resolved with a module resolver.
+    pub resolved_deps: Option<ResolvedDagDependencies>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// Set of all assert names. Membership-only, never iterated.
@@ -1192,13 +1212,82 @@ fn type_resolve_dag(
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
 
+    let resolved_deps =
+        module_ctx.and_then(|ctx| collect_resolved_dag_dependencies(&consts, &params, &nodes, ctx));
+
     Ok(DagTIRSeed {
         dag_id: dag_id.clone(),
         consts,
         params,
         nodes,
         resolved_decl_types,
+        resolved_deps,
     })
+}
+
+fn collect_resolved_dag_dependencies(
+    consts: &[crate::ir::lower::ConstEntry],
+    params: &[crate::ir::lower::ParamEntry],
+    nodes: &[crate::ir::lower::NodeEntry],
+    ctx: ModuleTypeContext<'_>,
+) -> Option<ResolvedDagDependencies> {
+    let generic_scope = hir::GenericScope::new();
+    let prelude = hir::PreludeTypeScope::graphcal();
+    let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
+        .with_prelude(&prelude);
+    let mut resolved = ResolvedDagDependencies::default();
+
+    for entry in consts {
+        let key = resolved_decl_key(ctx.owner, &entry.name)?;
+        let mut deps = lower_expr_dependencies(&entry.expr, expr_ctx)?;
+        for graph_ref in deps.graph_refs {
+            if !ctx.resolver.decl_symbol_kind(&graph_ref).ok()?.is_const() {
+                return None;
+            }
+            deps.const_refs.insert(graph_ref);
+        }
+        resolved.const_deps.insert(key, deps.const_refs);
+    }
+
+    for entry in params {
+        let key = resolved_decl_key(ctx.owner, &entry.name)?;
+        let graph_refs = match &entry.default_expr {
+            Some(expr) => lower_expr_dependencies(expr, expr_ctx)?.graph_refs,
+            None => BTreeSet::new(),
+        };
+        resolved.runtime_deps.insert(key, graph_refs);
+    }
+
+    for entry in nodes {
+        let key = resolved_decl_key(ctx.owner, &entry.name)?;
+        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
+        let mut deps = hir::collect_expr_dependencies(&hir_expr).graph_refs;
+        if matches!(hir_expr.kind, hir::ExprKind::Unfold { .. }) {
+            deps.remove(&key);
+        }
+        resolved.runtime_deps.insert(key, deps);
+    }
+
+    Some(resolved)
+}
+
+fn lower_expr_dependencies(
+    expr: &crate::desugar::resolved_ast::Expr,
+    ctx: hir::ExprLoweringContext<'_>,
+) -> Option<hir::ExprDependencies> {
+    let hir_expr = hir::lower_expr(expr, ctx).ok()?;
+    Some(hir::collect_expr_dependencies(&hir_expr))
+}
+
+fn resolved_decl_key(
+    owner: &crate::dag_id::DagId,
+    name: &ScopedName,
+) -> Option<ResolvedName<namespace::Decl>> {
+    if name.is_qualified() {
+        return None;
+    }
+    let name = DeclName::try_new(name.member()).ok()?;
+    Some(ResolvedName::from_def(owner.clone(), name))
 }
 
 /// Partially-built [`DagTIR`] returned by [`type_resolve_dag`]; finalized
@@ -1210,6 +1299,7 @@ struct DagTIRSeed {
     params: Vec<crate::ir::lower::ParamEntry>,
     nodes: Vec<crate::ir::lower::NodeEntry>,
     resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
+    resolved_deps: Option<ResolvedDagDependencies>,
 }
 
 impl DagTIRSeed {
@@ -1250,6 +1340,7 @@ impl DagTIRSeed {
             layers,
             runtime_deps,
             const_deps,
+            resolved_deps: self.resolved_deps,
             source_order,
             assert_names,
             assumes_map,
@@ -3384,6 +3475,45 @@ mod tests {
             tir.dags.insert(dag_id, compiled_dag);
         }
         Ok(())
+    }
+
+    #[test]
+    fn module_aware_type_resolve_records_hir_resolved_deps() {
+        let source = "const node C: Dimensionless = 1.0;\n\
+                      const node D: Dimensionless = C;\n\
+                      param p: Dimensionless;\n\
+                      node x: Dimensionless = @p + D;";
+        let raw_file = Parser::new(source).parse_file().unwrap();
+        let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
+        let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+        let dag_id =
+            crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+        let ir = crate::ir::lower::lower(&file, &src).unwrap();
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(dag_id.clone(), &file.declarations)
+            .unwrap();
+        let mut module_types = ModuleTypeRegistry::default();
+        module_types.insert_graphcal_prelude().unwrap();
+        module_types.insert_registry(&dag_id, &ir.registry);
+
+        let tir =
+            type_resolve_with_modules(ir, dag_id.clone(), &src, &resolver, &module_types).unwrap();
+        let deps = tir
+            .root()
+            .resolved_deps
+            .as_ref()
+            .expect("module-aware TIR should record resolved deps");
+        let c = ResolvedName::from_def(dag_id.clone(), DeclName::new("C"));
+        let d = ResolvedName::from_def(dag_id.clone(), DeclName::new("D"));
+        let p = ResolvedName::from_def(dag_id.clone(), DeclName::new("p"));
+        let x = ResolvedName::from_def(dag_id, DeclName::new("x"));
+
+        assert!(deps.const_deps[&d].contains(&c));
+        assert!(deps.const_deps[&c].is_empty());
+        assert!(deps.runtime_deps[&x].contains(&p));
+        assert!(deps.runtime_deps[&p].is_empty());
     }
 
     #[test]
