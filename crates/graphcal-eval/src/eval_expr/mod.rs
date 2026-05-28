@@ -121,7 +121,9 @@ pub fn eval_expr(
         }
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
         ExprKind::VariantLiteral { index, variant } => Ok(RuntimeValue::Label {
-            index_name: index.value.index().clone(),
+            index_name: graphcal_compiler::syntax::names::IndexName::from_atom(
+                index.value.leaf().clone(),
+            ),
             variant: variant.value.clone(),
         }),
         ExprKind::GraphRef(ident) => values.get(&ident.value).cloned().ok_or_else(|| {

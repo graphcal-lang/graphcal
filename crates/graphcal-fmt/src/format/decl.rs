@@ -730,7 +730,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         .shared_axes
         .iter()
         .map(|spec| match spec {
-            TableIndexSpec::Named(s) => s.value.as_str().to_string(),
+            TableIndexSpec::Named(s) => s.value.to_string(),
             TableIndexSpec::NatRange(n, _) => n.to_string(),
         })
         .collect::<Vec<_>>()

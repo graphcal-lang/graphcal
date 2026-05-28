@@ -62,14 +62,14 @@ pub enum SymbolKey {
 }
 
 fn symbol_key_for_path(path: &graphcal_compiler::syntax::ast::IdentPath) -> SymbolKey {
-    match path.segments.as_slice() {
-        [single] => SymbolKey::TopLevel(single.name.to_string()),
-        segments => SymbolKey::Qualified {
-            module: segments[..segments.len() - 1]
+    match path.qualifier_and_leaf() {
+        None => SymbolKey::TopLevel(path.leaf().name.to_string()),
+        Some((qualifier, leaf)) => SymbolKey::Qualified {
+            module: qualifier
                 .iter()
                 .map(|segment| segment.name.to_string())
                 .collect(),
-            name: segments[segments.len() - 1].name.to_string(),
+            name: leaf.name.to_string(),
         },
     }
 }

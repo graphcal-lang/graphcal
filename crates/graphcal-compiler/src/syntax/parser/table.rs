@@ -1,5 +1,5 @@
 use crate::syntax::ast::{Expr, ExprKind, MapEntry, MapEntryIndex, MapEntryKey, TableIndexSpec};
-use crate::syntax::names::{IndexName, IndexNamePath, IndexVariantName};
+use crate::syntax::names::{IndexVariantName, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
@@ -85,7 +85,7 @@ impl Parser<'_> {
             }
             Some(Token::Ident) => {
                 let ident = self.parse_any_ident()?;
-                Ok(TableIndexSpec::Named(ident.into_spanned::<IndexNamePath>()))
+                Ok(TableIndexSpec::Named(ident.into_spanned::<NamePath>()))
             }
             _ => {
                 let (tok, span) = self.advance()?;
@@ -94,11 +94,11 @@ impl Parser<'_> {
         }
     }
 
-    fn named_index_spanned(index: &Spanned<IndexNamePath>) -> Spanned<MapEntryIndex> {
+    fn named_index_spanned(index: &Spanned<NamePath>) -> Spanned<MapEntryIndex> {
         Spanned::new(MapEntryIndex::Named(index.value.clone()), index.span)
     }
 
-    fn named_index_spanned_owned(index: Spanned<IndexNamePath>) -> Spanned<MapEntryIndex> {
+    fn named_index_spanned_owned(index: Spanned<NamePath>) -> Spanned<MapEntryIndex> {
         Spanned::new(MapEntryIndex::Named(index.value), index.span)
     }
 
@@ -125,7 +125,7 @@ impl Parser<'_> {
 
     fn parse_table_1d_named(
         &mut self,
-        index: &Spanned<IndexNamePath>,
+        index: &Spanned<NamePath>,
     ) -> Result<Vec<MapEntry>, ParseError> {
         let mut entries = Vec::new();
         while self.lexer.peek() != Some(&Token::RBrace) {
@@ -337,7 +337,7 @@ impl Parser<'_> {
                         let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
                         prefix_keys.push(MapEntryKey {
                             index: Spanned::new(
-                                MapEntryIndex::Named(IndexName::new(index_ident.name).into()),
+                                MapEntryIndex::Named(NamePath::local(index_ident.name.clone())),
                                 index_ident.span,
                             ),
                             variant,
@@ -390,7 +390,7 @@ impl Parser<'_> {
     pub(super) fn parse_map_literal_after_first_entry(
         &mut self,
         brace_span: Span,
-        first_index: Spanned<IndexNamePath>,
+        first_index: Spanned<NamePath>,
         first_variant: Spanned<IndexVariantName>,
     ) -> Result<Expr, ParseError> {
         self.expect(Token::Colon)?;
@@ -496,7 +496,7 @@ mod tests {
 
     fn named_index_name(spec: &TableIndexSpec) -> &str {
         match spec {
-            TableIndexSpec::Named(s) => s.value.as_str(),
+            TableIndexSpec::Named(s) => s.value.leaf_str(),
             TableIndexSpec::NatRange(..) => panic!("expected Named spec"),
         }
     }

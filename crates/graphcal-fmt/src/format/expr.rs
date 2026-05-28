@@ -91,11 +91,9 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             let arg_docs: Vec<RcDoc<'static>> = args
                 .iter()
                 .map(|a| match a {
-                    IndexArg::Variant { index, variant } => RcDoc::text(format!(
-                        "{}.{}",
-                        index.value.as_str(),
-                        variant.value.as_str()
-                    )),
+                    IndexArg::Variant { index, variant } => {
+                        RcDoc::text(format!("{}.{}", index.value, variant.value.as_str()))
+                    }
                     IndexArg::Var(ident) => RcDoc::text(ident.name.clone()),
                     IndexArg::Expr(e) => format_expr(fmt, e),
                 })
@@ -240,11 +238,7 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
 
 /// Format a `FnCall` expression with comment handling per argument.
 fn format_ident_path(path: &graphcal_compiler::syntax::ast::IdentPath) -> String {
-    path.segments
-        .iter()
-        .map(|segment| segment.name.as_str())
-        .collect::<Vec<_>>()
-        .join(".")
+    path.display_path()
 }
 
 pub fn format_fn_call_expr(
@@ -419,7 +413,7 @@ pub fn format_table_literal(
     let idx_names: Vec<String> = indexes
         .iter()
         .map(|i| match i {
-            TableIndexSpec::Named(s) => s.value.as_str().to_string(),
+            TableIndexSpec::Named(s) => s.value.to_string(),
             TableIndexSpec::NatRange(n, _) => n.to_string(),
         })
         .collect();
@@ -751,7 +745,7 @@ pub fn format_for_comp(
                 .append(RcDoc::text(": "))
                 .append(match &b.index {
                     graphcal_compiler::syntax::ast::ForBindingIndex::Named(spanned) => {
-                        RcDoc::text(spanned.value.as_str().to_string())
+                        RcDoc::text(spanned.value.to_string())
                     }
                     graphcal_compiler::syntax::ast::ForBindingIndex::Range { arg, .. } => {
                         let arg_str = arg.to_string();

@@ -10,7 +10,9 @@ use miette::NamedSource;
 use crate::desugar::resolved_ast::{
     BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, GenericArg, IndexArg, NatExpr,
 };
-use crate::syntax::names::{FieldName, GenericParamName, IndexName, ScopedName, StructTypeName};
+use crate::syntax::names::{
+    FieldName, GenericParamName, IndexName, NamePath, ScopedName, StructTypeName,
+};
 use crate::tir::typed::NatLinearForm;
 
 use crate::registry::error::GraphcalError;
@@ -20,10 +22,14 @@ use super::super::helpers::{cartesian_product, format_inferred_type, resolve_fie
 use super::super::{DeclaredType, InferredType};
 use super::infer_type;
 
+fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
+    IndexName::from_atom(path.leaf().clone())
+}
+
 /// Get the index name for a for binding.
 fn for_binding_index_name(index: &ForBindingIndex) -> IndexName {
     match index {
-        ForBindingIndex::Named(spanned) => spanned.value.index().clone(),
+        ForBindingIndex::Named(spanned) => legacy_index_name_from_path(&spanned.value),
         ForBindingIndex::Range { arg, .. } => IndexName::new(nat_expr_to_index_name_str(arg)),
     }
 }
@@ -78,10 +84,10 @@ pub(super) fn infer_for_comp(
     for binding in bindings {
         let var_type = match &binding.index {
             ForBindingIndex::Named(spanned_idx) => {
-                let idx_name = spanned_idx.value.as_str();
+                let idx_name = spanned_idx.value.leaf_str();
                 let idx_def = registry.indexes.get_index(idx_name).ok_or_else(|| {
                     GraphcalError::UnknownIndex {
-                        name: spanned_idx.value.index().clone(),
+                        name: legacy_index_name_from_path(&spanned_idx.value),
                         src: src.clone(),
                         span: spanned_idx.span.into(),
                     }
@@ -89,7 +95,7 @@ pub(super) fn infer_for_comp(
                 match &idx_def.kind {
                     crate::registry::types::IndexKind::Named { .. }
                     | crate::registry::types::IndexKind::RequiredNamed => {
-                        InferredType::Label(spanned_idx.value.index().clone())
+                        InferredType::Label(legacy_index_name_from_path(&spanned_idx.value))
                     }
                     crate::registry::types::IndexKind::Range(
                         crate::registry::types::RangeIndexData { dimension, .. },
@@ -444,10 +450,10 @@ pub(super) fn infer_index_access(
         // Validate the argument matches the index
         match arg {
             IndexArg::Variant { index, variant } => {
-                if index.value.as_str() != idx_name.as_str() {
+                if index.value.leaf_str() != idx_name.as_str() {
                     return Err(GraphcalError::IndexMismatch {
                         expected: idx_name,
-                        found: index.value.index().clone(),
+                        found: legacy_index_name_from_path(&index.value),
                         src: src.clone(),
                         span: index.span.into(),
                     });

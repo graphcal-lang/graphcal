@@ -6,7 +6,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::{Expr, MatchArm};
-use crate::syntax::names::{FieldName, ScopedName, StructTypeName};
+use crate::syntax::names::{FieldName, IndexName, ScopedName, StructTypeName};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
@@ -150,10 +150,10 @@ pub(super) fn infer_match(
                 };
                 let variant_name_str = variant.value.as_str();
 
-                if index.value.as_str() != index_name.as_str() {
+                if index.value.leaf_str() != index_name.as_str() {
                     return Err(GraphcalError::IndexMismatch {
                         expected: index_name.clone(),
-                        found: index.value.index().clone(),
+                        found: IndexName::from_atom(index.value.leaf().clone()),
                         src: src.clone(),
                         span: index.span.into(),
                     });

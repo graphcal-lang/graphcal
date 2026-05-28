@@ -428,7 +428,11 @@ pub(super) fn eval_for_comp(
 
     // Resolve the index name and get the index definition
     let (idx_name, error_span, dynamic_nat_size) = match &binding.index {
-        ForBindingIndex::Named(spanned) => (spanned.value.index().clone(), spanned.span, None),
+        ForBindingIndex::Named(spanned) => (
+            graphcal_compiler::syntax::names::IndexName::from_atom(spanned.value.leaf().clone()),
+            spanned.span,
+            None,
+        ),
         ForBindingIndex::Range { arg, span } => {
             let size = eval_nat_expr(arg, local_values, ctx)?;
             let idx_name = graphcal_compiler::syntax::names::IndexName::new(

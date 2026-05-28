@@ -30,8 +30,8 @@ use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
 use crate::syntax::ast::{ImportItemNamespace, ImportKind, TypeSystemRefKind};
 use crate::syntax::names::{
-    ConstructorName, DimName, GenericParamName, IndexName, IndexNamePath, IndexVariantName,
-    LocalName, ModuleAliasName, ScopedName, StructTypeName,
+    ConstructorName, DimName, GenericParamName, IndexName, IndexVariantName, LocalName,
+    ModuleAliasName, NamePath, ScopedName, StructTypeName,
 };
 use crate::syntax::phase::never;
 use crate::syntax::span::Spanned;
@@ -840,7 +840,7 @@ fn lift_match_pattern(
             path,
             bindings,
             span,
-        } => match path.segments.as_slice() {
+        } => match path.segments() {
             [index_ident, variant_ident]
                 if bindings.is_empty()
                     && ctx
@@ -852,7 +852,7 @@ fn lift_match_pattern(
             {
                 dst_ast::MatchPattern::IndexLabel {
                     index: Spanned::new(
-                        IndexNamePath::local(IndexName::new(&index_ident.name)),
+                        NamePath::local(index_ident.name.clone()),
                         index_ident.span,
                     ),
                     variant: Spanned::new(
@@ -913,13 +913,9 @@ fn resolve_unresolved_ref(
 
 /// Resolve an identifier path to a concrete [`dst_ast::ExprKind`].
 fn resolve_ident_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKind {
-    match path.segments.len() {
-        1 => {
-            let mut segments = path.segments.into_vec();
-            let ident = segments.remove(0);
-            resolve_name_ref(ident, ctx)
-        }
-        _ => resolve_dotted_path(path, ctx),
+    match path.into_bare() {
+        Ok(ident) => resolve_name_ref(ident, ctx),
+        Err(path) => resolve_dotted_path(path, ctx),
     }
 }
 
@@ -955,7 +951,7 @@ fn resolve_name_ref(ident: Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
 
     if ctx.constructor_names.contains(name.as_str()) {
         return dst_ast::ExprKind::ConstructorCall {
-            callee: IdentPath::new(crate::syntax::non_empty::NonEmpty::singleton(ident)),
+            callee: IdentPath::bare(ident),
             generic_args: Vec::new(),
             fields: Vec::new(),
         };
@@ -1011,9 +1007,8 @@ fn resolve_name_ref(ident: Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
 ///    (module-qualified constant, validated later)
 fn resolve_dotted_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKind {
     let span = path.span();
-    let segments = path.segments;
 
-    if let [qualifier, member] = segments.as_slice()
+    if let [qualifier, member] = path.segments()
         && ctx.index_variants.contains_key(qualifier.name.as_str())
     {
         return dst_ast::ExprKind::VariantLiteral {
@@ -1022,11 +1017,14 @@ fn resolve_dotted_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKi
         };
     }
 
-    let qualifier_names = segments.as_slice()[..segments.len() - 1]
-        .iter()
-        .map(|segment| segment.name.to_string());
+    let (qualifier, member) = path
+        .qualifier_and_leaf()
+        .expect("resolve_dotted_path only receives qualified paths");
     dst_ast::ExprKind::ConstRef(Spanned::new(
-        ScopedName::qualified_path(qualifier_names, segments.last().name.to_string()),
+        ScopedName::qualified_path(
+            qualifier.iter().map(|segment| segment.name.to_string()),
+            member.name.to_string(),
+        ),
         span,
     ))
 }

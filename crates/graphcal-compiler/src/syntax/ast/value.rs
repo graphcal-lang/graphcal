@@ -2,8 +2,8 @@ use std::marker::PhantomData;
 
 use crate::syntax::ast::common::{Ident, ModulePath};
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, IndexName, IndexNamePath, IndexVariantName,
-    LocalName, ScopedName, StructTypeName, UnitName,
+    ConstructorName, DeclName, DimName, FieldName, IndexName, IndexVariantName, LocalName,
+    NamePath, ScopedName, StructTypeName, UnitName,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Phase, Raw};
@@ -90,7 +90,7 @@ pub enum UnresolvedRef {
 }
 
 /// A non-empty dot-separated identifier path in expression position.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IdentPath {
     pub segments: NonEmpty<Ident>,
 }
@@ -102,10 +102,89 @@ impl IdentPath {
         Self { segments }
     }
 
+    /// Construct a one-segment path from an identifier.
+    #[must_use]
+    pub fn bare(ident: Ident) -> Self {
+        Self::new(NonEmpty::singleton(ident))
+    }
+
+    /// Borrow all path segments in source order.
+    #[must_use]
+    pub fn segments(&self) -> &[Ident] {
+        self.segments.as_slice()
+    }
+
+    /// Mutably borrow all path segments in source order.
+    #[must_use]
+    pub fn segments_mut(&mut self) -> &mut [Ident] {
+        self.segments.as_mut_slice()
+    }
+
+    /// Consume and return the non-empty segment sequence.
+    #[must_use]
+    pub fn into_segments(self) -> NonEmpty<Ident> {
+        self.segments
+    }
+
+    /// Consume and return the segment vector.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<Ident> {
+        self.segments.into_vec()
+    }
+
+    /// Number of path segments. Always at least 1.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Returns `false`; provided for API compatibility with sequence-like code.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Returns whether this is a one-segment identifier path.
+    #[must_use]
+    pub const fn is_bare(&self) -> bool {
+        self.segments.len() == 1
+    }
+
     /// Returns the source span covering the whole path.
     #[must_use]
     pub fn span(&self) -> Span {
         self.segments.first().span.merge(self.segments.last().span)
+    }
+
+    /// Returns the leaf segment of the path.
+    #[must_use]
+    pub fn leaf(&self) -> &Ident {
+        self.segments.last()
+    }
+
+    /// Split the path into qualifier segments and the leaf segment.
+    ///
+    /// The qualifier slice is empty for one-segment paths.
+    #[must_use]
+    pub fn split_last(&self) -> (&[Ident], &Ident) {
+        let segments = self.segments.as_slice();
+        let (leaf, qualifier) = segments
+            .split_last()
+            .expect("IdentPath is backed by NonEmpty");
+        (qualifier, leaf)
+    }
+
+    /// Returns the qualifier segments before the leaf. Empty for bare paths.
+    #[must_use]
+    pub fn qualifier_segments(&self) -> &[Ident] {
+        self.split_last().0
+    }
+
+    /// Returns qualifier segments and leaf only when this path is qualified.
+    #[must_use]
+    pub fn qualifier_and_leaf(&self) -> Option<(&[Ident], &Ident)> {
+        let (qualifier, leaf) = self.split_last();
+        (!qualifier.is_empty()).then_some((qualifier, leaf))
     }
 
     /// Returns the only segment when this is a bare identifier path.
@@ -125,6 +204,18 @@ impl IdentPath {
         }
     }
 
+    /// Consume this path and return its segment when it is bare.
+    ///
+    /// Returns the original path unchanged when it is qualified.
+    pub fn into_bare(self) -> Result<Ident, Self> {
+        if self.is_bare() {
+            let mut segments = self.segments.into_vec();
+            Ok(segments.pop().expect("bare IdentPath has one segment"))
+        } else {
+            Err(self)
+        }
+    }
+
     /// Human-readable path string for diagnostics and formatting boundaries.
     #[must_use]
     pub fn display_path(&self) -> String {
@@ -133,6 +224,24 @@ impl IdentPath {
             .map(|segment| segment.name.as_str())
             .collect::<Vec<_>>()
             .join(".")
+    }
+}
+
+impl From<Ident> for IdentPath {
+    fn from(ident: Ident) -> Self {
+        Self::bare(ident)
+    }
+}
+
+impl std::fmt::Display for IdentPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (idx, segment) in self.segments.iter().enumerate() {
+            if idx > 0 {
+                f.write_str(".")?;
+            }
+            f.write_str(segment.name.as_str())?;
+        }
+        Ok(())
     }
 }
 
@@ -455,7 +564,7 @@ pub enum ExprKind<P: Phase = Raw> {
     /// Qualified module variants currently stay as syntactic paths until a
     /// module-aware resolver can prove the target index.
     VariantLiteral {
-        index: Spanned<IndexNamePath>,
+        index: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
     },
     /// Inline DAG invocation: `@dag(args).out` or `@module.dag(args).out`.
@@ -508,7 +617,7 @@ pub enum ExprKind<P: Phase = Raw> {
 #[derive(Debug, Clone)]
 pub enum TableIndexSpec {
     /// A named index: `Phase`, `Maneuver`, or `module.Maneuver`
-    Named(Spanned<IndexNamePath>),
+    Named(Spanned<NamePath>),
     /// A Nat range literal: `3` (desugars to `range(3)`)
     NatRange(u64, Span),
 }
@@ -604,7 +713,7 @@ impl std::ops::Index<usize> for MultiDeclSharedAxes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MapEntryIndex {
     /// A declared named index.
-    Named(IndexNamePath),
+    Named(NamePath),
     /// A Nat range literal index, `range(N)`.
     NatRange(u64),
 }
@@ -614,7 +723,10 @@ impl MapEntryIndex {
     #[must_use]
     pub fn registry_name(&self) -> IndexName {
         match self {
-            Self::Named(name) => name.index().clone(),
+            // Legacy local registries are still keyed by leaf index names. A
+            // module-aware resolver should replace this boundary with a
+            // resolved index identity instead of inspecting the path leaf.
+            Self::Named(name) => IndexName::from_atom(name.leaf().clone()),
             Self::NatRange(size) => {
                 IndexName::new(crate::registry::types::nat_range_index_name(*size))
             }
@@ -624,12 +736,12 @@ impl MapEntryIndex {
 
 impl From<IndexName> for MapEntryIndex {
     fn from(value: IndexName) -> Self {
-        Self::Named(IndexNamePath::local(value))
+        Self::Named(NamePath::from(value))
     }
 }
 
-impl From<IndexNamePath> for MapEntryIndex {
-    fn from(value: IndexNamePath) -> Self {
+impl From<NamePath> for MapEntryIndex {
+    fn from(value: NamePath) -> Self {
         Self::Named(value)
     }
 }
@@ -716,7 +828,7 @@ pub struct ForBinding {
 #[derive(Debug, Clone)]
 pub enum ForBindingIndex {
     /// A named index: `for m: Maneuver { ... }` or `for m: module.Maneuver { ... }`
-    Named(Spanned<IndexNamePath>),
+    Named(Spanned<NamePath>),
     /// A range expression: `for i: range(3) { ... }` or `for i: range(N) { ... }`
     Range {
         /// The argument to `range(...)` — a nat literal or generic nat param.
@@ -791,7 +903,7 @@ impl<P: Phase> GenericArg<P> {
 pub enum IndexArg<P: Phase = Raw> {
     /// Qualified variant: `Maneuver.Departure` or `module.Maneuver.Departure`
     Variant {
-        index: Spanned<IndexNamePath>,
+        index: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
     },
     /// Loop variable: `m`
@@ -842,7 +954,7 @@ pub enum MatchPattern {
     /// binding payload. This variant is semantic: producers should construct it
     /// only after proving that the path denotes an index variant.
     IndexLabel {
-        index: Spanned<IndexNamePath>,
+        index: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
         span: Span,
     },

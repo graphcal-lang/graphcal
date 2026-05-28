@@ -224,6 +224,12 @@ macro_rules! define_name_type {
                 self.0.as_str()
             }
 
+            /// Consume and return the inner atom.
+            #[must_use]
+            pub fn into_atom(self) -> NameAtom {
+                self.0
+            }
+
             /// Consume and return the inner `String`.
             #[must_use]
             pub fn into_inner(self) -> String {
@@ -568,115 +574,173 @@ impl From<DeclName> for ScopedName {
     }
 }
 
-/// A syntactic index-name path, optionally qualified by one or more leading
-/// path segments.
+/// A syntactic non-empty dot-separated name path.
 ///
-/// This type preserves the source-level split in forms such as `Index` and
-/// `module.Index` without claiming that `module` has already been resolved to a
-/// concrete module. It is a parsed path shape, not a proof that the referenced
-/// index exists. Semantic resolution should either validate it in a context-rich
-/// resolver or keep it as syntax rather than flattening it into an [`IndexName`]
-/// string.
+/// `NamePath` preserves source-level path shape (`Foo`, `module.Foo`,
+/// `module.Index.Variant`) without assigning a semantic namespace to any
+/// segment. It is appropriate for unresolved reference positions that do not
+/// need per-segment spans. Use [`crate::syntax::ast::IdentPath`] when the AST
+/// must retain source spans for each segment.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct IndexNamePath {
-    qualifier: Arc<[Arc<str>]>,
-    index: IndexName,
+pub struct NamePath {
+    segments: crate::syntax::non_empty::NonEmpty<NameAtom>,
 }
 
-impl IndexNamePath {
-    /// Create an unqualified local index name.
+impl NamePath {
+    /// Construct a path from already-validated atoms.
     #[must_use]
-    pub fn local(index: IndexName) -> Self {
-        Self {
-            qualifier: Arc::from([] as [Arc<str>; 0]),
-            index,
+    pub const fn new(segments: crate::syntax::non_empty::NonEmpty<NameAtom>) -> Self {
+        Self { segments }
+    }
+
+    /// Construct a one-segment path.
+    #[must_use]
+    pub fn local(atom: NameAtom) -> Self {
+        Self::new(crate::syntax::non_empty::NonEmpty::singleton(atom))
+    }
+
+    /// Construct a path from qualifier atoms plus a leaf atom.
+    #[must_use]
+    pub fn qualified_path(qualifier: impl IntoIterator<Item = NameAtom>, leaf: NameAtom) -> Self {
+        let mut segments: Vec<NameAtom> = qualifier.into_iter().collect();
+        segments.push(leaf);
+        Self::new(
+            crate::syntax::non_empty::NonEmpty::try_from_vec(segments)
+                .expect("qualified_path always pushes a leaf segment"),
+        )
+    }
+
+    /// Borrow all path segments in source order.
+    #[must_use]
+    pub fn segments(&self) -> &[NameAtom] {
+        self.segments.as_slice()
+    }
+
+    /// Mutably borrow all path segments in source order.
+    #[must_use]
+    pub fn segments_mut(&mut self) -> &mut [NameAtom] {
+        self.segments.as_mut_slice()
+    }
+
+    /// Consume and return all path segments.
+    #[must_use]
+    pub fn into_segments(self) -> crate::syntax::non_empty::NonEmpty<NameAtom> {
+        self.segments
+    }
+
+    /// Number of path segments. Always at least 1.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Returns `false`; provided for API compatibility with sequence-like code.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Returns whether this is a one-segment path.
+    #[must_use]
+    pub const fn is_bare(&self) -> bool {
+        self.segments.len() == 1
+    }
+
+    /// Returns the leaf segment.
+    #[must_use]
+    pub fn leaf(&self) -> &NameAtom {
+        self.segments.last()
+    }
+
+    /// Returns the leaf segment as a string slice.
+    ///
+    /// Use this only at legacy boundaries that still key local registries by
+    /// leaf names. Do not use it to recover structure from a qualified path.
+    #[must_use]
+    pub fn leaf_str(&self) -> &str {
+        self.leaf().as_str()
+    }
+
+    /// Returns the only segment when this is a bare path.
+    #[must_use]
+    pub fn as_bare(&self) -> Option<&NameAtom> {
+        match self.segments.as_slice() {
+            [atom] => Some(atom),
+            _ => None,
         }
     }
 
-    /// Create an index name qualified by an arbitrary-depth module path.
+    /// Split the path into qualifier segments and leaf segment.
+    ///
+    /// The qualifier slice is empty for one-segment paths.
     #[must_use]
-    pub fn qualified_path(
-        qualifier: impl IntoIterator<Item = impl Into<Arc<str>>>,
-        index: IndexName,
-    ) -> Self {
-        Self {
-            qualifier: qualifier.into_iter().map(Into::into).collect(),
-            index,
-        }
+    pub fn split_last(&self) -> (&[NameAtom], &NameAtom) {
+        let segments = self.segments.as_slice();
+        let (leaf, qualifier) = segments
+            .split_last()
+            .expect("NamePath is backed by NonEmpty");
+        (qualifier, leaf)
     }
 
-    /// Returns the module qualifier path segments. Empty means local.
+    /// Returns the qualifier segments before the leaf. Empty for bare paths.
     #[must_use]
-    pub fn qualifier(&self) -> &[Arc<str>] {
-        &self.qualifier
+    pub fn qualifier_segments(&self) -> &[NameAtom] {
+        self.split_last().0
     }
 
-    /// Returns the index-name leaf.
+    /// Returns qualifier segments and leaf only when this path is qualified.
     #[must_use]
-    pub const fn index(&self) -> &IndexName {
-        &self.index
+    pub fn qualifier_and_leaf(&self) -> Option<(&[NameAtom], &NameAtom)> {
+        let (qualifier, leaf) = self.split_last();
+        (!qualifier.is_empty()).then_some((qualifier, leaf))
     }
 
-    /// Returns the leaf index as a string. This deliberately ignores the
-    /// qualifier and is intended for legacy local registries while qualified
-    /// index resolution is being pushed into name resolution.
+    /// Human-readable path string for diagnostics and formatting boundaries.
     #[must_use]
-    pub fn as_str(&self) -> &str {
-        self.index.as_str()
-    }
-
-    /// Returns whether this index reference is qualified.
-    #[must_use]
-    pub fn is_qualified(&self) -> bool {
-        !self.qualifier.is_empty()
+    pub fn display_path(&self) -> String {
+        self.segments
+            .iter()
+            .map(NameAtom::as_str)
+            .collect::<Vec<_>>()
+            .join(".")
     }
 }
 
-impl From<IndexName> for IndexNamePath {
-    fn from(name: IndexName) -> Self {
-        Self::local(name)
-    }
-}
-
-impl From<NameAtom> for IndexNamePath {
+impl From<NameAtom> for NamePath {
     fn from(atom: NameAtom) -> Self {
-        Self::local(IndexName::from_atom(atom))
+        Self::local(atom)
     }
 }
 
-impl From<String> for IndexNamePath {
+impl From<IndexName> for NamePath {
+    fn from(name: IndexName) -> Self {
+        Self::local(name.into_atom())
+    }
+}
+
+impl From<String> for NamePath {
     fn from(s: String) -> Self {
-        Self::local(IndexName::new(s))
+        Self::local(NameAtom::parse(s).unwrap_or_else(|err| {
+            panic!("invalid NamePath leaf name: {err}");
+        }))
     }
 }
 
-impl From<&str> for IndexNamePath {
+impl From<&str> for NamePath {
     fn from(s: &str) -> Self {
-        Self::local(IndexName::new(s))
+        Self::from(s.to_string())
     }
 }
 
-impl std::ops::Deref for IndexNamePath {
-    type Target = IndexName;
-
-    fn deref(&self) -> &Self::Target {
-        &self.index
-    }
-}
-
-impl AsRef<str> for IndexNamePath {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl std::fmt::Display for IndexNamePath {
+impl std::fmt::Display for NamePath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for segment in self.qualifier.iter() {
-            f.write_str(segment)?;
-            f.write_str(".")?;
+        for (idx, segment) in self.segments.iter().enumerate() {
+            if idx > 0 {
+                f.write_str(".")?;
+            }
+            f.write_str(segment.as_str())?;
         }
-        write!(f, "{}", self.index)
+        Ok(())
     }
 }
 
@@ -752,6 +816,23 @@ mod tests {
         let a = FnName::new("alpha");
         let b = FnName::new("beta");
         assert!(a < b);
+    }
+
+    #[test]
+    fn name_path_preserves_qualifier_and_leaf() {
+        let path = NamePath::qualified_path(
+            [NameAtom::parse("module").unwrap()],
+            NameAtom::parse("Index").unwrap(),
+        );
+        assert_eq!(path.display_path(), "module.Index");
+        assert_eq!(path.leaf_str(), "Index");
+        assert_eq!(
+            path.qualifier_segments()
+                .iter()
+                .map(NameAtom::as_str)
+                .collect::<Vec<_>>(),
+            ["module"]
+        );
     }
 
     #[test]

@@ -1,9 +1,7 @@
 use crate::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, Ident, IdentPath, IndexArg, ModulePath, UnaryOp,
 };
-use crate::syntax::names::{
-    DeclName, FieldName, IndexName, IndexNamePath, IndexVariantName, NameAtom, ScopedName,
-};
+use crate::syntax::names::{DeclName, FieldName, IndexVariantName, NameAtom, NamePath, ScopedName};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::Token;
 
@@ -670,9 +668,7 @@ impl Parser<'_> {
 
     // --- Index access ---
 
-    pub(super) fn index_name_path_from_segments(
-        index_segments: &[Ident],
-    ) -> Spanned<IndexNamePath> {
+    pub(super) fn index_name_path_from_segments(index_segments: &[Ident]) -> Spanned<NamePath> {
         let index_ident = index_segments
             .last()
             .expect("index variant paths always have an index segment");
@@ -681,16 +677,16 @@ impl Parser<'_> {
             .map_or(index_ident.span, |first| first.span.merge(index_ident.span));
         let qualifier = index_segments[..index_segments.len().saturating_sub(1)]
             .iter()
-            .map(|ident| ident.name.to_string());
+            .map(|ident| ident.name.clone());
         Spanned::new(
-            IndexNamePath::qualified_path(qualifier, IndexName::new(&index_ident.name)),
+            NamePath::qualified_path(qualifier, index_ident.name.clone()),
             span,
         )
     }
 
     pub(super) fn parse_index_variant_path(
         &mut self,
-    ) -> Result<(Spanned<IndexNamePath>, Spanned<IndexVariantName>, Span), ParseError> {
+    ) -> Result<(Spanned<NamePath>, Spanned<IndexVariantName>, Span), ParseError> {
         let first = self.parse_any_ident()?;
         let start_span = first.span;
         self.expect(Token::Dot)?;
@@ -735,11 +731,14 @@ impl Parser<'_> {
 
         // If it's a bare name reference, use IndexArg::Var for backward compatibility.
         match expr.kind {
-            ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path))
-                if path.segments.len() == 1 =>
-            {
-                let mut segments = path.segments.into_vec();
-                Ok(IndexArg::Var(segments.remove(0)))
+            ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
+                match path.into_bare() {
+                    Ok(ident) => Ok(IndexArg::Var(ident)),
+                    Err(path) => Ok(IndexArg::Expr(Box::new(Expr::new(
+                        ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)),
+                        expr.span,
+                    )))),
+                }
             }
             other => Ok(IndexArg::Expr(Box::new(Expr::new(other, expr.span)))),
         }

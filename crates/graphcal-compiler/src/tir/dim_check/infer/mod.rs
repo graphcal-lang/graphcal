@@ -18,7 +18,7 @@ use crate::desugar::resolved_ast::{Expr, ExprKind};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{ScopedName, UnitName};
+use crate::syntax::names::{IndexName, ScopedName, UnitName};
 
 use super::{DeclaredType, InferredType};
 
@@ -82,12 +82,13 @@ pub(super) fn infer_type_with_owner(
         }),
 
         ExprKind::VariantLiteral { index, variant } => {
+            let index_name = IndexName::from_atom(index.value.leaf().clone());
             // Validate index exists
             let idx_def = registry
                 .indexes
-                .get_index(index.value.as_str())
+                .get_index(index_name.as_str())
                 .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: index.value.index().clone(),
+                    name: index_name.clone(),
                     src: src.clone(),
                     span: index.span.into(),
                 })?;
@@ -98,13 +99,13 @@ pub(super) fn infer_type_with_owner(
                 .any(|v| v.as_str() == variant.value.as_str())
             {
                 return Err(GraphcalError::UnknownVariant {
-                    index_name: index.value.index().clone(),
+                    index_name: index_name.clone(),
                     variant_name: variant.value.clone(),
                     src: src.clone(),
                     span: variant.span.into(),
                 });
             }
-            Ok(InferredType::Label(index.value.index().clone()))
+            Ok(InferredType::Label(index_name))
         }
 
         ExprKind::UnitLiteral { unit, .. } => {
