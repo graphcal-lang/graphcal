@@ -20,7 +20,7 @@ use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeGenericConstraint};
 
 use super::super::helpers::{cartesian_product, format_inferred_type, resolve_field_type};
-use super::super::{DeclaredType, InferredType};
+use super::super::{DeclaredType, InferredIndex, InferredType};
 use super::infer_type;
 
 fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
@@ -92,12 +92,55 @@ fn validate_index_path_module_scope(
     }
 }
 
+fn resolved_collection_refs(
+    dag: Option<&crate::tir::typed::DagTIR>,
+) -> Option<&crate::tir::typed::ResolvedCollectionRefs> {
+    dag.and_then(|dag| dag.resolved_collection_refs.as_ref())
+}
+
+fn inferred_index_for_path(
+    path: &NamePath,
+    span: Span,
+    dag: Option<&crate::tir::typed::DagTIR>,
+) -> InferredIndex {
+    resolved_collection_refs(dag)
+        .and_then(|refs| refs.for_binding_indexes.get(&span))
+        .cloned()
+        .map_or_else(
+            || InferredIndex::legacy(legacy_index_name_from_path(path)),
+            InferredIndex::from_resolved,
+        )
+}
+
+fn resolved_index_variant_for_arg(
+    index_span: Span,
+    variant_span: Span,
+    dag: Option<&crate::tir::typed::DagTIR>,
+) -> Option<&crate::syntax::names::ResolvedIndexVariant> {
+    let span = index_span.merge(variant_span);
+    resolved_collection_refs(dag).and_then(|refs| refs.index_access_variants.get(&span))
+}
+
+fn index_def_for_inferred<'a>(
+    index: &InferredIndex,
+    dag: Option<&'a crate::tir::typed::DagTIR>,
+    registry: &'a Registry,
+) -> Option<&'a crate::registry::types::IndexDef> {
+    index
+        .resolved()
+        .and_then(|resolved| {
+            resolved_collection_refs(dag).and_then(|refs| refs.index_defs.get(resolved))
+        })
+        .or_else(|| registry.indexes.get_index(index.name().as_str()))
+}
+
 /// Infer the type of a for comprehension.
 pub(super) fn infer_for_comp(
     bindings: &[ForBinding],
     body: &Expr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -106,44 +149,56 @@ pub(super) fn infer_for_comp(
     // Add loop variables to local_types, infer body type, wrap in Indexed layers
     let mut inner_locals = local_types.clone();
     for binding in bindings {
-        let var_type = match &binding.index {
-            ForBindingIndex::Named(spanned_idx) => {
-                validate_index_path_module_scope(&spanned_idx.value, tir, src, spanned_idx.span)?;
-                let idx_name = spanned_idx.value.leaf_str();
-                let idx_def = registry.indexes.get_index(idx_name).ok_or_else(|| {
-                    GraphcalError::UnknownIndex {
-                        name: legacy_index_name_from_path(&spanned_idx.value),
-                        src: src.clone(),
-                        span: spanned_idx.span.into(),
+        let var_type =
+            match &binding.index {
+                ForBindingIndex::Named(spanned_idx) => {
+                    if resolved_collection_refs(dag)
+                        .and_then(|refs| refs.for_binding_indexes.get(&spanned_idx.span))
+                        .is_none()
+                    {
+                        validate_index_path_module_scope(
+                            &spanned_idx.value,
+                            tir,
+                            src,
+                            spanned_idx.span,
+                        )?;
                     }
-                })?;
-                match &idx_def.kind {
-                    crate::registry::types::IndexKind::Named { .. }
-                    | crate::registry::types::IndexKind::RequiredNamed => {
-                        InferredType::Label(legacy_index_name_from_path(&spanned_idx.value))
-                    }
-                    crate::registry::types::IndexKind::Range(
-                        crate::registry::types::RangeIndexData { dimension, .. },
-                    )
-                    | crate::registry::types::IndexKind::RequiredRange { dimension } => {
-                        InferredType::Scalar(dimension.clone())
-                    }
-                    crate::registry::types::IndexKind::NatRange { size } => {
-                        InferredType::Fin(NatLinearForm::from_constant(*size as u64))
+                    let index_identity =
+                        inferred_index_for_path(&spanned_idx.value, spanned_idx.span, dag);
+                    let idx_def = index_def_for_inferred(&index_identity, dag, registry)
+                        .ok_or_else(|| GraphcalError::UnknownIndex {
+                            name: index_identity.name().clone(),
+                            src: src.clone(),
+                            span: spanned_idx.span.into(),
+                        })?;
+                    match &idx_def.kind {
+                        crate::registry::types::IndexKind::Named { .. }
+                        | crate::registry::types::IndexKind::RequiredNamed => {
+                            InferredType::Label(index_identity)
+                        }
+                        crate::registry::types::IndexKind::Range(
+                            crate::registry::types::RangeIndexData { dimension, .. },
+                        )
+                        | crate::registry::types::IndexKind::RequiredRange { dimension } => {
+                            InferredType::Scalar(dimension.clone())
+                        }
+                        crate::registry::types::IndexKind::NatRange { size } => {
+                            InferredType::Fin(NatLinearForm::from_constant(*size as u64))
+                        }
                     }
                 }
-            }
-            ForBindingIndex::Range { arg, .. } => {
-                // `for i: range(N)` — loop variable is Fin(N)
-                InferredType::Fin(normalize_nat_expr_lenient(arg))
-            }
-        };
+                ForBindingIndex::Range { arg, .. } => {
+                    // `for i: range(N)` — loop variable is Fin(N)
+                    InferredType::Fin(normalize_nat_expr_lenient(arg))
+                }
+            };
         inner_locals.insert(binding.var.value.as_str().to_owned(), var_type);
     }
     let body_type = infer_type(
         body,
         declared_types,
         &inner_locals,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -152,10 +207,17 @@ pub(super) fn infer_for_comp(
     // Wrap body type with index layers (outermost binding first)
     let mut result = body_type;
     for binding in bindings.iter().rev() {
-        let idx_name = for_binding_index_name(&binding.index);
+        let index = match &binding.index {
+            ForBindingIndex::Named(spanned_idx) => {
+                inferred_index_for_path(&spanned_idx.value, spanned_idx.span, dag)
+            }
+            ForBindingIndex::Range { .. } => {
+                InferredIndex::legacy(for_binding_index_name(&binding.index))
+            }
+        };
         result = InferredType::Indexed {
             element: Box::new(result),
-            index: idx_name,
+            index,
         };
     }
     Ok(result)
@@ -171,6 +233,7 @@ pub(super) fn infer_map_or_table_literal(
     entries: &[crate::desugar::resolved_ast::MapEntry],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -393,6 +456,7 @@ pub(super) fn infer_map_or_table_literal(
         &entries[0].value,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -405,7 +469,7 @@ pub(super) fn infer_map_or_table_literal(
     if let InferredType::Indexed { index, .. } = &first_type {
         let inner_is_label = registry
             .indexes
-            .get_index(index.as_str())
+            .get_index(index.name().as_str())
             .is_some_and(|def| !def.is_range());
         if inner_is_label {
             return Err(GraphcalError::EvalError {
@@ -420,6 +484,7 @@ pub(super) fn infer_map_or_table_literal(
             &entry.value,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -439,7 +504,7 @@ pub(super) fn infer_map_or_table_literal(
     for idx_name in index_names.iter().rev() {
         result = InferredType::Indexed {
             element: Box::new(result),
-            index: (*idx_name).clone(),
+            index: InferredIndex::legacy((*idx_name).clone()),
         };
     }
     Ok(result)
@@ -452,6 +517,7 @@ pub(super) fn infer_index_access(
     args: &[IndexArg],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -461,6 +527,7 @@ pub(super) fn infer_index_access(
         inner,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -483,35 +550,48 @@ pub(super) fn infer_index_access(
         // Validate the argument matches the index
         match arg {
             IndexArg::Variant { index, variant } => {
-                validate_index_path_module_scope(&index.value, tir, src, index.span)?;
-                if index.value.leaf_str() != idx_name.as_str() {
+                let resolved_variant =
+                    resolved_index_variant_for_arg(index.span, variant.span, dag);
+                if resolved_variant.is_none() {
+                    validate_index_path_module_scope(&index.value, tir, src, index.span)?;
+                }
+                let arg_index = resolved_variant.map_or_else(
+                    || InferredIndex::legacy(legacy_index_name_from_path(&index.value)),
+                    |variant| InferredIndex::from_resolved(variant.index().clone()),
+                );
+                if arg_index != idx_name {
                     return Err(GraphcalError::IndexMismatch {
-                        expected: idx_name,
-                        found: legacy_index_name_from_path(&index.value),
+                        expected: idx_name.name().clone(),
+                        found: arg_index.name().clone(),
                         src: src.clone(),
                         span: index.span.into(),
                     });
                 }
-                // Validate variant exists
-                let idx_def = registry
-                    .indexes
-                    .get_index(idx_name.as_str())
-                    .ok_or_else(|| GraphcalError::UnknownIndex {
-                        name: idx_name.clone(),
-                        src: src.clone(),
-                        span: index.span.into(),
-                    })?;
-                if !idx_def
-                    .variants()
-                    .iter()
-                    .any(|v| v.as_str() == variant.value.as_str())
-                {
-                    return Err(GraphcalError::UnknownVariant {
-                        index_name: idx_name,
-                        variant_name: variant.value.clone(),
-                        src: src.clone(),
-                        span: variant.span.into(),
-                    });
+                if resolved_variant.is_none() {
+                    // Validate variant exists on the legacy leaf-keyed path only
+                    // when no HIR-resolved variant sidecar is available. The
+                    // HIR sidecar itself is produced by successful canonical
+                    // `ResolvedIndexVariant` lookup.
+                    let idx_def =
+                        index_def_for_inferred(&idx_name, dag, registry).ok_or_else(|| {
+                            GraphcalError::UnknownIndex {
+                                name: idx_name.name().clone(),
+                                src: src.clone(),
+                                span: index.span.into(),
+                            }
+                        })?;
+                    if !idx_def
+                        .variants()
+                        .iter()
+                        .any(|v| v.as_str() == variant.value.as_str())
+                    {
+                        return Err(GraphcalError::UnknownVariant {
+                            index_name: idx_name.name().clone(),
+                            variant_name: variant.value.clone(),
+                            src: src.clone(),
+                            span: variant.span.into(),
+                        });
+                    }
                 }
             }
             IndexArg::Var(ident) => {
@@ -525,10 +605,10 @@ pub(super) fn infer_index_access(
                 })?;
                 match var_type {
                     InferredType::Label(label_index) => {
-                        if label_index.as_str() != idx_name.as_str() {
+                        if label_index != &idx_name {
                             return Err(GraphcalError::IndexMismatch {
-                                expected: idx_name,
-                                found: label_index.clone(),
+                                expected: idx_name.name().clone(),
+                                found: label_index.name().clone(),
                                 src: src.clone(),
                                 span: ident.span.into(),
                             });
@@ -537,7 +617,7 @@ pub(super) fn infer_index_access(
                     InferredType::Struct(type_name, args) => {
                         if type_name.as_str() != idx_name.as_str() || !args.is_empty() {
                             return Err(GraphcalError::IndexMismatch {
-                                expected: idx_name,
+                                expected: idx_name.name().clone(),
                                 found: IndexName::new(type_name.as_str()),
                                 src: src.clone(),
                                 span: ident.span.into(),
@@ -548,14 +628,13 @@ pub(super) fn infer_index_access(
                         // Allow scalar locals to be used as index args
                         // for range indexes (e.g. prev_i, i in Unfold)
                         let idx_def =
-                            registry
-                                .indexes
-                                .get_index(idx_name.as_str())
-                                .ok_or_else(|| GraphcalError::UnknownIndex {
-                                    name: idx_name.clone(),
+                            index_def_for_inferred(&idx_name, dag, registry).ok_or_else(|| {
+                                GraphcalError::UnknownIndex {
+                                    name: idx_name.name().clone(),
                                     src: src.clone(),
                                     span: ident.span.into(),
-                                })?;
+                                }
+                            })?;
                         if !idx_def.is_range() {
                             return Err(GraphcalError::EvalError {
                                 message: format!("`{}` is not a loop variable", ident.name),
@@ -567,7 +646,7 @@ pub(super) fn infer_index_access(
                     InferredType::Int => {
                         // Allow Int locals to be used as index args for nat range indexes
                         // (e.g. `for i: range(3) { v[i] }`)
-                        if let Some(idx_def) = registry.indexes.get_index(idx_name.as_str())
+                        if let Some(idx_def) = index_def_for_inferred(&idx_name, dag, registry)
                             && !idx_def.is_nat_range()
                         {
                             return Err(GraphcalError::EvalError {
@@ -587,7 +666,7 @@ pub(super) fn infer_index_access(
                         // Fin(N) can index into nat-range indexes with bounds checking.
                         // Extract the index size as a NatLinearForm and check: fin_bound <= size.
                         let index_form = if let Some(idx_def) =
-                            registry.indexes.get_index(idx_name.as_str())
+                            index_def_for_inferred(&idx_name, dag, registry)
                         {
                             if !idx_def.is_nat_range() {
                                 return Err(GraphcalError::EvalError {
@@ -638,6 +717,7 @@ pub(super) fn infer_index_access(
                     index_expr,
                     declared_types,
                     local_types,
+                    dag,
                     tir,
                     registry,
                     builtin_fns,
@@ -654,7 +734,7 @@ pub(super) fn infer_index_access(
                     });
                 }
                 // Check that the indexed type is a nat-range index.
-                if let Some(idx_def) = registry.indexes.get_index(idx_name.as_str())
+                if let Some(idx_def) = index_def_for_inferred(&idx_name, dag, registry)
                     && !idx_def.is_nat_range()
                 {
                     return Err(GraphcalError::EvalError {
@@ -667,7 +747,7 @@ pub(super) fn infer_index_access(
                 }
                 // Try to compute a static Fin bound for bounds checking.
                 if let Some(fin_bound) = compute_index_fin_bound(index_expr, local_types) {
-                    let index_form = registry.indexes.get_index(idx_name.as_str()).map_or_else(
+                    let index_form = index_def_for_inferred(&idx_name, dag, registry).map_or_else(
                         // Symbolic nat range from generic param.
                         || NatLinearForm::from_index_name(idx_name.as_str()),
                         |idx_def| idx_def.nat_range_size().map(NatLinearForm::from_constant),
@@ -757,6 +837,7 @@ pub(super) fn infer_scan(
     body: &Expr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -767,6 +848,7 @@ pub(super) fn infer_scan(
         source,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -783,6 +865,7 @@ pub(super) fn infer_scan(
         init,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -806,6 +889,7 @@ pub(super) fn infer_scan(
         body,
         declared_types,
         &scan_locals,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -837,6 +921,7 @@ pub(super) fn infer_unfold(
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -846,6 +931,7 @@ pub(super) fn infer_unfold(
         init,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -903,6 +989,7 @@ pub(super) fn infer_unfold(
         body,
         declared_types,
         &scan_locals,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -922,7 +1009,7 @@ pub(super) fn infer_unfold(
     if let Some((index_name, _)) = owner_range_index {
         return Ok(InferredType::Indexed {
             element: Box::new(init_type),
-            index: index_name,
+            index: InferredIndex::legacy(index_name),
         });
     }
 
@@ -936,6 +1023,7 @@ pub(super) fn infer_field_access(
     field: &crate::syntax::span::Spanned<FieldName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -945,6 +1033,7 @@ pub(super) fn infer_field_access(
         inner,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -1006,6 +1095,7 @@ pub(super) fn infer_constructor_call(
     fields: &[crate::desugar::resolved_ast::FieldInit],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -1199,6 +1289,7 @@ pub(super) fn infer_constructor_call(
             &field_init.value,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,

@@ -5,7 +5,7 @@ use miette::NamedSource;
 
 use crate::desugar::resolved_ast::Expr;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{IndexName, ScopedName, StructTypeName};
+use crate::syntax::names::{IndexName, ResolvedName, ScopedName, StructTypeName, namespace};
 
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
@@ -14,7 +14,9 @@ use crate::registry::types::Registry;
 use crate::tir::typed::NatLinearForm;
 
 pub(crate) use helpers::format_inferred_type;
-use helpers::{expect_scalar, format_declared_type, is_bool_type, types_match};
+use helpers::{
+    expect_scalar, format_declared_type, is_bool_type, resolved_type_matches_inferred, types_match,
+};
 use infer::{infer_type, infer_type_with_owner};
 
 mod builtins;
@@ -33,6 +35,86 @@ mod tests;
 
 pub use crate::registry::declared_type::DeclaredType;
 
+/// Index identity carried by inferred collection/label types.
+///
+/// The `resolved` field is populated by module-aware HIR sidecars. If both
+/// sides being compared carry canonical identities, equality is owner-sensitive;
+/// otherwise inference falls back to the legacy leaf name so standalone callers
+/// keep working while the rest of TIR/eval migrates.
+#[derive(Debug, Clone, Eq)]
+pub struct InferredIndex {
+    name: IndexName,
+    resolved: Option<ResolvedName<namespace::Index>>,
+}
+
+impl InferredIndex {
+    #[must_use]
+    pub const fn new(name: IndexName, resolved: Option<ResolvedName<namespace::Index>>) -> Self {
+        Self { name, resolved }
+    }
+
+    #[must_use]
+    pub const fn legacy(name: IndexName) -> Self {
+        Self {
+            name,
+            resolved: None,
+        }
+    }
+
+    #[must_use]
+    pub fn from_resolved(resolved: ResolvedName<namespace::Index>) -> Self {
+        Self {
+            name: resolved.to_def_name(),
+            resolved: Some(resolved),
+        }
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &IndexName {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn resolved(&self) -> Option<&ResolvedName<namespace::Index>> {
+        self.resolved.as_ref()
+    }
+
+    #[must_use]
+    pub fn matches_resolved_or_name(
+        &self,
+        name: &IndexName,
+        resolved: Option<&ResolvedName<namespace::Index>>,
+    ) -> bool {
+        match (self.resolved(), resolved) {
+            (Some(actual), Some(expected)) => actual == expected,
+            _ => self.name() == name,
+        }
+    }
+}
+
+impl PartialEq for InferredIndex {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.resolved(), other.resolved()) {
+            (Some(lhs), Some(rhs)) => lhs == rhs,
+            _ => self.name == other.name,
+        }
+    }
+}
+
+impl std::fmt::Display for InferredIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.name.fmt(f)
+    }
+}
+
+impl std::ops::Deref for InferredIndex {
+    type Target = IndexName;
+
+    fn deref(&self) -> &Self::Target {
+        &self.name
+    }
+}
+
 /// The inferred type of an expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InferredType {
@@ -50,12 +132,12 @@ pub enum InferredType {
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
     /// A label of a named index (e.g., `Maneuver.Departure` has type `Label(Maneuver)`).
-    Label(IndexName),
+    Label(InferredIndex),
     /// A struct type, optionally with concrete type arguments for generic structs.
     Struct(StructTypeName, Vec<Self>),
     Indexed {
         element: Box<Self>,
-        index: IndexName,
+        index: InferredIndex,
     },
 }
 
@@ -76,6 +158,7 @@ impl InferredType {
 struct DimCheckContext<'a> {
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
     empty_locals: &'a HashMap<String, InferredType>,
+    dag: Option<&'a crate::tir::typed::DagTIR>,
     tir: &'a crate::tir::typed::TIR,
     registry: &'a Registry,
     builtin_fns: &'a HashMap<&'a str, crate::registry::builtins::BuiltinFunction>,
@@ -89,6 +172,7 @@ impl DimCheckContext<'_> {
             expr,
             self.declared_types,
             self.empty_locals,
+            self.dag,
             self.tir,
             self.registry,
             self.builtin_fns,
@@ -117,12 +201,17 @@ fn check_decl_expr_type(
         Some(name.member()),
         ctx.declared_types,
         ctx.empty_locals,
+        ctx.dag,
         ctx.tir,
         ctx.registry,
         ctx.builtin_fns,
         ctx.src,
     )?;
-    if !types_match(declared, &inferred) {
+    let matches = match ctx.dag.and_then(|dag| dag.resolved_decl_types.get(name)) {
+        Some(resolved) => resolved_type_matches_inferred(resolved, &inferred),
+        None => types_match(declared, &inferred),
+    };
+    if !matches {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_declared_type(declared, ctx.registry),
             inferred: format_inferred_type(&inferred, ctx.registry),
@@ -278,6 +367,7 @@ fn check_dimensions_dag(
     let ctx = DimCheckContext {
         declared_types: &declared_types,
         empty_locals: &empty_locals,
+        dag: Some(dag),
         tir,
         registry,
         builtin_fns,
@@ -374,6 +464,7 @@ fn check_domain_constraint_dimensions_dag(
                 &bound.value,
                 declared_types,
                 empty_locals,
+                Some(dag),
                 tir,
                 registry,
                 builtin_fns,
@@ -464,7 +555,7 @@ fn check_domain_constraint_targets_dag(
         let type_kind = match strip_indexed(resolved) {
             crate::tir::typed::ResolvedTypeExpr::Bool => "Bool".to_string(),
             crate::tir::typed::ResolvedTypeExpr::Datetime(_) => "Datetime".to_string(),
-            crate::tir::typed::ResolvedTypeExpr::Label(idx, _) => format!("Label({idx})"),
+            crate::tir::typed::ResolvedTypeExpr::Label(idx, _, _) => format!("Label({idx})"),
             crate::tir::typed::ResolvedTypeExpr::Struct(struct_name, _)
             | crate::tir::typed::ResolvedTypeExpr::GenericStruct {
                 name: struct_name, ..
@@ -633,6 +724,7 @@ fn check_field_domain_constraint_dimensions(
                     &bound.value,
                     declared_types,
                     empty_locals,
+                    None,
                     tir,
                     registry,
                     builtin_fns,
@@ -854,6 +946,7 @@ pub fn check_override_dimension(
         expr,
         declared_types,
         &empty_locals,
+        None,
         tir,
         registry,
         builtin_fns,

@@ -924,6 +924,71 @@ fn project_qualified_index_type_annotation_and_variant_arg() {
     assert!((find_value(&result, "accel") - 9.80665).abs() < f64::EPSILON);
 }
 
+fn write_same_leaf_index_project(main_source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub index Phase = { Warm, Cold };\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+#[test]
+fn project_index_access_uses_resolved_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
+         node burn: Dimensionless = @series[a.Phase.Burn];\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_index_access_rejects_same_leaf_wrong_owner() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
+         node bad: Dimensionless = @series[b.Phase.Warm];\n",
+    );
+
+    match compile_to_tir_project(&root, None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::IndexMismatch { .. })) => {}
+        other => panic!("expected IndexMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_for_comp_rejects_same_leaf_wrong_owner() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = for p: b.Phase { 1.0 };\n",
+    );
+
+    match compile_to_tir_project(&root, None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })) => {}
+        other => panic!("expected DimensionMismatchInAnnotation, got {other:?}"),
+    }
+}
+
 // ---- Bare module path eval tests ----
 mod prop {
     use super::*;

@@ -9,7 +9,8 @@ use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{GenericParamName, IndexName, IndexVariantName};
 
-use super::{DeclaredType, InferredType};
+use super::{DeclaredType, InferredIndex, InferredType};
+use crate::tir::typed::{ResolvedIndex, ResolvedTypeExpr};
 
 pub(super) fn is_bool_type(ty: &InferredType) -> bool {
     match ty {
@@ -31,7 +32,7 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
         (DeclaredType::Bool, InferredType::Bool) => true,
         (DeclaredType::Int, inferred) if inferred.is_int_like() => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
-        (DeclaredType::Label(d), InferredType::Label(i)) => d == i,
+        (DeclaredType::Label(d), InferredType::Label(i)) => i.name() == d,
         (DeclaredType::Struct(d, d_args), InferredType::Struct(i, i_args)) => {
             d == i
                 && d_args.len() == i_args.len()
@@ -49,8 +50,93 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
                 element: i_elem,
                 index: i_idx,
             },
-        ) => d_idx == i_idx && types_match(d_elem, i_elem),
+        ) => i_idx.name() == d_idx && types_match(d_elem, i_elem),
         _ => false,
+    }
+}
+
+/// Check if a resolved declaration type matches an inferred expression type,
+/// preserving canonical index identity when both sides carry it.
+pub(super) fn resolved_type_matches_inferred(
+    resolved: &ResolvedTypeExpr,
+    inferred: &InferredType,
+) -> bool {
+    match (resolved, inferred) {
+        (ResolvedTypeExpr::Dimensionless, InferredType::Scalar(d)) => d.is_dimensionless(),
+        (ResolvedTypeExpr::Bool, InferredType::Bool) => true,
+        (ResolvedTypeExpr::Int, inferred) => inferred.is_int_like(),
+        (ResolvedTypeExpr::Datetime(expected), InferredType::Datetime(actual)) => {
+            expected == actual
+        }
+        (ResolvedTypeExpr::Scalar(expected), InferredType::Scalar(actual)) => expected == actual,
+        (ResolvedTypeExpr::Label(expected, resolved, _), InferredType::Label(actual)) => {
+            actual.matches_resolved_or_name(expected, resolved.as_ref())
+        }
+        (ResolvedTypeExpr::Struct(expected, _), InferredType::Struct(actual, args)) => {
+            expected == actual && args.is_empty()
+        }
+        (
+            ResolvedTypeExpr::GenericStruct {
+                name, type_args, ..
+            },
+            InferredType::Struct(actual, actual_args),
+        ) => {
+            name == actual
+                && type_args.len() == actual_args.len()
+                && type_args
+                    .iter()
+                    .zip(actual_args)
+                    .all(|(expected, actual)| resolved_type_matches_inferred(expected, actual))
+        }
+        (ResolvedTypeExpr::Indexed { base, indexes }, _) => {
+            resolved_indexed_type_matches_inferred(base, indexes, inferred)
+        }
+        (
+            ResolvedTypeExpr::GenericDimParam(_, _)
+            | ResolvedTypeExpr::GenericTypeParam(_, _)
+            | ResolvedTypeExpr::GenericDimExpr { .. },
+            _,
+        ) => false,
+        _ => false,
+    }
+}
+
+fn resolved_indexed_type_matches_inferred(
+    base: &ResolvedTypeExpr,
+    indexes: &[ResolvedIndex],
+    inferred: &InferredType,
+) -> bool {
+    let mut current = inferred;
+    for index in indexes {
+        let InferredType::Indexed {
+            element,
+            index: actual,
+        } = current
+        else {
+            return false;
+        };
+        if !resolved_index_matches_inferred(index, actual) {
+            return false;
+        }
+        current = element;
+    }
+    resolved_type_matches_inferred(base, current)
+}
+
+fn resolved_index_matches_inferred(index: &ResolvedIndex, actual: &InferredIndex) -> bool {
+    match index {
+        ResolvedIndex::Concrete(expected, resolved, _) => {
+            actual.matches_resolved_or_name(expected, resolved.as_ref())
+        }
+        ResolvedIndex::NatExpr(form, _) => form
+            .is_constant()
+            .then(|| {
+                IndexName::new(crate::registry::types::nat_range_index_name(
+                    form.constant(),
+                ))
+            })
+            .is_some_and(|expected| actual.name() == &expected),
+        ResolvedIndex::GenericParam(expected, _) => actual.name().as_str() == expected.as_str(),
     }
 }
 
@@ -75,13 +161,13 @@ impl From<&InferredType> for DeclaredType {
             InferredType::Bool => Self::Bool,
             InferredType::Int | InferredType::Fin(_) => Self::Int,
             InferredType::Datetime(scale) => Self::Datetime(*scale),
-            InferredType::Label(index) => Self::Label(index.clone()),
+            InferredType::Label(index) => Self::Label(index.name().clone()),
             InferredType::Struct(n, args) => {
                 Self::Struct(n.clone(), args.iter().map(Self::from).collect())
             }
             InferredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),
-                index: index.clone(),
+                index: index.name().clone(),
             },
         }
     }
@@ -94,13 +180,13 @@ impl From<&DeclaredType> for InferredType {
             DeclaredType::Bool => Self::Bool,
             DeclaredType::Int => Self::Int,
             DeclaredType::Datetime(scale) => Self::Datetime(*scale),
-            DeclaredType::Label(index) => Self::Label(index.clone()),
+            DeclaredType::Label(index) => Self::Label(InferredIndex::legacy(index.clone())),
             DeclaredType::Struct(n, args) => {
                 Self::Struct(n.clone(), args.iter().map(Self::from).collect())
             }
             DeclaredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),
-                index: index.clone(),
+                index: InferredIndex::legacy(index.clone()),
             },
         }
     }

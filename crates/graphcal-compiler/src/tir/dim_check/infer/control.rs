@@ -22,6 +22,7 @@ pub(super) fn infer_if(
     else_branch: &Expr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -31,6 +32,7 @@ pub(super) fn infer_if(
         condition,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -50,6 +52,7 @@ pub(super) fn infer_if(
         then_branch,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -59,6 +62,7 @@ pub(super) fn infer_if(
         else_branch,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -89,6 +93,7 @@ pub(super) fn infer_match(
     arms: &[MatchArm],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -99,6 +104,7 @@ pub(super) fn infer_match(
         scrutinee,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -106,7 +112,8 @@ pub(super) fn infer_match(
     )?;
 
     Ok(match &scrutinee_type {
-        InferredType::Label(index_name) => {
+        InferredType::Label(index_identity) => {
+            let index_name = index_identity.name();
             // Label scrutinee: match on index variants (fieldless, qualified syntax)
             let index_def = registry
                 .indexes
@@ -183,6 +190,7 @@ pub(super) fn infer_match(
                     &arm.body,
                     declared_types,
                     local_types,
+                    dag,
                     tir,
                     registry,
                     builtin_fns,
@@ -302,6 +310,7 @@ pub(super) fn infer_match(
                     &arm.body,
                     declared_types,
                     &arm_locals,
+                    dag,
                     tir,
                     registry,
                     builtin_fns,

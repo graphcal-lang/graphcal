@@ -991,7 +991,7 @@ fn validate_constraint_target(
                 span: decl_span.into(),
             })
         }
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Label(idx, _) => {
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Label(idx, _, _) => {
             Err(GraphcalError::InvalidDomainTarget {
                 type_kind: format!("Label({idx})"),
                 src: src.clone(),
