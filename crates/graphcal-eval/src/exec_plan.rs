@@ -1003,7 +1003,7 @@ fn validate_constraint_target(
                 span: decl_span.into(),
             })
         }
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(name_s, _)
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(name_s, _, _)
         | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct { name: name_s, .. } => {
             Err(GraphcalError::InvalidDomainTarget {
                 type_kind: format!("struct `{name_s}`"),

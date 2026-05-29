@@ -54,11 +54,20 @@ pub enum ResolvedTypeExpr {
     Label(IndexName, Option<ResolvedName<namespace::Index>>, Span),
     /// A concrete scalar dimension, e.g. `Length * Time^-2`
     Scalar(Dimension),
-    /// A non-generic struct type name, e.g. `TransferResult`
-    Struct(StructTypeName, Span),
-    /// A generic struct with concrete type arguments, e.g. `Vec3<Length, ECI>`
+    /// A non-generic struct type name, e.g. `TransferResult`.
+    ///
+    /// The optional resolved identity is present when type resolution consumed
+    /// HIR/module-aware lookup. Legacy standalone callers keep `None` and
+    /// compare by the leaf name only.
+    Struct(
+        StructTypeName,
+        Option<ResolvedName<namespace::StructType>>,
+        Span,
+    ),
+    /// A generic struct with concrete type arguments, e.g. `Vec3<Length, ECI>`.
     GenericStruct {
         name: StructTypeName,
+        resolved: Option<ResolvedName<namespace::StructType>>,
         type_args: Vec<Self>,
         span: Span,
     },
@@ -102,7 +111,7 @@ impl ResolvedTypeExpr {
                     formatted
                 }
             }
-            Self::Struct(name, _) => name.to_string(),
+            Self::Struct(name, _, _) => name.to_string(),
             Self::GenericStruct {
                 name, type_args, ..
             } => {
@@ -778,6 +787,13 @@ pub struct ResolvedInlineDagRefs {
     pub calls: HashMap<Span, ResolvedInlineDagCall>,
 }
 
+/// Canonical type definitions referenced by module-aware TIR.
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedTypeDefs {
+    /// Struct/tagged-union definitions keyed by canonical owner/name.
+    pub struct_types: HashMap<ResolvedName<namespace::StructType>, TypeDef>,
+}
+
 /// A resolved inline-DAG invocation target, bindings, and projected output.
 #[derive(Debug, Clone)]
 pub struct ResolvedInlineDagCall {
@@ -980,6 +996,7 @@ impl TIR {
                 resolved_collection_refs: None,
                 resolved_constructor_refs: None,
                 resolved_inline_dag_refs: None,
+                resolved_type_defs: None,
                 source_order: Vec::new(),
                 assert_names: std::collections::HashSet::new(),
                 assumes_map: HashMap::new(),
@@ -1043,6 +1060,8 @@ pub struct DagTIR {
     pub resolved_constructor_refs: Option<ResolvedConstructorRefs>,
     /// Canonical HIR-derived inline-DAG routing identities for calls from this DAG.
     pub resolved_inline_dag_refs: Option<ResolvedInlineDagRefs>,
+    /// Canonical type definitions referenced by module-aware TIR.
+    pub resolved_type_defs: Option<ResolvedTypeDefs>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// Set of all assert names. Membership-only, never iterated.
@@ -1353,6 +1372,13 @@ fn type_resolve_dag(
         module_ctx.and_then(|ctx| collect_resolved_constructor_refs(&consts, &params, &nodes, ctx));
     let resolved_inline_dag_refs =
         module_ctx.and_then(|ctx| collect_resolved_inline_dag_refs(&consts, &params, &nodes, ctx));
+    let resolved_type_defs = module_ctx.map(|ctx| {
+        collect_resolved_type_defs(
+            &resolved_decl_types,
+            resolved_constructor_refs.as_ref(),
+            ctx,
+        )
+    });
 
     Ok(DagTIRSeed {
         dag_id: dag_id.clone(),
@@ -1364,7 +1390,80 @@ fn type_resolve_dag(
         resolved_collection_refs,
         resolved_constructor_refs,
         resolved_inline_dag_refs,
+        resolved_type_defs,
     })
+}
+
+fn collect_resolved_type_defs(
+    resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
+    constructor_refs: Option<&ResolvedConstructorRefs>,
+    ctx: ModuleTypeContext<'_>,
+) -> ResolvedTypeDefs {
+    let mut defs = ResolvedTypeDefs::default();
+    for resolved in resolved_decl_types.values() {
+        collect_struct_type_defs_from_resolved_type(resolved, ctx, &mut defs);
+    }
+    if let Some(constructor_refs) = constructor_refs {
+        for target in constructor_refs.constructor_defs.values() {
+            defs.struct_types
+                .entry(target.owning_type.clone())
+                .or_insert_with(|| target.type_def.clone());
+        }
+    }
+    defs
+}
+
+fn collect_struct_type_defs_from_resolved_type(
+    resolved: &ResolvedTypeExpr,
+    ctx: ModuleTypeContext<'_>,
+    defs: &mut ResolvedTypeDefs,
+) {
+    match resolved {
+        ResolvedTypeExpr::Struct(_, Some(name), _) => {
+            record_resolved_struct_type_def(name, ctx, defs);
+        }
+        ResolvedTypeExpr::GenericStruct {
+            resolved: Some(name),
+            type_args,
+            ..
+        } => {
+            record_resolved_struct_type_def(name, ctx, defs);
+            for arg in type_args {
+                collect_struct_type_defs_from_resolved_type(arg, ctx, defs);
+            }
+        }
+        ResolvedTypeExpr::GenericStruct { type_args, .. } => {
+            for arg in type_args {
+                collect_struct_type_defs_from_resolved_type(arg, ctx, defs);
+            }
+        }
+        ResolvedTypeExpr::Indexed { base, indexes: _ } => {
+            collect_struct_type_defs_from_resolved_type(base, ctx, defs);
+        }
+        ResolvedTypeExpr::Dimensionless
+        | ResolvedTypeExpr::Bool
+        | ResolvedTypeExpr::Int
+        | ResolvedTypeExpr::Datetime(_)
+        | ResolvedTypeExpr::Label(_, _, _)
+        | ResolvedTypeExpr::Scalar(_)
+        | ResolvedTypeExpr::Struct(_, None, _)
+        | ResolvedTypeExpr::GenericDimParam(_, _)
+        | ResolvedTypeExpr::GenericTypeParam(_, _)
+        | ResolvedTypeExpr::GenericDimExpr { .. } => {}
+    }
+}
+
+fn record_resolved_struct_type_def(
+    name: &ResolvedName<namespace::StructType>,
+    ctx: ModuleTypeContext<'_>,
+    defs: &mut ResolvedTypeDefs,
+) {
+    if defs.struct_types.contains_key(name) {
+        return;
+    }
+    if let Some(type_def) = ctx.types.get_struct_type(name) {
+        defs.struct_types.insert(name.clone(), type_def.clone());
+    }
 }
 
 fn collect_resolved_dag_dependencies(
@@ -1932,6 +2031,7 @@ struct DagTIRSeed {
     resolved_collection_refs: Option<ResolvedCollectionRefs>,
     resolved_constructor_refs: Option<ResolvedConstructorRefs>,
     resolved_inline_dag_refs: Option<ResolvedInlineDagRefs>,
+    resolved_type_defs: Option<ResolvedTypeDefs>,
 }
 
 impl DagTIRSeed {
@@ -1976,6 +2076,7 @@ impl DagTIRSeed {
             resolved_collection_refs: self.resolved_collection_refs,
             resolved_constructor_refs: self.resolved_constructor_refs,
             resolved_inline_dag_refs: self.resolved_inline_dag_refs,
+            resolved_type_defs: self.resolved_type_defs,
             source_order,
             assert_names,
             assumes_map,
@@ -2017,7 +2118,7 @@ pub fn resolved_to_declared_type(
         ResolvedTypeExpr::Datetime(scale) => Ok(DeclaredType::Datetime(*scale)),
         ResolvedTypeExpr::Label(index, _, _) => Ok(DeclaredType::Label(index.clone())),
         ResolvedTypeExpr::Scalar(dim) => Ok(DeclaredType::Scalar(dim.clone())),
-        ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(name.clone(), vec![])),
+        ResolvedTypeExpr::Struct(name, _, _) => Ok(DeclaredType::Struct(name.clone(), vec![])),
         ResolvedTypeExpr::GenericStruct {
             name, type_args, ..
         } => {
@@ -2426,10 +2527,11 @@ pub fn unify_resolved_type(
             Ok(())
         }
 
-        ResolvedTypeExpr::GenericStruct { name, .. } | ResolvedTypeExpr::Struct(name, _) => {
-            // For struct unification in function args, compare name only.
+        ResolvedTypeExpr::GenericStruct { name, resolved, .. }
+        | ResolvedTypeExpr::Struct(name, resolved, _) => {
             // Type args matching is not needed here since function generics
-            // don't use TypeApplication in their signatures (yet).
+            // don't use TypeApplication in their signatures (yet). When both
+            // sides carry canonical struct identities, compare owners as well.
             let InferredType::Struct(actual_name, _) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.to_string(),
@@ -2439,7 +2541,7 @@ pub fn unify_resolved_type(
                     span: span.into(),
                 });
             };
-            if *name != *actual_name {
+            if !actual_name.matches_resolved_or_name(name, resolved.as_ref()) {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.to_string(),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
@@ -2603,9 +2705,15 @@ pub fn substitute_resolved_type(
             crate::tir::dim_check::InferredIndex::new(index.clone(), resolved.clone()),
         )),
         ResolvedTypeExpr::Scalar(dim) => Ok(InferredType::Scalar(dim.clone())),
-        ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(name.clone(), vec![])),
+        ResolvedTypeExpr::Struct(name, resolved, _) => Ok(InferredType::Struct(
+            crate::tir::dim_check::InferredStructType::new(name.clone(), resolved.clone()),
+            vec![],
+        )),
         ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
+            name,
+            resolved,
+            type_args,
+            ..
         } => {
             let mut inferred_args = Vec::with_capacity(type_args.len());
             for arg in type_args {
@@ -2613,7 +2721,10 @@ pub fn substitute_resolved_type(
                     arg, dim_sub, index_sub, nat_sub, src,
                 )?);
             }
-            Ok(InferredType::Struct(name.clone(), inferred_args))
+            Ok(InferredType::Struct(
+                crate::tir::dim_check::InferredStructType::new(name.clone(), resolved.clone()),
+                inferred_args,
+            ))
         }
 
         ResolvedTypeExpr::GenericDimParam(gp, span) => dim_sub.get(gp).map_or_else(
@@ -2893,6 +3004,7 @@ fn resolve_hir_type_expr_inner(
             hir_struct_type_def(&name.value, name.span, ctx)?;
             Ok(ResolvedTypeExpr::Struct(
                 name.value.to_def_name(),
+                Some(name.value.clone()),
                 name.span,
             ))
         }
@@ -3149,6 +3261,7 @@ fn resolve_hir_type_application(
 
     Ok(ResolvedTypeExpr::GenericStruct {
         name: name.value.to_def_name(),
+        resolved: Some(name.value.clone()),
         type_args: resolved_args,
         span: type_ann.span,
     })
@@ -3303,7 +3416,14 @@ fn resolve_struct_type_path<'a>(
     registry: &'a Registry,
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'a>>,
-) -> Result<Option<(StructTypeName, &'a TypeDef, Option<crate::dag_id::DagId>)>, GraphcalError> {
+) -> Result<
+    Option<(
+        StructTypeName,
+        Option<ResolvedName<namespace::StructType>>,
+        &'a TypeDef,
+    )>,
+    GraphcalError,
+> {
     if let Some(ctx) = module_ctx {
         match ctx.resolver.resolve_struct_type_path(ctx.owner, path) {
             Ok(resolved) => {
@@ -3312,11 +3432,7 @@ fn resolve_struct_type_path<'a>(
                     .get_struct_type(&resolved)
                     .or_else(|| registry.types.get_type(resolved.as_str()))
                 {
-                    return Ok(Some((
-                        resolved.to_def_name(),
-                        type_def,
-                        Some(resolved.owner().clone()),
-                    )));
+                    return Ok(Some((resolved.to_def_name(), Some(resolved), type_def)));
                 }
                 return Err(GraphcalError::UnknownStructType {
                     name: resolved.to_string(),
@@ -3336,7 +3452,7 @@ fn resolve_struct_type_path<'a>(
     Ok(registry
         .types
         .get_type(atom.as_str())
-        .map(|type_def| (StructTypeName::from_atom(atom.clone()), type_def, None)))
+        .map(|type_def| (StructTypeName::from_atom(atom.clone()), None, type_def)))
 }
 
 fn resolve_dimension_path(
@@ -3531,10 +3647,10 @@ fn resolve_dim_expr(
         )? {
             return Ok(ResolvedTypeExpr::Label(index, None, term.span));
         }
-        if let Some((type_name, _, _)) =
+        if let Some((type_name, resolved, _)) =
             resolve_struct_type_path(&term.name.value, term.name.span, registry, src, module_ctx)?
         {
-            return Ok(ResolvedTypeExpr::Struct(type_name, term.span));
+            return Ok(ResolvedTypeExpr::Struct(type_name, resolved, term.span));
         }
         if let Some(atom) = term.name.value.as_bare()
             && let Some(gp) = dim_params.iter().find(|p| p.as_str() == atom.as_str())
@@ -3709,7 +3825,7 @@ fn resolve_type_application(
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let (type_name, type_def, definition_owner) =
+    let (type_name, resolved_type_name, type_def) =
         resolve_struct_type_path(&name.value, name.span, registry, src, module_ctx)?.ok_or_else(
             || GraphcalError::UnknownStructType {
                 name: name.value.display_path(),
@@ -3766,10 +3882,12 @@ fn resolve_type_application(
                 src: src.clone(),
                 span: type_ann.span.into(),
             })?;
-        let default_ctx = match (module_ctx, definition_owner.as_ref()) {
-            (Some(ctx), Some(owner)) => {
-                Some(ModuleTypeContext::new(owner, ctx.resolver, ctx.types))
-            }
+        let default_ctx = match (module_ctx, resolved_type_name.as_ref()) {
+            (Some(ctx), Some(resolved)) => Some(ModuleTypeContext::new(
+                resolved.owner(),
+                ctx.resolver,
+                ctx.types,
+            )),
             _ => module_ctx,
         };
         let resolved = resolve_type_expr_inner(
@@ -3785,6 +3903,7 @@ fn resolve_type_application(
     }
     Ok(ResolvedTypeExpr::GenericStruct {
         name: type_name.clone(),
+        resolved: resolved_type_name,
         type_args: resolved_args,
         span: type_ann.span,
     })
@@ -3945,7 +4064,7 @@ mod tests {
         let te = parse_type("TransferResult");
         let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert!(
-            matches!(resolved, ResolvedTypeExpr::Struct(name, _) if name.as_str() == "TransferResult")
+            matches!(resolved, ResolvedTypeExpr::Struct(name, _, _) if name.as_str() == "TransferResult")
         );
     }
 
@@ -4248,7 +4367,7 @@ mod tests {
                     )))
                 );
                 assert!(
-                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci")
+                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _, _) if n.as_str() == "Eci")
                 );
             }
             other => panic!("expected GenericStruct, got {other:?}"),
@@ -4280,7 +4399,7 @@ mod tests {
                     )))
                 );
                 assert!(
-                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci")
+                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _, _) if n.as_str() == "Eci")
                 );
             }
             other => panic!("expected GenericStruct, got {other:?}"),
@@ -4301,7 +4420,7 @@ mod tests {
                     )))
                 );
                 assert!(
-                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Unframed"),
+                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _, _) if n.as_str() == "Unframed"),
                     "expected Struct(Unframed), got {:?}",
                     type_args[1]
                 );
@@ -4343,7 +4462,7 @@ mod tests {
     #[test]
     fn convert_struct() {
         let dt = resolved_to_declared_type(
-            &ResolvedTypeExpr::Struct(StructTypeName::new("Foo"), Span::new(0, 0)),
+            &ResolvedTypeExpr::Struct(StructTypeName::new("Foo"), None, Span::new(0, 0)),
             &make_src(),
         )
         .unwrap();

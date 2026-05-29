@@ -5,11 +5,11 @@ use miette::NamedSource;
 
 use crate::desugar::resolved_ast::Expr;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::Registry;
+use crate::registry::types::{Registry, TypeDef};
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{GenericParamName, IndexName};
 
-use super::{DeclaredType, InferredIndex, InferredType};
+use super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
 use crate::tir::typed::{ResolvedIndex, ResolvedTypeExpr};
 
 pub(super) fn is_bool_type(ty: &InferredType) -> bool {
@@ -34,7 +34,7 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
         (DeclaredType::Label(d), InferredType::Label(i)) => i.name() == d,
         (DeclaredType::Struct(d, d_args), InferredType::Struct(i, i_args)) => {
-            d == i
+            d == i.name()
                 && d_args.len() == i_args.len()
                 && d_args
                     .iter()
@@ -72,16 +72,19 @@ pub(super) fn resolved_type_matches_inferred(
         (ResolvedTypeExpr::Label(expected, resolved, _), InferredType::Label(actual)) => {
             actual.matches_resolved_or_name(expected, resolved.as_ref())
         }
-        (ResolvedTypeExpr::Struct(expected, _), InferredType::Struct(actual, args)) => {
-            expected == actual && args.is_empty()
+        (ResolvedTypeExpr::Struct(expected, resolved, _), InferredType::Struct(actual, args)) => {
+            actual.matches_resolved_or_name(expected, resolved.as_ref()) && args.is_empty()
         }
         (
             ResolvedTypeExpr::GenericStruct {
-                name, type_args, ..
+                name,
+                resolved,
+                type_args,
+                ..
             },
             InferredType::Struct(actual, actual_args),
         ) => {
-            name == actual
+            actual.matches_resolved_or_name(name, resolved.as_ref())
                 && type_args.len() == actual_args.len()
                 && type_args
                     .iter()
@@ -145,6 +148,24 @@ pub(super) fn format_declared_type(dt: &DeclaredType, registry: &Registry) -> St
     dt.format(&registry.dimensions)
 }
 
+/// Look up the definition for an inferred struct identity.
+///
+/// Prefer canonical module-aware TIR sidecars when the identity carries a
+/// resolved owner, then fall back to the legacy leaf-keyed registry for
+/// standalone/non-module-aware callers.
+pub(super) fn struct_type_def_for_inferred<'a>(
+    ty: &InferredStructType,
+    dag: Option<&'a crate::tir::typed::DagTIR>,
+    registry: &'a Registry,
+) -> Option<&'a TypeDef> {
+    ty.resolved()
+        .and_then(|resolved| {
+            dag.and_then(|dag| dag.resolved_type_defs.as_ref())
+                .and_then(|defs| defs.struct_types.get(resolved))
+        })
+        .or_else(|| registry.types.get_type(ty.name().as_str()))
+}
+
 /// Format an inferred type for display in diagnostics.
 #[must_use]
 pub fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
@@ -163,7 +184,7 @@ impl From<&InferredType> for DeclaredType {
             InferredType::Datetime(scale) => Self::Datetime(*scale),
             InferredType::Label(index) => Self::Label(index.name().clone()),
             InferredType::Struct(n, args) => {
-                Self::Struct(n.clone(), args.iter().map(Self::from).collect())
+                Self::Struct(n.name().clone(), args.iter().map(Self::from).collect())
             }
             InferredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),
@@ -181,9 +202,10 @@ impl From<&DeclaredType> for InferredType {
             DeclaredType::Int => Self::Int,
             DeclaredType::Datetime(scale) => Self::Datetime(*scale),
             DeclaredType::Label(index) => Self::Label(InferredIndex::legacy(index.clone())),
-            DeclaredType::Struct(n, args) => {
-                Self::Struct(n.clone(), args.iter().map(Self::from).collect())
-            }
+            DeclaredType::Struct(n, args) => Self::Struct(
+                InferredStructType::legacy(n.clone()),
+                args.iter().map(Self::from).collect(),
+            ),
             DeclaredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),
                 index: InferredIndex::legacy(index.clone()),
@@ -249,7 +271,7 @@ pub(super) fn resolve_field_type(
             },
             TypeGenericConstraint::Index => match arg {
                 InferredType::Struct(name, _) => {
-                    index_sub.insert(param.name.clone(), IndexName::new(name.as_str()));
+                    index_sub.insert(param.name.clone(), IndexName::new(name.name().as_str()));
                 }
                 other => {
                     return Err(GraphcalError::EvalError {

@@ -12,7 +12,9 @@ use crate::syntax::names::{FieldName, IndexName, ScopedName, StructTypeName};
 use crate::syntax::span::Span;
 use crate::tir::typed::{ResolvedConstructorPattern, ResolvedPatternBinding};
 
-use super::super::helpers::{check_arm_types_match, format_inferred_type, resolve_field_type};
+use super::super::helpers::{
+    check_arm_types_match, format_inferred_type, resolve_field_type, struct_type_def_for_inferred,
+};
 use super::super::{DeclaredType, InferredType};
 use super::infer_type;
 
@@ -329,13 +331,14 @@ pub(super) fn infer_match(
         }
 
         InferredType::Struct(type_name, scrutinee_type_args) => {
-            let type_def = registry.types.get_type(type_name.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownStructType {
-                    name: type_name.to_string(),
-                    src: src.clone(),
-                    span: scrutinee.span.into(),
-                }
-            })?;
+            let type_def =
+                struct_type_def_for_inferred(type_name, dag, registry).ok_or_else(|| {
+                    GraphcalError::UnknownStructType {
+                        name: type_name.to_string(),
+                        src: src.clone(),
+                        span: scrutinee.span.into(),
+                    }
+                })?;
 
             let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
             let mut arm_types: Vec<InferredType> = Vec::new();
@@ -346,9 +349,12 @@ pub(super) fn infer_match(
                 let (variant_name_str, pattern_span, pattern_type_def, variant_def, bindings) =
                     match resolved_pattern {
                         Some(pattern) => {
-                            if pattern.target.type_def.name != *type_name {
+                            if !type_name.matches_resolved_or_name(
+                                &pattern.target.type_def.name,
+                                Some(&pattern.target.owning_type),
+                            ) {
                                 return Err(GraphcalError::UnknownField {
-                                    type_name: type_name.clone(),
+                                    type_name: type_name.name().clone(),
                                     field_name: FieldName::new(
                                         pattern.target.variant.name.as_str(),
                                     ),
@@ -389,7 +395,8 @@ pub(super) fn infer_match(
                             let members = type_def.union_members().ok_or_else(|| {
                                 GraphcalError::EvalError {
                                     message: format!(
-                                        "internal: cannot match on required (unbound) type `{type_name}`"
+                                        "internal: cannot match on required (unbound) type `{}`",
+                                        type_name.name()
                                     ),
                                     src: src.clone(),
                                     span: (*span).into(),
@@ -399,7 +406,7 @@ pub(super) fn infer_match(
                                 .iter()
                                 .find(|m| m.name.as_str() == variant_name_str)
                                 .ok_or_else(|| GraphcalError::UnknownField {
-                                    type_name: type_name.clone(),
+                                    type_name: type_name.name().clone(),
                                     field_name: FieldName::new(variant_name_str),
                                     src: src.clone(),
                                     span: name.span.into(),
@@ -429,7 +436,7 @@ pub(super) fn infer_match(
                     &mut arm_locals,
                     bindings,
                     variant_def,
-                    type_name,
+                    type_name.name(),
                     pattern_type_def,
                     scrutinee_type_args,
                     registry,
@@ -468,9 +475,12 @@ pub(super) fn infer_match(
                 }
             } else {
                 // Non-union struct: single arm matching the type itself
-                if !covered.contains(type_name.as_str()) {
+                if !covered.contains(type_name.name().as_str()) {
                     return Err(GraphcalError::EvalError {
-                        message: format!("non-exhaustive match: type `{type_name}` not covered"),
+                        message: format!(
+                            "non-exhaustive match: type `{}` not covered",
+                            type_name.name()
+                        ),
                         src: src.clone(),
                         span: expr.span.into(),
                     });

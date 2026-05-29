@@ -974,6 +974,58 @@ fn write_same_leaf_constructor_project(
     (dir, root)
 }
 
+fn write_same_leaf_struct_type_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub type Item { Pick(distance: Length), Idle }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub type Item { Pick(duration: Time), Idle }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+fn write_same_leaf_record_type_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub type Item { Item(distance: Length) }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub type Item { Item(duration: Time) }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
 #[test]
 fn project_constructor_call_uses_resolved_owner_with_same_leaf_constructors() {
     let (_dir, root) = write_same_leaf_constructor_project(
@@ -996,6 +1048,44 @@ fn project_match_pattern_uses_resolved_constructor_and_binding() {
              a.Pick(distance: d) => d,\n\
              a.Idle => 0.0 m,\n\
          };\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_struct_type_uses_resolved_owner_with_same_leaf_types() {
+    let (_dir, root) = write_same_leaf_struct_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node action: a.Item = a.Pick(distance: 2.0 m);\n\
+         node command: b.Item = b.Pick(duration: 3.0 s);\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_struct_type_rejects_same_leaf_wrong_owner_constructor() {
+    let (_dir, root) = write_same_leaf_struct_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node bad: a.Item = b.Pick(duration: 3.0 s);\n",
+    );
+
+    match compile_to_tir_project(&root, None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })) => {}
+        other => panic!("expected DimensionMismatchInAnnotation, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_field_access_uses_resolved_struct_type_def_with_same_leaf_types() {
+    let (_dir, root) = write_same_leaf_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node item: a.Item = a.Item(distance: 2.0 m);\n\
+         node distance: Length = @item.distance;\n",
     );
 
     compile_to_tir_project(&root, None, &fs()).unwrap();

@@ -20,8 +20,10 @@ use crate::tir::typed::NatLinearForm;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeGenericConstraint};
 
-use super::super::helpers::{cartesian_product, format_inferred_type, resolve_field_type};
-use super::super::{DeclaredType, InferredIndex, InferredType};
+use super::super::helpers::{
+    cartesian_product, format_inferred_type, resolve_field_type, struct_type_def_for_inferred,
+};
+use super::super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
 use super::infer_type;
 
 fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
@@ -687,10 +689,10 @@ pub(super) fn infer_index_access(
                         }
                     }
                     InferredType::Struct(type_name, args) => {
-                        if type_name.as_str() != idx_name.as_str() || !args.is_empty() {
+                        if type_name.name().as_str() != idx_name.as_str() || !args.is_empty() {
                             return Err(GraphcalError::IndexMismatch {
                                 expected: idx_name.name().clone(),
-                                found: IndexName::new(type_name.as_str()),
+                                found: IndexName::new(type_name.name().as_str()),
                                 src: src.clone(),
                                 span: ident.span.into(),
                             });
@@ -1113,22 +1115,26 @@ pub(super) fn infer_field_access(
     )?;
     match &inner_type {
         InferredType::Struct(type_name, type_args) => {
-            let type_def = registry.types.get_type(type_name.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownStructType {
-                    name: type_name.to_string(),
-                    src: src.clone(),
-                    span: inner.span.into(),
-                }
-            })?;
+            let type_def =
+                struct_type_def_for_inferred(type_name, dag, registry).ok_or_else(|| {
+                    GraphcalError::UnknownStructType {
+                        name: type_name.to_string(),
+                        src: src.clone(),
+                        span: inner.span.into(),
+                    }
+                })?;
             // Field access is only valid on the record-shape: a single
             // -variant union whose sole constructor's name equals the
             // type's name. Multi-variant unions must be destructured
             // via `match`; required type stubs carry no fields.
             let fields = type_def.record_fields().ok_or_else(|| {
                 let detail = if type_def.is_required() {
-                    format!("required type `{type_name}` has no fields")
+                    format!("required type `{}` has no fields", type_name.name())
                 } else {
-                    format!("union type `{type_name}` (use `match` to access fields)")
+                    format!(
+                        "union type `{}` (use `match` to access fields)",
+                        type_name.name()
+                    )
                 };
                 GraphcalError::NotAStruct {
                     name: detail,
@@ -1140,7 +1146,7 @@ pub(super) fn infer_field_access(
                 .iter()
                 .find(|f| f.name.as_str() == field.value.as_str())
                 .ok_or_else(|| GraphcalError::UnknownField {
-                    type_name: type_name.clone(),
+                    type_name: type_name.name().clone(),
                     field_name: field.value.clone(),
                     src: src.clone(),
                     span: field.span.into(),
@@ -1181,25 +1187,26 @@ pub(super) fn infer_constructor_call(
     // `type` stored as an n-variant union, a constructor call names a
     // constructor — not a type. The union the constructor belongs to becomes
     // the value's type.
-    let (type_def, variant, constructor_name, constructor_span) = match resolved_target {
-        Some(target) => (
-            &target.type_def,
-            &target.variant,
-            target.variant.name.clone(),
-            callee.span(),
-        ),
-        None => {
-            let Some(constructor) = callee.as_bare() else {
-                return Err(GraphcalError::UnknownStructType {
-                    name: callee.display_path(),
-                    src: src.clone(),
-                    span: callee.span().into(),
-                });
-            };
-            let constructor_name =
-                crate::syntax::names::ConstructorName::from_atom(constructor.name.clone());
-            let (type_def, variant) =
-                registry
+    let (type_def, variant, constructor_name, constructor_span, owning_type_identity) =
+        match resolved_target {
+            Some(target) => (
+                &target.type_def,
+                &target.variant,
+                target.variant.name.clone(),
+                callee.span(),
+                InferredStructType::from_resolved(target.owning_type.clone()),
+            ),
+            None => {
+                let Some(constructor) = callee.as_bare() else {
+                    return Err(GraphcalError::UnknownStructType {
+                        name: callee.display_path(),
+                        src: src.clone(),
+                        span: callee.span().into(),
+                    });
+                };
+                let constructor_name =
+                    crate::syntax::names::ConstructorName::from_atom(constructor.name.clone());
+                let (type_def, variant) = registry
                     .types
                     .lookup_ctor(&constructor_name)
                     .ok_or_else(|| GraphcalError::UnknownStructType {
@@ -1207,9 +1214,15 @@ pub(super) fn infer_constructor_call(
                         src: src.clone(),
                         span: constructor.span.into(),
                     })?;
-            (type_def, variant, constructor_name, constructor.span)
-        }
-    };
+                (
+                    type_def,
+                    variant,
+                    constructor_name,
+                    constructor.span,
+                    InferredStructType::legacy(type_def.name.clone()),
+                )
+            }
+        };
     let owning_type_name = type_def.name.clone();
     let variant_fields: &[crate::registry::types::StructField] = &variant.fields;
 
@@ -1404,5 +1417,8 @@ pub(super) fn infer_constructor_call(
         }
     }
 
-    Ok(InferredType::Struct(owning_type_name, resolved_type_args))
+    Ok(InferredType::Struct(
+        owning_type_identity,
+        resolved_type_args,
+    ))
 }

@@ -115,6 +115,89 @@ impl std::ops::Deref for InferredIndex {
     }
 }
 
+/// Struct/type identity carried by inferred constructor, match, and field types.
+///
+/// The `resolved` field is populated from module-aware TIR/HIR sidecars. If both
+/// sides being compared carry canonical identities, equality is owner-sensitive;
+/// otherwise inference falls back to the legacy leaf name so standalone callers
+/// keep working while TIR/eval migrates.
+#[derive(Debug, Clone, Eq)]
+pub struct InferredStructType {
+    name: StructTypeName,
+    resolved: Option<ResolvedName<namespace::StructType>>,
+}
+
+impl InferredStructType {
+    #[must_use]
+    pub const fn new(
+        name: StructTypeName,
+        resolved: Option<ResolvedName<namespace::StructType>>,
+    ) -> Self {
+        Self { name, resolved }
+    }
+
+    #[must_use]
+    pub const fn legacy(name: StructTypeName) -> Self {
+        Self {
+            name,
+            resolved: None,
+        }
+    }
+
+    #[must_use]
+    pub fn from_resolved(resolved: ResolvedName<namespace::StructType>) -> Self {
+        Self {
+            name: resolved.to_def_name(),
+            resolved: Some(resolved),
+        }
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &StructTypeName {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn resolved(&self) -> Option<&ResolvedName<namespace::StructType>> {
+        self.resolved.as_ref()
+    }
+
+    #[must_use]
+    pub fn matches_resolved_or_name(
+        &self,
+        name: &StructTypeName,
+        resolved: Option<&ResolvedName<namespace::StructType>>,
+    ) -> bool {
+        match (self.resolved(), resolved) {
+            (Some(actual), Some(expected)) => actual == expected,
+            _ => self.name() == name,
+        }
+    }
+}
+
+impl PartialEq for InferredStructType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.resolved(), other.resolved()) {
+            (Some(lhs), Some(rhs)) => lhs == rhs,
+            _ => self.name == other.name,
+        }
+    }
+}
+
+impl std::fmt::Display for InferredStructType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.name.fmt(f)
+    }
+}
+
+impl std::ops::Deref for InferredStructType {
+    type Target = StructTypeName;
+
+    fn deref(&self) -> &Self::Target {
+        &self.name
+    }
+}
+
 /// The inferred type of an expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InferredType {
@@ -134,7 +217,7 @@ pub enum InferredType {
     /// A label of a named index (e.g., `Maneuver.Departure` has type `Label(Maneuver)`).
     Label(InferredIndex),
     /// A struct type, optionally with concrete type arguments for generic structs.
-    Struct(StructTypeName, Vec<Self>),
+    Struct(InferredStructType, Vec<Self>),
     Indexed {
         element: Box<Self>,
         index: InferredIndex,
@@ -556,7 +639,7 @@ fn check_domain_constraint_targets_dag(
             crate::tir::typed::ResolvedTypeExpr::Bool => "Bool".to_string(),
             crate::tir::typed::ResolvedTypeExpr::Datetime(_) => "Datetime".to_string(),
             crate::tir::typed::ResolvedTypeExpr::Label(idx, _, _) => format!("Label({idx})"),
-            crate::tir::typed::ResolvedTypeExpr::Struct(struct_name, _)
+            crate::tir::typed::ResolvedTypeExpr::Struct(struct_name, _, _)
             | crate::tir::typed::ResolvedTypeExpr::GenericStruct {
                 name: struct_name, ..
             } => format!("struct `{struct_name}`"),
