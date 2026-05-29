@@ -159,11 +159,11 @@ impl GenericScope {
     /// Returns [`HirLowerError::DuplicateGenericParam`] if the list contains
     /// the same leaf name twice.
     pub fn from_params(
-        owner: GenericParamOwner,
+        owner: &GenericParamOwner,
         params: &[ast::GenericParam],
     ) -> Result<Self, HirLowerError> {
         params.iter().try_fold(Self::new(), |mut scope, param| {
-            scope.insert(owner.clone(), param)?;
+            scope.insert(owner, param)?;
             Ok(scope)
         })
     }
@@ -176,10 +176,10 @@ impl GenericScope {
     /// same leaf name is already in scope.
     pub fn insert(
         &mut self,
-        owner: GenericParamOwner,
+        owner: &GenericParamOwner,
         param: &ast::GenericParam,
     ) -> Result<(), HirLowerError> {
-        let id = GenericParamId::new(owner, param.name.value.clone());
+        let id = GenericParamId::new(owner.clone(), param.name.value.clone());
         self.insert_binding(GenericParamBinding::new(
             id,
             param.constraint,
@@ -276,12 +276,12 @@ impl<'a> TypeLoweringContext<'a> {
 /// Returns [`HirLowerError`] if a generic parameter is duplicated or a default
 /// type expression cannot be resolved.
 pub fn lower_generic_params(
-    owner: GenericParamOwner,
+    owner: &GenericParamOwner,
     params: &[ast::GenericParam],
     module_owner: &DagId,
     resolver: &ModuleResolver,
 ) -> Result<(GenericScope, Vec<GenericParamDef>), HirLowerError> {
-    let scope = GenericScope::from_params(owner.clone(), params)?;
+    let scope = GenericScope::from_params(owner, params)?;
     let ctx = TypeLoweringContext::new(module_owner, resolver, &scope);
     let defs = params
         .iter()
@@ -395,10 +395,10 @@ fn lower_dim_expr_as_type(
         NominalTypeLookup::Found(kind) => Ok(kind),
         NominalTypeLookup::Absent { deferred_error } => match lower_dim_expr(dim_expr, ctx) {
             Ok(dim_expr) => Ok(TypeExprKind::DimExpr(dim_expr)),
-            Err(HirLowerError::UnknownTypePath { path, span }) => match deferred_error {
-                Some(source) => Err(HirLowerError::ModuleResolve { source, span }),
-                None => Err(HirLowerError::UnknownTypePath { path, span }),
-            },
+            Err(HirLowerError::UnknownTypePath { path, span }) => deferred_error.map_or(
+                Err(HirLowerError::UnknownTypePath { path, span }),
+                |source| Err(HirLowerError::ModuleResolve { source, span }),
+            ),
             Err(err) => Err(err),
         },
     }
@@ -429,7 +429,7 @@ fn lower_single_term_nominal_type(
         LookupCandidate::Error(source) => {
             deferred_error.get_or_insert(source);
         }
-    };
+    }
 
     match resolve_optional(ctx.resolver.resolve_struct_type_path(ctx.owner, path)) {
         LookupCandidate::Found(struct_type) => {
@@ -441,7 +441,7 @@ fn lower_single_term_nominal_type(
         LookupCandidate::Error(source) => {
             deferred_error.get_or_insert(source);
         }
-    };
+    }
 
     if let Some(atom) = path.as_bare()
         && let Some(binding) = ctx.generic_scope.get_atom(atom)
@@ -725,7 +725,7 @@ mod tests {
             .add_module(main_id.clone(), &main.declarations)
             .unwrap();
         resolver
-            .register_import(&main_id, import_path, import_kind, lib_id.clone())
+            .register_import(&main_id, import_path, import_kind, &lib_id)
             .unwrap();
 
         let scope = GenericScope::new();
@@ -783,7 +783,7 @@ mod tests {
             StructTypeName::new("Series"),
         ));
         let (scope, defs) =
-            lower_generic_params(type_owner, &type_decl.generic_params, &owner_id, &resolver)
+            lower_generic_params(&type_owner, &type_decl.generic_params, &owner_id, &resolver)
                 .unwrap();
         assert_eq!(defs.len(), 4);
 

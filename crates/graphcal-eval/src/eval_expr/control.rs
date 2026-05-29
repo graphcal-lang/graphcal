@@ -82,10 +82,9 @@ fn runtime_struct_matches_resolved_constructor(
     target: &ResolvedConstructorTarget,
 ) -> bool {
     scrutinee_type.name().as_str() == target.variant.name.as_str()
-        && match scrutinee_type.resolved() {
-            Some(owner) => owner == &target.owning_type,
-            None => true,
-        }
+        && scrutinee_type
+            .resolved()
+            .is_none_or(|owner| owner == &target.owning_type)
 }
 
 fn constructor_pattern_matches(

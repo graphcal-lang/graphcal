@@ -220,6 +220,10 @@ fn struct_value_type_refs_equal(lhs: &StructTypeRef, rhs: &StructTypeRef) -> boo
 
 pub(super) fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
     match (lhs, rhs) {
+        #[expect(
+            clippy::float_cmp,
+            reason = "Graphcal equality uses exact IEEE scalar equality"
+        )]
         (RuntimeValue::Scalar(lhs), RuntimeValue::Scalar(rhs)) => lhs == rhs,
         (RuntimeValue::Bool(lhs), RuntimeValue::Bool(rhs)) => lhs == rhs,
         (RuntimeValue::Int(lhs), RuntimeValue::Int(rhs)) => lhs == rhs,

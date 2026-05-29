@@ -2978,13 +2978,10 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
     };
 
     let phase_a_owner = label_index_owner("phase_a");
-    let phase_b_owner = label_index_owner("phase_b");
-    assert_ne!(phase_a_owner, phase_b_owner);
+    let other_phase_owner = label_index_owner("phase_b");
+    assert_ne!(phase_a_owner, other_phase_owner);
 
-    for (name, expected_owner) in [
-        ("series_a", phase_a_owner.clone()),
-        ("series_b", phase_b_owner.clone()),
-    ] {
+    for (name, expected_owner) in [("series_a", phase_a_owner), ("series_b", other_phase_owner)] {
         let value = result
             .nodes
             .iter()

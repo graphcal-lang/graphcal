@@ -1732,6 +1732,10 @@ fn collect_resolved_collection_indexes_from_type(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "expression traversal mirrors HIR variants"
+)]
 fn collect_resolved_collection_refs_from_expr(
     expr: &hir::Expr,
     ctx: ModuleTypeContext<'_>,
@@ -1911,6 +1915,10 @@ fn record_resolved_constructor_target(
     Some(target)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "expression traversal mirrors HIR variants"
+)]
 fn collect_resolved_constructor_refs_from_expr(
     expr: &hir::Expr,
     ctx: ModuleTypeContext<'_>,
@@ -2241,7 +2249,9 @@ fn resolve_expected_fail_keys(
                                             &index_path,
                                             &part.variant,
                                         )
-                                        .map_err(|err| module_resolve_error(err, src, part.span))?;
+                                        .map_err(|err| {
+                                            module_resolve_error(&err, src, part.span)
+                                        })?;
                                     Ok(part.with_resolved_variant(resolved))
                                 })
                                 .collect::<Result<_, GraphcalError>>()
@@ -3141,7 +3151,7 @@ fn require_local_type_level_path<'a>(
     src: &NamedSource<Arc<String>>,
 ) -> Result<&'a str, GraphcalError> {
     path.as_bare()
-        .map(|atom| atom.as_str())
+        .map(super::super::syntax::names::NameAtom::as_str)
         .ok_or_else(|| GraphcalError::EvalError {
             message: format!(
                 "qualified type-level reference `{path}` needs module-aware resolution"
@@ -3152,7 +3162,7 @@ fn require_local_type_level_path<'a>(
 }
 
 fn module_resolve_error(
-    err: ModuleResolveError,
+    err: &ModuleResolveError,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> GraphcalError {
@@ -3163,12 +3173,12 @@ fn module_resolve_error(
     }
 }
 
-fn module_lookup_is_absent(err: &ModuleResolveError) -> bool {
+const fn module_lookup_is_absent(err: &ModuleResolveError) -> bool {
     matches!(err, ModuleResolveError::UnknownName { .. })
 }
 
 fn hir_lower_error_to_graphcal(
-    err: hir::HirLowerError,
+    err: &hir::HirLowerError,
     src: &NamedSource<Arc<String>>,
 ) -> GraphcalError {
     let span = match &err {
@@ -3177,9 +3187,9 @@ fn hir_lower_error_to_graphcal(
         | hir::HirLowerError::GenericConstraintMismatch { span, .. }
         | hir::HirLowerError::UnknownGenericParam { span, .. }
         | hir::HirLowerError::ExpectedTimeScaleName { span }
-        | hir::HirLowerError::UnknownTimeScale { span, .. } => *span,
+        | hir::HirLowerError::UnknownTimeScale { span, .. }
+        | hir::HirLowerError::WrongDatetimeArgCount { span, .. } => *span,
         hir::HirLowerError::DuplicateGenericParam { duplicate, .. } => *duplicate,
-        hir::HirLowerError::WrongDatetimeArgCount { span, .. } => *span,
     };
     GraphcalError::EvalError {
         message: err.to_string(),
@@ -3241,7 +3251,7 @@ fn resolve_ast_type_expr_via_hir(
             // legacy resolver because they are not local leaf names.
             return resolve_type_expr_inner(type_ann, registry, &[], &[], &[], src, None);
         }
-        Err(err) => return Err(hir_lower_error_to_graphcal(err, src)),
+        Err(err) => return Err(hir_lower_error_to_graphcal(&err, src)),
     };
     let resolve_ctx = HirTypeResolutionContext {
         src,
@@ -3296,7 +3306,7 @@ fn resolve_hir_type_expr_inner(
     }
 }
 
-fn resolve_hir_builtin_type(builtin: hir::BuiltinType) -> ResolvedTypeExpr {
+const fn resolve_hir_builtin_type(builtin: hir::BuiltinType) -> ResolvedTypeExpr {
     match builtin {
         hir::BuiltinType::Dimensionless => ResolvedTypeExpr::Dimensionless,
         hir::BuiltinType::Bool => ResolvedTypeExpr::Bool,
@@ -3546,13 +3556,13 @@ fn lower_type_generic_default(
                 constraint,
                 default_expr.span,
             ))
-            .map_err(|err| hir_lower_error_to_graphcal(err, ctx.src))?;
+            .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))?;
     }
 
     let lower_ctx = hir::TypeLoweringContext::new(type_owner.owner(), ctx.resolver, &scope)
         .with_prelude(ctx.prelude);
     hir::lower_type_expr(default_expr, lower_ctx)
-        .map_err(|err| hir_lower_error_to_graphcal(err, ctx.src))
+        .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))
 }
 
 fn resolve_index_expr_name(
@@ -3594,7 +3604,7 @@ fn resolve_index_expr_name(
                 });
             }
             Err(err) if path.is_bare() && module_lookup_is_absent(&err) => {}
-            Err(err) => return Err(module_resolve_error(err, src, span)),
+            Err(err) => return Err(module_resolve_error(&err, src, span)),
         }
     }
 
@@ -3641,7 +3651,7 @@ fn resolve_concrete_index_path(
                 // A bare non-local name may still be a prelude or registry-only
                 // compatibility entry. Fall through to the legacy registry.
             }
-            Err(err) => return Err(module_resolve_error(err, src, span)),
+            Err(err) => return Err(module_resolve_error(&err, src, span)),
         }
     }
 
@@ -3659,20 +3669,19 @@ fn resolve_concrete_index_path(
     .then(|| IndexName::from_atom(atom.clone())))
 }
 
+type ResolvedStructTypeLookup<'a> = Option<(
+    StructTypeName,
+    Option<ResolvedName<namespace::StructType>>,
+    &'a TypeDef,
+)>;
+
 fn resolve_struct_type_path<'a>(
     path: &NamePath,
     span: Span,
     registry: &'a Registry,
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'a>>,
-) -> Result<
-    Option<(
-        StructTypeName,
-        Option<ResolvedName<namespace::StructType>>,
-        &'a TypeDef,
-    )>,
-    GraphcalError,
-> {
+) -> Result<ResolvedStructTypeLookup<'a>, GraphcalError> {
     if let Some(ctx) = module_ctx {
         match ctx.resolver.resolve_struct_type_path(ctx.owner, path) {
             Ok(resolved) => {
@@ -3691,7 +3700,7 @@ fn resolve_struct_type_path<'a>(
             }
             Err(err) if module_lookup_is_absent(&err) => {}
             Err(_err) if path.is_bare() => {}
-            Err(err) => return Err(module_resolve_error(err, src, span)),
+            Err(err) => return Err(module_resolve_error(&err, src, span)),
         }
     }
 
@@ -3726,7 +3735,7 @@ fn resolve_dimension_path(
                     });
             }
             Err(err) if path.is_bare() && module_lookup_is_absent(&err) => {}
-            Err(err) => return Err(module_resolve_error(err, src, span)),
+            Err(err) => return Err(module_resolve_error(&err, src, span)),
         }
     }
 
@@ -4145,7 +4154,7 @@ fn resolve_type_application(
         resolved_args.push(resolved);
     }
     Ok(ResolvedTypeExpr::GenericStruct {
-        name: type_name.clone(),
+        name: type_name,
         resolved: resolved_type_name,
         type_args: resolved_args,
         span: type_ann.span,

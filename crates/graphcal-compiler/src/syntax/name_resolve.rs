@@ -915,7 +915,7 @@ fn resolve_unresolved_ref(
 fn resolve_ident_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKind {
     match path.into_bare() {
         Ok(ident) => resolve_name_ref(ident, ctx),
-        Err(path) => resolve_dotted_path(path, ctx),
+        Err(path) => resolve_dotted_path(&path, ctx),
     }
 }
 
@@ -1005,7 +1005,7 @@ fn resolve_name_ref(ident: Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
 ///    `VariantLiteral`
 /// 2. Otherwise → `ConstRef` carrying a qualified `ScopedName`
 ///    (module-qualified constant, validated later)
-fn resolve_dotted_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKind {
+fn resolve_dotted_path(path: &IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKind {
     let span = path.span();
 
     if let [qualifier, member] = path.segments()
@@ -1017,9 +1017,7 @@ fn resolve_dotted_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKi
         };
     }
 
-    let (qualifier, member) = path
-        .qualifier_and_leaf()
-        .expect("resolve_dotted_path only receives qualified paths");
+    let (qualifier, member) = path.split_last();
     dst_ast::ExprKind::ConstRef(Spanned::new(
         ScopedName::qualified_path(
             qualifier.iter().map(|segment| segment.name.to_string()),

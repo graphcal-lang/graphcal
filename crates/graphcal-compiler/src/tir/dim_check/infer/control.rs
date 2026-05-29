@@ -55,12 +55,10 @@ fn index_def_for_label_index<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a IndexDef> {
-    match index.resolved() {
-        Some(resolved) => {
-            resolved_collection_refs(dag).and_then(|refs| refs.index_defs.get(resolved))
-        }
-        None => registry.indexes.get_index(index.name().as_str()),
-    }
+    index.resolved().map_or_else(
+        || registry.indexes.get_index(index.name().as_str()),
+        |resolved| resolved_collection_refs(dag).and_then(|refs| refs.index_defs.get(resolved)),
+    )
 }
 
 /// Infer the type of an if/else expression.
@@ -130,6 +128,7 @@ pub(super) fn infer_if(
     Ok(then_type)
 }
 
+#[derive(Clone, Copy)]
 enum ConstructorPatternBindings<'a> {
     Legacy(&'a [crate::desugar::resolved_ast::PatternBinding]),
     Resolved(&'a [ResolvedPatternBinding]),
@@ -410,78 +409,74 @@ pub(super) fn infer_match(
             for arm in arms {
                 let resolved_pattern = resolved_constructor_pattern(dag, &arm.pattern);
                 let (variant_name_str, pattern_span, pattern_type_def, variant_def, bindings) =
-                    match resolved_pattern {
-                        Some(pattern) => {
-                            if !type_name.matches_resolved_or_name(
-                                &pattern.target.type_def.name,
-                                Some(&pattern.target.owning_type),
-                            ) {
-                                return Err(GraphcalError::UnknownField {
-                                    type_name: type_name.name().clone(),
-                                    field_name: FieldName::new(
-                                        pattern.target.variant.name.as_str(),
-                                    ),
-                                    src: src.clone(),
-                                    span: constructor_pattern_lookup_span(&arm.pattern)
-                                        .unwrap_or_else(|| arm.pattern.span())
-                                        .into(),
-                                });
-                            }
-                            resolved_type_def.get_or_insert(&pattern.target.type_def);
-                            (
-                                pattern.target.variant.name.as_str(),
-                                arm.pattern.span(),
-                                &pattern.target.type_def,
-                                &pattern.target.variant,
-                                ConstructorPatternBindings::Resolved(&pattern.bindings),
-                            )
+                    if let Some(pattern) = resolved_pattern {
+                        if !type_name.matches_resolved_or_name(
+                            &pattern.target.type_def.name,
+                            Some(&pattern.target.owning_type),
+                        ) {
+                            return Err(GraphcalError::UnknownField {
+                                type_name: type_name.name().clone(),
+                                field_name: FieldName::new(pattern.target.variant.name.as_str()),
+                                src: src.clone(),
+                                span: constructor_pattern_lookup_span(&arm.pattern)
+                                    .unwrap_or_else(|| arm.pattern.span())
+                                    .into(),
+                            });
                         }
-                        None => {
-                            let MatchPattern::Constructor {
-                                name,
-                                bindings,
-                                span,
-                            } = &arm.pattern
-                            else {
-                                return Err(GraphcalError::EvalError {
-                                    message: "union match arms must use constructor patterns"
-                                        .to_string(),
-                                    src: src.clone(),
-                                    span: arm.pattern.span().into(),
-                                });
-                            };
-                            let variant_name_str = name.value.as_str();
+                        resolved_type_def.get_or_insert(&pattern.target.type_def);
+                        (
+                            pattern.target.variant.name.as_str(),
+                            arm.pattern.span(),
+                            &pattern.target.type_def,
+                            &pattern.target.variant,
+                            ConstructorPatternBindings::Resolved(&pattern.bindings),
+                        )
+                    } else {
+                        let MatchPattern::Constructor {
+                            name,
+                            bindings,
+                            span,
+                        } = &arm.pattern
+                        else {
+                            return Err(GraphcalError::EvalError {
+                                message: "union match arms must use constructor patterns"
+                                    .to_string(),
+                                src: src.clone(),
+                                span: arm.pattern.span().into(),
+                            });
+                        };
+                        let variant_name_str = name.value.as_str();
 
-                            // The match pattern names a constructor of `type_def`.
-                            // Resolve it in the union's member list directly — there
-                            // are no per-variant TypeDefs.
-                            let members = type_def.union_members().ok_or_else(|| {
-                                GraphcalError::EvalError {
+                        // The match pattern names a constructor of `type_def`.
+                        // Resolve it in the union's member list directly — there
+                        // are no per-variant TypeDefs.
+                        let members =
+                            type_def
+                                .union_members()
+                                .ok_or_else(|| GraphcalError::EvalError {
                                     message: format!(
                                         "internal: cannot match on required (unbound) type `{}`",
                                         type_name.name()
                                     ),
                                     src: src.clone(),
                                     span: (*span).into(),
-                                }
-                            })?;
-                            let variant_def = members
-                                .iter()
-                                .find(|m| m.name.as_str() == variant_name_str)
-                                .ok_or_else(|| GraphcalError::UnknownField {
-                                    type_name: type_name.name().clone(),
-                                    field_name: FieldName::new(variant_name_str),
-                                    src: src.clone(),
-                                    span: name.span.into(),
                                 })?;
-                            (
-                                variant_name_str,
-                                *span,
-                                type_def,
-                                variant_def,
-                                ConstructorPatternBindings::Legacy(bindings),
-                            )
-                        }
+                        let variant_def = members
+                            .iter()
+                            .find(|m| m.name.as_str() == variant_name_str)
+                            .ok_or_else(|| GraphcalError::UnknownField {
+                                type_name: type_name.name().clone(),
+                                field_name: FieldName::new(variant_name_str),
+                                src: src.clone(),
+                                span: name.span.into(),
+                            })?;
+                        (
+                            variant_name_str,
+                            *span,
+                            type_def,
+                            variant_def,
+                            ConstructorPatternBindings::Legacy(bindings),
+                        )
                     };
 
                 // Check for duplicate arms

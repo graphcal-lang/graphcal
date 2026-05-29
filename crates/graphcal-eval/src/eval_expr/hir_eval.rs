@@ -23,7 +23,7 @@ use super::{
     runtime_struct_type_def, topo_order_for_dag_body,
 };
 
-pub(crate) type HirLocalValueMap = HashMap<hir::LocalId, RuntimeValue>;
+pub type HirLocalValueMap = HashMap<hir::LocalId, RuntimeValue>;
 
 type ResolvedDeclKey = ResolvedName<namespace::Decl>;
 
@@ -33,8 +33,7 @@ type ResolvedDeclKey = ResolvedName<namespace::Decl>;
 /// This evaluator consumes canonical declaration, constructor, index-variant,
 /// inline-DAG, local, and built-in references directly instead of consulting
 /// span-keyed syntax-AST sidecars.
-#[expect(clippy::too_many_lines, reason = "exhaustive HIR expression dispatch")]
-pub(crate) fn eval_hir_expr(
+pub fn eval_hir_expr(
     expr: &hir::Expr,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap,
@@ -406,6 +405,10 @@ fn eval_hir_scalar_binop(
     super::arithmetic::check_finite(result, "arithmetic operation", ctx, span)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "function dispatch handles all builtin and user-call forms"
+)]
 fn eval_hir_fn_call(
     expr: &hir::Expr,
     callee: &graphcal_compiler::syntax::span::Spanned<FunctionRef>,
@@ -858,13 +861,14 @@ fn index_def_for_ref<'a>(
     index_ref: &IndexTypeRef,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a IndexDef> {
-    match index_ref.resolved() {
-        Some(resolved) => ctx
-            .current_dag
-            .and_then(|dag| dag.resolved_collection_refs.as_ref())
-            .and_then(|refs| refs.index_defs.get(resolved)),
-        None => ctx.registry.indexes.get_index(index_ref.as_str()),
-    }
+    index_ref.resolved().map_or_else(
+        || ctx.registry.indexes.get_index(index_ref.as_str()),
+        |resolved| {
+            ctx.current_dag
+                .and_then(|dag| dag.resolved_collection_refs.as_ref())
+                .and_then(|refs| refs.index_defs.get(resolved))
+        },
+    )
 }
 
 fn ensure_index_ref_matches_resolved(
@@ -999,9 +1003,10 @@ fn eval_hir_map_literal(
 
 fn eval_hir_nat_expr(
     expr: &hir::NatExpr,
-    _local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<u64, GraphcalError> {
+    let _ = local_values;
     match expr {
         hir::NatExpr::Literal(n, _) => Ok(*n),
         hir::NatExpr::Param(param) => Err(ctx.internal_error(
@@ -1009,14 +1014,14 @@ fn eval_hir_nat_expr(
             param.span,
         )),
         hir::NatExpr::Add(lhs, rhs, span) => {
-            let l = eval_hir_nat_expr(lhs, _local_values, ctx)?;
-            let r = eval_hir_nat_expr(rhs, _local_values, ctx)?;
+            let l = eval_hir_nat_expr(lhs, local_values, ctx)?;
+            let r = eval_hir_nat_expr(rhs, local_values, ctx)?;
             l.checked_add(r)
                 .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} + {r}"), *span))
         }
         hir::NatExpr::Mul(lhs, rhs, span) => {
-            let l = eval_hir_nat_expr(lhs, _local_values, ctx)?;
-            let r = eval_hir_nat_expr(rhs, _local_values, ctx)?;
+            let l = eval_hir_nat_expr(lhs, local_values, ctx)?;
+            let r = eval_hir_nat_expr(rhs, local_values, ctx)?;
             l.checked_mul(r)
                 .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} * {r}"), *span))
         }
@@ -1187,6 +1192,10 @@ fn eval_hir_index_access(
     Ok(current)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "scan evaluation is called from expression destructuring"
+)]
 fn eval_hir_scan(
     source: &hir::Expr,
     init: &hir::Expr,
@@ -1286,6 +1295,10 @@ fn eval_hir_unfold(
         },
     );
     let mut scan_locals = HirLocalValueMap::with_capacity(2);
+    #[expect(
+        clippy::needless_range_loop,
+        reason = "step index addresses both variants and accumulated values"
+    )]
     for i in 1..step_count {
         if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(&self_key) {
             *entries = std::mem::take(&mut result_entries);
@@ -1321,10 +1334,9 @@ fn runtime_struct_matches_resolved_constructor(
     target: &ResolvedConstructorTarget,
 ) -> bool {
     scrutinee_type.name().as_str() == target.variant.name.as_str()
-        && match scrutinee_type.resolved() {
-            Some(owner) => owner == &target.owning_type,
-            None => true,
-        }
+        && scrutinee_type
+            .resolved()
+            .is_none_or(|owner| owner == &target.owning_type)
 }
 
 fn eval_hir_match(

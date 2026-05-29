@@ -343,10 +343,13 @@ fn check_decl_expr_type(
             ctx.src,
         )?,
     };
-    let matches = match ctx.dag.and_then(|dag| dag.resolved_decl_types.get(name)) {
-        Some(resolved) => resolved_type_matches_inferred(resolved, &inferred),
-        None => types_match(declared, &inferred),
-    };
+    let matches = ctx
+        .dag
+        .and_then(|dag| dag.resolved_decl_types.get(name))
+        .map_or_else(
+            || types_match(declared, &inferred),
+            |resolved| resolved_type_matches_inferred(resolved, &inferred),
+        );
     if !matches {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_declared_type(declared, ctx.registry),
@@ -796,7 +799,13 @@ fn field_constraint_target_kind(
                 && dim_expr.terms[0].term.power.is_none()
                 && let Some(item) = dim_expr.terms.first()
             {
-                let Some(name) = item.term.name.value.as_bare().map(|atom| atom.as_str()) else {
+                let Some(name) = item
+                    .term
+                    .name
+                    .value
+                    .as_bare()
+                    .map(super::super::syntax::names::NameAtom::as_str)
+                else {
                     // Qualified type-level references are rejected by type
                     // resolution; skip this compatibility classifier here.
                     return None;
@@ -1189,6 +1198,10 @@ fn collect_dag_call_targets_from_dag(
 /// under `graphcal check`, not only at evaluation. Mirrors the toposort-based
 /// cycle detection in `graphcal-eval`'s `exec_plan::eval_consts_from_tir` and
 /// `build_runtime_dag`, which now act as defense-in-depth backstops.
+#[expect(
+    clippy::too_many_lines,
+    reason = "cycle diagnostics keep traversal helpers local"
+)]
 fn detect_decl_cycles(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
@@ -1296,7 +1309,7 @@ fn detect_decl_cycles(
                 .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
             let name = local_name_by_key
                 .get(cycle_node)
-                .map_or_else(|| cycle_node.to_string(), |name| name.to_string());
+                .map_or_else(|| cycle_node.to_string(), std::string::ToString::to_string);
             GraphcalError::CyclicDependency {
                 name,
                 src: src.clone(),
@@ -1306,39 +1319,36 @@ fn detect_decl_cycles(
     }
 
     for dag in tir.dags.values() {
-        match &dag.resolved_deps {
-            Some(deps) => {
-                check_resolved(
-                    dag,
-                    dag.consts.iter().map(|e| (&e.name, e.span)),
-                    &deps.const_deps,
-                    src,
-                )?;
-                check_resolved(
-                    dag,
-                    dag.params
-                        .iter()
-                        .map(|e| (&e.name, e.span))
-                        .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
-                    &deps.runtime_deps,
-                    src,
-                )?;
-            }
-            None => {
-                check_legacy(
-                    dag.consts.iter().map(|e| (&e.name, e.span)),
-                    &dag.const_deps,
-                    src,
-                )?;
-                check_legacy(
-                    dag.params
-                        .iter()
-                        .map(|e| (&e.name, e.span))
-                        .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
-                    &dag.runtime_deps,
-                    src,
-                )?;
-            }
+        if let Some(deps) = &dag.resolved_deps {
+            check_resolved(
+                dag,
+                dag.consts.iter().map(|e| (&e.name, e.span)),
+                &deps.const_deps,
+                src,
+            )?;
+            check_resolved(
+                dag,
+                dag.params
+                    .iter()
+                    .map(|e| (&e.name, e.span))
+                    .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
+                &deps.runtime_deps,
+                src,
+            )?;
+        } else {
+            check_legacy(
+                dag.consts.iter().map(|e| (&e.name, e.span)),
+                &dag.const_deps,
+                src,
+            )?;
+            check_legacy(
+                dag.params
+                    .iter()
+                    .map(|e| (&e.name, e.span))
+                    .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
+                &dag.runtime_deps,
+                src,
+            )?;
         }
     }
     Ok(())

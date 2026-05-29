@@ -13,6 +13,10 @@ use super::*;
     clippy::too_many_arguments,
     reason = "pipeline function threading project context through IR lowering stages"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "project lowering coordinates resolver, TIR, and plan construction"
+)]
 pub(in crate::eval::project) fn lower_and_finalize(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,

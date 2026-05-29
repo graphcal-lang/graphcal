@@ -654,7 +654,7 @@ fn format_value_inline_with_budget(
                     .iter()
                     .map(|(k, v)| (value.indexed_entry_display_name(k), v))
                     .collect();
-                format_entries("", &single, |k| k.clone(), symbols, max_len)
+                format_entries("", &single, Clone::clone, symbols, max_len)
             }
         }
     }
@@ -921,7 +921,7 @@ fn rekey_selective_import(
     }
 }
 
-fn selective_import_allows_category(
+const fn selective_import_allows_category(
     namespace: graphcal_compiler::desugar::resolved_ast::ImportItemNamespace,
     category: SymbolCategory,
 ) -> bool {
@@ -968,7 +968,7 @@ fn rekey_module_import(key: &SymbolKey, module_name: &str) -> SymbolKey {
             owner: owner.prepend_module(module_name),
             field_name: field_name.clone(),
         },
-        other => other.clone(),
+        other @ SymbolKey::ExprScoped { .. } => other.clone(),
     }
 }
 

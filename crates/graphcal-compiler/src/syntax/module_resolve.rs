@@ -438,6 +438,10 @@ impl ModuleSymbols {
                 }
                 ast::DeclKind::Index(i) => self.insert_index(i)?,
                 ast::DeclKind::Import(_) | ast::DeclKind::Include(_) => {}
+                #[expect(
+                    clippy::uninhabited_references,
+                    reason = "post-desugar Sugar payload is uninhabited by phase invariant"
+                )]
                 ast::DeclKind::Sugar(s) => never(*s),
             }
         }
@@ -647,7 +651,7 @@ pub struct ImportedSymbol<Ns: NameNamespace> {
 }
 
 impl<Ns: NameNamespace> ImportedSymbol<Ns> {
-    fn new(resolved: ResolvedName<Ns>, span: Span, visibility: SymbolVisibility) -> Self {
+    const fn new(resolved: ResolvedName<Ns>, span: Span, visibility: SymbolVisibility) -> Self {
         Self {
             resolved,
             span,
@@ -814,7 +818,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &ModulePath,
         kind: &ImportKind,
-        target: DagId,
+        target: &DagId,
     ) -> Result<(), ModuleResolveError> {
         self.register_import_with_access(owner, path, kind, target, ModuleAccess::PublicOnly)
     }
@@ -830,7 +834,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &ModulePath,
         kind: &ImportKind,
-        target: DagId,
+        target: &DagId,
     ) -> Result<(), ModuleResolveError> {
         self.register_import_with_access(owner, path, kind, target, ModuleAccess::IncludePrivate)
     }
@@ -840,13 +844,13 @@ impl ModuleResolver {
         owner: &DagId,
         path: &ModulePath,
         kind: &ImportKind,
-        target: DagId,
+        target: &DagId,
         access: ModuleAccess,
     ) -> Result<(), ModuleResolveError> {
         self.module_symbols(owner)?;
-        self.module_symbols(&target)?;
+        self.module_symbols(target)?;
 
-        let additions = self.import_additions(path, kind, &target, access)?;
+        let additions = self.import_additions(path, kind, target, access)?;
         let scope =
             self.scopes
                 .get_mut(owner)
@@ -987,9 +991,7 @@ impl ModuleResolver {
             });
         }
 
-        let (qualifier, leaf) = path
-            .qualifier_and_leaf()
-            .expect("qualified path has a qualifier");
+        let (qualifier, leaf) = path.split_last();
         let target_ref = self.resolve_module_qualifier(owner, qualifier)?;
         let target = self.module_symbols(&target_ref.owner)?;
         if let Some(symbol) = target.indexes.get(leaf.as_str()) {
@@ -1122,15 +1124,12 @@ impl ModuleResolver {
     ) -> Result<Vec<ImportAddition>, ModuleResolveError> {
         match kind {
             ImportKind::Module { alias } => {
-                let alias = alias.clone().map_or_else(
-                    || {
-                        Spanned::new(
-                            ModuleAliasName::from_atom(path.leaf().name.clone()),
-                            path.leaf().span,
-                        )
-                    },
-                    |alias| alias,
-                );
+                let alias = alias.clone().unwrap_or_else(|| {
+                    Spanned::new(
+                        ModuleAliasName::from_atom(path.leaf().name.clone()),
+                        path.leaf().span,
+                    )
+                });
                 Ok(vec![ImportAddition::ModuleAlias {
                     alias,
                     target: target.clone(),
@@ -1145,6 +1144,10 @@ impl ModuleResolver {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "import namespace expansion is kept together"
+    )]
     fn import_item_additions(
         &self,
         target: &DagId,
@@ -1220,7 +1223,7 @@ impl ModuleResolver {
                             local: Spanned::new(DimName::from_atom(local_atom.clone()), local_span),
                             target: target_name,
                             visibility: local_visibility,
-                        })
+                        });
                     }
                     ExportLookup::Private => saw_private = true,
                     ExportLookup::Missing => {}
@@ -1261,7 +1264,7 @@ impl ModuleResolver {
                             local: Spanned::new(ConstructorName::from_atom(local_atom), local_span),
                             target: target_name,
                             visibility: local_visibility,
-                        })
+                        });
                     }
                     ExportLookup::Private => saw_private = true,
                     ExportLookup::Missing => {}
@@ -1359,9 +1362,7 @@ impl ModuleResolver {
             });
         }
 
-        let (qualifier, leaf) = path
-            .qualifier_and_leaf()
-            .expect("qualified path has a qualifier");
+        let (qualifier, leaf) = path.split_last();
         let target_ref = self.resolve_module_qualifier(owner, qualifier)?;
         let target = self.module_symbols(&target_ref.owner)?;
         if let Some(symbol) = local_symbols(target).get(leaf.as_str()) {
@@ -1399,9 +1400,13 @@ impl ModuleResolver {
         owner: &DagId,
         qualifier: &[NameAtom],
     ) -> Result<ResolvedModuleQualifier, ModuleResolveError> {
-        let (head, rest) = qualifier
-            .split_first()
-            .expect("qualified path has non-empty qualifier");
+        let Some((head, rest)) = qualifier.split_first() else {
+            return Err(ModuleResolveError::UnknownName {
+                owner: owner.clone(),
+                namespace: "module",
+                name: String::new(),
+            });
+        };
         let scope = self.module_scope(owner)?;
         let alias = ModuleAliasName::from_atom(head.clone());
         let alias_target = scope.module_aliases.get(alias.as_str()).ok_or_else(|| {
@@ -1652,15 +1657,14 @@ fn name_path_from_slice(segments: &[NameAtom]) -> Option<NamePath> {
 }
 
 fn ident_path_to_name_path(path: &IdentPath) -> NamePath {
-    NamePath::new(
-        NonEmpty::try_from_vec(
-            path.segments()
-                .iter()
-                .map(|ident| ident.name.clone())
-                .collect(),
-        )
-        .expect("IdentPath is non-empty"),
-    )
+    let segments = path.segments();
+    NamePath::new(NonEmpty::new(
+        segments[0].name.clone(),
+        segments[1..]
+            .iter()
+            .map(|ident| ident.name.clone())
+            .collect(),
+    ))
 }
 
 /// Errors produced while building or using module-aware symbol tables.
@@ -1774,16 +1778,16 @@ mod tests {
             .add_module(main_id.clone(), &main.declarations)
             .unwrap();
         resolver
-            .register_import(&main_id, import_path, import_kind, lib_id.clone())
+            .register_import(&main_id, import_path, import_kind, &lib_id)
             .unwrap();
 
-        let resolved = resolver
+        let resolved_name = resolver
             .resolve_index_variant_path(&main_id, &path(&["physics", "Phase", "Burn"]))
             .unwrap();
 
-        assert_eq!(resolved.index().owner(), &lib_id);
-        assert_eq!(resolved.index().as_str(), "Phase");
-        assert_eq!(resolved.variant().as_str(), "Burn");
+        assert_eq!(resolved_name.index().owner(), &lib_id);
+        assert_eq!(resolved_name.index().as_str(), "Phase");
+        assert_eq!(resolved_name.variant().as_str(), "Burn");
     }
 
     #[test]
@@ -1802,15 +1806,15 @@ mod tests {
             .add_module(main_id.clone(), &main.declarations)
             .unwrap();
         resolver
-            .register_import(&main_id, import_path, import_kind, lib_id.clone())
+            .register_import(&main_id, import_path, import_kind, &lib_id)
             .unwrap();
 
-        let resolved = resolver
+        let resolved_name = resolver
             .resolve_struct_type_path(&main_id, &path(&["Vector"]))
             .unwrap();
 
-        assert_eq!(resolved.owner(), &lib_id);
-        assert_eq!(resolved.as_str(), "Vec3");
+        assert_eq!(resolved_name.owner(), &lib_id);
+        assert_eq!(resolved_name.as_str(), "Vec3");
     }
 
     #[test]
@@ -1829,7 +1833,7 @@ mod tests {
             .add_module(main_id.clone(), &main.declarations)
             .unwrap();
         resolver
-            .register_import(&main_id, import_path, import_kind, lib_id.clone())
+            .register_import(&main_id, import_path, import_kind, &lib_id)
             .unwrap();
 
         let err = resolver
@@ -1862,15 +1866,15 @@ mod tests {
             .add_module(main_id.clone(), &main.declarations)
             .unwrap();
         resolver
-            .register_import(&main_id, import_path, import_kind, lib_id.clone())
+            .register_import(&main_id, import_path, import_kind, &lib_id)
             .unwrap();
 
-        let resolved = resolver
+        let resolved_name = resolver
             .resolve_constructor_path(&main_id, &path(&["mission", "Impulsive"]))
             .unwrap();
 
-        assert_eq!(resolved.owner(), &lib_id);
-        assert_eq!(resolved.as_str(), "Impulsive");
+        assert_eq!(resolved_name.owner(), &lib_id);
+        assert_eq!(resolved_name.as_str(), "Impulsive");
     }
 
     #[test]
@@ -1895,22 +1899,17 @@ mod tests {
             .add_module(main_id.clone(), &main.declarations)
             .unwrap();
         resolver
-            .register_import(
-                &middle_id,
-                middle_import_path,
-                middle_import_kind,
-                leaf_id.clone(),
-            )
+            .register_import(&middle_id, middle_import_path, middle_import_kind, &leaf_id)
             .unwrap();
         resolver
-            .register_import(&main_id, main_import_path, main_import_kind, middle_id)
+            .register_import(&main_id, main_import_path, main_import_kind, &middle_id)
             .unwrap();
 
-        let resolved = resolver
+        let resolved_name = resolver
             .resolve_dimension_path(&main_id, &path(&["Acceleration"]))
             .unwrap();
 
-        assert_eq!(resolved.owner(), &leaf_id);
-        assert_eq!(resolved.as_str(), "Acceleration");
+        assert_eq!(resolved_name.owner(), &leaf_id);
+        assert_eq!(resolved_name.as_str(), "Acceleration");
     }
 }

@@ -676,17 +676,15 @@ pub(super) fn resolve_field_declared_type(
         &field.type_ann.kind
         && dim_expr.terms.len() == 1
         && dim_expr.terms[0].term.power.is_none()
-    {
-        if let Some(name) = dim_expr.terms[0]
+        && let Some(name) = dim_expr.terms[0]
             .term
             .name
             .value
             .as_bare()
-            .map(|atom| atom.as_str())
-            && let Some(concrete) = generic_sub.get(name)
-        {
-            return Some((*concrete).clone());
-        }
+            .map(graphcal_compiler::syntax::names::NameAtom::as_str)
+        && let Some(concrete) = generic_sub.get(name)
+    {
+        return Some((*concrete).clone());
     }
     // Non-generic: resolve directly from the registry. Overflow in dimension
     // arithmetic is treated as "no declared type info" here — the value will

@@ -50,7 +50,7 @@ impl NameAtom {
     /// impossible error path.
     #[must_use]
     pub(crate) fn new_unchecked_for_parser(s: String) -> Self {
-        debug_assert!(NameAtom::parse(s.as_str()).is_ok());
+        debug_assert!(Self::parse(s.as_str()).is_ok());
         Self(s)
     }
 
@@ -141,7 +141,7 @@ impl From<&NameAtom> for String {
     }
 }
 
-impl<'a> From<NameAtom> for std::borrow::Cow<'a, str> {
+impl From<NameAtom> for std::borrow::Cow<'_, str> {
     fn from(atom: NameAtom) -> Self {
         Self::Owned(atom.into_inner())
     }
@@ -235,7 +235,7 @@ pub mod namespace {
 /// `NameDef<Ns>` is intentionally a single [`NameAtom`]. It is suitable for
 /// names introduced by syntax positions whose namespace is fixed by the
 /// grammar, such as `type Foo`, `index Phase`, or `unit m`. Reference positions
-/// that may be qualified should stay as [`NamePath`](crate::syntax::names::NamePath)
+/// that may be qualified should stay as [`NamePath`]
 /// / [`IdentPath`](crate::syntax::ast::IdentPath) until module-aware
 /// resolution can produce a [`ResolvedName`].
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -260,6 +260,10 @@ impl<Ns: NameNamespace> NameDef<Ns> {
     /// Panics if the string is empty or contains `.`. Use [`Self::try_new`]
     /// when validating external input.
     #[must_use]
+    #[expect(
+        clippy::panic,
+        reason = "infallible constructor documents invalid input panic"
+    )]
     pub fn new(s: impl Into<String>) -> Self {
         Self::try_new(s).unwrap_or_else(|err| {
             panic!("invalid {} leaf name: {err}", Ns::DISPLAY_NAME);
@@ -775,10 +779,8 @@ impl NamePath {
     pub fn qualified_path(qualifier: impl IntoIterator<Item = NameAtom>, leaf: NameAtom) -> Self {
         let mut segments: Vec<NameAtom> = qualifier.into_iter().collect();
         segments.push(leaf);
-        Self::new(
-            crate::syntax::non_empty::NonEmpty::try_from_vec(segments)
-                .expect("qualified_path always pushes a leaf segment"),
-        )
+        let first = segments.remove(0);
+        Self::new(crate::syntax::non_empty::NonEmpty::new(first, segments))
     }
 
     /// Borrow all path segments in source order.
@@ -837,10 +839,7 @@ impl NamePath {
     /// The qualifier slice is empty for one-segment paths.
     #[must_use]
     pub fn split_last(&self) -> (&[NameAtom], &NameAtom) {
-        let segments = self.segments.as_slice();
-        let (leaf, qualifier) = segments
-            .split_last()
-            .expect("NamePath is backed by NonEmpty");
+        let (leaf, qualifier) = self.segments.split_last();
         (qualifier, leaf)
     }
 
@@ -881,6 +880,10 @@ impl From<IndexName> for NamePath {
 }
 
 impl From<String> for NamePath {
+    #[expect(
+        clippy::panic,
+        reason = "From<String> is a convenience for trusted leaf names"
+    )]
     fn from(s: String) -> Self {
         Self::local(NameAtom::parse(s).unwrap_or_else(|err| {
             panic!("invalid NamePath leaf name: {err}");

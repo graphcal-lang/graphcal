@@ -657,9 +657,7 @@ impl Parser<'_> {
     // --- Index access ---
 
     pub(super) fn index_name_path_from_segments(index_segments: &[Ident]) -> Spanned<NamePath> {
-        let index_ident = index_segments
-            .last()
-            .expect("index variant paths always have an index segment");
+        let index_ident = &index_segments[index_segments.len() - 1];
         let span = index_segments
             .first()
             .map_or(index_ident.span, |first| first.span.merge(index_ident.span));
@@ -684,9 +682,7 @@ impl Parser<'_> {
             self.lexer.next_token();
             segments.push(self.parse_any_ident()?);
         }
-        let variant_ident = segments
-            .pop()
-            .expect("index variant paths always have a variant segment");
+        let variant_ident = segments.remove(segments.len() - 1);
         let full_span = start_span.merge(variant_ident.span);
         let index = Self::index_name_path_from_segments(&segments);
         let variant = Spanned::new(

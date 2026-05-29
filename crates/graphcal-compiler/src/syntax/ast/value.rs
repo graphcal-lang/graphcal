@@ -167,10 +167,7 @@ impl IdentPath {
     /// The qualifier slice is empty for one-segment paths.
     #[must_use]
     pub fn split_last(&self) -> (&[Ident], &Ident) {
-        let segments = self.segments.as_slice();
-        let (leaf, qualifier) = segments
-            .split_last()
-            .expect("IdentPath is backed by NonEmpty");
+        let (leaf, qualifier) = self.segments.split_last();
         (qualifier, leaf)
     }
 
@@ -210,7 +207,7 @@ impl IdentPath {
     pub fn into_bare(self) -> Result<Ident, Self> {
         if self.is_bare() {
             let mut segments = self.segments.into_vec();
-            Ok(segments.pop().expect("bare IdentPath has one segment"))
+            Ok(segments.remove(0))
         } else {
             Err(self)
         }

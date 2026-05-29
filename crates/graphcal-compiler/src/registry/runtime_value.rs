@@ -106,7 +106,7 @@ pub enum RuntimeValue {
 impl RuntimeValue {
     /// Construct a standalone/legacy label value from leaf names.
     #[must_use]
-    pub fn legacy_label(index_name: IndexName, variant: IndexVariantName) -> Self {
+    pub const fn legacy_label(index_name: IndexName, variant: IndexVariantName) -> Self {
         Self::Label {
             index_name: IndexTypeRef::legacy(index_name),
             variant,
@@ -124,7 +124,10 @@ impl RuntimeValue {
 
     /// Construct a standalone/legacy struct value from a concrete type/constructor leaf.
     #[must_use]
-    pub fn legacy_struct(type_name: StructTypeName, fields: IndexMap<FieldName, Self>) -> Self {
+    pub const fn legacy_struct(
+        type_name: StructTypeName,
+        fields: IndexMap<FieldName, Self>,
+    ) -> Self {
         Self::Struct {
             type_name: StructTypeRef::legacy(type_name),
             fields,
@@ -133,7 +136,7 @@ impl RuntimeValue {
 
     /// Construct a standalone/legacy indexed value from an index leaf.
     #[must_use]
-    pub fn legacy_indexed(
+    pub const fn legacy_indexed(
         index_name: IndexName,
         entries: IndexMap<IndexVariantName, Self>,
     ) -> Self {

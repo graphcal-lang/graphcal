@@ -106,9 +106,9 @@ fn cycle_detection_prefers_resolved_dependency_sidecar_when_present() {
 
     let mut resolved = crate::tir::typed::ResolvedDagDependencies::default();
     resolved.const_deps.insert(a.clone(), BTreeSet::new());
-    resolved.const_deps.insert(b.clone(), BTreeSet::from([a]));
+    resolved.const_deps.insert(b, BTreeSet::from([a]));
     resolved.runtime_deps.insert(x.clone(), BTreeSet::new());
-    resolved.runtime_deps.insert(y.clone(), BTreeSet::from([x]));
+    resolved.runtime_deps.insert(y, BTreeSet::from([x]));
 
     let root = tir.root_mut();
     root.resolved_deps = Some(resolved);

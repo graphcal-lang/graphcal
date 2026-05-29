@@ -148,12 +148,10 @@ fn ensure_index_refs_match(
 }
 
 fn index_def_for_ref<'a>(index_ref: &IndexTypeRef, ctx: &EvalContext<'a>) -> Option<&'a IndexDef> {
-    match index_ref.resolved() {
-        Some(resolved) => {
-            resolved_collection_refs(ctx).and_then(|refs| refs.index_defs.get(resolved))
-        }
-        None => ctx.registry.indexes.get_index(index_ref.as_str()),
-    }
+    index_ref.resolved().map_or_else(
+        || ctx.registry.indexes.get_index(index_ref.as_str()),
+        |resolved| resolved_collection_refs(ctx).and_then(|refs| refs.index_defs.get(resolved)),
+    )
 }
 
 fn map_entry_variant_for_axis(
@@ -161,23 +159,21 @@ fn map_entry_variant_for_axis(
     axis: &IndexTypeRef,
     ctx: &EvalContext<'_>,
 ) -> Result<IndexVariantName, GraphcalError> {
-    match resolved_map_entry_variant(ctx, key) {
-        Some(resolved) => {
-            ensure_index_ref_matches_resolved(axis, resolved.index(), key.index.span, ctx)?;
-            Ok(resolved.variant().clone())
-        }
-        None => {
-            let legacy_index = IndexTypeRef::legacy(key.index.value.registry_name());
-            ensure_index_refs_match(axis, &legacy_index, key.index.span, ctx)?;
-            Ok(key.variant.value.clone())
-        }
+    if let Some(resolved) = resolved_map_entry_variant(ctx, key) {
+        ensure_index_ref_matches_resolved(axis, resolved.index(), key.index.span, ctx)?;
+        Ok(resolved.variant().clone())
+    } else {
+        let legacy_index = IndexTypeRef::legacy(key.index.value.registry_name());
+        ensure_index_refs_match(axis, &legacy_index, key.index.span, ctx)?;
+        Ok(key.variant.value.clone())
     }
 }
 
 fn map_entry_index_ref(key: &MapEntryKey, ctx: &EvalContext<'_>) -> IndexTypeRef {
-    resolved_map_entry_variant(ctx, key)
-        .map(|resolved| IndexTypeRef::from_resolved(resolved.index().clone()))
-        .unwrap_or_else(|| IndexTypeRef::legacy(key.index.value.registry_name()))
+    resolved_map_entry_variant(ctx, key).map_or_else(
+        || IndexTypeRef::legacy(key.index.value.registry_name()),
+        |resolved| IndexTypeRef::from_resolved(resolved.index().clone()),
+    )
 }
 
 fn map_entry_index_def<'a>(
@@ -219,22 +215,20 @@ pub(super) fn eval_index_access(
         };
         let variant_name: IndexVariantName = match arg {
             graphcal_compiler::desugar::resolved_ast::IndexArg::Variant { index, variant } => {
-                match resolved_index_access_variant(ctx, index.span, variant.span) {
-                    Some(resolved) => {
-                        ensure_index_ref_matches_resolved(
-                            &index_name,
-                            resolved.index(),
-                            index.span,
-                            ctx,
-                        )?;
-                        resolved.variant().clone()
-                    }
-                    None => {
-                        let legacy_index =
-                            IndexTypeRef::legacy(standalone_index_name_from_path(&index.value));
-                        ensure_index_refs_match(&index_name, &legacy_index, index.span, ctx)?;
-                        variant.value.clone()
-                    }
+                if let Some(resolved) = resolved_index_access_variant(ctx, index.span, variant.span)
+                {
+                    ensure_index_ref_matches_resolved(
+                        &index_name,
+                        resolved.index(),
+                        index.span,
+                        ctx,
+                    )?;
+                    resolved.variant().clone()
+                } else {
+                    let legacy_index =
+                        IndexTypeRef::legacy(standalone_index_name_from_path(&index.value));
+                    ensure_index_refs_match(&index_name, &legacy_index, index.span, ctx)?;
+                    variant.value.clone()
                 }
             }
             graphcal_compiler::desugar::resolved_ast::IndexArg::Var(ident) => {
@@ -595,12 +589,10 @@ pub(super) fn eval_for_comp(
         ForBindingIndex::Named(spanned) => {
             let resolved = resolved_for_binding_index(ctx, spanned.span).cloned();
             (
-                resolved
-                    .as_ref()
-                    .map(|resolved| IndexTypeRef::from_resolved(resolved.clone()))
-                    .unwrap_or_else(|| {
-                        IndexTypeRef::legacy(standalone_index_name_from_path(&spanned.value))
-                    }),
+                resolved.as_ref().map_or_else(
+                    || IndexTypeRef::legacy(standalone_index_name_from_path(&spanned.value)),
+                    |resolved| IndexTypeRef::from_resolved(resolved.clone()),
+                ),
                 spanned.span,
                 None,
                 resolved,

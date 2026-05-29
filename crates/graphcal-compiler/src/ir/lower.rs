@@ -1688,9 +1688,9 @@ pub(crate) fn substitute_type_names_in_expr(
         } => {
             if let Some(constructor) = callee.as_bare_mut()
                 && let Some(new_name) = bindings.get(constructor.name.as_str())
+                && let Ok(parsed_name) = NameAtom::parse(new_name.as_ref())
             {
-                constructor.name = NameAtom::parse(new_name.as_ref())
-                    .expect("type substitution names must be leaf names");
+                constructor.name = parsed_name;
             }
             for arg in generic_args.iter_mut() {
                 if let GenericArg::Type(ty) = arg {
@@ -2010,7 +2010,13 @@ fn topo_sort_derived_dims<'a>(
             continue;
         };
         for item in &definition.terms {
-            let Some(dep_name) = item.term.name.value.as_bare().map(|atom| atom.as_str()) else {
+            let Some(dep_name) = item
+                .term
+                .name
+                .value
+                .as_bare()
+                .map(super::super::syntax::names::NameAtom::as_str)
+            else {
                 continue;
             };
             if dep_name != self_name

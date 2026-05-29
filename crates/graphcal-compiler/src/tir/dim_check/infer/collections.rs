@@ -133,12 +133,10 @@ fn index_def_for_inferred<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a crate::registry::types::IndexDef> {
-    match index.resolved() {
-        Some(resolved) => {
-            resolved_collection_refs(dag).and_then(|refs| refs.index_defs.get(resolved))
-        }
-        None => registry.indexes.get_index(index.name().as_str()),
-    }
+    index.resolved().map_or_else(
+        || registry.indexes.get_index(index.name().as_str()),
+        |resolved| resolved_collection_refs(dag).and_then(|refs| refs.index_defs.get(resolved)),
+    )
 }
 
 fn resolved_map_entry_variant_for_key<'a>(
@@ -169,14 +167,14 @@ enum MapLiteralVariantKey {
 }
 
 impl MapLiteralVariantKey {
-    fn variant(&self) -> &IndexVariantName {
+    const fn variant(&self) -> &IndexVariantName {
         match self {
             Self::Resolved(resolved) => resolved.variant(),
             Self::Legacy { variant, .. } => variant,
         }
     }
 
-    fn display_index<'a>(&'a self, fallback: &'a IndexName) -> &'a IndexName {
+    const fn display_index<'a>(&'a self, fallback: &'a IndexName) -> &'a IndexName {
         match self {
             Self::Resolved(_) => fallback,
             Self::Legacy { index, .. } => index,
@@ -411,8 +409,10 @@ pub(super) fn infer_map_or_table_literal(
             .map(|(i, key)| {
                 resolved_map_entry_variant_for_key(key, dag)
                     .cloned()
-                    .map(MapLiteralVariantKey::Resolved)
-                    .unwrap_or_else(|| axes[i].variant_key(key.variant.value.clone()))
+                    .map_or_else(
+                        || axes[i].variant_key(key.variant.value.clone()),
+                        MapLiteralVariantKey::Resolved,
+                    )
             })
             .collect();
         if !provided_tuples.insert(tuple.clone()) {
@@ -1192,25 +1192,26 @@ pub(super) fn infer_constructor_call(
     // constructor — not a type. The union the constructor belongs to becomes
     // the value's type.
     let (type_def, variant, constructor_name, constructor_span, owning_type_identity) =
-        match resolved_target {
-            Some(target) => (
+        if let Some(target) = resolved_target {
+            (
                 &target.type_def,
                 &target.variant,
                 target.variant.name.clone(),
                 callee.span(),
                 InferredStructType::from_resolved(target.owning_type.clone()),
-            ),
-            None => {
-                let Some(constructor) = callee.as_bare() else {
-                    return Err(GraphcalError::UnknownStructType {
-                        name: callee.display_path(),
-                        src: src.clone(),
-                        span: callee.span().into(),
-                    });
-                };
-                let constructor_name =
-                    crate::syntax::names::ConstructorName::from_atom(constructor.name.clone());
-                let (type_def, variant) = registry
+            )
+        } else {
+            let Some(constructor) = callee.as_bare() else {
+                return Err(GraphcalError::UnknownStructType {
+                    name: callee.display_path(),
+                    src: src.clone(),
+                    span: callee.span().into(),
+                });
+            };
+            let constructor_name =
+                crate::syntax::names::ConstructorName::from_atom(constructor.name.clone());
+            let (type_def, variant) =
+                registry
                     .types
                     .lookup_ctor(&constructor_name)
                     .ok_or_else(|| GraphcalError::UnknownStructType {
@@ -1218,14 +1219,13 @@ pub(super) fn infer_constructor_call(
                         src: src.clone(),
                         span: constructor.span.into(),
                     })?;
-                (
-                    type_def,
-                    variant,
-                    constructor_name,
-                    constructor.span,
-                    InferredStructType::legacy(type_def.name.clone()),
-                )
-            }
+            (
+                type_def,
+                variant,
+                constructor_name,
+                constructor.span,
+                InferredStructType::legacy(type_def.name.clone()),
+            )
         };
     let owning_type_name = type_def.name.clone();
     let variant_fields: &[crate::registry::types::StructField] = &variant.fields;
@@ -1354,7 +1354,7 @@ pub(super) fn infer_constructor_call(
         .collect();
     if !extra.is_empty() {
         return Err(GraphcalError::ExtraFields {
-            type_name: owning_type_name.clone(),
+            type_name: owning_type_name,
             extra,
             src: src.clone(),
             span: expr.span.into(),
@@ -1370,7 +1370,7 @@ pub(super) fn infer_constructor_call(
         .collect();
     if !missing.is_empty() {
         return Err(GraphcalError::MissingFields {
-            type_name: owning_type_name.clone(),
+            type_name: owning_type_name,
             missing,
             src: src.clone(),
             span: expr.span.into(),
@@ -1411,7 +1411,7 @@ pub(super) fn infer_constructor_call(
         )?;
         if value_type != expected_field_type {
             return Err(GraphcalError::FieldDimensionMismatch {
-                type_name: owning_type_name.clone(),
+                type_name: owning_type_name,
                 field_name: field_init.name.value.clone(),
                 expected: format_inferred_type(&expected_field_type, registry),
                 found: format_inferred_type(&value_type, registry),

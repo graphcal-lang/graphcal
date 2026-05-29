@@ -95,12 +95,6 @@ pub(super) fn resolved_type_matches_inferred(
         (ResolvedTypeExpr::Indexed { base, indexes }, _) => {
             resolved_indexed_type_matches_inferred(base, indexes, inferred)
         }
-        (
-            ResolvedTypeExpr::GenericDimParam(_, _)
-            | ResolvedTypeExpr::GenericTypeParam(_, _)
-            | ResolvedTypeExpr::GenericDimExpr { .. },
-            _,
-        ) => false,
         _ => false,
     }
 }
@@ -159,12 +153,13 @@ pub(super) fn struct_type_def_for_inferred<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a TypeDef> {
-    match ty.resolved() {
-        Some(resolved) => dag
-            .and_then(|dag| dag.resolved_type_defs.as_ref())
-            .and_then(|defs| defs.struct_types.get(resolved)),
-        None => registry.types.get_type(ty.name().as_str()),
-    }
+    ty.resolved().map_or_else(
+        || registry.types.get_type(ty.name().as_str()),
+        |resolved| {
+            dag.and_then(|dag| dag.resolved_type_defs.as_ref())
+                .and_then(|defs| defs.struct_types.get(resolved))
+        },
+    )
 }
 
 /// Format an inferred type for display in diagnostics.
@@ -313,17 +308,15 @@ pub(super) fn resolve_field_type(
     if let crate::desugar::resolved_ast::TypeExprKind::DimExpr(dim_expr) = &field_type_ann.kind
         && dim_expr.terms.len() == 1
         && dim_expr.terms[0].term.power.is_none()
-    {
-        if let Some(name) = dim_expr.terms[0]
+        && let Some(name) = dim_expr.terms[0]
             .term
             .name
             .value
             .as_bare()
-            .map(|atom| atom.as_str())
-            && let Some(inferred) = type_sub.get(name)
-        {
-            return Ok(inferred.clone());
-        }
+            .map(crate::syntax::names::NameAtom::as_str)
+        && let Some(inferred) = type_sub.get(name)
+    {
+        return Ok(inferred.clone());
     }
 
     // Resolve using TIR type resolution with generic params in scope, then substitute

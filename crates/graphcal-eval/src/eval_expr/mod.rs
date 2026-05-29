@@ -28,8 +28,8 @@ use graphcal_compiler::tir::typed::{
 use crate::decl_key::RuntimeDeclKey;
 
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
-pub(crate) use hir_eval::{HirLocalValueMap, eval_hir_expr};
-pub(crate) type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
+pub use hir_eval::{HirLocalValueMap, eval_hir_expr};
+pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 
 /// Immutable evaluation environment shared across all expression evaluations.
 ///
@@ -153,24 +153,24 @@ fn const_ref_runtime_key(
     ctx: &EvalContext<'_>,
     span: graphcal_compiler::syntax::span::Span,
     legacy: &ScopedName,
-) -> Result<Option<RuntimeDeclKey>, GraphcalError> {
+) -> Option<RuntimeDeclKey> {
     match ctx.current_dag.and_then(|dag| dag.resolved_deps.as_ref()) {
-        Some(_) => Ok(resolved_const_ref_target(ctx, span)
+        Some(_) => resolved_const_ref_target(ctx, span)
             .cloned()
             .map(RuntimeDeclKey::resolved)
-            .or_else(|| visible_decl_runtime_key(ctx, legacy))),
-        None => Ok(Some(RuntimeDeclKey::legacy(legacy.clone()))),
+            .or_else(|| visible_decl_runtime_key(ctx, legacy)),
+        None => Some(RuntimeDeclKey::legacy(legacy.clone())),
     }
 }
 
-pub(super) fn index_ref_matches_resolved_or_legacy(
+pub fn index_ref_matches_resolved_or_legacy(
     actual: &IndexTypeRef,
     expected: &ResolvedName<namespace::Index>,
 ) -> bool {
-    match actual.resolved() {
-        Some(actual) => actual == expected,
-        None => actual.name().as_str() == expected.as_str(),
-    }
+    actual.resolved().map_or_else(
+        || actual.name().as_str() == expected.as_str(),
+        |actual| actual == expected,
+    )
 }
 
 fn constructor_call_target<'a>(
@@ -186,14 +186,15 @@ fn runtime_struct_type_def<'a>(
     type_name: &StructTypeRef,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a TypeDef> {
-    match type_name.resolved() {
-        Some(resolved) => ctx
-            .tir
-            .dags
-            .values()
-            .find_map(|dag| dag.resolved_type_defs.as_ref()?.struct_types.get(resolved)),
-        None => ctx.registry.types.get_type(type_name.as_str()),
-    }
+    type_name.resolved().map_or_else(
+        || ctx.registry.types.get_type(type_name.as_str()),
+        |resolved| {
+            ctx.tir
+                .dags
+                .values()
+                .find_map(|dag| dag.resolved_type_defs.as_ref()?.struct_types.get(resolved))
+        },
+    )
 }
 
 fn constructor_fields_for_runtime_struct<'a>(
@@ -299,14 +300,15 @@ pub fn eval_expr(
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
         ExprKind::VariantLiteral { index, variant } => {
             let full_span = index.span.merge(variant.span);
-            Ok(resolved_value_index_variant(ctx, full_span)
-                .map(runtime_label_from_resolved_variant)
-                .unwrap_or_else(|| {
+            Ok(resolved_value_index_variant(ctx, full_span).map_or_else(
+                || {
                     RuntimeValue::legacy_label(
                         standalone_index_name_from_path(&index.value),
                         variant.value.clone(),
                     )
-                }))
+                },
+                runtime_label_from_resolved_variant,
+            ))
         }
         ExprKind::GraphRef(ident) => {
             let key = graph_ref_runtime_key(ctx, ident.span, &ident.value)?;
@@ -322,7 +324,7 @@ pub fn eval_expr(
                 return Ok(runtime_label_from_resolved_variant(resolved_variant));
             }
 
-            if let Some(key) = const_ref_runtime_key(ctx, ident.span, &ident.value)?
+            if let Some(key) = const_ref_runtime_key(ctx, ident.span, &ident.value)
                 && let Some(value) = values.get(&key)
             {
                 return Ok(value.clone());
@@ -459,20 +461,19 @@ pub fn eval_expr(
         // --- Constructor call ---
         ExprKind::ConstructorCall { callee, fields, .. } => {
             let resolved_constructor = constructor_call_target(ctx, callee.span());
-            let (constructor_name, owning_type) = match resolved_constructor {
-                Some(target) => (
+            let (constructor_name, owning_type) = if let Some(target) = resolved_constructor {
+                (
                     target.variant.name.clone(),
                     Some(StructTypeRef::from_resolved(target.owning_type.clone())),
-                ),
-                None => {
-                    let Some(constructor) = callee.as_bare() else {
-                        return Err(ctx.eval_error(
-                            format!("unknown constructor `{}`", callee.display_path()),
-                            callee.span(),
-                        ));
-                    };
-                    (ConstructorName::from_atom(constructor.name.clone()), None)
-                }
+                )
+            } else {
+                let Some(constructor) = callee.as_bare() else {
+                    return Err(ctx.eval_error(
+                        format!("unknown constructor `{}`", callee.display_path()),
+                        callee.span(),
+                    ));
+                };
+                (ConstructorName::from_atom(constructor.name.clone()), None)
             };
             let mut field_map = IndexMap::new();
             for field_init in fields {
@@ -615,8 +616,12 @@ fn imported_value_source_value<'a>(
 /// source-path lookup through the enclosing TIR. The dag's own registry is used
 /// for all nested lookups so sibling dag calls from inside the body resolve
 /// through the same pipeline.
+#[expect(
+    clippy::too_many_lines,
+    reason = "inline DAG evaluation validates bindings and executes selected body"
+)]
 fn eval_inline_dag_call(
-    _call_expr: &Expr,
+    call_expr: &Expr,
     path: &graphcal_compiler::syntax::ast::ModulePath,
     args: &[graphcal_compiler::desugar::resolved_ast::ParamBinding],
     output: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::DeclName>,
@@ -625,7 +630,7 @@ fn eval_inline_dag_call(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let display_path = path.display_path();
-    let resolved_call = resolved_inline_call(_call_expr, ctx);
+    let resolved_call = resolved_inline_call(call_expr, ctx);
     let dag_tir = match resolved_call {
         Some(call) => ctx.tir.dags.get(&call.target).ok_or_else(|| {
             ctx.internal_error(
@@ -762,10 +767,10 @@ fn eval_inline_dag_call(
 /// of its runtime and const dependencies. Cycles are impossible in a
 /// well-typed dag body because compile-time dep collection rejects them.
 fn topo_order_for_dag_body(dag_tir: &DagTIR) -> Vec<ScopedName> {
-    match &dag_tir.resolved_deps {
-        Some(deps) => topo_order_for_dag_body_resolved(dag_tir, deps),
-        None => topo_order_for_dag_body_legacy(dag_tir),
-    }
+    dag_tir.resolved_deps.as_ref().map_or_else(
+        || topo_order_for_dag_body_legacy(dag_tir),
+        |deps| topo_order_for_dag_body_resolved(dag_tir, deps),
+    )
 }
 
 type ResolvedDeclKey = ResolvedName<namespace::Decl>;

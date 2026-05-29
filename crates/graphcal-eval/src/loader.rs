@@ -289,7 +289,7 @@ fn register_file_module_imports(
                         owner,
                         &import.path,
                         &import.kind,
-                        module_resolver_target_for_path(&import.path, target, files),
+                        &module_resolver_target_for_path(&import.path, target, files),
                     )?;
                 }
             }
@@ -300,7 +300,7 @@ fn register_file_module_imports(
                         owner,
                         &include.path,
                         &include.kind,
-                        module_resolver_target_for_path(&include.path, target, files),
+                        &module_resolver_target_for_path(&include.path, target, files),
                     )?;
                 }
             }
@@ -328,7 +328,7 @@ fn register_inline_module_imports(
                 owner,
                 &import.path,
                 &import.kind,
-                module_resolver_target_for_path(&import.path, target, files),
+                &module_resolver_target_for_path(&import.path, target, files),
             )?;
         }
     }
@@ -1115,13 +1115,13 @@ mod tests {
         let resolver = project.build_module_resolver().unwrap();
         let lib_dag_id = DagId::new("src", ["helper", "lib"]);
 
-        let resolved = resolver
+        let resolved_variant = resolver
             .resolve_index_variant_path(&project.root, &name_path(&["lib", "Phase", "Burn"]))
             .unwrap();
 
-        assert_eq!(resolved.index().owner(), &lib_dag_id);
-        assert_eq!(resolved.index().as_str(), "Phase");
-        assert_eq!(resolved.variant().as_str(), "Burn");
+        assert_eq!(resolved_variant.index().owner(), &lib_dag_id);
+        assert_eq!(resolved_variant.index().as_str(), "Phase");
+        assert_eq!(resolved_variant.variant().as_str(), "Burn");
     }
 
     #[test]

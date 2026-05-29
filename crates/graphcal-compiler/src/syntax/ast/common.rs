@@ -172,10 +172,7 @@ impl ModulePath {
     /// The qualifier slice is empty for one-segment paths.
     #[must_use]
     pub fn split_last(&self) -> (&[Ident], &Ident) {
-        let segments = self.segments.as_slice();
-        let (leaf, qualifier) = segments
-            .split_last()
-            .expect("ModulePath is backed by NonEmpty");
+        let (leaf, qualifier) = self.segments.split_last();
         (qualifier, leaf)
     }
 

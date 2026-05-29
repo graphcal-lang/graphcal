@@ -92,7 +92,7 @@ pub fn resolve_symbol_at(analysis: &AnalysisResult, offset: usize) -> Option<Res
     None
 }
 
-pub(crate) fn reference_lookup_keys(key: &SymbolKey) -> Vec<SymbolKey> {
+pub fn reference_lookup_keys(key: &SymbolKey) -> Vec<SymbolKey> {
     let mut keys = vec![key.clone()];
     match key {
         SymbolKey::Qualified { module, name } => {

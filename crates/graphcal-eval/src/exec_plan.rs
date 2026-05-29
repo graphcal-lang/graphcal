@@ -285,10 +285,10 @@ fn const_eval_order(
     dag: &DagTIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
-    match &dag.resolved_deps {
-        Some(deps) => const_eval_order_resolved(dag, deps, src),
-        None => const_eval_order_legacy(dag, src),
-    }
+    dag.resolved_deps.as_ref().map_or_else(
+        || const_eval_order_legacy(dag, src),
+        |deps| const_eval_order_resolved(dag, deps, src),
+    )
 }
 
 fn const_eval_order_resolved(
@@ -331,9 +331,9 @@ fn const_eval_order_resolved(
             .unwrap_or_else(|| Span::new(0, 0));
         let name = local_name_by_key
             .get(cycle_node)
-            .map_or_else(|| cycle_node.to_string(), |name| name.to_string());
+            .map_or_else(|| cycle_node.to_string(), std::string::ToString::to_string);
         GraphcalError::CyclicDependency {
-            name: name.into(),
+            name,
             src: src.clone(),
             span: span.into(),
         }
@@ -380,7 +380,7 @@ fn const_eval_order_legacy(
             .find(|e| &e.name == cycle_node)
             .map_or_else(|| Span::new(0, 0), |e| e.span);
         GraphcalError::CyclicDependency {
-            name: cycle_node.to_string().into(),
+            name: cycle_node.to_string(),
             src: src.clone(),
             span: span.into(),
         }
@@ -464,10 +464,10 @@ fn runtime_eval_order(
     decl_spans: &[(ScopedName, Span)],
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
-    match &dag.resolved_deps {
-        Some(deps) => runtime_eval_order_resolved(dag, decl_spans, deps, src),
-        None => runtime_eval_order_legacy(dag, decl_spans, src),
-    }
+    dag.resolved_deps.as_ref().map_or_else(
+        || runtime_eval_order_legacy(dag, decl_spans, src),
+        |deps| runtime_eval_order_resolved(dag, decl_spans, deps, src),
+    )
 }
 
 fn runtime_eval_order_resolved(
@@ -508,9 +508,9 @@ fn runtime_eval_order_resolved(
             .unwrap_or_else(|| Span::new(0, 0));
         let name = local_name_by_key
             .get(cycle_node)
-            .map_or_else(|| cycle_node.to_string(), |name| name.to_string());
+            .map_or_else(|| cycle_node.to_string(), std::string::ToString::to_string);
         GraphcalError::CyclicDependency {
-            name: name.into(),
+            name,
             src: src.clone(),
             span: span.into(),
         }
@@ -554,7 +554,7 @@ fn runtime_eval_order_legacy(
             .copied()
             .unwrap_or_else(|| Span::new(0, 0));
         GraphcalError::CyclicDependency {
-            name: cycle_node.to_string().into(),
+            name: cycle_node.to_string(),
             src: src.clone(),
             span: span.into(),
         }

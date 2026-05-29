@@ -574,7 +574,8 @@ fn collect_expr_dependencies_into(expr: &Expr, deps: &mut ExprDependencies) {
         | ExprKind::StringLiteral(_)
         | ExprKind::TypeSystemRef(_)
         | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral(_) => {}
+        | ExprKind::VariantLiteral(_)
+        | ExprKind::UnitLiteral { .. } => {}
         ExprKind::GraphRef(target) => {
             deps.graph_refs.insert(target.value.clone());
             deps.graph_ref_targets
@@ -610,7 +611,6 @@ fn collect_expr_dependencies_into(expr: &Expr, deps: &mut ExprDependencies) {
             collect_expr_dependencies_into(then_branch, deps);
             collect_expr_dependencies_into(else_branch, deps);
         }
-        ExprKind::UnitLiteral { .. } => {}
         ExprKind::ConstructorCall { fields, .. } => {
             for field in fields {
                 collect_expr_dependencies_into(&field.value, deps);
@@ -1505,7 +1505,7 @@ mod tests {
                 continue;
             };
             resolver
-                .register_import(main_id, &import.path, &import.kind, lib_id.clone())
+                .register_import(main_id, &import.path, &import.kind, lib_id)
                 .unwrap();
         }
         resolver

@@ -7,19 +7,19 @@ use graphcal_compiler::tir::typed::DagTIR;
 /// declarations from different modules/DAGs cannot collide. Standalone or
 /// compatibility TIRs keep the legacy `ScopedName` key at the boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum RuntimeDeclKey {
+pub enum RuntimeDeclKey {
     Resolved(ResolvedName<namespace::Decl>),
     Legacy(ScopedName),
 }
 
 impl RuntimeDeclKey {
     #[must_use]
-    pub(crate) fn resolved(name: ResolvedName<namespace::Decl>) -> Self {
+    pub(crate) const fn resolved(name: ResolvedName<namespace::Decl>) -> Self {
         Self::Resolved(name)
     }
 
     #[must_use]
-    pub(crate) fn legacy(name: ScopedName) -> Self {
+    pub(crate) const fn legacy(name: ScopedName) -> Self {
         Self::Legacy(name)
     }
 
@@ -60,7 +60,7 @@ impl RuntimeDeclKey {
     }
 
     #[must_use]
-    pub(crate) fn as_resolved(&self) -> Option<&ResolvedName<namespace::Decl>> {
+    pub(crate) const fn as_resolved(&self) -> Option<&ResolvedName<namespace::Decl>> {
         match self {
             Self::Resolved(name) => Some(name),
             Self::Legacy(_) => None,

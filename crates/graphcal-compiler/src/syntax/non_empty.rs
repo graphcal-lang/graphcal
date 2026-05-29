@@ -94,6 +94,13 @@ impl<T> NonEmpty<T> {
         &self.items[self.items.len() - 1]
     }
 
+    /// Split into the last element and the elements before it.
+    #[must_use]
+    pub fn split_last(&self) -> (&T, &[T]) {
+        let last_index = self.items.len() - 1;
+        (&self.items[last_index], &self.items[..last_index])
+    }
+
     /// Iterate over all elements in source order.
     pub fn iter(&self) -> std::slice::Iter<'_, T> {
         self.items.iter()

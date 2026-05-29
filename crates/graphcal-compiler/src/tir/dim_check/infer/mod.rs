@@ -540,38 +540,35 @@ fn infer_inline_dag_ref(
         std::collections::HashSet::with_capacity(args.len());
     for binding in args {
         let binding_name = binding.name.name.as_str();
-        let expected = match resolved_call {
-            Some(call) => {
-                let target = call.arg_targets.get(&binding.name.span).ok_or_else(|| {
-                    GraphcalError::InternalError {
-                        message: format!(
-                            "resolved inline-DAG sidecar has no arg target for binding `{binding_name}`"
-                        ),
-                        src: src.clone(),
-                        span: binding.name.span.into(),
-                    }
-                })?;
-                bound_resolved_names.insert(target.clone());
-                param_decl_types_by_key.get(target).ok_or_else(|| {
-                    GraphcalError::UnknownInlineDagParam {
-                        name: target.as_str().to_string(),
-                        dag_name: display_path.clone(),
-                        src: src.clone(),
-                        span: binding.name.span.into(),
-                    }
-                })?
-            }
-            None => {
-                bound_names.insert(binding_name.to_string());
-                param_decl_types.get(binding_name).ok_or_else(|| {
-                    GraphcalError::UnknownInlineDagParam {
-                        name: binding_name.to_string(),
-                        dag_name: display_path.clone(),
-                        src: src.clone(),
-                        span: binding.name.span.into(),
-                    }
-                })?
-            }
+        let expected = if let Some(call) = resolved_call {
+            let target = call.arg_targets.get(&binding.name.span).ok_or_else(|| {
+                GraphcalError::InternalError {
+                    message: format!(
+                        "resolved inline-DAG sidecar has no arg target for binding `{binding_name}`"
+                    ),
+                    src: src.clone(),
+                    span: binding.name.span.into(),
+                }
+            })?;
+            bound_resolved_names.insert(target.clone());
+            param_decl_types_by_key.get(target).ok_or_else(|| {
+                GraphcalError::UnknownInlineDagParam {
+                    name: target.as_str().to_string(),
+                    dag_name: display_path.clone(),
+                    src: src.clone(),
+                    span: binding.name.span.into(),
+                }
+            })?
+        } else {
+            bound_names.insert(binding_name.to_string());
+            param_decl_types.get(binding_name).ok_or_else(|| {
+                GraphcalError::UnknownInlineDagParam {
+                    name: binding_name.to_string(),
+                    dag_name: display_path.clone(),
+                    src: src.clone(),
+                    span: binding.name.span.into(),
+                }
+            })?
         };
         let found = infer_type(
             &binding.value,
@@ -594,65 +591,59 @@ fn infer_inline_dag_ref(
         }
     }
 
-    match resolved_call {
-        Some(_) => {
-            let mut missing: Vec<String> = param_decl_types_by_key
-                .keys()
-                .filter(|p| !bound_resolved_names.contains(*p))
-                .map(|p| p.as_str().to_string())
-                .collect();
-            if !missing.is_empty() {
-                missing.sort();
-                return Err(GraphcalError::MissingInlineDagBindings {
-                    missing,
-                    dag_name: display_path.clone(),
-                    src: src.clone(),
-                    span: expr.span.into(),
-                });
-            }
+    if resolved_call.is_some() {
+        let mut missing: Vec<String> = param_decl_types_by_key
+            .keys()
+            .filter(|p| !bound_resolved_names.contains(*p))
+            .map(|p| p.as_str().to_string())
+            .collect();
+        if !missing.is_empty() {
+            missing.sort();
+            return Err(GraphcalError::MissingInlineDagBindings {
+                missing,
+                dag_name: display_path.clone(),
+                src: src.clone(),
+                span: expr.span.into(),
+            });
         }
-        None => {
-            let mut missing: Vec<String> = param_decl_types
-                .keys()
-                .filter(|p| !bound_names.contains(p.as_str()))
-                .cloned()
-                .collect();
-            if !missing.is_empty() {
-                missing.sort();
-                return Err(GraphcalError::MissingInlineDagBindings {
-                    missing,
-                    dag_name: display_path.clone(),
-                    src: src.clone(),
-                    span: expr.span.into(),
-                });
-            }
+    } else {
+        let mut missing: Vec<String> = param_decl_types
+            .keys()
+            .filter(|p| !bound_names.contains(p.as_str()))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            missing.sort();
+            return Err(GraphcalError::MissingInlineDagBindings {
+                missing,
+                dag_name: display_path.clone(),
+                src: src.clone(),
+                span: expr.span.into(),
+            });
         }
     }
 
-    let (output_name, output_decl) = match resolved_call {
-        Some(call) => {
-            let output_key = &call.output.value;
-            let output_decl = node_decl_types_by_key.get(output_key).ok_or_else(|| {
-                GraphcalError::UnknownInlineDagOutput {
-                    name: output_key.as_str().to_string(),
-                    dag_name: display_path.clone(),
-                    src: src.clone(),
-                    span: output.span.into(),
-                }
-            })?;
-            (output_key.as_str(), output_decl)
-        }
-        None => {
-            let output_decl = node_decl_types.get(output.value.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownInlineDagOutput {
-                    name: output.value.to_string(),
-                    dag_name: display_path.clone(),
-                    src: src.clone(),
-                    span: output.span.into(),
-                }
-            })?;
-            (output.value.as_str(), output_decl)
-        }
+    let (output_name, output_decl) = if let Some(call) = resolved_call {
+        let output_key = &call.output.value;
+        let output_decl = node_decl_types_by_key.get(output_key).ok_or_else(|| {
+            GraphcalError::UnknownInlineDagOutput {
+                name: output_key.as_str().to_string(),
+                dag_name: display_path.clone(),
+                src: src.clone(),
+                span: output.span.into(),
+            }
+        })?;
+        (output_key.as_str(), output_decl)
+    } else {
+        let output_decl = node_decl_types.get(output.value.as_str()).ok_or_else(|| {
+            GraphcalError::UnknownInlineDagOutput {
+                name: output.value.to_string(),
+                dag_name: display_path.clone(),
+                src: src.clone(),
+                span: output.span.into(),
+            }
+        })?;
+        (output.value.as_str(), output_decl)
     };
     if !dag_tir.pub_nodes.contains(output_name) {
         return Err(GraphcalError::ImportPrivateItem {

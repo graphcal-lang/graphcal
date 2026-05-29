@@ -30,21 +30,21 @@ use super::types::{
     AssertResult, AxisMeta, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
 };
 
-fn declared_label_index_ref(declared_type: Option<&DeclaredType>) -> Option<&IndexTypeRef> {
+const fn declared_label_index_ref(declared_type: Option<&DeclaredType>) -> Option<&IndexTypeRef> {
     match declared_type {
         Some(DeclaredType::Label(index)) => Some(index),
         _ => None,
     }
 }
 
-fn declared_indexed_index_ref(declared_type: Option<&DeclaredType>) -> Option<&IndexTypeRef> {
+const fn declared_indexed_index_ref(declared_type: Option<&DeclaredType>) -> Option<&IndexTypeRef> {
     match declared_type {
         Some(DeclaredType::Indexed { index, .. }) => Some(index),
         _ => None,
     }
 }
 
-fn declared_struct_type_ref(declared_type: Option<&DeclaredType>) -> Option<&StructTypeRef> {
+const fn declared_struct_type_ref(declared_type: Option<&DeclaredType>) -> Option<&StructTypeRef> {
     match declared_type {
         Some(DeclaredType::Struct(type_name, _)) => Some(type_name),
         _ => None,
@@ -102,6 +102,10 @@ fn public_struct_type_ref(
     merge_struct_ref_owner(runtime_ref, declared_struct_type_ref(declared_type))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "runtime value conversion mirrors all value variants"
+)]
 pub(super) fn runtime_to_value(
     rv: &RuntimeValue,
     declared_type: Option<&DeclaredType>,
@@ -298,15 +302,18 @@ pub(super) fn run_eval_loop(
             struct_field_constraints: Some(&plan.struct_field_constraints),
         };
 
-        let result = match name.as_resolved().and_then(|resolved| {
-            tir.root()
-                .resolved_exprs
-                .as_ref()
-                .and_then(|exprs| exprs.runtime_expr(resolved))
-        }) {
-            Some(hir_expr) => eval_hir_expr(hir_expr, &values, &empty_hir_locals, &ctx),
-            None => eval_expr(expr, &values, &empty_locals, &ctx),
-        };
+        let result = name
+            .as_resolved()
+            .and_then(|resolved| {
+                tir.root()
+                    .resolved_exprs
+                    .as_ref()
+                    .and_then(|exprs| exprs.runtime_expr(resolved))
+            })
+            .map_or_else(
+                || eval_expr(expr, &values, &empty_locals, &ctx),
+                |hir_expr| eval_hir_expr(hir_expr, &values, &empty_hir_locals, &ctx),
+            );
 
         match result {
             Ok(val) => {
@@ -343,8 +350,8 @@ fn failed_runtime_dependencies(
     name: &RuntimeDeclKey,
     errors: &HashMap<RuntimeDeclKey, NodeError>,
 ) -> Vec<DeclName> {
-    match (name.as_resolved(), &dag.resolved_deps) {
-        (Some(key), Some(resolved_deps)) => resolved_deps
+    if let (Some(key), Some(resolved_deps)) = (name.as_resolved(), &dag.resolved_deps) {
+        resolved_deps
             .runtime_deps
             .get(key)
             .map(|deps| {
@@ -353,24 +360,23 @@ fn failed_runtime_dependencies(
                     .map(|dep| DeclName::from_atom(dep.atom().clone()))
                     .collect()
             })
-            .unwrap_or_default(),
-        _ => {
-            let RuntimeDeclKey::Legacy(name) = name else {
-                return Vec::new();
-            };
-            dag.runtime_deps
-                .get(name)
-                .map(|deps| {
-                    deps.iter()
-                        .filter(|dep| {
-                            !dep.is_qualified()
-                                && errors.contains_key(&RuntimeDeclKey::legacy((*dep).clone()))
-                        })
-                        .map(|dep| DeclName::new(dep.member()))
-                        .collect()
-                })
-                .unwrap_or_default()
-        }
+            .unwrap_or_default()
+    } else {
+        let RuntimeDeclKey::Legacy(name) = name else {
+            return Vec::new();
+        };
+        dag.runtime_deps
+            .get(name)
+            .map(|deps| {
+                deps.iter()
+                    .filter(|dep| {
+                        !dep.is_qualified()
+                            && errors.contains_key(&RuntimeDeclKey::legacy((*dep).clone()))
+                    })
+                    .map(|dep| DeclName::new(dep.member()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
