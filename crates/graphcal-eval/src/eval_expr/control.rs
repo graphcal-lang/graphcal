@@ -13,12 +13,12 @@ use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use super::EvalContext;
 use super::RuntimeValueMap;
 use super::eval_expr;
-use super::index_ref_matches_resolved_or_legacy;
+use super::index_ref_matches_resolved_or_leaf;
 
 /// Collapse a syntactic label-pattern path to a leaf-only index reference for
 /// standalone eval. Module-aware match selection must use resolved label refs.
 fn standalone_index_ref_from_path(path: &NamePath) -> IndexTypeRef {
-    IndexTypeRef::legacy(IndexName::from(path.leaf().clone()))
+    IndexTypeRef::ownerless(IndexName::from(path.leaf().clone()))
 }
 
 fn resolved_match_label_variant<'a>(
@@ -46,7 +46,7 @@ fn label_pattern_matches(
     scrutinee_variant: &graphcal_compiler::syntax::names::IndexVariantName,
 ) -> bool {
     if let Some(resolved) = resolved_match_label_variant(ctx, pattern) {
-        return index_ref_matches_resolved_or_legacy(scrutinee_index, resolved.index())
+        return index_ref_matches_resolved_or_leaf(scrutinee_index, resolved.index())
             && resolved.variant() == scrutinee_variant;
     }
 
@@ -129,7 +129,7 @@ fn bind_resolved_constructor_pattern(
     Ok(())
 }
 
-fn bind_legacy_constructor_pattern(
+fn bind_syntax_constructor_pattern(
     pattern: &MatchPattern,
     scrutinee_fields: &indexmap::IndexMap<
         graphcal_compiler::syntax::names::FieldName,
@@ -218,7 +218,7 @@ pub(super) fn eval_match(
 
             // Bind pattern variables. Qualified `MatchPattern::Path` arms are
             // selected and bound through the HIR-derived constructor sidecar;
-            // standalone/bare constructor arms keep the legacy syntax bindings.
+            // standalone/bare constructor arms keep the source syntax bindings.
             let mut arm_locals = local_values.clone();
             if let Some(resolved) = resolved_match_constructor_pattern(ctx, &matched_arm.pattern) {
                 bind_resolved_constructor_pattern(
@@ -229,7 +229,7 @@ pub(super) fn eval_match(
                     ctx,
                 )?;
             } else {
-                bind_legacy_constructor_pattern(
+                bind_syntax_constructor_pattern(
                     &matched_arm.pattern,
                     scrutinee_fields,
                     type_name,

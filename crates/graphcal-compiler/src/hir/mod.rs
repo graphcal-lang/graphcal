@@ -3,7 +3,7 @@
 //! HIR is the first compiler layer whose reference positions are intended to be
 //! **truly resolved**. The current `syntax::phase::Resolved` AST is only a
 //! locally normalized syntax tree: it has no `UnresolvedRef` nodes, but many
-//! module-sensitive references still carry source paths or legacy leaf names.
+//! module-sensitive references still carry source paths or ownerless leaf names.
 //!
 //! The HIR boundary is deliberately separate from the syntax AST so the syntax
 //! phase can stay path-first and honest, while HIR can require stronger
@@ -21,7 +21,7 @@
 //!
 //! This module currently defines and lowers the first boundary slice: type-level
 //! references. Module-aware TIR type resolution consumes this HIR slice before
-//! converting back to its legacy runtime-facing type representation. Remaining
+//! converting back to its runtime-facing type representation. Remaining
 //! expression/value consumers should move to HIR rather than adding more
 //! compatibility lookups to the syntax AST.
 

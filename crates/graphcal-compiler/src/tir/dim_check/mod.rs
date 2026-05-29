@@ -40,8 +40,8 @@ pub use crate::registry::declared_type::DeclaredType;
 ///
 /// The `resolved` field is populated by module-aware HIR sidecars. If both
 /// sides being compared carry canonical identities, equality is owner-sensitive;
-/// otherwise inference falls back to the legacy leaf name so standalone callers
-/// keep working while the rest of TIR/eval migrates.
+/// otherwise inference falls back to the ownerless leaf name so standalone
+/// callers keep working at explicit boundaries.
 #[derive(Debug, Clone, Eq)]
 pub struct InferredIndex {
     reference: IndexTypeRef,
@@ -56,9 +56,9 @@ impl InferredIndex {
     }
 
     #[must_use]
-    pub const fn legacy(name: IndexName) -> Self {
+    pub const fn ownerless(name: IndexName) -> Self {
         Self {
-            reference: IndexTypeRef::legacy(name),
+            reference: IndexTypeRef::ownerless(name),
         }
     }
 
@@ -128,8 +128,8 @@ impl std::ops::Deref for InferredIndex {
 ///
 /// The `resolved` field is populated from module-aware TIR/HIR sidecars. If both
 /// sides being compared carry canonical identities, equality is owner-sensitive;
-/// otherwise inference falls back to the legacy leaf name so standalone callers
-/// keep working while TIR/eval migrates.
+/// otherwise inference falls back to the ownerless leaf name so standalone
+/// callers keep working at explicit boundaries.
 #[derive(Debug, Clone, Eq)]
 pub struct InferredStructType {
     reference: StructTypeRef,
@@ -147,9 +147,9 @@ impl InferredStructType {
     }
 
     #[must_use]
-    pub const fn legacy(name: StructTypeName) -> Self {
+    pub const fn ownerless(name: StructTypeName) -> Self {
         Self {
-            reference: StructTypeRef::legacy(name),
+            reference: StructTypeRef::ownerless(name),
         }
     }
 
@@ -288,7 +288,20 @@ impl DimCheckContext<'_> {
         let dag = self.dag?;
         let key = dag.resolved_decl_key_for_local(name)?;
         let exprs = dag.resolved_exprs.as_ref()?;
-        exprs.consts.get(&key).or_else(|| exprs.runtime_expr(&key))
+        exprs
+            .consts
+            .get(&key)
+            .or_else(|| exprs.runtime_expr(&key))
+            .or_else(|| {
+                let mut candidates = exprs
+                    .consts
+                    .iter()
+                    .chain(exprs.param_defaults.iter())
+                    .chain(exprs.nodes.iter())
+                    .filter(|(key, _)| key.as_str() == name.member())
+                    .map(|(_, expr)| expr);
+                candidates.next().filter(|_| candidates.next().is_none())
+            })
     }
 }
 
@@ -307,6 +320,19 @@ fn check_decl_expr_type(
             src: ctx.src.clone(),
             span: (*type_ann_span).into(),
         })?;
+    let infer_from_source = || {
+        infer_type_with_owner(
+            expr,
+            Some(name.member()),
+            ctx.declared_types,
+            ctx.empty_locals,
+            ctx.dag,
+            ctx.tir,
+            ctx.registry,
+            ctx.builtin_fns,
+            ctx.src,
+        )
+    };
     let inferred = match (ctx.dag, ctx.hir_expr_for_decl(name)) {
         (Some(dag), Some(hir_expr)) => match infer::hir::infer_hir_type_with_owner(
             hir_expr,
@@ -317,31 +343,12 @@ fn check_decl_expr_type(
             ctx.registry,
             ctx.builtin_fns,
             ctx.src,
-        )? {
-            Some(inferred) => inferred,
-            None => infer_type_with_owner(
-                expr,
-                Some(name.member()),
-                ctx.declared_types,
-                ctx.empty_locals,
-                ctx.dag,
-                ctx.tir,
-                ctx.registry,
-                ctx.builtin_fns,
-                ctx.src,
-            )?,
+        ) {
+            Ok(Some(inferred)) => inferred,
+            Ok(None) | Err(GraphcalError::UnknownGraphRef { .. }) => infer_from_source()?,
+            Err(err) => return Err(err),
         },
-        _ => infer_type_with_owner(
-            expr,
-            Some(name.member()),
-            ctx.declared_types,
-            ctx.empty_locals,
-            ctx.dag,
-            ctx.tir,
-            ctx.registry,
-            ctx.builtin_fns,
-            ctx.src,
-        )?,
+        _ => infer_from_source()?,
     };
     let matches = ctx
         .dag
@@ -1162,7 +1169,7 @@ impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Resolved>
 /// Collect inline dag call targets from a compiled DAG's body expressions.
 ///
 /// Module-aware TIRs carry HIR-derived canonical call targets, which are
-/// authoritative when present. Standalone/legacy TIRs fall back to walking the
+/// authoritative when present. Standalone TIRs fall back to walking the
 /// syntax AST and resolving source paths through the caller `TIR`.
 fn collect_dag_call_targets_from_dag(
     tir: &crate::tir::typed::TIR,
@@ -1231,46 +1238,6 @@ fn detect_decl_cycles(
             })
     }
 
-    fn check_legacy<'a>(
-        names_with_spans: impl Iterator<Item = (&'a ScopedName, crate::syntax::span::Span)>,
-        deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<(), GraphcalError> {
-        let mut graph = DiGraph::<ScopedName, ()>::new();
-        let mut index_map: HashMap<ScopedName, petgraph::graph::NodeIndex> = HashMap::new();
-        let mut spans: HashMap<ScopedName, crate::syntax::span::Span> = HashMap::new();
-        for (name, span) in names_with_spans {
-            let idx = graph.add_node(name.clone());
-            index_map.insert(name.clone(), idx);
-            spans.insert(name.clone(), span);
-        }
-        if index_map.is_empty() {
-            return Ok(());
-        }
-        for (name, dep_set) in deps {
-            let Some(&to) = index_map.get(name) else {
-                continue;
-            };
-            for dep in dep_set {
-                if let Some(&from) = index_map.get(dep) {
-                    graph.add_edge(from, to, ());
-                }
-            }
-        }
-        toposort(&graph, None).map(|_| ()).map_err(|cycle| {
-            let cycle_node = &graph[cycle.node_id()];
-            let span = spans
-                .get(cycle_node)
-                .copied()
-                .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
-            GraphcalError::CyclicDependency {
-                name: cycle_node.to_string(),
-                src: src.clone(),
-                span: span.into(),
-            }
-        })
-    }
-
     fn check_resolved<'a>(
         dag: &crate::tir::typed::DagTIR,
         names_with_spans: impl Iterator<Item = (&'a ScopedName, crate::syntax::span::Span)>,
@@ -1319,37 +1286,22 @@ fn detect_decl_cycles(
     }
 
     for dag in tir.dags.values() {
-        if let Some(deps) = &dag.resolved_deps {
-            check_resolved(
-                dag,
-                dag.consts.iter().map(|e| (&e.name, e.span)),
-                &deps.const_deps,
-                src,
-            )?;
-            check_resolved(
-                dag,
-                dag.params
-                    .iter()
-                    .map(|e| (&e.name, e.span))
-                    .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
-                &deps.runtime_deps,
-                src,
-            )?;
-        } else {
-            check_legacy(
-                dag.consts.iter().map(|e| (&e.name, e.span)),
-                &dag.const_deps,
-                src,
-            )?;
-            check_legacy(
-                dag.params
-                    .iter()
-                    .map(|e| (&e.name, e.span))
-                    .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
-                &dag.runtime_deps,
-                src,
-            )?;
-        }
+        let deps = &dag.resolved_deps;
+        check_resolved(
+            dag,
+            dag.consts.iter().map(|e| (&e.name, e.span)),
+            &deps.const_deps,
+            src,
+        )?;
+        check_resolved(
+            dag,
+            dag.params
+                .iter()
+                .map(|e| (&e.name, e.span))
+                .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
+            &deps.runtime_deps,
+            src,
+        )?;
     }
     Ok(())
 }

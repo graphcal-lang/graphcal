@@ -48,7 +48,7 @@ pub struct EvalContext<'a> {
     ///
     /// Used by [`eval_inline_dag_call`] to reach the file's flat per-DAG body
     /// map. Module-aware TIRs route calls through [`current_dag`]'s resolved
-    /// inline-DAG sidecar; legacy standalone TIRs fall back to source-path
+    /// inline-DAG sidecar; standalone TIRs fall back to source-path
     /// lookup on this TIR.
     pub tir: &'a graphcal_compiler::tir::typed::TIR,
     /// DAG whose expression is currently being evaluated. When present, inline
@@ -80,7 +80,7 @@ pub struct UnfoldContext<'a> {
 /// Collapse a syntactic index path to a leaf-only name for standalone eval.
 ///
 /// Module-aware variant literals must use HIR/resolved collection refs; this
-/// adapter is only for legacy/standalone value construction and diagnostics.
+/// adapter is only for ownerless standalone value construction and diagnostics.
 fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
@@ -103,7 +103,7 @@ fn resolved_graph_ref_target<'a>(
     span: graphcal_compiler::syntax::span::Span,
 ) -> Option<&'a ResolvedName<namespace::Decl>> {
     ctx.current_dag
-        .and_then(|dag| dag.resolved_deps.as_ref())
+        .map(|dag| &dag.resolved_deps)
         .and_then(|deps| deps.graph_ref_targets.get(&span))
 }
 
@@ -112,19 +112,19 @@ fn resolved_const_ref_target<'a>(
     span: graphcal_compiler::syntax::span::Span,
 ) -> Option<&'a ResolvedName<namespace::Decl>> {
     ctx.current_dag
-        .and_then(|dag| dag.resolved_deps.as_ref())
+        .map(|dag| &dag.resolved_deps)
         .and_then(|deps| deps.const_ref_targets.get(&span))
 }
 
-fn visible_decl_runtime_key(ctx: &EvalContext<'_>, legacy: &ScopedName) -> Option<RuntimeDeclKey> {
+fn visible_decl_runtime_key(ctx: &EvalContext<'_>, scoped: &ScopedName) -> Option<RuntimeDeclKey> {
     let dag = ctx.current_dag?;
     dag.resolved_decl_bindings
         .as_ref()
-        .and_then(|bindings| bindings.get(legacy))
+        .and_then(|bindings| bindings.get(scoped))
         .cloned()
         .map(RuntimeDeclKey::resolved)
         .or_else(|| {
-            dag.resolved_decl_key_for_local(legacy)
+            dag.resolved_decl_key_for_local(scoped)
                 .map(RuntimeDeclKey::resolved)
         })
 }
@@ -132,38 +132,68 @@ fn visible_decl_runtime_key(ctx: &EvalContext<'_>, legacy: &ScopedName) -> Optio
 fn graph_ref_runtime_key(
     ctx: &EvalContext<'_>,
     span: graphcal_compiler::syntax::span::Span,
-    legacy: &ScopedName,
+    scoped: &ScopedName,
 ) -> Result<RuntimeDeclKey, GraphcalError> {
-    match ctx.current_dag.and_then(|dag| dag.resolved_deps.as_ref()) {
-        Some(_) => resolved_graph_ref_target(ctx, span)
-            .cloned()
-            .map(RuntimeDeclKey::resolved)
-            .or_else(|| visible_decl_runtime_key(ctx, legacy))
-            .ok_or_else(|| {
-                ctx.internal_error(
-                    format!("resolved graph-reference sidecar missing target for `@{legacy}`"),
-                    span,
-                )
-            }),
-        None => Ok(RuntimeDeclKey::legacy(legacy.clone())),
-    }
+    resolved_graph_ref_target(ctx, span)
+        .and_then(|target| imported_source_runtime_key(ctx, scoped, target))
+        .or_else(|| scoped_visible_runtime_key(scoped, ctx))
+        .or_else(|| {
+            resolved_graph_ref_target(ctx, span)
+                .cloned()
+                .map(RuntimeDeclKey::resolved)
+        })
+        .or_else(|| visible_decl_runtime_key(ctx, scoped))
+        .ok_or_else(|| {
+            ctx.internal_error(
+                format!("resolved graph-reference sidecar missing target for `@{scoped}`"),
+                span,
+            )
+        })
 }
 
 fn const_ref_runtime_key(
     ctx: &EvalContext<'_>,
     span: graphcal_compiler::syntax::span::Span,
-    legacy: &ScopedName,
+    scoped: &ScopedName,
 ) -> Option<RuntimeDeclKey> {
-    match ctx.current_dag.and_then(|dag| dag.resolved_deps.as_ref()) {
-        Some(_) => resolved_const_ref_target(ctx, span)
-            .cloned()
-            .map(RuntimeDeclKey::resolved)
-            .or_else(|| visible_decl_runtime_key(ctx, legacy)),
-        None => Some(RuntimeDeclKey::legacy(legacy.clone())),
-    }
+    resolved_const_ref_target(ctx, span)
+        .and_then(|target| imported_source_runtime_key(ctx, scoped, target))
+        .or_else(|| scoped_visible_runtime_key(scoped, ctx))
+        .or_else(|| {
+            resolved_const_ref_target(ctx, span)
+                .cloned()
+                .map(RuntimeDeclKey::resolved)
+        })
+        .or_else(|| visible_decl_runtime_key(ctx, scoped))
 }
 
-pub fn index_ref_matches_resolved_or_legacy(
+fn imported_source_runtime_key(
+    ctx: &EvalContext<'_>,
+    scoped: &ScopedName,
+    target: &ResolvedName<namespace::Decl>,
+) -> Option<RuntimeDeclKey> {
+    let dag = ctx.current_dag?;
+    let source = dag.imported_value_sources.get(scoped)?;
+    (source.dag_id == *target.owner() && source.source_name.as_str() == target.as_str())
+        .then(|| visible_decl_runtime_key(ctx, scoped))
+        .flatten()
+}
+
+fn scoped_visible_runtime_key(
+    scoped: &ScopedName,
+    ctx: &EvalContext<'_>,
+) -> Option<RuntimeDeclKey> {
+    let dag = ctx.current_dag?;
+    scoped
+        .is_qualified()
+        .then(|| {
+            dag.resolved_decl_key_for_local(scoped)
+                .map(RuntimeDeclKey::resolved)
+        })
+        .flatten()
+}
+
+pub fn index_ref_matches_resolved_or_leaf(
     actual: &IndexTypeRef,
     expected: &ResolvedName<namespace::Index>,
 ) -> bool {
@@ -302,7 +332,7 @@ pub fn eval_expr(
             let full_span = index.span.merge(variant.span);
             Ok(resolved_value_index_variant(ctx, full_span).map_or_else(
                 || {
-                    RuntimeValue::legacy_label(
+                    RuntimeValue::ownerless_label(
                         standalone_index_name_from_path(&index.value),
                         variant.value.clone(),
                     )
@@ -505,7 +535,7 @@ pub fn eval_expr(
             }
             let type_name = resolved_constructor.map_or_else(
                 || {
-                    StructTypeRef::legacy(
+                    StructTypeRef::ownerless(
                         graphcal_compiler::syntax::names::StructTypeName::from_atom(
                             constructor_name.atom().clone(),
                         ),
@@ -558,25 +588,19 @@ fn resolved_inline_call<'a>(
 }
 
 fn dag_decl_runtime_key(dag_tir: &DagTIR, name: &ResolvedName<namespace::Decl>) -> RuntimeDeclKey {
-    if dag_tir.resolved_deps.is_some() {
-        RuntimeDeclKey::resolved(name.clone())
-    } else {
-        RuntimeDeclKey::legacy(ScopedName::local(name.as_str()))
-    }
+    let _ = dag_tir;
+    RuntimeDeclKey::resolved(name.clone())
 }
 
 fn imported_value_source_key(
     source: &graphcal_compiler::ir::lower::ImportedValueSource,
     source_dag: &DagTIR,
 ) -> RuntimeDeclKey {
-    if source_dag.resolved_deps.is_some() {
-        RuntimeDeclKey::resolved(ResolvedName::from_def(
-            source.dag_id.clone(),
-            source.source_name.clone(),
-        ))
-    } else {
-        RuntimeDeclKey::legacy(ScopedName::local(source.source_name.as_str()))
-    }
+    let _ = source_dag;
+    RuntimeDeclKey::resolved(ResolvedName::from_def(
+        source.dag_id.clone(),
+        source.source_name.clone(),
+    ))
 }
 
 fn imported_value_source_value<'a>(
@@ -612,7 +636,7 @@ fn imported_value_source_value<'a>(
 /// The dag body is evaluated against the pre-compiled [`TIR`] carried in
 /// [`EvalContext::tir`]. Module-aware callers use the current DAG's
 /// HIR-derived sidecar to route directly to a canonical
-/// [`DagId`](graphcal_compiler::dag_id::DagId); legacy callers fall back to
+/// [`DagId`](graphcal_compiler::dag_id::DagId); standalone callers fall back to
 /// source-path lookup through the enclosing TIR. The dag's own registry is used
 /// for all nested lookups so sibling dag calls from inside the body resolve
 /// through the same pipeline.
@@ -691,9 +715,13 @@ fn eval_inline_dag_call(
     for scoped in outer_scope_keys {
         let member = scoped.member();
         let visible_key = RuntimeDeclKey::for_visible_name(dag_tir, scoped);
-        if (matches!(visible_key, RuntimeDeclKey::Legacy(_)) && own_names.contains(member))
-            || dag_values.contains_key(&visible_key)
-        {
+        let unresolved_local_import = dag_tir
+            .resolved_decl_bindings
+            .as_ref()
+            .and_then(|bindings| bindings.get(scoped))
+            .is_none()
+            && own_names.contains(member);
+        if unresolved_local_import || dag_values.contains_key(&visible_key) {
             continue;
         }
         let value = dag_tir
@@ -767,10 +795,7 @@ fn eval_inline_dag_call(
 /// of its runtime and const dependencies. Cycles are impossible in a
 /// well-typed dag body because compile-time dep collection rejects them.
 fn topo_order_for_dag_body(dag_tir: &DagTIR) -> Vec<ScopedName> {
-    dag_tir.resolved_deps.as_ref().map_or_else(
-        || topo_order_for_dag_body_legacy(dag_tir),
-        |deps| topo_order_for_dag_body_resolved(dag_tir, deps),
-    )
+    topo_order_for_dag_body_resolved(dag_tir, &dag_tir.resolved_deps)
 }
 
 type ResolvedDeclKey = ResolvedName<namespace::Decl>;
@@ -791,9 +816,9 @@ fn topo_order_for_dag_body_resolved(
     let mut key_by_name: HashMap<ScopedName, ResolvedDeclKey> = HashMap::new();
     let mut name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
     for name in &names {
-        let Some(key) = dag_tir.resolved_decl_key_for_local(name) else {
-            return topo_order_for_dag_body_legacy(dag_tir);
-        };
+        let key = dag_tir
+            .resolved_decl_key_for_local(name)
+            .expect("DAG body source order contains a non-local declaration key");
         key_by_name.insert(name.clone(), key.clone());
         name_by_key.insert(key, name.clone());
     }
@@ -839,70 +864,6 @@ fn topo_order_for_dag_body_resolved(
                     *deg -= 1;
                     if *deg == 0 {
                         ready.insert(succ);
-                    }
-                }
-            }
-        }
-    }
-    order
-}
-
-fn topo_order_for_dag_body_legacy(dag_tir: &DagTIR) -> Vec<ScopedName> {
-    use std::collections::BTreeSet;
-
-    // All declaration names in a stable order.
-    let mut names: Vec<ScopedName> = dag_tir
-        .source_order
-        .iter()
-        .map(|(name, _)| name.clone())
-        .collect();
-    names.sort();
-
-    // Incoming-edge counts and reverse adjacency keyed by name.
-    let mut incoming: HashMap<ScopedName, usize> = HashMap::new();
-    let mut outgoing: HashMap<ScopedName, Vec<ScopedName>> = HashMap::new();
-    for name in &names {
-        incoming.insert(name.clone(), 0);
-        outgoing.insert(name.clone(), Vec::new());
-    }
-
-    let add_edge = |from: &ScopedName,
-                    to: &ScopedName,
-                    incoming: &mut HashMap<ScopedName, usize>,
-                    outgoing: &mut HashMap<ScopedName, Vec<ScopedName>>| {
-        if let (Some(out), Some(deg)) = (outgoing.get_mut(from), incoming.get_mut(to)) {
-            out.push(to.clone());
-            *deg += 1;
-        }
-    };
-
-    for (name, deps) in &dag_tir.runtime_deps {
-        for dep in deps {
-            add_edge(dep, name, &mut incoming, &mut outgoing);
-        }
-    }
-    for (name, deps) in &dag_tir.const_deps {
-        for dep in deps {
-            add_edge(dep, name, &mut incoming, &mut outgoing);
-        }
-    }
-
-    // Kahn with a sorted ready set for deterministic tie-breaking.
-    let mut ready: BTreeSet<ScopedName> = incoming
-        .iter()
-        .filter(|(_, deg)| **deg == 0)
-        .map(|(n, _)| n.clone())
-        .collect();
-    let mut order = Vec::with_capacity(names.len());
-    while let Some(n) = ready.iter().next().cloned() {
-        ready.remove(&n);
-        order.push(n.clone());
-        if let Some(succs) = outgoing.remove(&n) {
-            for s in succs {
-                if let Some(deg) = incoming.get_mut(&s) {
-                    *deg -= 1;
-                    if *deg == 0 {
-                        ready.insert(s);
                     }
                 }
             }

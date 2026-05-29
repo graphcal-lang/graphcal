@@ -29,7 +29,7 @@ use super::infer_type;
 /// Collapse a syntactic index path to a leaf-only name for standalone TIR.
 ///
 /// Module-aware inference must use `ResolvedCollectionRefs`; this adapter is
-/// only for legacy/standalone callers whose registries are leaf-keyed.
+/// only for standalone callers whose registries are leaf-keyed.
 fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
@@ -114,7 +114,7 @@ fn inferred_index_for_path(
         .and_then(|refs| refs.for_binding_indexes.get(&span))
         .cloned()
         .map_or_else(
-            || InferredIndex::legacy(standalone_index_name_from_path(path)),
+            || InferredIndex::ownerless(standalone_index_name_from_path(path)),
             InferredIndex::from_resolved,
         )
 }
@@ -152,7 +152,7 @@ fn inferred_index_for_map_entry_key(
     dag: Option<&crate::tir::typed::DagTIR>,
 ) -> InferredIndex {
     resolved_map_entry_variant_for_key(key, dag).map_or_else(
-        || InferredIndex::legacy(key.index.value.registry_name()),
+        || InferredIndex::ownerless(key.index.value.registry_name()),
         |variant| InferredIndex::from_resolved(variant.index().clone()),
     )
 }
@@ -160,7 +160,7 @@ fn inferred_index_for_map_entry_key(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum MapLiteralVariantKey {
     Resolved(ResolvedIndexVariant),
-    Legacy {
+    Ownerless {
         index: IndexName,
         variant: IndexVariantName,
     },
@@ -170,14 +170,14 @@ impl MapLiteralVariantKey {
     const fn variant(&self) -> &IndexVariantName {
         match self {
             Self::Resolved(resolved) => resolved.variant(),
-            Self::Legacy { variant, .. } => variant,
+            Self::Ownerless { variant, .. } => variant,
         }
     }
 
     const fn display_index<'a>(&'a self, fallback: &'a IndexName) -> &'a IndexName {
         match self {
             Self::Resolved(_) => fallback,
-            Self::Legacy { index, .. } => index,
+            Self::Ownerless { index, .. } => index,
         }
     }
 }
@@ -194,7 +194,7 @@ impl MapLiteralAxis {
             Some(index) => {
                 MapLiteralVariantKey::Resolved(ResolvedIndexVariant::new(index.clone(), variant))
             }
-            None => MapLiteralVariantKey::Legacy {
+            None => MapLiteralVariantKey::Ownerless {
                 index: self.index.name().clone(),
                 variant,
             },
@@ -280,7 +280,7 @@ pub(super) fn infer_for_comp(
                 inferred_index_for_path(&spanned_idx.value, spanned_idx.span, dag)
             }
             ForBindingIndex::Range { .. } => {
-                InferredIndex::legacy(for_binding_index_name(&binding.index))
+                InferredIndex::ownerless(for_binding_index_name(&binding.index))
             }
         };
         result = InferredType::Indexed {
@@ -634,7 +634,7 @@ pub(super) fn infer_index_access(
                     validate_index_path_module_scope(&index.value, tir, src, index.span)?;
                 }
                 let arg_index = resolved_variant.map_or_else(
-                    || InferredIndex::legacy(standalone_index_name_from_path(&index.value)),
+                    || InferredIndex::ownerless(standalone_index_name_from_path(&index.value)),
                     |variant| InferredIndex::from_resolved(variant.index().clone()),
                 );
                 if arg_index != idx_name {
@@ -646,7 +646,7 @@ pub(super) fn infer_index_access(
                     });
                 }
                 if resolved_variant.is_none() {
-                    // Validate variant exists on the legacy leaf-keyed path only
+                    // Validate variant exists on the ownerless leaf-keyed path only
                     // when no HIR-resolved variant sidecar is available. The
                     // HIR sidecar itself is produced by successful canonical
                     // `ResolvedIndexVariant` lookup.
@@ -1224,7 +1224,7 @@ pub(super) fn infer_constructor_call(
                 variant,
                 constructor_name,
                 constructor.span,
-                InferredStructType::legacy(type_def.name.clone()),
+                InferredStructType::ownerless(type_def.name.clone()),
             )
         };
     let owning_type_name = type_def.name.clone();

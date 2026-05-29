@@ -2,7 +2,7 @@
 //!
 //! This is an incremental semantic consumer for module-aware declaration
 //! expressions. It returns `Ok(None)` for expression forms that still need the
-//! legacy syntax-AST inference path, but the forms it does accept consume HIR
+//! syntax-AST inference path, but the forms it does accept consume HIR
 //! references directly: canonical declaration/index refs, lexical `LocalId`s,
 //! and typed built-in function variants.
 
@@ -111,7 +111,7 @@ fn hir_dimcheck_supported(expr: &hir::Expr) -> bool {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "mirrors legacy inference context"
+    reason = "mirrors syntax inference context"
 )]
 fn infer_hir_type(
     expr: &hir::Expr,
@@ -243,7 +243,7 @@ fn infer_hir_type(
             builtin_fns,
             src,
         )?,
-        // These forms still rely on richer legacy inference helpers while this
+        // These forms still rely on richer syntax inference helpers while this
         // chunk migrates the core reference/local/built-in path.
         hir::ExprKind::ConstructorCall { .. }
         | hir::ExprKind::MapLiteral { .. }
@@ -289,16 +289,6 @@ fn infer_hir_unit_literal(
     Ok(InferredType::Scalar(dim))
 }
 
-fn scoped_name_for_resolved<'a>(
-    target: &ResolvedDeclKey,
-    dag: &'a crate::tir::typed::DagTIR,
-) -> Option<&'a ScopedName> {
-    dag.resolved_decl_bindings
-        .as_ref()?
-        .iter()
-        .find_map(|(name, resolved)| (resolved == target).then_some(name))
-}
-
 fn infer_resolved_decl_ref_type(
     target: &ResolvedDeclKey,
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -306,12 +296,50 @@ fn infer_resolved_decl_ref_type(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let local_name = ScopedName::local(target.as_str());
-    let scoped_name = if target.owner() == &dag.dag_id {
-        Some(&local_name)
-    } else {
-        scoped_name_for_resolved(target, dag)
-    };
-    if let Some(resolved_type) = scoped_name.and_then(|name| dag.resolved_decl_types.get(name)) {
+
+    if target.owner() == &dag.dag_id
+        && let Some(inferred) = infer_bound_decl_type(&local_name, declared_types, dag, src)?
+    {
+        return Ok(inferred);
+    }
+
+    if let Some(bindings) = &dag.resolved_decl_bindings {
+        for name in bindings
+            .iter()
+            .filter_map(|(name, resolved)| (resolved == target).then_some(name))
+        {
+            if let Some(inferred) = infer_bound_decl_type(name, declared_types, dag, src)? {
+                return Ok(inferred);
+            }
+        }
+    }
+
+    for name in dag
+        .imported_value_sources
+        .iter()
+        .filter_map(|(name, source)| {
+            imported_source_matches_resolved(source, target).then_some(name)
+        })
+    {
+        if let Some(inferred) = infer_bound_decl_type(name, declared_types, dag, src)? {
+            return Ok(inferred);
+        }
+    }
+
+    Err(GraphcalError::UnknownGraphRef {
+        name: local_name,
+        src: src.clone(),
+        span: crate::syntax::span::Span::new(0, 0).into(),
+    })
+}
+
+fn infer_bound_decl_type(
+    name: &ScopedName,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    dag: &crate::tir::typed::DagTIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Option<InferredType>, GraphcalError> {
+    if let Some(resolved_type) = dag.resolved_decl_types.get(name) {
         let dim_sub = HashMap::new();
         let index_sub =
             HashMap::<GenericParamName, crate::registry::declared_type::IndexTypeRef>::new();
@@ -322,16 +350,18 @@ fn infer_resolved_decl_ref_type(
             &index_sub,
             &nat_sub,
             src,
-        );
+        )
+        .map(Some);
     }
-    if let Some(declared) = scoped_name.and_then(|name| declared_types.get(name)) {
-        return Ok(InferredType::from(declared));
-    }
-    Err(GraphcalError::UnknownGraphRef {
-        name: local_name,
-        src: src.clone(),
-        span: crate::syntax::span::Span::new(0, 0).into(),
-    })
+
+    Ok(declared_types.get(name).map(InferredType::from))
+}
+
+fn imported_source_matches_resolved(
+    source: &crate::ir::lower::ImportedValueSource,
+    target: &ResolvedDeclKey,
+) -> bool {
+    source.dag_id == *target.owner() && source.source_name.as_str() == target.as_str()
 }
 
 fn infer_hir_const_ref(
@@ -365,7 +395,7 @@ fn infer_hir_const_ref(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "mirrors legacy inference context"
+    reason = "mirrors syntax inference context"
 )]
 fn infer_arg(
     arg: &hir::Expr,
@@ -1217,9 +1247,12 @@ fn infer_hir_for_comp(
             hir::expr::ForBindingIndex::Named(index) => {
                 InferredIndex::from_resolved(index.value.clone())
             }
-            hir::expr::ForBindingIndex::Range { arg, .. } => InferredIndex::legacy(IndexName::new(
-                format!("__nat_range_{}", hir_nat_to_linear_form(arg).format()),
-            )),
+            hir::expr::ForBindingIndex::Range { arg, .. } => {
+                InferredIndex::ownerless(IndexName::new(format!(
+                    "__nat_range_{}",
+                    hir_nat_to_linear_form(arg).format()
+                )))
+            }
         };
         result = InferredType::Indexed {
             element: Box::new(result),

@@ -8,7 +8,7 @@ use crate::registry::types::DimensionRegistry;
 
 /// A type-level reference to a named compiler entity.
 ///
-/// The leaf `name` is retained for standalone/legacy registry compatibility
+/// The leaf `name` is retained for standalone registry compatibility
 /// and diagnostic rendering. The optional `resolved` identity is populated by
 /// module-aware type resolution and must be used by semantic comparisons when
 /// both sides carry an owner.
@@ -25,9 +25,9 @@ impl<Ns: NameNamespace> TypeNameRef<Ns> {
         Self { name, resolved }
     }
 
-    /// Create a standalone/legacy reference with no canonical owner.
+    /// Create an ownerless reference with no canonical owner.
     #[must_use]
-    pub const fn legacy(name: NameDef<Ns>) -> Self {
+    pub const fn ownerless(name: NameDef<Ns>) -> Self {
         Self {
             name,
             resolved: None,
@@ -43,7 +43,7 @@ impl<Ns: NameNamespace> TypeNameRef<Ns> {
         }
     }
 
-    /// The leaf definition name used by legacy standalone registries and diagnostics.
+    /// The leaf definition name used by standalone registries and diagnostics.
     #[must_use]
     pub const fn name(&self) -> &NameDef<Ns> {
         &self.name
@@ -88,18 +88,18 @@ impl<Ns: NameNamespace> TypeNameRef<Ns> {
 
     /// Clone the leaf definition name, explicitly dropping any canonical owner.
     ///
-    /// This is a temporary adapter for standalone/legacy APIs that still key by
+    /// This is a temporary adapter for standalone APIs that still key by
     /// leaf name. Do not feed the returned value back into module-aware semantic
     /// comparisons.
     #[must_use]
-    pub fn to_legacy_name(&self) -> NameDef<Ns> {
+    pub fn to_unowned_name(&self) -> NameDef<Ns> {
         self.name.clone()
     }
 }
 
 impl<Ns: NameNamespace> From<NameDef<Ns>> for TypeNameRef<Ns> {
     fn from(name: NameDef<Ns>) -> Self {
-        Self::legacy(name)
+        Self::ownerless(name)
     }
 }
 

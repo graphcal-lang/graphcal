@@ -555,7 +555,7 @@ impl Parser<'_> {
     /// - bare `ident` → unresolved identifier path (resolved later to const,
     ///   local, or unit constructor)
     ///
-    /// The legacy brace-form construction `Name { field: val }` is no
+    /// The old brace-form construction `Name { field: val }` is no
     /// longer accepted — constructor calls use parens.
     fn parse_identifier_expr(&mut self) -> Result<Expr, ParseError> {
         let path = self.parse_ident_path()?;

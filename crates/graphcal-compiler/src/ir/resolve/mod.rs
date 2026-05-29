@@ -1027,7 +1027,7 @@ pub(crate) fn resolve_with_imports(
 
     // Pre-populate with imported names (they don't get duplicate-checked against
     // each other here because they were validated in their source files).
-    // The `imported.*` legacy entries pass bare names; the at-rest dep map
+    // The `imported.*` compatibility entries pass bare names; the at-rest dep map
     // produced upstream already classifies them as locals.
     for (name, _, _, span) in &imported.consts {
         names.insert(

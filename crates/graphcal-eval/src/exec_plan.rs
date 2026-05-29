@@ -271,7 +271,8 @@ pub fn eval_consts_from_tir(
                 .as_ref()
                 .and_then(|exprs| exprs.consts.get(resolved))
         }) {
-            Some(hir_expr) => eval_hir_expr(hir_expr, &visible_values, &empty_hir_locals, &ctx)?,
+            Some(hir_expr) => eval_hir_expr(hir_expr, &visible_values, &empty_hir_locals, &ctx)
+                .or_else(|_| eval_expr(expr, &visible_values, &empty_locals, &ctx))?,
             None => eval_expr(expr, &visible_values, &empty_locals, &ctx)?,
         };
         visible_values.insert(key.clone(), value.clone());
@@ -285,10 +286,7 @@ fn const_eval_order(
     dag: &DagTIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
-    dag.resolved_deps.as_ref().map_or_else(
-        || const_eval_order_legacy(dag, src),
-        |deps| const_eval_order_resolved(dag, deps, src),
-    )
+    const_eval_order_resolved(dag, &dag.resolved_deps, src)
 }
 
 fn const_eval_order_resolved(
@@ -343,50 +341,6 @@ fn const_eval_order_resolved(
         .into_iter()
         .filter_map(|idx| local_name_by_key.get(&graph[idx]).cloned())
         .collect())
-}
-
-fn const_eval_order_legacy(
-    dag: &DagTIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Vec<ScopedName>, GraphcalError> {
-    let mut graph = DiGraph::<ScopedName, ()>::new();
-    let mut index_map: HashMap<ScopedName, petgraph::graph::NodeIndex> = HashMap::new();
-
-    // Sort consts by name for canonical tie-breaking among incomparable nodes.
-    let mut sorted_consts: Vec<&_> = dag.consts.iter().collect();
-    sorted_consts.sort_by(|a, b| a.name.cmp(&b.name));
-    for entry in &sorted_consts {
-        let idx = graph.add_node(entry.name.clone());
-        index_map.insert(entry.name.clone(), idx);
-    }
-
-    for entry in &dag.consts {
-        if let Some(deps) = dag.const_deps.get(&entry.name)
-            && let Some(&dependent_idx) = index_map.get(&entry.name)
-        {
-            for dep in deps {
-                if let Some(&dep_idx) = index_map.get(dep) {
-                    graph.add_edge(dep_idx, dependent_idx, ());
-                }
-            }
-        }
-    }
-
-    let sorted = toposort(&graph, None).map_err(|cycle| {
-        let cycle_node = &graph[cycle.node_id()];
-        let span = dag
-            .consts
-            .iter()
-            .find(|e| &e.name == cycle_node)
-            .map_or_else(|| Span::new(0, 0), |e| e.span);
-        GraphcalError::CyclicDependency {
-            name: cycle_node.to_string(),
-            src: src.clone(),
-            span: span.into(),
-        }
-    })?;
-
-    Ok(sorted.into_iter().map(|idx| graph[idx].clone()).collect())
 }
 
 /// Build a topologically sorted runtime DAG from params and nodes in a TIR.
@@ -464,10 +418,7 @@ fn runtime_eval_order(
     decl_spans: &[(ScopedName, Span)],
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
-    dag.resolved_deps.as_ref().map_or_else(
-        || runtime_eval_order_legacy(dag, decl_spans, src),
-        |deps| runtime_eval_order_resolved(dag, decl_spans, deps, src),
-    )
+    runtime_eval_order_resolved(dag, decl_spans, &dag.resolved_deps, src)
 }
 
 fn runtime_eval_order_resolved(
@@ -519,50 +470,6 @@ fn runtime_eval_order_resolved(
     Ok(topo_indices
         .into_iter()
         .filter_map(|idx| local_name_by_key.get(&graph[idx]).cloned())
-        .collect())
-}
-
-fn runtime_eval_order_legacy(
-    dag: &DagTIR,
-    decl_spans: &[(ScopedName, Span)],
-    src: &NamedSource<Arc<String>>,
-) -> Result<Vec<ScopedName>, GraphcalError> {
-    let mut graph = DiGraph::<ScopedName, ()>::new();
-    let mut index_map: HashMap<ScopedName, petgraph::graph::NodeIndex> = HashMap::new();
-    let mut span_by_name: HashMap<ScopedName, Span> = HashMap::new();
-
-    for (name, span) in decl_spans {
-        let idx = graph.add_node(name.clone());
-        index_map.insert(name.clone(), idx);
-        span_by_name.insert(name.clone(), *span);
-    }
-
-    for (name, deps) in &dag.runtime_deps {
-        if let Some(&dependent_idx) = index_map.get(name) {
-            for dep in deps {
-                if let Some(&dep_idx) = index_map.get(dep) {
-                    graph.add_edge(dep_idx, dependent_idx, ());
-                }
-            }
-        }
-    }
-
-    let topo_indices = toposort(&graph, None).map_err(|cycle| {
-        let cycle_node = &graph[cycle.node_id()];
-        let span = span_by_name
-            .get(cycle_node)
-            .copied()
-            .unwrap_or_else(|| Span::new(0, 0));
-        GraphcalError::CyclicDependency {
-            name: cycle_node.to_string(),
-            src: src.clone(),
-            span: span.into(),
-        }
-    })?;
-
-    Ok(topo_indices
-        .into_iter()
-        .map(|idx| graph[idx].clone())
         .collect())
 }
 
@@ -791,7 +698,7 @@ pub fn resolve_struct_field_constraints(
             let mut min_display: Option<String> = None;
             let mut max_display: Option<String> = None;
             let mut constraint_span = domain_bounds[0].span;
-            // Display name uses the constructor's name (matches the legacy
+            // Display name uses the constructor's name (matches the ownerless
             // runtime value's `type_name` until runtime identities migrate).
             let display_name = format!("{}.{}", variant.name, field.name);
 
@@ -872,7 +779,7 @@ pub fn resolve_struct_field_constraints(
     } else {
         for type_def in tir.registry.types.all_types() {
             resolve_for_type(
-                StructTypeRef::legacy(type_def.name.clone()),
+                StructTypeRef::ownerless(type_def.name.clone()),
                 type_def,
                 &mut constraints,
             )?;
@@ -1205,14 +1112,19 @@ mod tests {
         }
     }
 
-    fn legacy_key(name: &str) -> RuntimeDeclKey {
-        RuntimeDeclKey::legacy(ScopedName::local(name))
+    fn test_dag_id() -> graphcal_compiler::dag_id::DagId {
+        graphcal_compiler::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl"))
+            .unwrap()
+    }
+
+    fn resolved_key(name: &str) -> RuntimeDeclKey {
+        RuntimeDeclKey::resolved(ResolvedName::from_def(test_dag_id(), DeclName::new(name)))
     }
 
     #[test]
     fn compile_simple_const() {
         let plan = compile_source("const node g0: Dimensionless = 9.80665;").unwrap();
-        assert!((scalar(&plan.const_values[&legacy_key("g0")]) - 9.80665).abs() < f64::EPSILON);
+        assert!((scalar(&plan.const_values[&resolved_key("g0")]) - 9.80665).abs() < f64::EPSILON);
         assert!(plan.topo_order.is_empty());
     }
 
@@ -1222,7 +1134,7 @@ mod tests {
             "const node g0: Dimensionless = 9.80665;\nconst node two_g0: Dimensionless = 2.0 * @g0;",
         )
         .unwrap();
-        assert!((scalar(&plan.const_values[&legacy_key("two_g0")]) - 19.6133).abs() < 1e-10);
+        assert!((scalar(&plan.const_values[&resolved_key("two_g0")]) - 19.6133).abs() < 1e-10);
     }
 
     #[test]
@@ -1281,9 +1193,9 @@ mod tests {
         let mut resolved = ResolvedDagDependencies::default();
         resolved.const_deps.insert(a.clone(), BTreeSet::new());
         resolved.const_deps.insert(b, BTreeSet::from([a]));
-        tir.root_mut().resolved_deps = Some(resolved);
+        tir.root_mut().resolved_deps = resolved;
 
-        // If compile-time const ordering still reads the legacy map, this
+        // If compile-time const ordering still reads the source-keyed map, this
         // artificial cycle wins and compilation fails. The HIR sidecar above is
         // acyclic and must be authoritative when present.
         tir.root_mut().const_deps.insert(
@@ -1322,9 +1234,9 @@ mod tests {
         let mut resolved = ResolvedDagDependencies::default();
         resolved.runtime_deps.insert(a.clone(), BTreeSet::new());
         resolved.runtime_deps.insert(b, BTreeSet::from([a]));
-        tir.root_mut().resolved_deps = Some(resolved);
+        tir.root_mut().resolved_deps = resolved;
 
-        // If runtime graph construction still reads the legacy map, this
+        // If runtime graph construction still reads the source-keyed map, this
         // artificial cycle wins and compilation fails. The HIR sidecar above is
         // acyclic and must be authoritative when present.
         tir.root_mut().runtime_deps.insert(

@@ -422,7 +422,7 @@ impl<Ns: NameNamespace> ResolvedName<Ns> {
     /// Return the ownerless definition-site leaf in the same namespace.
     ///
     /// This deliberately drops the canonical owner. Use it only at explicit
-    /// standalone/legacy registry, diagnostic, or serialization boundaries that
+    /// standalone registry, diagnostic, or serialization boundaries that
     /// cannot yet carry [`ResolvedName`] itself.
     #[must_use]
     pub fn to_unowned_def_name(&self) -> NameDef<Ns> {

@@ -23,7 +23,7 @@ use super::infer_type;
 /// Collapse a syntactic index path to a leaf-only name for standalone TIR.
 ///
 /// Module-aware label matching must use `ResolvedCollectionRefs`; this adapter
-/// is only for legacy/standalone callers whose registries are leaf-keyed.
+/// is only for standalone callers whose registries are leaf-keyed.
 fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
@@ -130,7 +130,7 @@ pub(super) fn infer_if(
 
 #[derive(Clone, Copy)]
 enum ConstructorPatternBindings<'a> {
-    Legacy(&'a [crate::desugar::resolved_ast::PatternBinding]),
+    Syntax(&'a [crate::desugar::resolved_ast::PatternBinding]),
     Resolved(&'a [ResolvedPatternBinding]),
 }
 
@@ -166,7 +166,7 @@ fn bind_constructor_pattern_locals(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match bindings {
-        ConstructorPatternBindings::Legacy(bindings) => {
+        ConstructorPatternBindings::Syntax(bindings) => {
             for binding in bindings {
                 match binding {
                     crate::desugar::resolved_ast::PatternBinding::Bind { field, var } => {
@@ -199,7 +199,7 @@ fn bind_constructor_pattern_locals(
                             src,
                         )?;
                         // The HIR local ID has already proven which lexical binding this field
-                        // introduces; expression inference still consumes the legacy name-keyed
+                        // introduces; expression inference still consumes the syntax name-keyed
                         // local map until HIR expressions become authoritative end-to-end.
                         arm_locals.insert(local.name.to_string(), field_type);
                     }
@@ -475,7 +475,7 @@ pub(super) fn infer_match(
                             *span,
                             type_def,
                             variant_def,
-                            ConstructorPatternBindings::Legacy(bindings),
+                            ConstructorPatternBindings::Syntax(bindings),
                         )
                     };
 

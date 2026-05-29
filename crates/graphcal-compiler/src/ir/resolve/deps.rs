@@ -95,7 +95,7 @@ impl RefCollector<'_> {
             Ok(())
         } else if !is_bare {
             // A qualified const-like path may later resolve to an index
-            // variant or constructor through module-aware HIR. This legacy
+            // variant or constructor through module-aware HIR. This source-AST
             // dependency visitor has no module resolver, so it must not reject
             // the path before the typed consumer gets a chance to classify it.
             Ok(())

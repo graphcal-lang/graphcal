@@ -734,7 +734,7 @@ impl MapEntryIndex {
     #[must_use]
     pub fn registry_name(&self) -> IndexName {
         match self {
-            // Legacy local registries are still keyed by leaf index names. A
+            // Local registries are still keyed by leaf index names. A
             // module-aware resolver should replace this boundary with a
             // resolved index identity instead of inspecting the path leaf.
             Self::Named(name) => IndexName::from(name.leaf().clone()),

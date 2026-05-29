@@ -111,7 +111,7 @@ fn cycle_detection_prefers_resolved_dependency_sidecar_when_present() {
     resolved.runtime_deps.insert(y, BTreeSet::from([x]));
 
     let root = tir.root_mut();
-    root.resolved_deps = Some(resolved);
+    root.resolved_deps = resolved;
     root.const_deps.insert(
         ScopedName::local("a"),
         BTreeSet::from([ScopedName::local("b")]),
@@ -308,7 +308,7 @@ Maneuver.Insertion: 1.8 km / s,
         types[&ScopedName::local("dv")],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Scalar(velocity)),
-            index: IndexTypeRef::legacy(IndexName::new("Maneuver")),
+            index: IndexTypeRef::ownerless(IndexName::new("Maneuver")),
         }
     );
 }
@@ -1379,9 +1379,9 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
         types[&ScopedName::local("distances")],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Scalar(length)),
-            index: IndexTypeRef::legacy(
-                crate::syntax::names::IndexName::new("Region".to_string(),)
-            ),
+            index: IndexTypeRef::ownerless(crate::syntax::names::IndexName::new(
+                "Region".to_string(),
+            )),
         }
     );
 }

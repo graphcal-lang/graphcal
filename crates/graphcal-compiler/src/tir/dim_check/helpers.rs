@@ -146,7 +146,7 @@ pub(super) fn format_declared_type(dt: &DeclaredType, registry: &Registry) -> St
 /// Look up the definition for an inferred struct identity.
 ///
 /// Prefer canonical module-aware TIR sidecars when the identity carries a
-/// resolved owner, then fall back to the legacy leaf-keyed registry for
+/// resolved owner, then fall back to the leaf-keyed registry for
 /// standalone/non-module-aware callers.
 pub(super) fn struct_type_def_for_inferred<'a>(
     ty: &InferredStructType,

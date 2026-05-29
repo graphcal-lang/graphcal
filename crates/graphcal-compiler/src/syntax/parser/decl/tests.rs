@@ -909,21 +909,21 @@ fn parse_import_with_param_bindings_error() {
 }
 
 #[test]
-fn parse_import_legacy_double_colon_error() {
+fn parse_import_rejects_old_double_colon_error() {
     // `::` is no longer a valid token.
     let result = Parser::new("import nasa::rocket;").parse_file();
     assert!(result.is_err());
 }
 
 #[test]
-fn parse_import_legacy_string_path_error() {
+fn parse_import_rejects_old_string_path_error() {
     // File-path imports were removed.
     let result = Parser::new(r#"import "./helper.gcl";"#).parse_file();
     assert!(result.is_err());
 }
 
 #[test]
-fn parse_import_legacy_parent_path_error() {
+fn parse_import_rejects_old_parent_path_error() {
     // Parent-scope imports were removed.
     let result = Parser::new("import ..;").parse_file();
     assert!(result.is_err());

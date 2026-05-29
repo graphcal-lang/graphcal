@@ -20,7 +20,8 @@ use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{
-    GenericParamName, IndexName, NamePath, ResolvedIndexVariant, ScopedName, UnitName,
+    GenericParamName, IndexName, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName,
+    UnitName, namespace,
 };
 
 use super::{DeclaredType, InferredIndex, InferredType};
@@ -28,7 +29,7 @@ use super::{DeclaredType, InferredIndex, InferredType};
 /// Collapse a syntactic index path to a leaf-only name for standalone TIR.
 ///
 /// Module-aware variant literals must use `ResolvedCollectionRefs`; this
-/// adapter is only for legacy/standalone callers whose registries are leaf-keyed.
+/// adapter is only for standalone callers whose registries are leaf-keyed.
 fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
@@ -138,7 +139,7 @@ pub(super) fn infer_type_with_owner(
                     span: variant.span.into(),
                 });
             }
-            Ok(InferredType::Label(InferredIndex::legacy(index_name)))
+            Ok(InferredType::Label(InferredIndex::ownerless(index_name)))
         }
 
         ExprKind::UnitLiteral { unit, .. } => {
@@ -442,7 +443,38 @@ fn infer_decl_ref_type(
     dag: Option<&crate::tir::typed::DagTIR>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    if let Some(resolved) = dag.and_then(|dag| dag.resolved_decl_types.get(name)) {
+    fn resolved_decl_type_for_key<'a>(
+        dag: &'a crate::tir::typed::DagTIR,
+        key: &ResolvedName<namespace::Decl>,
+    ) -> Option<&'a crate::tir::typed::ResolvedTypeExpr> {
+        dag.resolved_decl_types
+            .iter()
+            .find_map(|(name, resolved_type)| {
+                (dag.resolved_decl_key_for_local(name).as_ref() == Some(key))
+                    .then_some(resolved_type)
+            })
+    }
+
+    let resolved_type = dag.and_then(|dag| {
+        dag.resolved_deps
+            .graph_ref_targets
+            .get(&span)
+            .or_else(|| dag.resolved_deps.const_ref_targets.get(&span))
+            .and_then(|key| resolved_decl_type_for_key(dag, key))
+            .or_else(|| dag.resolved_decl_types.get(name))
+            .or_else(|| {
+                (!name.is_qualified()).then(|| {
+                    let mut candidates = dag
+                        .resolved_decl_types
+                        .iter()
+                        .filter(|(candidate, _)| candidate.member() == name.member())
+                        .map(|(_, resolved_type)| resolved_type);
+                    candidates.next().filter(|_| candidates.next().is_none())
+                })?
+            })
+    });
+
+    if let Some(resolved) = resolved_type {
         let dim_sub = HashMap::new();
         let index_sub =
             HashMap::<GenericParamName, crate::registry::declared_type::IndexTypeRef>::new();
@@ -454,6 +486,15 @@ fn infer_decl_ref_type(
 
     declared_types
         .get(name)
+        .or_else(|| {
+            (!name.is_qualified()).then(|| {
+                let mut candidates = declared_types
+                    .iter()
+                    .filter(|(candidate, _)| candidate.member() == name.member())
+                    .map(|(_, declared)| declared);
+                candidates.next().filter(|_| candidates.next().is_none())
+            })?
+        })
         .map(InferredType::from)
         .ok_or_else(|| GraphcalError::UnknownGraphRef {
             name: name.clone(),
@@ -466,7 +507,7 @@ fn infer_decl_ref_type(
 ///
 /// Module-aware TIRs carry HIR-derived [`ResolvedInlineDagCall`] sidecars for
 /// call routing. When present, those canonical `DagId` / `ResolvedName<Decl>`
-/// identities are authoritative; standalone TIRs retain the legacy source-path
+/// identities are authoritative; standalone TIRs retain the source-path
 /// lookup by `path` and leaf param/output names.
 #[expect(
     clippy::too_many_arguments,

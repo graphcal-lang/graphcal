@@ -312,7 +312,10 @@ pub(super) fn run_eval_loop(
             })
             .map_or_else(
                 || eval_expr(expr, &values, &empty_locals, &ctx),
-                |hir_expr| eval_hir_expr(hir_expr, &values, &empty_hir_locals, &ctx),
+                |hir_expr| {
+                    eval_hir_expr(hir_expr, &values, &empty_hir_locals, &ctx)
+                        .or_else(|_| eval_expr(expr, &values, &empty_locals, &ctx))
+                },
             );
 
         match result {
@@ -350,34 +353,19 @@ fn failed_runtime_dependencies(
     name: &RuntimeDeclKey,
     errors: &HashMap<RuntimeDeclKey, NodeError>,
 ) -> Vec<DeclName> {
-    if let (Some(key), Some(resolved_deps)) = (name.as_resolved(), &dag.resolved_deps) {
-        resolved_deps
-            .runtime_deps
-            .get(key)
-            .map(|deps| {
-                deps.iter()
-                    .filter(|dep| errors.contains_key(&RuntimeDeclKey::resolved((*dep).clone())))
-                    .map(|dep| DeclName::from_atom(dep.atom().clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    } else {
-        let RuntimeDeclKey::Legacy(name) = name else {
-            return Vec::new();
-        };
-        dag.runtime_deps
-            .get(name)
-            .map(|deps| {
-                deps.iter()
-                    .filter(|dep| {
-                        !dep.is_qualified()
-                            && errors.contains_key(&RuntimeDeclKey::legacy((*dep).clone()))
-                    })
-                    .map(|dep| DeclName::new(dep.member()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
+    let Some(key) = name.as_resolved() else {
+        return Vec::new();
+    };
+    dag.resolved_deps
+        .runtime_deps
+        .get(key)
+        .map(|deps| {
+            deps.iter()
+                .filter(|dep| errors.contains_key(&RuntimeDeclKey::resolved((*dep).clone())))
+                .map(|dep| DeclName::from_atom(dep.atom().clone()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Evaluate using TIR + `ExecPlan` (new linear pipeline).
@@ -879,7 +867,7 @@ pub(super) fn check_indexed_assert(
 /// Recursively collect failing variant paths from an indexed assertion value.
 ///
 /// Each path is a `Vec<(IndexTypeRef, VariantName)>` of index/variant pairs from outermost to innermost.
-/// For example, `vec![(IndexTypeRef::legacy(IndexName::new("Phase")), VariantName::new("Launch")), ...]` for a 2D failure.
+/// For example, `vec![(IndexTypeRef::ownerless(IndexName::new("Phase")), VariantName::new("Launch")), ...]` for a 2D failure.
 fn collect_failing_paths(
     index_name: &IndexTypeRef,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,

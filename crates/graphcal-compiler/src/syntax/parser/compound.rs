@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn parse_brace_form_construction_rejected() {
-        // The legacy brace-form `Ctor { field: val }` no longer parses.
+        // The old brace-form `Ctor { field: val }` no longer parses.
         let source = "node t: Dimensionless = TransferResult { dv1: 1.0, dv2: 2.0 };";
         assert!(Parser::new(source).parse_file().is_err());
     }

@@ -383,7 +383,7 @@ pub struct ResolvedLayerEntry {
 ///
 /// The `index` carrier is the semantic key used by runtime assertion checks.
 /// It carries a canonical owner after module-aware TIR resolution and remains
-/// legacy leaf-only for standalone callers. `source_index_path` preserves the
+/// ownerless leaf-only for standalone callers. `source_index_path` preserves the
 /// structured syntax path only until that module-aware resolution boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpectedFailKeyPart {
@@ -397,7 +397,7 @@ impl ExpectedFailKeyPart {
     #[must_use]
     pub fn unresolved(index_path: NamePath, variant: IndexVariantName, span: Span) -> Self {
         Self {
-            index: IndexTypeRef::legacy(IndexName::from_atom(index_path.leaf().clone())),
+            index: IndexTypeRef::ownerless(IndexName::from_atom(index_path.leaf().clone())),
             variant,
             source_index_path: Some(index_path),
             span,
@@ -405,9 +405,9 @@ impl ExpectedFailKeyPart {
     }
 
     #[must_use]
-    pub const fn legacy(index: IndexName, variant: IndexVariantName, span: Span) -> Self {
+    pub const fn ownerless(index: IndexName, variant: IndexVariantName, span: Span) -> Self {
         Self {
-            index: IndexTypeRef::legacy(index),
+            index: IndexTypeRef::ownerless(index),
             variant,
             source_index_path: None,
             span,

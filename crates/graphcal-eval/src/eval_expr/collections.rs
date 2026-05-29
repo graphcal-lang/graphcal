@@ -20,7 +20,7 @@ use crate::decl_key::RuntimeDeclKey;
 use super::EvalContext;
 use super::RuntimeValueMap;
 use super::eval_expr;
-use super::index_ref_matches_resolved_or_legacy;
+use super::index_ref_matches_resolved_or_leaf;
 
 /// Evaluate a `NatExpr` to a concrete `u64` during runtime.
 ///
@@ -75,7 +75,7 @@ fn eval_nat_expr(
 /// Collapse a syntactic index path to a leaf-only name for standalone eval.
 ///
 /// Module-aware collection evaluation must use HIR/resolved collection refs;
-/// this adapter is only for legacy/standalone value construction.
+/// this adapter is only for ownerless standalone value construction.
 fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
@@ -123,7 +123,7 @@ fn ensure_index_ref_matches_resolved(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
-    if index_ref_matches_resolved_or_legacy(actual, expected) {
+    if index_ref_matches_resolved_or_leaf(actual, expected) {
         return Ok(());
     }
     Err(ctx.eval_error(
@@ -163,15 +163,15 @@ fn map_entry_variant_for_axis(
         ensure_index_ref_matches_resolved(axis, resolved.index(), key.index.span, ctx)?;
         Ok(resolved.variant().clone())
     } else {
-        let legacy_index = IndexTypeRef::legacy(key.index.value.registry_name());
-        ensure_index_refs_match(axis, &legacy_index, key.index.span, ctx)?;
+        let ownerless_index = IndexTypeRef::ownerless(key.index.value.registry_name());
+        ensure_index_refs_match(axis, &ownerless_index, key.index.span, ctx)?;
         Ok(key.variant.value.clone())
     }
 }
 
 fn map_entry_index_ref(key: &MapEntryKey, ctx: &EvalContext<'_>) -> IndexTypeRef {
     resolved_map_entry_variant(ctx, key).map_or_else(
-        || IndexTypeRef::legacy(key.index.value.registry_name()),
+        || IndexTypeRef::ownerless(key.index.value.registry_name()),
         |resolved| IndexTypeRef::from_resolved(resolved.index().clone()),
     )
 }
@@ -225,9 +225,9 @@ pub(super) fn eval_index_access(
                     )?;
                     resolved.variant().clone()
                 } else {
-                    let legacy_index =
-                        IndexTypeRef::legacy(standalone_index_name_from_path(&index.value));
-                    ensure_index_refs_match(&index_name, &legacy_index, index.span, ctx)?;
+                    let ownerless_index =
+                        IndexTypeRef::ownerless(standalone_index_name_from_path(&index.value));
+                    ensure_index_refs_match(&index_name, &ownerless_index, index.span, ctx)?;
                     variant.value.clone()
                 }
             }
@@ -424,10 +424,8 @@ pub(super) fn eval_unfold(
     // `result_entries` in/out of this slot via `std::mem::take` to avoid a full
     // O(N) clone of the map every iteration (which would make the loop O(N²)).
     let self_scoped = ScopedName::local(self_name);
-    let self_key = ctx.current_dag.map_or_else(
-        || RuntimeDeclKey::legacy(self_scoped.clone()),
-        |dag| RuntimeDeclKey::for_local_decl(dag, &self_scoped),
-    );
+    let self_key =
+        RuntimeDeclKey::for_local_decl(ctx.current_dag.unwrap_or(ctx.tir.root()), &self_scoped);
     overlay_values.insert(
         self_key.clone(),
         RuntimeValue::Indexed {
@@ -527,7 +525,7 @@ pub(super) fn eval_map_literal(
     for variant in &variants {
         // Collect entries whose first key matches this variant, stripping the first key.
         // Module-aware refs compare the resolved owning index before falling
-        // back to the legacy variant leaf.
+        // back to the ownerless variant leaf.
         let mut sub_entries: Vec<MapEntry> = Vec::new();
         for entry in entries {
             let first_entry_key = entry.keys.first();
@@ -590,7 +588,7 @@ pub(super) fn eval_for_comp(
             let resolved = resolved_for_binding_index(ctx, spanned.span).cloned();
             (
                 resolved.as_ref().map_or_else(
-                    || IndexTypeRef::legacy(standalone_index_name_from_path(&spanned.value)),
+                    || IndexTypeRef::ownerless(standalone_index_name_from_path(&spanned.value)),
                     |resolved| IndexTypeRef::from_resolved(resolved.clone()),
                 ),
                 spanned.span,
@@ -603,7 +601,7 @@ pub(super) fn eval_for_comp(
             let idx_name = graphcal_compiler::syntax::names::IndexName::new(
                 graphcal_compiler::registry::types::nat_range_index_name(size),
             );
-            (IndexTypeRef::legacy(idx_name), *span, Some(size), None)
+            (IndexTypeRef::ownerless(idx_name), *span, Some(size), None)
         }
     };
 
@@ -632,7 +630,7 @@ pub(super) fn eval_for_comp(
             )
         })?;
         dynamic_nat_def = graphcal_compiler::registry::types::IndexDef {
-            name: idx_name.to_legacy_name(),
+            name: idx_name.to_unowned_name(),
             kind: graphcal_compiler::registry::types::IndexKind::NatRange { size },
         };
         &dynamic_nat_def

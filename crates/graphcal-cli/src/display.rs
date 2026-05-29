@@ -336,7 +336,7 @@ mod tests {
         for (k, v) in pairs {
             entries.insert(IndexVariantName::new(*k), v.clone());
         }
-        Value::legacy_indexed(IndexName::new(name), entries)
+        Value::ownerless_indexed(IndexName::new(name), entries)
     }
 
     #[test]
@@ -405,7 +405,7 @@ mod tests {
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("x"), scalar(1.0));
         fields.insert(FieldName::new("y"), scalar(2.0));
-        let s = Value::legacy_struct(StructTypeName::new("Pair"), fields);
+        let s = Value::ownerless_struct(StructTypeName::new("Pair"), fields);
         let mut out = Vec::new();
         flatten_value("p", &s, &mut out);
         let names: Vec<&str> = out
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn flatten_empty_struct_keeps_single_entry() {
-        let s = Value::legacy_struct(StructTypeName::new("Unit"), IndexMap::new());
+        let s = Value::ownerless_struct(StructTypeName::new("Unit"), IndexMap::new());
         let mut out = Vec::new();
         flatten_value("u", &s, &mut out);
         assert_eq!(out.len(), 1);

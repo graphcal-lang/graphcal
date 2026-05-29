@@ -51,7 +51,7 @@ pub enum ResolvedTypeExpr {
     /// A label of a named index (e.g., `Maneuver` in `m: Maneuver`).
     ///
     /// The optional resolved identity is present when type resolution consumed
-    /// HIR/module-aware lookup. Legacy standalone callers keep `None` and
+    /// HIR/module-aware lookup. Standalone callers keep `None` and
     /// compare by the leaf name only.
     Label(IndexName, Option<ResolvedName<namespace::Index>>, Span),
     /// A concrete scalar dimension, e.g. `Length * Time^-2`
@@ -59,7 +59,7 @@ pub enum ResolvedTypeExpr {
     /// A non-generic struct type name, e.g. `TransferResult`.
     ///
     /// The optional resolved identity is present when type resolution consumed
-    /// HIR/module-aware lookup. Legacy standalone callers keep `None` and
+    /// HIR/module-aware lookup. Standalone callers keep `None` and
     /// compare by the leaf name only.
     Struct(
         StructTypeName,
@@ -560,7 +560,7 @@ pub enum ResolvedIndex {
     /// A concrete index name, e.g. `Maneuver`
     ///
     /// The optional resolved identity preserves the canonical owning module
-    /// for module-aware paths while legacy standalone callers keep `None`.
+    /// for module-aware paths while standalone callers keep `None`.
     Concrete(IndexName, Option<ResolvedName<namespace::Index>>, Span),
     /// A generic index parameter, e.g. `I`
     GenericParam(GenericParamName, Span),
@@ -573,7 +573,7 @@ pub enum ResolvedIndex {
 
 /// Canonical type-system definitions keyed by [`ResolvedName`] identities.
 ///
-/// The legacy [`Registry`] remains leaf-keyed for now because runtime values and
+/// The standalone [`Registry`] remains leaf-keyed for now because runtime values and
 /// declaration types still use local names. This registry is the module-aware
 /// lookup side table used by TIR resolution: qualified source paths are first
 /// resolved through [`ModuleResolver`] to canonical owners, then looked up here
@@ -773,7 +773,7 @@ pub type DagRegistry = HashMap<crate::dag_id::DagId, DagTIR>;
 
 /// Canonical dependency maps for one DAG body, collected from HIR expressions.
 ///
-/// This supplements the legacy [`ScopedName`]-keyed dependency maps while
+/// This supplements the source [`ScopedName`]-keyed dependency maps while
 /// downstream eval/runtime code is still being migrated. It is populated only
 /// by module-aware TIR resolution, where a [`ModuleResolver`] is available to
 /// lower expression references into canonical owners.
@@ -818,7 +818,7 @@ impl ResolvedExpressions {
 
 /// Canonical HIR-derived index references used by collection/index inference.
 ///
-/// The legacy registry remains leaf-keyed, so these maps are deliberately a
+/// The leaf-keyed registry remains available, so these maps are deliberately a
 /// sidecar keyed by syntax spans. They let dim-check compare index owners for
 /// `for p: module.Index`, map/table keys, and `value[module.Index.Variant]`
 /// without resolving source paths again in the syntax-AST consumer.
@@ -1067,7 +1067,7 @@ impl TIR {
                 runtime_deps: HashMap::new(),
                 const_deps: HashMap::new(),
                 resolved_exprs: None,
-                resolved_deps: None,
+                resolved_deps: ResolvedDagDependencies::default(),
                 resolved_collection_refs: None,
                 resolved_constructor_refs: None,
                 resolved_inline_dag_refs: None,
@@ -1130,8 +1130,8 @@ pub struct DagTIR {
     pub const_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
     /// Module-aware HIR expressions for const/default/node expressions.
     pub resolved_exprs: Option<ResolvedExpressions>,
-    /// Canonical HIR-derived dependency maps when this DAG was resolved with a module resolver.
-    pub resolved_deps: Option<ResolvedDagDependencies>,
+    /// Canonical dependency maps for this DAG.
+    pub resolved_deps: ResolvedDagDependencies,
     /// Canonical HIR-derived collection/index references for dim-check inference.
     pub resolved_collection_refs: Option<ResolvedCollectionRefs>,
     /// Canonical HIR-derived constructor calls and match patterns for dim-check inference.
@@ -1231,22 +1231,37 @@ impl DagTIR {
         }
     }
 
-    /// Return the canonical resolved declaration key for a declaration owned by this DAG.
+    /// Return the resolved declaration key for a declaration visible from this DAG.
     ///
-    /// This is the narrow compatibility bridge from legacy local [`ScopedName`]
-    /// declaration keys to canonical [`ResolvedName`] identities. Qualified
-    /// `ScopedName`s do not name declarations owned by this DAG and therefore
-    /// return `None`.
+    /// Qualified source keys synthesize a child owner under this DAG so
+    /// standalone/compatibility entries still use resolved identities instead
+    /// of source-keyed runtime maps.
     #[must_use]
     pub fn resolved_decl_key_for_local(
         &self,
         name: &ScopedName,
     ) -> Option<ResolvedName<namespace::Decl>> {
-        if name.is_qualified() {
-            return None;
+        if self.resolved_decl_types.contains_key(name)
+            || self
+                .source_order
+                .iter()
+                .any(|(source_name, _)| source_name == name)
+        {
+            return resolved_decl_key(&self.dag_id, name);
         }
-        let name = DeclName::try_new(name.member()).ok()?;
-        Some(ResolvedName::from_def(self.dag_id.clone(), name))
+        if !name.is_qualified() {
+            let mut candidates = self
+                .resolved_decl_types
+                .keys()
+                .filter(|candidate| candidate.member() == name.member())
+                .filter_map(|candidate| resolved_decl_key(&self.dag_id, candidate));
+            if let Some(candidate) = candidates.next()
+                && candidates.next().is_none()
+            {
+                return Some(candidate);
+            }
+        }
+        resolved_decl_key(&self.dag_id, name)
     }
 }
 
@@ -1277,7 +1292,7 @@ pub fn type_resolve(
 /// `lib.Phase` are first lowered into HIR canonical references using
 /// `module_resolver`; TIR then consumes those HIR references and reads the
 /// corresponding definition from `module_types`. The returned TIR still exposes
-/// legacy leaf names at runtime boundaries, but lookup itself no longer depends
+/// ownerless leaf names at runtime boundaries, but lookup itself no longer depends
 /// on source alias strings.
 pub fn type_resolve_with_modules(
     ir: IR,
@@ -1452,7 +1467,7 @@ fn type_resolve_dag(
 
     let resolved_exprs =
         module_ctx.and_then(|ctx| lower_resolved_expressions(&consts, &params, &nodes, ctx));
-    let resolved_deps = module_ctx.and_then(|ctx| {
+    let hir_deps = module_ctx.and_then(|ctx| {
         resolved_exprs.as_ref().and_then(|exprs| {
             collect_resolved_dag_dependencies(&consts, &params, &nodes, exprs, ctx)
         })
@@ -1485,7 +1500,7 @@ fn type_resolve_dag(
         nodes,
         resolved_decl_types,
         resolved_exprs,
-        resolved_deps,
+        hir_deps,
         resolved_collection_refs,
         resolved_constructor_refs,
         resolved_inline_dag_refs,
@@ -2159,11 +2174,44 @@ fn resolved_decl_key(
     owner: &crate::dag_id::DagId,
     name: &ScopedName,
 ) -> Option<ResolvedName<namespace::Decl>> {
-    if name.is_qualified() {
-        return None;
-    }
+    let owner = name
+        .qualifier()
+        .iter()
+        .fold(owner.clone(), |owner, segment| {
+            owner.child(segment.as_ref())
+        });
     let name = DeclName::try_new(name.member()).ok()?;
-    Some(ResolvedName::from_def(owner.clone(), name))
+    Some(ResolvedName::from_def(owner, name))
+}
+
+fn collect_standalone_dag_dependencies(
+    owner: &crate::dag_id::DagId,
+    runtime_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
+    const_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
+) -> ResolvedDagDependencies {
+    fn convert_dep_map(
+        owner: &crate::dag_id::DagId,
+        deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
+    ) -> HashMap<ResolvedName<namespace::Decl>, BTreeSet<ResolvedName<namespace::Decl>>> {
+        deps.iter()
+            .filter_map(|(name, dep_set)| {
+                resolved_decl_key(owner, name).map(|key| {
+                    let deps = dep_set
+                        .iter()
+                        .filter_map(|dep| resolved_decl_key(owner, dep))
+                        .collect();
+                    (key, deps)
+                })
+            })
+            .collect()
+    }
+
+    ResolvedDagDependencies {
+        runtime_deps: convert_dep_map(owner, runtime_deps),
+        const_deps: convert_dep_map(owner, const_deps),
+        graph_ref_targets: HashMap::new(),
+        const_ref_targets: HashMap::new(),
+    }
 }
 
 fn collect_resolved_decl_bindings(
@@ -2275,7 +2323,7 @@ struct DagTIRSeed {
     nodes: Vec<crate::ir::lower::NodeEntry>,
     resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     resolved_exprs: Option<ResolvedExpressions>,
-    resolved_deps: Option<ResolvedDagDependencies>,
+    hir_deps: Option<ResolvedDagDependencies>,
     resolved_collection_refs: Option<ResolvedCollectionRefs>,
     resolved_constructor_refs: Option<ResolvedConstructorRefs>,
     resolved_inline_dag_refs: Option<ResolvedInlineDagRefs>,
@@ -2327,6 +2375,16 @@ impl DagTIRSeed {
             None => expected_fail,
         };
 
+        let contains_rewritten_include_names =
+            source_order.iter().any(|(name, _)| name.is_qualified());
+        let resolved_deps = if contains_rewritten_include_names {
+            collect_standalone_dag_dependencies(&self.dag_id, &runtime_deps, &const_deps)
+        } else {
+            self.hir_deps.unwrap_or_else(|| {
+                collect_standalone_dag_dependencies(&self.dag_id, &runtime_deps, &const_deps)
+            })
+        };
+
         Ok(DagTIR {
             dag_id: self.dag_id,
             consts: self.consts,
@@ -2339,7 +2397,7 @@ impl DagTIRSeed {
             runtime_deps,
             const_deps,
             resolved_exprs: self.resolved_exprs,
-            resolved_deps: self.resolved_deps,
+            resolved_deps,
             resolved_collection_refs: self.resolved_collection_refs,
             resolved_constructor_refs: self.resolved_constructor_refs,
             resolved_inline_dag_refs: self.resolved_inline_dag_refs,
@@ -2449,7 +2507,7 @@ pub fn resolved_to_declared_type(
                         );
                         result = DeclaredType::Indexed {
                             element: Box::new(result),
-                            index: IndexTypeRef::legacy(idx_name),
+                            index: IndexTypeRef::ownerless(idx_name),
                         };
                     }
                     ResolvedIndex::GenericParam(name, span) => {
@@ -3103,7 +3161,7 @@ pub fn substitute_resolved_type(
                                 span: (*span).into(),
                             }
                         })?;
-                        crate::tir::dim_check::InferredIndex::legacy(IndexName::new(
+                        crate::tir::dim_check::InferredIndex::ownerless(IndexName::new(
                             crate::registry::types::nat_range_index_name(n),
                         ))
                     }
@@ -3206,7 +3264,7 @@ struct HirTypeResolutionContext<'a> {
     prelude: &'a hir::PreludeTypeScope,
 }
 
-/// Resolve an already-lowered HIR type expression into the legacy TIR type
+/// Resolve an already-lowered HIR type expression into the TIR type
 /// representation.
 ///
 /// This is the new semantic entry point for module-aware TIR type resolution:
@@ -3243,12 +3301,12 @@ fn resolve_ast_type_expr_via_hir(
     let hir_type = match hir::lower_type_expr(type_ann, lower_ctx) {
         Ok(hir_type) => hir_type,
         Err(hir::HirLowerError::UnknownTypePath { .. }) => {
-            // Compatibility boundary: inline DAG bodies and a few legacy IR
+            // Compatibility boundary: inline DAG bodies and a few syntax IR
             // construction paths still inherit bare type-system definitions via
             // the local registry without corresponding `ModuleResolver` symbols.
             // Keep this fallback narrow: module/private/wrong-namespace errors
             // remain HIR diagnostics, and qualified paths still fail in the
-            // legacy resolver because they are not local leaf names.
+            // source resolver because they are not local leaf names.
             return resolve_type_expr_inner(type_ann, registry, &[], &[], &[], src, None);
         }
         Err(err) => return Err(hir_lower_error_to_graphcal(&err, src)),
@@ -3649,7 +3707,7 @@ fn resolve_concrete_index_path(
             Err(err) if module_lookup_is_absent(&err) => {}
             Err(_) if path.is_bare() => {
                 // A bare non-local name may still be a prelude or registry-only
-                // compatibility entry. Fall through to the legacy registry.
+                // compatibility entry. Fall through to the leaf-keyed registry.
             }
             Err(err) => return Err(module_resolve_error(&err, src, span)),
         }
@@ -4539,11 +4597,7 @@ mod tests {
 
         let tir =
             type_resolve_with_modules(ir, dag_id.clone(), &src, &resolver, &module_types).unwrap();
-        let deps = tir
-            .root()
-            .resolved_deps
-            .as_ref()
-            .expect("module-aware TIR should record resolved deps");
+        let deps = &tir.root().resolved_deps;
         let c = ResolvedName::from_def(dag_id.clone(), DeclName::new("C"));
         let d = ResolvedName::from_def(dag_id.clone(), DeclName::new("D"));
         let p = ResolvedName::from_def(dag_id.clone(), DeclName::new("p"));
@@ -4765,7 +4819,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             dt,
-            DeclaredType::Struct(StructTypeRef::legacy(StructTypeName::new("Foo")), vec![])
+            DeclaredType::Struct(StructTypeRef::ownerless(StructTypeName::new("Foo")), vec![])
         );
     }
 
@@ -4791,7 +4845,7 @@ mod tests {
                 element: Box::new(DeclaredType::Scalar(Dimension::base(BaseDimId::Prelude(
                     "Length".to_string()
                 )))),
-                index: IndexTypeRef::legacy(IndexName::new("M")),
+                index: IndexTypeRef::ownerless(IndexName::new("M")),
             }
         );
     }

@@ -18,9 +18,8 @@ use crate::decl_key::RuntimeDeclKey;
 
 use super::{
     EvalContext, RuntimeValueMap, constructor_fields_for_runtime_struct, eval_expr,
-    find_struct_field_constraint, imported_value_source_value,
-    index_ref_matches_resolved_or_legacy, lookup_dag_body_expr, resolve_unit_scale,
-    runtime_struct_type_def, topo_order_for_dag_body,
+    find_struct_field_constraint, imported_value_source_value, index_ref_matches_resolved_or_leaf,
+    lookup_dag_body_expr, resolve_unit_scale, runtime_struct_type_def, topo_order_for_dag_body,
 };
 
 pub type HirLocalValueMap = HashMap<hir::LocalId, RuntimeValue>;
@@ -54,8 +53,8 @@ pub fn eval_hir_expr(
             name.span,
         )),
         hir::ExprKind::UnitLiteral { value, unit } => {
-            let empty_legacy_locals = HashMap::new();
-            let scale = resolve_unit_scale(unit, values, &empty_legacy_locals, ctx)?;
+            let empty_syntax_locals = HashMap::new();
+            let scale = resolve_unit_scale(unit, values, &empty_syntax_locals, ctx)?;
             Ok(RuntimeValue::Scalar(*value * scale))
         }
         hir::ExprKind::GraphRef(target) => values
@@ -877,7 +876,7 @@ fn ensure_index_ref_matches_resolved(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
-    if index_ref_matches_resolved_or_legacy(actual, expected) {
+    if index_ref_matches_resolved_or_leaf(actual, expected) {
         return Ok(());
     }
     Err(ctx.eval_error(
@@ -896,7 +895,7 @@ fn map_entry_index_ref(key: &hir::expr::MapEntryKey) -> IndexTypeRef {
             IndexTypeRef::from_resolved(variant.value.index().clone())
         }
         hir::expr::MapEntryKey::NatRangeVariant { size, .. } => {
-            IndexTypeRef::legacy(IndexName::new(
+            IndexTypeRef::ownerless(IndexName::new(
                 graphcal_compiler::registry::types::nat_range_index_name(*size),
             ))
         }
@@ -1045,7 +1044,7 @@ fn eval_hir_for_comp(
         hir::expr::ForBindingIndex::Range { arg, span } => {
             let size = eval_hir_nat_expr(arg, local_values, ctx)?;
             (
-                IndexTypeRef::legacy(IndexName::new(
+                IndexTypeRef::ownerless(IndexName::new(
                     graphcal_compiler::registry::types::nat_range_index_name(size),
                 )),
                 *span,
@@ -1065,7 +1064,7 @@ fn eval_hir_for_comp(
             )
         })?;
         dynamic_nat_def = IndexDef {
-            name: idx_name.to_legacy_name(),
+            name: idx_name.to_unowned_name(),
             kind: IndexKind::NatRange { size },
         };
         &dynamic_nat_def
@@ -1282,10 +1281,8 @@ fn eval_hir_unfold(
     result_entries.insert(variants[0].clone(), init_val);
 
     let self_scoped = ScopedName::local(self_name);
-    let self_key = ctx.current_dag.map_or_else(
-        || RuntimeDeclKey::legacy(self_scoped.clone()),
-        |dag| RuntimeDeclKey::for_local_decl(dag, &self_scoped),
-    );
+    let self_key =
+        RuntimeDeclKey::for_local_decl(ctx.current_dag.unwrap_or(ctx.tir.root()), &self_scoped);
     let mut overlay_values = values.clone();
     overlay_values.insert(
         self_key.clone(),
@@ -1357,7 +1354,7 @@ fn eval_hir_match(
                 .iter()
                 .find(|arm| match &arm.pattern {
                     hir::expr::MatchPattern::IndexLabel { variant: pat, .. } => {
-                        index_ref_matches_resolved_or_legacy(index_name, pat.value.index())
+                        index_ref_matches_resolved_or_leaf(index_name, pat.value.index())
                             && pat.value.variant() == variant
                     }
                     hir::expr::MatchPattern::Constructor { .. } => false,
@@ -1415,11 +1412,8 @@ fn eval_hir_match(
 }
 
 fn dag_decl_runtime_key(dag_tir: &DagTIR, name: &ResolvedDeclKey) -> RuntimeDeclKey {
-    if dag_tir.resolved_deps.is_some() {
-        RuntimeDeclKey::resolved(name.clone())
-    } else {
-        RuntimeDeclKey::legacy(ScopedName::local(name.as_str()))
-    }
+    let _ = dag_tir;
+    RuntimeDeclKey::resolved(name.clone())
 }
 
 fn hir_expr_for_dag_body_name<'a>(dag_tir: &'a DagTIR, name: &ScopedName) -> Option<&'a hir::Expr> {
@@ -1467,9 +1461,13 @@ fn eval_hir_inline_dag_call(
     for scoped in outer_scope_keys {
         let member = scoped.member();
         let visible_key = RuntimeDeclKey::for_visible_name(dag_tir, scoped);
-        if (matches!(visible_key, RuntimeDeclKey::Legacy(_)) && own_names.contains(member))
-            || dag_values.contains_key(&visible_key)
-        {
+        let unresolved_local_import = dag_tir
+            .resolved_decl_bindings
+            .as_ref()
+            .and_then(|bindings| bindings.get(scoped))
+            .is_none()
+            && own_names.contains(member);
+        if unresolved_local_import || dag_values.contains_key(&visible_key) {
             continue;
         }
         let value = dag_tir
@@ -1499,25 +1497,28 @@ fn eval_hir_inline_dag_call(
         struct_field_constraints: ctx.struct_field_constraints,
     };
     let empty_hir_locals = HirLocalValueMap::new();
-    let empty_legacy_locals = HashMap::new();
+    let empty_syntax_locals = HashMap::new();
 
     for name in topo_order_for_dag_body(dag_tir) {
         let local_key = RuntimeDeclKey::for_local_decl(dag_tir, &name);
         if dag_values.contains_key(&local_key) {
             continue;
         }
+        let syntax_expr = lookup_dag_body_expr(dag_tir, &name);
         let value = if let Some(hir_expr) = hir_expr_for_dag_body_name(dag_tir, &name) {
-            Some(eval_hir_expr(
-                hir_expr,
-                &dag_values,
-                &empty_hir_locals,
-                &dag_ctx,
-            )?)
+            Some(
+                eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx).or_else(
+                    |_| match syntax_expr {
+                        Some(expr) => eval_expr(expr, &dag_values, &empty_syntax_locals, &dag_ctx),
+                        None => eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx),
+                    },
+                )?,
+            )
         } else if let Some(expr) = lookup_dag_body_expr(dag_tir, &name) {
             Some(eval_expr(
                 expr,
                 &dag_values,
-                &empty_legacy_locals,
+                &empty_syntax_locals,
                 &dag_ctx,
             )?)
         } else {
