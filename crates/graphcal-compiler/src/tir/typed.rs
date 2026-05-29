@@ -785,6 +785,30 @@ pub struct ResolvedDagDependencies {
     pub const_ref_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
 }
 
+/// Module-aware HIR expressions for value declarations.
+///
+/// This is the semantic expression carrier for const expressions, param
+/// defaults, and node expressions. Span-keyed sidecars below are compatibility
+/// projections for consumers that still walk the syntax AST; new consumers
+/// should prefer these HIR trees and their canonical references directly.
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedExpressions {
+    /// Const declaration expression keyed by its canonical declaration identity.
+    pub consts: HashMap<ResolvedName<namespace::Decl>, hir::Expr>,
+    /// Param default expression keyed by its canonical declaration identity.
+    pub param_defaults: HashMap<ResolvedName<namespace::Decl>, hir::Expr>,
+    /// Node expression keyed by its canonical declaration identity.
+    pub nodes: HashMap<ResolvedName<namespace::Decl>, hir::Expr>,
+}
+
+impl ResolvedExpressions {
+    /// Look up the HIR expression for a runtime declaration (param default or node).
+    #[must_use]
+    pub fn runtime_expr(&self, key: &ResolvedName<namespace::Decl>) -> Option<&hir::Expr> {
+        self.param_defaults.get(key).or_else(|| self.nodes.get(key))
+    }
+}
+
 /// Canonical HIR-derived index references used by collection/index inference.
 ///
 /// The legacy registry remains leaf-keyed, so these maps are deliberately a
@@ -1035,6 +1059,7 @@ impl TIR {
                 layers: Vec::new(),
                 runtime_deps: HashMap::new(),
                 const_deps: HashMap::new(),
+                resolved_exprs: None,
                 resolved_deps: None,
                 resolved_collection_refs: None,
                 resolved_constructor_refs: None,
@@ -1096,6 +1121,8 @@ pub struct DagTIR {
     /// Outer map: key-lookup only, order irrelevant.
     /// Inner set: `BTreeSet` for deterministic iteration when building the DAG.
     pub const_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
+    /// Module-aware HIR expressions for const/default/node expressions.
+    pub resolved_exprs: Option<ResolvedExpressions>,
     /// Canonical HIR-derived dependency maps when this DAG was resolved with a module resolver.
     pub resolved_deps: Option<ResolvedDagDependencies>,
     /// Canonical HIR-derived collection/index references for dim-check inference.
@@ -1414,22 +1441,28 @@ fn type_resolve_dag(
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
 
-    let resolved_deps =
-        module_ctx.and_then(|ctx| collect_resolved_dag_dependencies(&consts, &params, &nodes, ctx));
-    let resolved_collection_refs = module_ctx.and_then(|ctx| {
-        collect_resolved_collection_refs(
-            &consts,
-            &params,
-            &nodes,
-            &resolved_decl_types,
-            ctx,
-            registry,
-        )
+    let resolved_exprs =
+        module_ctx.and_then(|ctx| lower_resolved_expressions(&consts, &params, &nodes, ctx));
+    let resolved_deps = module_ctx.and_then(|ctx| {
+        resolved_exprs.as_ref().and_then(|exprs| {
+            collect_resolved_dag_dependencies(&consts, &params, &nodes, exprs, ctx)
+        })
     });
-    let resolved_constructor_refs =
-        module_ctx.and_then(|ctx| collect_resolved_constructor_refs(&consts, &params, &nodes, ctx));
-    let resolved_inline_dag_refs =
-        module_ctx.and_then(|ctx| collect_resolved_inline_dag_refs(&consts, &params, &nodes, ctx));
+    let resolved_collection_refs = module_ctx.and_then(|ctx| {
+        resolved_exprs.as_ref().and_then(|exprs| {
+            collect_resolved_collection_refs(exprs, &resolved_decl_types, ctx, registry)
+        })
+    });
+    let resolved_constructor_refs = module_ctx.and_then(|ctx| {
+        resolved_exprs
+            .as_ref()
+            .and_then(|exprs| collect_resolved_constructor_refs(exprs, ctx))
+    });
+    let resolved_inline_dag_refs = module_ctx.and_then(|_| {
+        resolved_exprs
+            .as_ref()
+            .map(collect_resolved_inline_dag_refs)
+    });
     let resolved_type_defs = module_ctx.map(|ctx| {
         collect_resolved_type_defs(
             &resolved_decl_types,
@@ -1444,6 +1477,7 @@ fn type_resolve_dag(
         params,
         nodes,
         resolved_decl_types,
+        resolved_exprs,
         resolved_deps,
         resolved_collection_refs,
         resolved_constructor_refs,
@@ -1524,21 +1558,56 @@ fn record_resolved_struct_type_def(
     }
 }
 
-fn collect_resolved_dag_dependencies(
+fn lower_resolved_expressions(
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
     ctx: ModuleTypeContext<'_>,
-) -> Option<ResolvedDagDependencies> {
+) -> Option<ResolvedExpressions> {
     let generic_scope = hir::GenericScope::new();
     let prelude = hir::PreludeTypeScope::graphcal();
     let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
         .with_prelude(&prelude);
+    let mut exprs = ResolvedExpressions::default();
+
+    for entry in consts {
+        let key = resolved_decl_key(ctx.owner, &entry.name)?;
+        exprs
+            .consts
+            .insert(key, hir::lower_expr(&entry.expr, expr_ctx).ok()?);
+    }
+    for entry in params {
+        let Some(expr) = &entry.default_expr else {
+            continue;
+        };
+        let key = resolved_decl_key(ctx.owner, &entry.name)?;
+        exprs
+            .param_defaults
+            .insert(key, hir::lower_expr(expr, expr_ctx).ok()?);
+    }
+    for entry in nodes {
+        let key = resolved_decl_key(ctx.owner, &entry.name)?;
+        exprs
+            .nodes
+            .insert(key, hir::lower_expr(&entry.expr, expr_ctx).ok()?);
+    }
+
+    Some(exprs)
+}
+
+fn collect_resolved_dag_dependencies(
+    consts: &[crate::ir::lower::ConstEntry],
+    params: &[crate::ir::lower::ParamEntry],
+    nodes: &[crate::ir::lower::NodeEntry],
+    exprs: &ResolvedExpressions,
+    ctx: ModuleTypeContext<'_>,
+) -> Option<ResolvedDagDependencies> {
     let mut resolved = ResolvedDagDependencies::default();
 
     for entry in consts {
         let key = resolved_decl_key(ctx.owner, &entry.name)?;
-        let mut deps = lower_expr_dependencies(&entry.expr, expr_ctx)?;
+        let hir_expr = exprs.consts.get(&key)?;
+        let mut deps = hir::collect_expr_dependencies(hir_expr);
         for graph_ref in &deps.graph_refs {
             if !ctx.resolver.decl_symbol_kind(graph_ref).ok()?.is_const() {
                 return None;
@@ -1552,10 +1621,10 @@ fn collect_resolved_dag_dependencies(
 
     for entry in params {
         let key = resolved_decl_key(ctx.owner, &entry.name)?;
-        let deps = match &entry.default_expr {
-            Some(expr) => lower_expr_dependencies(expr, expr_ctx)?,
-            None => hir::ExprDependencies::default(),
-        };
+        let deps = exprs.param_defaults.get(&key).map_or_else(
+            hir::ExprDependencies::default,
+            hir::collect_expr_dependencies,
+        );
         resolved.graph_ref_targets.extend(deps.graph_ref_targets);
         resolved.const_ref_targets.extend(deps.const_ref_targets);
         resolved.runtime_deps.insert(key, deps.graph_refs);
@@ -1563,8 +1632,8 @@ fn collect_resolved_dag_dependencies(
 
     for entry in nodes {
         let key = resolved_decl_key(ctx.owner, &entry.name)?;
-        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
-        let mut deps = hir::collect_expr_dependencies(&hir_expr);
+        let hir_expr = exprs.nodes.get(&key)?;
+        let mut deps = hir::collect_expr_dependencies(hir_expr);
         if matches!(hir_expr.kind, hir::ExprKind::Unfold { .. }) {
             deps.graph_refs.remove(&key);
         }
@@ -1576,46 +1645,25 @@ fn collect_resolved_dag_dependencies(
     Some(resolved)
 }
 
-fn lower_expr_dependencies(
-    expr: &crate::desugar::resolved_ast::Expr,
-    ctx: hir::ExprLoweringContext<'_>,
-) -> Option<hir::ExprDependencies> {
-    let hir_expr = hir::lower_expr(expr, ctx).ok()?;
-    Some(hir::collect_expr_dependencies(&hir_expr))
-}
-
 fn collect_resolved_collection_refs(
-    consts: &[crate::ir::lower::ConstEntry],
-    params: &[crate::ir::lower::ParamEntry],
-    nodes: &[crate::ir::lower::NodeEntry],
+    exprs: &ResolvedExpressions,
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
     ctx: ModuleTypeContext<'_>,
     registry: &Registry,
 ) -> Option<ResolvedCollectionRefs> {
-    let generic_scope = hir::GenericScope::new();
-    let prelude = hir::PreludeTypeScope::graphcal();
-    let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
-        .with_prelude(&prelude);
     let mut refs = ResolvedCollectionRefs::default();
 
     for resolved_type in resolved_decl_types.values() {
         collect_resolved_collection_indexes_from_type(resolved_type, ctx, registry, &mut refs)?;
     }
 
-    for entry in consts {
-        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
-        collect_resolved_collection_refs_from_expr(&hir_expr, ctx, registry, &mut refs)?;
-    }
-    for entry in params {
-        let Some(expr) = &entry.default_expr else {
-            continue;
-        };
-        let hir_expr = hir::lower_expr(expr, expr_ctx).ok()?;
-        collect_resolved_collection_refs_from_expr(&hir_expr, ctx, registry, &mut refs)?;
-    }
-    for entry in nodes {
-        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
-        collect_resolved_collection_refs_from_expr(&hir_expr, ctx, registry, &mut refs)?;
+    for hir_expr in exprs
+        .consts
+        .values()
+        .chain(exprs.param_defaults.values())
+        .chain(exprs.nodes.values())
+    {
+        collect_resolved_collection_refs_from_expr(hir_expr, ctx, registry, &mut refs)?;
     }
 
     Some(refs)
@@ -1829,31 +1877,18 @@ fn collect_resolved_collection_refs_from_expr(
 }
 
 fn collect_resolved_constructor_refs(
-    consts: &[crate::ir::lower::ConstEntry],
-    params: &[crate::ir::lower::ParamEntry],
-    nodes: &[crate::ir::lower::NodeEntry],
+    exprs: &ResolvedExpressions,
     ctx: ModuleTypeContext<'_>,
 ) -> Option<ResolvedConstructorRefs> {
-    let generic_scope = hir::GenericScope::new();
-    let prelude = hir::PreludeTypeScope::graphcal();
-    let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
-        .with_prelude(&prelude);
     let mut refs = ResolvedConstructorRefs::default();
 
-    for entry in consts {
-        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
-        collect_resolved_constructor_refs_from_expr(&hir_expr, ctx, &mut refs)?;
-    }
-    for entry in params {
-        let Some(expr) = &entry.default_expr else {
-            continue;
-        };
-        let hir_expr = hir::lower_expr(expr, expr_ctx).ok()?;
-        collect_resolved_constructor_refs_from_expr(&hir_expr, ctx, &mut refs)?;
-    }
-    for entry in nodes {
-        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
-        collect_resolved_constructor_refs_from_expr(&hir_expr, ctx, &mut refs)?;
+    for hir_expr in exprs
+        .consts
+        .values()
+        .chain(exprs.param_defaults.values())
+        .chain(exprs.nodes.values())
+    {
+        collect_resolved_constructor_refs_from_expr(hir_expr, ctx, &mut refs)?;
     }
 
     Some(refs)
@@ -1990,35 +2025,19 @@ fn collect_resolved_constructor_refs_from_expr(
     }
 }
 
-fn collect_resolved_inline_dag_refs(
-    consts: &[crate::ir::lower::ConstEntry],
-    params: &[crate::ir::lower::ParamEntry],
-    nodes: &[crate::ir::lower::NodeEntry],
-    ctx: ModuleTypeContext<'_>,
-) -> Option<ResolvedInlineDagRefs> {
-    let generic_scope = hir::GenericScope::new();
-    let prelude = hir::PreludeTypeScope::graphcal();
-    let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
-        .with_prelude(&prelude);
+fn collect_resolved_inline_dag_refs(exprs: &ResolvedExpressions) -> ResolvedInlineDagRefs {
     let mut refs = ResolvedInlineDagRefs::default();
 
-    for entry in consts {
-        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
-        collect_resolved_inline_dag_refs_from_expr(&hir_expr, &mut refs);
-    }
-    for entry in params {
-        let Some(expr) = &entry.default_expr else {
-            continue;
-        };
-        let hir_expr = hir::lower_expr(expr, expr_ctx).ok()?;
-        collect_resolved_inline_dag_refs_from_expr(&hir_expr, &mut refs);
-    }
-    for entry in nodes {
-        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
-        collect_resolved_inline_dag_refs_from_expr(&hir_expr, &mut refs);
+    for hir_expr in exprs
+        .consts
+        .values()
+        .chain(exprs.param_defaults.values())
+        .chain(exprs.nodes.values())
+    {
+        collect_resolved_inline_dag_refs_from_expr(hir_expr, &mut refs);
     }
 
-    Some(refs)
+    refs
 }
 
 fn collect_resolved_inline_dag_refs_from_expr(expr: &hir::Expr, refs: &mut ResolvedInlineDagRefs) {
@@ -2205,6 +2224,7 @@ struct DagTIRSeed {
     params: Vec<crate::ir::lower::ParamEntry>,
     nodes: Vec<crate::ir::lower::NodeEntry>,
     resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
+    resolved_exprs: Option<ResolvedExpressions>,
     resolved_deps: Option<ResolvedDagDependencies>,
     resolved_collection_refs: Option<ResolvedCollectionRefs>,
     resolved_constructor_refs: Option<ResolvedConstructorRefs>,
@@ -2262,6 +2282,7 @@ impl DagTIRSeed {
             layers,
             runtime_deps,
             const_deps,
+            resolved_exprs: self.resolved_exprs,
             resolved_deps: self.resolved_deps,
             resolved_collection_refs: self.resolved_collection_refs,
             resolved_constructor_refs: self.resolved_constructor_refs,

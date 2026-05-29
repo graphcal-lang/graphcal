@@ -22,6 +22,27 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     tir.build_declared_types(&src)
 }
 
+fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<String>>) {
+    let raw_file = Parser::new(source).parse_file().unwrap();
+    let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
+    let src = make_src(source);
+    let dag_id =
+        crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+    let ir = crate::ir::lower::lower(&file, &src).unwrap();
+    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    resolver
+        .add_module(dag_id.clone(), &file.declarations)
+        .unwrap();
+    let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
+    module_types.insert_graphcal_prelude().unwrap();
+    module_types.insert_registry(&dag_id, &ir.registry);
+    let tir =
+        crate::tir::typed::type_resolve_with_modules(ir, dag_id, &src, &resolver, &module_types)
+            .unwrap();
+    (tir, src)
+}
+
 /// Compile each inline dag body in `tir` with no self-import preprocessing.
 /// Used by compiler-side integration tests that don't have access to the
 /// eval crate's project pipeline.
@@ -107,6 +128,27 @@ fn cycle_detection_prefers_resolved_dependency_sidecar_when_present() {
         ScopedName::local("y"),
         BTreeSet::from([ScopedName::local("x")]),
     );
+
+    check_dimensions_tir(&tir, &src).unwrap();
+}
+
+#[test]
+fn hir_dim_check_uses_lowered_builtin_function_not_mutated_syntax_callee() {
+    let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
+    assert!(tir.root().resolved_exprs.is_some());
+    tir.root_mut().nodes[0].expr.kind =
+        crate::desugar::resolved_ast::ExprKind::StringLiteral("not the HIR".to_string());
+
+    check_dimensions_tir(&tir, &src).unwrap();
+}
+
+#[test]
+fn hir_dim_check_uses_lexical_local_ids_not_mutated_syntax_names() {
+    let (mut tir, src) =
+        module_aware_tir("index Phase = { Burn };\nnode y: Phase[Phase] = for p: Phase { p };");
+    assert!(tir.root().resolved_exprs.is_some());
+    tir.root_mut().nodes[0].expr.kind =
+        crate::desugar::resolved_ast::ExprKind::StringLiteral("not the HIR".to_string());
 
     check_dimensions_tir(&tir, &src).unwrap();
 }

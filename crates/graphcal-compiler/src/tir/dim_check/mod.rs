@@ -279,6 +279,17 @@ impl DimCheckContext<'_> {
             self.src,
         )
     }
+
+    /// Look up the module-aware HIR expression for a local declaration.
+    fn hir_expr_for_decl(
+        &self,
+        name: &crate::syntax::names::ScopedName,
+    ) -> Option<&crate::hir::Expr> {
+        let dag = self.dag?;
+        let key = dag.resolved_decl_key_for_local(name)?;
+        let exprs = dag.resolved_exprs.as_ref()?;
+        exprs.consts.get(&key).or_else(|| exprs.runtime_expr(&key))
+    }
 }
 
 /// Check that a declaration's expression type matches its declared type annotation.
@@ -296,17 +307,42 @@ fn check_decl_expr_type(
             src: ctx.src.clone(),
             span: (*type_ann_span).into(),
         })?;
-    let inferred = infer_type_with_owner(
-        expr,
-        Some(name.member()),
-        ctx.declared_types,
-        ctx.empty_locals,
-        ctx.dag,
-        ctx.tir,
-        ctx.registry,
-        ctx.builtin_fns,
-        ctx.src,
-    )?;
+    let inferred = match (ctx.dag, ctx.hir_expr_for_decl(name)) {
+        (Some(dag), Some(hir_expr)) => match infer::hir::infer_hir_type_with_owner(
+            hir_expr,
+            Some(name.member()),
+            ctx.declared_types,
+            dag,
+            ctx.tir,
+            ctx.registry,
+            ctx.builtin_fns,
+            ctx.src,
+        )? {
+            Some(inferred) => inferred,
+            None => infer_type_with_owner(
+                expr,
+                Some(name.member()),
+                ctx.declared_types,
+                ctx.empty_locals,
+                ctx.dag,
+                ctx.tir,
+                ctx.registry,
+                ctx.builtin_fns,
+                ctx.src,
+            )?,
+        },
+        _ => infer_type_with_owner(
+            expr,
+            Some(name.member()),
+            ctx.declared_types,
+            ctx.empty_locals,
+            ctx.dag,
+            ctx.tir,
+            ctx.registry,
+            ctx.builtin_fns,
+            ctx.src,
+        )?,
+    };
     let matches = match ctx.dag.and_then(|dag| dag.resolved_decl_types.get(name)) {
         Some(resolved) => resolved_type_matches_inferred(resolved, &inferred),
         None => types_match(declared, &inferred),

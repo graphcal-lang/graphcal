@@ -26,6 +26,26 @@ fn find_value(result: &EvalResult, name: &str) -> f64 {
         .unwrap()
 }
 
+fn run_mutated_tir_values(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    source: &str,
+) -> crate::eval_expr::RuntimeValueMap {
+    let src = miette::NamedSource::new("test.gcl", std::sync::Arc::new(source.to_string()));
+    let plan = crate::exec_plan::compile(tir, &src).unwrap();
+    let declared_types = tir.build_declared_types(&src).unwrap();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
+    super::runtime::run_eval_loop(
+        &plan,
+        tir,
+        &declared_types,
+        &src,
+        builtin_consts,
+        builtin_fns,
+    )
+    .values
+}
+
 #[test]
 #[expect(
     clippy::suboptimal_flops,
@@ -84,6 +104,48 @@ fn eval_constants_ksr() {
     let area = find_value(&result, "area");
     let expected_area = std::f64::consts::PI * 100.0_f64.powf(2.0);
     assert!((area - expected_area).abs() < 1e-10, "area = {area}");
+}
+
+#[test]
+fn eval_uses_hir_builtin_dispatch_after_syntax_mutation() {
+    let source = "node y: Dimensionless = sqrt(4.0);";
+    let mut tir = compile_to_tir(source, "test.gcl").unwrap();
+    assert!(tir.root().resolved_exprs.is_some());
+    tir.root_mut().nodes[0].expr.kind =
+        graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(
+            "mutated syntax".to_string(),
+        );
+
+    let values = run_mutated_tir_values(&tir, source);
+    let key = crate::decl_key::RuntimeDeclKey::for_local_decl(
+        tir.root(),
+        &graphcal_compiler::syntax::names::ScopedName::local("y"),
+    );
+    let value = values[&key].expect_scalar("y").unwrap();
+    assert!((value - 2.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
+    let source = "index Phase = { Burn };\nnode y: Dimensionless[Phase] = for p: Phase { if p == Phase.Burn { 1.0 } else { 0.0 } };";
+    let mut tir = compile_to_tir(source, "test.gcl").unwrap();
+    assert!(tir.root().resolved_exprs.is_some());
+    tir.root_mut().nodes[0].expr.kind =
+        graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(
+            "mutated syntax".to_string(),
+        );
+
+    let values = run_mutated_tir_values(&tir, source);
+    let key = crate::decl_key::RuntimeDeclKey::for_local_decl(
+        tir.root(),
+        &graphcal_compiler::syntax::names::ScopedName::local("y"),
+    );
+    let crate::eval_expr::RuntimeValue::Indexed { entries, .. } = &values[&key] else {
+        panic!("expected indexed value, got {:?}", values[&key]);
+    };
+    let burn = graphcal_compiler::syntax::names::IndexVariantName::new("Burn");
+    let value = entries[&burn].expect_scalar("Burn entry").unwrap();
+    assert!((value - 1.0).abs() < f64::EPSILON);
 }
 
 #[test]

@@ -18,7 +18,9 @@ use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
 use crate::decl_key::RuntimeDeclKey;
-use crate::eval_expr::{EvalContext, RuntimeValue, RuntimeValueMap, eval_expr};
+use crate::eval_expr::{
+    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_expr, eval_hir_expr,
+};
 use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{
@@ -246,6 +248,7 @@ pub fn eval_consts_from_tir(
         .collect();
 
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    let empty_hir_locals = HirLocalValueMap::new();
     let mut visible_values = visible_values_with_imports(dag, &HashMap::new());
     let mut local_const_values: RuntimeValueMap = HashMap::new();
 
@@ -263,7 +266,14 @@ pub fn eval_consts_from_tir(
             root_values: Some(&visible_values),
             struct_field_constraints: None,
         };
-        let value = eval_expr(expr, &visible_values, &empty_locals, &ctx)?;
+        let value = match key.as_resolved().and_then(|resolved| {
+            dag.resolved_exprs
+                .as_ref()
+                .and_then(|exprs| exprs.consts.get(resolved))
+        }) {
+            Some(hir_expr) => eval_hir_expr(hir_expr, &visible_values, &empty_hir_locals, &ctx)?,
+            None => eval_expr(expr, &visible_values, &empty_locals, &ctx)?,
+        };
         visible_values.insert(key.clone(), value.clone());
         local_const_values.insert(key, value);
     }

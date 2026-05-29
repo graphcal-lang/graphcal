@@ -12,7 +12,10 @@ use graphcal_compiler::syntax::names::{DeclName, IndexName, IndexVariantName, Sc
 use graphcal_compiler::syntax::span::Span;
 
 use crate::decl_key::RuntimeDeclKey;
-use crate::eval_expr::{EvalContext, RuntimeValue, RuntimeValueMap, UnfoldContext, eval_expr};
+use crate::eval_expr::{
+    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, UnfoldContext, eval_expr,
+    eval_hir_expr,
+};
 use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail};
 use graphcal_compiler::registry::builtins::{
     BuiltinFunction, builtin_constants, builtin_functions,
@@ -241,6 +244,7 @@ pub(super) fn run_eval_loop(
     builtin_fns: &HashMap<&str, BuiltinFunction>,
 ) -> EvalLoopResult {
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    let empty_hir_locals = HirLocalValueMap::new();
 
     let mut values: RuntimeValueMap = HashMap::new();
     let mut errors: HashMap<RuntimeDeclKey, NodeError> = HashMap::new();
@@ -294,7 +298,15 @@ pub(super) fn run_eval_loop(
             struct_field_constraints: Some(&plan.struct_field_constraints),
         };
 
-        let result = eval_expr(expr, &values, &empty_locals, &ctx);
+        let result = match name.as_resolved().and_then(|resolved| {
+            tir.root()
+                .resolved_exprs
+                .as_ref()
+                .and_then(|exprs| exprs.runtime_expr(resolved))
+        }) {
+            Some(hir_expr) => eval_hir_expr(hir_expr, &values, &empty_hir_locals, &ctx),
+            None => eval_expr(expr, &values, &empty_locals, &ctx),
+        };
 
         match result {
             Ok(val) => {

@@ -7,6 +7,7 @@
 mod collections;
 mod control;
 mod functions;
+pub(super) mod hir;
 mod scalar;
 
 use std::collections::HashMap;

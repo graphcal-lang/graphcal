@@ -2,6 +2,7 @@ mod arithmetic;
 mod collections;
 mod control;
 mod functions;
+mod hir_eval;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ use graphcal_compiler::tir::typed::{
 use crate::decl_key::RuntimeDeclKey;
 
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
+pub(crate) use hir_eval::{HirLocalValueMap, eval_hir_expr};
 pub(crate) type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 
 /// Immutable evaluation environment shared across all expression evaluations.
