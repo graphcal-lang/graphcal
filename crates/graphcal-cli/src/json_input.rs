@@ -24,7 +24,7 @@ use graphcal_compiler::syntax::ast::{
     Expr, ExprKind, FieldInit, Ident, IdentPath, MapEntry, MapEntryIndex, MapEntryKey,
 };
 use graphcal_compiler::syntax::names::{
-    DeclName, FieldName, IndexName, IndexVariantName, NameAtom,
+    DeclName, FieldName, IndexVariantName, NameAtom, NameAtomError, NamePath,
 };
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::{Span, Spanned};
@@ -32,11 +32,48 @@ use graphcal_compiler::syntax::span::{Span, Spanned};
 /// A synthetic span used for all AST nodes constructed from JSON input.
 const SYNTH_SPAN: Span = Span::new(0, 0);
 
-fn synth_ident_path(name: &str) -> IdentPath {
-    IdentPath::new(NonEmpty::singleton(Ident {
-        name: NameAtom::parse(name).expect("JSON-generated identifier paths must be leaf names"),
+fn synth_ident_path(
+    name: &str,
+    param: &str,
+    role: &'static str,
+) -> Result<IdentPath, JsonInputError> {
+    let segments = parse_name_atoms(name, param, role)?;
+    Ok(IdentPath::new(segments.map(|name| Ident {
+        name,
         span: SYNTH_SPAN,
-    }))
+    })))
+}
+
+fn synth_name_path(
+    name: &str,
+    param: &str,
+    role: &'static str,
+) -> Result<NamePath, JsonInputError> {
+    parse_name_atoms(name, param, role).map(NamePath::new)
+}
+
+fn parse_name_atoms(
+    name: &str,
+    param: &str,
+    role: &'static str,
+) -> Result<NonEmpty<NameAtom>, JsonInputError> {
+    let atoms = name
+        .split('.')
+        .map(|segment| {
+            NameAtom::parse(segment).map_err(|reason| JsonInputError::InvalidName {
+                param: param.to_string(),
+                role,
+                value: name.to_string(),
+                reason,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    NonEmpty::try_from_vec(atoms).map_err(|_| JsonInputError::InvalidName {
+        param: param.to_string(),
+        role,
+        value: name.to_string(),
+        reason: NameAtomError::Empty,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -50,6 +87,13 @@ pub enum JsonInputError {
     Json(serde_json::Error),
     /// The top-level JSON value is not an object.
     TopLevelNotObject,
+    /// A JSON-provided name was not a valid Graphcal leaf/path.
+    InvalidName {
+        param: String,
+        role: &'static str,
+        value: String,
+        reason: NameAtomError,
+    },
     /// A GCL expression string could not be parsed.
     ParseFailed { param: String, message: String },
     /// A JSON number is neither i64 nor f64.
@@ -77,6 +121,14 @@ impl fmt::Display for JsonInputError {
         match self {
             Self::Json(e) => write!(f, "invalid JSON: {e}"),
             Self::TopLevelNotObject => write!(f, "top-level JSON value must be an object"),
+            Self::InvalidName {
+                param,
+                role,
+                value,
+                reason,
+            } => {
+                write!(f, "invalid {role} name `{value}` for `{param}`: {reason}")
+            }
             Self::ParseFailed { param, message } => {
                 write!(f, "failed to parse value for `{param}`: {message}")
             }
@@ -144,7 +196,14 @@ pub fn json_to_overrides(json_str: &str) -> Result<HashMap<DeclName, Expr>, Json
     let mut overrides = HashMap::new();
     for (name, value) in obj {
         let expr = convert_value(value, name)?;
-        overrides.insert(DeclName::new(name), expr);
+        let decl_name =
+            DeclName::try_new(name.clone()).map_err(|reason| JsonInputError::InvalidName {
+                param: name.clone(),
+                role: "parameter",
+                value: name.clone(),
+                reason,
+            })?;
+        overrides.insert(decl_name, expr);
     }
     Ok(overrides)
 }
@@ -260,7 +319,7 @@ fn convert_tagged_union(
     };
 
     Ok(synth_expr(ExprKind::ConstructorCall {
-        callee: synth_ident_path(variant_name),
+        callee: synth_ident_path(variant_name, param_name, "constructor")?,
         generic_args: Vec::new(),
         fields,
     }))
@@ -287,7 +346,7 @@ fn convert_struct(
     let fields = convert_field_inits(fields_obj, param_name)?;
 
     Ok(synth_expr(ExprKind::ConstructorCall {
-        callee: synth_ident_path(type_name_str),
+        callee: synth_ident_path(type_name_str, param_name, "constructor")?,
         generic_args: Vec::new(),
         fields,
     }))
@@ -305,6 +364,7 @@ fn convert_indexed(
         .ok_or_else(|| JsonInputError::InvalidIndex {
             param: param_name.to_string(),
         })?;
+    let index_path = synth_name_path(index_name, param_name, "index")?;
 
     let entries_obj = obj["entries"]
         .as_object()
@@ -324,11 +384,18 @@ fn convert_indexed(
             let variant_span = Span::new(entry_index * 2 + 2, 0);
             Ok(MapEntry {
                 keys: NonEmpty::singleton(MapEntryKey {
-                    index: Spanned::new(
-                        MapEntryIndex::Named(IndexName::new(index_name).into()),
-                        index_span,
+                    index: Spanned::new(MapEntryIndex::Named(index_path.clone()), index_span),
+                    variant: Spanned::new(
+                        IndexVariantName::try_new(variant.clone()).map_err(|reason| {
+                            JsonInputError::InvalidName {
+                                param: format!("{param_name}[{variant}]"),
+                                role: "index variant",
+                                value: variant.clone(),
+                                reason,
+                            }
+                        })?,
+                        variant_span,
                     ),
-                    variant: Spanned::new(IndexVariantName::new(variant), variant_span),
                 }),
                 value: value_expr,
             })
@@ -351,8 +418,16 @@ fn convert_field_inits(
         .iter()
         .map(|(field_name, field_val)| {
             let field_expr = convert_value(field_val, &format!("{param_name}.{field_name}"))?;
+            let name = FieldName::try_new(field_name.clone()).map_err(|reason| {
+                JsonInputError::InvalidName {
+                    param: param_name.to_string(),
+                    role: "field",
+                    value: field_name.clone(),
+                    reason,
+                }
+            })?;
             Ok(FieldInit {
-                name: Spanned::new(FieldName::new(field_name), SYNTH_SPAN),
+                name: Spanned::new(name, SYNTH_SPAN),
                 value: field_expr,
             })
         })
@@ -514,5 +589,44 @@ mod tests {
         let overrides = json_to_overrides(r#"{"x": "2.0 + 3.0"}"#).unwrap();
         let expr = &overrides[&DeclName::new("x")];
         assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
+    }
+
+    #[test]
+    fn structured_json_accepts_qualified_constructor_and_index_paths() {
+        let json = r#"{
+            "status": {"variant": "lib.Pick", "fields": {"distance": 1}},
+            "series": {"index": "lib.Phase", "entries": {"Burn": 1, "Coast": 2}}
+        }"#;
+        let overrides = json_to_overrides(json).unwrap();
+
+        match &overrides[&DeclName::new("status")].kind {
+            ExprKind::ConstructorCall { callee, .. } => {
+                let segments: Vec<_> = callee.segments().iter().map(|s| s.name.as_str()).collect();
+                assert_eq!(segments, ["lib", "Pick"]);
+            }
+            other => panic!("expected ConstructorCall, got {other:?}"),
+        }
+
+        match &overrides[&DeclName::new("series")].kind {
+            ExprKind::MapLiteral { entries } => {
+                assert_eq!(entries[0].keys[0].index.value.to_string(), "lib.Phase");
+            }
+            other => panic!("expected MapLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dotted_parameter_names_are_reported_not_panicked() {
+        let result = json_to_overrides(r#"{"module.x": 1}"#);
+        assert!(
+            matches!(
+                result,
+                Err(JsonInputError::InvalidName {
+                    role: "parameter",
+                    ..
+                })
+            ),
+            "expected InvalidName for dotted parameter key, got {result:?}",
+        );
     }
 }

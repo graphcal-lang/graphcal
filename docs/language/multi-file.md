@@ -157,6 +157,7 @@ path to select the owner explicitly:
 import collide.a as a;
 import collide.b as b;
 
+const node gain: Dimensionless = a.bias;
 node phase: a.Phase = a.Phase.Burn;
 node result: a.Item = a.Pick(distance: 2.0 m);
 node code: Dimensionless = match @phase {

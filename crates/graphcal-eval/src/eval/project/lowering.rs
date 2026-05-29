@@ -168,7 +168,17 @@ fn module_resolve_compile_error(
     err: graphcal_compiler::syntax::module_resolve::ModuleResolveError,
     src: &NamedSource<Arc<String>>,
 ) -> CompileError {
-    let span = match &err {
+    match err {
+        graphcal_compiler::syntax::module_resolve::ModuleResolveError::PrivateName {
+            owner,
+            name,
+            ..
+        } => CompileError::Eval(GraphcalError::ImportPrivateItem {
+            name,
+            file_path: owner.to_string(),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        }),
         graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateSymbol {
             duplicate,
             ..
@@ -176,14 +186,17 @@ fn module_resolve_compile_error(
         | graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateImportName {
             duplicate,
             ..
-        } => *duplicate,
-        _ => Span::new(0, 0),
-    };
-    CompileError::Eval(GraphcalError::EvalError {
-        message: err.to_string(),
-        src: src.clone(),
-        span: span.into(),
-    })
+        } => CompileError::Eval(GraphcalError::EvalError {
+            message: err.to_string(),
+            src: src.clone(),
+            span: duplicate.into(),
+        }),
+        other => CompileError::Eval(GraphcalError::EvalError {
+            message: other.to_string(),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        }),
+    }
 }
 
 /// Merge compiled per-DAG TIRs from each module-imported dependency into

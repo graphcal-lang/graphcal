@@ -77,6 +77,10 @@ fn format_hover(def: &DefinitionInfo) -> String {
             let desc = def.type_description.as_deref().unwrap_or("...");
             format!("```graphcal\n{vis}type {} = {desc}\n```", def.name)
         }
+        SymbolCategory::Constructor => {
+            let detail = def.type_description.as_deref().unwrap_or("constructor");
+            format!("```graphcal\n{vis}{}(...)\n```\n{detail}", def.name)
+        }
         SymbolCategory::IndexVariant => {
             let detail = def.detail.as_deref().unwrap_or("");
             format!("`{}` ({detail})", def.name)

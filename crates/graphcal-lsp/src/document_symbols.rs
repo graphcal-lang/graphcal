@@ -33,6 +33,7 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
             SymbolCategory::Const | SymbolCategory::Unit => SymbolKind::CONSTANT,
             SymbolCategory::Dag => SymbolKind::FUNCTION,
             SymbolCategory::StructType => SymbolKind::STRUCT,
+            SymbolCategory::Constructor => SymbolKind::CONSTRUCTOR,
             SymbolCategory::Dimension => SymbolKind::TYPE_PARAMETER,
             SymbolCategory::Index => SymbolKind::ENUM,
             SymbolCategory::Assert
@@ -79,14 +80,14 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
 /// call (O(N*M)) with a single pre-pass that groups by parent.
 fn build_variants_index(
     analysis: &AnalysisResult,
-) -> HashMap<&str, Vec<&crate::symbol_table::DefinitionInfo>> {
-    let mut out: HashMap<&str, Vec<_>> = HashMap::new();
+) -> HashMap<crate::symbol_table::SymbolPath, Vec<&crate::symbol_table::DefinitionInfo>> {
+    let mut out: HashMap<crate::symbol_table::SymbolPath, Vec<_>> = HashMap::new();
     for (key, def) in &analysis.symbol_table.definitions {
         if def.category != SymbolCategory::IndexVariant {
             continue;
         }
         if let SymbolKey::Variant { parent, .. } = key {
-            out.entry(parent.as_str()).or_default().push(def);
+            out.entry(parent.clone()).or_default().push(def);
         }
     }
     out
@@ -99,10 +100,14 @@ fn build_variants_index(
 )]
 fn collect_children(
     lines: &LineIndex<'_>,
-    variants_by_parent: &HashMap<&str, Vec<&crate::symbol_table::DefinitionInfo>>,
+    variants_by_parent: &HashMap<
+        crate::symbol_table::SymbolPath,
+        Vec<&crate::symbol_table::DefinitionInfo>,
+    >,
     parent_name: &str,
 ) -> Vec<DocumentSymbol> {
-    let Some(defs) = variants_by_parent.get(parent_name) else {
+    let parent = crate::symbol_table::SymbolPath::Local(parent_name.to_string());
+    let Some(defs) = variants_by_parent.get(&parent) else {
         return Vec::new();
     };
 

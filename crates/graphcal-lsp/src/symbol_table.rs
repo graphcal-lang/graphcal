@@ -10,6 +10,7 @@ use graphcal_compiler::desugar::resolved_ast::{
     TypeExprKind, UnitDecl, UnitExpr,
 };
 use graphcal_compiler::syntax::attribute::AttributeName;
+use graphcal_compiler::syntax::names::NamePath;
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
@@ -30,6 +31,99 @@ pub enum ExprScopeKind {
     Match,
 }
 
+/// A structured source path used by symbol-table keys.
+///
+/// This is deliberately not a dotted string. Source qualifier segments remain
+/// available for editor-boundary lookups, while the leaf remains distinct from
+/// the qualifier so callers never have to split display text to recover
+/// structure.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SymbolPath {
+    /// A same-scope leaf name.
+    Local(String),
+    /// A module-qualified name (`module.name`, possibly with nested module
+    /// qualifier segments).
+    Qualified { module: Vec<String>, name: String },
+}
+
+impl SymbolPath {
+    pub(crate) fn local(name: impl Into<String>) -> Self {
+        Self::Local(name.into())
+    }
+
+    fn qualified(module: Vec<String>, name: impl Into<String>) -> Self {
+        Self::Qualified {
+            module,
+            name: name.into(),
+        }
+    }
+
+    fn from_ident_path(path: &graphcal_compiler::syntax::ast::IdentPath) -> Self {
+        match path.qualifier_and_leaf() {
+            None => Self::local(path.leaf().name.to_string()),
+            Some((qualifier, leaf)) => Self::qualified(
+                qualifier
+                    .iter()
+                    .map(|segment| segment.name.to_string())
+                    .collect(),
+                leaf.name.to_string(),
+            ),
+        }
+    }
+
+    fn from_name_path(path: &NamePath) -> Self {
+        match path.qualifier_and_leaf() {
+            None => Self::local(path.leaf().to_string()),
+            Some((qualifier, leaf)) => Self::qualified(
+                qualifier.iter().map(ToString::to_string).collect(),
+                leaf.to_string(),
+            ),
+        }
+    }
+
+    pub(crate) fn prepend_module(&self, module_name: &str) -> Self {
+        match self {
+            Self::Local(name) => Self::qualified(vec![module_name.to_string()], name.clone()),
+            Self::Qualified { module, name } => {
+                let mut nested = Vec::with_capacity(module.len() + 1);
+                nested.push(module_name.to_string());
+                nested.extend(module.iter().cloned());
+                Self::qualified(nested, name.clone())
+            }
+        }
+    }
+
+    pub(crate) fn rekey_first_segment(&self, original: &str, local: &str) -> Option<Self> {
+        match self {
+            Self::Local(name) if name == original => Some(Self::local(local.to_string())),
+            Self::Qualified { module, name } if module.first().is_some_and(|m| m == original) => {
+                let mut rekeyed = Vec::with_capacity(module.len());
+                rekeyed.push(local.to_string());
+                rekeyed.extend(module.iter().skip(1).cloned());
+                Some(Self::qualified(rekeyed, name.clone()))
+            }
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for SymbolPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(name) => f.write_str(name),
+            Self::Qualified { module, name } => {
+                for (i, seg) in module.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(".")?;
+                    }
+                    f.write_str(seg)?;
+                }
+                write!(f, ".{name}")
+            }
+        }
+    }
+}
+
 /// A typed key for symbol table entries.
 ///
 /// Replaces ad-hoc `String` keys like `"fn_name::param"` or `"field::name"`
@@ -44,13 +138,16 @@ pub enum SymbolKey {
     /// formatted string, so two callers that build the same logical path
     /// always produce equal keys without depending on a shared join format.
     Qualified { module: Vec<String>, name: String },
-    /// Variant of a type or index: e.g., `Season::Winter`.
-    Variant { parent: String, variant: String },
-    /// Field of a struct or union variant. `struct_name` distinguishes two
-    /// fields with the same name across different types (without it, hover
-    /// and goto-def could resolve to the wrong field).
+    /// Tagged-union constructor. Constructors are separate from type names, so
+    /// a record-like `type Student { Student(...) }` needs a distinct key from
+    /// the `StructType` definition that shares its spelling.
+    Constructor(SymbolPath),
+    /// Variant of an index: e.g., `Season.Winter` or `module.Season.Winter`.
+    Variant { parent: SymbolPath, variant: String },
+    /// Field of a struct or union variant. `owner` distinguishes fields with
+    /// the same name across different types/constructors.
     Field {
-        struct_name: String,
+        owner: SymbolPath,
         field_name: String,
     },
     /// Expression-scoped local variable (block, for, scan, unfold, match).
@@ -62,16 +159,40 @@ pub enum SymbolKey {
 }
 
 fn symbol_key_for_path(path: &graphcal_compiler::syntax::ast::IdentPath) -> SymbolKey {
-    match path.qualifier_and_leaf() {
-        None => SymbolKey::TopLevel(path.leaf().name.to_string()),
-        Some((qualifier, leaf)) => SymbolKey::Qualified {
-            module: qualifier
-                .iter()
-                .map(|segment| segment.name.to_string())
-                .collect(),
-            name: leaf.name.to_string(),
-        },
+    match SymbolPath::from_ident_path(path) {
+        SymbolPath::Local(name) => SymbolKey::TopLevel(name),
+        SymbolPath::Qualified { module, name } => SymbolKey::Qualified { module, name },
     }
+}
+
+fn symbol_key_for_name_path(path: &NamePath) -> SymbolKey {
+    match SymbolPath::from_name_path(path) {
+        SymbolPath::Local(name) => SymbolKey::TopLevel(name),
+        SymbolPath::Qualified { module, name } => SymbolKey::Qualified { module, name },
+    }
+}
+
+fn variant_key_for_parts(
+    index: &NamePath,
+    variant: &graphcal_compiler::syntax::names::IndexVariantName,
+) -> SymbolKey {
+    SymbolKey::Variant {
+        parent: SymbolPath::from_name_path(index),
+        variant: variant.to_string(),
+    }
+}
+
+fn name_path_from_ident_segments(
+    segments: &[graphcal_compiler::syntax::ast::Ident],
+) -> Option<NamePath> {
+    graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(
+        segments
+            .iter()
+            .map(|segment| segment.name.clone())
+            .collect(),
+    )
+    .ok()
+    .map(NamePath::new)
 }
 
 impl std::fmt::Display for SymbolKey {
@@ -87,11 +208,9 @@ impl std::fmt::Display for SymbolKey {
                 }
                 write!(f, "::{name}")
             }
+            Self::Constructor(path) => write!(f, "constructor::{path}"),
             Self::Variant { parent, variant } => write!(f, "{parent}::{variant}"),
-            Self::Field {
-                struct_name,
-                field_name,
-            } => write!(f, "{struct_name}::{field_name}"),
+            Self::Field { owner, field_name } => write!(f, "{owner}::{field_name}"),
             Self::ExprScoped {
                 kind,
                 offset,
@@ -128,6 +247,7 @@ pub enum SymbolCategory {
     Dimension,
     Unit,
     StructType,
+    Constructor,
     Index,
     IndexVariant,
     Field,
@@ -707,15 +827,42 @@ fn collect_type_decl(
         None,
         visibility,
     );
-    // Walk constructor payload type annotations (required types have no fields).
+    // Register constructor and payload-field definitions, then walk payload
+    // type annotations (required types have no fields). Constructors are a
+    // separate namespace from type names, so they must not reuse the type's
+    // `TopLevel` key.
     if let TypeDeclBody::Constructors(members) = &t.body {
         for member in members {
-            table.references.push(ReferenceInfo {
-                span: member.name.span,
-                target: SymbolKey::TopLevel(member.name.value.to_string()),
-            });
+            let constructor_name = member.name.value.to_string();
+            table.insert_definition(
+                SymbolKey::Constructor(SymbolPath::local(constructor_name.clone())),
+                DefinitionInfo {
+                    name: constructor_name.clone(),
+                    category: SymbolCategory::Constructor,
+                    name_span: member.name.span,
+                    decl_span: member.span,
+                    type_description: Some(format!("constructor of {}", t.name.value)),
+                    detail: None,
+                    visibility: Some(t.visibility),
+                },
+            );
             if let Some(fields) = &member.payload {
                 for field in fields {
+                    table.insert_definition(
+                        SymbolKey::Field {
+                            owner: SymbolPath::local(constructor_name.clone()),
+                            field_name: field.name.value.to_string(),
+                        },
+                        DefinitionInfo {
+                            name: field.name.value.to_string(),
+                            category: SymbolCategory::Field,
+                            name_span: field.name.span,
+                            decl_span: field.name.span,
+                            type_description: None,
+                            detail: Some(format!("field of {constructor_name}")),
+                            visibility: None,
+                        },
+                    );
                     collect_type_expr_refs(&field.type_ann, table);
                 }
             }
@@ -744,7 +891,7 @@ fn collect_index_decl(
             for variant in variants {
                 let vname = variant.value.to_string();
                 let key = SymbolKey::Variant {
-                    parent: name.clone(),
+                    parent: SymbolPath::local(name.clone()),
                     variant: vname.clone(),
                 };
                 table.insert_definition(
@@ -1122,16 +1269,17 @@ fn collect_expr_refs(
             // that would resolve to the first struct registering a field with
             // the same name. Pattern bindings (which carry variant context)
             // and the registry-driven definition pass below still record
-            // precisely-keyed `Field { struct_name, field_name }` entries.
+            // precisely-keyed `Field { owner, field_name }` entries.
         }
         ExprKind::ConstructorCall {
             callee,
             generic_args,
             fields,
         } => {
+            let constructor_path = SymbolPath::from_ident_path(callee);
             table.references.push(ReferenceInfo {
                 span: callee.span(),
-                target: symbol_key_for_path(callee),
+                target: SymbolKey::Constructor(constructor_path.clone()),
             });
             for generic_arg in generic_args {
                 if let graphcal_compiler::desugar::resolved_ast::GenericArg::Type(type_arg) =
@@ -1141,6 +1289,13 @@ fn collect_expr_refs(
                 }
             }
             for field in fields {
+                table.references.push(ReferenceInfo {
+                    span: field.name.span,
+                    target: SymbolKey::Field {
+                        owner: constructor_path.clone(),
+                        field_name: field.name.value.to_string(),
+                    },
+                });
                 collect_expr_refs(&field.value, table, scopes);
             }
         }
@@ -1153,17 +1308,18 @@ fn collect_expr_refs(
             // a side-channel of preserved metadata.
             for entry in entries {
                 for key in &entry.keys {
-                    table.references.push(ReferenceInfo {
-                        span: key.index.span,
-                        target: SymbolKey::TopLevel(key.index.value.to_string()),
-                    });
-                    table.references.push(ReferenceInfo {
-                        span: key.variant.span,
-                        target: SymbolKey::Variant {
-                            parent: key.index.value.to_string(),
-                            variant: key.variant.value.to_string(),
-                        },
-                    });
+                    if let graphcal_compiler::syntax::ast::MapEntryIndex::Named(index_path) =
+                        &key.index.value
+                    {
+                        table.references.push(ReferenceInfo {
+                            span: key.index.span,
+                            target: symbol_key_for_name_path(index_path),
+                        });
+                        table.references.push(ReferenceInfo {
+                            span: key.variant.span,
+                            target: variant_key_for_parts(index_path, &key.variant.value),
+                        });
+                    }
                 }
                 collect_expr_refs(&entry.value, table, scopes);
             }
@@ -1176,7 +1332,7 @@ fn collect_expr_refs(
                         let detail = format!("loop variable over {}", spanned.value);
                         let ref_info = Some(ReferenceInfo {
                             span: spanned.span,
-                            target: SymbolKey::TopLevel(spanned.value.to_string()),
+                            target: symbol_key_for_name_path(&spanned.value),
                         });
                         (detail, ref_info)
                     }
@@ -1224,14 +1380,11 @@ fn collect_expr_refs(
                     } => {
                         table.references.push(ReferenceInfo {
                             span: index.span,
-                            target: SymbolKey::TopLevel(index.value.to_string()),
+                            target: symbol_key_for_name_path(&index.value),
                         });
                         table.references.push(ReferenceInfo {
                             span: variant.span,
-                            target: SymbolKey::Variant {
-                                parent: index.value.to_string(),
-                                variant: variant.value.to_string(),
-                            },
+                            target: variant_key_for_parts(&index.value, &variant.value),
                         });
                     }
                     graphcal_compiler::desugar::resolved_ast::IndexArg::Var(ident) => {
@@ -1312,15 +1465,12 @@ fn collect_expr_refs(
             // Reference to the index name
             table.references.push(ReferenceInfo {
                 span: index.span,
-                target: SymbolKey::TopLevel(index.value.to_string()),
+                target: symbol_key_for_name_path(&index.value),
             });
             // Reference to the qualified variant: Index.Variant
             table.references.push(ReferenceInfo {
                 span: variant.span,
-                target: SymbolKey::Variant {
-                    parent: index.value.to_string(),
-                    variant: variant.value.to_string(),
-                },
+                target: variant_key_for_parts(&index.value, &variant.value),
             });
         }
         ExprKind::Match { scrutinee, arms } => {
@@ -1330,38 +1480,45 @@ fn collect_expr_refs(
                     MatchPattern::IndexLabel { index, variant, .. } => {
                         table.references.push(ReferenceInfo {
                             span: index.span,
-                            target: SymbolKey::TopLevel(index.value.to_string()),
+                            target: symbol_key_for_name_path(&index.value),
                         });
                         table.references.push(ReferenceInfo {
                             span: variant.span,
-                            target: SymbolKey::Variant {
-                                parent: index.value.to_string(),
-                                variant: variant.value.to_string(),
-                            },
+                            target: variant_key_for_parts(&index.value, &variant.value),
                         });
-                        (variant.value.to_string(), &[][..])
+                        (SymbolPath::local(variant.value.to_string()), &[][..])
                     }
                     MatchPattern::Constructor { name, bindings, .. } => {
+                        let constructor_path = SymbolPath::local(name.value.to_string());
                         table.references.push(ReferenceInfo {
                             span: name.span,
-                            target: SymbolKey::TopLevel(name.value.to_string()),
+                            target: SymbolKey::Constructor(constructor_path.clone()),
                         });
-                        (name.value.to_string(), bindings.as_slice())
+                        (constructor_path, bindings.as_slice())
                     }
                     MatchPattern::Path { path, bindings, .. } => {
-                        let pattern_name = path
-                            .segments
-                            .iter()
-                            .map(|segment| segment.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(".");
-                        for segment in &path.segments {
+                        let pattern_path = SymbolPath::from_ident_path(path);
+                        if path.len() >= 3 {
+                            let segments = path.segments();
+                            if let Some(index_path) =
+                                name_path_from_ident_segments(&segments[..segments.len() - 1])
+                            {
+                                let variant =
+                                    graphcal_compiler::syntax::names::IndexVariantName::from_atom(
+                                        path.leaf().name.clone(),
+                                    );
+                                table.references.push(ReferenceInfo {
+                                    span: path.span(),
+                                    target: variant_key_for_parts(&index_path, &variant),
+                                });
+                            }
+                        } else {
                             table.references.push(ReferenceInfo {
-                                span: segment.span,
-                                target: SymbolKey::TopLevel(segment.name.to_string()),
+                                span: path.span(),
+                                target: SymbolKey::Constructor(pattern_path.clone()),
                             });
                         }
-                        (pattern_name, bindings.as_slice())
+                        (pattern_path, bindings.as_slice())
                     }
                 };
 
@@ -1372,7 +1529,7 @@ fn collect_expr_refs(
                             table.references.push(ReferenceInfo {
                                 span: field.span,
                                 target: SymbolKey::Field {
-                                    struct_name: variant_name.clone(),
+                                    owner: variant_name.clone(),
                                     field_name: field.value.to_string(),
                                 },
                             });
@@ -1399,7 +1556,7 @@ fn collect_expr_refs(
                             table.references.push(ReferenceInfo {
                                 span: field.span,
                                 target: SymbolKey::Field {
-                                    struct_name: variant_name.clone(),
+                                    owner: variant_name.clone(),
                                     field_name: field.value.to_string(),
                                 },
                             });
@@ -1444,7 +1601,7 @@ fn collect_type_expr_refs(
                     graphcal_compiler::desugar::resolved_ast::IndexExpr::Name(path) => {
                         table.references.push(ReferenceInfo {
                             span: path.span,
-                            target: SymbolKey::TopLevel(path.value.display_path()),
+                            target: symbol_key_for_name_path(&path.value),
                         });
                     }
                     graphcal_compiler::desugar::resolved_ast::IndexExpr::NatExpr(_) => {
@@ -1456,7 +1613,7 @@ fn collect_type_expr_refs(
         TypeExprKind::TypeApplication { name, type_args } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
-                target: SymbolKey::TopLevel(name.value.display_path()),
+                target: symbol_key_for_name_path(&name.value),
             });
             for arg in type_args {
                 collect_type_expr_refs(arg, table);
@@ -1498,7 +1655,7 @@ fn collect_dim_expr_refs(dim_expr: &DimExpr, table: &mut SymbolTable) {
     for item in &dim_expr.terms {
         table.references.push(ReferenceInfo {
             span: item.term.span,
-            target: SymbolKey::TopLevel(item.term.name.value.display_path()),
+            target: symbol_key_for_name_path(&item.term.name.value),
         });
     }
 }
@@ -1738,7 +1895,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
     for type_def in registry.types.all_types() {
         for field in type_def.fields() {
             let field_key = SymbolKey::Field {
-                struct_name: type_def.name.to_string(),
+                owner: SymbolPath::local(type_def.name.to_string()),
                 field_name: field.name.to_string(),
             };
             if !table.definitions.contains_key(&field_key) {
@@ -1862,7 +2019,7 @@ param q: Int[I]
         );
         assert_eq!(
             SymbolKey::Field {
-                struct_name: "Rocket".to_string(),
+                owner: SymbolPath::local("Rocket"),
                 field_name: "x".to_string(),
             }
             .top_level_name(),

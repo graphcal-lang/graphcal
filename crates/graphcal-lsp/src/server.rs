@@ -24,7 +24,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
-use crate::symbol_table::{self, DefinitionInfo, SymbolKey, SymbolTable};
+use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
 use graphcal_compiler::syntax::names::DeclName;
 use graphcal_eval::eval::{
@@ -834,9 +834,13 @@ fn collect_imported_definitions(
                     // (DAG body member) miss because their non-TopLevel keys
                     // would never travel with the selective import.
                     for (key, def) in &imported_table.definitions {
-                        let Some(local_key) =
-                            rekey_selective_import(key, &original_name, &local_name)
-                        else {
+                        let Some(local_key) = rekey_selective_import(
+                            key,
+                            def.category,
+                            import_item.namespace,
+                            original_name.as_str(),
+                            &local_name,
+                        ) else {
                             continue;
                         };
                         insert_imported_def(&mut result, local_key, imported_uri, source, def);
@@ -867,23 +871,43 @@ fn collect_imported_definitions(
 /// Returns `Some(local_key)` if `key` denotes the imported name `original` or
 /// something semantically attached to it (its variants, fields, qualified body
 /// members) — with the parent / qualifier rewritten to the local alias `local`.
-/// Returns `None` for unrelated entries.
-fn rekey_selective_import(key: &SymbolKey, original: &str, local: &str) -> Option<SymbolKey> {
+/// Returns `None` for unrelated entries or entries in a namespace the import
+/// item did not request (for example, `import lib.{type Student}` must not also
+/// import the `Student` constructor).
+fn rekey_selective_import(
+    key: &SymbolKey,
+    category: SymbolCategory,
+    namespace: graphcal_compiler::desugar::resolved_ast::ImportItemNamespace,
+    original: &str,
+    local: &str,
+) -> Option<SymbolKey> {
+    if !selective_import_allows_category(namespace, category) {
+        return None;
+    }
+
     match key {
         SymbolKey::TopLevel(name) if name == original => {
             Some(SymbolKey::TopLevel(local.to_string()))
         }
-        SymbolKey::Variant { parent, variant } if parent == original => Some(SymbolKey::Variant {
-            parent: local.to_string(),
-            variant: variant.clone(),
-        }),
-        SymbolKey::Field {
-            struct_name,
-            field_name,
-        } if struct_name == original => Some(SymbolKey::Field {
-            struct_name: local.to_string(),
-            field_name: field_name.clone(),
-        }),
+        SymbolKey::Constructor(path) => path
+            .rekey_first_segment(original, local)
+            .map(SymbolKey::Constructor),
+        SymbolKey::Variant { parent, variant } => {
+            parent
+                .rekey_first_segment(original, local)
+                .map(|parent| SymbolKey::Variant {
+                    parent,
+                    variant: variant.clone(),
+                })
+        }
+        SymbolKey::Field { owner, field_name } => {
+            owner
+                .rekey_first_segment(original, local)
+                .map(|owner| SymbolKey::Field {
+                    owner,
+                    field_name: field_name.clone(),
+                })
+        }
         SymbolKey::Qualified { module, name } if module.first().is_some_and(|m| m == original) => {
             let mut rekeyed = Vec::with_capacity(module.len());
             rekeyed.push(local.to_string());
@@ -897,14 +921,29 @@ fn rekey_selective_import(key: &SymbolKey, original: &str, local: &str) -> Optio
     }
 }
 
+fn selective_import_allows_category(
+    namespace: graphcal_compiler::desugar::resolved_ast::ImportItemNamespace,
+    category: SymbolCategory,
+) -> bool {
+    match namespace {
+        graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Type => {
+            matches!(category, SymbolCategory::StructType | SymbolCategory::Field)
+        }
+        graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Default => {
+            !matches!(category, SymbolCategory::StructType)
+        }
+    }
+}
+
 /// Re-key an imported-file table entry for a module import (`import lib as m;`).
 ///
 /// `TopLevel(x)` becomes `Qualified { module: [m], name: x }`. `Qualified` keys
 /// nest the module alias as a new outer segment so `Qualified { module: [dag], name: out }`
 /// in the imported file becomes `Qualified { module: [m, dag], name: out }` here —
-/// matching the call-site key produced for `@m.dag(args).out`. Non-addressable
-/// keys (`Variant`, `Field`, `ExprScoped`) pass through unchanged since the
-/// grammar gives the caller no way to qualify them with the module alias.
+/// matching the call-site key produced for `@m.dag(args).out`. Variant,
+/// constructor, and field parents are re-keyed structurally, so
+/// `module.Index.Variant` and `module.Constructor(field: ...)` navigate to the
+/// declaration that owns the imported module rather than a same-leaf local item.
 fn rekey_module_import(key: &SymbolKey, module_name: &str) -> SymbolKey {
     match key {
         SymbolKey::TopLevel(name) => SymbolKey::Qualified {
@@ -920,6 +959,15 @@ fn rekey_module_import(key: &SymbolKey, module_name: &str) -> SymbolKey {
                 name: name.clone(),
             }
         }
+        SymbolKey::Constructor(path) => SymbolKey::Constructor(path.prepend_module(module_name)),
+        SymbolKey::Variant { parent, variant } => SymbolKey::Variant {
+            parent: parent.prepend_module(module_name),
+            variant: variant.clone(),
+        },
+        SymbolKey::Field { owner, field_name } => SymbolKey::Field {
+            owner: owner.prepend_module(module_name),
+            field_name: field_name.clone(),
+        },
         other => other.clone(),
     }
 }
@@ -1753,7 +1801,7 @@ node bad: Mass = mass + length;
         let analysis = run_analysis(&uri, &text);
 
         let palette_red_key = crate::symbol_table::SymbolKey::Variant {
-            parent: "Palette".to_string(),
+            parent: crate::symbol_table::SymbolPath::local("Palette"),
             variant: "Red".to_string(),
         };
         assert!(
@@ -1761,5 +1809,64 @@ node bad: Mass = mass + length;
             "expected imported variant under local alias `Palette.Red`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
+    }
+
+    #[test]
+    fn goto_definition_uses_qualified_same_leaf_import_identity() {
+        use crate::resolve::{SymbolLocation, resolve_symbol_at};
+
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"proj\"\n"),
+            (
+                "src/proj/a.gcl",
+                "pub index Phase = { Burn, Coast };\n\
+                 pub type Item { Pick(distance: Dimensionless), Idle }\n\
+                 pub const node bias: Dimensionless = 1.0;\n",
+            ),
+            (
+                "src/proj/b.gcl",
+                "pub index Phase = { Burn, Coast };\n\
+                 pub type Item { Pick(distance: Dimensionless), Idle }\n\
+                 pub const node bias: Dimensionless = 2.0;\n",
+            ),
+            (
+                "src/proj/main.gcl",
+                "import proj.a as a;\n\
+                 import proj.b as b;\n\n\
+                 const node from_a: Dimensionless = a.bias;\n\
+                 node phase: a.Phase = a.Phase.Burn;\n\
+                 node item: a.Item = a.Pick(distance: a.bias);\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/proj/main.gcl");
+        let a_path = dir.path().join("src/proj/a.gcl");
+        let b_path = dir.path().join("src/proj/b.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let a_uri = Url::from_file_path(a_path.canonicalize().unwrap()).unwrap();
+        let b_uri = Url::from_file_path(b_path.canonicalize().unwrap()).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        for (needle, token_prefix) in [
+            ("a.bias", "a."),
+            ("a.Phase =", "a."),
+            ("a.Phase.Burn", "a.Phase."),
+            ("a.Item", "a."),
+            ("a.Pick", "a."),
+        ] {
+            let offset = text.find(needle).expect("token in main.gcl") + token_prefix.len();
+            let resolved = resolve_symbol_at(&analysis, offset + 1)
+                .unwrap_or_else(|| panic!("resolve `{needle}`"));
+            let SymbolLocation::Imported(imported) = resolved.location else {
+                panic!("expected `{needle}` to resolve to an imported definition");
+            };
+            assert_eq!(imported.uri, a_uri, "`{needle}` should jump to a.gcl");
+            assert_ne!(imported.uri, b_uri, "`{needle}` must not jump to b.gcl");
+        }
     }
 }

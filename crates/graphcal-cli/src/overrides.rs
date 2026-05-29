@@ -17,7 +17,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use graphcal_compiler::desugar::resolved_ast::Expr;
-use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::names::{DeclName, NameAtomError};
 use graphcal_compiler::syntax::parser::ParseError;
 use miette::Diagnostic;
 use thiserror::Error;
@@ -56,6 +56,20 @@ pub enum OverrideParseError {
     EmptyExpression {
         /// The raw string as received from the command line.
         raw: String,
+    },
+
+    /// A `--set` name is not an unqualified parameter leaf name.
+    #[error(
+        "invalid --set name `{name}` in {raw:?}: override names must be unqualified parameter names ({reason})"
+    )]
+    #[diagnostic(code(graphcal::cli::O008))]
+    InvalidName {
+        /// The raw string as received from the command line.
+        raw: String,
+        /// The invalid name segment.
+        name: String,
+        /// The validation failure.
+        reason: NameAtomError,
     },
 
     /// A `--set` expression failed to parse as a GCL expression.
@@ -141,6 +155,13 @@ pub fn parse_overrides(
         if value_str.is_empty() {
             return Err(OverrideParseError::EmptyExpression { raw: s.clone() });
         }
+        let override_name = DeclName::try_new(name.to_string()).map_err(|reason| {
+            OverrideParseError::InvalidName {
+                raw: s.clone(),
+                name: name.to_string(),
+                reason,
+            }
+        })?;
         let raw_expr = graphcal_compiler::syntax::parser::Parser::new(value_str)
             .parse_single_expr()
             .map_err(|e| OverrideParseError::ExpressionParse {
@@ -153,7 +174,7 @@ pub fn parse_overrides(
         // and time-scale names visible).
         let desugared: graphcal_compiler::desugar::desugared_ast::Expr = raw_expr.into();
         overrides.insert(
-            DeclName::new(name),
+            override_name,
             graphcal_compiler::syntax::name_resolve::resolve_standalone_expr(desugared),
         );
     }
@@ -257,6 +278,16 @@ mod tests {
             OverrideParseError::ExpressionParse { name, .. } => assert_eq!(name, "x"),
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    #[test]
+    fn parse_overrides_rejects_qualified_name_without_panicking() {
+        let set = vec!["module.x=1".to_string()];
+        let err = parse_overrides(&set, None, None).unwrap_err();
+        assert!(
+            matches!(err, OverrideParseError::InvalidName { ref name, .. } if name == "module.x"),
+            "unexpected error: {err}",
+        );
     }
 
     #[test]
