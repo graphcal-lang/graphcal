@@ -1,13 +1,31 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, MatchArm, MatchPattern};
-use graphcal_compiler::syntax::names::ScopedName;
+use graphcal_compiler::syntax::names::{ResolvedIndexVariant, ScopedName};
 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
 use super::EvalContext;
 use super::eval_expr;
+
+fn resolved_match_label_variant<'a>(
+    ctx: &'a EvalContext<'_>,
+    pattern: &MatchPattern,
+) -> Option<&'a ResolvedIndexVariant> {
+    let refs = ctx
+        .current_dag
+        .and_then(|dag| dag.resolved_collection_refs.as_ref())?;
+    refs.match_label_variants
+        .get(&pattern.span())
+        .or_else(|| match pattern {
+            MatchPattern::IndexLabel { index, variant, .. } => refs
+                .match_label_variants
+                .get(&index.span.merge(variant.span)),
+            MatchPattern::Path { path, .. } => refs.match_label_variants.get(&path.span()),
+            MatchPattern::Constructor { .. } => None,
+        })
+}
 
 /// Evaluate an `if` expression.
 pub(super) fn eval_if(
@@ -45,11 +63,15 @@ pub(super) fn eval_match(
             // Label match (index label pattern matching)
             let matched_arm = arms
                 .iter()
-                .find(|arm| match &arm.pattern {
-                    MatchPattern::IndexLabel { variant: v, .. } => {
-                        v.value.as_str() == variant.as_str()
-                    }
-                    MatchPattern::Constructor { .. } | MatchPattern::Path { .. } => false,
+                .find(|arm| {
+                    resolved_match_label_variant(ctx, &arm.pattern)
+                        .is_some_and(|resolved| resolved.variant().as_str() == variant.as_str())
+                        || match &arm.pattern {
+                            MatchPattern::IndexLabel { variant: v, .. } => {
+                                v.value.as_str() == variant.as_str()
+                            }
+                            MatchPattern::Constructor { .. } | MatchPattern::Path { .. } => false,
+                        }
                 })
                 .ok_or_else(|| {
                     ctx.eval_error(format!("no match arm for label `{variant}`"), expr.span)

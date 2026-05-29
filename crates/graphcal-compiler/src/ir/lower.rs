@@ -1246,11 +1246,13 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
 
     fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::VariantLiteral { index, variant } = &expr.kind
-            && self.index_bindings.contains_key(index.value.leaf_str())
+            && self
+                .index_bindings
+                .contains_key(index.value.leaf().as_str())
         {
             return Err(self.orphan_error(
                 "index",
-                index.value.leaf_str(),
+                index.value.leaf().as_str(),
                 format!("`{}.{}`", index.value, variant.value),
             ));
         }
@@ -1261,11 +1263,13 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
         if let ExprKind::IndexAccess { args, .. } = &expr.kind {
             for arg in args {
                 if let crate::desugar::resolved_ast::IndexArg::Variant { index, variant } = arg
-                    && self.index_bindings.contains_key(index.value.leaf_str())
+                    && self
+                        .index_bindings
+                        .contains_key(index.value.leaf().as_str())
                 {
                     return Err(self.orphan_error(
                         "index",
-                        index.value.leaf_str(),
+                        index.value.leaf().as_str(),
                         format!("`{}.{}`", index.value, variant.value),
                     ));
                 }
@@ -1282,11 +1286,11 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
         for entry in entries {
             let key = entry.keys.first();
             if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
-                && self.index_bindings.contains_key(index_name.leaf_str())
+                && self.index_bindings.contains_key(index_name.leaf().as_str())
             {
                 return Err(self.orphan_error(
                     "index",
-                    index_name.leaf_str(),
+                    index_name.leaf().as_str(),
                     format!("`{}.{}`", index_name, key.variant.value),
                 ));
             }
@@ -1305,11 +1309,13 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
         for arm in arms {
             if let crate::desugar::resolved_ast::MatchPattern::IndexLabel { index, variant, .. } =
                 &arm.pattern
-                && self.index_bindings.contains_key(index.value.leaf_str())
+                && self
+                    .index_bindings
+                    .contains_key(index.value.leaf().as_str())
             {
                 return Err(self.orphan_error(
                     "index",
-                    index.value.leaf_str(),
+                    index.value.leaf().as_str(),
                     format!("`{}.{}`", index.value, variant.value),
                 ));
             }
@@ -1442,7 +1448,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
 
     fn visit_variant_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         if let ExprKind::VariantLiteral { index, .. } = &mut expr.kind
-            && let Some(new) = self.bindings.get(index.value.leaf_str())
+            && let Some(new) = self.bindings.get(index.value.leaf().as_str())
         {
             index.value = new.clone().into();
         }
@@ -1454,7 +1460,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
             for b in bindings {
                 if let crate::desugar::resolved_ast::ForBindingIndex::Named(ref mut spanned_idx) =
                     b.index
-                    && let Some(new) = self.bindings.get(spanned_idx.value.leaf_str())
+                    && let Some(new) = self.bindings.get(spanned_idx.value.leaf().as_str())
                 {
                     spanned_idx.value = new.clone().into();
                 }
@@ -1470,7 +1476,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
             for arg in args.iter_mut() {
                 match arg {
                     IndexArg::Variant { index, .. } => {
-                        if let Some(new) = self.bindings.get(index.value.leaf_str()) {
+                        if let Some(new) = self.bindings.get(index.value.leaf().as_str()) {
                             index.value = new.clone().into();
                         }
                     }
@@ -1490,7 +1496,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
             for entry in entries.iter_mut() {
                 for key in &mut entry.keys {
                     if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
-                        && let Some(new) = self.bindings.get(index_name.leaf_str())
+                        && let Some(new) = self.bindings.get(index_name.leaf().as_str())
                     {
                         key.index.value =
                             crate::syntax::ast::MapEntryIndex::Named(new.clone().into());
@@ -1508,7 +1514,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
             for arm in arms {
                 if let crate::desugar::resolved_ast::MatchPattern::IndexLabel { index, .. } =
                     &mut arm.pattern
-                    && let Some(new) = self.bindings.get(index.value.leaf_str())
+                    && let Some(new) = self.bindings.get(index.value.leaf().as_str())
                 {
                     index.value = new.clone().into();
                 }

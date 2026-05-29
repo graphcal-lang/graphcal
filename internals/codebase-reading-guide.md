@@ -331,21 +331,17 @@ When syntax changes, update these together with the compiler/parser and docs.
 
 ### 3.1 Typed Names
 
-Identifier strings are wrapped as semantic newtypes in `syntax/names.rs`:
-`DeclName`, `DimName`, `UnitName`, `StructTypeName`, `IndexName`, `FnName`,
-`FieldName`, `VariantName`, `ConstructorName`, `GenericParamName`,
-`LocalName`, and `ModuleAliasName`.
+Identifier leaf segments are `NameAtom`s, and definition-site names are
+semantic newtypes in `syntax/names.rs`: `DeclName`, `DimName`, `UnitName`,
+`StructTypeName`, `IndexName`, `FnName`, `FieldName`, `IndexVariantName`,
+`ConstructorName`, `GenericParamName`, `LocalName`, and `ModuleAliasName`.
 
-Use these newtypes in the core instead of naked `String`s. `ScopedName` carries
-local versus module-qualified declaration names structurally:
-
-```text
-ScopedName::Local(name)
-ScopedName::Qualified { module, member }
-```
-
-The `Display` implementation may render `module::member`, but that string is a
-boundary representation. Core code should pattern-match the variant.
+Use these newtypes for actual definition leaves only. Reference positions that
+may be qualified stay as `IdentPath`/`NamePath` until module-aware resolution
+produces `ResolvedName<Ns>` or `ResolvedIndexVariant`. `ScopedName` carries
+legacy declaration lookup/display paths structurally as qualifier segments plus
+a member; its dotted `Display` form is a boundary representation for diagnostics
+and protocols, not a string to split in the core.
 
 ### 3.2 DAG Identity
 

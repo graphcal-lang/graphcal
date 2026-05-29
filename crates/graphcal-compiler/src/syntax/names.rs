@@ -822,15 +822,6 @@ impl NamePath {
         self.segments.last()
     }
 
-    /// Returns the leaf segment as a string slice.
-    ///
-    /// Use this only at legacy boundaries that still key local registries by
-    /// leaf names. Do not use it to recover structure from a qualified path.
-    #[must_use]
-    pub fn leaf_str(&self) -> &str {
-        self.leaf().as_str()
-    }
-
     /// Returns the only segment when this is a bare path.
     #[must_use]
     pub fn as_bare(&self) -> Option<&NameAtom> {
@@ -995,7 +986,7 @@ mod tests {
             NameAtom::parse("Index").unwrap(),
         );
         assert_eq!(path.display_path(), "module.Index");
-        assert_eq!(path.leaf_str(), "Index");
+        assert_eq!(path.leaf().as_str(), "Index");
         assert_eq!(
             path.qualifier_segments()
                 .iter()

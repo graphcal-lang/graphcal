@@ -740,7 +740,7 @@ impl MapEntryIndex {
             // Legacy local registries are still keyed by leaf index names. A
             // module-aware resolver should replace this boundary with a
             // resolved index identity instead of inspecting the path leaf.
-            Self::Named(name) => IndexName::from_atom(name.leaf().clone()),
+            Self::Named(name) => IndexName::from(name.leaf().clone()),
             Self::NatRange(size) => {
                 IndexName::new(crate::registry::types::nat_range_index_name(*size))
             }

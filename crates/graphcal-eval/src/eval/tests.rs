@@ -1196,6 +1196,51 @@ fn project_table_literal_uses_resolved_owner_with_same_leaf_indexes() {
     compile_to_tir_project(&root, None, &fs()).unwrap();
 }
 
+#[test]
+fn project_variant_literal_uses_resolved_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node phase: a.Phase = a.Phase.Burn;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_label_match_uses_resolved_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node phase: a.Phase = a.Phase.Burn;\n\
+         node code: Dimensionless = match @phase {\n\
+             a.Phase.Burn => 1.0,\n\
+             a.Phase.Coast => 2.0,\n\
+         };\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "code") - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn project_label_match_rejects_same_leaf_wrong_owner_pattern() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node phase: a.Phase = a.Phase.Burn;\n\
+         node code: Dimensionless = match @phase {\n\
+             a.Phase.Burn => 1.0,\n\
+             b.Phase.Warm => 2.0,\n\
+         };\n",
+    );
+
+    match compile_to_tir_project(&root, None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::IndexMismatch { .. })) => {}
+        other => panic!("expected IndexMismatch, got {other:?}"),
+    }
+}
+
 // ---- Bare module path eval tests ----
 mod prop {
     use super::*;

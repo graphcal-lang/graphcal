@@ -98,8 +98,10 @@ frames).
 
 ### Constructing Union Values
 
-Construct a variant by its constructor name. The parens-with-named-args
-form is the canonical syntax:
+Construct a variant by its constructor name. If another module exports a
+same-named constructor, qualify the constructor with the module alias (for
+example, `rocket.LowThrust(...)`). The parens-with-named-args form is the
+canonical syntax:
 
 ```
 node maneuver: ManeuverKind = LowThrust(thrust: 0.5 N, duration: 3600.0 s);
@@ -118,10 +120,10 @@ node fuel_proxy: Force = match @maneuver {
 };
 ```
 
-- Each arm uses a bare constructor pattern and binds its fields
+- Each arm uses a constructor pattern (bare or module-qualified) and binds its fields
 - `_` discards a field value
 - Each field binding must be explicit: `field: variable` or `field: _`
-- Named-index labels can also be matched exhaustively with qualified, fieldless patterns such as `Maneuver.Departure`
+- Named-index labels can also be matched exhaustively with qualified, fieldless patterns such as `Maneuver.Departure` or `mission.Maneuver.Departure`
 
 ### Exhaustiveness Checking
 

@@ -27,7 +27,7 @@ use super::super::{DeclaredType, InferredIndex, InferredStructType, InferredType
 use super::infer_type;
 
 fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
-    IndexName::from_atom(path.leaf().clone())
+    IndexName::from(path.leaf().clone())
 }
 
 /// Get the index name for a for binding.

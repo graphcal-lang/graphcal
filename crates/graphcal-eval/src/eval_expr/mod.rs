@@ -11,7 +11,8 @@ use miette::NamedSource;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, ExprKind, MulDivOp, UnitExpr};
 use graphcal_compiler::syntax::names::{
-    FieldName, ResolvedName, ScopedName, StructTypeName, namespace,
+    FieldName, IndexName, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName, StructTypeName,
+    namespace,
 };
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
@@ -68,6 +69,26 @@ pub struct EvalContext<'a> {
 pub struct UnfoldContext<'a> {
     pub self_name: &'a str,
     pub declared_types: &'a HashMap<ScopedName, DeclaredType>,
+}
+
+fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
+    IndexName::from(path.leaf().clone())
+}
+
+fn resolved_value_index_variant<'a>(
+    ctx: &'a EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+) -> Option<&'a ResolvedIndexVariant> {
+    ctx.current_dag
+        .and_then(|dag| dag.resolved_collection_refs.as_ref())
+        .and_then(|refs| refs.variant_literals.get(&span))
+}
+
+fn runtime_label_from_resolved_variant(resolved: &ResolvedIndexVariant) -> RuntimeValue {
+    RuntimeValue::Label {
+        index_name: resolved.index().to_def_name(),
+        variant: resolved.variant().clone(),
+    }
 }
 
 impl EvalContext<'_> {
@@ -130,39 +151,48 @@ pub fn eval_expr(
             Ok(RuntimeValue::Scalar(*value * scale))
         }
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
-        ExprKind::VariantLiteral { index, variant } => Ok(RuntimeValue::Label {
-            index_name: graphcal_compiler::syntax::names::IndexName::from_atom(
-                index.value.leaf().clone(),
-            ),
-            variant: variant.value.clone(),
-        }),
+        ExprKind::VariantLiteral { index, variant } => {
+            let full_span = index.span.merge(variant.span);
+            Ok(resolved_value_index_variant(ctx, full_span)
+                .map(runtime_label_from_resolved_variant)
+                .unwrap_or_else(|| RuntimeValue::Label {
+                    index_name: legacy_index_name_from_path(&index.value),
+                    variant: variant.value.clone(),
+                }))
+        }
         ExprKind::GraphRef(ident) => values.get(&ident.value).cloned().ok_or_else(|| {
             ctx.eval_error(
                 format!("undefined graph reference `@{}`", ident.value),
                 expr.span,
             )
         }),
-        ExprKind::ConstRef(ident) => values
-            .get(&ident.value)
-            .cloned()
-            .or_else(|| {
-                ctx.builtin_consts
-                    .get(ident.value.member())
-                    .map(|v| RuntimeValue::Scalar(*v))
-            })
-            .or_else(|| {
-                // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
-                // and may be referenced in expression position as ConstRef (uppercase).
-                // Locals are always bare names (no module qualification).
-                if ident.value.is_qualified() {
-                    None
-                } else {
-                    local_values.get(ident.value.member()).cloned()
-                }
-            })
-            .ok_or_else(|| {
-                ctx.eval_error(format!("undefined constant `{}`", ident.value), expr.span)
-            }),
+        ExprKind::ConstRef(ident) => {
+            if let Some(resolved_variant) = resolved_value_index_variant(ctx, ident.span) {
+                return Ok(runtime_label_from_resolved_variant(resolved_variant));
+            }
+
+            values
+                .get(&ident.value)
+                .cloned()
+                .or_else(|| {
+                    ctx.builtin_consts
+                        .get(ident.value.member())
+                        .map(|v| RuntimeValue::Scalar(*v))
+                })
+                .or_else(|| {
+                    // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
+                    // and may be referenced in expression position as ConstRef (uppercase).
+                    // Locals are always bare names (no module qualification).
+                    if ident.value.is_qualified() {
+                        None
+                    } else {
+                        local_values.get(ident.value.member()).cloned()
+                    }
+                })
+                .ok_or_else(|| {
+                    ctx.eval_error(format!("undefined constant `{}`", ident.value), expr.span)
+                })
+        }
         ExprKind::LocalRef(ident) => {
             local_values
                 .get(ident.name.as_str())

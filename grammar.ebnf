@@ -217,7 +217,7 @@ multi_index_list
    = axis_ref, { ",", axis_ref }, ",", slot_tuple;
 
 axis_ref
-   = IDENT
+   = ident_path
    | NUMBER;
 
 slot_tuple
@@ -225,7 +225,7 @@ slot_tuple
 
 slot_axes
    = "_"
-   | IDENT;
+   | ident_path;
 
 multi_table_body
    = multi_slice_section, { multi_slice_section }
@@ -803,8 +803,8 @@ field_init
    = IDENT, ":", expr;
 
 (* --- Map literal --- *)
-(* Single-axis map literals use bare variant keys:
-     { Index.Variant1: expr1, Index.Variant2: expr2, ... }
+(* Single-axis map literals use qualified variant keys:
+     { Index.Variant1: expr1, module.Index.Variant2: expr2, ... }
    Multi-axis map literals use tuple keys:
      { (I1.V1, I2.V2): expr1, (I1.V1, I2.V3): expr2, ... }
    All labels of the index (or all label tuples) must be present
@@ -827,15 +827,15 @@ tuple_key_entry
 (*                                                                      *)
 (* The body grammar is context-sensitive: whether a header row is       *)
 (* expected, whether data rows carry row labels, and whether slice      *)
-(* labels are `Index.Variant` or `#N` all depend on whether the         *)
+(* labels are `Index.Variant` / `module.Index.Variant` or `#N` all    *)
 (* corresponding axis in `index_list` is named or a Nat range literal.  *)
 table_expr
    = "table", "[", index_list, "]", "{", table_body, "}";
 
-(* Each index is a named identifier or an integer literal which         *)
+(* Each index is a named identifier path or an integer literal which    *)
 (* desugars to `range(N)` with synthetic variants `#0`, `#1`, ...       *)
 index_list
-   = (IDENT | NUMBER), { ",", (IDENT | NUMBER) };
+   = (ident_path | NUMBER), { ",", (ident_path | NUMBER) };
 
 table_body
    = table_slice_section, { table_slice_section }   (* 3D+: slice sections *)
@@ -908,7 +908,7 @@ for_binding
    = IDENT, ":", for_binding_index;
 
 for_binding_index
-   = IDENT                                    (* named index *)
+   = ident_path                               (* named index *)
    | "range", "(", nat_expr, ")";                         (* nat range *)
 
 (* "range" is a contextual keyword in for bindings.

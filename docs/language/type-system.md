@@ -631,20 +631,20 @@ match scrutinee {
 - `scrutinee` must be a union type or a named-index `Label` type.
 - `match` is for exhaustive case analysis over closed finite alternatives. Use `if` for ordinary boolean predicates and comparisons.
 - All members/labels must be covered (exhaustiveness check).
-- For union type scrutinees, arms use bare constructor patterns and can bind fields explicitly with `field: variable` or `field: _`.
-- For `Label` scrutinees, arms use qualified index-label patterns (`Index.Label`) and cannot bind fields (labels are fieldless).
+- For union type scrutinees, arms use constructor patterns (bare or module-qualified) and can bind fields explicitly with `field: variable` or `field: _`.
+- For `Label` scrutinees, arms use qualified index-label patterns (`Index.Label` or `module.Index.Label`) and cannot bind fields (labels are fieldless).
 - All arm expressions must have the same type.
 - The result type is the common type of the arms.
 
 ### Map Literal
 
 ```
-{ Index.Variant1: expr1, Index.Variant2: expr2, ... }
+{ Index.Variant1: expr1, module.Index.Variant2: expr2, ... }
 ```
 
 - All variants of the index must be covered.
 - All value expressions must have the same type `T`.
-- The result type is `T[Index]`.
+- The result type is `T[Index]`; when the index is imported, the owner is the resolved module item, not just the leaf spelling.
 
 For multi-axis map literals, use tuple keys:
 

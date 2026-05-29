@@ -93,6 +93,12 @@ impl RefCollector<'_> {
         let is_bare = !ident.value.is_qualified();
         if is_bare && (self.builtin_consts.contains_key(lookup) || is_time_scale_name(lookup)) {
             Ok(())
+        } else if !is_bare {
+            // A qualified const-like path may later resolve to an index
+            // variant or constructor through module-aware HIR. This legacy
+            // dependency visitor has no module resolver, so it must not reject
+            // the path before the typed consumer gets a chance to classify it.
+            Ok(())
         } else {
             Err(GraphcalError::UnknownConstRef {
                 name: ident.value.clone(),

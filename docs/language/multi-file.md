@@ -149,6 +149,25 @@ Runtime values — non-`const` `node` and any `param` — are **not**
 importable. To consume runtime values from another file, instantiate
 the producing DAG via `include` (see [The `include` Form](#the-include-form)).
 
+Imported module aliases are first-class qualifiers in type and expression
+positions. If two imports export the same leaf name, write the module-qualified
+path to select the owner explicitly:
+
+```graphcal
+import collide.a as a;
+import collide.b as b;
+
+node phase: a.Phase = a.Phase.Burn;
+node result: a.Item = a.Pick(distance: 2.0 m);
+node code: Dimensionless = match @phase {
+    a.Phase.Burn => 1.0,
+    a.Phase.Coast => 2.0,
+};
+```
+
+The compiler resolves those paths to the canonical exported item; it does not
+merge same-leaf types, indexes, constructors, or labels from different modules.
+
 ### `pub import` — re-export
 
 Prefixing an `import` with `pub` re-exports the imported names under

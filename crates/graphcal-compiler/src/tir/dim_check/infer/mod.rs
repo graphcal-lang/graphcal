@@ -18,9 +18,29 @@ use crate::desugar::resolved_ast::{Expr, ExprKind};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{GenericParamName, IndexName, ScopedName, UnitName};
+use crate::syntax::names::{
+    GenericParamName, IndexName, NamePath, ResolvedIndexVariant, ScopedName, UnitName,
+};
 
 use super::{DeclaredType, InferredIndex, InferredType};
+
+fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
+    IndexName::from(path.leaf().clone())
+}
+
+fn resolved_value_index_variant(
+    dag: Option<&crate::tir::typed::DagTIR>,
+    span: crate::syntax::span::Span,
+) -> Option<&ResolvedIndexVariant> {
+    dag.and_then(|dag| dag.resolved_collection_refs.as_ref())
+        .and_then(|refs| refs.variant_literals.get(&span))
+}
+
+fn infer_resolved_index_variant_label(resolved_variant: &ResolvedIndexVariant) -> InferredType {
+    InferredType::Label(InferredIndex::from_resolved(
+        resolved_variant.index().clone(),
+    ))
+}
 
 /// Infer the type (dimension or struct) of an expression.
 ///
@@ -85,7 +105,12 @@ pub(super) fn infer_type_with_owner(
         }),
 
         ExprKind::VariantLiteral { index, variant } => {
-            let index_name = IndexName::from_atom(index.value.leaf().clone());
+            let full_span = index.span.merge(variant.span);
+            if let Some(resolved_variant) = resolved_value_index_variant(dag, full_span) {
+                return Ok(infer_resolved_index_variant_label(resolved_variant));
+            }
+
+            let index_name = legacy_index_name_from_path(&index.value);
             // Validate index exists
             let idx_def = registry
                 .indexes
@@ -139,6 +164,10 @@ pub(super) fn infer_type_with_owner(
         }
 
         ExprKind::ConstRef(ident) => {
+            if let Some(resolved_variant) = resolved_value_index_variant(dag, ident.span) {
+                return Ok(infer_resolved_index_variant_label(resolved_variant));
+            }
+
             infer_decl_ref_type(&ident.value, ident.span, declared_types, dag, src).map_err(|err| {
                 match err {
                     GraphcalError::UnknownGraphRef { name, src, span } => {

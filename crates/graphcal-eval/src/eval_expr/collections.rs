@@ -2,13 +2,17 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use graphcal_compiler::desugar::resolved_ast::{Expr, MapEntry};
-use graphcal_compiler::syntax::names::{IndexVariantName, ScopedName};
+use graphcal_compiler::desugar::resolved_ast::{Expr, MapEntry, MapEntryKey};
+use graphcal_compiler::syntax::names::{
+    IndexName, IndexVariantName, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName,
+    namespace,
+};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use graphcal_compiler::registry::types::IndexDef;
 
 use super::EvalContext;
 use super::eval_expr;
@@ -61,6 +65,50 @@ fn eval_nat_expr(
                 .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} * {r}"), *span))
         }
     }
+}
+
+fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
+    IndexName::from(path.leaf().clone())
+}
+
+fn resolved_collection_refs<'a>(
+    ctx: &EvalContext<'a>,
+) -> Option<&'a graphcal_compiler::tir::typed::ResolvedCollectionRefs> {
+    ctx.current_dag
+        .and_then(|dag| dag.resolved_collection_refs.as_ref())
+}
+
+fn resolved_map_entry_variant<'a>(
+    ctx: &EvalContext<'a>,
+    key: &MapEntryKey,
+) -> Option<&'a ResolvedIndexVariant> {
+    let span = key.index.span.merge(key.variant.span);
+    resolved_collection_refs(ctx).and_then(|refs| refs.map_entry_variants.get(&span))
+}
+
+fn map_entry_index_name(key: &MapEntryKey, ctx: &EvalContext<'_>) -> IndexName {
+    resolved_map_entry_variant(ctx, key)
+        .map(|resolved| resolved.index().to_def_name())
+        .unwrap_or_else(|| key.index.value.registry_name())
+}
+
+fn map_entry_index_def<'a>(
+    key: &MapEntryKey,
+    index_name: &IndexName,
+    ctx: &EvalContext<'a>,
+) -> Option<&'a IndexDef> {
+    resolved_map_entry_variant(ctx, key)
+        .and_then(|resolved| {
+            resolved_collection_refs(ctx).and_then(|refs| refs.index_defs.get(resolved.index()))
+        })
+        .or_else(|| ctx.registry.indexes.get_index(index_name.as_str()))
+}
+
+fn resolved_for_binding_index<'a>(
+    ctx: &EvalContext<'a>,
+    span: graphcal_compiler::syntax::span::Span,
+) -> Option<&'a ResolvedName<namespace::Index>> {
+    resolved_collection_refs(ctx).and_then(|refs| refs.for_binding_indexes.get(&span))
 }
 
 /// Evaluate an index access expression.
@@ -343,7 +391,7 @@ pub(super) fn eval_map_literal(
     })?;
     let first_key = first.keys.first();
     let arity = first.keys.len();
-    let idx_name = first_key.index.value.registry_name();
+    let idx_name = map_entry_index_name(first_key, ctx);
 
     if arity == 1 {
         // Single-axis: flat Indexed
@@ -359,13 +407,9 @@ pub(super) fn eval_map_literal(
     }
 
     // Multi-axis: group by first key, recurse on remaining keys
-    let idx_def = ctx
-        .registry
-        .indexes
-        .get_index(idx_name.as_str())
-        .ok_or_else(|| {
-            ctx.internal_error(format!("unknown index `{idx_name}`"), first_key.index.span)
-        })?;
+    let idx_def = map_entry_index_def(first_key, &idx_name, ctx).ok_or_else(|| {
+        ctx.internal_error(format!("unknown index `{idx_name}`"), first_key.index.span)
+    })?;
     let variants = idx_def.variants();
 
     let mut outer = IndexMap::new();
@@ -427,18 +471,25 @@ pub(super) fn eval_for_comp(
     let binding = &bindings[0];
 
     // Resolve the index name and get the index definition
-    let (idx_name, error_span, dynamic_nat_size) = match &binding.index {
-        ForBindingIndex::Named(spanned) => (
-            graphcal_compiler::syntax::names::IndexName::from_atom(spanned.value.leaf().clone()),
-            spanned.span,
-            None,
-        ),
+    let (idx_name, error_span, dynamic_nat_size, resolved_index) = match &binding.index {
+        ForBindingIndex::Named(spanned) => {
+            let resolved = resolved_for_binding_index(ctx, spanned.span).cloned();
+            (
+                resolved
+                    .as_ref()
+                    .map(ResolvedName::to_def_name)
+                    .unwrap_or_else(|| legacy_index_name_from_path(&spanned.value)),
+                spanned.span,
+                None,
+                resolved,
+            )
+        }
         ForBindingIndex::Range { arg, span } => {
             let size = eval_nat_expr(arg, local_values, ctx)?;
             let idx_name = graphcal_compiler::syntax::names::IndexName::new(
                 graphcal_compiler::registry::types::nat_range_index_name(size),
             );
-            (idx_name, *span, Some(size))
+            (idx_name, *span, Some(size), None)
         }
     };
 
@@ -446,7 +497,18 @@ pub(super) fn eval_for_comp(
     // the concrete size may not have been registered at compile time.
     // Create a temporary IndexDef for the computed size if not in the registry.
     let dynamic_nat_def;
-    let idx_def = if let Some(def) = ctx.registry.indexes.get_index(idx_name.as_str()) {
+    let idx_def = if let Some(resolved) = &resolved_index {
+        resolved_collection_refs(ctx)
+            .and_then(|refs| refs.index_defs.get(resolved))
+            .ok_or_else(|| {
+                ctx.internal_error(
+                    format!(
+                        "resolved index `{resolved}` has no recorded definition in collection refs"
+                    ),
+                    error_span,
+                )
+            })?
+    } else if let Some(def) = ctx.registry.indexes.get_index(idx_name.as_str()) {
         def
     } else if let Some(size) = dynamic_nat_size {
         let size = usize::try_from(size).map_err(|_| {

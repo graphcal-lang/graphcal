@@ -119,10 +119,10 @@ node distances: Length[Region] = for r: Region {
 };
 ```
 
-The thing immediately after `@` must be a single in-scope identifier (a
-node directly, or a DAG in scope by its leaf name). Qualified forms like
-`@module.dag(args).out` are rejected — bring the DAG into scope first via
-`import <pkg>.{<dag>};` and call it as `@<dag>(...)`.
+The thing immediately after `@` may be a DAG in scope by its leaf name or a
+module-qualified DAG path such as `@module.dag(args).out`. The projection after
+the call is still mandatory; `@dag(args)` and `@module.dag(args)` are rejected
+because a DAG instance without an output projection is not a node.
 
 ## Import vs Include
 

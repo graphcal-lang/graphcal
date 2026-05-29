@@ -239,7 +239,7 @@ param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
 };
 ```
 
-Each `[SliceLabel]` section contains its own header row and data rows. Named slice labels use `Index.Variant` syntax; Nat range slice labels use `#N`.
+Each `[SliceLabel]` section contains its own header row and data rows. Named slice labels use `Index.Variant` syntax (or `module.Index.Variant` when the index is imported); Nat range slice labels use `#N`.
 
 ### Nat Range Tables
 
@@ -302,7 +302,7 @@ const node mass_per_unit:     Mass[Component]
 ```
 
 - Each slot on the left-hand side is a full declaration: kind (`param` / `node` / `const node`), name, and type annotation.
-- The `table[SharedAxis, (…)]` bracket declares the row axis followed by a parenthesized slot tuple. Each tuple entry is either `_` (1-D slot typed `T[SharedAxis]`) or a named axis (2-D slot typed `T[SharedAxis, ExtraAxis]`).
+- The `table[SharedAxis, (…)]` bracket declares the row axis followed by a parenthesized slot tuple. Each tuple entry is either `_` (1-D slot typed `T[SharedAxis]`) or a named axis, including module-qualified axes (2-D slot typed `T[SharedAxis, ExtraAxis]`).
 - The header row `: …;` has exactly one cell per column. For 1-D slots the cell must be `_`; for 2-D slots, list the extra-axis variants in order (bare, e.g., `Safe, Nominal`, or qualified `OpMode.Safe`). Qualification is never required but is accepted for readability.
 
 Mixed 1-D / 2-D slots:

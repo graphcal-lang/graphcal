@@ -674,7 +674,7 @@ mod tests {
         match &te.kind {
             TypeExprKind::DimExpr(dim) => {
                 assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
-                dim.terms[0].term.name.value.leaf_str()
+                dim.terms[0].term.name.value.leaf().as_str()
             }
             other => panic!("expected DimExpr, got {other:?}"),
         }
@@ -687,7 +687,7 @@ mod tests {
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
                 TypeExprKind::TypeApplication { name, type_args } => {
-                    assert_eq!(name.value.leaf_str(), "Vec3");
+                    assert_eq!(name.value.leaf().as_str(), "Vec3");
                     assert_eq!(type_args.len(), 2);
                     assert_eq!(dim_expr_name(&type_args[0]), "Length");
                     assert_eq!(dim_expr_name(&type_args[1]), "ECI");
@@ -705,7 +705,7 @@ mod tests {
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
                 TypeExprKind::TypeApplication { name, type_args } => {
-                    assert_eq!(name.value.leaf_str(), "Timestamp");
+                    assert_eq!(name.value.leaf().as_str(), "Timestamp");
                     assert_eq!(type_args.len(), 1);
                     assert_eq!(dim_expr_name(&type_args[0]), "UTC");
                 }
@@ -723,7 +723,7 @@ mod tests {
             DeclKind::Param(p) => match &p.type_ann.kind {
                 TypeExprKind::TypeApplication { name, type_args } => {
                     assert_eq!(name.value.display_path(), "math.Vec3");
-                    assert_eq!(name.value.leaf_str(), "Vec3");
+                    assert_eq!(name.value.leaf().as_str(), "Vec3");
                     assert_eq!(type_args.len(), 1);
                 }
                 other => panic!("expected TypeApplication, got {other:?}"),
@@ -764,7 +764,7 @@ mod tests {
                         panic!("expected Name")
                     };
                     assert_eq!(index_path.value.display_path(), "mesh.Row");
-                    assert_eq!(index_path.value.leaf_str(), "Row");
+                    assert_eq!(index_path.value.leaf().as_str(), "Row");
                 }
                 other => panic!("expected Indexed type, got {other:?}"),
             },
@@ -833,7 +833,7 @@ mod tests {
                         let IndexExpr::Name(ident) = &indexes[0] else {
                             panic!("expected Name")
                         };
-                        assert_eq!(ident.value.leaf_str(), "Maneuver");
+                        assert_eq!(ident.value.leaf().as_str(), "Maneuver");
                     }
                     other => panic!("expected Indexed type, got {other:?}"),
                 }
@@ -853,11 +853,11 @@ mod tests {
                     let IndexExpr::Name(ident) = &indexes[0] else {
                         panic!("expected Name")
                     };
-                    assert_eq!(ident.value.leaf_str(), "Row");
+                    assert_eq!(ident.value.leaf().as_str(), "Row");
                     let IndexExpr::Name(ident) = &indexes[1] else {
                         panic!("expected Name")
                     };
-                    assert_eq!(ident.value.leaf_str(), "Col");
+                    assert_eq!(ident.value.leaf().as_str(), "Col");
                 }
                 other => panic!("expected Indexed type, got {other:?}"),
             },
@@ -940,7 +940,7 @@ mod tests {
                     let IndexExpr::Name(ident) = &indexes[0] else {
                         panic!("expected Name")
                     };
-                    assert_eq!(ident.value.leaf_str(), "Maneuver");
+                    assert_eq!(ident.value.leaf().as_str(), "Maneuver");
                 }
                 other => panic!("expected Indexed type, got {other:?}"),
             },

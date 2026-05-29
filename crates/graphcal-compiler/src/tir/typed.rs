@@ -763,10 +763,17 @@ pub struct ResolvedCollectionRefs {
     pub index_defs: HashMap<ResolvedName<namespace::Index>, IndexDef>,
     /// `ForBindingIndex::Named` span -> resolved index owner/name.
     pub for_binding_indexes: HashMap<Span, ResolvedName<namespace::Index>>,
+    /// Full value-level `Index.Variant` span -> resolved index variant.
+    ///
+    /// This covers parser-created `VariantLiteral` nodes and locally-resolved
+    /// const-like refs that HIR proves are index variants.
+    pub variant_literals: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
     /// Full map/table `Index.Variant` key span -> resolved index variant.
     pub map_entry_variants: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
     /// Full `Index.Variant` argument span -> resolved index variant.
     pub index_access_variants: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
+    /// Full index-label match-pattern span -> resolved index variant.
+    pub match_label_variants: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
 }
 
 /// Canonical HIR-derived constructor references used by constructor and match inference.
@@ -1583,10 +1590,21 @@ fn collect_resolved_collection_refs_from_expr(
         | hir::ExprKind::StringLiteral(_)
         | hir::ExprKind::TypeSystemRef(_)
         | hir::ExprKind::GraphRef(_)
-        | hir::ExprKind::ConstRef(_)
         | hir::ExprKind::LocalRef(_)
-        | hir::ExprKind::UnitLiteral { .. }
-        | hir::ExprKind::VariantLiteral(_) => Some(()),
+        | hir::ExprKind::UnitLiteral { .. } => Some(()),
+        hir::ExprKind::ConstRef(target) => {
+            if let hir::ConstRef::IndexVariant(variant) = &target.value {
+                let _ = record_resolved_collection_index(variant.index(), ctx, registry, refs);
+                refs.variant_literals.insert(target.span, variant.clone());
+            }
+            Some(())
+        }
+        hir::ExprKind::VariantLiteral(variant) => {
+            let _ = record_resolved_collection_index(variant.value.index(), ctx, registry, refs);
+            refs.variant_literals
+                .insert(variant.span, variant.value.clone());
+            Some(())
+        }
         hir::ExprKind::BinOp { lhs, rhs, .. } => {
             collect_resolved_collection_refs_from_expr(lhs, ctx, registry, refs)?;
             collect_resolved_collection_refs_from_expr(rhs, ctx, registry, refs)
@@ -1690,6 +1708,13 @@ fn collect_resolved_collection_refs_from_expr(
         hir::ExprKind::Match { scrutinee, arms } => {
             collect_resolved_collection_refs_from_expr(scrutinee, ctx, registry, refs)?;
             for arm in arms {
+                if let hir::expr::MatchPattern::IndexLabel { variant, span } = &arm.pattern {
+                    record_resolved_collection_index(variant.value.index(), ctx, registry, refs)?;
+                    refs.match_label_variants
+                        .insert(variant.span, variant.value.clone());
+                    refs.match_label_variants
+                        .insert(*span, variant.value.clone());
+                }
                 collect_resolved_collection_refs_from_expr(&arm.body, ctx, registry, refs)?;
             }
             Some(())

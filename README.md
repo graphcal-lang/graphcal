@@ -40,7 +40,7 @@ delta_v    = 3778.220768 m/s
 - **Git-friendly.** Plain text `.gcl` files diff and merge cleanly. No binary spreadsheets, no hidden state.
 - **Algebraic types and generics.** Structs, tagged unions with `match`, and generic types with phantom parameters for things like reference frames (`Vec3<Length, Eci>` vs `Vec3<Length, Body>`).
 - **Indexed values.** First-class index sets, `for` comprehensions, aggregations (`sum`, `mean`, ...), and `unfold` for time-series and recurrences.
-- **Reusable computation.** `dag` blocks parameterize sub-graphs and instantiate them as expressions or via `include`. Multi-file projects compose with `import` and a two-axis (`pub` / `pub(bind)`) visibility system.
+- **Reusable computation.** `dag` blocks parameterize sub-graphs and instantiate them as expressions or via `include`. Multi-file projects compose with `import`, module-qualified type/index/constructor paths, and a two-axis (`pub` / `pub(bind)`) visibility system.
 - **Built-in plotting.** `plot` and `figure` declarations render to interactive [Vega-Lite](https://vega.github.io/vega-lite/) charts.
 - **Live editor experience.** The LSP server provides diagnostics, symbols, hover, go-to-definition, and inlay hints that show computed values inline -- your editor becomes a live calculation sheet.
 

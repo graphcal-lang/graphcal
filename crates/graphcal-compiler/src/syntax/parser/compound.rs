@@ -311,7 +311,7 @@ mod tests {
         match &te.kind {
             crate::syntax::ast::TypeExprKind::DimExpr(dim) => {
                 assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
-                dim.terms[0].term.name.value.leaf_str()
+                dim.terms[0].term.name.value.leaf().as_str()
             }
             other => panic!("expected DimExpr, got {other:?}"),
         }
@@ -453,7 +453,7 @@ mod tests {
                     let ForBindingIndex::Named(spanned) = &bindings[0].index else {
                         panic!("expected Named")
                     };
-                    assert_eq!(spanned.value.leaf_str(), "Maneuver");
+                    assert_eq!(spanned.value.leaf().as_str(), "Maneuver");
                     assert!(matches!(body.kind, ExprKind::UnitLiteral { .. }));
                 }
                 other => panic!("expected ForComp, got {other:?}"),
@@ -474,12 +474,12 @@ mod tests {
                     let ForBindingIndex::Named(spanned) = &bindings[0].index else {
                         panic!("expected Named")
                     };
-                    assert_eq!(spanned.value.leaf_str(), "Row");
+                    assert_eq!(spanned.value.leaf().as_str(), "Row");
                     assert_eq!(bindings[1].var.value.as_str(), "c");
                     let ForBindingIndex::Named(spanned) = &bindings[1].index else {
                         panic!("expected Named")
                     };
-                    assert_eq!(spanned.value.leaf_str(), "Col");
+                    assert_eq!(spanned.value.leaf().as_str(), "Col");
                 }
                 other => panic!("expected ForComp, got {other:?}"),
             },
@@ -498,7 +498,7 @@ mod tests {
                     assert_eq!(args.len(), 1);
                     match &args[0] {
                         crate::syntax::ast::IndexArg::Variant { index, variant } => {
-                            assert_eq!(index.value.leaf_str(), "Maneuver");
+                            assert_eq!(index.value.leaf().as_str(), "Maneuver");
                             assert_eq!(variant.value.as_str(), "Departure");
                         }
                         other @ (crate::syntax::ast::IndexArg::Var(_)

@@ -496,7 +496,7 @@ mod tests {
 
     fn named_index_name(spec: &TableIndexSpec) -> &str {
         match spec {
-            TableIndexSpec::Named(s) => s.value.leaf_str(),
+            TableIndexSpec::Named(s) => s.value.leaf().as_str(),
             TableIndexSpec::NatRange(..) => panic!("expected Named spec"),
         }
     }

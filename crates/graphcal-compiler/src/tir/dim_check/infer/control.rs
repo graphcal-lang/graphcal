@@ -7,16 +7,57 @@ use miette::NamedSource;
 
 use crate::desugar::resolved_ast::{Expr, MatchArm, MatchPattern};
 use crate::registry::error::GraphcalError;
-use crate::registry::types::{Registry, TypeDef, UnionMemberDef};
-use crate::syntax::names::{FieldName, IndexName, ScopedName, StructTypeName};
+use crate::registry::types::{IndexDef, Registry, TypeDef, UnionMemberDef};
+use crate::syntax::names::{
+    FieldName, IndexName, NamePath, ResolvedIndexVariant, ScopedName, StructTypeName,
+};
 use crate::syntax::span::Span;
 use crate::tir::typed::{ResolvedConstructorPattern, ResolvedPatternBinding};
 
 use super::super::helpers::{
     check_arm_types_match, format_inferred_type, resolve_field_type, struct_type_def_for_inferred,
 };
-use super::super::{DeclaredType, InferredType};
+use super::super::{DeclaredType, InferredIndex, InferredType};
 use super::infer_type;
+
+fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
+    IndexName::from(path.leaf().clone())
+}
+
+fn resolved_collection_refs(
+    dag: Option<&crate::tir::typed::DagTIR>,
+) -> Option<&crate::tir::typed::ResolvedCollectionRefs> {
+    dag.and_then(|dag| dag.resolved_collection_refs.as_ref())
+}
+
+fn resolved_match_label_variant<'a>(
+    dag: Option<&'a crate::tir::typed::DagTIR>,
+    pattern: &MatchPattern,
+) -> Option<&'a ResolvedIndexVariant> {
+    let refs = resolved_collection_refs(dag)?;
+    refs.match_label_variants
+        .get(&pattern.span())
+        .or_else(|| match pattern {
+            MatchPattern::IndexLabel { index, variant, .. } => refs
+                .match_label_variants
+                .get(&index.span.merge(variant.span)),
+            MatchPattern::Path { path, .. } => refs.match_label_variants.get(&path.span()),
+            MatchPattern::Constructor { .. } => None,
+        })
+}
+
+fn index_def_for_label_index<'a>(
+    index: &InferredIndex,
+    dag: Option<&'a crate::tir::typed::DagTIR>,
+    registry: &'a Registry,
+) -> Option<&'a IndexDef> {
+    index
+        .resolved()
+        .and_then(|resolved| {
+            resolved_collection_refs(dag).and_then(|refs| refs.index_defs.get(resolved))
+        })
+        .or_else(|| registry.indexes.get_index(index.name().as_str()))
+}
 
 /// Infer the type of an if/else expression.
 pub(super) fn infer_if(
@@ -228,13 +269,13 @@ pub(super) fn infer_match(
         InferredType::Label(index_identity) => {
             let index_name = index_identity.name();
             // Label scrutinee: match on index variants (fieldless, qualified syntax)
-            let index_def = registry
-                .indexes
-                .get_index(index_name.as_str())
-                .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: index_name.clone(),
-                    src: src.clone(),
-                    span: scrutinee.span.into(),
+            let index_def =
+                index_def_for_label_index(index_identity, dag, registry).ok_or_else(|| {
+                    GraphcalError::UnknownIndex {
+                        name: index_name.clone(),
+                        src: src.clone(),
+                        span: scrutinee.span.into(),
+                    }
                 })?;
 
             let variants = match &index_def.kind {
@@ -255,29 +296,47 @@ pub(super) fn infer_match(
             let mut arm_types: Vec<InferredType> = Vec::new();
 
             for arm in arms {
-                let crate::desugar::resolved_ast::MatchPattern::IndexLabel {
-                    index,
-                    variant,
-                    span,
-                } = &arm.pattern
-                else {
-                    return Err(GraphcalError::EvalError {
-                        message: "label match arms must use qualified index-label patterns"
-                            .to_string(),
-                        src: src.clone(),
-                        span: arm.pattern.span().into(),
-                    });
-                };
-                let variant_name_str = variant.value.as_str();
+                let (variant_name_str, duplicate_span) = if let Some(resolved_variant) =
+                    resolved_match_label_variant(dag, &arm.pattern)
+                {
+                    if !index_identity.matches_resolved_or_name(
+                        &resolved_variant.index().to_def_name(),
+                        Some(resolved_variant.index()),
+                    ) {
+                        return Err(GraphcalError::IndexMismatch {
+                            expected: index_name.clone(),
+                            found: resolved_variant.index().to_def_name(),
+                            src: src.clone(),
+                            span: arm.pattern.span().into(),
+                        });
+                    }
+                    (resolved_variant.variant().as_str(), arm.pattern.span())
+                } else {
+                    let crate::desugar::resolved_ast::MatchPattern::IndexLabel {
+                        index,
+                        variant,
+                        span,
+                    } = &arm.pattern
+                    else {
+                        return Err(GraphcalError::EvalError {
+                            message: "label match arms must use qualified index-label patterns"
+                                .to_string(),
+                            src: src.clone(),
+                            span: arm.pattern.span().into(),
+                        });
+                    };
+                    let variant_name_str = variant.value.as_str();
 
-                if index.value.leaf_str() != index_name.as_str() {
-                    return Err(GraphcalError::IndexMismatch {
-                        expected: index_name.clone(),
-                        found: IndexName::from_atom(index.value.leaf().clone()),
-                        src: src.clone(),
-                        span: index.span.into(),
-                    });
-                }
+                    if index.value.leaf().as_str() != index_name.as_str() {
+                        return Err(GraphcalError::IndexMismatch {
+                            expected: index_name.clone(),
+                            found: legacy_index_name_from_path(&index.value),
+                            src: src.clone(),
+                            span: index.span.into(),
+                        });
+                    }
+                    (variant_name_str, *span)
+                };
 
                 // Check variant belongs to this index
                 if !variants.iter().any(|v| v.as_str() == variant_name_str) {
@@ -285,7 +344,7 @@ pub(super) fn infer_match(
                         type_name: StructTypeName::new(index_name.as_str()),
                         field_name: FieldName::new(variant_name_str),
                         src: src.clone(),
-                        span: variant.span.into(),
+                        span: arm.pattern.span().into(),
                     });
                 }
 
@@ -294,7 +353,7 @@ pub(super) fn infer_match(
                     return Err(GraphcalError::EvalError {
                         message: format!("duplicate match arm for variant `{variant_name_str}`"),
                         src: src.clone(),
-                        span: (*span).into(),
+                        span: duplicate_span.into(),
                     });
                 }
 
