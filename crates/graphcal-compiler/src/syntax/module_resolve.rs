@@ -264,6 +264,16 @@ impl ModuleIndexSymbol {
     }
 }
 
+impl ModuleSymbolLookup<namespace::Index> for ModuleIndexSymbol {
+    fn resolved(&self) -> &ResolvedName<namespace::Index> {
+        self.resolved()
+    }
+
+    fn visibility(&self) -> SymbolVisibility {
+        self.visibility()
+    }
+}
+
 /// Symbols declared by a single DAG/module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleSymbols {
@@ -921,7 +931,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedName<namespace::Dim>, ModuleResolveError> {
-        self.resolve_symbol_path(owner, path, ModuleSymbols::dimensions, |scope| {
+        self.resolve_type_symbol_path(owner, path, ModuleSymbols::dimensions, |scope| {
             &scope.selected_dimensions
         })
     }
@@ -932,7 +942,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedName<namespace::Unit>, ModuleResolveError> {
-        self.resolve_symbol_path(owner, path, ModuleSymbols::units, |scope| {
+        self.resolve_type_symbol_path(owner, path, ModuleSymbols::units, |scope| {
             &scope.selected_units
         })
     }
@@ -943,7 +953,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedName<namespace::StructType>, ModuleResolveError> {
-        self.resolve_symbol_path(owner, path, ModuleSymbols::struct_types, |scope| {
+        self.resolve_type_symbol_path(owner, path, ModuleSymbols::struct_types, |scope| {
             &scope.selected_struct_types
         })
     }
@@ -954,7 +964,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedName<namespace::Constructor>, ModuleResolveError> {
-        self.resolve_symbol_path(owner, path, ModuleSymbols::constructors, |scope| {
+        self.resolve_type_symbol_path(owner, path, ModuleSymbols::constructors, |scope| {
             &scope.selected_constructors
         })
     }
@@ -983,6 +993,21 @@ impl ModuleResolver {
             let scope = self.module_scope(owner)?;
             if let Some(imported) = scope.selected_indexes.get(atom.as_str()) {
                 return Ok(imported.resolved().clone());
+            }
+            if let Some(resolved) =
+                self.resolve_parent_type_symbol(owner, atom, ModuleSymbols::indexes, |scope| {
+                    &scope.selected_indexes
+                })
+            {
+                return Ok(resolved);
+            }
+            if let Some(resolved) = self.resolve_unique_module_alias_type_symbol(
+                owner,
+                atom,
+                ModuleSymbols::indexes,
+                |scope| &scope.selected_indexes,
+            )? {
+                return Ok(resolved);
             }
             return Err(ModuleResolveError::UnknownName {
                 owner: owner.clone(),
@@ -1077,6 +1102,76 @@ impl ModuleResolver {
             });
         }
         Ok(ResolvedIndexVariant::new(resolved_index, variant.clone()))
+    }
+
+    /// Resolve a bare variant leaf by searching local and selectively imported
+    /// indexes in the current module scope.
+    pub fn resolve_bare_index_variant(
+        &self,
+        owner: &DagId,
+        variant: &IndexVariantName,
+    ) -> Result<ResolvedIndexVariant, ModuleResolveError> {
+        let local = self.module_symbols(owner)?;
+        let scope = self.module_scope(owner)?;
+        let mut candidates = Vec::new();
+
+        for symbol in local.indexes.values() {
+            if symbol.variants().contains_key(variant.as_str()) {
+                candidates.push(symbol.resolved().clone());
+            }
+        }
+        for imported in scope.selected_indexes.values() {
+            let resolved = imported.resolved();
+            let index_owner = resolved.owner().clone();
+            let index_name = IndexName::from_atom(resolved.atom().clone());
+            let target_symbols = self.module_symbols(&index_owner)?;
+            let Some(symbol) = target_symbols.indexes.get(index_name.as_str()) else {
+                continue;
+            };
+            if symbol.variants().contains_key(variant.as_str()) {
+                candidates.push(resolved.clone());
+            }
+        }
+        if let Some(parent) = owner.parent()
+            && self.modules.contains_key(&parent)
+        {
+            let parent_symbols = self.module_symbols(&parent)?;
+            let parent_scope = self.module_scope(&parent)?;
+            for symbol in parent_symbols.indexes.values() {
+                if symbol.variants().contains_key(variant.as_str()) {
+                    candidates.push(symbol.resolved().clone());
+                }
+            }
+            for imported in parent_scope.selected_indexes.values() {
+                let resolved = imported.resolved();
+                let index_owner = resolved.owner().clone();
+                let index_name = IndexName::from_atom(resolved.atom().clone());
+                let Some(symbol) = self
+                    .module_symbols(&index_owner)?
+                    .indexes
+                    .get(index_name.as_str())
+                else {
+                    continue;
+                };
+                if symbol.variants().contains_key(variant.as_str()) {
+                    candidates.push(resolved.clone());
+                }
+            }
+        }
+
+        match candidates.as_slice() {
+            [] => Err(ModuleResolveError::UnknownName {
+                owner: owner.clone(),
+                namespace: namespace::IndexVariant::DISPLAY_NAME,
+                name: variant.to_string(),
+            }),
+            [index] => Ok(ResolvedIndexVariant::new(index.clone(), variant.clone())),
+            _ => Err(ModuleResolveError::AmbiguousIndexVariant {
+                owner: owner.clone(),
+                variant: variant.clone(),
+                indexes: candidates,
+            }),
+        }
     }
 
     /// Resolve a source inline-DAG/module path to its canonical [`DagId`].
@@ -1393,6 +1488,116 @@ impl ModuleResolver {
             namespace: Ns::DISPLAY_NAME,
             name: leaf.to_string(),
         })
+    }
+
+    fn resolve_type_symbol_path<Ns, S>(
+        &self,
+        owner: &DagId,
+        path: &NamePath,
+        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
+        selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
+    ) -> Result<ResolvedName<Ns>, ModuleResolveError>
+    where
+        Ns: NameNamespace,
+        S: ModuleSymbolLookup<Ns>,
+    {
+        match self.resolve_symbol_path(owner, path, local_symbols, selected_symbols) {
+            Ok(resolved) => Ok(resolved),
+            Err(err) => {
+                if let Some(atom) = path.as_bare() {
+                    if let Some(resolved) = self.resolve_parent_type_symbol(
+                        owner,
+                        atom,
+                        local_symbols,
+                        selected_symbols,
+                    ) {
+                        return Ok(resolved);
+                    }
+                    if let Some(resolved) = self.resolve_unique_module_alias_type_symbol(
+                        owner,
+                        atom,
+                        local_symbols,
+                        selected_symbols,
+                    )? {
+                        return Ok(resolved);
+                    }
+                    Err(err)
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
+    fn resolve_parent_type_symbol<Ns, S>(
+        &self,
+        owner: &DagId,
+        atom: &NameAtom,
+        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
+        selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
+    ) -> Option<ResolvedName<Ns>>
+    where
+        Ns: NameNamespace,
+        S: ModuleSymbolLookup<Ns>,
+    {
+        let parent = owner.parent()?;
+        let local = self.modules.get(&parent)?;
+        if let Some(symbol) = local_symbols(local).get(atom.as_str()) {
+            return Some(symbol.resolved().clone());
+        }
+        let scope = self.scopes.get(&parent)?;
+        selected_symbols(scope)
+            .get(atom.as_str())
+            .map(|imported| imported.resolved().clone())
+    }
+
+    fn resolve_unique_module_alias_type_symbol<Ns, S>(
+        &self,
+        owner: &DagId,
+        atom: &NameAtom,
+        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
+        selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
+    ) -> Result<Option<ResolvedName<Ns>>, ModuleResolveError>
+    where
+        Ns: NameNamespace,
+        S: ModuleSymbolLookup<Ns>,
+    {
+        let scope = self.module_scope(owner)?;
+        let mut found = None;
+        for alias in scope.module_aliases.values() {
+            let target_symbols = self.module_symbols(alias.target())?;
+            let candidate = local_symbols(target_symbols)
+                .get(atom.as_str())
+                .and_then(|symbol| {
+                    (!alias.access().requires_public() || symbol.visibility().is_public())
+                        .then(|| symbol.resolved().clone())
+                })
+                .or_else(|| {
+                    self.module_scope(alias.target())
+                        .ok()
+                        .and_then(|target_scope| {
+                            selected_symbols(target_scope)
+                                .get(atom.as_str())
+                                .and_then(|imported| {
+                                    (!alias.access().requires_public()
+                                        || imported.visibility().is_public())
+                                    .then(|| imported.resolved().clone())
+                                })
+                        })
+                });
+
+            let Some(candidate) = candidate else {
+                continue;
+            };
+            if found
+                .as_ref()
+                .is_some_and(|existing| existing != &candidate)
+            {
+                return Ok(None);
+            }
+            found = Some(candidate);
+        }
+        Ok(found)
     }
 
     fn resolve_module_qualifier(
@@ -1729,6 +1934,13 @@ pub enum ModuleResolveError {
     UnknownIndexVariant {
         index: ResolvedName<namespace::Index>,
         variant: IndexVariantName,
+    },
+    /// A bare variant exists on more than one visible index.
+    #[error("ambiguous variant `{variant}` in module `{owner}`")]
+    AmbiguousIndexVariant {
+        owner: DagId,
+        variant: IndexVariantName,
+        indexes: Vec<ResolvedName<namespace::Index>>,
     },
 }
 

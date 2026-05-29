@@ -331,12 +331,16 @@ mod tests {
         }
     }
 
+    fn test_owner() -> graphcal_compiler::dag_id::DagId {
+        graphcal_compiler::dag_id::DagId::root("<cli-display-test>")
+    }
+
     fn indexed_1d(name: &str, pairs: &[(&str, Value)]) -> Value {
         let mut entries = IndexMap::new();
         for (k, v) in pairs {
             entries.insert(IndexVariantName::new(*k), v.clone());
         }
-        Value::ownerless_indexed(IndexName::new(name), entries)
+        Value::indexed_with_owner(test_owner(), IndexName::new(name), entries)
     }
 
     #[test]
@@ -405,7 +409,7 @@ mod tests {
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("x"), scalar(1.0));
         fields.insert(FieldName::new("y"), scalar(2.0));
-        let s = Value::ownerless_struct(StructTypeName::new("Pair"), fields);
+        let s = Value::struct_with_owner(test_owner(), StructTypeName::new("Pair"), fields);
         let mut out = Vec::new();
         flatten_value("p", &s, &mut out);
         let names: Vec<&str> = out
@@ -419,7 +423,8 @@ mod tests {
 
     #[test]
     fn flatten_empty_struct_keeps_single_entry() {
-        let s = Value::ownerless_struct(StructTypeName::new("Unit"), IndexMap::new());
+        let s =
+            Value::struct_with_owner(test_owner(), StructTypeName::new("Unit"), IndexMap::new());
         let mut out = Vec::new();
         flatten_value("u", &s, &mut out);
         assert_eq!(out.len(), 1);

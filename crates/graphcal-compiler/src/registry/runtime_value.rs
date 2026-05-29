@@ -2,6 +2,7 @@
 
 use indexmap::IndexMap;
 
+use crate::dag_id::DagId;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::syntax::names::{
     FieldName, IndexName, IndexVariantName, ResolvedIndexVariant, StructTypeName,
@@ -104,11 +105,15 @@ pub enum RuntimeValue {
 }
 
 impl RuntimeValue {
-    /// Construct an ownerless standalone label value from leaf names.
+    /// Construct a label value after resolving the index leaf into an owner.
     #[must_use]
-    pub const fn ownerless_label(index_name: IndexName, variant: IndexVariantName) -> Self {
+    pub fn label_with_owner(
+        owner: DagId,
+        index_name: IndexName,
+        variant: IndexVariantName,
+    ) -> Self {
         Self::Label {
-            index_name: IndexTypeRef::ownerless(index_name),
+            index_name: IndexTypeRef::with_owner(owner, index_name),
             variant,
         }
     }
@@ -122,26 +127,28 @@ impl RuntimeValue {
         }
     }
 
-    /// Construct an ownerless standalone struct value from a concrete type/constructor leaf.
+    /// Construct a struct value after resolving the struct leaf into an owner.
     #[must_use]
-    pub const fn ownerless_struct(
+    pub fn struct_with_owner(
+        owner: DagId,
         type_name: StructTypeName,
         fields: IndexMap<FieldName, Self>,
     ) -> Self {
         Self::Struct {
-            type_name: StructTypeRef::ownerless(type_name),
+            type_name: StructTypeRef::with_owner(owner, type_name),
             fields,
         }
     }
 
-    /// Construct an ownerless standalone indexed value from an index leaf.
+    /// Construct an indexed value after resolving the index leaf into an owner.
     #[must_use]
-    pub const fn ownerless_indexed(
+    pub fn indexed_with_owner(
+        owner: DagId,
         index_name: IndexName,
         entries: IndexMap<IndexVariantName, Self>,
     ) -> Self {
         Self::Indexed {
-            index_name: IndexTypeRef::ownerless(index_name),
+            index_name: IndexTypeRef::with_owner(owner, index_name),
             entries,
         }
     }

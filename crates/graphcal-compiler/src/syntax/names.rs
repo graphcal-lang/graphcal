@@ -419,7 +419,7 @@ impl<Ns: NameNamespace> ResolvedName<Ns> {
         self.name.as_str()
     }
 
-    /// Return the ownerless definition-site leaf in the same namespace.
+    /// Return the unowned definition-site leaf in the same namespace.
     ///
     /// This deliberately drops the canonical owner. Use it only at explicit
     /// standalone registry, diagnostic, or serialization boundaries that

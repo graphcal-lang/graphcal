@@ -14,8 +14,8 @@ use crate::desugar::resolved_ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::hir;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, NameAtom, NamePath,
-    StructTypeName,
+    ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, NameAtom,
+    NameNamespace, NamePath, StructTypeName,
 };
 use crate::syntax::span::{Span, Spanned};
 
@@ -49,27 +49,14 @@ pub enum ResolvedTypeExpr {
     /// A datetime instant in a specific time scale (e.g., `Datetime` = UTC, `Datetime<TT>`).
     Datetime(TimeScale),
     /// A label of a named index (e.g., `Maneuver` in `m: Maneuver`).
-    ///
-    /// The optional resolved identity is present when type resolution consumed
-    /// HIR/module-aware lookup. Standalone callers keep `None` and
-    /// compare by the leaf name only.
-    Label(IndexName, Option<ResolvedName<namespace::Index>>, Span),
+    Label(ResolvedName<namespace::Index>, Span),
     /// A concrete scalar dimension, e.g. `Length * Time^-2`
     Scalar(Dimension),
     /// A non-generic struct type name, e.g. `TransferResult`.
-    ///
-    /// The optional resolved identity is present when type resolution consumed
-    /// HIR/module-aware lookup. Standalone callers keep `None` and
-    /// compare by the leaf name only.
-    Struct(
-        StructTypeName,
-        Option<ResolvedName<namespace::StructType>>,
-        Span,
-    ),
+    Struct(ResolvedName<namespace::StructType>, Span),
     /// A generic struct with concrete type arguments, e.g. `Vec3<Length, ECI>`.
     GenericStruct {
-        name: StructTypeName,
-        resolved: Option<ResolvedName<namespace::StructType>>,
+        name: ResolvedName<namespace::StructType>,
         type_args: Vec<Self>,
         span: Span,
     },
@@ -104,7 +91,7 @@ impl ResolvedTypeExpr {
                     format!("Datetime<{scale}>")
                 }
             }
-            Self::Label(index, _, _) => format!("Label({index})"),
+            Self::Label(index, _) => format!("Label({})", index.as_str()),
             Self::Scalar(dim) => {
                 let formatted = registry.dimensions.format_dimension(dim);
                 if formatted.is_empty() {
@@ -113,12 +100,12 @@ impl ResolvedTypeExpr {
                     formatted
                 }
             }
-            Self::Struct(name, _, _) => name.to_string(),
+            Self::Struct(name, _) => name.as_str().to_string(),
             Self::GenericStruct {
                 name, type_args, ..
             } => {
                 let args: Vec<String> = type_args.iter().map(|a| a.format(registry)).collect();
-                format!("{}<{}>", name, args.join(", "))
+                format!("{}<{}>", name.as_str(), args.join(", "))
             }
             Self::GenericDimParam(name, _) | Self::GenericTypeParam(name, _) => name.to_string(),
             Self::GenericDimExpr { terms, .. } => {
@@ -130,7 +117,7 @@ impl ResolvedTypeExpr {
                 let idx_strs: Vec<String> = indexes
                     .iter()
                     .map(|i| match i {
-                        ResolvedIndex::Concrete(name, _, _) => name.to_string(),
+                        ResolvedIndex::Concrete(name, _) => name.as_str().to_string(),
                         ResolvedIndex::GenericParam(name, _) => name.to_string(),
                         ResolvedIndex::NatExpr(form, _) => form.format(),
                     })
@@ -557,11 +544,8 @@ pub fn normalize_nat_expr(
 /// A resolved index in an indexed type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedIndex {
-    /// A concrete index name, e.g. `Maneuver`
-    ///
-    /// The optional resolved identity preserves the canonical owning module
-    /// for module-aware paths while standalone callers keep `None`.
-    Concrete(IndexName, Option<ResolvedName<namespace::Index>>, Span),
+    /// A concrete index name, e.g. `Maneuver`.
+    Concrete(ResolvedName<namespace::Index>, Span),
     /// A generic index parameter, e.g. `I`
     GenericParam(GenericParamName, Span),
     /// A Nat expression in index position (covers literals, variables, addition, and multiplication).
@@ -1241,6 +1225,9 @@ impl DagTIR {
         &self,
         name: &ScopedName,
     ) -> Option<ResolvedName<namespace::Decl>> {
+        if let Some(bindings) = &self.resolved_decl_bindings {
+            return bindings.get(name).cloned();
+        }
         if self.resolved_decl_types.contains_key(name)
             || self
                 .source_order
@@ -1291,9 +1278,9 @@ pub fn type_resolve(
 /// Qualified source paths such as `lib.Length`, `lib.Vec3<...>`, and
 /// `lib.Phase` are first lowered into HIR canonical references using
 /// `module_resolver`; TIR then consumes those HIR references and reads the
-/// corresponding definition from `module_types`. The returned TIR still exposes
-/// ownerless leaf names at runtime boundaries, but lookup itself no longer depends
-/// on source alias strings.
+/// corresponding definition from `module_types`. Runtime-facing values still
+/// keep display leaves for diagnostics, but semantic lookup no longer depends on
+/// source alias strings.
 pub fn type_resolve_with_modules(
     ir: IR,
     root_dag_id: crate::dag_id::DagId,
@@ -1312,6 +1299,9 @@ fn type_resolve_impl(
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<TIR, GraphcalError> {
+    let runtime_deps_for_hir = ir.runtime_deps.clone();
+    let const_deps_for_hir = ir.const_deps.clone();
+    let imported_value_sources_for_hir = ir.imported_value_sources.clone();
     let root_dag = type_resolve_dag(
         ir.consts,
         ir.params,
@@ -1320,6 +1310,9 @@ fn type_resolve_impl(
         src,
         &root_dag_id,
         module_ctx,
+        &runtime_deps_for_hir,
+        &const_deps_for_hir,
+        &imported_value_sources_for_hir,
     )?
     .with_body(
         ir.asserts,
@@ -1386,6 +1379,9 @@ fn type_resolve_single_impl(
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<DagTIR, GraphcalError> {
+    let runtime_deps_for_hir = ir.runtime_deps.clone();
+    let const_deps_for_hir = ir.const_deps.clone();
+    let imported_value_sources_for_hir = ir.imported_value_sources.clone();
     type_resolve_dag(
         ir.consts,
         ir.params,
@@ -1394,6 +1390,9 @@ fn type_resolve_single_impl(
         src,
         dag_id,
         module_ctx,
+        &runtime_deps_for_hir,
+        &const_deps_for_hir,
+        &imported_value_sources_for_hir,
     )?
     .with_body(
         ir.asserts,
@@ -1424,6 +1423,9 @@ fn type_resolve_dag(
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     module_ctx: Option<ModuleTypeContext<'_>>,
+    runtime_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
+    const_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
+    imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
 ) -> Result<DagTIRSeed, GraphcalError> {
     let mut resolved_decl_types = HashMap::new();
     let no_generic_params: &[GenericParamName] = &[];
@@ -1432,6 +1434,7 @@ fn type_resolve_dag(
         let resolved = resolve_type_expr_inner(
             &entry.type_ann,
             registry,
+            dag_id,
             no_generic_params,
             no_generic_params,
             no_generic_params,
@@ -1444,6 +1447,7 @@ fn type_resolve_dag(
         let resolved = resolve_type_expr_inner(
             &entry.type_ann,
             registry,
+            dag_id,
             no_generic_params,
             no_generic_params,
             no_generic_params,
@@ -1456,6 +1460,7 @@ fn type_resolve_dag(
         let resolved = resolve_type_expr_inner(
             &entry.type_ann,
             registry,
+            dag_id,
             no_generic_params,
             no_generic_params,
             no_generic_params,
@@ -1465,13 +1470,25 @@ fn type_resolve_dag(
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
 
-    let resolved_exprs =
-        module_ctx.and_then(|ctx| lower_resolved_expressions(&consts, &params, &nodes, ctx));
-    let hir_deps = module_ctx.and_then(|ctx| {
-        resolved_exprs.as_ref().and_then(|exprs| {
-            collect_resolved_dag_dependencies(&consts, &params, &nodes, exprs, ctx)
-        })
-    });
+    let resolved_exprs = match module_ctx {
+        Some(ctx) => Some(lower_resolved_expressions(
+            &consts,
+            &params,
+            &nodes,
+            ctx,
+            runtime_deps,
+            const_deps,
+            imported_value_sources,
+            src,
+        )?),
+        None => None,
+    };
+    let hir_deps = match (module_ctx, resolved_exprs.as_ref()) {
+        (Some(ctx), Some(exprs)) => Some(collect_resolved_dag_dependencies(
+            &consts, &params, &nodes, exprs, ctx, src,
+        )?),
+        _ => None,
+    };
     let resolved_collection_refs = module_ctx.and_then(|ctx| {
         collect_resolved_collection_refs(resolved_exprs.as_ref(), &resolved_decl_types, ctx)
     });
@@ -1538,20 +1555,13 @@ fn collect_struct_type_defs_from_resolved_type(
     defs: &mut ResolvedTypeDefs,
 ) {
     match resolved {
-        ResolvedTypeExpr::Struct(_, Some(name), _) => {
+        ResolvedTypeExpr::Struct(name, _) => {
             record_resolved_struct_type_def(name, ctx, defs);
         }
         ResolvedTypeExpr::GenericStruct {
-            resolved: Some(name),
-            type_args,
-            ..
+            name, type_args, ..
         } => {
             record_resolved_struct_type_def(name, ctx, defs);
-            for arg in type_args {
-                collect_struct_type_defs_from_resolved_type(arg, ctx, defs);
-            }
-        }
-        ResolvedTypeExpr::GenericStruct { type_args, .. } => {
             for arg in type_args {
                 collect_struct_type_defs_from_resolved_type(arg, ctx, defs);
             }
@@ -1563,9 +1573,8 @@ fn collect_struct_type_defs_from_resolved_type(
         | ResolvedTypeExpr::Bool
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)
-        | ResolvedTypeExpr::Label(_, _, _)
+        | ResolvedTypeExpr::Label(_, _)
         | ResolvedTypeExpr::Scalar(_)
-        | ResolvedTypeExpr::Struct(_, None, _)
         | ResolvedTypeExpr::GenericDimParam(_, _)
         | ResolvedTypeExpr::GenericTypeParam(_, _)
         | ResolvedTypeExpr::GenericDimExpr { .. } => {}
@@ -1590,36 +1599,130 @@ fn lower_resolved_expressions(
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
     ctx: ModuleTypeContext<'_>,
-) -> Option<ResolvedExpressions> {
+    runtime_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
+    const_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
+    imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedExpressions, GraphcalError> {
     let generic_scope = hir::GenericScope::new();
     let prelude = hir::PreludeTypeScope::graphcal();
+    let decl_bindings = collect_hir_decl_bindings(
+        ctx.owner,
+        consts,
+        params,
+        nodes,
+        imported_value_sources,
+        src,
+    )?;
     let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
-        .with_prelude(&prelude);
+        .with_prelude(&prelude)
+        .with_decl_bindings(&decl_bindings);
     let mut exprs = ResolvedExpressions::default();
 
     for entry in consts {
-        let key = resolved_decl_key(ctx.owner, &entry.name)?;
-        exprs
-            .consts
-            .insert(key, hir::lower_expr(&entry.expr, expr_ctx).ok()?);
+        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
+            internal_error(
+                format!(
+                    "could not build canonical declaration key for `{}`",
+                    entry.name
+                ),
+                src,
+                entry.span,
+            )
+        })?;
+        let hir_expr = lower_expr_or_synthetic_alias(
+            &entry.expr,
+            expr_ctx,
+            ctx,
+            const_deps.get(&entry.name),
+            src,
+        )?;
+        exprs.consts.insert(key, hir_expr);
     }
     for entry in params {
         let Some(expr) = &entry.default_expr else {
             continue;
         };
-        let key = resolved_decl_key(ctx.owner, &entry.name)?;
-        exprs
-            .param_defaults
-            .insert(key, hir::lower_expr(expr, expr_ctx).ok()?);
+        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
+            internal_error(
+                format!(
+                    "could not build canonical declaration key for `{}`",
+                    entry.name
+                ),
+                src,
+                entry.span,
+            )
+        })?;
+        let hir_expr =
+            lower_expr_or_synthetic_alias(expr, expr_ctx, ctx, runtime_deps.get(&entry.name), src)?;
+        exprs.param_defaults.insert(key, hir_expr);
     }
     for entry in nodes {
-        let key = resolved_decl_key(ctx.owner, &entry.name)?;
-        exprs
-            .nodes
-            .insert(key, hir::lower_expr(&entry.expr, expr_ctx).ok()?);
+        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
+            internal_error(
+                format!(
+                    "could not build canonical declaration key for `{}`",
+                    entry.name
+                ),
+                src,
+                entry.span,
+            )
+        })?;
+        let hir_expr = lower_expr_or_synthetic_alias(
+            &entry.expr,
+            expr_ctx,
+            ctx,
+            runtime_deps.get(&entry.name),
+            src,
+        )?;
+        exprs.nodes.insert(key, hir_expr);
     }
 
-    Some(exprs)
+    Ok(exprs)
+}
+
+fn lower_expr_or_synthetic_alias(
+    expr: &crate::desugar::resolved_ast::Expr,
+    expr_ctx: hir::ExprLoweringContext<'_>,
+    ctx: ModuleTypeContext<'_>,
+    deps: Option<&BTreeSet<ScopedName>>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<hir::Expr, GraphcalError> {
+    match hir::lower_expr(expr, expr_ctx) {
+        Ok(expr) => Ok(expr),
+        Err(err) => lower_synthetic_alias_expr(expr, ctx, deps)
+            .ok_or_else(|| expr_lower_error_to_graphcal(&err, src)),
+    }
+}
+
+fn lower_synthetic_alias_expr(
+    expr: &crate::desugar::resolved_ast::Expr,
+    ctx: ModuleTypeContext<'_>,
+    deps: Option<&BTreeSet<ScopedName>>,
+) -> Option<hir::Expr> {
+    let target = single_dep(deps?)?;
+    let resolved = resolved_decl_key(ctx.owner, target)?;
+    match &expr.kind {
+        crate::desugar::resolved_ast::ExprKind::GraphRef(name) if &name.value == target => {
+            Some(hir::Expr::new(
+                hir::ExprKind::GraphRef(Spanned::new(resolved, name.span)),
+                expr.span,
+            ))
+        }
+        crate::desugar::resolved_ast::ExprKind::ConstRef(name) if &name.value == target => {
+            Some(hir::Expr::new(
+                hir::ExprKind::ConstRef(Spanned::new(hir::ConstRef::Decl(resolved), name.span)),
+                expr.span,
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn single_dep(deps: &BTreeSet<ScopedName>) -> Option<&ScopedName> {
+    let mut iter = deps.iter();
+    let only = iter.next()?;
+    iter.next().is_none().then_some(only)
 }
 
 fn collect_resolved_dag_dependencies(
@@ -1628,16 +1731,43 @@ fn collect_resolved_dag_dependencies(
     nodes: &[crate::ir::lower::NodeEntry],
     exprs: &ResolvedExpressions,
     ctx: ModuleTypeContext<'_>,
-) -> Option<ResolvedDagDependencies> {
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedDagDependencies, GraphcalError> {
     let mut resolved = ResolvedDagDependencies::default();
 
     for entry in consts {
-        let key = resolved_decl_key(ctx.owner, &entry.name)?;
-        let hir_expr = exprs.consts.get(&key)?;
+        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
+            internal_error(
+                format!(
+                    "could not build canonical declaration key for `{}`",
+                    entry.name
+                ),
+                src,
+                entry.span,
+            )
+        })?;
+        let hir_expr = exprs.consts.get(&key).ok_or_else(|| {
+            internal_error(
+                format!(
+                    "missing HIR expression for const declaration `{}`",
+                    entry.name
+                ),
+                src,
+                entry.span,
+            )
+        })?;
         let mut deps = hir::collect_expr_dependencies(hir_expr);
         for graph_ref in &deps.graph_refs {
-            if !ctx.resolver.decl_symbol_kind(graph_ref).ok()?.is_const() {
-                return None;
+            let kind = ctx
+                .resolver
+                .decl_symbol_kind(graph_ref)
+                .map_err(|err| module_resolve_error(&err, src, entry.span))?;
+            if !kind.is_const() {
+                return Err(GraphcalError::UnknownConstRef {
+                    name: ScopedName::local(graph_ref.as_str()),
+                    src: src.clone(),
+                    span: entry.span.into(),
+                });
             }
             deps.const_refs.insert(graph_ref.clone());
         }
@@ -1647,7 +1777,16 @@ fn collect_resolved_dag_dependencies(
     }
 
     for entry in params {
-        let key = resolved_decl_key(ctx.owner, &entry.name)?;
+        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
+            internal_error(
+                format!(
+                    "could not build canonical declaration key for `{}`",
+                    entry.name
+                ),
+                src,
+                entry.span,
+            )
+        })?;
         let deps = exprs.param_defaults.get(&key).map_or_else(
             hir::ExprDependencies::default,
             hir::collect_expr_dependencies,
@@ -1658,8 +1797,26 @@ fn collect_resolved_dag_dependencies(
     }
 
     for entry in nodes {
-        let key = resolved_decl_key(ctx.owner, &entry.name)?;
-        let hir_expr = exprs.nodes.get(&key)?;
+        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
+            internal_error(
+                format!(
+                    "could not build canonical declaration key for `{}`",
+                    entry.name
+                ),
+                src,
+                entry.span,
+            )
+        })?;
+        let hir_expr = exprs.nodes.get(&key).ok_or_else(|| {
+            internal_error(
+                format!(
+                    "missing HIR expression for node declaration `{}`",
+                    entry.name
+                ),
+                src,
+                entry.span,
+            )
+        })?;
         let mut deps = hir::collect_expr_dependencies(hir_expr);
         if matches!(hir_expr.kind, hir::ExprKind::Unfold { .. }) {
             deps.graph_refs.remove(&key);
@@ -1669,7 +1826,7 @@ fn collect_resolved_dag_dependencies(
         resolved.runtime_deps.insert(key, deps.graph_refs);
     }
 
-    Some(resolved)
+    Ok(resolved)
 }
 
 fn collect_resolved_collection_refs(
@@ -1716,13 +1873,11 @@ fn collect_resolved_collection_indexes_from_type(
     refs: &mut ResolvedCollectionRefs,
 ) -> Option<()> {
     match resolved_type {
-        ResolvedTypeExpr::Label(_, Some(index), _) => {
-            record_resolved_collection_index(index, ctx, refs)
-        }
+        ResolvedTypeExpr::Label(index, _) => record_resolved_collection_index(index, ctx, refs),
         ResolvedTypeExpr::Indexed { base, indexes } => {
             collect_resolved_collection_indexes_from_type(base, ctx, refs)?;
             for index in indexes {
-                if let ResolvedIndex::Concrete(_, Some(resolved), _) = index {
+                if let ResolvedIndex::Concrete(resolved, _) = index {
                     record_resolved_collection_index(resolved, ctx, refs)?;
                 }
             }
@@ -1738,9 +1893,8 @@ fn collect_resolved_collection_indexes_from_type(
         | ResolvedTypeExpr::Bool
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)
-        | ResolvedTypeExpr::Label(_, None, _)
         | ResolvedTypeExpr::Scalar(_)
-        | ResolvedTypeExpr::Struct(_, _, _)
+        | ResolvedTypeExpr::Struct(_, _)
         | ResolvedTypeExpr::GenericDimParam(_, _)
         | ResolvedTypeExpr::GenericTypeParam(_, _)
         | ResolvedTypeExpr::GenericDimExpr { .. } => Some(()),
@@ -2214,6 +2368,42 @@ fn collect_standalone_dag_dependencies(
     }
 }
 
+fn collect_hir_decl_bindings(
+    owner: &crate::dag_id::DagId,
+    consts: &[crate::ir::lower::ConstEntry],
+    params: &[crate::ir::lower::ParamEntry],
+    nodes: &[crate::ir::lower::NodeEntry],
+    imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<HashMap<ScopedName, ResolvedName<namespace::Decl>>, GraphcalError> {
+    let mut bindings = HashMap::new();
+
+    for name in consts
+        .iter()
+        .map(|entry| &entry.name)
+        .chain(params.iter().map(|entry| &entry.name))
+        .chain(nodes.iter().map(|entry| &entry.name))
+    {
+        let resolved = resolved_decl_key(owner, name).ok_or_else(|| {
+            internal_error(
+                format!("could not build canonical declaration key for `{name}`"),
+                src,
+                Span::new(0, 0),
+            )
+        })?;
+        bindings.insert(name.clone(), resolved);
+    }
+
+    for (name, source) in imported_value_sources {
+        bindings.insert(
+            name.clone(),
+            ResolvedName::from_def(source.dag_id.clone(), source.source_name.clone()),
+        );
+    }
+
+    Ok(bindings)
+}
+
 fn collect_resolved_decl_bindings(
     ctx: ModuleTypeContext<'_>,
     consts: &[crate::ir::lower::ConstEntry],
@@ -2228,29 +2418,40 @@ fn collect_resolved_decl_bindings(
     >,
     imported_decl_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
-) -> Option<HashMap<ScopedName, ResolvedName<namespace::Decl>>> {
-    let mut bindings = HashMap::new();
-
-    for name in consts
-        .iter()
-        .map(|entry| &entry.name)
-        .chain(params.iter().map(|entry| &entry.name))
-        .chain(nodes.iter().map(|entry| &entry.name))
-    {
-        bindings.insert(name.clone(), resolved_decl_key(ctx.owner, name)?);
-    }
+    src: &NamedSource<Arc<String>>,
+) -> Result<HashMap<ScopedName, ResolvedName<namespace::Decl>>, GraphcalError> {
+    let mut bindings = collect_hir_decl_bindings(
+        ctx.owner,
+        consts,
+        params,
+        nodes,
+        imported_value_sources,
+        src,
+    )?;
 
     for name in imported_values
         .keys()
         .chain(imported_decl_types.keys())
         .chain(imported_value_sources.keys())
     {
-        let path = scoped_name_to_name_path(name)?;
-        let resolved = ctx.resolver.resolve_decl_path(ctx.owner, &path).ok()?;
+        if bindings.contains_key(name) {
+            continue;
+        }
+        let path = scoped_name_to_name_path(name).ok_or_else(|| {
+            internal_error(
+                format!("could not convert visible declaration `{name}` to a name path"),
+                src,
+                Span::new(0, 0),
+            )
+        })?;
+        let resolved = ctx
+            .resolver
+            .resolve_decl_path(ctx.owner, &path)
+            .map_err(|err| module_resolve_error(&err, src, Span::new(0, 0)))?;
         bindings.insert(name.clone(), resolved);
     }
 
-    Some(bindings)
+    Ok(bindings)
 }
 
 fn scoped_name_to_name_path(name: &ScopedName) -> Option<NamePath> {
@@ -2283,7 +2484,7 @@ fn resolve_expected_fail_keys(
                         .map(|key| {
                             key.into_iter()
                                 .map(|part| {
-                                    if part.index.resolved().is_some() {
+                                    if part.source_index_path.is_none() {
                                         return Ok(part);
                                     }
                                     let index_path =
@@ -2359,8 +2560,8 @@ impl DagTIRSeed {
         module_ctx: Option<ModuleTypeContext<'_>>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<DagTIR, GraphcalError> {
-        let resolved_decl_bindings = module_ctx.and_then(|ctx| {
-            collect_resolved_decl_bindings(
+        let resolved_decl_bindings = match module_ctx {
+            Some(ctx) => Some(collect_resolved_decl_bindings(
                 ctx,
                 &self.consts,
                 &self.params,
@@ -2368,21 +2569,24 @@ impl DagTIRSeed {
                 &imported_values,
                 &imported_decl_types,
                 &imported_value_sources,
-            )
-        });
+                src,
+            )?),
+            None => None,
+        };
         let expected_fail = match module_ctx {
             Some(ctx) => resolve_expected_fail_keys(expected_fail, ctx, src)?,
             None => expected_fail,
         };
 
-        let contains_rewritten_include_names =
-            source_order.iter().any(|(name, _)| name.is_qualified());
-        let resolved_deps = if contains_rewritten_include_names {
-            collect_standalone_dag_dependencies(&self.dag_id, &runtime_deps, &const_deps)
-        } else {
-            self.hir_deps.unwrap_or_else(|| {
-                collect_standalone_dag_dependencies(&self.dag_id, &runtime_deps, &const_deps)
-            })
+        let resolved_deps = match module_ctx {
+            Some(_) => self.hir_deps.ok_or_else(|| {
+                internal_error(
+                    "missing HIR-derived dependency sidecar for module-aware DAG".to_string(),
+                    src,
+                    Span::new(0, 0),
+                )
+            })?,
+            None => collect_standalone_dag_dependencies(&self.dag_id, &runtime_deps, &const_deps),
         };
 
         Ok(DagTIR {
@@ -2442,27 +2646,23 @@ pub fn resolved_to_declared_type(
         ResolvedTypeExpr::Bool => Ok(DeclaredType::Bool),
         ResolvedTypeExpr::Int => Ok(DeclaredType::Int),
         ResolvedTypeExpr::Datetime(scale) => Ok(DeclaredType::Datetime(*scale)),
-        ResolvedTypeExpr::Label(index, resolved, _) => Ok(DeclaredType::Label(IndexTypeRef::new(
+        ResolvedTypeExpr::Label(index, _) => Ok(DeclaredType::Label(IndexTypeRef::from_resolved(
             index.clone(),
-            resolved.clone(),
         ))),
         ResolvedTypeExpr::Scalar(dim) => Ok(DeclaredType::Scalar(dim.clone())),
-        ResolvedTypeExpr::Struct(name, resolved, _) => Ok(DeclaredType::Struct(
-            StructTypeRef::new(name.clone(), resolved.clone()),
+        ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(
+            StructTypeRef::from_resolved(name.clone()),
             vec![],
         )),
         ResolvedTypeExpr::GenericStruct {
-            name,
-            resolved,
-            type_args,
-            ..
+            name, type_args, ..
         } => {
             let mut declared_args = Vec::with_capacity(type_args.len());
             for arg in type_args {
                 declared_args.push(resolved_to_declared_type(arg, src)?);
             }
             Ok(DeclaredType::Struct(
-                StructTypeRef::new(name.clone(), resolved.clone()),
+                StructTypeRef::from_resolved(name.clone()),
                 declared_args,
             ))
         }
@@ -2485,10 +2685,10 @@ pub fn resolved_to_declared_type(
             let mut result = resolved_to_declared_type(base, src)?;
             for idx in indexes.iter().rev() {
                 match idx {
-                    ResolvedIndex::Concrete(name, resolved, _) => {
+                    ResolvedIndex::Concrete(name, _) => {
                         result = DeclaredType::Indexed {
                             element: Box::new(result),
-                            index: IndexTypeRef::new(name.clone(), resolved.clone()),
+                            index: IndexTypeRef::from_resolved(name.clone()),
                         };
                     }
                     ResolvedIndex::NatExpr(form, span) => {
@@ -2502,12 +2702,13 @@ pub fn resolved_to_declared_type(
                                 span: (*span).into(),
                             });
                         }
-                        let idx_name = IndexName::new(
-                            crate::registry::types::nat_range_index_name(form.constant()),
-                        );
                         result = DeclaredType::Indexed {
                             element: Box::new(result),
-                            index: IndexTypeRef::ownerless(idx_name),
+                            index: IndexTypeRef::from_resolved(
+                                crate::registry::types::nat_range_resolved_index_size(
+                                    form.constant(),
+                                ),
+                            ),
                         };
                     }
                     ResolvedIndex::GenericParam(name, span) => {
@@ -2741,10 +2942,10 @@ pub fn unify_resolved_type(
                             },
                         )?;
                     }
-                    ResolvedIndex::Concrete(name, resolved, _) => {
-                        if !actual_idx.matches_resolved_or_name(name, resolved.as_ref()) {
+                    ResolvedIndex::Concrete(name, _) => {
+                        if actual_idx.resolved() != name {
                             return Err(GraphcalError::IndexMismatch {
-                                expected: name.clone(),
+                                expected: name.to_unowned_def_name(),
                                 found: actual_idx.name().clone(),
                                 src: src.clone(),
                                 span: span.into(),
@@ -2816,19 +3017,19 @@ pub fn unify_resolved_type(
             Ok(())
         }
 
-        ResolvedTypeExpr::Label(expected_index, expected_resolved, _) => {
+        ResolvedTypeExpr::Label(expected_index, _) => {
             let InferredType::Label(actual_index) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: format!("Label({expected_index})"),
+                    expected: format!("Label({})", expected_index.as_str()),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
-                    help: format!("expected a label of index `{expected_index}`"),
+                    help: format!("expected a label of index `{}`", expected_index.as_str()),
                     src: src.clone(),
                     span: span.into(),
                 });
             };
-            if !actual_index.matches_resolved_or_name(expected_index, expected_resolved.as_ref()) {
+            if actual_index.resolved() != expected_index {
                 return Err(GraphcalError::IndexMismatch {
-                    expected: expected_index.clone(),
+                    expected: expected_index.to_unowned_def_name(),
                     found: actual_index.name().clone(),
                     src: src.clone(),
                     span: span.into(),
@@ -2865,25 +3066,24 @@ pub fn unify_resolved_type(
             Ok(())
         }
 
-        ResolvedTypeExpr::GenericStruct { name, resolved, .. }
-        | ResolvedTypeExpr::Struct(name, resolved, _) => {
+        ResolvedTypeExpr::GenericStruct { name, .. } | ResolvedTypeExpr::Struct(name, _) => {
             // Type args matching is not needed here since function generics
             // don't use TypeApplication in their signatures (yet). When both
             // sides carry canonical struct identities, compare owners as well.
             let InferredType::Struct(actual_name, _) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: name.to_string(),
+                    expected: name.as_str().to_string(),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
-                    help: format!("expected struct type `{name}`"),
+                    help: format!("expected struct type `{}`", name.as_str()),
                     src: src.clone(),
                     span: span.into(),
                 });
             };
-            if !actual_name.matches_resolved_or_name(name, resolved.as_ref()) {
+            if actual_name.resolved() != name {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: name.to_string(),
+                    expected: name.as_str().to_string(),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
-                    help: format!("expected struct type `{name}`"),
+                    help: format!("expected struct type `{}`", name.as_str()),
                     src: src.clone(),
                     span: span.into(),
                 });
@@ -3039,19 +3239,16 @@ pub fn substitute_resolved_type(
         ResolvedTypeExpr::Bool => Ok(InferredType::Bool),
         ResolvedTypeExpr::Int => Ok(InferredType::Int),
         ResolvedTypeExpr::Datetime(scale) => Ok(InferredType::Datetime(*scale)),
-        ResolvedTypeExpr::Label(index, resolved, _) => Ok(InferredType::Label(
-            crate::tir::dim_check::InferredIndex::new(index.clone(), resolved.clone()),
+        ResolvedTypeExpr::Label(index, _) => Ok(InferredType::Label(
+            crate::tir::dim_check::InferredIndex::from_resolved(index.clone()),
         )),
         ResolvedTypeExpr::Scalar(dim) => Ok(InferredType::Scalar(dim.clone())),
-        ResolvedTypeExpr::Struct(name, resolved, _) => Ok(InferredType::Struct(
-            crate::tir::dim_check::InferredStructType::new(name.clone(), resolved.clone()),
+        ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(
+            crate::tir::dim_check::InferredStructType::from_resolved(name.clone()),
             vec![],
         )),
         ResolvedTypeExpr::GenericStruct {
-            name,
-            resolved,
-            type_args,
-            ..
+            name, type_args, ..
         } => {
             let mut inferred_args = Vec::with_capacity(type_args.len());
             for arg in type_args {
@@ -3060,7 +3257,7 @@ pub fn substitute_resolved_type(
                 )?);
             }
             Ok(InferredType::Struct(
-                crate::tir::dim_check::InferredStructType::new(name.clone(), resolved.clone()),
+                crate::tir::dim_check::InferredStructType::from_resolved(name.clone()),
                 inferred_args,
             ))
         }
@@ -3120,12 +3317,11 @@ pub fn substitute_resolved_type(
             let mut result = substitute_resolved_type(base, dim_sub, index_sub, nat_sub, src)?;
             for idx in indexes.iter().rev() {
                 let resolved_idx = match idx {
-                    ResolvedIndex::Concrete(name, resolved, _) => {
+                    ResolvedIndex::Concrete(name, _) => {
                         result = InferredType::Indexed {
                             element: Box::new(result),
-                            index: crate::tir::dim_check::InferredIndex::new(
+                            index: crate::tir::dim_check::InferredIndex::from_resolved(
                                 name.clone(),
-                                resolved.clone(),
                             ),
                         };
                         continue;
@@ -3161,9 +3357,9 @@ pub fn substitute_resolved_type(
                                 span: (*span).into(),
                             }
                         })?;
-                        crate::tir::dim_check::InferredIndex::ownerless(IndexName::new(
-                            crate::registry::types::nat_range_index_name(n),
-                        ))
+                        crate::tir::dim_check::InferredIndex::from_resolved(
+                            crate::registry::types::nat_range_resolved_index_size(n),
+                        )
                     }
                 };
                 result = InferredType::Indexed {
@@ -3231,8 +3427,85 @@ fn module_resolve_error(
     }
 }
 
+fn internal_error(message: String, src: &NamedSource<Arc<String>>, span: Span) -> GraphcalError {
+    GraphcalError::InternalError {
+        message,
+        src: src.clone(),
+        span: span.into(),
+    }
+}
+
 const fn module_lookup_is_absent(err: &ModuleResolveError) -> bool {
     matches!(err, ModuleResolveError::UnknownName { .. })
+}
+
+fn expr_lower_error_to_graphcal(
+    err: &hir::ExprLowerError,
+    src: &NamedSource<Arc<String>>,
+) -> GraphcalError {
+    match err {
+        hir::ExprLowerError::UnknownLocalRef { name, span } => {
+            return GraphcalError::UnknownLocalRef {
+                name: name.to_string(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::ExtraMapVariant {
+            index_name,
+            variant_name,
+            span,
+        } => {
+            return GraphcalError::ExtraVariants {
+                index_name: index_name.clone(),
+                extra: vec![variant_name.clone()],
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::ModuleResolve {
+            source: ModuleResolveError::UnknownIndexVariant { index, variant },
+            span,
+        } => {
+            return GraphcalError::UnknownVariant {
+                index_name: index.to_unowned_def_name(),
+                variant_name: variant.clone(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::ModuleResolve {
+            source:
+                ModuleResolveError::UnknownName {
+                    namespace, name, ..
+                },
+            span,
+        } if *namespace == namespace::Decl::DISPLAY_NAME => {
+            return GraphcalError::UnknownLocalRef {
+                name: name.clone(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        _ => {}
+    }
+    let span = match err {
+        hir::ExprLowerError::Type(err) => return hir_lower_error_to_graphcal(err, src),
+        hir::ExprLowerError::ModuleResolve { span, .. }
+        | hir::ExprLowerError::InvalidScopedNameSegment { span, .. }
+        | hir::ExprLowerError::UnknownLocalRef { span, .. }
+        | hir::ExprLowerError::TooManyLocals { span }
+        | hir::ExprLowerError::EmptyMapEntry { span }
+        | hir::ExprLowerError::ExtraMapVariant { span, .. }
+        | hir::ExprLowerError::UnknownFunction { span, .. }
+        | hir::ExprLowerError::UnknownPattern { span, .. } => *span,
+        hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. } => *duplicate,
+    };
+    GraphcalError::EvalError {
+        message: err.to_string(),
+        src: src.clone(),
+        span: span.into(),
+    }
 }
 
 fn hir_lower_error_to_graphcal(
@@ -3261,6 +3534,7 @@ struct HirTypeResolutionContext<'a> {
     src: &'a NamedSource<Arc<String>>,
     resolver: &'a ModuleResolver,
     module_types: &'a ModuleTypeRegistry,
+    registry: Option<&'a Registry>,
     prelude: &'a hir::PreludeTypeScope,
 }
 
@@ -3282,6 +3556,7 @@ pub fn resolve_hir_type_expr(
         src,
         resolver: module_ctx.resolver,
         module_types: module_ctx.types,
+        registry: None,
         prelude: &prelude,
     };
     resolve_hir_type_expr_inner(type_ann, ctx)
@@ -3307,7 +3582,16 @@ fn resolve_ast_type_expr_via_hir(
             // Keep this fallback narrow: module/private/wrong-namespace errors
             // remain HIR diagnostics, and qualified paths still fail in the
             // source resolver because they are not local leaf names.
-            return resolve_type_expr_inner(type_ann, registry, &[], &[], &[], src, None);
+            return resolve_type_expr_inner(
+                type_ann,
+                registry,
+                module_ctx.owner,
+                &[],
+                &[],
+                &[],
+                src,
+                None,
+            );
         }
         Err(err) => return Err(hir_lower_error_to_graphcal(&err, src)),
     };
@@ -3315,6 +3599,7 @@ fn resolve_ast_type_expr_via_hir(
         src,
         resolver: module_ctx.resolver,
         module_types: module_ctx.types,
+        registry: Some(registry),
         prelude: &prelude,
     };
     resolve_hir_type_expr_inner(&hir_type, resolve_ctx)
@@ -3328,20 +3613,12 @@ fn resolve_hir_type_expr_inner(
         hir::TypeExprKind::Builtin(builtin) => Ok(resolve_hir_builtin_type(*builtin)),
         hir::TypeExprKind::DimExpr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),
         hir::TypeExprKind::Label(index) => {
-            let resolved_index = hir_index_name(&index.value, index.span, ctx)?;
-            Ok(ResolvedTypeExpr::Label(
-                resolved_index,
-                Some(index.value.clone()),
-                index.span,
-            ))
+            hir_index_name(&index.value, index.span, ctx)?;
+            Ok(ResolvedTypeExpr::Label(index.value.clone(), index.span))
         }
         hir::TypeExprKind::Struct(name) => {
             hir_struct_type_def(&name.value, name.span, ctx)?;
-            Ok(ResolvedTypeExpr::Struct(
-                name.value.to_unowned_def_name(),
-                Some(name.value.clone()),
-                name.span,
-            ))
+            Ok(ResolvedTypeExpr::Struct(name.value.clone(), name.span))
         }
         hir::TypeExprKind::GenericTypeParam(param) => Ok(ResolvedTypeExpr::GenericTypeParam(
             param.value.name.clone(),
@@ -3381,6 +3658,14 @@ fn hir_dimension(
     ctx.module_types
         .get_dimension(name)
         .cloned()
+        .or_else(|| {
+            ctx.registry.and_then(|registry| {
+                registry
+                    .dimensions
+                    .get_dimension(name.to_unowned_def_name().as_str())
+                    .cloned()
+            })
+        })
         .ok_or_else(|| GraphcalError::UnknownDimension {
             name: name.to_unowned_def_name(),
             src: ctx.src.clone(),
@@ -3503,9 +3788,8 @@ fn resolve_hir_index_ref(
 ) -> Result<ResolvedIndex, GraphcalError> {
     match index {
         hir::IndexRef::Concrete(name) => {
-            hir_index_name(&name.value, name.span, ctx).map(|index_name| {
-                ResolvedIndex::Concrete(index_name, Some(name.value.clone()), name.span)
-            })
+            hir_index_name(&name.value, name.span, ctx)?;
+            Ok(ResolvedIndex::Concrete(name.value.clone(), name.span))
         }
         hir::IndexRef::GenericParam(param) => Ok(ResolvedIndex::GenericParam(
             param.value.name.clone(),
@@ -3583,8 +3867,7 @@ fn resolve_hir_type_application(
     }
 
     Ok(ResolvedTypeExpr::GenericStruct {
-        name: name.value.to_unowned_def_name(),
-        resolved: Some(name.value.clone()),
+        name: name.value.clone(),
         type_args: resolved_args,
         span: type_ann.span,
     })
@@ -3627,6 +3910,7 @@ fn resolve_index_expr_name(
     path: &NamePath,
     span: Span,
     registry: &Registry,
+    owner: &crate::dag_id::DagId,
     index_params: &[GenericParamName],
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
@@ -3649,11 +3933,7 @@ fn resolve_index_expr_name(
         match ctx.resolver.resolve_index_path(ctx.owner, path) {
             Ok(resolved) => {
                 if ctx.types.get_index(&resolved).is_some() {
-                    return Ok(ResolvedIndex::Concrete(
-                        resolved.to_unowned_def_name(),
-                        Some(resolved),
-                        span,
-                    ));
+                    return Ok(ResolvedIndex::Concrete(resolved, span));
                 }
                 return Err(GraphcalError::UnknownIndex {
                     name: resolved.to_unowned_def_name(),
@@ -3668,7 +3948,10 @@ fn resolve_index_expr_name(
 
     let text = require_local_type_level_path(path, span, src)?;
     if registry.indexes.get_index(text).is_some() {
-        Ok(ResolvedIndex::Concrete(IndexName::new(text), None, span))
+        Ok(ResolvedIndex::Concrete(
+            ResolvedName::from_def(owner.clone(), IndexName::new(text)),
+            span,
+        ))
     } else {
         Err(GraphcalError::UnknownIndex {
             name: IndexName::new(text),
@@ -3682,9 +3965,10 @@ fn resolve_concrete_index_path(
     path: &NamePath,
     span: Span,
     registry: &Registry,
+    owner: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<Option<IndexName>, GraphcalError> {
+) -> Result<Option<ResolvedName<namespace::Index>>, GraphcalError> {
     if let Some(ctx) = module_ctx {
         match ctx.resolver.resolve_index_path(ctx.owner, path) {
             Ok(resolved) => {
@@ -3700,7 +3984,7 @@ fn resolve_concrete_index_path(
                     crate::registry::types::IndexKind::Named { .. }
                         | crate::registry::types::IndexKind::RequiredNamed
                 ) {
-                    return Ok(Some(resolved.to_unowned_def_name()));
+                    return Ok(Some(resolved));
                 }
                 return Ok(None);
             }
@@ -3724,19 +4008,16 @@ fn resolve_concrete_index_path(
         crate::registry::types::IndexKind::Named { .. }
             | crate::registry::types::IndexKind::RequiredNamed
     )
-    .then(|| IndexName::from_atom(atom.clone())))
+    .then(|| ResolvedName::from_def(owner.clone(), IndexName::from_atom(atom.clone()))))
 }
 
-type ResolvedStructTypeLookup<'a> = Option<(
-    StructTypeName,
-    Option<ResolvedName<namespace::StructType>>,
-    &'a TypeDef,
-)>;
+type ResolvedStructTypeLookup<'a> = Option<(ResolvedName<namespace::StructType>, &'a TypeDef)>;
 
 fn resolve_struct_type_path<'a>(
     path: &NamePath,
     span: Span,
     registry: &'a Registry,
+    owner: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'a>>,
 ) -> Result<ResolvedStructTypeLookup<'a>, GraphcalError> {
@@ -3744,11 +4025,7 @@ fn resolve_struct_type_path<'a>(
         match ctx.resolver.resolve_struct_type_path(ctx.owner, path) {
             Ok(resolved) => {
                 if let Some(type_def) = ctx.types.get_struct_type(&resolved) {
-                    return Ok(Some((
-                        resolved.to_unowned_def_name(),
-                        Some(resolved),
-                        type_def,
-                    )));
+                    return Ok(Some((resolved, type_def)));
                 }
                 return Err(GraphcalError::UnknownStructType {
                     name: resolved.to_string(),
@@ -3765,10 +4042,12 @@ fn resolve_struct_type_path<'a>(
     let Some(atom) = path.as_bare() else {
         return Ok(None);
     };
-    Ok(registry
-        .types
-        .get_type(atom.as_str())
-        .map(|type_def| (StructTypeName::from_atom(atom.clone()), None, type_def)))
+    Ok(registry.types.get_type(atom.as_str()).map(|type_def| {
+        (
+            ResolvedName::from_def(owner.clone(), StructTypeName::from_atom(atom.clone())),
+            type_def,
+        )
+    }))
 }
 
 fn resolve_dimension_path(
@@ -3818,9 +4097,11 @@ pub fn resolve_type_expr(
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let owner = crate::dag_id::DagId::root("<type-resolution>");
     resolve_type_expr_inner(
         type_ann,
         registry,
+        &owner,
         dim_params,
         index_params,
         nat_params,
@@ -3842,6 +4123,7 @@ pub fn resolve_type_expr_with_modules(
     resolve_type_expr_inner(
         type_ann,
         registry,
+        module_ctx.owner,
         dim_params,
         index_params,
         nat_params,
@@ -3853,6 +4135,7 @@ pub fn resolve_type_expr_with_modules(
 fn resolve_type_expr_inner(
     type_ann: &TypeExpr,
     registry: &Registry,
+    owner: &crate::dag_id::DagId,
     dim_params: &[GenericParamName],
     index_params: &[GenericParamName],
     nat_params: &[GenericParamName],
@@ -3880,6 +4163,7 @@ fn resolve_type_expr_inner(
             let resolved_base = resolve_type_expr_inner(
                 base,
                 registry,
+                owner,
                 dim_params,
                 index_params,
                 nat_params,
@@ -3898,6 +4182,7 @@ fn resolve_type_expr_inner(
                             &path.value,
                             path.span,
                             registry,
+                            owner,
                             index_params,
                             nat_params,
                             src,
@@ -3913,7 +4198,7 @@ fn resolve_type_expr_inner(
         }
 
         TypeExprKind::DimExpr(dim_expr) => {
-            resolve_dim_expr(dim_expr, registry, dim_params, src, module_ctx)
+            resolve_dim_expr(dim_expr, registry, owner, dim_params, src, module_ctx)
         }
 
         TypeExprKind::TypeApplication { name, type_args } => resolve_type_application(
@@ -3921,6 +4206,7 @@ fn resolve_type_expr_inner(
             name,
             type_args,
             registry,
+            owner,
             dim_params,
             index_params,
             nat_params,
@@ -3940,6 +4226,7 @@ fn resolve_type_expr_inner(
 fn resolve_dim_expr(
     dim_expr: &crate::desugar::resolved_ast::DimExpr,
     registry: &Registry,
+    owner: &crate::dag_id::DagId,
     dim_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
@@ -3952,15 +4239,21 @@ fn resolve_dim_expr(
             &term.name.value,
             term.name.span,
             registry,
+            owner,
             src,
             module_ctx,
         )? {
-            return Ok(ResolvedTypeExpr::Label(index, None, term.span));
+            return Ok(ResolvedTypeExpr::Label(index, term.span));
         }
-        if let Some((type_name, resolved, _)) =
-            resolve_struct_type_path(&term.name.value, term.name.span, registry, src, module_ctx)?
-        {
-            return Ok(ResolvedTypeExpr::Struct(type_name, resolved, term.span));
+        if let Some((type_name, _)) = resolve_struct_type_path(
+            &term.name.value,
+            term.name.span,
+            registry,
+            owner,
+            src,
+            module_ctx,
+        )? {
+            return Ok(ResolvedTypeExpr::Struct(type_name, term.span));
         }
         if let Some(atom) = term.name.value.as_bare()
             && let Some(gp) = dim_params.iter().find(|p| p.as_str() == atom.as_str())
@@ -4129,20 +4422,20 @@ fn resolve_type_application(
     name: &crate::syntax::span::Spanned<NamePath>,
     type_args: &[TypeExpr],
     registry: &Registry,
+    owner: &crate::dag_id::DagId,
     dim_params: &[GenericParamName],
     index_params: &[GenericParamName],
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let (type_name, resolved_type_name, type_def) =
-        resolve_struct_type_path(&name.value, name.span, registry, src, module_ctx)?.ok_or_else(
-            || GraphcalError::UnknownStructType {
+    let (type_name, type_def) =
+        resolve_struct_type_path(&name.value, name.span, registry, owner, src, module_ctx)?
+            .ok_or_else(|| GraphcalError::UnknownStructType {
                 name: name.value.display_path(),
                 src: src.clone(),
                 span: name.span.into(),
-            },
-        )?;
+            })?;
     let total_params = type_def.generic_params.len();
     let required_count = type_def
         .generic_params
@@ -4171,6 +4464,7 @@ fn resolve_type_application(
         let resolved = resolve_type_expr_inner(
             arg,
             registry,
+            owner,
             dim_params,
             index_params,
             nat_params,
@@ -4192,17 +4486,18 @@ fn resolve_type_application(
                 src: src.clone(),
                 span: type_ann.span.into(),
             })?;
-        let default_ctx = match (module_ctx, resolved_type_name.as_ref()) {
-            (Some(ctx), Some(resolved)) => Some(ModuleTypeContext::new(
-                resolved.owner(),
+        let default_ctx = match module_ctx {
+            Some(ctx) => Some(ModuleTypeContext::new(
+                type_name.owner(),
                 ctx.resolver,
                 ctx.types,
             )),
-            _ => module_ctx,
+            None => module_ctx,
         };
         let resolved = resolve_type_expr_inner(
             default_expr,
             registry,
+            type_name.owner(),
             dim_params,
             index_params,
             nat_params,
@@ -4213,7 +4508,6 @@ fn resolve_type_application(
     }
     Ok(ResolvedTypeExpr::GenericStruct {
         name: type_name,
-        resolved: resolved_type_name,
         type_args: resolved_args,
         span: type_ann.span,
     })
@@ -4374,7 +4668,7 @@ mod tests {
         let te = parse_type("TransferResult");
         let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         assert!(
-            matches!(resolved, ResolvedTypeExpr::Struct(name, _, _) if name.as_str() == "TransferResult")
+            matches!(resolved, ResolvedTypeExpr::Struct(name, _) if name.as_str() == "TransferResult")
         );
     }
 
@@ -4444,7 +4738,7 @@ mod tests {
                 );
                 assert_eq!(indexes.len(), 1);
                 assert!(
-                    matches!(&indexes[0], ResolvedIndex::Concrete(name, _, _) if name.as_str() == "Maneuver")
+                    matches!(&indexes[0], ResolvedIndex::Concrete(name, _) if name.as_str() == "Maneuver")
                 );
             }
             _ => panic!("expected Indexed"),
@@ -4673,7 +4967,7 @@ mod tests {
                     )))
                 );
                 assert!(
-                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _, _) if n.as_str() == "Eci")
+                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci")
                 );
             }
             other => panic!("expected GenericStruct, got {other:?}"),
@@ -4705,7 +4999,7 @@ mod tests {
                     )))
                 );
                 assert!(
-                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _, _) if n.as_str() == "Eci")
+                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci")
                 );
             }
             other => panic!("expected GenericStruct, got {other:?}"),
@@ -4726,7 +5020,7 @@ mod tests {
                     )))
                 );
                 assert!(
-                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _, _) if n.as_str() == "Unframed"),
+                    matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Unframed"),
                     "expected Struct(Unframed), got {:?}",
                     type_args[1]
                 );
@@ -4774,14 +5068,14 @@ mod tests {
             Span::new(0, 0),
         )
         .unwrap();
-        assert_eq!(index_sub[&generic].resolved(), Some(&resolved_index));
+        assert_eq!(index_sub[&generic].resolved(), &resolved_index);
 
         let substituted =
             substitute_resolved_type(&resolved_type, &dim_sub, &index_sub, &nat_sub, &src).unwrap();
         let InferredType::Indexed { index, .. } = substituted else {
             panic!("expected indexed type after substitution");
         };
-        assert_eq!(index.resolved(), Some(&resolved_index));
+        assert_eq!(index.resolved(), &resolved_index);
     }
 
     #[test]
@@ -4812,27 +5106,30 @@ mod tests {
 
     #[test]
     fn convert_struct() {
+        let owner = crate::dag_id::DagId::root("test");
+        let resolved = ResolvedName::from_def(owner, StructTypeName::new("Foo"));
         let dt = resolved_to_declared_type(
-            &ResolvedTypeExpr::Struct(StructTypeName::new("Foo"), None, Span::new(0, 0)),
+            &ResolvedTypeExpr::Struct(resolved.clone(), Span::new(0, 0)),
             &make_src(),
         )
         .unwrap();
         assert_eq!(
             dt,
-            DeclaredType::Struct(StructTypeRef::ownerless(StructTypeName::new("Foo")), vec![])
+            DeclaredType::Struct(StructTypeRef::from_resolved(resolved), vec![])
         );
     }
 
     #[test]
     fn convert_indexed() {
+        let owner = crate::dag_id::DagId::root("test");
+        let resolved_index = ResolvedName::from_def(owner, IndexName::new("M"));
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Indexed {
                 base: Box::new(ResolvedTypeExpr::Scalar(Dimension::base(
                     BaseDimId::Prelude("Length".to_string()),
                 ))),
                 indexes: vec![ResolvedIndex::Concrete(
-                    IndexName::new("M"),
-                    None,
+                    resolved_index.clone(),
                     Span::new(0, 0),
                 )],
             },
@@ -4845,7 +5142,7 @@ mod tests {
                 element: Box::new(DeclaredType::Scalar(Dimension::base(BaseDimId::Prelude(
                     "Length".to_string()
                 )))),
-                index: IndexTypeRef::ownerless(IndexName::new("M")),
+                index: IndexTypeRef::from_resolved(resolved_index),
             }
         );
     }

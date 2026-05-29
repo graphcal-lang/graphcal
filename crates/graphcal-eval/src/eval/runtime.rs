@@ -55,30 +55,16 @@ fn merge_index_ref_owner(
     runtime_ref: &IndexTypeRef,
     declared_ref: Option<&IndexTypeRef>,
 ) -> IndexTypeRef {
-    match (
-        runtime_ref.resolved(),
-        declared_ref.and_then(IndexTypeRef::resolved),
-    ) {
-        (None, Some(resolved)) => {
-            IndexTypeRef::new(runtime_ref.name().clone(), Some(resolved.clone()))
-        }
-        _ => runtime_ref.clone(),
-    }
+    let _ = declared_ref;
+    runtime_ref.clone()
 }
 
 fn merge_struct_ref_owner(
     runtime_ref: &StructTypeRef,
     declared_ref: Option<&StructTypeRef>,
 ) -> StructTypeRef {
-    match (
-        runtime_ref.resolved(),
-        declared_ref.and_then(StructTypeRef::resolved),
-    ) {
-        (None, Some(resolved)) => {
-            StructTypeRef::new(runtime_ref.name().clone(), Some(resolved.clone()))
-        }
-        _ => runtime_ref.clone(),
-    }
+    let _ = declared_ref;
+    runtime_ref.clone()
 }
 
 fn public_label_index_ref(
@@ -867,7 +853,7 @@ pub(super) fn check_indexed_assert(
 /// Recursively collect failing variant paths from an indexed assertion value.
 ///
 /// Each path is a `Vec<(IndexTypeRef, VariantName)>` of index/variant pairs from outermost to innermost.
-/// For example, `vec![(IndexTypeRef::ownerless(IndexName::new("Phase")), VariantName::new("Launch")), ...]` for a 2D failure.
+/// For example, `vec![(IndexTypeRef::with_owner(owner, IndexName::new("Phase")), VariantName::new("Launch")), ...]` for a 2D failure.
 fn collect_failing_paths(
     index_name: &IndexTypeRef,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,

@@ -1,5 +1,6 @@
 //! Declared type of a const/param/node.
 
+use crate::dag_id::DagId;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{NameDef, NameNamespace, ResolvedName, namespace};
 
@@ -8,76 +9,58 @@ use crate::registry::types::DimensionRegistry;
 
 /// A type-level reference to a named compiler entity.
 ///
-/// The leaf `name` is retained for standalone registry compatibility
-/// and diagnostic rendering. The optional `resolved` identity is populated by
-/// module-aware type resolution and must be used by semantic comparisons when
-/// both sides carry an owner.
+/// Every semantic type reference has a canonical owner. Leaf-only names belong
+/// at syntax/display boundaries; once a value crosses into the functional core,
+/// it must carry a [`ResolvedName`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeNameRef<Ns: NameNamespace> {
     name: NameDef<Ns>,
-    resolved: Option<ResolvedName<Ns>>,
+    resolved: ResolvedName<Ns>,
 }
 
 impl<Ns: NameNamespace> TypeNameRef<Ns> {
-    /// Create a type reference from a leaf name plus an optional canonical owner.
-    #[must_use]
-    pub const fn new(name: NameDef<Ns>, resolved: Option<ResolvedName<Ns>>) -> Self {
-        Self { name, resolved }
-    }
-
-    /// Create an ownerless reference with no canonical owner.
-    #[must_use]
-    pub const fn ownerless(name: NameDef<Ns>) -> Self {
-        Self {
-            name,
-            resolved: None,
-        }
-    }
-
     /// Create a module-aware reference from a canonical resolved name.
     #[must_use]
     pub fn from_resolved(resolved: ResolvedName<Ns>) -> Self {
         Self {
             name: resolved.to_unowned_def_name(),
-            resolved: Some(resolved),
+            resolved,
         }
     }
 
-    /// The leaf definition name used by standalone registries and diagnostics.
+    /// Create a reference with a display leaf that differs from the canonical
+    /// owner-qualified identity.
+    ///
+    /// This is used at value-display boundaries such as tagged-union
+    /// constructor values, where the semantic type is the owning union but the
+    /// rendered value should show the constructor leaf.
+    #[must_use]
+    pub const fn with_display_leaf(name: NameDef<Ns>, resolved: ResolvedName<Ns>) -> Self {
+        Self { name, resolved }
+    }
+
+    /// Resolve a definition-site leaf into the given owner.
+    #[must_use]
+    pub fn with_owner(owner: DagId, name: NameDef<Ns>) -> Self {
+        Self::from_resolved(ResolvedName::from_def(owner, name))
+    }
+
+    /// The leaf definition name used by registries and diagnostics.
     #[must_use]
     pub const fn name(&self) -> &NameDef<Ns> {
         &self.name
     }
 
-    /// The canonical owner/name identity, when module-aware resolution supplied one.
+    /// The canonical owner/name identity.
     #[must_use]
-    pub const fn resolved(&self) -> Option<&ResolvedName<Ns>> {
-        self.resolved.as_ref()
+    pub const fn resolved(&self) -> &ResolvedName<Ns> {
+        &self.resolved
     }
 
-    /// Compare this reference against an expected leaf plus optional owner.
-    ///
-    /// If both sides carry canonical owners, the owner-qualified identity is
-    /// authoritative. Otherwise this intentionally falls back to the leaf name;
-    /// use it only for semantic matching at compatibility boundaries, not as a
-    /// `HashMap` key equality relation.
-    #[must_use]
-    pub fn matches_resolved_or_name(
-        &self,
-        name: &NameDef<Ns>,
-        resolved: Option<&ResolvedName<Ns>>,
-    ) -> bool {
-        match (self.resolved(), resolved) {
-            (Some(actual), Some(expected)) => actual == expected,
-            _ => self.name() == name,
-        }
-    }
-
-    /// Compare this reference against another type reference using semantic
-    /// compatibility rules.
+    /// Compare this reference against another type reference by owner-qualified identity.
     #[must_use]
     pub fn matches_ref(&self, other: &Self) -> bool {
-        self.matches_resolved_or_name(other.name(), other.resolved())
+        self.resolved() == other.resolved()
     }
 
     /// Borrow the leaf string for diagnostic/display-only formatting.
@@ -86,20 +69,10 @@ impl<Ns: NameNamespace> TypeNameRef<Ns> {
         self.name.as_str()
     }
 
-    /// Clone the leaf definition name, explicitly dropping any canonical owner.
-    ///
-    /// This is a temporary adapter for standalone APIs that still key by
-    /// leaf name. Do not feed the returned value back into module-aware semantic
-    /// comparisons.
+    /// Clone the leaf definition name for diagnostic/display boundaries.
     #[must_use]
     pub fn to_unowned_name(&self) -> NameDef<Ns> {
         self.name.clone()
-    }
-}
-
-impl<Ns: NameNamespace> From<NameDef<Ns>> for TypeNameRef<Ns> {
-    fn from(name: NameDef<Ns>) -> Self {
-        Self::ownerless(name)
     }
 }
 

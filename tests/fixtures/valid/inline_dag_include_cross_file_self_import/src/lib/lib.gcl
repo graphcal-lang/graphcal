@@ -2,8 +2,8 @@ pub const node r_earth: Length = 6_371_000.0 m;
 
 pub dag scale_earth {
     import lib.lib.{ r_earth as radius };
-    
+
     param factor: Dimensionless;
-    
+
     pub node result: Length = @radius * @factor;
 }

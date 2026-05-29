@@ -8,7 +8,8 @@ use crate::eval::CompileError;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::resolved_ast::{Declaration, File};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
+use graphcal_compiler::syntax::ast::{DeclKind, ImportKind, IncludeDecl, ModulePath};
+use graphcal_compiler::syntax::phase::Phase;
 use graphcal_io::{FileSystemReader, RealFileSystem};
 
 /// Span-free identity for an `import`/`include` path.
@@ -251,6 +252,26 @@ impl LoadedProject {
 
         for dag_id in &self.load_order {
             let loaded = &self.files[dag_id];
+            add_instantiated_include_modules(
+                &mut resolver,
+                &loaded.dag_id,
+                &loaded.ast.declarations,
+                &loaded.resolved_imports,
+                &self.files,
+            )?;
+            for inline in &loaded.inline_dags {
+                add_inline_instantiated_include_modules(
+                    &mut resolver,
+                    &inline.dag_id,
+                    &inline.body,
+                    &inline.resolved_imports,
+                    &self.files,
+                )?;
+            }
+        }
+
+        for dag_id in &self.load_order {
+            let loaded = &self.files[dag_id];
             register_file_module_imports(
                 &mut resolver,
                 &loaded.dag_id,
@@ -271,6 +292,86 @@ impl LoadedProject {
 
         Ok(resolver)
     }
+}
+
+fn add_instantiated_include_modules(
+    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    owner: &DagId,
+    declarations: &[Declaration],
+    resolved_imports: &HashMap<ModulePathKey, DagId>,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+    for decl in declarations {
+        let DeclKind::Include(include) = &decl.kind else {
+            continue;
+        };
+        let Some(prefix) = instantiated_include_prefix(include) else {
+            continue;
+        };
+        let Some(file_target) = resolved_imports.get(&ModulePathKey::from_path(&include.path))
+        else {
+            continue;
+        };
+        let target = module_resolver_target_for_path(&include.path, file_target, files);
+        let Some(target_decls) = module_declarations(&target, files) else {
+            continue;
+        };
+        resolver.add_module(owner.child(prefix.as_str()), target_decls)?;
+    }
+    Ok(())
+}
+
+fn add_inline_instantiated_include_modules(
+    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    owner: &DagId,
+    declarations: &[Declaration],
+    resolved_imports: &HashMap<ModulePathKey, InlineBodyImportResolution>,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+    for decl in declarations {
+        let DeclKind::Include(include) = &decl.kind else {
+            continue;
+        };
+        let Some(prefix) = instantiated_include_prefix(include) else {
+            continue;
+        };
+        let Some(InlineBodyImportResolution::Resolved(file_target)) =
+            resolved_imports.get(&ModulePathKey::from_path(&include.path))
+        else {
+            continue;
+        };
+        let target = module_resolver_target_for_path(&include.path, file_target, files);
+        let Some(target_decls) = module_declarations(&target, files) else {
+            continue;
+        };
+        resolver.add_module(owner.child(prefix.as_str()), target_decls)?;
+    }
+    Ok(())
+}
+
+fn instantiated_include_prefix<P: Phase>(include: &IncludeDecl<P>) -> Option<String> {
+    (!include.param_bindings.is_empty()).then(|| match &include.kind {
+        ImportKind::Module { alias } => alias.as_ref().map_or_else(
+            || include.path.leaf().name.to_string(),
+            |alias| alias.value.to_string(),
+        ),
+        ImportKind::Selective(_) => include.path.leaf().name.to_string(),
+    })
+}
+
+fn module_declarations<'a>(
+    target: &DagId,
+    files: &'a HashMap<DagId, LoadedFile>,
+) -> Option<&'a [Declaration]> {
+    if let Some(file) = files.get(target) {
+        return Some(file.ast.declarations.as_slice());
+    }
+    files.values().find_map(|file| {
+        file.inline_dags
+            .iter()
+            .find(|inline| inline.dag_id == *target)
+            .map(|inline| inline.body.as_slice())
+    })
 }
 
 fn register_file_module_imports(
@@ -296,12 +397,12 @@ fn register_file_module_imports(
             DeclKind::Include(include) => {
                 if let Some(target) = resolved_imports.get(&ModulePathKey::from_path(&include.path))
                 {
-                    resolver.register_include(
-                        owner,
-                        &include.path,
-                        &include.kind,
-                        &module_resolver_target_for_path(&include.path, target, files),
-                    )?;
+                    let synthetic_owner = instantiated_include_prefix(include)
+                        .map(|prefix| owner.child(prefix.as_str()));
+                    let target = synthetic_owner.unwrap_or_else(|| {
+                        module_resolver_target_for_path(&include.path, target, files)
+                    });
+                    resolver.register_include(owner, &include.path, &include.kind, &target)?;
                 }
             }
             _ => {}

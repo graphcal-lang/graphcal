@@ -4,8 +4,7 @@ use indexmap::IndexMap;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, MapEntry, MapEntryKey};
 use graphcal_compiler::syntax::names::{
-    IndexName, IndexVariantName, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName,
-    namespace,
+    IndexVariantName, ResolvedIndexVariant, ResolvedName, ScopedName, namespace,
 };
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
@@ -20,7 +19,9 @@ use crate::decl_key::RuntimeDeclKey;
 use super::EvalContext;
 use super::RuntimeValueMap;
 use super::eval_expr;
+use super::index_ref_from_path;
 use super::index_ref_matches_resolved_or_leaf;
+use super::index_ref_with_eval_owner;
 
 /// Evaluate a `NatExpr` to a concrete `u64` during runtime.
 ///
@@ -70,14 +71,6 @@ fn eval_nat_expr(
                 .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} * {r}"), *span))
         }
     }
-}
-
-/// Collapse a syntactic index path to a leaf-only name for standalone eval.
-///
-/// Module-aware collection evaluation must use HIR/resolved collection refs;
-/// this adapter is only for ownerless standalone value construction.
-fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
-    IndexName::from(path.leaf().clone())
 }
 
 fn resolved_collection_refs<'a>(
@@ -148,10 +141,9 @@ fn ensure_index_refs_match(
 }
 
 fn index_def_for_ref<'a>(index_ref: &IndexTypeRef, ctx: &EvalContext<'a>) -> Option<&'a IndexDef> {
-    index_ref.resolved().map_or_else(
-        || ctx.registry.indexes.get_index(index_ref.as_str()),
-        |resolved| resolved_collection_refs(ctx).and_then(|refs| refs.index_defs.get(resolved)),
-    )
+    resolved_collection_refs(ctx)
+        .and_then(|refs| refs.index_defs.get(index_ref.resolved()))
+        .or_else(|| ctx.registry.indexes.get_index(index_ref.as_str()))
 }
 
 fn map_entry_variant_for_axis(
@@ -163,15 +155,15 @@ fn map_entry_variant_for_axis(
         ensure_index_ref_matches_resolved(axis, resolved.index(), key.index.span, ctx)?;
         Ok(resolved.variant().clone())
     } else {
-        let ownerless_index = IndexTypeRef::ownerless(key.index.value.registry_name());
-        ensure_index_refs_match(axis, &ownerless_index, key.index.span, ctx)?;
+        let index_ref = index_ref_with_eval_owner(ctx, key.index.value.registry_name());
+        ensure_index_refs_match(axis, &index_ref, key.index.span, ctx)?;
         Ok(key.variant.value.clone())
     }
 }
 
 fn map_entry_index_ref(key: &MapEntryKey, ctx: &EvalContext<'_>) -> IndexTypeRef {
     resolved_map_entry_variant(ctx, key).map_or_else(
-        || IndexTypeRef::ownerless(key.index.value.registry_name()),
+        || index_ref_with_eval_owner(ctx, key.index.value.registry_name()),
         |resolved| IndexTypeRef::from_resolved(resolved.index().clone()),
     )
 }
@@ -225,9 +217,8 @@ pub(super) fn eval_index_access(
                     )?;
                     resolved.variant().clone()
                 } else {
-                    let ownerless_index =
-                        IndexTypeRef::ownerless(standalone_index_name_from_path(&index.value));
-                    ensure_index_refs_match(&index_name, &ownerless_index, index.span, ctx)?;
+                    let index_ref = index_ref_from_path(ctx, &index.value);
+                    ensure_index_refs_match(&index_name, &index_ref, index.span, ctx)?;
                     variant.value.clone()
                 }
             }
@@ -524,8 +515,8 @@ pub(super) fn eval_map_literal(
     let mut outer = IndexMap::new();
     for variant in &variants {
         // Collect entries whose first key matches this variant, stripping the first key.
-        // Module-aware refs compare the resolved owning index before falling
-        // back to the ownerless variant leaf.
+        // Module-aware refs compare the resolved owning index; the variant leaf
+        // is only the member within that resolved index.
         let mut sub_entries: Vec<MapEntry> = Vec::new();
         for entry in entries {
             let first_entry_key = entry.keys.first();
@@ -588,7 +579,7 @@ pub(super) fn eval_for_comp(
             let resolved = resolved_for_binding_index(ctx, spanned.span).cloned();
             (
                 resolved.as_ref().map_or_else(
-                    || IndexTypeRef::ownerless(standalone_index_name_from_path(&spanned.value)),
+                    || index_ref_from_path(ctx, &spanned.value),
                     |resolved| IndexTypeRef::from_resolved(resolved.clone()),
                 ),
                 spanned.span,
@@ -601,7 +592,14 @@ pub(super) fn eval_for_comp(
             let idx_name = graphcal_compiler::syntax::names::IndexName::new(
                 graphcal_compiler::registry::types::nat_range_index_name(size),
             );
-            (IndexTypeRef::ownerless(idx_name), *span, Some(size), None)
+            (
+                IndexTypeRef::from_resolved(
+                    graphcal_compiler::registry::types::nat_range_resolved_index_name(idx_name),
+                ),
+                *span,
+                Some(size),
+                None,
+            )
         }
     };
 

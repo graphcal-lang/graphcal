@@ -1,6 +1,6 @@
 // Library DAG that the main file invokes via a qualified inline call.
 pub dag doubler {
     param v: Length;
-    
+
     pub node out: Length = @v * 2.0;
 }

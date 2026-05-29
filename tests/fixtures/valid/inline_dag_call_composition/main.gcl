@@ -2,13 +2,13 @@
 // inline call. `@add_one(v: @double(v: @src).result).result`.
 dag double {
     param v: Length;
-    
+
     pub node result: Length = @v * 2.0;
 }
 
 dag add_one {
     param v: Length;
-    
+
     pub node result: Length = @v + 1.0 m;
 }
 

@@ -1263,6 +1263,18 @@ mod tests {
         }
     }
 
+    fn test_owner() -> graphcal_compiler::dag_id::DagId {
+        graphcal_compiler::dag_id::DagId::root("<lsp-format-test>")
+    }
+
+    fn test_struct(type_name: StructTypeName, fields: IndexMap<FieldName, Value>) -> Value {
+        Value::struct_with_owner(test_owner(), type_name, fields)
+    }
+
+    fn test_indexed(index_name: IndexName, entries: IndexMap<IndexVariantName, Value>) -> Value {
+        Value::indexed_with_owner(test_owner(), index_name, entries)
+    }
+
     #[test]
     fn format_scalar_dimensionless() {
         let symbols = empty_symbols();
@@ -1289,7 +1301,7 @@ mod tests {
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("dv1"), scalar(100.0));
         fields.insert(FieldName::new("dv2"), scalar(200.0));
-        let val = Value::ownerless_struct(StructTypeName::new("TransferResult"), fields);
+        let val = test_struct(StructTypeName::new("TransferResult"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "TransferResult { dv1: 100, dv2: 200 }"
@@ -1299,7 +1311,7 @@ mod tests {
     #[test]
     fn format_struct_empty_fields() {
         let symbols = empty_symbols();
-        let val = Value::ownerless_struct(StructTypeName::new("Nominal"), IndexMap::new());
+        let val = test_struct(StructTypeName::new("Nominal"), IndexMap::new());
         assert_eq!(format_value_inline(&val, &symbols), "Nominal {}");
     }
 
@@ -1309,7 +1321,7 @@ mod tests {
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("thrust"), scalar(0.5));
         fields.insert(FieldName::new("duration"), scalar(3600.0));
-        let val = Value::ownerless_struct(StructTypeName::new("ManeuverKind"), fields);
+        let val = test_struct(StructTypeName::new("ManeuverKind"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "ManeuverKind { thrust: 0.5, duration: 3600 }"
@@ -1323,14 +1335,14 @@ mod tests {
         entries.insert(IndexVariantName::new("A"), scalar(1.0));
         entries.insert(IndexVariantName::new("B"), scalar(2.0));
         entries.insert(IndexVariantName::new("C"), scalar(3.0));
-        let val = Value::ownerless_indexed(IndexName::new("Phase"), entries);
+        let val = test_indexed(IndexName::new("Phase"), entries);
         assert_eq!(format_value_inline(&val, &symbols), "{ A: 1, B: 2, C: 3 }");
     }
 
     #[test]
     fn format_indexed_empty() {
         let symbols = empty_symbols();
-        let val = Value::ownerless_indexed(IndexName::new("Phase"), IndexMap::new());
+        let val = test_indexed(IndexName::new("Phase"), IndexMap::new());
         assert_eq!(format_value_inline(&val, &symbols), "{}");
     }
 
@@ -1343,7 +1355,7 @@ mod tests {
         entries.insert(IndexVariantName::new("LongVariantBeta"), scalar(2.34567));
         entries.insert(IndexVariantName::new("LongVariantGamma"), scalar(3.45678));
         entries.insert(IndexVariantName::new("LongVariantDelta"), scalar(4.56789));
-        let val = Value::ownerless_indexed(IndexName::new("Idx"), entries);
+        let val = test_indexed(IndexName::new("Idx"), entries);
         let result = format_value_inline(&val, &symbols);
         assert!(
             result.len() <= INLAY_HINT_MAX_LEN + 10,
@@ -1357,10 +1369,10 @@ mod tests {
         let symbols = empty_symbols();
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("x"), scalar(1.0));
-        let struct_val = Value::ownerless_struct(StructTypeName::new("Point"), fields);
+        let struct_val = test_struct(StructTypeName::new("Point"), fields);
         let mut entries = IndexMap::new();
         entries.insert(IndexVariantName::new("A"), struct_val);
-        let val = Value::ownerless_indexed(IndexName::new("Idx"), entries);
+        let val = test_indexed(IndexName::new("Idx"), entries);
         assert_eq!(format_value_inline(&val, &symbols), "{ A: Point { x: 1 } }");
     }
 
@@ -1376,13 +1388,13 @@ mod tests {
         let mut entries = IndexMap::new();
         entries.insert(
             IndexVariantName::new("A"),
-            Value::ownerless_indexed(IndexName::new("Col"), inner_a),
+            test_indexed(IndexName::new("Col"), inner_a),
         );
         entries.insert(
             IndexVariantName::new("B"),
-            Value::ownerless_indexed(IndexName::new("Col"), inner_b),
+            test_indexed(IndexName::new("Col"), inner_b),
         );
-        let val = Value::ownerless_indexed(IndexName::new("Row"), entries);
+        let val = test_indexed(IndexName::new("Row"), entries);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "{ (A, X): 1, (A, Y): 2, (B, X): 3, (B, Y): 4 }"
@@ -1398,14 +1410,14 @@ mod tests {
         let mut mid = IndexMap::new();
         mid.insert(
             IndexVariantName::new("Launch"),
-            Value::ownerless_indexed(IndexName::new("Maneuver"), inner_most),
+            test_indexed(IndexName::new("Maneuver"), inner_most),
         );
         let mut outer = IndexMap::new();
         outer.insert(
             IndexVariantName::new("Nom"),
-            Value::ownerless_indexed(IndexName::new("Phase"), mid),
+            test_indexed(IndexName::new("Phase"), mid),
         );
-        let val = Value::ownerless_indexed(IndexName::new("Scenario"), outer);
+        let val = test_indexed(IndexName::new("Scenario"), outer);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "{ (Nom, Launch, Dep): 100 }"
@@ -1426,13 +1438,13 @@ mod tests {
         let mut entries = IndexMap::new();
         entries.insert(
             IndexVariantName::new("LongOuter1"),
-            Value::ownerless_indexed(IndexName::new("Inner"), inner_a),
+            test_indexed(IndexName::new("Inner"), inner_a),
         );
         entries.insert(
             IndexVariantName::new("LongOuter2"),
-            Value::ownerless_indexed(IndexName::new("Inner"), inner_b),
+            test_indexed(IndexName::new("Inner"), inner_b),
         );
-        let val = Value::ownerless_indexed(IndexName::new("Outer"), entries);
+        let val = test_indexed(IndexName::new("Outer"), entries);
         let result = format_value_inline(&val, &symbols);
         assert!(
             result.len() <= INLAY_HINT_MAX_LEN + 10,

@@ -3,7 +3,7 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: '\.snap$'
+        exclude: '(\.snap|\.gcl)$'
       - id: end-of-file-fixer
       - id: check-toml
       - id: check-yaml

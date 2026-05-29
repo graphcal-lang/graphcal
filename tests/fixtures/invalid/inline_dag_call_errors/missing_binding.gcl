@@ -2,9 +2,9 @@
 // Expected diagnostic: `graphcal.G004` — missing required binding(s).
 dag scale {
     param factor: Dimensionless;
-    
+
     param v: Length;
-    
+
     node result: Length = @v * @factor;
 }
 

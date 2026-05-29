@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::dag_id::DagId;
 use crate::desugar::resolved_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
 use crate::registry::declared_type::IndexTypeRef;
 use crate::syntax::names::{
@@ -382,9 +383,9 @@ pub struct ResolvedLayerEntry {
 /// One axis segment in a per-variant `#[expected_fail(...)]` key.
 ///
 /// The `index` carrier is the semantic key used by runtime assertion checks.
-/// It carries a canonical owner after module-aware TIR resolution and remains
-/// ownerless leaf-only for standalone callers. `source_index_path` preserves the
-/// structured syntax path only until that module-aware resolution boundary.
+/// Before module-aware TIR resolution, `source_index_path` preserves the
+/// structured syntax path. After resolution, `index` carries the canonical owner
+/// used by runtime checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpectedFailKeyPart {
     pub index: IndexTypeRef,
@@ -394,10 +395,17 @@ pub struct ExpectedFailKeyPart {
 }
 
 impl ExpectedFailKeyPart {
+    fn unresolved_owner() -> DagId {
+        DagId::root("<expected-fail-unresolved>")
+    }
+
     #[must_use]
     pub fn unresolved(index_path: NamePath, variant: IndexVariantName, span: Span) -> Self {
         Self {
-            index: IndexTypeRef::ownerless(IndexName::from_atom(index_path.leaf().clone())),
+            index: IndexTypeRef::with_owner(
+                Self::unresolved_owner(),
+                IndexName::from_atom(index_path.leaf().clone()),
+            ),
             variant,
             source_index_path: Some(index_path),
             span,
@@ -405,9 +413,14 @@ impl ExpectedFailKeyPart {
     }
 
     #[must_use]
-    pub const fn ownerless(index: IndexName, variant: IndexVariantName, span: Span) -> Self {
+    pub fn with_owner(
+        owner: DagId,
+        index: IndexName,
+        variant: IndexVariantName,
+        span: Span,
+    ) -> Self {
         Self {
-            index: IndexTypeRef::ownerless(index),
+            index: IndexTypeRef::with_owner(owner, index),
             variant,
             source_index_path: None,
             span,

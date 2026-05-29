@@ -34,6 +34,13 @@ fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
 
+fn inference_owner(dag: Option<&crate::tir::typed::DagTIR>) -> crate::dag_id::DagId {
+    dag.map_or_else(
+        || crate::dag_id::DagId::root("<type-inference>"),
+        |dag| dag.dag_id.clone(),
+    )
+}
+
 fn resolved_value_index_variant(
     dag: Option<&crate::tir::typed::DagTIR>,
     span: crate::syntax::span::Span,
@@ -139,7 +146,10 @@ pub(super) fn infer_type_with_owner(
                     span: variant.span.into(),
                 });
             }
-            Ok(InferredType::Label(InferredIndex::ownerless(index_name)))
+            Ok(InferredType::Label(InferredIndex::with_owner(
+                inference_owner(dag),
+                index_name,
+            )))
         }
 
         ExprKind::UnitLiteral { unit, .. } => {

@@ -2,7 +2,7 @@
 // Expected diagnostic: `graphcal.G006` — binding dimension mismatch.
 dag id_len {
     param v: Length;
-    
+
     node result: Length = @v;
 }
 

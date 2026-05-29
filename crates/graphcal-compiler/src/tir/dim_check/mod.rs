@@ -38,10 +38,8 @@ pub use crate::registry::declared_type::DeclaredType;
 
 /// Index identity carried by inferred collection/label types.
 ///
-/// The `resolved` field is populated by module-aware HIR sidecars. If both
-/// sides being compared carry canonical identities, equality is owner-sensitive;
-/// otherwise inference falls back to the ownerless leaf name so standalone
-/// callers keep working at explicit boundaries.
+/// Equality is owner-sensitive; leaf-only names must be resolved before they
+/// become inferred semantic types.
 #[derive(Debug, Clone, Eq)]
 pub struct InferredIndex {
     reference: IndexTypeRef,
@@ -49,16 +47,9 @@ pub struct InferredIndex {
 
 impl InferredIndex {
     #[must_use]
-    pub const fn new(name: IndexName, resolved: Option<ResolvedName<namespace::Index>>) -> Self {
+    pub fn with_owner(owner: crate::dag_id::DagId, name: IndexName) -> Self {
         Self {
-            reference: IndexTypeRef::new(name, resolved),
-        }
-    }
-
-    #[must_use]
-    pub const fn ownerless(name: IndexName) -> Self {
-        Self {
-            reference: IndexTypeRef::ownerless(name),
+            reference: IndexTypeRef::with_owner(owner, name),
         }
     }
 
@@ -85,17 +76,13 @@ impl InferredIndex {
     }
 
     #[must_use]
-    pub const fn resolved(&self) -> Option<&ResolvedName<namespace::Index>> {
+    pub const fn resolved(&self) -> &ResolvedName<namespace::Index> {
         self.reference.resolved()
     }
 
     #[must_use]
-    pub fn matches_resolved_or_name(
-        &self,
-        name: &IndexName,
-        resolved: Option<&ResolvedName<namespace::Index>>,
-    ) -> bool {
-        self.reference.matches_resolved_or_name(name, resolved)
+    pub fn matches_resolved(&self, expected: &ResolvedName<namespace::Index>) -> bool {
+        self.resolved() == expected
     }
 
     #[must_use]
@@ -126,10 +113,8 @@ impl std::ops::Deref for InferredIndex {
 
 /// Struct/type identity carried by inferred constructor, match, and field types.
 ///
-/// The `resolved` field is populated from module-aware TIR/HIR sidecars. If both
-/// sides being compared carry canonical identities, equality is owner-sensitive;
-/// otherwise inference falls back to the ownerless leaf name so standalone
-/// callers keep working at explicit boundaries.
+/// Equality is owner-sensitive; leaf-only names must be resolved before they
+/// become inferred semantic types.
 #[derive(Debug, Clone, Eq)]
 pub struct InferredStructType {
     reference: StructTypeRef,
@@ -137,19 +122,9 @@ pub struct InferredStructType {
 
 impl InferredStructType {
     #[must_use]
-    pub const fn new(
-        name: StructTypeName,
-        resolved: Option<ResolvedName<namespace::StructType>>,
-    ) -> Self {
+    pub fn with_owner(owner: crate::dag_id::DagId, name: StructTypeName) -> Self {
         Self {
-            reference: StructTypeRef::new(name, resolved),
-        }
-    }
-
-    #[must_use]
-    pub const fn ownerless(name: StructTypeName) -> Self {
-        Self {
-            reference: StructTypeRef::ownerless(name),
+            reference: StructTypeRef::with_owner(owner, name),
         }
     }
 
@@ -176,17 +151,13 @@ impl InferredStructType {
     }
 
     #[must_use]
-    pub const fn resolved(&self) -> Option<&ResolvedName<namespace::StructType>> {
+    pub const fn resolved(&self) -> &ResolvedName<namespace::StructType> {
         self.reference.resolved()
     }
 
     #[must_use]
-    pub fn matches_resolved_or_name(
-        &self,
-        name: &StructTypeName,
-        resolved: Option<&ResolvedName<namespace::StructType>>,
-    ) -> bool {
-        self.reference.matches_resolved_or_name(name, resolved)
+    pub fn matches_resolved(&self, expected: &ResolvedName<namespace::StructType>) -> bool {
+        self.resolved() == expected
     }
 
     #[must_use]
@@ -288,20 +259,7 @@ impl DimCheckContext<'_> {
         let dag = self.dag?;
         let key = dag.resolved_decl_key_for_local(name)?;
         let exprs = dag.resolved_exprs.as_ref()?;
-        exprs
-            .consts
-            .get(&key)
-            .or_else(|| exprs.runtime_expr(&key))
-            .or_else(|| {
-                let mut candidates = exprs
-                    .consts
-                    .iter()
-                    .chain(exprs.param_defaults.iter())
-                    .chain(exprs.nodes.iter())
-                    .filter(|(key, _)| key.as_str() == name.member())
-                    .map(|(_, expr)| expr);
-                candidates.next().filter(|_| candidates.next().is_none())
-            })
+        exprs.consts.get(&key).or_else(|| exprs.runtime_expr(&key))
     }
 }
 
@@ -345,7 +303,7 @@ fn check_decl_expr_type(
             ctx.src,
         ) {
             Ok(Some(inferred)) => inferred,
-            Ok(None) | Err(GraphcalError::UnknownGraphRef { .. }) => infer_from_source()?,
+            Ok(None) => infer_from_source()?,
             Err(err) => return Err(err),
         },
         _ => infer_from_source()?,
@@ -701,11 +659,13 @@ fn check_domain_constraint_targets_dag(
         let type_kind = match strip_indexed(resolved) {
             crate::tir::typed::ResolvedTypeExpr::Bool => "Bool".to_string(),
             crate::tir::typed::ResolvedTypeExpr::Datetime(_) => "Datetime".to_string(),
-            crate::tir::typed::ResolvedTypeExpr::Label(idx, _, _) => format!("Label({idx})"),
-            crate::tir::typed::ResolvedTypeExpr::Struct(struct_name, _, _)
+            crate::tir::typed::ResolvedTypeExpr::Label(idx, _) => {
+                format!("Label({})", idx.as_str())
+            }
+            crate::tir::typed::ResolvedTypeExpr::Struct(struct_name, _)
             | crate::tir::typed::ResolvedTypeExpr::GenericStruct {
                 name: struct_name, ..
-            } => format!("struct `{struct_name}`"),
+            } => format!("struct `{}`", struct_name.as_str()),
             crate::tir::typed::ResolvedTypeExpr::Scalar(_)
             | crate::tir::typed::ResolvedTypeExpr::Dimensionless
             | crate::tir::typed::ResolvedTypeExpr::Int
@@ -1098,7 +1058,7 @@ pub fn check_override_dimension(
         expr,
         declared_types,
         &empty_locals,
-        None,
+        Some(tir.root()),
         tir,
         registry,
         builtin_fns,
@@ -1205,10 +1165,6 @@ fn collect_dag_call_targets_from_dag(
 /// under `graphcal check`, not only at evaluation. Mirrors the toposort-based
 /// cycle detection in `graphcal-eval`'s `exec_plan::eval_consts_from_tir` and
 /// `build_runtime_dag`, which now act as defense-in-depth backstops.
-#[expect(
-    clippy::too_many_lines,
-    reason = "cycle diagnostics keep traversal helpers local"
-)]
 fn detect_decl_cycles(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,

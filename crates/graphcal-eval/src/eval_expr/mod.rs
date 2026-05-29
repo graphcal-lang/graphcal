@@ -77,12 +77,30 @@ pub struct UnfoldContext<'a> {
     pub declared_types: &'a HashMap<ScopedName, DeclaredType>,
 }
 
-/// Collapse a syntactic index path to a leaf-only name for standalone eval.
+/// Collapse a syntactic index path to a leaf-only name for eval diagnostics.
 ///
-/// Module-aware variant literals must use HIR/resolved collection refs; this
-/// adapter is only for ownerless standalone value construction and diagnostics.
+/// Module-aware variant literals must use HIR/resolved collection refs.
 fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
+}
+
+fn eval_owner(ctx: &EvalContext<'_>) -> graphcal_compiler::dag_id::DagId {
+    ctx.current_dag
+        .map_or_else(|| ctx.tir.root_dag_id.clone(), |dag| dag.dag_id.clone())
+}
+
+fn index_ref_with_eval_owner(ctx: &EvalContext<'_>, name: IndexName) -> IndexTypeRef {
+    if name.as_str().starts_with("__nat_range_") {
+        IndexTypeRef::from_resolved(
+            graphcal_compiler::registry::types::nat_range_resolved_index_name(name),
+        )
+    } else {
+        IndexTypeRef::with_owner(eval_owner(ctx), name)
+    }
+}
+
+fn index_ref_from_path(ctx: &EvalContext<'_>, path: &NamePath) -> IndexTypeRef {
+    index_ref_with_eval_owner(ctx, standalone_index_name_from_path(path))
 }
 
 fn resolved_value_index_variant<'a>(
@@ -197,10 +215,7 @@ pub fn index_ref_matches_resolved_or_leaf(
     actual: &IndexTypeRef,
     expected: &ResolvedName<namespace::Index>,
 ) -> bool {
-    actual.resolved().map_or_else(
-        || actual.name().as_str() == expected.as_str(),
-        |actual| actual == expected,
-    )
+    actual.resolved() == expected
 }
 
 fn constructor_call_target<'a>(
@@ -216,15 +231,16 @@ fn runtime_struct_type_def<'a>(
     type_name: &StructTypeRef,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a TypeDef> {
-    type_name.resolved().map_or_else(
-        || ctx.registry.types.get_type(type_name.as_str()),
-        |resolved| {
-            ctx.tir
-                .dags
-                .values()
-                .find_map(|dag| dag.resolved_type_defs.as_ref()?.struct_types.get(resolved))
-        },
-    )
+    ctx.tir
+        .dags
+        .values()
+        .find_map(|dag| {
+            dag.resolved_type_defs
+                .as_ref()?
+                .struct_types
+                .get(type_name.resolved())
+        })
+        .or_else(|| ctx.registry.types.get_type(type_name.as_str()))
 }
 
 fn constructor_fields_for_runtime_struct<'a>(
@@ -243,28 +259,12 @@ fn find_struct_field_constraint<'a>(
     field: &FieldName,
 ) -> Option<&'a ResolvedDomainConstraint> {
     match owning_type {
-        Some(owning_type) if owning_type.resolved().is_some() => constraints.get(
-            &StructFieldConstraintKey::new(owning_type.clone(), constructor.clone(), field.clone()),
-        ),
-        _ => owning_type
-            .and_then(|owning_type| {
-                constraints.get(&StructFieldConstraintKey::new(
-                    owning_type.clone(),
-                    constructor.clone(),
-                    field.clone(),
-                ))
-            })
-            .or_else(|| {
-                constraints
-                    .iter()
-                    .find(|(key, _)| {
-                        key.constructor == *constructor
-                            && key.field == *field
-                            && owning_type
-                                .is_none_or(|owning_type| key.owning_type.matches_ref(owning_type))
-                    })
-                    .map(|(_, constraint)| constraint)
-            }),
+        Some(owning_type) => constraints.get(&StructFieldConstraintKey::new(
+            owning_type.clone(),
+            constructor.clone(),
+            field.clone(),
+        )),
+        None => None,
     }
 }
 
@@ -332,7 +332,8 @@ pub fn eval_expr(
             let full_span = index.span.merge(variant.span);
             Ok(resolved_value_index_variant(ctx, full_span).map_or_else(
                 || {
-                    RuntimeValue::ownerless_label(
+                    RuntimeValue::label_with_owner(
+                        eval_owner(ctx),
                         standalone_index_name_from_path(&index.value),
                         variant.value.clone(),
                     )
@@ -535,18 +536,19 @@ pub fn eval_expr(
             }
             let type_name = resolved_constructor.map_or_else(
                 || {
-                    StructTypeRef::ownerless(
+                    StructTypeRef::with_owner(
+                        eval_owner(ctx),
                         graphcal_compiler::syntax::names::StructTypeName::from_atom(
                             constructor_name.atom().clone(),
                         ),
                     )
                 },
                 |target| {
-                    StructTypeRef::new(
+                    StructTypeRef::with_display_leaf(
                         graphcal_compiler::syntax::names::StructTypeName::from_atom(
                             target.variant.name.atom().clone(),
                         ),
-                        Some(target.owning_type.clone()),
+                        target.owning_type.clone(),
                     )
                 },
             );

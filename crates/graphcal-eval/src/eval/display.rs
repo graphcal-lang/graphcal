@@ -114,7 +114,7 @@ pub(super) fn extract_flat_display_unit(
 ///
 /// Delegates to `eval_expr::resolve_unit_scale`, preserving the caller's
 /// module-aware runtime declaration keys so dynamic-unit graph refs are not
-/// reclassified through ownerless leaf names at display time.
+/// reclassified through display leaf names.
 fn resolve_display_unit_scale(
     unit: &graphcal_compiler::desugar::resolved_ast::UnitExpr,
     ctx: &EvalContext<'_>,

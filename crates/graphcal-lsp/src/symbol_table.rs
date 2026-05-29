@@ -1722,7 +1722,7 @@ fn format_type_with_constraints(
         let idx_strs: Vec<String> = indexes
             .iter()
             .map(|i| match i {
-                ResolvedIndex::Concrete(name, _, _) => name.to_string(),
+                ResolvedIndex::Concrete(name, _) => name.as_str().to_string(),
                 ResolvedIndex::GenericParam(name, _) => name.to_string(),
                 ResolvedIndex::NatExpr(form, _) => form.format(),
             })

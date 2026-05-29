@@ -698,8 +698,8 @@ pub fn resolve_struct_field_constraints(
             let mut min_display: Option<String> = None;
             let mut max_display: Option<String> = None;
             let mut constraint_span = domain_bounds[0].span;
-            // Display name uses the constructor's name (matches the ownerless
-            // runtime value's `type_name` until runtime identities migrate).
+            // Display name uses the constructor's leaf while semantic identity
+            // remains the owning union type.
             let display_name = format!("{}.{}", variant.name, field.name);
 
             for bound in domain_bounds {
@@ -779,7 +779,7 @@ pub fn resolve_struct_field_constraints(
     } else {
         for type_def in tir.registry.types.all_types() {
             resolve_for_type(
-                StructTypeRef::ownerless(type_def.name.clone()),
+                StructTypeRef::with_owner(tir.root_dag_id.clone(), type_def.name.clone()),
                 type_def,
                 &mut constraints,
             )?;
@@ -829,10 +829,10 @@ fn struct_type_ref_from_resolved_type(
     resolved: &graphcal_compiler::tir::typed::ResolvedTypeExpr,
 ) -> Option<StructTypeRef> {
     match strip_indexed(resolved) {
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(name, resolved, _)
-        | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct {
-            name, resolved, ..
-        } => Some(StructTypeRef::new(name.clone(), resolved.clone())),
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(name, _)
+        | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct { name, .. } => {
+            Some(StructTypeRef::from_resolved(name.clone()))
+        }
         _ => None,
     }
 }
@@ -844,28 +844,12 @@ fn find_struct_field_constraint<'a>(
     field: &FieldName,
 ) -> Option<&'a ResolvedDomainConstraint> {
     match owning_type {
-        Some(owning_type) if owning_type.resolved().is_some() => field_constraints.get(
-            &StructFieldConstraintKey::new(owning_type.clone(), constructor.clone(), field.clone()),
-        ),
-        _ => owning_type
-            .and_then(|owning_type| {
-                field_constraints.get(&StructFieldConstraintKey::new(
-                    owning_type.clone(),
-                    constructor.clone(),
-                    field.clone(),
-                ))
-            })
-            .or_else(|| {
-                field_constraints
-                    .iter()
-                    .find(|(key, _)| {
-                        key.constructor == *constructor
-                            && key.field == *field
-                            && owning_type
-                                .is_none_or(|owning_type| key.owning_type.matches_ref(owning_type))
-                    })
-                    .map(|(_, constraint)| constraint)
-            }),
+        Some(owning_type) => field_constraints.get(&StructFieldConstraintKey::new(
+            owning_type.clone(),
+            constructor.clone(),
+            field.clone(),
+        )),
+        None => None,
     }
 }
 
@@ -885,11 +869,8 @@ fn check_const_struct_field_constraints(
 ) -> Result<(), GraphcalError> {
     match value {
         RuntimeValue::Struct { type_name, fields } => {
-            let runtime_owning_type = type_name
-                .resolved()
-                .cloned()
-                .map(StructTypeRef::from_resolved);
-            let effective_owning_type = owning_type.or(runtime_owning_type.as_ref());
+            let runtime_owning_type = StructTypeRef::from_resolved(type_name.resolved().clone());
+            let effective_owning_type = owning_type.or(Some(&runtime_owning_type));
             let constructor = ConstructorName::from_atom(type_name.name().atom().clone());
             for (field_name, field_value) in fields {
                 if let Some(constraint) = find_struct_field_constraint(
@@ -1016,17 +997,17 @@ fn validate_constraint_target(
                 span: decl_span.into(),
             })
         }
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Label(idx, _, _) => {
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Label(idx, _) => {
             Err(GraphcalError::InvalidDomainTarget {
-                type_kind: format!("Label({idx})"),
+                type_kind: format!("Label({})", idx.as_str()),
                 src: src.clone(),
                 span: decl_span.into(),
             })
         }
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(name_s, _, _)
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(name_s, _)
         | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct { name: name_s, .. } => {
             Err(GraphcalError::InvalidDomainTarget {
-                type_kind: format!("struct `{name_s}`"),
+                type_kind: format!("struct `{}`", name_s.as_str()),
                 src: src.clone(),
                 span: decl_span.into(),
             })

@@ -1171,14 +1171,10 @@ fn index_def_for_inferred<'a>(
     dag: &'a crate::tir::typed::DagTIR,
     registry: &'a Registry,
 ) -> Option<&'a crate::registry::types::IndexDef> {
-    match index.resolved() {
-        Some(resolved) => dag
-            .resolved_collection_refs
-            .as_ref()?
-            .index_defs
-            .get(resolved),
-        None => registry.indexes.get_index(index.name().as_str()),
-    }
+    dag.resolved_collection_refs
+        .as_ref()
+        .and_then(|refs| refs.index_defs.get(index.resolved()))
+        .or_else(|| registry.indexes.get_index(index.name().as_str()))
 }
 
 #[expect(clippy::too_many_arguments, reason = "for-comprehension context")]
@@ -1247,12 +1243,12 @@ fn infer_hir_for_comp(
             hir::expr::ForBindingIndex::Named(index) => {
                 InferredIndex::from_resolved(index.value.clone())
             }
-            hir::expr::ForBindingIndex::Range { arg, .. } => {
-                InferredIndex::ownerless(IndexName::new(format!(
+            hir::expr::ForBindingIndex::Range { arg, .. } => InferredIndex::from_resolved(
+                crate::registry::types::nat_range_resolved_index_name(IndexName::new(format!(
                     "__nat_range_{}",
                     hir_nat_to_linear_form(arg).format()
-                )))
-            }
+                ))),
+            ),
         };
         result = InferredType::Indexed {
             element: Box::new(result),

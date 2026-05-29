@@ -2,7 +2,7 @@
 // Expected diagnostic: `graphcal.G005` — unknown output in inline dag call.
 dag id_len {
     param v: Length;
-    
+
     node result: Length = @v;
 }
 

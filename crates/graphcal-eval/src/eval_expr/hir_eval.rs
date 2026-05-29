@@ -7,7 +7,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{IndexDef, IndexKind};
 use graphcal_compiler::syntax::names::{
-    IndexName, IndexVariantName, ResolvedName, ScopedName, StructTypeName, namespace,
+    IndexVariantName, ResolvedName, ScopedName, StructTypeName, namespace,
 };
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{DagTIR, ResolvedConstructorTarget};
@@ -183,9 +183,9 @@ fn eval_hir_nullary_constructor(
     let target = constructor_target(ctx, constructor)
         .ok_or_else(|| ctx.eval_error(format!("unknown constructor `{constructor}`"), span))?;
     Ok(RuntimeValue::Struct {
-        type_name: StructTypeRef::new(
+        type_name: StructTypeRef::with_display_leaf(
             StructTypeName::from_atom(target.variant.name.atom().clone()),
-            Some(target.owning_type.clone()),
+            target.owning_type.clone(),
         ),
         fields: IndexMap::new(),
     })
@@ -848,9 +848,9 @@ fn eval_hir_constructor_call(
         field_map.insert(field_init.name.value.clone(), val);
     }
     Ok(RuntimeValue::Struct {
-        type_name: StructTypeRef::new(
+        type_name: StructTypeRef::with_display_leaf(
             StructTypeName::from_atom(target.variant.name.atom().clone()),
-            Some(target.owning_type.clone()),
+            target.owning_type.clone(),
         ),
         fields: field_map,
     })
@@ -860,14 +860,10 @@ fn index_def_for_ref<'a>(
     index_ref: &IndexTypeRef,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a IndexDef> {
-    index_ref.resolved().map_or_else(
-        || ctx.registry.indexes.get_index(index_ref.as_str()),
-        |resolved| {
-            ctx.current_dag
-                .and_then(|dag| dag.resolved_collection_refs.as_ref())
-                .and_then(|refs| refs.index_defs.get(resolved))
-        },
-    )
+    ctx.current_dag
+        .and_then(|dag| dag.resolved_collection_refs.as_ref())
+        .and_then(|refs| refs.index_defs.get(index_ref.resolved()))
+        .or_else(|| ctx.registry.indexes.get_index(index_ref.as_str()))
 }
 
 fn ensure_index_ref_matches_resolved(
@@ -894,11 +890,9 @@ fn map_entry_index_ref(key: &hir::expr::MapEntryKey) -> IndexTypeRef {
         hir::expr::MapEntryKey::IndexVariant(variant) => {
             IndexTypeRef::from_resolved(variant.value.index().clone())
         }
-        hir::expr::MapEntryKey::NatRangeVariant { size, .. } => {
-            IndexTypeRef::ownerless(IndexName::new(
-                graphcal_compiler::registry::types::nat_range_index_name(*size),
-            ))
-        }
+        hir::expr::MapEntryKey::NatRangeVariant { size, .. } => IndexTypeRef::from_resolved(
+            graphcal_compiler::registry::types::nat_range_resolved_index_size(*size),
+        ),
     }
 }
 
@@ -1044,9 +1038,9 @@ fn eval_hir_for_comp(
         hir::expr::ForBindingIndex::Range { arg, span } => {
             let size = eval_hir_nat_expr(arg, local_values, ctx)?;
             (
-                IndexTypeRef::ownerless(IndexName::new(
-                    graphcal_compiler::registry::types::nat_range_index_name(size),
-                )),
+                IndexTypeRef::from_resolved(
+                    graphcal_compiler::registry::types::nat_range_resolved_index_size(size),
+                ),
                 *span,
                 Some(size),
             )
@@ -1331,9 +1325,7 @@ fn runtime_struct_matches_resolved_constructor(
     target: &ResolvedConstructorTarget,
 ) -> bool {
     scrutinee_type.name().as_str() == target.variant.name.as_str()
-        && scrutinee_type
-            .resolved()
-            .is_none_or(|owner| owner == &target.owning_type)
+        && scrutinee_type.resolved() == &target.owning_type
 }
 
 fn eval_hir_match(

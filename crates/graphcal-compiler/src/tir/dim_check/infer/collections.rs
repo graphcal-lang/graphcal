@@ -8,11 +8,13 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::{
-    BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, GenericArg, IndexArg, NatExpr,
+    BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, GenericArg, IndexArg, IndexExpr, MulDivOp,
+    NatExpr, TypeExpr, TypeExprKind,
 };
+use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
     FieldName, GenericParamName, IndexName, IndexVariantName, NamePath, ResolvedIndexVariant,
-    ScopedName,
+    ScopedName, StructTypeName,
 };
 use crate::syntax::span::Span;
 use crate::tir::typed::NatLinearForm;
@@ -32,6 +34,24 @@ use super::infer_type;
 /// only for standalone callers whose registries are leaf-keyed.
 fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
+}
+
+fn inference_owner(dag: Option<&crate::tir::typed::DagTIR>) -> crate::dag_id::DagId {
+    dag.map_or_else(
+        || crate::dag_id::DagId::root("<type-inference>"),
+        |dag| dag.dag_id.clone(),
+    )
+}
+
+fn inferred_index_for_leaf(
+    name: IndexName,
+    dag: Option<&crate::tir::typed::DagTIR>,
+) -> InferredIndex {
+    if name.as_str().starts_with("__nat_range_") {
+        InferredIndex::from_resolved(crate::registry::types::nat_range_resolved_index_name(name))
+    } else {
+        InferredIndex::with_owner(inference_owner(dag), name)
+    }
 }
 
 /// Get the index name for a for binding.
@@ -114,7 +134,7 @@ fn inferred_index_for_path(
         .and_then(|refs| refs.for_binding_indexes.get(&span))
         .cloned()
         .map_or_else(
-            || InferredIndex::ownerless(standalone_index_name_from_path(path)),
+            || inferred_index_for_leaf(standalone_index_name_from_path(path), dag),
             InferredIndex::from_resolved,
         )
 }
@@ -133,10 +153,9 @@ fn index_def_for_inferred<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a crate::registry::types::IndexDef> {
-    index.resolved().map_or_else(
-        || registry.indexes.get_index(index.name().as_str()),
-        |resolved| resolved_collection_refs(dag).and_then(|refs| refs.index_defs.get(resolved)),
-    )
+    resolved_collection_refs(dag)
+        .and_then(|refs| refs.index_defs.get(index.resolved()))
+        .or_else(|| registry.indexes.get_index(index.name().as_str()))
 }
 
 fn resolved_map_entry_variant_for_key<'a>(
@@ -152,7 +171,7 @@ fn inferred_index_for_map_entry_key(
     dag: Option<&crate::tir::typed::DagTIR>,
 ) -> InferredIndex {
     resolved_map_entry_variant_for_key(key, dag).map_or_else(
-        || InferredIndex::ownerless(key.index.value.registry_name()),
+        || inferred_index_for_leaf(key.index.value.registry_name(), dag),
         |variant| InferredIndex::from_resolved(variant.index().clone()),
     )
 }
@@ -160,24 +179,18 @@ fn inferred_index_for_map_entry_key(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum MapLiteralVariantKey {
     Resolved(ResolvedIndexVariant),
-    Ownerless {
-        index: IndexName,
-        variant: IndexVariantName,
-    },
 }
 
 impl MapLiteralVariantKey {
     const fn variant(&self) -> &IndexVariantName {
         match self {
             Self::Resolved(resolved) => resolved.variant(),
-            Self::Ownerless { variant, .. } => variant,
         }
     }
 
-    const fn display_index<'a>(&'a self, fallback: &'a IndexName) -> &'a IndexName {
+    fn display_index(&self) -> IndexName {
         match self {
-            Self::Resolved(_) => fallback,
-            Self::Ownerless { index, .. } => index,
+            Self::Resolved(resolved) => resolved.index().to_unowned_def_name(),
         }
     }
 }
@@ -190,15 +203,10 @@ struct MapLiteralAxis {
 
 impl MapLiteralAxis {
     fn variant_key(&self, variant: IndexVariantName) -> MapLiteralVariantKey {
-        match self.index.resolved() {
-            Some(index) => {
-                MapLiteralVariantKey::Resolved(ResolvedIndexVariant::new(index.clone(), variant))
-            }
-            None => MapLiteralVariantKey::Ownerless {
-                index: self.index.name().clone(),
-                variant,
-            },
-        }
+        MapLiteralVariantKey::Resolved(ResolvedIndexVariant::new(
+            self.index.resolved().clone(),
+            variant,
+        ))
     }
 }
 
@@ -280,7 +288,7 @@ pub(super) fn infer_for_comp(
                 inferred_index_for_path(&spanned_idx.value, spanned_idx.span, dag)
             }
             ForBindingIndex::Range { .. } => {
-                InferredIndex::ownerless(for_binding_index_name(&binding.index))
+                inferred_index_for_leaf(for_binding_index_name(&binding.index), dag)
             }
         };
         result = InferredType::Indexed {
@@ -473,11 +481,9 @@ pub(super) fn infer_map_or_table_literal(
             .iter()
             .map(|t| {
                 t.iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        v.variant()
-                            .qualified_by(v.display_index(axes[i].index.name()))
-                            .to_string()
+                    .map(|v| {
+                        let display_index = v.display_index();
+                        v.variant().qualified_by(&display_index).to_string()
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -512,11 +518,9 @@ pub(super) fn infer_map_or_table_literal(
             .iter()
             .map(|t| {
                 t.iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        v.variant()
-                            .qualified_by(v.display_index(axes[i].index.name()))
-                            .to_string()
+                    .map(|v| {
+                        let display_index = v.display_index();
+                        v.variant().qualified_by(&display_index).to_string()
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -634,7 +638,7 @@ pub(super) fn infer_index_access(
                     validate_index_path_module_scope(&index.value, tir, src, index.span)?;
                 }
                 let arg_index = resolved_variant.map_or_else(
-                    || InferredIndex::ownerless(standalone_index_name_from_path(&index.value)),
+                    || inferred_index_for_leaf(standalone_index_name_from_path(&index.value), dag),
                     |variant| InferredIndex::from_resolved(variant.index().clone()),
                 );
                 if arg_index != idx_name {
@@ -646,7 +650,7 @@ pub(super) fn infer_index_access(
                     });
                 }
                 if resolved_variant.is_none() {
-                    // Validate variant exists on the ownerless leaf-keyed path only
+                    // Validate variant exists on the leaf-keyed compatibility path only
                     // when no HIR-resolved variant sidecar is available. The
                     // HIR sidecar itself is produced by successful canonical
                     // `ResolvedIndexVariant` lookup.
@@ -1165,11 +1169,174 @@ pub(super) fn infer_field_access(
     }
 }
 
-/// Infer the type of a constructor call expression.
-#[expect(
-    clippy::too_many_lines,
-    reason = "exhaustive validation of constructor calls"
-)]
+fn infer_ast_generic_type_arg(
+    type_expr: &TypeExpr,
+    owner: &crate::dag_id::DagId,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    match &type_expr.kind {
+        TypeExprKind::Dimensionless => Ok(InferredType::Scalar(Dimension::dimensionless())),
+        TypeExprKind::Bool => Ok(InferredType::Bool),
+        TypeExprKind::Int => Ok(InferredType::Int),
+        TypeExprKind::Datetime => Ok(InferredType::Datetime(
+            crate::registry::time_scale::TimeScale::UTC,
+        )),
+        TypeExprKind::DatetimeApplication { .. } => {
+            let resolved =
+                crate::tir::typed::resolve_type_expr(type_expr, registry, &[], &[], &[], src)?;
+            let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
+            Ok(InferredType::from(&dt))
+        }
+        TypeExprKind::DimExpr(dim_expr) => {
+            infer_ast_dim_or_nominal_type(dim_expr, owner, registry, src)
+        }
+        TypeExprKind::Indexed { base, indexes } => {
+            let mut result = infer_ast_generic_type_arg(base, owner, registry, src)?;
+            for index in indexes {
+                let inferred_index = match index {
+                    IndexExpr::Name(path) => InferredIndex::with_owner(
+                        owner.clone(),
+                        IndexName::from(path.value.leaf().clone()),
+                    ),
+                    IndexExpr::NatExpr(nat_expr) => {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "Nat index argument `{nat_expr}` is not yet representable in constructor value types"
+                            ),
+                            src: src.clone(),
+                            span: nat_expr.span().into(),
+                        });
+                    }
+                };
+                result = InferredType::Indexed {
+                    element: Box::new(result),
+                    index: inferred_index,
+                };
+            }
+            Ok(result)
+        }
+        TypeExprKind::TypeApplication { name, type_args } => {
+            let type_name = StructTypeName::from_atom(name.value.leaf().clone());
+            let type_def = registry.types.get_type(type_name.as_str()).ok_or_else(|| {
+                GraphcalError::UnknownStructType {
+                    name: name.value.display_path(),
+                    src: src.clone(),
+                    span: name.span.into(),
+                }
+            })?;
+            let mut args = type_args
+                .iter()
+                .map(|arg| infer_ast_generic_type_arg(arg, owner, registry, src))
+                .collect::<Result<Vec<_>, _>>()?;
+            for param in type_def.generic_params.iter().skip(type_args.len()) {
+                let default_expr =
+                    param
+                        .default
+                        .as_ref()
+                        .ok_or_else(|| GraphcalError::EvalError {
+                            message: format!(
+                                "internal: generic parameter `{}` has no default",
+                                param.name
+                            ),
+                            src: src.clone(),
+                            span: type_expr.span.into(),
+                        })?;
+                args.push(infer_ast_generic_type_arg(
+                    default_expr,
+                    owner,
+                    registry,
+                    src,
+                )?);
+            }
+            Ok(InferredType::Struct(
+                InferredStructType::with_owner(owner.clone(), type_name),
+                args,
+            ))
+        }
+    }
+}
+
+fn infer_ast_dim_or_nominal_type(
+    dim_expr: &crate::desugar::resolved_ast::DimExpr,
+    owner: &crate::dag_id::DagId,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    if let [item] = dim_expr.terms.as_slice()
+        && item.term.power.is_none()
+        && let Some(atom) = item.term.name.value.as_bare()
+    {
+        if registry.indexes.get_index(atom.as_str()).is_some() {
+            return Ok(InferredType::Label(InferredIndex::with_owner(
+                owner.clone(),
+                IndexName::from_atom(atom.clone()),
+            )));
+        }
+        if registry.types.get_type(atom.as_str()).is_some() {
+            return Ok(InferredType::Struct(
+                InferredStructType::with_owner(
+                    owner.clone(),
+                    StructTypeName::from_atom(atom.clone()),
+                ),
+                vec![],
+            ));
+        }
+    }
+    infer_ast_dimension_expr(dim_expr, registry, src).map(InferredType::Scalar)
+}
+
+fn infer_ast_dimension_expr(
+    dim_expr: &crate::desugar::resolved_ast::DimExpr,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Dimension, GraphcalError> {
+    dim_expr
+        .terms
+        .iter()
+        .try_fold(Dimension::dimensionless(), |acc, item| {
+            let name = item.term.name.value.leaf();
+            let base = registry
+                .dimensions
+                .get_dimension(name.as_str())
+                .cloned()
+                .ok_or_else(|| GraphcalError::UnknownDimension {
+                    name: crate::syntax::names::DimName::from_atom(name.clone()),
+                    src: src.clone(),
+                    span: item.term.name.span.into(),
+                })?;
+            apply_dimension_term(
+                acc,
+                &base,
+                item.term.power.unwrap_or(1),
+                item.op,
+                src,
+                item.term.span,
+            )
+        })
+}
+
+fn apply_dimension_term(
+    acc: Dimension,
+    base: &Dimension,
+    power: i32,
+    op: MulDivOp,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<Dimension, GraphcalError> {
+    let overflow_err = || GraphcalError::DimensionOverflow {
+        src: src.clone(),
+        span: span.into(),
+    };
+    let powered = base
+        .pow(Rational::from_int(power))
+        .map_err(|_| overflow_err())?;
+    match op {
+        MulDivOp::Mul => (acc * powered).map_err(|_| overflow_err()),
+        MulDivOp::Div => (acc / powered).map_err(|_| overflow_err()),
+    }
+}
+
 pub(super) fn infer_constructor_call(
     expr: &Expr,
     callee: &crate::syntax::ast::IdentPath,
@@ -1224,7 +1391,7 @@ pub(super) fn infer_constructor_call(
                 variant,
                 constructor_name,
                 constructor.span,
-                InferredStructType::ownerless(type_def.name.clone()),
+                InferredStructType::with_owner(inference_owner(dag), type_def.name.clone()),
             )
         };
     let owning_type_name = type_def.name.clone();
@@ -1260,9 +1427,6 @@ pub(super) fn infer_constructor_call(
                 span: constructor_span.into(),
             });
         }
-        let no_dim_params: &[GenericParamName] = &[];
-        let no_index_params: &[GenericParamName] = &[];
-        let no_nat_params: &[GenericParamName] = &[];
         let mut args = Vec::with_capacity(total_params);
         for (param, arg) in type_def.generic_params.iter().zip(constructor_generic_args) {
             match (param.constraint, arg) {
@@ -1297,16 +1461,12 @@ pub(super) fn infer_constructor_call(
                     });
                 }
                 (_, GenericArg::Type(type_expr)) => {
-                    let resolved = crate::tir::typed::resolve_type_expr(
+                    args.push(infer_ast_generic_type_arg(
                         type_expr,
+                        owning_type_identity.resolved().owner(),
                         registry,
-                        no_dim_params,
-                        no_index_params,
-                        no_nat_params,
                         src,
-                    )?;
-                    let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-                    args.push(InferredType::from(&dt));
+                    )?);
                 }
             }
         }
@@ -1327,16 +1487,13 @@ pub(super) fn infer_constructor_call(
                     src: src.clone(),
                     span: constructor_span.into(),
                 })?;
-            let resolved = crate::tir::typed::resolve_type_expr(
+            let resolved = infer_ast_generic_type_arg(
                 default_expr,
+                owning_type_identity.resolved().owner(),
                 registry,
-                no_dim_params,
-                no_index_params,
-                no_nat_params,
                 src,
             )?;
-            let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-            args.push(InferredType::from(&dt));
+            args.push(resolved);
         }
         args
     } else {

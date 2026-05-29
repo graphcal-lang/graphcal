@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, MatchArm, MatchPattern};
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
-use graphcal_compiler::syntax::names::{IndexName, NamePath, ResolvedIndexVariant};
+use graphcal_compiler::syntax::names::ResolvedIndexVariant;
 use graphcal_compiler::tir::typed::{
     ResolvedConstructorPattern, ResolvedConstructorTarget, ResolvedPatternBinding,
 };
@@ -13,13 +13,8 @@ use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use super::EvalContext;
 use super::RuntimeValueMap;
 use super::eval_expr;
+use super::index_ref_from_path;
 use super::index_ref_matches_resolved_or_leaf;
-
-/// Collapse a syntactic label-pattern path to a leaf-only index reference for
-/// standalone eval. Module-aware match selection must use resolved label refs.
-fn standalone_index_ref_from_path(path: &NamePath) -> IndexTypeRef {
-    IndexTypeRef::ownerless(IndexName::from(path.leaf().clone()))
-}
 
 fn resolved_match_label_variant<'a>(
     ctx: &'a EvalContext<'_>,
@@ -52,7 +47,7 @@ fn label_pattern_matches(
 
     match pattern {
         MatchPattern::IndexLabel { index, variant, .. } => {
-            standalone_index_ref_from_path(&index.value).matches_ref(scrutinee_index)
+            index_ref_from_path(ctx, &index.value).matches_ref(scrutinee_index)
                 && variant.value == *scrutinee_variant
         }
         MatchPattern::Constructor { .. } | MatchPattern::Path { .. } => false,
@@ -82,9 +77,7 @@ fn runtime_struct_matches_resolved_constructor(
     target: &ResolvedConstructorTarget,
 ) -> bool {
     scrutinee_type.name().as_str() == target.variant.name.as_str()
-        && scrutinee_type
-            .resolved()
-            .is_none_or(|owner| owner == &target.owning_type)
+        && scrutinee_type.resolved() == &target.owning_type
 }
 
 fn constructor_pattern_matches(

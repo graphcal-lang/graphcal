@@ -1298,10 +1298,7 @@ fn eval_constructor_calls_preserve_same_leaf_struct_owners() {
             panic!("expected struct value for `{name}`, got {value:?}");
         };
         assert_eq!(type_name.name().as_str(), "Pick");
-        type_name
-            .resolved()
-            .cloned()
-            .unwrap_or_else(|| panic!("struct value `{name}` did not preserve owner"))
+        type_name.resolved().clone()
     };
 
     assert_eq!(owner_of_struct("action").owner(), &a_id);
@@ -1379,9 +1376,9 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
             &graphcal_compiler::syntax::names::ScopedName::local("action"),
         ),
         crate::eval_expr::RuntimeValue::Struct {
-            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::new(
+            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
                 graphcal_compiler::syntax::names::StructTypeName::new("Pick"),
-                Some(b_owner),
+                b_owner,
             ),
             fields,
         },
@@ -1444,9 +1441,9 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
             &graphcal_compiler::syntax::names::ScopedName::local("item"),
         ),
         crate::eval_expr::RuntimeValue::Struct {
-            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::new(
+            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
                 graphcal_compiler::syntax::names::StructTypeName::new("Item"),
-                Some(b_owner),
+                b_owner,
             ),
             fields,
         },
@@ -1531,7 +1528,7 @@ fn project_declared_type_preserves_same_leaf_index_owner() {
         panic!("expected indexed declared type for `series`");
     };
     assert_eq!(index.name().as_str(), "Phase");
-    assert!(matches!(index.resolved(), Some(name) if name.owner() == &a_id));
+    assert_eq!(index.resolved().owner(), &a_id);
 }
 
 #[test]
@@ -1561,8 +1558,8 @@ fn project_declared_type_preserves_same_leaf_struct_owner() {
     };
     assert_eq!(item.name().as_str(), "Item");
     assert_eq!(other.name().as_str(), "Item");
-    assert!(matches!(item.resolved(), Some(name) if name.owner() == &a_id));
-    assert!(matches!(other.resolved(), Some(name) if name.owner() == &b_id));
+    assert_eq!(item.resolved().owner(), &a_id);
+    assert_eq!(other.resolved().owner(), &b_id);
 }
 
 #[test]
@@ -1582,17 +1579,13 @@ fn project_struct_field_constraints_preserve_same_leaf_struct_owner() {
     let b_id = loaded_file_dag_id(&project, "b.gcl");
 
     assert!(constraints.keys().any(|key| {
-        key.owning_type
-            .resolved()
-            .is_some_and(|name| name.owner() == &a_id)
+        key.owning_type.resolved().owner() == &a_id
             && key.owning_type.name().as_str() == "Item"
             && key.constructor.as_str() == "Item"
             && key.field.as_str() == "distance"
     }));
     assert!(constraints.keys().any(|key| {
-        key.owning_type
-            .resolved()
-            .is_some_and(|name| name.owner() == &b_id)
+        key.owning_type.resolved().owner() == &b_id
             && key.owning_type.name().as_str() == "Item"
             && key.constructor.as_str() == "Item"
             && key.field.as_str() == "duration"
@@ -1600,7 +1593,7 @@ fn project_struct_field_constraints_preserve_same_leaf_struct_owner() {
     assert!(
         constraints
             .keys()
-            .all(|key| key.owning_type.resolved().is_some())
+            .all(|key| key.owning_type.resolved().owner().segment_count() >= 1)
     );
 }
 
@@ -1634,7 +1627,7 @@ fn project_generic_struct_defaults_preserve_same_leaf_owner() {
     let marker_owner = |decl: &str| {
         let key = graphcal_compiler::syntax::names::ScopedName::local(decl);
         let graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct {
-            resolved: Some(wrap),
+            name: wrap,
             type_args,
             ..
         } = &tir.root().resolved_decl_types[&key]
@@ -1642,18 +1635,15 @@ fn project_generic_struct_defaults_preserve_same_leaf_owner() {
             panic!("expected generic struct annotation for `{decl}`");
         };
         assert_eq!(wrap.as_str(), "Wrap");
-        let graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(
-            marker,
-            Some(marker_resolved),
-            _,
-        ) = &type_args[1]
+        let graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(marker_resolved, _) =
+            &type_args[1]
         else {
             panic!(
                 "expected default marker type arg for `{decl}`, got {:?}",
                 type_args[1]
             );
         };
-        assert_eq!(marker.as_str(), "Marker");
+        assert_eq!(marker_resolved.as_str(), "Marker");
         marker_resolved.owner().clone()
     };
 
@@ -1896,10 +1886,7 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
         let Value::Indexed { index_name, .. } = value else {
             panic!("expected indexed value for `{name}`, got {value:?}");
         };
-        index_name
-            .resolved()
-            .cloned()
-            .unwrap_or_else(|| panic!("indexed value `{name}` did not preserve owner"))
+        index_name.resolved().clone()
     };
     let owner_of_label = |name: &str| {
         let value = result
@@ -1913,10 +1900,7 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
         let Value::Label { index_name, .. } = value else {
             panic!("expected label value for `{name}`, got {value:?}");
         };
-        index_name
-            .resolved()
-            .cloned()
-            .unwrap_or_else(|| panic!("label value `{name}` did not preserve owner"))
+        index_name.resolved().clone()
     };
 
     let a_owner = owner_of_indexed("map_a");
@@ -1956,7 +1940,7 @@ fn eval_unfold_uses_resolved_declared_range_index_owner_with_same_leaf_indexes()
         panic!("expected indexed value for `y`, got {value:?}");
     };
     assert_eq!(entries.len(), 2);
-    assert!(matches!(index_name.resolved(), Some(name) if name.owner() == &a_owner));
+    assert_eq!(index_name.resolved().owner(), &a_owner);
 }
 
 #[test]
@@ -2971,10 +2955,7 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
         };
         assert_eq!(index_name.name().as_str(), "Phase");
         assert_eq!(variant.as_str(), "Burn");
-        index_name
-            .resolved()
-            .cloned()
-            .unwrap_or_else(|| panic!("label `{name}` did not preserve a resolved index owner"))
+        index_name.resolved().clone()
     };
 
     let phase_a_owner = label_index_owner("phase_a");
@@ -2999,7 +2980,7 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
             panic!("expected indexed value for `{name}`, got {value:?}");
         };
         assert_eq!(index_name.name().as_str(), "Phase");
-        assert_eq!(index_name.resolved(), Some(&expected_owner));
+        assert_eq!(index_name.resolved(), &expected_owner);
         assert_eq!(entries.len(), 2);
     }
 }

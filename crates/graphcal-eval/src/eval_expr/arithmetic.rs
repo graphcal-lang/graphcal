@@ -211,11 +211,7 @@ pub(super) fn eval_unaryop_expr(
 // ---------------------------------------------------------------------------
 
 fn struct_value_type_refs_equal(lhs: &StructTypeRef, rhs: &StructTypeRef) -> bool {
-    lhs.name() == rhs.name()
-        && match (lhs.resolved(), rhs.resolved()) {
-            (Some(lhs), Some(rhs)) => lhs == rhs,
-            _ => true,
-        }
+    lhs.matches_ref(rhs)
 }
 
 pub(super) fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {

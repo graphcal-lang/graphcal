@@ -8,7 +8,7 @@ use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeDef};
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{GenericParamName, IndexName};
+use crate::syntax::names::GenericParamName;
 
 use super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
 use crate::tir::typed::{ResolvedIndex, ResolvedTypeExpr};
@@ -70,22 +70,19 @@ pub(super) fn resolved_type_matches_inferred(
             expected == actual
         }
         (ResolvedTypeExpr::Scalar(expected), InferredType::Scalar(actual)) => expected == actual,
-        (ResolvedTypeExpr::Label(expected, resolved, _), InferredType::Label(actual)) => {
-            actual.matches_resolved_or_name(expected, resolved.as_ref())
+        (ResolvedTypeExpr::Label(expected, _), InferredType::Label(actual)) => {
+            actual.matches_resolved(expected)
         }
-        (ResolvedTypeExpr::Struct(expected, resolved, _), InferredType::Struct(actual, args)) => {
-            actual.matches_resolved_or_name(expected, resolved.as_ref()) && args.is_empty()
+        (ResolvedTypeExpr::Struct(expected, _), InferredType::Struct(actual, args)) => {
+            actual.matches_resolved(expected) && args.is_empty()
         }
         (
             ResolvedTypeExpr::GenericStruct {
-                name,
-                resolved,
-                type_args,
-                ..
+                name, type_args, ..
             },
             InferredType::Struct(actual, actual_args),
         ) => {
-            actual.matches_resolved_or_name(name, resolved.as_ref())
+            actual.matches_resolved(name)
                 && type_args.len() == actual_args.len()
                 && type_args
                     .iter()
@@ -123,17 +120,11 @@ fn resolved_indexed_type_matches_inferred(
 
 fn resolved_index_matches_inferred(index: &ResolvedIndex, actual: &InferredIndex) -> bool {
     match index {
-        ResolvedIndex::Concrete(expected, resolved, _) => {
-            actual.matches_resolved_or_name(expected, resolved.as_ref())
-        }
+        ResolvedIndex::Concrete(expected, _) => actual.matches_resolved(expected),
         ResolvedIndex::NatExpr(form, _) => form
             .is_constant()
-            .then(|| {
-                IndexName::new(crate::registry::types::nat_range_index_name(
-                    form.constant(),
-                ))
-            })
-            .is_some_and(|expected| actual.name() == &expected),
+            .then(|| crate::registry::types::nat_range_resolved_index_size(form.constant()))
+            .is_some_and(|expected| actual.resolved() == &expected),
         ResolvedIndex::GenericParam(expected, _) => actual.name().as_str() == expected.as_str(),
     }
 }
@@ -145,21 +136,16 @@ pub(super) fn format_declared_type(dt: &DeclaredType, registry: &Registry) -> St
 
 /// Look up the definition for an inferred struct identity.
 ///
-/// Prefer canonical module-aware TIR sidecars when the identity carries a
-/// resolved owner, then fall back to the leaf-keyed registry for
-/// standalone/non-module-aware callers.
+/// Prefer canonical module-aware TIR sidecars, then fall back to the leaf-keyed
+/// registry for boundary-created synthetic owners.
 pub(super) fn struct_type_def_for_inferred<'a>(
     ty: &InferredStructType,
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a TypeDef> {
-    ty.resolved().map_or_else(
-        || registry.types.get_type(ty.name().as_str()),
-        |resolved| {
-            dag.and_then(|dag| dag.resolved_type_defs.as_ref())
-                .and_then(|defs| defs.struct_types.get(resolved))
-        },
-    )
+    dag.and_then(|dag| dag.resolved_type_defs.as_ref())
+        .and_then(|defs| defs.struct_types.get(ty.resolved()))
+        .or_else(|| registry.types.get_type(ty.name().as_str()))
 }
 
 /// Format an inferred type for display in diagnostics.

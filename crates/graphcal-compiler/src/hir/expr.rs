@@ -18,10 +18,11 @@ use crate::registry::resolve_types::{
 };
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::TypeSystemRefKind as SyntaxTypeSystemRefKind;
-use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
+use crate::syntax::module_resolve::{DeclSymbolKind, ModuleResolveError, ModuleResolver};
 use crate::syntax::names::{
-    FieldName, GenericParamName, IndexVariantName, LocalName, NameAtom, NameAtomError,
-    NameNamespace, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName, namespace,
+    DeclName, FieldName, GenericParamName, IndexName, IndexVariantName, LocalName, NameAtom,
+    NameAtomError, NameNamespace, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName,
+    namespace,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
@@ -63,6 +64,13 @@ pub enum ExprLowerError {
     /// A map literal entry unexpectedly had no keys after syntax lowering.
     #[error("map literal entry has no keys")]
     EmptyMapEntry { span: Span },
+    /// A map literal used a key variant that is not declared by its index.
+    #[error("extra variant `{variant_name}` in map literal for index `{index_name}`")]
+    ExtraMapVariant {
+        index_name: IndexName,
+        variant_name: IndexVariantName,
+        span: Span,
+    },
     /// One lexical scope introduced the same local name twice.
     #[error("duplicate local binding `{name}`")]
     DuplicateLocalBinding {
@@ -85,6 +93,7 @@ pub struct ExprLoweringContext<'a> {
     pub resolver: &'a ModuleResolver,
     pub generic_scope: &'a GenericScope,
     pub prelude: Option<&'a PreludeTypeScope>,
+    pub decl_bindings: Option<&'a HashMap<ScopedName, ResolvedName<namespace::Decl>>>,
 }
 
 impl<'a> ExprLoweringContext<'a> {
@@ -100,6 +109,7 @@ impl<'a> ExprLoweringContext<'a> {
             resolver,
             generic_scope,
             prelude: None,
+            decl_bindings: None,
         }
     }
 
@@ -111,6 +121,23 @@ impl<'a> ExprLoweringContext<'a> {
             resolver: self.resolver,
             generic_scope: self.generic_scope,
             prelude: Some(prelude),
+            decl_bindings: self.decl_bindings,
+        }
+    }
+
+    /// Add canonical declaration bindings for declarations already visible in
+    /// the lowered IR, such as prefixed dependency entries and DAG self-imports.
+    #[must_use]
+    pub const fn with_decl_bindings(
+        self,
+        decl_bindings: &'a HashMap<ScopedName, ResolvedName<namespace::Decl>>,
+    ) -> Self {
+        Self {
+            owner: self.owner,
+            resolver: self.resolver,
+            generic_scope: self.generic_scope,
+            prelude: self.prelude,
+            decl_bindings: Some(decl_bindings),
         }
     }
 
@@ -661,9 +688,7 @@ pub enum TypeSystemRef {
     Type(ResolvedName<namespace::StructType>),
     Dimension(ResolvedName<namespace::Dim>),
     Index(ResolvedName<namespace::Index>),
-    /// A bare variant has no owner until an include/type-binding context tells
-    /// which index it belongs to. Keep it as a leaf-only compatibility boundary.
-    BareVariant(IndexVariantName),
+    IndexVariant(ResolvedIndexVariant),
 }
 
 /// Resolved constant-like expression target.
@@ -915,7 +940,7 @@ impl<'a> ExprLowerer<'a> {
             ast::ExprKind::MapLiteral { entries } => ExprKind::MapLiteral {
                 entries: entries
                     .iter()
-                    .map(|entry| self.lower_map_entry(entry))
+                    .map(|entry| self.lower_map_entry(entry, expr.span))
                     .collect::<Result<Vec<_>, _>>()?,
             },
             ast::ExprKind::ForComp { bindings, body } => {
@@ -989,7 +1014,12 @@ impl<'a> ExprLowerer<'a> {
             },
             ast::ExprKind::VariantLiteral { index, variant } => {
                 ExprKind::VariantLiteral(Spanned::new(
-                    self.resolve_index_variant_parts(&index.value, &variant.value, index.span)?,
+                    self.resolve_index_variant_parts(
+                        &index.value,
+                        &variant.value,
+                        index.span,
+                        variant.span,
+                    )?,
                     index.span.merge(variant.span),
                 ))
             }
@@ -1095,9 +1125,12 @@ impl<'a> ExprLowerer<'a> {
                 .resolve_index_path(self.ctx.owner, &NamePath::local(name.atom().clone()))
                 .map(TypeSystemRef::Index)
                 .map_err(|source| ExprLowerError::ModuleResolve { source, span }),
-            SyntaxTypeSystemRefKind::BareVariant(variant) => {
-                Ok(TypeSystemRef::BareVariant(variant.clone()))
-            }
+            SyntaxTypeSystemRefKind::BareVariant(variant) => self
+                .ctx
+                .resolver
+                .resolve_bare_index_variant(self.ctx.owner, variant)
+                .map(TypeSystemRef::IndexVariant)
+                .map_err(|source| ExprLowerError::ModuleResolve { source, span }),
         }
     }
 
@@ -1120,6 +1153,15 @@ impl<'a> ExprLowerer<'a> {
         let path = scoped_name_to_path(name, span)?;
         let mut first_error = None;
 
+        if let Some(resolved) = self
+            .ctx
+            .decl_bindings
+            .and_then(|bindings| bindings.get(name))
+            .cloned()
+        {
+            return Ok(ConstRef::Decl(resolved));
+        }
+
         match self
             .ctx
             .resolver
@@ -1128,6 +1170,15 @@ impl<'a> ExprLowerer<'a> {
             Ok(resolved) => return Ok(ConstRef::Decl(resolved)),
             Err(err) => first_error.get_or_insert(err),
         };
+        if let Some(resolved) = self.resolve_synthetic_child_decl_path(&path)
+            && self
+                .ctx
+                .resolver
+                .decl_symbol_kind(&resolved)
+                .is_ok_and(DeclSymbolKind::is_const)
+        {
+            return Ok(ConstRef::Decl(resolved));
+        }
         match self
             .ctx
             .resolver
@@ -1166,10 +1217,43 @@ impl<'a> ExprLowerer<'a> {
         span: Span,
     ) -> Result<ResolvedName<namespace::Decl>, ExprLowerError> {
         let path = scoped_name_to_path(name, span)?;
+        if let Some(resolved) = self
+            .ctx
+            .decl_bindings
+            .and_then(|bindings| bindings.get(name))
+            .cloned()
+        {
+            return Ok(resolved);
+        }
         self.ctx
             .resolver
             .resolve_decl_path(self.ctx.owner, &path)
+            .or_else(|_| {
+                self.resolve_synthetic_child_decl_path(&path)
+                    .ok_or_else(|| ModuleResolveError::UnknownName {
+                        owner: self.ctx.owner.clone(),
+                        namespace: namespace::Decl::DISPLAY_NAME,
+                        name: path.to_string(),
+                    })
+            })
             .map_err(|source| ExprLowerError::ModuleResolve { source, span })
+    }
+
+    fn resolve_synthetic_child_decl_path(
+        &self,
+        path: &NamePath,
+    ) -> Option<ResolvedName<namespace::Decl>> {
+        let (qualifier, leaf) = path.qualifier_and_leaf()?;
+        let owner = qualifier
+            .iter()
+            .fold(self.ctx.owner.clone(), |owner, segment| {
+                owner.child(segment.as_str())
+            });
+        self.ctx
+            .resolver
+            .modules()
+            .contains_key(&owner)
+            .then(|| ResolvedName::from_def(owner, DeclName::from_atom(leaf.clone())))
     }
 
     fn lower_function_ref(
@@ -1189,11 +1273,15 @@ impl<'a> ExprLowerer<'a> {
             })
     }
 
-    fn lower_map_entry(&mut self, entry: &ast::MapEntry) -> Result<MapEntry, ExprLowerError> {
+    fn lower_map_entry(
+        &mut self,
+        entry: &ast::MapEntry,
+        map_span: Span,
+    ) -> Result<MapEntry, ExprLowerError> {
         let keys = entry
             .keys
             .iter()
-            .map(|key| self.lower_map_entry_key(key))
+            .map(|key| self.lower_map_entry_key(key, map_span))
             .collect::<Result<Vec<_>, _>>()?;
         let mut keys = keys.into_iter();
         let Some(first) = keys.next() else {
@@ -1207,15 +1295,33 @@ impl<'a> ExprLowerer<'a> {
         })
     }
 
-    fn lower_map_entry_key(&self, key: &ast::MapEntryKey) -> Result<MapEntryKey, ExprLowerError> {
+    fn lower_map_entry_key(
+        &self,
+        key: &ast::MapEntryKey,
+        map_span: Span,
+    ) -> Result<MapEntryKey, ExprLowerError> {
         match &key.index.value {
             crate::syntax::ast::MapEntryIndex::Named(index_path) => {
-                Ok(MapEntryKey::IndexVariant(Spanned::new(
-                    self.resolve_index_variant_parts(
+                let variant = self
+                    .resolve_index_variant_parts(
                         index_path,
                         &key.variant.value,
                         key.index.span,
-                    )?,
+                        key.variant.span,
+                    )
+                    .map_err(|err| match err {
+                        ExprLowerError::ModuleResolve {
+                            source: ModuleResolveError::UnknownIndexVariant { index, variant },
+                            ..
+                        } => ExprLowerError::ExtraMapVariant {
+                            index_name: index.to_unowned_def_name(),
+                            variant_name: variant,
+                            span: map_span,
+                        },
+                        err => err,
+                    })?;
+                Ok(MapEntryKey::IndexVariant(Spanned::new(
+                    variant,
                     key.index.span.merge(key.variant.span),
                 )))
             }
@@ -1253,7 +1359,12 @@ impl<'a> ExprLowerer<'a> {
     fn lower_index_arg(&mut self, arg: &ast::IndexArg) -> Result<IndexArg, ExprLowerError> {
         match arg {
             ast::IndexArg::Variant { index, variant } => Ok(IndexArg::Variant(Spanned::new(
-                self.resolve_index_variant_parts(&index.value, &variant.value, index.span)?,
+                self.resolve_index_variant_parts(
+                    &index.value,
+                    &variant.value,
+                    index.span,
+                    variant.span,
+                )?,
                 index.span.merge(variant.span),
             ))),
             ast::IndexArg::Var(ident) => Ok(IndexArg::Var(Spanned::new(
@@ -1311,7 +1422,12 @@ impl<'a> ExprLowerer<'a> {
                 span,
             } => Ok(MatchPattern::IndexLabel {
                 variant: Spanned::new(
-                    self.resolve_index_variant_parts(&index.value, &variant.value, index.span)?,
+                    self.resolve_index_variant_parts(
+                        &index.value,
+                        &variant.value,
+                        index.span,
+                        variant.span,
+                    )?,
                     index.span.merge(variant.span),
                 ),
                 span: *span,
@@ -1388,12 +1504,19 @@ impl<'a> ExprLowerer<'a> {
         &self,
         index_path: &NamePath,
         variant: &IndexVariantName,
-        span: Span,
+        index_span: Span,
+        variant_span: Span,
     ) -> Result<ResolvedIndexVariant, ExprLowerError> {
         self.ctx
             .resolver
             .resolve_index_variant_parts(self.ctx.owner, index_path, variant)
-            .map_err(|source| ExprLowerError::ModuleResolve { source, span })
+            .map_err(|source| {
+                let span = match source {
+                    ModuleResolveError::UnknownIndexVariant { .. } => variant_span,
+                    _ => index_span,
+                };
+                ExprLowerError::ModuleResolve { source, span }
+            })
     }
 
     fn allocate_local(&mut self, name: LocalName, span: Span) -> Result<LocalDef, ExprLowerError> {

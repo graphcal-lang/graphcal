@@ -55,10 +55,9 @@ fn index_def_for_label_index<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a IndexDef> {
-    index.resolved().map_or_else(
-        || registry.indexes.get_index(index.name().as_str()),
-        |resolved| resolved_collection_refs(dag).and_then(|refs| refs.index_defs.get(resolved)),
-    )
+    resolved_collection_refs(dag)
+        .and_then(|refs| refs.index_defs.get(index.resolved()))
+        .or_else(|| registry.indexes.get_index(index.name().as_str()))
 }
 
 /// Infer the type of an if/else expression.
@@ -302,10 +301,7 @@ pub(super) fn infer_match(
                 let (variant_name_str, duplicate_span) = if let Some(resolved_variant) =
                     resolved_match_label_variant(dag, &arm.pattern)
                 {
-                    if !index_identity.matches_resolved_or_name(
-                        &resolved_variant.index().to_unowned_def_name(),
-                        Some(resolved_variant.index()),
-                    ) {
+                    if !index_identity.matches_resolved(resolved_variant.index()) {
                         return Err(GraphcalError::IndexMismatch {
                             expected: index_name.clone(),
                             found: resolved_variant.index().to_unowned_def_name(),
@@ -410,10 +406,7 @@ pub(super) fn infer_match(
                 let resolved_pattern = resolved_constructor_pattern(dag, &arm.pattern);
                 let (variant_name_str, pattern_span, pattern_type_def, variant_def, bindings) =
                     if let Some(pattern) = resolved_pattern {
-                        if !type_name.matches_resolved_or_name(
-                            &pattern.target.type_def.name,
-                            Some(&pattern.target.owning_type),
-                        ) {
+                        if !type_name.matches_resolved(&pattern.target.owning_type) {
                             return Err(GraphcalError::UnknownField {
                                 type_name: type_name.name().clone(),
                                 field_name: FieldName::new(pattern.target.variant.name.as_str()),
