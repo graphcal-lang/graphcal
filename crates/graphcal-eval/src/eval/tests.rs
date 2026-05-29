@@ -1104,6 +1104,32 @@ fn write_same_leaf_constrained_record_type_project(
     (dir, root)
 }
 
+fn write_same_leaf_same_field_constrained_record_type_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub type Item { Item(value: Length(min: 1.0 m)) }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub type Item { Item(value: Length(min: 10.0 m)) }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
 fn loaded_file_dag_id(
     project: &crate::loader::LoadedProject,
     file_name: &str,
@@ -1181,6 +1207,241 @@ fn project_field_access_uses_resolved_struct_type_def_with_same_leaf_types() {
     );
 
     compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn eval_constructor_calls_preserve_same_leaf_struct_owners() {
+    let (_dir, root) = write_same_leaf_constructor_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node action: a.Action = a.Pick(distance: 2.0 m);\n\
+         node command: b.Command = b.Pick(duration: 3.0 s);\n",
+    );
+
+    let (_tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let a_id = loaded_file_dag_id(&project, "a.gcl");
+    let b_id = loaded_file_dag_id(&project, "b.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+
+    let owner_of_struct = |name: &str| {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == name)
+            .unwrap_or_else(|| panic!("node `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("node `{name}` failed: {e}"));
+        let Value::Struct { type_name, .. } = value else {
+            panic!("expected struct value for `{name}`, got {value:?}");
+        };
+        assert_eq!(type_name.name().as_str(), "Pick");
+        type_name
+            .resolved()
+            .cloned()
+            .unwrap_or_else(|| panic!("struct value `{name}` did not preserve owner"))
+    };
+
+    assert_eq!(owner_of_struct("action").owner(), &a_id);
+    assert_eq!(owner_of_struct("command").owner(), &b_id);
+}
+
+#[test]
+fn eval_constructor_match_uses_resolved_owner_and_binding() {
+    let (_dir, root) = write_same_leaf_constructor_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node action: a.Action = a.Pick(distance: 2.0 m);\n\
+         node command: b.Command = b.Pick(duration: 3.0 s);\n\
+         node distance: Length = match @action {\n\
+             a.Pick(distance: d) => d,\n\
+             a.Idle => 0.0 m,\n\
+         };\n\
+         node duration: Time = match @command {\n\
+             b.Pick(duration: t) => t,\n\
+             b.Idle => 0.0 s,\n\
+         };\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "distance") - 2.0).abs() < f64::EPSILON);
+    assert!((find_value(&result, "duration") - 3.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_field_access_uses_resolved_struct_type_def_with_same_leaf_types() {
+    let (_dir, root) = write_same_leaf_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node item: a.Item = a.Item(distance: 2.0 m);\n\
+         node other: b.Item = b.Item(duration: 3.0 s);\n\
+         node distance: Length = @item.distance;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "distance") - 2.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_constructor() {
+    let (_dir, root) = write_same_leaf_constructor_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node action: a.Action = a.Pick(distance: 2.0 m);\n\
+         node distance: Length = match @action {\n\
+             a.Pick(distance: d) => d,\n\
+             a.Idle => 0.0 m,\n\
+         };\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let expr = &tir
+        .root()
+        .nodes
+        .iter()
+        .find(|entry| entry.name.member() == "distance")
+        .expect("distance node")
+        .expr;
+    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+        loaded_file_dag_id(&project, "b.gcl"),
+        graphcal_compiler::syntax::names::StructTypeName::new("Command"),
+    );
+    let mut fields = indexmap::IndexMap::new();
+    fields.insert(
+        graphcal_compiler::syntax::names::FieldName::new("distance"),
+        crate::eval_expr::RuntimeValue::Scalar(9.0),
+    );
+    let values = HashMap::from([(
+        graphcal_compiler::syntax::names::ScopedName::local("action"),
+        crate::eval_expr::RuntimeValue::Struct {
+            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::new(
+                graphcal_compiler::syntax::names::StructTypeName::new("Pick"),
+                Some(b_owner),
+            ),
+            fields,
+        },
+    )]);
+    let empty_locals = HashMap::new();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
+    let src = &project.files[&project.root].named_source;
+    let ctx = crate::eval_expr::EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+        tir: &tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&values),
+        struct_field_constraints: None,
+    };
+
+    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    match err {
+        GraphcalError::EvalError { message, .. } => {
+            assert!(message.contains("no match arm for variant"), "{message}");
+        }
+        other => panic!("expected EvalError, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
+    let (_dir, root) = write_same_leaf_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node item: a.Item = a.Item(distance: 2.0 m);\n\
+         node other: b.Item = b.Item(duration: 3.0 s);\n\
+         node distance: Length = @item.distance;\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let expr = &tir
+        .root()
+        .nodes
+        .iter()
+        .find(|entry| entry.name.member() == "distance")
+        .expect("distance node")
+        .expr;
+    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+        loaded_file_dag_id(&project, "b.gcl"),
+        graphcal_compiler::syntax::names::StructTypeName::new("Item"),
+    );
+    let mut fields = indexmap::IndexMap::new();
+    fields.insert(
+        graphcal_compiler::syntax::names::FieldName::new("distance"),
+        crate::eval_expr::RuntimeValue::Scalar(99.0),
+    );
+    let values = HashMap::from([(
+        graphcal_compiler::syntax::names::ScopedName::local("item"),
+        crate::eval_expr::RuntimeValue::Struct {
+            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::new(
+                graphcal_compiler::syntax::names::StructTypeName::new("Item"),
+                Some(b_owner),
+            ),
+            fields,
+        },
+    )]);
+    let empty_locals = HashMap::new();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
+    let src = &project.files[&project.root].named_source;
+    let ctx = crate::eval_expr::EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+        tir: &tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&values),
+        struct_field_constraints: None,
+    };
+
+    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    match err {
+        GraphcalError::EvalError { message, .. } => {
+            assert!(message.contains("no field `distance`"), "{message}");
+        }
+        other => panic!("expected EvalError, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fields() {
+    let (_dir, root) = write_same_leaf_same_field_constrained_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node a_ok: a.Item = a.Item(value: 2.0 m);\n\
+         node b_bad: b.Item = b.Item(value: 2.0 m);\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let a_ok = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "a_ok")
+        .expect("node a_ok")
+        .1
+        .as_ref();
+    assert!(
+        a_ok.is_ok(),
+        "a_ok should satisfy a.Item's constraint: {a_ok:?}"
+    );
+    let b_bad = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "b_bad")
+        .expect("node b_bad")
+        .1
+        .as_ref();
+    match b_bad {
+        Err(NodeError::EvalFailed { message }) => {
+            assert!(message.contains("minimum"), "{message}");
+        }
+        other => panic!("expected b_bad constraint failure, got {other:?}"),
+    }
 }
 
 #[test]

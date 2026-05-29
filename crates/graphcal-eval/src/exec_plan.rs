@@ -955,11 +955,16 @@ fn check_const_struct_field_constraints(
 ) -> Result<(), GraphcalError> {
     match value {
         RuntimeValue::Struct { type_name, fields } => {
+            let runtime_owning_type = type_name
+                .resolved()
+                .cloned()
+                .map(StructTypeRef::from_resolved);
+            let effective_owning_type = owning_type.or(runtime_owning_type.as_ref());
             let constructor = ConstructorName::from_atom(type_name.name().atom().clone());
             for (field_name, field_value) in fields {
                 if let Some(constraint) = find_struct_field_constraint(
                     field_constraints,
-                    owning_type,
+                    effective_owning_type,
                     &constructor,
                     field_name,
                 ) && let Err(violation) =
@@ -973,9 +978,10 @@ fn check_const_struct_field_constraints(
                         span: decl_span.into(),
                     });
                 }
-                // Recurse for nested struct fields. Field-declared struct owners are
-                // not threaded through this runtime walk yet, so nested lookups
-                // intentionally fall back to constructor+field.
+                // Recurse for nested struct fields. The nested runtime value
+                // carries its canonical owner when module-aware constructor
+                // evaluation created it, so the recursive call can recover the
+                // owner even without a field-declared type side channel.
                 check_const_struct_field_constraints(
                     field_value,
                     &format!("{decl_name}.{field_name}"),

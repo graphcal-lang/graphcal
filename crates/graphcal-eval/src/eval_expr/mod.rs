@@ -18,7 +18,7 @@ use graphcal_compiler::syntax::names::{
 use graphcal_compiler::registry::builtins::BuiltinFunction;
 use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::{Registry, UnitScale};
+use graphcal_compiler::registry::types::{Registry, TypeDef, UnitScale};
 use graphcal_compiler::tir::typed::{
     DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint, ResolvedInlineDagCall,
     StructFieldConstraintKey,
@@ -106,6 +106,29 @@ fn constructor_call_target<'a>(
     ctx.current_dag
         .and_then(|dag| dag.resolved_constructor_refs.as_ref())
         .and_then(|refs| refs.constructor_calls.get(&span))
+}
+
+fn runtime_struct_type_def<'a>(
+    type_name: &StructTypeRef,
+    ctx: &'a EvalContext<'_>,
+) -> Option<&'a TypeDef> {
+    match type_name.resolved() {
+        Some(resolved) => ctx
+            .tir
+            .dags
+            .values()
+            .find_map(|dag| dag.resolved_type_defs.as_ref()?.struct_types.get(resolved)),
+        None => ctx.registry.types.get_type(type_name.as_str()),
+    }
+}
+
+fn constructor_fields_for_runtime_struct<'a>(
+    type_def: &'a TypeDef,
+    type_name: &StructTypeRef,
+) -> Option<&'a [graphcal_compiler::registry::types::StructField]> {
+    type_def.union_members()?.iter().find_map(|member| {
+        (member.name.as_str() == type_name.as_str()).then_some(member.fields.as_slice())
+    })
 }
 
 fn find_struct_field_constraint<'a>(
@@ -318,7 +341,30 @@ pub fn eval_expr(
         ExprKind::FieldAccess { expr: inner, field } => {
             let inner_val = eval_expr(inner, values, local_values, ctx)?;
             match inner_val {
-                RuntimeValue::Struct { fields, .. } => {
+                RuntimeValue::Struct { type_name, fields } => {
+                    if let Some(type_def) = runtime_struct_type_def(&type_name, ctx) {
+                        let constructor_fields =
+                            constructor_fields_for_runtime_struct(type_def, &type_name)
+                                .ok_or_else(|| {
+                                    ctx.eval_error(
+                                        format!(
+                                            "constructor `{}` is not a member of struct `{}`",
+                                            type_name.name(),
+                                            type_def.name
+                                        ),
+                                        inner.span,
+                                    )
+                                })?;
+                        if !constructor_fields
+                            .iter()
+                            .any(|field_def| field_def.name == field.value)
+                        {
+                            return Err(ctx.eval_error(
+                                format!("no field `{}` on struct `{type_name}`", field.value),
+                                field.span,
+                            ));
+                        }
+                    }
                     fields.get(field.value.as_str()).cloned().ok_or_else(|| {
                         ctx.eval_error(format!("no field `{}` on struct", field.value), field.span)
                     })
@@ -329,23 +375,29 @@ pub fn eval_expr(
 
         // --- Constructor call ---
         ExprKind::ConstructorCall { callee, fields, .. } => {
-            let Some(constructor) = callee.as_bare() else {
-                return Err(ctx.eval_error(
-                    format!("unknown constructor `{}`", callee.display_path()),
-                    callee.span(),
-                ));
-            };
             let resolved_constructor = constructor_call_target(ctx, callee.span());
-            let owning_type = resolved_constructor
-                .map(|target| StructTypeRef::from_resolved(target.owning_type.clone()));
-            let constructor_name = ConstructorName::from_atom(constructor.name.clone());
+            let (constructor_name, owning_type) = match resolved_constructor {
+                Some(target) => (
+                    target.variant.name.clone(),
+                    Some(StructTypeRef::from_resolved(target.owning_type.clone())),
+                ),
+                None => {
+                    let Some(constructor) = callee.as_bare() else {
+                        return Err(ctx.eval_error(
+                            format!("unknown constructor `{}`", callee.display_path()),
+                            callee.span(),
+                        ));
+                    };
+                    (ConstructorName::from_atom(constructor.name.clone()), None)
+                }
+            };
             let mut field_map = IndexMap::new();
             for field_init in fields {
                 let val = eval_expr(&field_init.value, values, local_values, ctx)?;
                 // Validate against any field-level domain constraint declared
                 // on `<constructor>.<field_name>`. Prefer the HIR-resolved owning
                 // struct identity when available; runtime values still store the
-                // constructor leaf until the runtime identity migration.
+                // constructor leaf for display/variant identity.
                 if let Some(field_constraints) = ctx.struct_field_constraints
                     && let Some(constraint) = find_struct_field_constraint(
                         field_constraints,
@@ -360,7 +412,7 @@ pub fn eval_expr(
                     return Err(ctx.eval_error(
                         format!(
                             "field `{}.{}` {}",
-                            constructor.name, field_init.name.value, violation.message
+                            constructor_name, field_init.name.value, violation.message
                         ),
                         span,
                     ));
@@ -369,9 +421,11 @@ pub fn eval_expr(
             }
             let type_name = resolved_constructor.map_or_else(
                 || {
-                    StructTypeRef::legacy(graphcal_compiler::syntax::names::StructTypeName::new(
-                        &constructor.name,
-                    ))
+                    StructTypeRef::legacy(
+                        graphcal_compiler::syntax::names::StructTypeName::from_atom(
+                            constructor_name.atom().clone(),
+                        ),
+                    )
                 },
                 |target| {
                     StructTypeRef::new(
