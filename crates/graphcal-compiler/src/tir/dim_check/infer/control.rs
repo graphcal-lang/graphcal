@@ -51,12 +51,12 @@ fn index_def_for_label_index<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a IndexDef> {
-    index
-        .resolved()
-        .and_then(|resolved| {
+    match index.resolved() {
+        Some(resolved) => {
             resolved_collection_refs(dag).and_then(|refs| refs.index_defs.get(resolved))
-        })
-        .or_else(|| registry.indexes.get_index(index.name().as_str()))
+        }
+        None => registry.indexes.get_index(index.name().as_str()),
+    }
 }
 
 /// Infer the type of an if/else expression.

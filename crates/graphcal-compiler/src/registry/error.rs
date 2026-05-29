@@ -663,7 +663,7 @@ pub enum GraphcalError {
     },
 
     #[error(
-        "invalid argument in `#[expected_fail(...)]`: expected `Index.Variant` or `(Index.Variant, ...)`"
+        "invalid argument in `#[expected_fail(...)]`: expected `Index.Variant`, `module.Index.Variant`, or grouped variants"
     )]
     #[diagnostic(code(graphcal::A009))]
     ExpectedFailInvalidArg {
@@ -689,7 +689,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::A011),
         help(
-            "use `#[expected_fail(Index.Variant, ...)]` to specify which variants are expected to fail"
+            "use `#[expected_fail(Index.Variant, ...)]` or qualified `#[expected_fail(module.Index.Variant, ...)]` to specify which variants are expected to fail"
         )
     )]
     ExpectedFailAllOnIndexed {

@@ -440,7 +440,8 @@ fn infer_decl_ref_type(
 ) -> Result<InferredType, GraphcalError> {
     if let Some(resolved) = dag.and_then(|dag| dag.resolved_decl_types.get(name)) {
         let dim_sub = HashMap::new();
-        let index_sub = HashMap::<GenericParamName, IndexName>::new();
+        let index_sub =
+            HashMap::<GenericParamName, crate::registry::declared_type::IndexTypeRef>::new();
         let nat_sub = HashMap::new();
         return crate::tir::typed::substitute_resolved_type(
             resolved, &dim_sub, &index_sub, &nat_sub, src,

@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::syntax::dimension::Dimension;
-use graphcal_compiler::syntax::names::{DeclName, IndexName, IndexVariantName, ScopedName};
+use graphcal_compiler::syntax::names::{DeclName, IndexVariantName, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
 use crate::decl_key::RuntimeDeclKey;
@@ -16,7 +16,7 @@ use crate::eval_expr::{
     EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, UnfoldContext, eval_expr,
     eval_hir_expr,
 };
-use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail};
+use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail, ExpectedFailKey};
 use graphcal_compiler::registry::builtins::{
     BuiltinFunction, builtin_constants, builtin_functions,
 };
@@ -664,21 +664,22 @@ fn evaluate_assert_with_expected_fail(
     }
 }
 
-fn expected_index_key_matches(actual: &IndexTypeRef, expected: &IndexName) -> bool {
-    actual.name() == expected
+fn expected_index_key_matches(actual: &IndexTypeRef, expected: &IndexTypeRef) -> bool {
+    actual.matches_ref(expected)
 }
 
 fn expected_fail_key_matches_path(
     path: &[(IndexTypeRef, IndexVariantName)],
-    key: &[(IndexName, IndexVariantName)],
+    key: &ExpectedFailKey,
 ) -> bool {
     path.len() == key.len()
-        && path.iter().zip(key.iter()).all(
-            |((actual_index, actual_variant), (expected_index, expected_variant))| {
-                expected_index_key_matches(actual_index, expected_index)
-                    && actual_variant == expected_variant
-            },
-        )
+        && path
+            .iter()
+            .zip(key.iter())
+            .all(|((actual_index, actual_variant), expected)| {
+                expected_index_key_matches(actual_index, &expected.index)
+                    && actual_variant == &expected.variant
+            })
 }
 
 /// Invert specific variant entries in an indexed `RuntimeValue`.
@@ -689,7 +690,7 @@ fn expected_fail_key_matches_path(
 fn invert_indexed_variants(
     index_name: &IndexTypeRef,
     entries: IndexMap<IndexVariantName, RuntimeValue>,
-    keys: &[Vec<(IndexName, IndexVariantName)>],
+    keys: &[ExpectedFailKey],
 ) -> (IndexTypeRef, IndexMap<IndexVariantName, RuntimeValue>) {
     let inverted_entries = entries
         .into_iter()
@@ -699,8 +700,8 @@ fn invert_indexed_variants(
                     // Single-index: check if this variant is in any key
                     let should_invert = keys.iter().any(|key| {
                         key.len() == 1
-                            && expected_index_key_matches(index_name, &key[0].0)
-                            && key[0].1 == variant
+                            && expected_index_key_matches(index_name, &key[0].index)
+                            && key[0].variant == variant
                     });
                     if should_invert {
                         RuntimeValue::Bool(!b)
@@ -714,12 +715,12 @@ fn invert_indexed_variants(
                 } => {
                     // Multi-index: filter keys that match the current variant at position 0,
                     // then strip the first element and recurse.
-                    let sub_keys: Vec<Vec<(IndexName, IndexVariantName)>> = keys
+                    let sub_keys: Vec<ExpectedFailKey> = keys
                         .iter()
                         .filter(|key| {
                             key.len() >= 2
-                                && expected_index_key_matches(index_name, &key[0].0)
-                                && key[0].1 == variant
+                                && expected_index_key_matches(index_name, &key[0].index)
+                                && key[0].variant == variant
                         })
                         .map(|key| key[1..].to_vec())
                         .collect();
@@ -791,7 +792,7 @@ fn format_indexed_paths(
 fn check_indexed_assert_with_expected_fail(
     index_name: &IndexTypeRef,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
-    keys: &[Vec<(IndexName, IndexVariantName)>],
+    keys: &[ExpectedFailKey],
 ) -> AssertResult {
     match collect_failing_paths(index_name, entries) {
         Ok(paths) if paths.is_empty() => AssertResult::Pass,

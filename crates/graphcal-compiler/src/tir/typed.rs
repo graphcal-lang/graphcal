@@ -21,6 +21,7 @@ use crate::syntax::span::{Span, Spanned};
 
 use crate::ir::lower::IR;
 use crate::ir::resolve::{DeclCategory, ExpectedFail};
+use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{
@@ -577,11 +578,19 @@ pub enum ResolvedIndex {
 /// lookup side table used by TIR resolution: qualified source paths are first
 /// resolved through [`ModuleResolver`] to canonical owners, then looked up here
 /// instead of by source alias text or a dotted string.
+#[derive(Debug, Clone)]
+pub struct ModuleConstructorDef {
+    pub owning_type: ResolvedName<namespace::StructType>,
+    pub type_def: TypeDef,
+    pub variant: UnionMemberDef,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ModuleTypeRegistry {
     dimensions: HashMap<ResolvedName<namespace::Dim>, Dimension>,
     indexes: HashMap<ResolvedName<namespace::Index>, IndexDef>,
     struct_types: HashMap<ResolvedName<namespace::StructType>, TypeDef>,
+    constructors: HashMap<ResolvedName<namespace::Constructor>, ModuleConstructorDef>,
 }
 
 impl ModuleTypeRegistry {
@@ -629,10 +638,21 @@ impl ModuleTypeRegistry {
             );
         }
         for type_def in registry.types.all_types() {
-            self.struct_types.insert(
-                ResolvedName::from_def(owner.clone(), type_def.name.clone()),
-                type_def.clone(),
-            );
+            let type_name = ResolvedName::from_def(owner.clone(), type_def.name.clone());
+            self.struct_types
+                .insert(type_name.clone(), type_def.clone());
+            if let Some(members) = type_def.union_members() {
+                for member in members {
+                    self.constructors.insert(
+                        ResolvedName::from_def(owner.clone(), member.name.clone()),
+                        ModuleConstructorDef {
+                            owning_type: type_name.clone(),
+                            type_def: type_def.clone(),
+                            variant: member.clone(),
+                        },
+                    );
+                }
+            }
         }
     }
 
@@ -656,21 +676,8 @@ impl ModuleTypeRegistry {
     pub fn lookup_constructor(
         &self,
         constructor: &ResolvedName<namespace::Constructor>,
-    ) -> Option<(
-        ResolvedName<namespace::StructType>,
-        &TypeDef,
-        &UnionMemberDef,
-    )> {
-        self.struct_types
-            .iter()
-            .filter(|(type_name, _)| type_name.owner() == constructor.owner())
-            .find_map(|(type_name, type_def)| {
-                let member = type_def
-                    .union_members()?
-                    .iter()
-                    .find(|member| member.name.as_str() == constructor.as_str())?;
-                Some((type_name.clone(), type_def, member))
-            })
+    ) -> Option<&ModuleConstructorDef> {
+        self.constructors.get(constructor)
     }
 }
 
@@ -1314,7 +1321,8 @@ fn type_resolve_impl(
         ir.imported_decl_types,
         ir.imported_value_sources,
         module_ctx,
-    );
+        src,
+    )?;
     let mut dags = DagRegistry::new();
     dags.insert(root_dag_id.clone(), root_dag);
     Ok(TIR {
@@ -1363,7 +1371,7 @@ fn type_resolve_single_impl(
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<DagTIR, GraphcalError> {
-    Ok(type_resolve_dag(
+    type_resolve_dag(
         ir.consts,
         ir.params,
         ir.nodes,
@@ -1387,7 +1395,8 @@ fn type_resolve_single_impl(
         ir.imported_decl_types,
         ir.imported_value_sources,
         module_ctx,
-    ))
+        src,
+    )
 }
 
 /// Internal helper: resolve type annotations for the const/param/node
@@ -1449,9 +1458,9 @@ fn type_resolve_dag(
         })
     });
     let resolved_collection_refs = module_ctx.and_then(|ctx| {
-        resolved_exprs.as_ref().and_then(|exprs| {
-            collect_resolved_collection_refs(exprs, &resolved_decl_types, ctx, registry)
-        })
+        resolved_exprs
+            .as_ref()
+            .and_then(|exprs| collect_resolved_collection_refs(exprs, &resolved_decl_types, ctx))
     });
     let resolved_constructor_refs = module_ctx.and_then(|ctx| {
         resolved_exprs
@@ -1492,6 +1501,11 @@ fn collect_resolved_type_defs(
     ctx: ModuleTypeContext<'_>,
 ) -> ResolvedTypeDefs {
     let mut defs = ResolvedTypeDefs::default();
+    if let Some(symbols) = ctx.resolver.modules().get(ctx.owner) {
+        for symbol in symbols.struct_types().values() {
+            record_resolved_struct_type_def(symbol.resolved(), ctx, &mut defs);
+        }
+    }
     for resolved in resolved_decl_types.values() {
         collect_struct_type_defs_from_resolved_type(resolved, ctx, &mut defs);
     }
@@ -1649,12 +1663,11 @@ fn collect_resolved_collection_refs(
     exprs: &ResolvedExpressions,
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
     ctx: ModuleTypeContext<'_>,
-    registry: &Registry,
 ) -> Option<ResolvedCollectionRefs> {
     let mut refs = ResolvedCollectionRefs::default();
 
     for resolved_type in resolved_decl_types.values() {
-        collect_resolved_collection_indexes_from_type(resolved_type, ctx, registry, &mut refs)?;
+        collect_resolved_collection_indexes_from_type(resolved_type, ctx, &mut refs)?;
     }
 
     for hir_expr in exprs
@@ -1663,7 +1676,7 @@ fn collect_resolved_collection_refs(
         .chain(exprs.param_defaults.values())
         .chain(exprs.nodes.values())
     {
-        collect_resolved_collection_refs_from_expr(hir_expr, ctx, registry, &mut refs)?;
+        collect_resolved_collection_refs_from_expr(hir_expr, ctx, &mut refs)?;
     }
 
     Some(refs)
@@ -1672,17 +1685,12 @@ fn collect_resolved_collection_refs(
 fn record_resolved_collection_index(
     index: &ResolvedName<namespace::Index>,
     ctx: ModuleTypeContext<'_>,
-    registry: &Registry,
     refs: &mut ResolvedCollectionRefs,
 ) -> Option<()> {
     if refs.index_defs.contains_key(index) {
         return Some(());
     }
-    let def = ctx
-        .types
-        .get_index(index)
-        .or_else(|| registry.indexes.get_index(index.as_str()))?
-        .clone();
+    let def = ctx.types.get_index(index)?.clone();
     refs.index_defs.insert(index.clone(), def);
     Some(())
 }
@@ -1690,25 +1698,24 @@ fn record_resolved_collection_index(
 fn collect_resolved_collection_indexes_from_type(
     resolved_type: &ResolvedTypeExpr,
     ctx: ModuleTypeContext<'_>,
-    registry: &Registry,
     refs: &mut ResolvedCollectionRefs,
 ) -> Option<()> {
     match resolved_type {
         ResolvedTypeExpr::Label(_, Some(index), _) => {
-            record_resolved_collection_index(index, ctx, registry, refs)
+            record_resolved_collection_index(index, ctx, refs)
         }
         ResolvedTypeExpr::Indexed { base, indexes } => {
-            collect_resolved_collection_indexes_from_type(base, ctx, registry, refs)?;
+            collect_resolved_collection_indexes_from_type(base, ctx, refs)?;
             for index in indexes {
                 if let ResolvedIndex::Concrete(_, Some(resolved), _) = index {
-                    record_resolved_collection_index(resolved, ctx, registry, refs)?;
+                    record_resolved_collection_index(resolved, ctx, refs)?;
                 }
             }
             Some(())
         }
         ResolvedTypeExpr::GenericStruct { type_args, .. } => {
             for arg in type_args {
-                collect_resolved_collection_indexes_from_type(arg, ctx, registry, refs)?;
+                collect_resolved_collection_indexes_from_type(arg, ctx, refs)?;
             }
             Some(())
         }
@@ -1728,7 +1735,6 @@ fn collect_resolved_collection_indexes_from_type(
 fn collect_resolved_collection_refs_from_expr(
     expr: &hir::Expr,
     ctx: ModuleTypeContext<'_>,
-    registry: &Registry,
     refs: &mut ResolvedCollectionRefs,
 ) -> Option<()> {
     match &expr.kind {
@@ -1742,27 +1748,27 @@ fn collect_resolved_collection_refs_from_expr(
         | hir::ExprKind::UnitLiteral { .. } => Some(()),
         hir::ExprKind::ConstRef(target) => {
             if let hir::ConstRef::IndexVariant(variant) = &target.value {
-                let _ = record_resolved_collection_index(variant.index(), ctx, registry, refs);
+                let _ = record_resolved_collection_index(variant.index(), ctx, refs);
                 refs.variant_literals.insert(target.span, variant.clone());
             }
             Some(())
         }
         hir::ExprKind::VariantLiteral(variant) => {
-            let _ = record_resolved_collection_index(variant.value.index(), ctx, registry, refs);
+            let _ = record_resolved_collection_index(variant.value.index(), ctx, refs);
             refs.variant_literals
                 .insert(variant.span, variant.value.clone());
             Some(())
         }
         hir::ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_resolved_collection_refs_from_expr(lhs, ctx, registry, refs)?;
-            collect_resolved_collection_refs_from_expr(rhs, ctx, registry, refs)
+            collect_resolved_collection_refs_from_expr(lhs, ctx, refs)?;
+            collect_resolved_collection_refs_from_expr(rhs, ctx, refs)
         }
         hir::ExprKind::UnaryOp { operand, .. } => {
-            collect_resolved_collection_refs_from_expr(operand, ctx, registry, refs)
+            collect_resolved_collection_refs_from_expr(operand, ctx, refs)
         }
         hir::ExprKind::FnCall { args, .. } => {
             for arg in args {
-                collect_resolved_collection_refs_from_expr(arg, ctx, registry, refs)?;
+                collect_resolved_collection_refs_from_expr(arg, ctx, refs)?;
             }
             Some(())
         }
@@ -1771,18 +1777,18 @@ fn collect_resolved_collection_refs_from_expr(
             then_branch,
             else_branch,
         } => {
-            collect_resolved_collection_refs_from_expr(condition, ctx, registry, refs)?;
-            collect_resolved_collection_refs_from_expr(then_branch, ctx, registry, refs)?;
-            collect_resolved_collection_refs_from_expr(else_branch, ctx, registry, refs)
+            collect_resolved_collection_refs_from_expr(condition, ctx, refs)?;
+            collect_resolved_collection_refs_from_expr(then_branch, ctx, refs)?;
+            collect_resolved_collection_refs_from_expr(else_branch, ctx, refs)
         }
         hir::ExprKind::Convert { expr, .. }
         | hir::ExprKind::DisplayTimezone { expr, .. }
         | hir::ExprKind::FieldAccess { expr, .. } => {
-            collect_resolved_collection_refs_from_expr(expr, ctx, registry, refs)
+            collect_resolved_collection_refs_from_expr(expr, ctx, refs)
         }
         hir::ExprKind::ConstructorCall { fields, .. } => {
             for field in fields {
-                collect_resolved_collection_refs_from_expr(&field.value, ctx, registry, refs)?;
+                collect_resolved_collection_refs_from_expr(&field.value, ctx, refs)?;
             }
             Some(())
         }
@@ -1791,19 +1797,14 @@ fn collect_resolved_collection_refs_from_expr(
                 for key in &entry.keys {
                     match key {
                         hir::expr::MapEntryKey::IndexVariant(variant) => {
-                            record_resolved_collection_index(
-                                variant.value.index(),
-                                ctx,
-                                registry,
-                                refs,
-                            )?;
+                            record_resolved_collection_index(variant.value.index(), ctx, refs)?;
                             refs.map_entry_variants
                                 .insert(variant.span, variant.value.clone());
                         }
                         hir::expr::MapEntryKey::NatRangeVariant { .. } => {}
                     }
                 }
-                collect_resolved_collection_refs_from_expr(&entry.value, ctx, registry, refs)?;
+                collect_resolved_collection_refs_from_expr(&entry.value, ctx, refs)?;
             }
             Some(())
         }
@@ -1811,31 +1812,26 @@ fn collect_resolved_collection_refs_from_expr(
             for binding in bindings {
                 match &binding.index {
                     hir::expr::ForBindingIndex::Named(index) => {
-                        record_resolved_collection_index(&index.value, ctx, registry, refs)?;
+                        record_resolved_collection_index(&index.value, ctx, refs)?;
                         refs.for_binding_indexes
                             .insert(index.span, index.value.clone());
                     }
                     hir::expr::ForBindingIndex::Range { .. } => {}
                 }
             }
-            collect_resolved_collection_refs_from_expr(body, ctx, registry, refs)
+            collect_resolved_collection_refs_from_expr(body, ctx, refs)
         }
         hir::ExprKind::IndexAccess { expr, args } => {
-            collect_resolved_collection_refs_from_expr(expr, ctx, registry, refs)?;
+            collect_resolved_collection_refs_from_expr(expr, ctx, refs)?;
             for arg in args {
                 match arg {
                     hir::expr::IndexArg::Variant(variant) => {
-                        record_resolved_collection_index(
-                            variant.value.index(),
-                            ctx,
-                            registry,
-                            refs,
-                        )?;
+                        record_resolved_collection_index(variant.value.index(), ctx, refs)?;
                         refs.index_access_variants
                             .insert(variant.span, variant.value.clone());
                     }
                     hir::expr::IndexArg::Expr(expr) => {
-                        collect_resolved_collection_refs_from_expr(expr, ctx, registry, refs)?;
+                        collect_resolved_collection_refs_from_expr(expr, ctx, refs)?;
                     }
                     hir::expr::IndexArg::Var(_) => {}
                 }
@@ -1845,31 +1841,31 @@ fn collect_resolved_collection_refs_from_expr(
         hir::ExprKind::Scan {
             source, init, body, ..
         } => {
-            collect_resolved_collection_refs_from_expr(source, ctx, registry, refs)?;
-            collect_resolved_collection_refs_from_expr(init, ctx, registry, refs)?;
-            collect_resolved_collection_refs_from_expr(body, ctx, registry, refs)
+            collect_resolved_collection_refs_from_expr(source, ctx, refs)?;
+            collect_resolved_collection_refs_from_expr(init, ctx, refs)?;
+            collect_resolved_collection_refs_from_expr(body, ctx, refs)
         }
         hir::ExprKind::Unfold { init, body, .. } => {
-            collect_resolved_collection_refs_from_expr(init, ctx, registry, refs)?;
-            collect_resolved_collection_refs_from_expr(body, ctx, registry, refs)
+            collect_resolved_collection_refs_from_expr(init, ctx, refs)?;
+            collect_resolved_collection_refs_from_expr(body, ctx, refs)
         }
         hir::ExprKind::Match { scrutinee, arms } => {
-            collect_resolved_collection_refs_from_expr(scrutinee, ctx, registry, refs)?;
+            collect_resolved_collection_refs_from_expr(scrutinee, ctx, refs)?;
             for arm in arms {
                 if let hir::expr::MatchPattern::IndexLabel { variant, span } = &arm.pattern {
-                    record_resolved_collection_index(variant.value.index(), ctx, registry, refs)?;
+                    record_resolved_collection_index(variant.value.index(), ctx, refs)?;
                     refs.match_label_variants
                         .insert(variant.span, variant.value.clone());
                     refs.match_label_variants
                         .insert(*span, variant.value.clone());
                 }
-                collect_resolved_collection_refs_from_expr(&arm.body, ctx, registry, refs)?;
+                collect_resolved_collection_refs_from_expr(&arm.body, ctx, refs)?;
             }
             Some(())
         }
         hir::ExprKind::InlineDagRef { args, .. } => {
             for arg in args {
-                collect_resolved_collection_refs_from_expr(&arg.value, ctx, registry, refs)?;
+                collect_resolved_collection_refs_from_expr(&arg.value, ctx, refs)?;
             }
             Some(())
         }
@@ -1903,12 +1899,12 @@ fn record_resolved_constructor_target(
         return Some(target.clone());
     }
 
-    let (owning_type, type_def, variant) = ctx.types.lookup_constructor(constructor)?;
+    let def = ctx.types.lookup_constructor(constructor)?;
     let target = ResolvedConstructorTarget {
         constructor: constructor.clone(),
-        owning_type,
-        type_def: type_def.clone(),
-        variant: variant.clone(),
+        owning_type: def.owning_type.clone(),
+        type_def: def.type_def.clone(),
+        variant: def.variant.clone(),
     };
     refs.constructor_defs
         .insert(constructor.clone(), target.clone());
@@ -2215,6 +2211,50 @@ fn scoped_name_to_name_path(name: &ScopedName) -> Option<NamePath> {
     })
 }
 
+fn resolve_expected_fail_keys(
+    expected_fail: HashMap<ScopedName, ExpectedFail>,
+    ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<HashMap<ScopedName, ExpectedFail>, GraphcalError> {
+    expected_fail
+        .into_iter()
+        .map(|(assert_name, expected)| {
+            let resolved = match expected {
+                ExpectedFail::All => ExpectedFail::All,
+                ExpectedFail::Variants(keys) => {
+                    let resolved_keys = keys
+                        .into_iter()
+                        .map(|key| {
+                            key.into_iter()
+                                .map(|part| {
+                                    if part.index.resolved().is_some() {
+                                        return Ok(part);
+                                    }
+                                    let index_path =
+                                        part.source_index_path.clone().unwrap_or_else(|| {
+                                            NamePath::from(part.index.name().clone())
+                                        });
+                                    let resolved = ctx
+                                        .resolver
+                                        .resolve_index_variant_parts(
+                                            ctx.owner,
+                                            &index_path,
+                                            &part.variant,
+                                        )
+                                        .map_err(|err| module_resolve_error(err, src, part.span))?;
+                                    Ok(part.with_resolved_variant(resolved))
+                                })
+                                .collect::<Result<_, GraphcalError>>()
+                        })
+                        .collect::<Result<_, GraphcalError>>()?;
+                    ExpectedFail::Variants(resolved_keys)
+                }
+            };
+            Ok((assert_name, resolved))
+        })
+        .collect()
+}
+
 /// Partially-built [`DagTIR`] returned by [`type_resolve_dag`]; finalized
 /// by [`DagTIRSeed::with_body`] which fills in the rest of the per-DAG
 /// fields.
@@ -2259,7 +2299,8 @@ impl DagTIRSeed {
         imported_decl_types: HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
         imported_value_sources: HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
         module_ctx: Option<ModuleTypeContext<'_>>,
-    ) -> DagTIR {
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<DagTIR, GraphcalError> {
         let resolved_decl_bindings = module_ctx.and_then(|ctx| {
             collect_resolved_decl_bindings(
                 ctx,
@@ -2271,7 +2312,12 @@ impl DagTIRSeed {
                 &imported_value_sources,
             )
         });
-        DagTIR {
+        let expected_fail = match module_ctx {
+            Some(ctx) => resolve_expected_fail_keys(expected_fail, ctx, src)?,
+            None => expected_fail,
+        };
+
+        Ok(DagTIR {
             dag_id: self.dag_id,
             consts: self.consts,
             params: self.params,
@@ -2299,7 +2345,7 @@ impl DagTIRSeed {
             imported_decl_types,
             imported_value_sources,
             pub_nodes: std::collections::HashSet::new(),
-        }
+        })
     }
 }
 
@@ -2586,7 +2632,7 @@ pub fn unify_resolved_type(
     resolved: &ResolvedTypeExpr,
     actual: &crate::tir::dim_check::InferredType,
     dim_sub: &mut HashMap<GenericParamName, Dimension>,
-    index_sub: &mut HashMap<GenericParamName, IndexName>,
+    index_sub: &mut HashMap<GenericParamName, IndexTypeRef>,
     nat_sub: &mut HashMap<GenericParamName, u64>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
@@ -2618,9 +2664,9 @@ pub fn unify_resolved_type(
                         bind_or_check(
                             index_sub,
                             gp.clone(),
-                            actual_idx.name().clone(),
+                            actual_idx.type_ref().clone(),
                             |prev, _| GraphcalError::IndexMismatch {
-                                expected: prev.clone(),
+                                expected: prev.name().clone(),
                                 found: actual_idx.name().clone(),
                                 src: src.clone(),
                                 span: span.into(),
@@ -2914,7 +2960,7 @@ pub fn unify_resolved_type(
 pub fn substitute_resolved_type(
     resolved: &ResolvedTypeExpr,
     dim_sub: &HashMap<GenericParamName, Dimension>,
-    index_sub: &HashMap<GenericParamName, IndexName>,
+    index_sub: &HashMap<GenericParamName, IndexTypeRef>,
     nat_sub: &HashMap<GenericParamName, u64>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::dim_check::InferredType, GraphcalError> {
@@ -3017,7 +3063,7 @@ pub fn substitute_resolved_type(
                         continue;
                     }
                     ResolvedIndex::GenericParam(gp, span) => {
-                        crate::tir::dim_check::InferredIndex::legacy(
+                        crate::tir::dim_check::InferredIndex::from_ref(
                             index_sub
                                 .get(gp)
                                 .cloned()
@@ -3144,7 +3190,6 @@ fn hir_lower_error_to_graphcal(
 
 #[derive(Clone, Copy)]
 struct HirTypeResolutionContext<'a> {
-    registry: &'a Registry,
     src: &'a NamedSource<Arc<String>>,
     resolver: &'a ModuleResolver,
     module_types: &'a ModuleTypeRegistry,
@@ -3160,13 +3205,12 @@ struct HirTypeResolutionContext<'a> {
 /// source-path lookup itself.
 pub fn resolve_hir_type_expr(
     type_ann: &hir::TypeExpr,
-    registry: &Registry,
+    _registry: &Registry,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
     let prelude = hir::PreludeTypeScope::graphcal();
     let ctx = HirTypeResolutionContext {
-        registry,
         src,
         resolver: module_ctx.resolver,
         module_types: module_ctx.types,
@@ -3200,7 +3244,6 @@ fn resolve_ast_type_expr_via_hir(
         Err(err) => return Err(hir_lower_error_to_graphcal(err, src)),
     };
     let resolve_ctx = HirTypeResolutionContext {
-        registry,
         src,
         resolver: module_ctx.resolver,
         module_types: module_ctx.types,
@@ -3270,12 +3313,6 @@ fn hir_dimension(
     ctx.module_types
         .get_dimension(name)
         .cloned()
-        .or_else(|| {
-            ctx.registry
-                .dimensions
-                .get_dimension(name.as_str())
-                .cloned()
-        })
         .ok_or_else(|| GraphcalError::UnknownDimension {
             name: name.to_def_name(),
             src: ctx.src.clone(),
@@ -3288,12 +3325,7 @@ fn hir_index_name(
     span: Span,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<IndexName, GraphcalError> {
-    if ctx
-        .module_types
-        .get_index(name)
-        .or_else(|| ctx.registry.indexes.get_index(name.as_str()))
-        .is_some()
-    {
+    if ctx.module_types.get_index(name).is_some() {
         Ok(name.to_def_name())
     } else {
         Err(GraphcalError::UnknownIndex {
@@ -3311,7 +3343,6 @@ fn hir_struct_type_def<'a>(
 ) -> Result<&'a TypeDef, GraphcalError> {
     ctx.module_types
         .get_struct_type(name)
-        .or_else(|| ctx.registry.types.get_type(name.as_str()))
         .ok_or_else(|| GraphcalError::UnknownStructType {
             name: name.to_string(),
             src: ctx.src.clone(),
@@ -3549,9 +3580,7 @@ fn resolve_index_expr_name(
     if let Some(ctx) = module_ctx {
         match ctx.resolver.resolve_index_path(ctx.owner, path) {
             Ok(resolved) => {
-                if ctx.types.get_index(&resolved).is_some()
-                    || registry.indexes.get_index(resolved.as_str()).is_some()
-                {
+                if ctx.types.get_index(&resolved).is_some() {
                     return Ok(ResolvedIndex::Concrete(
                         resolved.to_def_name(),
                         Some(resolved),
@@ -3591,11 +3620,7 @@ fn resolve_concrete_index_path(
     if let Some(ctx) = module_ctx {
         match ctx.resolver.resolve_index_path(ctx.owner, path) {
             Ok(resolved) => {
-                let Some(index) = ctx
-                    .types
-                    .get_index(&resolved)
-                    .or_else(|| registry.indexes.get_index(resolved.as_str()))
-                else {
+                let Some(index) = ctx.types.get_index(&resolved) else {
                     return Err(GraphcalError::UnknownIndex {
                         name: resolved.to_def_name(),
                         src: src.clone(),
@@ -3651,11 +3676,7 @@ fn resolve_struct_type_path<'a>(
     if let Some(ctx) = module_ctx {
         match ctx.resolver.resolve_struct_type_path(ctx.owner, path) {
             Ok(resolved) => {
-                if let Some(type_def) = ctx
-                    .types
-                    .get_struct_type(&resolved)
-                    .or_else(|| registry.types.get_type(resolved.as_str()))
-                {
+                if let Some(type_def) = ctx.types.get_struct_type(&resolved) {
                     return Ok(Some((resolved.to_def_name(), Some(resolved), type_def)));
                 }
                 return Err(GraphcalError::UnknownStructType {
@@ -3693,12 +3714,6 @@ fn resolve_dimension_path(
                     .types
                     .get_dimension(&resolved)
                     .cloned()
-                    .or_else(|| {
-                        registry
-                            .dimensions
-                            .get_dimension(resolved.as_str())
-                            .cloned()
-                    })
                     .map(Some)
                     .ok_or_else(|| GraphcalError::UnknownDimension {
                         name: resolved.to_def_name(),
@@ -4656,6 +4671,51 @@ mod tests {
     // --- resolved_to_declared_type() tests ---
 
     use crate::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
+
+    #[test]
+    fn generic_index_substitution_preserves_resolved_owner() {
+        use crate::tir::dim_check::{InferredIndex, InferredType};
+
+        let src = make_src();
+        let registry = make_registry();
+        let owner = crate::dag_id::DagId::root("a");
+        let resolved_index = ResolvedName::from_def(owner, IndexName::new("Phase"));
+        let generic = GenericParamName::new("I");
+        let resolved_type = ResolvedTypeExpr::Indexed {
+            base: Box::new(ResolvedTypeExpr::Dimensionless),
+            indexes: vec![ResolvedIndex::GenericParam(
+                generic.clone(),
+                Span::new(0, 0),
+            )],
+        };
+        let actual = InferredType::Indexed {
+            element: Box::new(InferredType::Scalar(Dimension::dimensionless())),
+            index: InferredIndex::from_resolved(resolved_index.clone()),
+        };
+        let mut dim_sub = HashMap::new();
+        let mut index_sub = HashMap::new();
+        let mut nat_sub = HashMap::new();
+
+        unify_resolved_type(
+            &resolved_type,
+            &actual,
+            &mut dim_sub,
+            &mut index_sub,
+            &mut nat_sub,
+            &registry,
+            &src,
+            Span::new(0, 0),
+        )
+        .unwrap();
+        assert_eq!(index_sub[&generic].resolved(), Some(&resolved_index));
+
+        let substituted =
+            substitute_resolved_type(&resolved_type, &dim_sub, &index_sub, &nat_sub, &src).unwrap();
+        let InferredType::Indexed { index, .. } = substituted else {
+            panic!("expected indexed type after substitution");
+        };
+        assert_eq!(index.resolved(), Some(&resolved_index));
+    }
 
     #[test]
     fn convert_dimensionless() {

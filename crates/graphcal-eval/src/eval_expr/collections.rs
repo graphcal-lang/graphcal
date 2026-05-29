@@ -144,12 +144,12 @@ fn ensure_index_refs_match(
 }
 
 fn index_def_for_ref<'a>(index_ref: &IndexTypeRef, ctx: &EvalContext<'a>) -> Option<&'a IndexDef> {
-    index_ref
-        .resolved()
-        .and_then(|resolved| {
+    match index_ref.resolved() {
+        Some(resolved) => {
             resolved_collection_refs(ctx).and_then(|refs| refs.index_defs.get(resolved))
-        })
-        .or_else(|| ctx.registry.indexes.get_index(index_ref.as_str()))
+        }
+        None => ctx.registry.indexes.get_index(index_ref.as_str()),
+    }
 }
 
 fn map_entry_variant_for_axis(

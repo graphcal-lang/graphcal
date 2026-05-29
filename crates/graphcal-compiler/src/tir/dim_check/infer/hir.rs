@@ -313,7 +313,8 @@ fn infer_resolved_decl_ref_type(
     };
     if let Some(resolved_type) = scoped_name.and_then(|name| dag.resolved_decl_types.get(name)) {
         let dim_sub = HashMap::new();
-        let index_sub = HashMap::<GenericParamName, IndexName>::new();
+        let index_sub =
+            HashMap::<GenericParamName, crate::registry::declared_type::IndexTypeRef>::new();
         let nat_sub = HashMap::new();
         return crate::tir::typed::substitute_resolved_type(
             resolved_type,
@@ -1140,15 +1141,14 @@ fn index_def_for_inferred<'a>(
     dag: &'a crate::tir::typed::DagTIR,
     registry: &'a Registry,
 ) -> Option<&'a crate::registry::types::IndexDef> {
-    index
-        .resolved()
-        .and_then(|resolved| {
-            dag.resolved_collection_refs
-                .as_ref()?
-                .index_defs
-                .get(resolved)
-        })
-        .or_else(|| registry.indexes.get_index(index.name().as_str()))
+    match index.resolved() {
+        Some(resolved) => dag
+            .resolved_collection_refs
+            .as_ref()?
+            .index_defs
+            .get(resolved),
+        None => registry.indexes.get_index(index.name().as_str()),
+    }
 }
 
 #[expect(clippy::too_many_arguments, reason = "for-comprehension context")]

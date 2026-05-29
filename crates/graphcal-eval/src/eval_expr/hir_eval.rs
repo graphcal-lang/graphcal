@@ -858,14 +858,13 @@ fn index_def_for_ref<'a>(
     index_ref: &IndexTypeRef,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a IndexDef> {
-    index_ref
-        .resolved()
-        .and_then(|resolved| {
-            ctx.current_dag
-                .and_then(|dag| dag.resolved_collection_refs.as_ref())
-                .and_then(|refs| refs.index_defs.get(resolved))
-        })
-        .or_else(|| ctx.registry.indexes.get_index(index_ref.as_str()))
+    match index_ref.resolved() {
+        Some(resolved) => ctx
+            .current_dag
+            .and_then(|dag| dag.resolved_collection_refs.as_ref())
+            .and_then(|refs| refs.index_defs.get(resolved)),
+        None => ctx.registry.indexes.get_index(index_ref.as_str()),
+    }
 }
 
 fn ensure_index_ref_matches_resolved(

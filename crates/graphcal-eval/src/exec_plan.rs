@@ -869,14 +869,14 @@ pub fn resolve_struct_field_constraints(
                 &mut constraints,
             )?;
         }
-    }
-
-    for type_def in tir.registry.types.all_types() {
-        resolve_for_type(
-            StructTypeRef::legacy(type_def.name.clone()),
-            type_def,
-            &mut constraints,
-        )?;
+    } else {
+        for type_def in tir.registry.types.all_types() {
+            resolve_for_type(
+                StructTypeRef::legacy(type_def.name.clone()),
+                type_def,
+                &mut constraints,
+            )?;
+        }
     }
 
     Ok(constraints)
@@ -936,25 +936,30 @@ fn find_struct_field_constraint<'a>(
     constructor: &ConstructorName,
     field: &FieldName,
 ) -> Option<&'a ResolvedDomainConstraint> {
-    owning_type
-        .and_then(|owning_type| {
-            field_constraints.get(&StructFieldConstraintKey::new(
-                owning_type.clone(),
-                constructor.clone(),
-                field.clone(),
-            ))
-        })
-        .or_else(|| {
-            field_constraints
-                .iter()
-                .find(|(key, _)| {
-                    key.constructor == *constructor
-                        && key.field == *field
-                        && owning_type
-                            .is_none_or(|owning_type| key.owning_type.matches_ref(owning_type))
-                })
-                .map(|(_, constraint)| constraint)
-        })
+    match owning_type {
+        Some(owning_type) if owning_type.resolved().is_some() => field_constraints.get(
+            &StructFieldConstraintKey::new(owning_type.clone(), constructor.clone(), field.clone()),
+        ),
+        _ => owning_type
+            .and_then(|owning_type| {
+                field_constraints.get(&StructFieldConstraintKey::new(
+                    owning_type.clone(),
+                    constructor.clone(),
+                    field.clone(),
+                ))
+            })
+            .or_else(|| {
+                field_constraints
+                    .iter()
+                    .find(|(key, _)| {
+                        key.constructor == *constructor
+                            && key.field == *field
+                            && owning_type
+                                .is_none_or(|owning_type| key.owning_type.matches_ref(owning_type))
+                    })
+                    .map(|(_, constraint)| constraint)
+            }),
+    }
 }
 
 /// Recursively validate a const value against resolved struct-field

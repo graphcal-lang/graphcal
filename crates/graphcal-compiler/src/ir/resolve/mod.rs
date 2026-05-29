@@ -25,8 +25,8 @@ use crate::syntax::span::Span;
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
 pub use crate::registry::resolve_types::{
-    DeclCategory, ExpectedFail, ExpectedFailKey, ImportedValueNames, ResolvedFile,
-    is_aggregation_fn, is_time_scale_name,
+    DeclCategory, ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart, ImportedValueNames,
+    ResolvedFile, is_aggregation_fn, is_time_scale_name,
 };
 pub use crate::syntax::names::ScopedName;
 

@@ -207,25 +207,30 @@ fn find_struct_field_constraint<'a>(
     constructor: &ConstructorName,
     field: &FieldName,
 ) -> Option<&'a ResolvedDomainConstraint> {
-    owning_type
-        .and_then(|owning_type| {
-            constraints.get(&StructFieldConstraintKey::new(
-                owning_type.clone(),
-                constructor.clone(),
-                field.clone(),
-            ))
-        })
-        .or_else(|| {
-            constraints
-                .iter()
-                .find(|(key, _)| {
-                    key.constructor == *constructor
-                        && key.field == *field
-                        && owning_type
-                            .is_none_or(|owning_type| key.owning_type.matches_ref(owning_type))
-                })
-                .map(|(_, constraint)| constraint)
-        })
+    match owning_type {
+        Some(owning_type) if owning_type.resolved().is_some() => constraints.get(
+            &StructFieldConstraintKey::new(owning_type.clone(), constructor.clone(), field.clone()),
+        ),
+        _ => owning_type
+            .and_then(|owning_type| {
+                constraints.get(&StructFieldConstraintKey::new(
+                    owning_type.clone(),
+                    constructor.clone(),
+                    field.clone(),
+                ))
+            })
+            .or_else(|| {
+                constraints
+                    .iter()
+                    .find(|(key, _)| {
+                        key.constructor == *constructor
+                            && key.field == *field
+                            && owning_type
+                                .is_none_or(|owning_type| key.owning_type.matches_ref(owning_type))
+                    })
+                    .map(|(_, constraint)| constraint)
+            }),
+    }
 }
 
 impl EvalContext<'_> {

@@ -1597,6 +1597,68 @@ fn project_struct_field_constraints_preserve_same_leaf_struct_owner() {
             && key.constructor.as_str() == "Item"
             && key.field.as_str() == "duration"
     }));
+    assert!(
+        constraints
+            .keys()
+            .all(|key| key.owning_type.resolved().is_some())
+    );
+}
+
+#[test]
+fn project_generic_struct_defaults_preserve_same_leaf_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    let module_source = "pub type Marker { Marker }\n\
+         pub type Wrap<D: Dim, F: Type = Marker> { Wrap(value: D) }\n";
+    std::fs::write(root_dir.join("a.gcl"), module_source).unwrap();
+    std::fs::write(root_dir.join("b.gcl"), module_source).unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node a_wrap: a.Wrap<Length> = a.Wrap<Length>(value: 1.0 m);\n\
+         node b_wrap: b.Wrap<Time> = b.Wrap<Time>(value: 1.0 s);\n",
+    )
+    .unwrap();
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let a_id = loaded_file_dag_id(&project, "a.gcl");
+    let b_id = loaded_file_dag_id(&project, "b.gcl");
+    let marker_owner = |decl: &str| {
+        let key = graphcal_compiler::syntax::names::ScopedName::local(decl);
+        let graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct {
+            resolved: Some(wrap),
+            type_args,
+            ..
+        } = &tir.root().resolved_decl_types[&key]
+        else {
+            panic!("expected generic struct annotation for `{decl}`");
+        };
+        assert_eq!(wrap.as_str(), "Wrap");
+        let graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(
+            marker,
+            Some(marker_resolved),
+            _,
+        ) = &type_args[1]
+        else {
+            panic!(
+                "expected default marker type arg for `{decl}`, got {:?}",
+                type_args[1]
+            );
+        };
+        assert_eq!(marker.as_str(), "Marker");
+        marker_resolved.owner().clone()
+    };
+
+    assert_eq!(marker_owner("a_wrap"), a_id);
+    assert_eq!(marker_owner("b_wrap"), b_id);
 }
 
 #[test]
@@ -1746,6 +1808,42 @@ fn project_label_match_rejects_same_leaf_wrong_owner_pattern() {
     match compile_to_tir_project(&root, None, &fs()) {
         Err(CompileError::Eval(GraphcalError::IndexMismatch { .. })) => {}
         other => panic!("expected IndexMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_expected_fail_keys_use_resolved_index_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_same_variant_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node a_checks: Bool[a.Phase] = {\n\
+             a.Phase.Burn: false,\n\
+             a.Phase.Coast: true,\n\
+         };\n\
+         #[expected_fail(a.Phase.Burn)]\n\
+         assert a_expected = @a_checks;\n\
+         node b_checks: Bool[b.Phase] = {\n\
+             b.Phase.Burn: false,\n\
+             b.Phase.Coast: true,\n\
+         };\n\
+         #[expected_fail(a.Phase.Burn)]\n\
+         assert b_unexpected = @b_checks;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let assert_result = |name: &str| {
+        result
+            .assertions
+            .iter()
+            .find(|(assert_name, _, _)| assert_name.as_str() == name)
+            .unwrap_or_else(|| panic!("assertion `{name}` not found"))
+            .1
+            .clone()
+    };
+    assert_eq!(assert_result("a_expected"), AssertResult::Pass);
+    match assert_result("b_unexpected") {
+        AssertResult::Fail { message } => assert!(message.contains("failed at"), "{message}"),
+        other => panic!("expected b_unexpected to fail, got {other:?}"),
     }
 }
 

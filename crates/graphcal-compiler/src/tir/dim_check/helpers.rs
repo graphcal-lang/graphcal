@@ -4,6 +4,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::Expr;
+use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeDef};
 use crate::syntax::dimension::Dimension;
@@ -158,12 +159,12 @@ pub(super) fn struct_type_def_for_inferred<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a TypeDef> {
-    ty.resolved()
-        .and_then(|resolved| {
-            dag.and_then(|dag| dag.resolved_type_defs.as_ref())
-                .and_then(|defs| defs.struct_types.get(resolved))
-        })
-        .or_else(|| registry.types.get_type(ty.name().as_str()))
+    match ty.resolved() {
+        Some(resolved) => dag
+            .and_then(|dag| dag.resolved_type_defs.as_ref())
+            .and_then(|defs| defs.struct_types.get(resolved)),
+        None => registry.types.get_type(ty.name().as_str()),
+    }
 }
 
 /// Format an inferred type for display in diagnostics.
@@ -247,7 +248,7 @@ pub(super) fn resolve_field_type(
 
     // Generic type: build substitution maps from generic params + type args
     let mut dim_sub: HashMap<GenericParamName, Dimension> = HashMap::new();
-    let mut index_sub: HashMap<GenericParamName, IndexName> = HashMap::new();
+    let mut index_sub: HashMap<GenericParamName, IndexTypeRef> = HashMap::new();
     // Track unconstrained (Type) params separately — they map to InferredType
     let mut type_sub: HashMap<GenericParamName, InferredType> = HashMap::new();
 
@@ -270,8 +271,8 @@ pub(super) fn resolve_field_type(
                 }
             },
             TypeGenericConstraint::Index => match arg {
-                InferredType::Struct(name, _) => {
-                    index_sub.insert(param.name.clone(), IndexName::new(name.name().as_str()));
+                InferredType::Label(index) => {
+                    index_sub.insert(param.name.clone(), index.type_ref().clone());
                 }
                 other => {
                     return Err(GraphcalError::EvalError {
