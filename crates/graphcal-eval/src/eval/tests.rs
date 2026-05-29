@@ -948,6 +948,58 @@ fn write_same_leaf_index_project(main_source: &str) -> (tempfile::TempDir, std::
     (dir, root)
 }
 
+fn write_same_leaf_same_variant_index_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+fn write_same_leaf_range_index_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub index Step = linspace(0.0 s, 1.0 s, step: 1.0 s);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub index Step = linspace(0.0 s, 2.0 s, step: 1.0 s);\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
 fn write_same_leaf_constructor_project(
     main_source: &str,
 ) -> (tempfile::TempDir, std::path::PathBuf) {
@@ -1365,6 +1417,243 @@ fn project_label_match_rejects_same_leaf_wrong_owner_pattern() {
     match compile_to_tir_project(&root, None, &fs()) {
         Err(CompileError::Eval(GraphcalError::IndexMismatch { .. })) => {}
         other => panic!("expected IndexMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() {
+    let (_dir, root) = write_same_leaf_same_variant_index_project(
+        "import collide.a.{ Phase };\n\
+         import collide.a as a;\n\
+         import collide.b as b;\n\
+         dag pick_a {\n\
+             param series: Dimensionless[Phase];\n\
+             pub node burn: Dimensionless = @series[Phase.Burn];\n\
+             pub node echoed: Dimensionless[Phase] = for p: Phase { @series[p] };\n\
+         }\n\
+         node literal_a: a.Phase = a.Phase.Burn;\n\
+         node literal_b: b.Phase = b.Phase.Burn;\n\
+         node map_a: Dimensionless[a.Phase] = {\n\
+             a.Phase.Burn: 10.0,\n\
+             a.Phase.Coast: 20.0,\n\
+         };\n\
+         node table_a: Dimensionless[Phase] = table[Phase] {\n\
+             Burn: 3.0;\n\
+             Coast: 4.0;\n\
+         };\n\
+         node for_a: Dimensionless[a.Phase] = for p: a.Phase {\n\
+             match p {\n\
+                 a.Phase.Burn => @map_a[p],\n\
+                 a.Phase.Coast => @pick_a(series: @map_a).echoed[p],\n\
+             }\n\
+         };\n\
+         node scan_a: Dimensionless[a.Phase] = scan(@map_a, 0.0, |acc, val| acc + val);\n\
+         node total: Dimensionless = @pick_a(series: @map_a).burn\n\
+             + @table_a[Phase.Burn]\n\
+             + @for_a[a.Phase.Coast]\n\
+             + @scan_a[a.Phase.Coast];\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "total") - 63.0).abs() < f64::EPSILON);
+
+    let owner_of_indexed = |name: &str| {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == name)
+            .unwrap_or_else(|| panic!("node `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("node `{name}` failed: {e}"));
+        let Value::Indexed { index_name, .. } = value else {
+            panic!("expected indexed value for `{name}`, got {value:?}");
+        };
+        index_name
+            .resolved()
+            .cloned()
+            .unwrap_or_else(|| panic!("indexed value `{name}` did not preserve owner"))
+    };
+    let owner_of_label = |name: &str| {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == name)
+            .unwrap_or_else(|| panic!("node `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("node `{name}` failed: {e}"));
+        let Value::Label { index_name, .. } = value else {
+            panic!("expected label value for `{name}`, got {value:?}");
+        };
+        index_name
+            .resolved()
+            .cloned()
+            .unwrap_or_else(|| panic!("label value `{name}` did not preserve owner"))
+    };
+
+    let a_owner = owner_of_indexed("map_a");
+    let b_owner = owner_of_label("literal_b");
+    assert_ne!(a_owner, b_owner);
+    assert_eq!(owner_of_indexed("table_a"), a_owner);
+    assert_eq!(owner_of_indexed("for_a"), a_owner);
+    assert_eq!(owner_of_indexed("scan_a"), a_owner);
+    assert_eq!(owner_of_label("literal_a"), a_owner);
+}
+
+#[test]
+fn eval_unfold_uses_resolved_declared_range_index_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_range_index_project(
+        "import collide.b as b;\n\
+         import collide.a as a;\n\
+         node y: Dimensionless[a.Step] = unfold(0.0, |prev_t, t| @y[prev_t] + 1.0);\n",
+    );
+
+    let (_tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let a_owner = loaded_file_dag_id(&project, "a.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let value = result
+        .nodes
+        .iter()
+        .find(|(name, _)| name.as_str() == "y")
+        .expect("node y")
+        .1
+        .as_ref()
+        .expect("node y value");
+    let Value::Indexed {
+        index_name,
+        entries,
+        ..
+    } = value
+    else {
+        panic!("expected indexed value for `y`, got {value:?}");
+    };
+    assert_eq!(entries.len(), 2);
+    assert!(matches!(index_name.resolved(), Some(name) if name.owner() == &a_owner));
+}
+
+#[test]
+fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
+    let (_dir, root) = write_same_leaf_same_variant_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = {\n\
+             a.Phase.Burn: 1.0,\n\
+             a.Phase.Coast: 2.0,\n\
+         };\n\
+         node burn: Dimensionless = @series[a.Phase.Burn];\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let expr = &tir
+        .root()
+        .nodes
+        .iter()
+        .find(|entry| entry.name.member() == "burn")
+        .expect("burn node")
+        .expr;
+    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+        loaded_file_dag_id(&project, "b.gcl"),
+        graphcal_compiler::syntax::names::IndexName::new("Phase"),
+    );
+    let mut entries = indexmap::IndexMap::new();
+    entries.insert(
+        graphcal_compiler::syntax::names::IndexVariantName::new("Burn"),
+        crate::eval_expr::RuntimeValue::Scalar(99.0),
+    );
+    entries.insert(
+        graphcal_compiler::syntax::names::IndexVariantName::new("Coast"),
+        crate::eval_expr::RuntimeValue::Scalar(100.0),
+    );
+    let values = HashMap::from([(
+        graphcal_compiler::syntax::names::ScopedName::local("series"),
+        crate::eval_expr::RuntimeValue::Indexed {
+            index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
+                b_owner,
+            ),
+            entries,
+        },
+    )]);
+    let empty_locals = HashMap::new();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
+    let src = &project.files[&project.root].named_source;
+    let ctx = crate::eval_expr::EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+        tir: &tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&values),
+        struct_field_constraints: None,
+    };
+
+    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    match err {
+        GraphcalError::EvalError { message, .. } => {
+            assert!(message.contains("index argument belongs to"), "{message}");
+        }
+        other => panic!("expected EvalError, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
+    let (_dir, root) = write_same_leaf_same_variant_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node phase: a.Phase = a.Phase.Burn;\n\
+         node code: Dimensionless = match @phase {\n\
+             a.Phase.Burn => 1.0,\n\
+             a.Phase.Coast => 2.0,\n\
+         };\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let expr = &tir
+        .root()
+        .nodes
+        .iter()
+        .find(|entry| entry.name.member() == "code")
+        .expect("code node")
+        .expr;
+    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+        loaded_file_dag_id(&project, "b.gcl"),
+        graphcal_compiler::syntax::names::IndexName::new("Phase"),
+    );
+    let values = HashMap::from([(
+        graphcal_compiler::syntax::names::ScopedName::local("phase"),
+        crate::eval_expr::RuntimeValue::Label {
+            index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
+                b_owner,
+            ),
+            variant: graphcal_compiler::syntax::names::IndexVariantName::new("Burn"),
+        },
+    )]);
+    let empty_locals = HashMap::new();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
+    let src = &project.files[&project.root].named_source;
+    let ctx = crate::eval_expr::EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+        tir: &tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&values),
+        struct_field_constraints: None,
+    };
+
+    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    match err {
+        GraphcalError::EvalError { message, .. } => {
+            assert!(message.contains("no match arm for label"), "{message}");
+        }
+        other => panic!("expected EvalError, got {other:?}"),
     }
 }
 

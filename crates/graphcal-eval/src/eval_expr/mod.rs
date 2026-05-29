@@ -16,7 +16,7 @@ use graphcal_compiler::syntax::names::{
 };
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
-use graphcal_compiler::registry::declared_type::{DeclaredType, StructTypeRef};
+use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{Registry, UnitScale};
 use graphcal_compiler::tir::typed::{
@@ -87,6 +87,16 @@ fn resolved_value_index_variant<'a>(
 
 fn runtime_label_from_resolved_variant(resolved: &ResolvedIndexVariant) -> RuntimeValue {
     RuntimeValue::resolved_label(resolved)
+}
+
+pub(super) fn index_ref_matches_resolved_or_legacy(
+    actual: &IndexTypeRef,
+    expected: &ResolvedName<namespace::Index>,
+) -> bool {
+    match actual.resolved() {
+        Some(actual) => actual == expected,
+        None => actual.name().as_str() == expected.as_str(),
+    }
 }
 
 fn constructor_call_target<'a>(

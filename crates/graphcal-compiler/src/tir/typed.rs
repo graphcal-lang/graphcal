@@ -787,7 +787,9 @@ pub struct ResolvedDagDependencies {
 /// without resolving source paths again in the syntax-AST consumer.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedCollectionRefs {
-    /// Canonical index definitions observed while collecting the refs below.
+    /// Canonical index definitions observed while collecting the refs below
+    /// or owner-qualified declaration types that runtime collection semantics
+    /// may need (for example `unfold` over a declared indexed node).
     pub index_defs: HashMap<ResolvedName<namespace::Index>, IndexDef>,
     /// `ForBindingIndex::Named` span -> resolved index owner/name.
     pub for_binding_indexes: HashMap<Span, ResolvedName<namespace::Index>>,
@@ -1401,8 +1403,16 @@ fn type_resolve_dag(
 
     let resolved_deps =
         module_ctx.and_then(|ctx| collect_resolved_dag_dependencies(&consts, &params, &nodes, ctx));
-    let resolved_collection_refs = module_ctx
-        .and_then(|ctx| collect_resolved_collection_refs(&consts, &params, &nodes, ctx, registry));
+    let resolved_collection_refs = module_ctx.and_then(|ctx| {
+        collect_resolved_collection_refs(
+            &consts,
+            &params,
+            &nodes,
+            &resolved_decl_types,
+            ctx,
+            registry,
+        )
+    });
     let resolved_constructor_refs =
         module_ctx.and_then(|ctx| collect_resolved_constructor_refs(&consts, &params, &nodes, ctx));
     let resolved_inline_dag_refs =
@@ -1559,6 +1569,7 @@ fn collect_resolved_collection_refs(
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
+    resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
     ctx: ModuleTypeContext<'_>,
     registry: &Registry,
 ) -> Option<ResolvedCollectionRefs> {
@@ -1567,6 +1578,10 @@ fn collect_resolved_collection_refs(
     let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
         .with_prelude(&prelude);
     let mut refs = ResolvedCollectionRefs::default();
+
+    for resolved_type in resolved_decl_types.values() {
+        collect_resolved_collection_indexes_from_type(resolved_type, ctx, registry, &mut refs)?;
+    }
 
     for entry in consts {
         let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
@@ -1603,6 +1618,44 @@ fn record_resolved_collection_index(
         .clone();
     refs.index_defs.insert(index.clone(), def);
     Some(())
+}
+
+fn collect_resolved_collection_indexes_from_type(
+    resolved_type: &ResolvedTypeExpr,
+    ctx: ModuleTypeContext<'_>,
+    registry: &Registry,
+    refs: &mut ResolvedCollectionRefs,
+) -> Option<()> {
+    match resolved_type {
+        ResolvedTypeExpr::Label(_, Some(index), _) => {
+            record_resolved_collection_index(index, ctx, registry, refs)
+        }
+        ResolvedTypeExpr::Indexed { base, indexes } => {
+            collect_resolved_collection_indexes_from_type(base, ctx, registry, refs)?;
+            for index in indexes {
+                if let ResolvedIndex::Concrete(_, Some(resolved), _) = index {
+                    record_resolved_collection_index(resolved, ctx, registry, refs)?;
+                }
+            }
+            Some(())
+        }
+        ResolvedTypeExpr::GenericStruct { type_args, .. } => {
+            for arg in type_args {
+                collect_resolved_collection_indexes_from_type(arg, ctx, registry, refs)?;
+            }
+            Some(())
+        }
+        ResolvedTypeExpr::Dimensionless
+        | ResolvedTypeExpr::Bool
+        | ResolvedTypeExpr::Int
+        | ResolvedTypeExpr::Datetime(_)
+        | ResolvedTypeExpr::Label(_, None, _)
+        | ResolvedTypeExpr::Scalar(_)
+        | ResolvedTypeExpr::Struct(_, _, _)
+        | ResolvedTypeExpr::GenericDimParam(_, _)
+        | ResolvedTypeExpr::GenericTypeParam(_, _)
+        | ResolvedTypeExpr::GenericDimExpr { .. } => Some(()),
+    }
 }
 
 fn collect_resolved_collection_refs_from_expr(

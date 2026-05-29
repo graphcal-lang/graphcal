@@ -1,13 +1,19 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, MatchArm, MatchPattern};
-use graphcal_compiler::syntax::names::{ResolvedIndexVariant, ScopedName};
+use graphcal_compiler::registry::declared_type::IndexTypeRef;
+use graphcal_compiler::syntax::names::{IndexName, NamePath, ResolvedIndexVariant, ScopedName};
 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
 use super::EvalContext;
 use super::eval_expr;
+use super::index_ref_matches_resolved_or_legacy;
+
+fn legacy_index_ref_from_path(path: &NamePath) -> IndexTypeRef {
+    IndexTypeRef::legacy(IndexName::from(path.leaf().clone()))
+}
 
 fn resolved_match_label_variant<'a>(
     ctx: &'a EvalContext<'_>,
@@ -25,6 +31,26 @@ fn resolved_match_label_variant<'a>(
             MatchPattern::Path { path, .. } => refs.match_label_variants.get(&path.span()),
             MatchPattern::Constructor { .. } => None,
         })
+}
+
+fn label_pattern_matches(
+    ctx: &EvalContext<'_>,
+    pattern: &MatchPattern,
+    scrutinee_index: &IndexTypeRef,
+    scrutinee_variant: &graphcal_compiler::syntax::names::IndexVariantName,
+) -> bool {
+    if let Some(resolved) = resolved_match_label_variant(ctx, pattern) {
+        return index_ref_matches_resolved_or_legacy(scrutinee_index, resolved.index())
+            && resolved.variant() == scrutinee_variant;
+    }
+
+    match pattern {
+        MatchPattern::IndexLabel { index, variant, .. } => {
+            legacy_index_ref_from_path(&index.value).matches_ref(scrutinee_index)
+                && variant.value == *scrutinee_variant
+        }
+        MatchPattern::Constructor { .. } | MatchPattern::Path { .. } => false,
+    }
 }
 
 /// Evaluate an `if` expression.
@@ -59,20 +85,14 @@ pub(super) fn eval_match(
     let scrutinee_val = eval_expr(scrutinee, values, local_values, ctx)?;
 
     match &scrutinee_val {
-        RuntimeValue::Label { variant, .. } => {
+        RuntimeValue::Label {
+            index_name,
+            variant,
+        } => {
             // Label match (index label pattern matching)
             let matched_arm = arms
                 .iter()
-                .find(|arm| {
-                    resolved_match_label_variant(ctx, &arm.pattern)
-                        .is_some_and(|resolved| resolved.variant().as_str() == variant.as_str())
-                        || match &arm.pattern {
-                            MatchPattern::IndexLabel { variant: v, .. } => {
-                                v.value.as_str() == variant.as_str()
-                            }
-                            MatchPattern::Constructor { .. } | MatchPattern::Path { .. } => false,
-                        }
-                })
+                .find(|arm| label_pattern_matches(ctx, &arm.pattern, index_name, variant))
                 .ok_or_else(|| {
                     ctx.eval_error(format!("no match arm for label `{variant}`"), expr.span)
                 })?;

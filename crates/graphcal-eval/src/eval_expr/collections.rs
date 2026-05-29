@@ -17,6 +17,7 @@ use graphcal_compiler::registry::types::IndexDef;
 
 use super::EvalContext;
 use super::eval_expr;
+use super::index_ref_matches_resolved_or_legacy;
 
 /// Evaluate a `NatExpr` to a concrete `u64` during runtime.
 ///
@@ -87,6 +88,85 @@ fn resolved_map_entry_variant<'a>(
     resolved_collection_refs(ctx).and_then(|refs| refs.map_entry_variants.get(&span))
 }
 
+fn resolved_index_access_variant<'a>(
+    ctx: &EvalContext<'a>,
+    index_span: Span,
+    variant_span: Span,
+) -> Option<&'a ResolvedIndexVariant> {
+    let span = index_span.merge(variant_span);
+    resolved_collection_refs(ctx).and_then(|refs| refs.index_access_variants.get(&span))
+}
+
+fn index_owner_mismatch_message(actual: &IndexTypeRef, expected_leaf: &str) -> String {
+    if actual.name().as_str() == expected_leaf {
+        format!(
+            "index argument belongs to a different `{expected_leaf}` index owner than the indexed value"
+        )
+    } else {
+        format!(
+            "index argument belongs to `{expected_leaf}`, but value is indexed by `{}`",
+            actual.name()
+        )
+    }
+}
+
+fn ensure_index_ref_matches_resolved(
+    actual: &IndexTypeRef,
+    expected: &ResolvedName<namespace::Index>,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<(), GraphcalError> {
+    if index_ref_matches_resolved_or_legacy(actual, expected) {
+        return Ok(());
+    }
+    Err(ctx.eval_error(
+        index_owner_mismatch_message(actual, expected.as_str()),
+        span,
+    ))
+}
+
+fn ensure_index_refs_match(
+    actual: &IndexTypeRef,
+    expected: &IndexTypeRef,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<(), GraphcalError> {
+    if actual.matches_ref(expected) {
+        return Ok(());
+    }
+    Err(ctx.eval_error(
+        index_owner_mismatch_message(actual, expected.name().as_str()),
+        span,
+    ))
+}
+
+fn index_def_for_ref<'a>(index_ref: &IndexTypeRef, ctx: &EvalContext<'a>) -> Option<&'a IndexDef> {
+    index_ref
+        .resolved()
+        .and_then(|resolved| {
+            resolved_collection_refs(ctx).and_then(|refs| refs.index_defs.get(resolved))
+        })
+        .or_else(|| ctx.registry.indexes.get_index(index_ref.as_str()))
+}
+
+fn map_entry_variant_for_axis(
+    key: &MapEntryKey,
+    axis: &IndexTypeRef,
+    ctx: &EvalContext<'_>,
+) -> Result<IndexVariantName, GraphcalError> {
+    match resolved_map_entry_variant(ctx, key) {
+        Some(resolved) => {
+            ensure_index_ref_matches_resolved(axis, resolved.index(), key.index.span, ctx)?;
+            Ok(resolved.variant().clone())
+        }
+        None => {
+            let legacy_index = IndexTypeRef::legacy(key.index.value.registry_name());
+            ensure_index_refs_match(axis, &legacy_index, key.index.span, ctx)?;
+            Ok(key.variant.value.clone())
+        }
+    }
+}
+
 fn map_entry_index_ref(key: &MapEntryKey, ctx: &EvalContext<'_>) -> IndexTypeRef {
     resolved_map_entry_variant(ctx, key)
         .map(|resolved| IndexTypeRef::from_resolved(resolved.index().clone()))
@@ -102,7 +182,7 @@ fn map_entry_index_def<'a>(
         .and_then(|resolved| {
             resolved_collection_refs(ctx).and_then(|refs| refs.index_defs.get(resolved.index()))
         })
-        .or_else(|| ctx.registry.indexes.get_index(index_name.as_str()))
+        .or_else(|| index_def_for_ref(index_name, ctx))
 }
 
 fn resolved_for_binding_index<'a>(
@@ -123,12 +203,32 @@ pub(super) fn eval_index_access(
 ) -> Result<RuntimeValue, GraphcalError> {
     let mut current = eval_expr(inner, values, local_values, ctx)?;
     for arg in args {
-        let RuntimeValue::Indexed { entries, .. } = current else {
+        let RuntimeValue::Indexed {
+            index_name,
+            entries,
+        } = current
+        else {
             return Err(ctx.eval_error("indexing a non-indexed value", expr.span));
         };
         let variant_name: IndexVariantName = match arg {
-            graphcal_compiler::desugar::resolved_ast::IndexArg::Variant { variant, .. } => {
-                variant.value.clone()
+            graphcal_compiler::desugar::resolved_ast::IndexArg::Variant { index, variant } => {
+                match resolved_index_access_variant(ctx, index.span, variant.span) {
+                    Some(resolved) => {
+                        ensure_index_ref_matches_resolved(
+                            &index_name,
+                            resolved.index(),
+                            index.span,
+                            ctx,
+                        )?;
+                        resolved.variant().clone()
+                    }
+                    None => {
+                        let legacy_index =
+                            IndexTypeRef::legacy(legacy_index_name_from_path(&index.value));
+                        ensure_index_refs_match(&index_name, &legacy_index, index.span, ctx)?;
+                        variant.value.clone()
+                    }
+                }
             }
             graphcal_compiler::desugar::resolved_ast::IndexArg::Var(ident) => {
                 let var_val = local_values.get(ident.name.as_str()).ok_or_else(|| {
@@ -138,7 +238,13 @@ pub(super) fn eval_index_access(
                     )
                 })?;
                 match var_val {
-                    RuntimeValue::Label { variant, .. } => variant.clone(),
+                    RuntimeValue::Label {
+                        index_name: label_index,
+                        variant,
+                    } => {
+                        ensure_index_refs_match(&index_name, label_index, ident.span, ctx)?;
+                        variant.clone()
+                    }
                     RuntimeValue::Struct { type_name, .. } => {
                         IndexVariantName::new(type_name.as_str())
                     }
@@ -286,10 +392,7 @@ pub(super) fn eval_unfold(
             ));
         }
     };
-    let idx_def = ctx
-        .registry
-        .indexes
-        .get_index(index_ref.as_str())
+    let idx_def = index_def_for_ref(&index_ref, ctx)
         .ok_or_else(|| ctx.eval_error(format!("unknown index `{index_ref}`"), Span::new(0, 0)))?;
 
     let step_count = idx_def.step_count();
@@ -398,8 +501,10 @@ pub(super) fn eval_map_literal(
         // Single-axis: flat Indexed
         let mut result = IndexMap::new();
         for entry in entries {
+            let key = entry.keys.first();
+            let variant = map_entry_variant_for_axis(key, &idx_name, ctx)?;
             let val = eval_expr(&entry.value, values, local_values, ctx)?;
-            result.insert(entry.keys[0].variant.value.clone(), val);
+            result.insert(variant, val);
         }
         return Ok(RuntimeValue::Indexed {
             index_name: idx_name,
@@ -415,24 +520,27 @@ pub(super) fn eval_map_literal(
 
     let mut outer = IndexMap::new();
     for variant in &variants {
-        // Collect entries whose first key matches this variant, stripping the first key
-        let sub_entries: Vec<MapEntry> = entries
-            .iter()
-            .filter(|e| e.keys.first().variant.value.as_str() == variant.as_str())
-            .map(|e| {
-                let keys =
-                    NonEmpty::try_from_vec(e.keys.as_slice()[1..].to_vec()).map_err(|_| {
-                        ctx.internal_error(
-                            "multi-axis map literal entry lost all index keys".to_string(),
-                            e.value.span,
-                        )
-                    })?;
-                Ok(MapEntry {
-                    keys,
-                    value: e.value.clone(),
-                })
-            })
-            .collect::<Result<_, GraphcalError>>()?;
+        // Collect entries whose first key matches this variant, stripping the first key.
+        // Module-aware refs compare the resolved owning index before falling
+        // back to the legacy variant leaf.
+        let mut sub_entries: Vec<MapEntry> = Vec::new();
+        for entry in entries {
+            let first_entry_key = entry.keys.first();
+            if map_entry_variant_for_axis(first_entry_key, &idx_name, ctx)? != *variant {
+                continue;
+            }
+            let keys =
+                NonEmpty::try_from_vec(entry.keys.as_slice()[1..].to_vec()).map_err(|_| {
+                    ctx.internal_error(
+                        "multi-axis map literal entry lost all index keys".to_string(),
+                        entry.value.span,
+                    )
+                })?;
+            sub_entries.push(MapEntry {
+                keys,
+                value: entry.value.clone(),
+            });
+        }
 
         // A dim-checked program guarantees every variant has at least one
         // entry. If that invariant is violated (e.g. malformed IR), surface it
