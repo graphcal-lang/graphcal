@@ -9,8 +9,9 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::resolved_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
+use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::syntax::names::{
-    FieldName, ResolvedName, ScopedName, StructTypeName, namespace,
+    ConstructorName, FieldName, ResolvedName, ScopedName, namespace,
 };
 use graphcal_compiler::syntax::span::Span;
 use petgraph::algo::toposort;
@@ -20,7 +21,7 @@ use crate::eval_expr::{EvalContext, RuntimeValue, eval_expr};
 use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{
-    DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint, TIR,
+    DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint, StructFieldConstraintKey, TIR,
 };
 
 /// An assert body entry for execution.
@@ -87,10 +88,10 @@ pub struct ExecPlan {
     /// Key-lookup only, order irrelevant.
     pub(crate) domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>,
     /// Resolved domain constraints for struct/union member fields, keyed by
-    /// `(struct type name, field name)`. Looked up at every
+    /// owner-qualified struct/constructor/field identity. Looked up at every
     /// `ExprKind::ConstructorCall` evaluation to validate field values.
     pub(crate) struct_field_constraints:
-        HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>,
+        HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
 }
 
 /// Compile a TIR into an execution plan.
@@ -712,18 +713,24 @@ pub fn resolve_domain_constraints(
 
 /// Resolve domain constraints declared on struct/union member fields.
 ///
-/// For every `TypeDef` in the registry, evaluates each constrained field's
-/// `min`/`max` bound expressions to SI scalars, validates `min ≤ max`, and
-/// stores the result keyed by `(struct type name, field name)`.
+/// For every `TypeDef` in the registry and every owner-qualified type
+/// definition recorded in module-aware TIR sidecars, evaluates each constrained
+/// field's `min`/`max` bound expressions to SI scalars, validates `min ≤ max`,
+/// and stores the result keyed by the owning struct type, constructor, and
+/// field name.
 ///
 /// Bound dimensions and target compatibility are validated earlier in
 /// `dim_check::check_field_domain_constraint_*`. This pass focuses on the
 /// runtime-relevant pieces: bound evaluation, `min ≤ max`, and storage.
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear field-constraint resolution over type definitions with bound eval and range checks"
+)]
 pub fn resolve_struct_field_constraints(
     tir: &TIR,
     const_values: &HashMap<ScopedName, RuntimeValue>,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>, GraphcalError> {
+) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
@@ -743,13 +750,15 @@ pub fn resolve_struct_field_constraints(
 
     let mut constraints = HashMap::new();
 
-    for type_def in tir.registry.types.all_types() {
-        // Walk every variant's payload fields. The constraint registry
-        // is keyed by `(constructor_name, field_name)` — for the
-        // single-variant record-shape this is `(Type, field)`; for a
-        // true multi-variant union it's `(Variant, field)`.
+    let resolve_for_type = |owning_type: StructTypeRef,
+                            type_def: &graphcal_compiler::registry::types::TypeDef,
+                            constraints: &mut HashMap<
+        StructFieldConstraintKey,
+        ResolvedDomainConstraint,
+    >|
+     -> Result<(), GraphcalError> {
         let Some(members) = type_def.union_members() else {
-            continue;
+            return Ok(());
         };
         for (variant, field) in members
             .iter()
@@ -765,8 +774,8 @@ pub fn resolve_struct_field_constraints(
             let mut min_display: Option<String> = None;
             let mut max_display: Option<String> = None;
             let mut constraint_span = domain_bounds[0].span;
-            // Display name uses the constructor's name (matches what
-            // appears in the runtime value's `type_name`).
+            // Display name uses the constructor's name (matches the legacy
+            // runtime value's `type_name` until runtime identities migrate).
             let display_name = format!("{}.{}", variant.name, field.name);
 
             for bound in domain_bounds {
@@ -818,8 +827,9 @@ pub fn resolve_struct_field_constraints(
             }
 
             constraints.insert(
-                (
-                    graphcal_compiler::syntax::names::StructTypeName::new(variant.name.as_str()),
+                StructFieldConstraintKey::new(
+                    owning_type.clone(),
+                    variant.name.clone(),
                     field.name.clone(),
                 ),
                 ResolvedDomainConstraint {
@@ -831,6 +841,25 @@ pub fn resolve_struct_field_constraints(
                 },
             );
         }
+        Ok(())
+    };
+
+    if let Some(resolved_type_defs) = tir.root().resolved_type_defs.as_ref() {
+        for (resolved_owner, type_def) in &resolved_type_defs.struct_types {
+            resolve_for_type(
+                StructTypeRef::from_resolved(resolved_owner.clone()),
+                type_def,
+                &mut constraints,
+            )?;
+        }
+    }
+
+    for type_def in tir.registry.types.all_types() {
+        resolve_for_type(
+            StructTypeRef::legacy(type_def.name.clone()),
+            type_def,
+            &mut constraints,
+        )?;
     }
 
     Ok(constraints)
@@ -848,15 +877,21 @@ pub fn resolve_struct_field_constraints(
 pub fn check_const_struct_field_constraints_at_compile_time(
     tir: &TIR,
     const_values: &HashMap<ScopedName, RuntimeValue>,
-    field_constraints: &HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>,
+    field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for entry in &tir.root().consts {
         if let Some(value) = const_values.get(&entry.name) {
+            let owning_type = tir
+                .root()
+                .resolved_decl_types
+                .get(&entry.name)
+                .and_then(struct_type_ref_from_resolved_type);
             check_const_struct_field_constraints(
                 value,
                 entry.name.member(),
                 entry.span,
+                owning_type.as_ref(),
                 field_constraints,
                 src,
             )?;
@@ -865,25 +900,70 @@ pub fn check_const_struct_field_constraints_at_compile_time(
     Ok(())
 }
 
+fn struct_type_ref_from_resolved_type(
+    resolved: &graphcal_compiler::tir::typed::ResolvedTypeExpr,
+) -> Option<StructTypeRef> {
+    match strip_indexed(resolved) {
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(name, resolved, _)
+        | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct {
+            name, resolved, ..
+        } => Some(StructTypeRef::new(name.clone(), resolved.clone())),
+        _ => None,
+    }
+}
+
+fn find_struct_field_constraint<'a>(
+    field_constraints: &'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
+    owning_type: Option<&StructTypeRef>,
+    constructor: &ConstructorName,
+    field: &FieldName,
+) -> Option<&'a ResolvedDomainConstraint> {
+    owning_type
+        .and_then(|owning_type| {
+            field_constraints.get(&StructFieldConstraintKey::new(
+                owning_type.clone(),
+                constructor.clone(),
+                field.clone(),
+            ))
+        })
+        .or_else(|| {
+            field_constraints
+                .iter()
+                .find(|(key, _)| {
+                    key.constructor == *constructor
+                        && key.field == *field
+                        && owning_type
+                            .is_none_or(|owning_type| key.owning_type.matches_ref(owning_type))
+                })
+                .map(|(_, constraint)| constraint)
+        })
+}
+
 /// Recursively validate a const value against resolved struct-field
 /// constraints. For `RuntimeValue::Struct`, looks up each field's
-/// `(struct, field)` constraint and emits `DomainViolation` on the first
-/// violation. Indexed values recurse element-wise; nested structs recurse
-/// field-wise. Other variants short-circuit to `Ok(())`.
+/// owner-qualified struct/constructor/field constraint and emits
+/// `DomainViolation` on the first violation. Indexed values recurse
+/// element-wise; nested structs recurse field-wise. Other variants short-circuit
+/// to `Ok(())`.
 fn check_const_struct_field_constraints(
     value: &RuntimeValue,
     decl_name: &str,
     decl_span: Span,
-    field_constraints: &HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>,
+    owning_type: Option<&StructTypeRef>,
+    field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match value {
         RuntimeValue::Struct { type_name, fields } => {
+            let constructor = ConstructorName::from_atom(type_name.atom().clone());
             for (field_name, field_value) in fields {
-                let key = (type_name.clone(), field_name.clone());
-                if let Some(constraint) = field_constraints.get(&key)
-                    && let Err(violation) =
-                        crate::domain_check::check_domain_constraint(field_value, constraint)
+                if let Some(constraint) = find_struct_field_constraint(
+                    field_constraints,
+                    owning_type,
+                    &constructor,
+                    field_name,
+                ) && let Err(violation) =
+                    crate::domain_check::check_domain_constraint(field_value, constraint)
                 {
                     return Err(GraphcalError::DomainViolation {
                         name: format!("{decl_name}.{field_name}"),
@@ -893,11 +973,14 @@ fn check_const_struct_field_constraints(
                         span: decl_span.into(),
                     });
                 }
-                // Recurse for nested struct fields.
+                // Recurse for nested struct fields. The field's declared struct
+                // owner is not available at the runtime value boundary yet, so
+                // nested lookups intentionally fall back to constructor+field.
                 check_const_struct_field_constraints(
                     field_value,
                     &format!("{decl_name}.{field_name}"),
                     decl_span,
+                    None,
                     field_constraints,
                     src,
                 )?;
@@ -910,6 +993,7 @@ fn check_const_struct_field_constraints(
                     entry,
                     &format!("{decl_name}.{variant}"),
                     decl_span,
+                    owning_type,
                     field_constraints,
                     src,
                 )?;

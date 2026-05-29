@@ -4,6 +4,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::Expr;
+use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{IndexName, ResolvedName, ScopedName, StructTypeName, namespace};
 
@@ -43,40 +44,49 @@ pub use crate::registry::declared_type::DeclaredType;
 /// keep working while the rest of TIR/eval migrates.
 #[derive(Debug, Clone, Eq)]
 pub struct InferredIndex {
-    name: IndexName,
-    resolved: Option<ResolvedName<namespace::Index>>,
+    reference: IndexTypeRef,
 }
 
 impl InferredIndex {
     #[must_use]
     pub const fn new(name: IndexName, resolved: Option<ResolvedName<namespace::Index>>) -> Self {
-        Self { name, resolved }
+        Self {
+            reference: IndexTypeRef::new(name, resolved),
+        }
     }
 
     #[must_use]
     pub const fn legacy(name: IndexName) -> Self {
         Self {
-            name,
-            resolved: None,
+            reference: IndexTypeRef::legacy(name),
         }
     }
 
     #[must_use]
     pub fn from_resolved(resolved: ResolvedName<namespace::Index>) -> Self {
         Self {
-            name: resolved.to_def_name(),
-            resolved: Some(resolved),
+            reference: IndexTypeRef::from_resolved(resolved),
         }
     }
 
     #[must_use]
+    pub const fn from_ref(reference: IndexTypeRef) -> Self {
+        Self { reference }
+    }
+
+    #[must_use]
+    pub const fn type_ref(&self) -> &IndexTypeRef {
+        &self.reference
+    }
+
+    #[must_use]
     pub const fn name(&self) -> &IndexName {
-        &self.name
+        self.reference.name()
     }
 
     #[must_use]
     pub const fn resolved(&self) -> Option<&ResolvedName<namespace::Index>> {
-        self.resolved.as_ref()
+        self.reference.resolved()
     }
 
     #[must_use]
@@ -85,25 +95,24 @@ impl InferredIndex {
         name: &IndexName,
         resolved: Option<&ResolvedName<namespace::Index>>,
     ) -> bool {
-        match (self.resolved(), resolved) {
-            (Some(actual), Some(expected)) => actual == expected,
-            _ => self.name() == name,
-        }
+        self.reference.matches_resolved_or_name(name, resolved)
+    }
+
+    #[must_use]
+    pub fn matches_ref(&self, expected: &IndexTypeRef) -> bool {
+        self.reference.matches_ref(expected)
     }
 }
 
 impl PartialEq for InferredIndex {
     fn eq(&self, other: &Self) -> bool {
-        match (self.resolved(), other.resolved()) {
-            (Some(lhs), Some(rhs)) => lhs == rhs,
-            _ => self.name == other.name,
-        }
+        self.reference.matches_ref(&other.reference)
     }
 }
 
 impl std::fmt::Display for InferredIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.name.fmt(f)
+        self.reference.fmt(f)
     }
 }
 
@@ -111,7 +120,7 @@ impl std::ops::Deref for InferredIndex {
     type Target = IndexName;
 
     fn deref(&self) -> &Self::Target {
-        &self.name
+        self.name()
     }
 }
 
@@ -123,8 +132,7 @@ impl std::ops::Deref for InferredIndex {
 /// keep working while TIR/eval migrates.
 #[derive(Debug, Clone, Eq)]
 pub struct InferredStructType {
-    name: StructTypeName,
-    resolved: Option<ResolvedName<namespace::StructType>>,
+    reference: StructTypeRef,
 }
 
 impl InferredStructType {
@@ -133,33 +141,43 @@ impl InferredStructType {
         name: StructTypeName,
         resolved: Option<ResolvedName<namespace::StructType>>,
     ) -> Self {
-        Self { name, resolved }
+        Self {
+            reference: StructTypeRef::new(name, resolved),
+        }
     }
 
     #[must_use]
     pub const fn legacy(name: StructTypeName) -> Self {
         Self {
-            name,
-            resolved: None,
+            reference: StructTypeRef::legacy(name),
         }
     }
 
     #[must_use]
     pub fn from_resolved(resolved: ResolvedName<namespace::StructType>) -> Self {
         Self {
-            name: resolved.to_def_name(),
-            resolved: Some(resolved),
+            reference: StructTypeRef::from_resolved(resolved),
         }
     }
 
     #[must_use]
+    pub const fn from_ref(reference: StructTypeRef) -> Self {
+        Self { reference }
+    }
+
+    #[must_use]
+    pub const fn type_ref(&self) -> &StructTypeRef {
+        &self.reference
+    }
+
+    #[must_use]
     pub const fn name(&self) -> &StructTypeName {
-        &self.name
+        self.reference.name()
     }
 
     #[must_use]
     pub const fn resolved(&self) -> Option<&ResolvedName<namespace::StructType>> {
-        self.resolved.as_ref()
+        self.reference.resolved()
     }
 
     #[must_use]
@@ -168,25 +186,24 @@ impl InferredStructType {
         name: &StructTypeName,
         resolved: Option<&ResolvedName<namespace::StructType>>,
     ) -> bool {
-        match (self.resolved(), resolved) {
-            (Some(actual), Some(expected)) => actual == expected,
-            _ => self.name() == name,
-        }
+        self.reference.matches_resolved_or_name(name, resolved)
+    }
+
+    #[must_use]
+    pub fn matches_ref(&self, expected: &StructTypeRef) -> bool {
+        self.reference.matches_ref(expected)
     }
 }
 
 impl PartialEq for InferredStructType {
     fn eq(&self, other: &Self) -> bool {
-        match (self.resolved(), other.resolved()) {
-            (Some(lhs), Some(rhs)) => lhs == rhs,
-            _ => self.name == other.name,
-        }
+        self.reference.matches_ref(&other.reference)
     }
 }
 
 impl std::fmt::Display for InferredStructType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.name.fmt(f)
+        self.reference.fmt(f)
     }
 }
 
@@ -194,7 +211,7 @@ impl std::ops::Deref for InferredStructType {
     type Target = StructTypeName;
 
     fn deref(&self) -> &Self::Target {
-        &self.name
+        self.name()
     }
 }
 

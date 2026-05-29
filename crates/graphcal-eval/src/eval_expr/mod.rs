@@ -11,16 +11,17 @@ use miette::NamedSource;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, ExprKind, MulDivOp, UnitExpr};
 use graphcal_compiler::syntax::names::{
-    FieldName, IndexName, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName, StructTypeName,
-    namespace,
+    ConstructorName, FieldName, IndexName, NamePath, ResolvedIndexVariant, ResolvedName,
+    ScopedName, namespace,
 };
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
-use graphcal_compiler::registry::declared_type::DeclaredType;
+use graphcal_compiler::registry::declared_type::{DeclaredType, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{Registry, UnitScale};
 use graphcal_compiler::tir::typed::{
     DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint, ResolvedInlineDagCall,
+    StructFieldConstraintKey,
 };
 
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
@@ -54,12 +55,12 @@ pub struct EvalContext<'a> {
     /// same-leaf name in the immediate caller's local value map.
     pub root_values: Option<&'a HashMap<ScopedName, RuntimeValue>>,
     /// Resolved domain constraints declared on struct/union member fields,
-    /// keyed by `(struct type name, field name)`. Looked up at every
-    /// `ExprKind::ConstructorCall` to validate field values immediately.
+    /// keyed by owner-qualified struct/constructor/field identity. Looked up at
+    /// every `ExprKind::ConstructorCall` to validate field values immediately.
     /// `None` means "skip the check" (used by paths that haven't resolved
     /// constraints yet, e.g. const-bound evaluation inside `exec_plan`).
     pub struct_field_constraints:
-        Option<&'a HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>>,
+        Option<&'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>,
 }
 
 /// Context required to evaluate an `unfold(...)` expression inline.
@@ -89,6 +90,42 @@ fn runtime_label_from_resolved_variant(resolved: &ResolvedIndexVariant) -> Runti
         index_name: resolved.index().to_def_name(),
         variant: resolved.variant().clone(),
     }
+}
+
+fn constructor_call_target<'a>(
+    ctx: &'a EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+) -> Option<&'a graphcal_compiler::tir::typed::ResolvedConstructorTarget> {
+    ctx.current_dag
+        .and_then(|dag| dag.resolved_constructor_refs.as_ref())
+        .and_then(|refs| refs.constructor_calls.get(&span))
+}
+
+fn find_struct_field_constraint<'a>(
+    constraints: &'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
+    owning_type: Option<&StructTypeRef>,
+    constructor: &ConstructorName,
+    field: &FieldName,
+) -> Option<&'a ResolvedDomainConstraint> {
+    owning_type
+        .and_then(|owning_type| {
+            constraints.get(&StructFieldConstraintKey::new(
+                owning_type.clone(),
+                constructor.clone(),
+                field.clone(),
+            ))
+        })
+        .or_else(|| {
+            constraints
+                .iter()
+                .find(|(key, _)| {
+                    key.constructor == *constructor
+                        && key.field == *field
+                        && owning_type
+                            .is_none_or(|owning_type| key.owning_type.matches_ref(owning_type))
+                })
+                .map(|(_, constraint)| constraint)
+        })
 }
 
 impl EvalContext<'_> {
@@ -289,17 +326,24 @@ pub fn eval_expr(
                     callee.span(),
                 ));
             };
+            let resolved_constructor = constructor_call_target(ctx, callee.span());
+            let owning_type = resolved_constructor
+                .map(|target| StructTypeRef::from_resolved(target.owning_type.clone()));
+            let constructor_name = ConstructorName::from_atom(constructor.name.clone());
             let mut field_map = IndexMap::new();
             for field_init in fields {
                 let val = eval_expr(&field_init.value, values, local_values, ctx)?;
                 // Validate against any field-level domain constraint declared
-                // on `<constructor>.<field_name>`. The check fires at the field's
-                // span so the diagnostic points at the offending value.
-                let constructor_type_name =
-                    graphcal_compiler::syntax::names::StructTypeName::new(&constructor.name);
+                // on `<constructor>.<field_name>`. Prefer the HIR-resolved owning
+                // struct identity when available; runtime values still store the
+                // constructor leaf until the runtime identity migration.
                 if let Some(field_constraints) = ctx.struct_field_constraints
-                    && let Some(constraint) = field_constraints
-                        .get(&(constructor_type_name.clone(), field_init.name.value.clone()))
+                    && let Some(constraint) = find_struct_field_constraint(
+                        field_constraints,
+                        owning_type.as_ref(),
+                        &constructor_name,
+                        &field_init.name.value,
+                    )
                     && let Err(violation) =
                         crate::domain_check::check_domain_constraint(&val, constraint)
                 {

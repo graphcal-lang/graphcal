@@ -1026,6 +1026,46 @@ fn write_same_leaf_record_type_project(
     (dir, root)
 }
 
+fn write_same_leaf_constrained_record_type_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub type Item { Item(distance: Length(min: 1.0 m)) }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub type Item { Item(duration: Time(min: 1.0 s)) }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+fn loaded_file_dag_id(
+    project: &crate::loader::LoadedProject,
+    file_name: &str,
+) -> graphcal_compiler::dag_id::DagId {
+    project
+        .files
+        .values()
+        .find(|file| file.path.file_name().and_then(|name| name.to_str()) == Some(file_name))
+        .map_or_else(
+            || panic!("loaded file `{file_name}` not found"),
+            |file| file.dag_id.clone(),
+        )
+}
+
 #[test]
 fn project_constructor_call_uses_resolved_owner_with_same_leaf_constructors() {
     let (_dir, root) = write_same_leaf_constructor_project(
@@ -1089,6 +1129,93 @@ fn project_field_access_uses_resolved_struct_type_def_with_same_leaf_types() {
     );
 
     compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_declared_type_preserves_same_leaf_index_owner() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let src = &project.files[&project.root].named_source;
+    let a_id = loaded_file_dag_id(&project, "a.gcl");
+    let declared = tir.root().build_declared_types(src).unwrap();
+
+    let graphcal_compiler::registry::declared_type::DeclaredType::Indexed { index, .. } =
+        &declared[&graphcal_compiler::syntax::names::ScopedName::local("series")]
+    else {
+        panic!("expected indexed declared type for `series`");
+    };
+    assert_eq!(index.name().as_str(), "Phase");
+    assert!(matches!(index.resolved(), Some(name) if name.owner() == &a_id));
+}
+
+#[test]
+fn project_declared_type_preserves_same_leaf_struct_owner() {
+    let (_dir, root) = write_same_leaf_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node item: a.Item = a.Item(distance: 2.0 m);\n\
+         node other: b.Item = b.Item(duration: 3.0 s);\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let src = &project.files[&project.root].named_source;
+    let a_id = loaded_file_dag_id(&project, "a.gcl");
+    let b_id = loaded_file_dag_id(&project, "b.gcl");
+    let declared = tir.root().build_declared_types(src).unwrap();
+
+    let graphcal_compiler::registry::declared_type::DeclaredType::Struct(item, _) =
+        &declared[&graphcal_compiler::syntax::names::ScopedName::local("item")]
+    else {
+        panic!("expected struct declared type for `item`");
+    };
+    let graphcal_compiler::registry::declared_type::DeclaredType::Struct(other, _) =
+        &declared[&graphcal_compiler::syntax::names::ScopedName::local("other")]
+    else {
+        panic!("expected struct declared type for `other`");
+    };
+    assert_eq!(item.name().as_str(), "Item");
+    assert_eq!(other.name().as_str(), "Item");
+    assert!(matches!(item.resolved(), Some(name) if name.owner() == &a_id));
+    assert!(matches!(other.resolved(), Some(name) if name.owner() == &b_id));
+}
+
+#[test]
+fn project_struct_field_constraints_preserve_same_leaf_struct_owner() {
+    let (_dir, root) = write_same_leaf_constrained_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node item: a.Item = a.Item(distance: 2.0 m);\n\
+         node other: b.Item = b.Item(duration: 3.0 s);\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let src = &project.files[&project.root].named_source;
+    let constraints =
+        crate::exec_plan::resolve_struct_field_constraints(&tir, &HashMap::new(), src).unwrap();
+    let a_id = loaded_file_dag_id(&project, "a.gcl");
+    let b_id = loaded_file_dag_id(&project, "b.gcl");
+
+    assert!(constraints.keys().any(|key| {
+        key.owning_type
+            .resolved()
+            .is_some_and(|name| name.owner() == &a_id)
+            && key.owning_type.name().as_str() == "Item"
+            && key.constructor.as_str() == "Item"
+            && key.field.as_str() == "distance"
+    }));
+    assert!(constraints.keys().any(|key| {
+        key.owning_type
+            .resolved()
+            .is_some_and(|name| name.owner() == &b_id)
+            && key.owning_type.name().as_str() == "Item"
+            && key.constructor.as_str() == "Item"
+            && key.field.as_str() == "duration"
+    }));
 }
 
 #[test]

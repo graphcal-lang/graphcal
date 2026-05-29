@@ -32,9 +32,9 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
         (DeclaredType::Bool, InferredType::Bool) => true,
         (DeclaredType::Int, inferred) if inferred.is_int_like() => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
-        (DeclaredType::Label(d), InferredType::Label(i)) => i.name() == d,
+        (DeclaredType::Label(d), InferredType::Label(i)) => i.matches_ref(d),
         (DeclaredType::Struct(d, d_args), InferredType::Struct(i, i_args)) => {
-            d == i.name()
+            i.matches_ref(d)
                 && d_args.len() == i_args.len()
                 && d_args
                     .iter()
@@ -50,7 +50,7 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
                 element: i_elem,
                 index: i_idx,
             },
-        ) => i_idx.name() == d_idx && types_match(d_elem, i_elem),
+        ) => i_idx.matches_ref(d_idx) && types_match(d_elem, i_elem),
         _ => false,
     }
 }
@@ -182,13 +182,13 @@ impl From<&InferredType> for DeclaredType {
             InferredType::Bool => Self::Bool,
             InferredType::Int | InferredType::Fin(_) => Self::Int,
             InferredType::Datetime(scale) => Self::Datetime(*scale),
-            InferredType::Label(index) => Self::Label(index.name().clone()),
+            InferredType::Label(index) => Self::Label(index.type_ref().clone()),
             InferredType::Struct(n, args) => {
-                Self::Struct(n.name().clone(), args.iter().map(Self::from).collect())
+                Self::Struct(n.type_ref().clone(), args.iter().map(Self::from).collect())
             }
             InferredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),
-                index: index.name().clone(),
+                index: index.type_ref().clone(),
             },
         }
     }
@@ -201,14 +201,14 @@ impl From<&DeclaredType> for InferredType {
             DeclaredType::Bool => Self::Bool,
             DeclaredType::Int => Self::Int,
             DeclaredType::Datetime(scale) => Self::Datetime(*scale),
-            DeclaredType::Label(index) => Self::Label(InferredIndex::legacy(index.clone())),
+            DeclaredType::Label(index) => Self::Label(InferredIndex::from_ref(index.clone())),
             DeclaredType::Struct(n, args) => Self::Struct(
-                InferredStructType::legacy(n.clone()),
+                InferredStructType::from_ref(n.clone()),
                 args.iter().map(Self::from).collect(),
             ),
             DeclaredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),
-                index: InferredIndex::legacy(index.clone()),
+                index: InferredIndex::from_ref(index.clone()),
             },
         }
     }

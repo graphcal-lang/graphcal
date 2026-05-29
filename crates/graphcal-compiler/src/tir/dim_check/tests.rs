@@ -1,4 +1,5 @@
 use super::*;
+use crate::registry::declared_type::IndexTypeRef;
 use crate::syntax::dimension::BaseDimId;
 use crate::syntax::names::{DeclName, ResolvedName, ScopedName, namespace};
 use crate::syntax::parser::Parser;
@@ -265,7 +266,7 @@ Maneuver.Insertion: 1.8 km / s,
         types[&ScopedName::local("dv")],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Scalar(velocity)),
-            index: IndexName::new("Maneuver"),
+            index: IndexTypeRef::legacy(IndexName::new("Maneuver")),
         }
     );
 }
@@ -1336,7 +1337,9 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
         types[&ScopedName::local("distances")],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Scalar(length)),
-            index: crate::syntax::names::IndexName::new("Region".to_string()),
+            index: IndexTypeRef::legacy(
+                crate::syntax::names::IndexName::new("Region".to_string(),)
+            ),
         }
     );
 }

@@ -274,7 +274,7 @@ pub(super) fn eval_unfold(
                 Span::new(0, 0),
             )
         })?;
-    let index_name = match declared {
+    let index_ref = match declared {
         graphcal_compiler::registry::declared_type::DeclaredType::Indexed { index, .. } => {
             index.clone()
         }
@@ -288,14 +288,14 @@ pub(super) fn eval_unfold(
     let idx_def = ctx
         .registry
         .indexes
-        .get_index(index_name.as_str())
-        .ok_or_else(|| ctx.eval_error(format!("unknown index `{index_name}`"), Span::new(0, 0)))?;
+        .get_index(index_ref.as_str())
+        .ok_or_else(|| ctx.eval_error(format!("unknown index `{index_ref}`"), Span::new(0, 0)))?;
 
     let step_count = idx_def.step_count();
     let variants = idx_def.variants();
     let range_data = idx_def.range_data().ok_or_else(|| {
         ctx.eval_error(
-            format!("unfold requires a range index, but `{index_name}` is not a range"),
+            format!("unfold requires a range index, but `{index_ref}` is not a range"),
             Span::new(0, 0),
         )
     })?;
@@ -322,7 +322,9 @@ pub(super) fn eval_unfold(
     overlay_values.insert(
         self_key.clone(),
         RuntimeValue::Indexed {
-            index_name: index_name.clone(),
+            // Runtime values are still leaf-keyed until the runtime/public value
+            // identity migration; drop the owner only at this boundary.
+            index_name: index_ref.to_legacy_name(),
             entries: IndexMap::new(),
         },
     );
@@ -363,7 +365,9 @@ pub(super) fn eval_unfold(
     }
 
     Ok(RuntimeValue::Indexed {
-        index_name,
+        // Runtime values are still leaf-keyed until the runtime/public value
+        // identity migration; drop the owner only at this boundary.
+        index_name: index_ref.to_legacy_name(),
         entries: result_entries,
     })
 }

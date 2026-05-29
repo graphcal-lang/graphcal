@@ -14,7 +14,8 @@ use crate::desugar::resolved_ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::hir;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
-    DeclName, DimName, GenericParamName, IndexName, NamePath, StructTypeName,
+    ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, NamePath,
+    StructTypeName,
 };
 use crate::syntax::span::{Span, Spanned};
 
@@ -721,6 +722,33 @@ pub struct ResolvedDomainConstraint {
     pub max_display: Option<String>,
     /// Span covering the entire constraint clause for error reporting.
     pub span: Span,
+}
+
+/// Owner-qualified key for a domain constraint declared on a struct/union field.
+///
+/// The owning type carries a canonical owner when module-aware type resolution
+/// supplied one. The constructor remains a separate typed leaf because union
+/// members can share the same field names with different constraints.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructFieldConstraintKey {
+    pub owning_type: crate::registry::declared_type::StructTypeRef,
+    pub constructor: ConstructorName,
+    pub field: FieldName,
+}
+
+impl StructFieldConstraintKey {
+    #[must_use]
+    pub const fn new(
+        owning_type: crate::registry::declared_type::StructTypeRef,
+        constructor: ConstructorName,
+        field: FieldName,
+    ) -> Self {
+        Self {
+            owning_type,
+            constructor,
+            field,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2134,24 +2162,36 @@ pub fn resolved_to_declared_type(
     resolved: &ResolvedTypeExpr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::registry::declared_type::DeclaredType, GraphcalError> {
-    use crate::registry::declared_type::DeclaredType;
+    use crate::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
 
     match resolved {
         ResolvedTypeExpr::Dimensionless => Ok(DeclaredType::Scalar(Dimension::dimensionless())),
         ResolvedTypeExpr::Bool => Ok(DeclaredType::Bool),
         ResolvedTypeExpr::Int => Ok(DeclaredType::Int),
         ResolvedTypeExpr::Datetime(scale) => Ok(DeclaredType::Datetime(*scale)),
-        ResolvedTypeExpr::Label(index, _, _) => Ok(DeclaredType::Label(index.clone())),
+        ResolvedTypeExpr::Label(index, resolved, _) => Ok(DeclaredType::Label(IndexTypeRef::new(
+            index.clone(),
+            resolved.clone(),
+        ))),
         ResolvedTypeExpr::Scalar(dim) => Ok(DeclaredType::Scalar(dim.clone())),
-        ResolvedTypeExpr::Struct(name, _, _) => Ok(DeclaredType::Struct(name.clone(), vec![])),
+        ResolvedTypeExpr::Struct(name, resolved, _) => Ok(DeclaredType::Struct(
+            StructTypeRef::new(name.clone(), resolved.clone()),
+            vec![],
+        )),
         ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
+            name,
+            resolved,
+            type_args,
+            ..
         } => {
             let mut declared_args = Vec::with_capacity(type_args.len());
             for arg in type_args {
                 declared_args.push(resolved_to_declared_type(arg, src)?);
             }
-            Ok(DeclaredType::Struct(name.clone(), declared_args))
+            Ok(DeclaredType::Struct(
+                StructTypeRef::new(name.clone(), resolved.clone()),
+                declared_args,
+            ))
         }
         ResolvedTypeExpr::GenericDimParam(name, span) => Err(GraphcalError::EvalError {
             message: format!("cannot use generic dimension parameter `{name}` as a concrete type"),
@@ -2172,10 +2212,10 @@ pub fn resolved_to_declared_type(
             let mut result = resolved_to_declared_type(base, src)?;
             for idx in indexes.iter().rev() {
                 match idx {
-                    ResolvedIndex::Concrete(name, _, _) => {
+                    ResolvedIndex::Concrete(name, resolved, _) => {
                         result = DeclaredType::Indexed {
                             element: Box::new(result),
-                            index: name.clone(),
+                            index: IndexTypeRef::new(name.clone(), resolved.clone()),
                         };
                     }
                     ResolvedIndex::NatExpr(form, span) => {
@@ -2194,7 +2234,7 @@ pub fn resolved_to_declared_type(
                         );
                         result = DeclaredType::Indexed {
                             element: Box::new(result),
-                            index: idx_name,
+                            index: IndexTypeRef::legacy(idx_name),
                         };
                     }
                     ResolvedIndex::GenericParam(name, span) => {
@@ -4456,7 +4496,7 @@ mod tests {
 
     // --- resolved_to_declared_type() tests ---
 
-    use crate::registry::declared_type::DeclaredType;
+    use crate::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
 
     #[test]
     fn convert_dimensionless() {
@@ -4491,7 +4531,10 @@ mod tests {
             &make_src(),
         )
         .unwrap();
-        assert_eq!(dt, DeclaredType::Struct(StructTypeName::new("Foo"), vec![]));
+        assert_eq!(
+            dt,
+            DeclaredType::Struct(StructTypeRef::legacy(StructTypeName::new("Foo")), vec![])
+        );
     }
 
     #[test]
@@ -4516,7 +4559,7 @@ mod tests {
                 element: Box::new(DeclaredType::Scalar(Dimension::base(BaseDimId::Prelude(
                     "Length".to_string()
                 )))),
-                index: IndexName::new("M"),
+                index: IndexTypeRef::legacy(IndexName::new("M")),
             }
         );
     }

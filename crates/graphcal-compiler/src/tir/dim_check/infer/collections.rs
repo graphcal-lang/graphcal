@@ -1083,7 +1083,7 @@ pub(super) fn infer_unfold(
     if let Some((index_name, _)) = owner_range_index {
         return Ok(InferredType::Indexed {
             element: Box::new(init_type),
-            index: InferredIndex::legacy(index_name),
+            index: InferredIndex::from_ref(index_name),
         });
     }
 
