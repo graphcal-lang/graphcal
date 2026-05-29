@@ -10,5 +10,5 @@ snippet line 16:
 snippet line 17: #[expected_fail]
     label at line 17, columns 1 to 16: this assertion is indexed
 snippet line 18: assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
-diagnostic help: use `#[expected_fail(Index.Variant, ...)]` to specify which variants are expected to fail
+diagnostic help: use `#[expected_fail(Index.Variant, ...)]` or qualified `#[expected_fail(module.Index.Variant, ...)]` to specify which variants are expected to fail
 diagnostic code: graphcal::A011

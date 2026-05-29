@@ -15,7 +15,9 @@ use super::RuntimeValueMap;
 use super::eval_expr;
 use super::index_ref_matches_resolved_or_legacy;
 
-fn legacy_index_ref_from_path(path: &NamePath) -> IndexTypeRef {
+/// Collapse a syntactic label-pattern path to a leaf-only index reference for
+/// standalone eval. Module-aware match selection must use resolved label refs.
+fn standalone_index_ref_from_path(path: &NamePath) -> IndexTypeRef {
     IndexTypeRef::legacy(IndexName::from(path.leaf().clone()))
 }
 
@@ -50,7 +52,7 @@ fn label_pattern_matches(
 
     match pattern {
         MatchPattern::IndexLabel { index, variant, .. } => {
-            legacy_index_ref_from_path(&index.value).matches_ref(scrutinee_index)
+            standalone_index_ref_from_path(&index.value).matches_ref(scrutinee_index)
                 && variant.value == *scrutinee_variant
         }
         MatchPattern::Constructor { .. } | MatchPattern::Path { .. } => false,

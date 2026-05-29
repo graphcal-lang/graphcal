@@ -415,12 +415,13 @@ impl<Ns: NameNamespace> ResolvedName<Ns> {
         self.name.as_str()
     }
 
-    /// Return a definition-site name with the same leaf namespace.
+    /// Return the ownerless definition-site leaf in the same namespace.
     ///
-    /// This deliberately drops the owner and should only be used at temporary
-    /// legacy boundaries that still key local data by leaf name.
+    /// This deliberately drops the canonical owner. Use it only at explicit
+    /// standalone/legacy registry, diagnostic, or serialization boundaries that
+    /// cannot yet carry [`ResolvedName`] itself.
     #[must_use]
-    pub fn to_def_name(&self) -> NameDef<Ns> {
+    pub fn to_unowned_def_name(&self) -> NameDef<Ns> {
         NameDef::from_atom(self.name.clone())
     }
 
@@ -1023,7 +1024,7 @@ mod tests {
         assert_eq!(resolved.owner().to_string(), "helpers.mass");
         assert_eq!(resolved.as_str(), "dry_mass");
         assert_eq!(resolved.to_string(), "helpers.mass.dry_mass");
-        assert_eq!(resolved.to_def_name(), DeclName::new("dry_mass"));
+        assert_eq!(resolved.to_unowned_def_name(), DeclName::new("dry_mass"));
     }
 
     #[test]

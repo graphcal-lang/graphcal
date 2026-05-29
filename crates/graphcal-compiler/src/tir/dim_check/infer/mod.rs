@@ -25,7 +25,11 @@ use crate::syntax::names::{
 
 use super::{DeclaredType, InferredIndex, InferredType};
 
-fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
+/// Collapse a syntactic index path to a leaf-only name for standalone TIR.
+///
+/// Module-aware variant literals must use `ResolvedCollectionRefs`; this
+/// adapter is only for legacy/standalone callers whose registries are leaf-keyed.
+fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
 
@@ -111,7 +115,7 @@ pub(super) fn infer_type_with_owner(
                 return Ok(infer_resolved_index_variant_label(resolved_variant));
             }
 
-            let index_name = legacy_index_name_from_path(&index.value);
+            let index_name = standalone_index_name_from_path(&index.value);
             // Validate index exists
             let idx_def = registry
                 .indexes

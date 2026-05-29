@@ -38,7 +38,7 @@ impl<Ns: NameNamespace> TypeNameRef<Ns> {
     #[must_use]
     pub fn from_resolved(resolved: ResolvedName<Ns>) -> Self {
         Self {
-            name: resolved.to_def_name(),
+            name: resolved.to_unowned_def_name(),
             resolved: Some(resolved),
         }
     }

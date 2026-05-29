@@ -1458,9 +1458,7 @@ fn type_resolve_dag(
         })
     });
     let resolved_collection_refs = module_ctx.and_then(|ctx| {
-        resolved_exprs
-            .as_ref()
-            .and_then(|exprs| collect_resolved_collection_refs(exprs, &resolved_decl_types, ctx))
+        collect_resolved_collection_refs(resolved_exprs.as_ref(), &resolved_decl_types, ctx)
     });
     let resolved_constructor_refs = module_ctx.and_then(|ctx| {
         resolved_exprs
@@ -1660,7 +1658,7 @@ fn collect_resolved_dag_dependencies(
 }
 
 fn collect_resolved_collection_refs(
-    exprs: &ResolvedExpressions,
+    exprs: Option<&ResolvedExpressions>,
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
     ctx: ModuleTypeContext<'_>,
 ) -> Option<ResolvedCollectionRefs> {
@@ -1670,13 +1668,15 @@ fn collect_resolved_collection_refs(
         collect_resolved_collection_indexes_from_type(resolved_type, ctx, &mut refs)?;
     }
 
-    for hir_expr in exprs
-        .consts
-        .values()
-        .chain(exprs.param_defaults.values())
-        .chain(exprs.nodes.values())
-    {
-        collect_resolved_collection_refs_from_expr(hir_expr, ctx, &mut refs)?;
+    if let Some(exprs) = exprs {
+        for hir_expr in exprs
+            .consts
+            .values()
+            .chain(exprs.param_defaults.values())
+            .chain(exprs.nodes.values())
+        {
+            collect_resolved_collection_refs_from_expr(hir_expr, ctx, &mut refs)?;
+        }
     }
 
     Some(refs)
@@ -3270,7 +3270,7 @@ fn resolve_hir_type_expr_inner(
         hir::TypeExprKind::Struct(name) => {
             hir_struct_type_def(&name.value, name.span, ctx)?;
             Ok(ResolvedTypeExpr::Struct(
-                name.value.to_def_name(),
+                name.value.to_unowned_def_name(),
                 Some(name.value.clone()),
                 name.span,
             ))
@@ -3314,7 +3314,7 @@ fn hir_dimension(
         .get_dimension(name)
         .cloned()
         .ok_or_else(|| GraphcalError::UnknownDimension {
-            name: name.to_def_name(),
+            name: name.to_unowned_def_name(),
             src: ctx.src.clone(),
             span: span.into(),
         })
@@ -3326,10 +3326,10 @@ fn hir_index_name(
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<IndexName, GraphcalError> {
     if ctx.module_types.get_index(name).is_some() {
-        Ok(name.to_def_name())
+        Ok(name.to_unowned_def_name())
     } else {
         Err(GraphcalError::UnknownIndex {
-            name: name.to_def_name(),
+            name: name.to_unowned_def_name(),
             src: ctx.src.clone(),
             span: span.into(),
         })
@@ -3515,7 +3515,7 @@ fn resolve_hir_type_application(
     }
 
     Ok(ResolvedTypeExpr::GenericStruct {
-        name: name.value.to_def_name(),
+        name: name.value.to_unowned_def_name(),
         resolved: Some(name.value.clone()),
         type_args: resolved_args,
         span: type_ann.span,
@@ -3582,13 +3582,13 @@ fn resolve_index_expr_name(
             Ok(resolved) => {
                 if ctx.types.get_index(&resolved).is_some() {
                     return Ok(ResolvedIndex::Concrete(
-                        resolved.to_def_name(),
+                        resolved.to_unowned_def_name(),
                         Some(resolved),
                         span,
                     ));
                 }
                 return Err(GraphcalError::UnknownIndex {
-                    name: resolved.to_def_name(),
+                    name: resolved.to_unowned_def_name(),
                     src: src.clone(),
                     span: span.into(),
                 });
@@ -3622,7 +3622,7 @@ fn resolve_concrete_index_path(
             Ok(resolved) => {
                 let Some(index) = ctx.types.get_index(&resolved) else {
                     return Err(GraphcalError::UnknownIndex {
-                        name: resolved.to_def_name(),
+                        name: resolved.to_unowned_def_name(),
                         src: src.clone(),
                         span: span.into(),
                     });
@@ -3632,7 +3632,7 @@ fn resolve_concrete_index_path(
                     crate::registry::types::IndexKind::Named { .. }
                         | crate::registry::types::IndexKind::RequiredNamed
                 ) {
-                    return Ok(Some(resolved.to_def_name()));
+                    return Ok(Some(resolved.to_unowned_def_name()));
                 }
                 return Ok(None);
             }
@@ -3677,7 +3677,11 @@ fn resolve_struct_type_path<'a>(
         match ctx.resolver.resolve_struct_type_path(ctx.owner, path) {
             Ok(resolved) => {
                 if let Some(type_def) = ctx.types.get_struct_type(&resolved) {
-                    return Ok(Some((resolved.to_def_name(), Some(resolved), type_def)));
+                    return Ok(Some((
+                        resolved.to_unowned_def_name(),
+                        Some(resolved),
+                        type_def,
+                    )));
                 }
                 return Err(GraphcalError::UnknownStructType {
                     name: resolved.to_string(),
@@ -3716,7 +3720,7 @@ fn resolve_dimension_path(
                     .cloned()
                     .map(Some)
                     .ok_or_else(|| GraphcalError::UnknownDimension {
-                        name: resolved.to_def_name(),
+                        name: resolved.to_unowned_def_name(),
                         src: src.clone(),
                         span: span.into(),
                     });

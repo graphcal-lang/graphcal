@@ -72,7 +72,11 @@ fn eval_nat_expr(
     }
 }
 
-fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
+/// Collapse a syntactic index path to a leaf-only name for standalone eval.
+///
+/// Module-aware collection evaluation must use HIR/resolved collection refs;
+/// this adapter is only for legacy/standalone value construction.
+fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
 
@@ -227,7 +231,7 @@ pub(super) fn eval_index_access(
                     }
                     None => {
                         let legacy_index =
-                            IndexTypeRef::legacy(legacy_index_name_from_path(&index.value));
+                            IndexTypeRef::legacy(standalone_index_name_from_path(&index.value));
                         ensure_index_refs_match(&index_name, &legacy_index, index.span, ctx)?;
                         variant.value.clone()
                     }
@@ -595,7 +599,7 @@ pub(super) fn eval_for_comp(
                     .as_ref()
                     .map(|resolved| IndexTypeRef::from_resolved(resolved.clone()))
                     .unwrap_or_else(|| {
-                        IndexTypeRef::legacy(legacy_index_name_from_path(&spanned.value))
+                        IndexTypeRef::legacy(standalone_index_name_from_path(&spanned.value))
                     }),
                 spanned.span,
                 None,

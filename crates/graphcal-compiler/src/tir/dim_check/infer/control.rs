@@ -20,7 +20,11 @@ use super::super::helpers::{
 use super::super::{DeclaredType, InferredIndex, InferredType};
 use super::infer_type;
 
-fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
+/// Collapse a syntactic index path to a leaf-only name for standalone TIR.
+///
+/// Module-aware label matching must use `ResolvedCollectionRefs`; this adapter
+/// is only for legacy/standalone callers whose registries are leaf-keyed.
+fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
 
@@ -300,12 +304,12 @@ pub(super) fn infer_match(
                     resolved_match_label_variant(dag, &arm.pattern)
                 {
                     if !index_identity.matches_resolved_or_name(
-                        &resolved_variant.index().to_def_name(),
+                        &resolved_variant.index().to_unowned_def_name(),
                         Some(resolved_variant.index()),
                     ) {
                         return Err(GraphcalError::IndexMismatch {
                             expected: index_name.clone(),
-                            found: resolved_variant.index().to_def_name(),
+                            found: resolved_variant.index().to_unowned_def_name(),
                             src: src.clone(),
                             span: arm.pattern.span().into(),
                         });
@@ -330,7 +334,7 @@ pub(super) fn infer_match(
                     if index.value.leaf().as_str() != index_name.as_str() {
                         return Err(GraphcalError::IndexMismatch {
                             expected: index_name.clone(),
-                            found: legacy_index_name_from_path(&index.value),
+                            found: standalone_index_name_from_path(&index.value),
                             src: src.clone(),
                             span: index.span.into(),
                         });

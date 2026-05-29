@@ -26,14 +26,18 @@ use super::super::helpers::{
 use super::super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
 use super::infer_type;
 
-fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
+/// Collapse a syntactic index path to a leaf-only name for standalone TIR.
+///
+/// Module-aware inference must use `ResolvedCollectionRefs`; this adapter is
+/// only for legacy/standalone callers whose registries are leaf-keyed.
+fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
 
 /// Get the index name for a for binding.
 fn for_binding_index_name(index: &ForBindingIndex) -> IndexName {
     match index {
-        ForBindingIndex::Named(spanned) => legacy_index_name_from_path(&spanned.value),
+        ForBindingIndex::Named(spanned) => standalone_index_name_from_path(&spanned.value),
         ForBindingIndex::Range { arg, .. } => IndexName::new(nat_expr_to_index_name_str(arg)),
     }
 }
@@ -110,7 +114,7 @@ fn inferred_index_for_path(
         .and_then(|refs| refs.for_binding_indexes.get(&span))
         .cloned()
         .map_or_else(
-            || InferredIndex::legacy(legacy_index_name_from_path(path)),
+            || InferredIndex::legacy(standalone_index_name_from_path(path)),
             InferredIndex::from_resolved,
         )
 }
@@ -630,7 +634,7 @@ pub(super) fn infer_index_access(
                     validate_index_path_module_scope(&index.value, tir, src, index.span)?;
                 }
                 let arg_index = resolved_variant.map_or_else(
-                    || InferredIndex::legacy(legacy_index_name_from_path(&index.value)),
+                    || InferredIndex::legacy(standalone_index_name_from_path(&index.value)),
                     |variant| InferredIndex::from_resolved(variant.index().clone()),
                 );
                 if arg_index != idx_name {

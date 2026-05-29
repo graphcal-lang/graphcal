@@ -77,7 +77,11 @@ pub struct UnfoldContext<'a> {
     pub declared_types: &'a HashMap<ScopedName, DeclaredType>,
 }
 
-fn legacy_index_name_from_path(path: &NamePath) -> IndexName {
+/// Collapse a syntactic index path to a leaf-only name for standalone eval.
+///
+/// Module-aware variant literals must use HIR/resolved collection refs; this
+/// adapter is only for legacy/standalone value construction and diagnostics.
+fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
 
@@ -299,7 +303,7 @@ pub fn eval_expr(
                 .map(runtime_label_from_resolved_variant)
                 .unwrap_or_else(|| {
                     RuntimeValue::legacy_label(
-                        legacy_index_name_from_path(&index.value),
+                        standalone_index_name_from_path(&index.value),
                         variant.value.clone(),
                     )
                 }))

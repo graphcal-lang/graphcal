@@ -428,7 +428,7 @@ pub(super) fn evaluate_plan(
     let make_value = |name: &ScopedName, rv: &RuntimeValue| -> Value {
         let mut value = runtime_to_value(rv, declared_types.get(name), &tir.registry);
         if let Some(expr) = expr_map.get(name) {
-            attach_display_units(&mut value, expr, &tir.registry, &values);
+            attach_display_units(&mut value, expr, &ctx, &values);
         }
         value
     };
@@ -1050,8 +1050,7 @@ fn evaluate_plot(
         let field_value = eval_plot_property(&encoding.value, values, local_values, ctx)?;
 
         // Extract axis metadata: dimension from graph refs, display unit from expression
-        let meta =
-            extract_encoding_axis_meta(&encoding.value, declared_types, ctx.registry, values);
+        let meta = extract_encoding_axis_meta(&encoding.value, declared_types, ctx, values);
         encoding_meta.push((encoding.channel, meta));
 
         encodings.push((encoding.channel, field_value));
@@ -1100,11 +1099,11 @@ fn evaluate_plot(
 fn extract_encoding_axis_meta(
     expr: &graphcal_compiler::desugar::resolved_ast::Expr,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
-    registry: &Registry,
+    ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
 ) -> AxisMeta {
-    let dimension_label = extract_dimension_from_expr(expr, declared_types, registry);
-    let unit_label = extract_flat_display_unit(expr, registry, values).map(|du| du.label);
+    let dimension_label = extract_dimension_from_expr(expr, declared_types, ctx.registry);
+    let unit_label = extract_flat_display_unit(expr, ctx, values).map(|du| du.label);
     AxisMeta {
         dimension_label,
         unit_label,

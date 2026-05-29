@@ -183,18 +183,6 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
-    #[error("index label patterns cannot have field bindings")]
-    #[diagnostic(
-        code(graphcal::P013),
-        help("index labels are bare tags; remove the parenthesized bindings")
-    )]
-    IndexVariantPatternWithBindings {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("field bindings here")]
-        span: SourceSpan,
-    },
-
     #[error("inline DAG call requires `.<out>` projection")]
     #[diagnostic(
         code(graphcal::P014),
@@ -233,7 +221,6 @@ impl ParseError {
             | Self::MultiDeclSingleSlot { src, .. }
             | Self::MultiDeclNoSharedAxis { src, .. }
             | Self::MultiDeclUnsupportedShape { src, .. }
-            | Self::IndexVariantPatternWithBindings { src, .. }
             | Self::InlineDagCallMissingProjection { src, .. } => src,
         }
     }
