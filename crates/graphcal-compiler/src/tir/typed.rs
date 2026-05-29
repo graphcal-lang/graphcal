@@ -14,7 +14,7 @@ use crate::desugar::resolved_ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::hir;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, NamePath,
+    ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, NameAtom, NamePath,
     StructTypeName,
 };
 use crate::syntax::span::{Span, Spanned};
@@ -777,6 +777,12 @@ pub struct ResolvedDagDependencies {
         HashMap<ResolvedName<namespace::Decl>, BTreeSet<ResolvedName<namespace::Decl>>>,
     /// For each const declaration, the canonical const declarations it reads.
     pub const_deps: HashMap<ResolvedName<namespace::Decl>, BTreeSet<ResolvedName<namespace::Decl>>>,
+    /// Source-span keyed graph references used by syntax-AST eval compatibility
+    /// code to route values through canonical declaration identities.
+    pub graph_ref_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
+    /// Source-span keyed const references used by syntax-AST eval compatibility
+    /// code to route values through canonical declaration identities.
+    pub const_ref_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
 }
 
 /// Canonical HIR-derived index references used by collection/index inference.
@@ -1039,6 +1045,7 @@ impl TIR {
                 assumes_map: HashMap::new(),
                 expected_fail: HashMap::new(),
                 resolved_decl_types: HashMap::new(),
+                resolved_decl_bindings: None,
                 domain_constraints: HashMap::new(),
                 imported_values: HashMap::new(),
                 imported_decl_types: HashMap::new(),
@@ -1109,6 +1116,10 @@ pub struct DagTIR {
     pub expected_fail: HashMap<ScopedName, ExpectedFail>,
     /// Resolved type for each const/param/node declaration.
     pub resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
+    /// Canonical declaration identity for every value name visible in this DAG
+    /// (local declarations plus imported/selective names) when module-aware
+    /// resolution is available.
+    pub resolved_decl_bindings: Option<HashMap<ScopedName, ResolvedName<namespace::Decl>>>,
     /// Resolved domain constraints for declarations that have them.
     pub domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>,
     /// Pre-evaluated values imported from dependency files (passed through from IR).
@@ -1275,6 +1286,7 @@ fn type_resolve_impl(
         ir.imported_values,
         ir.imported_decl_types,
         ir.imported_value_sources,
+        module_ctx,
     );
     let mut dags = DagRegistry::new();
     dags.insert(root_dag_id.clone(), root_dag);
@@ -1347,6 +1359,7 @@ fn type_resolve_single_impl(
         ir.imported_values,
         ir.imported_decl_types,
         ir.imported_value_sources,
+        module_ctx,
     ))
 }
 
@@ -1526,32 +1539,38 @@ fn collect_resolved_dag_dependencies(
     for entry in consts {
         let key = resolved_decl_key(ctx.owner, &entry.name)?;
         let mut deps = lower_expr_dependencies(&entry.expr, expr_ctx)?;
-        for graph_ref in deps.graph_refs {
-            if !ctx.resolver.decl_symbol_kind(&graph_ref).ok()?.is_const() {
+        for graph_ref in &deps.graph_refs {
+            if !ctx.resolver.decl_symbol_kind(graph_ref).ok()?.is_const() {
                 return None;
             }
-            deps.const_refs.insert(graph_ref);
+            deps.const_refs.insert(graph_ref.clone());
         }
+        resolved.graph_ref_targets.extend(deps.graph_ref_targets);
+        resolved.const_ref_targets.extend(deps.const_ref_targets);
         resolved.const_deps.insert(key, deps.const_refs);
     }
 
     for entry in params {
         let key = resolved_decl_key(ctx.owner, &entry.name)?;
-        let graph_refs = match &entry.default_expr {
-            Some(expr) => lower_expr_dependencies(expr, expr_ctx)?.graph_refs,
-            None => BTreeSet::new(),
+        let deps = match &entry.default_expr {
+            Some(expr) => lower_expr_dependencies(expr, expr_ctx)?,
+            None => hir::ExprDependencies::default(),
         };
-        resolved.runtime_deps.insert(key, graph_refs);
+        resolved.graph_ref_targets.extend(deps.graph_ref_targets);
+        resolved.const_ref_targets.extend(deps.const_ref_targets);
+        resolved.runtime_deps.insert(key, deps.graph_refs);
     }
 
     for entry in nodes {
         let key = resolved_decl_key(ctx.owner, &entry.name)?;
         let hir_expr = hir::lower_expr(&entry.expr, expr_ctx).ok()?;
-        let mut deps = hir::collect_expr_dependencies(&hir_expr).graph_refs;
+        let mut deps = hir::collect_expr_dependencies(&hir_expr);
         if matches!(hir_expr.kind, hir::ExprKind::Unfold { .. }) {
-            deps.remove(&key);
+            deps.graph_refs.remove(&key);
         }
-        resolved.runtime_deps.insert(key, deps);
+        resolved.graph_ref_targets.extend(deps.graph_ref_targets);
+        resolved.const_ref_targets.extend(deps.const_ref_targets);
+        resolved.runtime_deps.insert(key, deps.graph_refs);
     }
 
     Some(resolved)
@@ -2124,6 +2143,59 @@ fn resolved_decl_key(
     Some(ResolvedName::from_def(owner.clone(), name))
 }
 
+fn collect_resolved_decl_bindings(
+    ctx: ModuleTypeContext<'_>,
+    consts: &[crate::ir::lower::ConstEntry],
+    params: &[crate::ir::lower::ParamEntry],
+    nodes: &[crate::ir::lower::NodeEntry],
+    imported_values: &HashMap<
+        ScopedName,
+        (
+            crate::registry::runtime_value::RuntimeValue,
+            crate::registry::declared_type::DeclaredType,
+        ),
+    >,
+    imported_decl_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
+    imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+) -> Option<HashMap<ScopedName, ResolvedName<namespace::Decl>>> {
+    let mut bindings = HashMap::new();
+
+    for name in consts
+        .iter()
+        .map(|entry| &entry.name)
+        .chain(params.iter().map(|entry| &entry.name))
+        .chain(nodes.iter().map(|entry| &entry.name))
+    {
+        bindings.insert(name.clone(), resolved_decl_key(ctx.owner, name)?);
+    }
+
+    for name in imported_values
+        .keys()
+        .chain(imported_decl_types.keys())
+        .chain(imported_value_sources.keys())
+    {
+        let path = scoped_name_to_name_path(name)?;
+        let resolved = ctx.resolver.resolve_decl_path(ctx.owner, &path).ok()?;
+        bindings.insert(name.clone(), resolved);
+    }
+
+    Some(bindings)
+}
+
+fn scoped_name_to_name_path(name: &ScopedName) -> Option<NamePath> {
+    let qualifier = name
+        .qualifier()
+        .iter()
+        .map(|segment| NameAtom::parse(segment.as_ref()).ok())
+        .collect::<Option<Vec<_>>>()?;
+    let leaf = NameAtom::parse(name.member()).ok()?;
+    Some(if qualifier.is_empty() {
+        NamePath::local(leaf)
+    } else {
+        NamePath::qualified_path(qualifier, leaf)
+    })
+}
+
 /// Partially-built [`DagTIR`] returned by [`type_resolve_dag`]; finalized
 /// by [`DagTIRSeed::with_body`] which fills in the rest of the per-DAG
 /// fields.
@@ -2166,7 +2238,19 @@ impl DagTIRSeed {
         >,
         imported_decl_types: HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
         imported_value_sources: HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+        module_ctx: Option<ModuleTypeContext<'_>>,
     ) -> DagTIR {
+        let resolved_decl_bindings = module_ctx.and_then(|ctx| {
+            collect_resolved_decl_bindings(
+                ctx,
+                &self.consts,
+                &self.params,
+                &self.nodes,
+                &imported_values,
+                &imported_decl_types,
+                &imported_value_sources,
+            )
+        });
         DagTIR {
             dag_id: self.dag_id,
             consts: self.consts,
@@ -2188,6 +2272,7 @@ impl DagTIRSeed {
             assumes_map,
             expected_fail,
             resolved_decl_types: self.resolved_decl_types,
+            resolved_decl_bindings,
             domain_constraints: HashMap::new(), // Resolved later in compile()
             imported_values,
             imported_decl_types,

@@ -481,6 +481,12 @@ pub struct ExprDependencies {
     pub graph_refs: BTreeSet<ResolvedName<namespace::Decl>>,
     /// Compile-time const dependencies reached through const-like value refs.
     pub const_refs: BTreeSet<ResolvedName<namespace::Decl>>,
+    /// Source-span keyed graph references used by the current syntax-AST eval
+    /// compatibility path to route values by canonical declaration identity.
+    pub graph_ref_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
+    /// Source-span keyed const references used by the current syntax-AST eval
+    /// compatibility path to route values by canonical declaration identity.
+    pub const_ref_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
 }
 
 /// Collect canonical declaration dependencies from an already-lowered HIR expression.
@@ -502,10 +508,13 @@ fn collect_expr_dependencies_into(expr: &Expr, deps: &mut ExprDependencies) {
         | ExprKind::VariantLiteral(_) => {}
         ExprKind::GraphRef(target) => {
             deps.graph_refs.insert(target.value.clone());
+            deps.graph_ref_targets
+                .insert(target.span, target.value.clone());
         }
         ExprKind::ConstRef(target) => {
             if let ConstRef::Decl(resolved) = &target.value {
                 deps.const_refs.insert(resolved.clone());
+                deps.const_ref_targets.insert(target.span, resolved.clone());
             }
         }
         ExprKind::BinOp { lhs, rhs, .. } => {

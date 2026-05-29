@@ -1312,7 +1312,10 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         crate::eval_expr::RuntimeValue::Scalar(9.0),
     );
     let values = HashMap::from([(
-        graphcal_compiler::syntax::names::ScopedName::local("action"),
+        crate::decl_key::RuntimeDeclKey::for_local_decl(
+            tir.root(),
+            &graphcal_compiler::syntax::names::ScopedName::local("action"),
+        ),
         crate::eval_expr::RuntimeValue::Struct {
             type_name: graphcal_compiler::registry::declared_type::StructTypeRef::new(
                 graphcal_compiler::syntax::names::StructTypeName::new("Pick"),
@@ -1374,7 +1377,10 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         crate::eval_expr::RuntimeValue::Scalar(99.0),
     );
     let values = HashMap::from([(
-        graphcal_compiler::syntax::names::ScopedName::local("item"),
+        crate::decl_key::RuntimeDeclKey::for_local_decl(
+            tir.root(),
+            &graphcal_compiler::syntax::names::ScopedName::local("item"),
+        ),
         crate::eval_expr::RuntimeValue::Struct {
             type_name: graphcal_compiler::registry::declared_type::StructTypeRef::new(
                 graphcal_compiler::syntax::names::StructTypeName::new("Item"),
@@ -1827,7 +1833,10 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         crate::eval_expr::RuntimeValue::Scalar(100.0),
     );
     let values = HashMap::from([(
-        graphcal_compiler::syntax::names::ScopedName::local("series"),
+        crate::decl_key::RuntimeDeclKey::for_local_decl(
+            tir.root(),
+            &graphcal_compiler::syntax::names::ScopedName::local("series"),
+        ),
         crate::eval_expr::RuntimeValue::Indexed {
             index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
                 b_owner,
@@ -1885,7 +1894,10 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         graphcal_compiler::syntax::names::IndexName::new("Phase"),
     );
     let values = HashMap::from([(
-        graphcal_compiler::syntax::names::ScopedName::local("phase"),
+        crate::decl_key::RuntimeDeclKey::for_local_decl(
+            tir.root(),
+            &graphcal_compiler::syntax::names::ScopedName::local("phase"),
+        ),
         crate::eval_expr::RuntimeValue::Label {
             index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
                 b_owner,
@@ -2426,6 +2438,113 @@ fn eval_qualified_runtime_refs_with_colliding_leaf_names() {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     let out = find_value(&result, "out");
     assert!((out - 6.0).abs() < 1e-10, "out = {out}");
+}
+
+#[test]
+fn eval_qualified_params_with_colliding_leaf_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "param shared: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "param shared: Dimensionless = 3.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include collide.a() as a;\n\
+         include collide.b() as b;\n\
+         param shared: Dimensionless = 100.0;\n\
+         node total: Dimensionless = @a.shared + @b.shared + @shared;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let total = find_value(&result, "total");
+    assert!((total - 105.0).abs() < 1e-10, "total = {total}");
+}
+
+#[test]
+fn eval_selective_import_aliases_with_colliding_leaf_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub const node shared: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub const node shared: Dimensionless = 3.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import collide.a.{ shared as a_shared };\n\
+         import collide.b.{ shared as b_shared };\n\
+         const node shared: Dimensionless = 100.0;\n\
+         node total: Dimensionless = @a_shared + @b_shared + @shared;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let total = find_value(&result, "total");
+    assert!((total - 105.0).abs() < 1e-10, "total = {total}");
+}
+
+#[test]
+fn eval_overrides_route_selective_same_leaf_params_by_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "param shared: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "param shared: Dimensionless = 3.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include collide.a().{ shared as a_shared };\n\
+         include collide.b().{ shared as b_shared };\n\
+         node total: Dimensionless = @a_shared + @b_shared;\n",
+    )
+    .unwrap();
+
+    let mut overrides = HashMap::new();
+    overrides.insert(DeclName::new("a_shared"), parse_expr("20.0"));
+    overrides.insert(DeclName::new("b_shared"), parse_expr("30.0"));
+    let result = compile_and_eval_project(&root, &overrides, None, &fs()).unwrap();
+    let total = find_value(&result, "total");
+    assert!((total - 50.0).abs() < 1e-10, "total = {total}");
 }
 
 #[test]

@@ -222,13 +222,23 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
         file_dag_id.clone(),
         EvaluatedFile {
             values: file_runtime_values,
-            // Top-level consts are bare locals; collapse the ScopedName
-            // back to a `String` for the per-file lookup map that import
-            // logic indexes by member name.
-            const_values: plan
-                .const_values
-                .into_iter()
-                .map(|(k, v)| (DeclName::new(k.member()), v))
+            // Top-level consts are exposed by leaf name at the project import
+            // boundary; internal eval routing used canonical declaration keys.
+            const_values: compiled
+                .tir
+                .root()
+                .consts
+                .iter()
+                .filter_map(|entry| {
+                    let key = crate::decl_key::RuntimeDeclKey::for_local_decl(
+                        compiled.tir.root(),
+                        &entry.name,
+                    );
+                    plan.const_values
+                        .get(&key)
+                        .cloned()
+                        .map(|value| (DeclName::new(entry.name.member()), value))
+                })
                 .collect(),
             declared_types: compiled.declared_types,
             assertions: eval_result
@@ -673,19 +683,18 @@ pub(super) fn extract_runtime_values(
     );
 
     // Return only locally-defined param/node values (not imported, not consts).
-    // Param/node names are always `Local`-form at the file's top level.
-    let local_runtime_names: HashSet<&ScopedName> = tir
-        .root()
+    tir.root()
         .params
         .iter()
         .map(|e| &e.name)
         .chain(tir.root().nodes.iter().map(|e| &e.name))
-        .collect();
-
-    result
-        .values
-        .into_iter()
-        .filter(|(name, _)| local_runtime_names.contains(name))
-        .map(|(k, v)| (DeclName::new(k.member()), v))
+        .filter_map(|name| {
+            let key = crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), name);
+            result
+                .values
+                .get(&key)
+                .cloned()
+                .map(|value| (DeclName::new(name.member()), value))
+        })
         .collect()
 }

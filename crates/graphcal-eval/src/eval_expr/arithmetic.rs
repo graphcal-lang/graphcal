@@ -1,12 +1,12 @@
 use graphcal_compiler::desugar::resolved_ast::{BinOp, Expr, UnaryOp};
 use graphcal_compiler::registry::declared_type::StructTypeRef;
-use graphcal_compiler::syntax::names::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
 use super::EvalContext;
+use super::RuntimeValueMap;
 use super::eval_expr;
 
 /// Evaluate a `BinOp` expression.
@@ -21,7 +21,7 @@ pub(super) fn eval_binop_expr(
     op: BinOp,
     lhs: &Expr,
     rhs: &Expr,
-    values: &std::collections::HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &std::collections::HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -177,7 +177,7 @@ pub(super) fn eval_unaryop_expr(
     expr: &Expr,
     op: UnaryOp,
     operand: &Expr,
-    values: &std::collections::HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &std::collections::HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {

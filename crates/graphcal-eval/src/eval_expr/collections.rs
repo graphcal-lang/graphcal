@@ -15,7 +15,10 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::IndexDef;
 
+use crate::decl_key::RuntimeDeclKey;
+
 use super::EvalContext;
+use super::RuntimeValueMap;
 use super::eval_expr;
 use super::index_ref_matches_resolved_or_legacy;
 
@@ -197,7 +200,7 @@ pub(super) fn eval_index_access(
     expr: &Expr,
     inner: &Expr,
     args: &[graphcal_compiler::desugar::resolved_ast::IndexArg],
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -306,7 +309,7 @@ pub(super) fn eval_scan(
         graphcal_compiler::syntax::names::LocalName,
     >,
     body: &Expr,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -360,7 +363,7 @@ pub(super) fn eval_unfold(
         graphcal_compiler::syntax::names::LocalName,
     >,
     body: &Expr,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let unfold_ctx = ctx.unfold_context.as_ref().ok_or_else(|| {
@@ -422,7 +425,11 @@ pub(super) fn eval_unfold(
     // Seed the self-reference slot once. Per iteration we swap the accumulating
     // `result_entries` in/out of this slot via `std::mem::take` to avoid a full
     // O(N) clone of the map every iteration (which would make the loop O(N²)).
-    let self_key = ScopedName::local(self_name);
+    let self_scoped = ScopedName::local(self_name);
+    let self_key = ctx.current_dag.map_or_else(
+        || RuntimeDeclKey::legacy(self_scoped.clone()),
+        |dag| RuntimeDeclKey::for_local_decl(dag, &self_scoped),
+    );
     overlay_values.insert(
         self_key.clone(),
         RuntimeValue::Indexed {
@@ -483,7 +490,7 @@ pub(super) fn eval_unfold(
 /// builds nested `Indexed` values from the remaining keys.
 pub(super) fn eval_map_literal(
     entries: &[MapEntry],
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -571,7 +578,7 @@ pub(super) fn eval_map_literal(
 pub(super) fn eval_for_comp(
     bindings: &[graphcal_compiler::desugar::resolved_ast::ForBinding],
     body: &Expr,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {

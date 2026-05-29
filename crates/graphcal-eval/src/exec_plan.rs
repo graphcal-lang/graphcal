@@ -17,7 +17,8 @@ use graphcal_compiler::syntax::span::Span;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
-use crate::eval_expr::{EvalContext, RuntimeValue, eval_expr};
+use crate::decl_key::RuntimeDeclKey;
+use crate::eval_expr::{EvalContext, RuntimeValue, RuntimeValueMap, eval_expr};
 use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{
@@ -60,16 +61,16 @@ pub struct LayerBodyEntry {
 pub struct ExecPlan {
     /// Evaluated const values (in base SI units).
     /// Key-lookup only, order irrelevant.
-    pub(crate) const_values: HashMap<ScopedName, RuntimeValue>,
+    pub(crate) const_values: RuntimeValueMap,
     /// Pre-evaluated values imported from dependency files.
     /// These are injected directly into the evaluation environment.
     /// Iterated once during env setup; feeds into `HashMap` (key-lookup only).
-    pub(crate) imported_values: HashMap<ScopedName, RuntimeValue>,
+    pub(crate) imported_values: RuntimeValueMap,
     /// Topologically sorted names for runtime evaluation (params + nodes).
-    pub(crate) topo_order: Vec<ScopedName>,
+    pub(crate) topo_order: Vec<RuntimeDeclKey>,
     /// Runtime expressions keyed by declaration name (params + nodes).
     /// Key-lookup only, order irrelevant.
-    pub(crate) expressions: HashMap<ScopedName, Expr>,
+    pub(crate) expressions: HashMap<RuntimeDeclKey, Expr>,
     /// Assert bodies in source order.
     pub(crate) assert_bodies: Vec<AssertBodyEntry>,
     /// Plot declarations in source order.
@@ -86,7 +87,7 @@ pub struct ExecPlan {
     pub(crate) expected_fail: HashMap<ScopedName, graphcal_compiler::ir::resolve::ExpectedFail>,
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
     /// Key-lookup only, order irrelevant.
-    pub(crate) domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>,
+    pub(crate) domain_constraints: HashMap<RuntimeDeclKey, ResolvedDomainConstraint>,
     /// Resolved domain constraints for struct/union member fields, keyed by
     /// owner-qualified struct/constructor/field identity. Looked up at every
     /// `ExprKind::ConstructorCall` evaluation to validate field values.
@@ -173,7 +174,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
             .root()
             .imported_values
             .iter()
-            .map(|(k, (v, _dt))| (k.clone(), v.clone()))
+            .map(|(k, (v, _dt))| (RuntimeDeclKey::for_visible_name(tir.root(), k), v.clone()))
             .collect(),
         topo_order,
         expressions,
@@ -208,12 +209,12 @@ fn local_resolved_decl_key(
 
 fn visible_values_with_imports(
     dag: &DagTIR,
-    local_const_values: &HashMap<ScopedName, RuntimeValue>,
-) -> HashMap<ScopedName, RuntimeValue> {
-    let mut values: HashMap<ScopedName, RuntimeValue> = dag
+    local_const_values: &RuntimeValueMap,
+) -> RuntimeValueMap {
+    let mut values: RuntimeValueMap = dag
         .imported_values
         .iter()
-        .map(|(name, (value, _))| (name.clone(), value.clone()))
+        .map(|(name, (value, _))| (RuntimeDeclKey::for_visible_name(dag, name), value.clone()))
         .collect();
     values.extend(
         local_const_values
@@ -227,7 +228,7 @@ fn visible_values_with_imports(
 pub fn eval_consts_from_tir(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, RuntimeValue>, GraphcalError> {
+) -> Result<RuntimeValueMap, GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let dag = tir.root();
@@ -246,10 +247,11 @@ pub fn eval_consts_from_tir(
 
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
     let mut visible_values = visible_values_with_imports(dag, &HashMap::new());
-    let mut local_const_values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
+    let mut local_const_values: RuntimeValueMap = HashMap::new();
 
     for name in sorted_names {
         let expr = const_exprs[&name];
+        let key = RuntimeDeclKey::for_local_decl(dag, &name);
         let ctx = EvalContext {
             builtin_consts,
             builtin_fns,
@@ -262,8 +264,8 @@ pub fn eval_consts_from_tir(
             struct_field_constraints: None,
         };
         let value = eval_expr(expr, &visible_values, &empty_locals, &ctx)?;
-        visible_values.insert(name.clone(), value.clone());
-        local_const_values.insert(name, value);
+        visible_values.insert(key.clone(), value.clone());
+        local_const_values.insert(key, value);
     }
 
     Ok(local_const_values)
@@ -381,7 +383,7 @@ fn const_eval_order_legacy(
 fn build_runtime_dag(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<(Vec<ScopedName>, HashMap<ScopedName, Expr>), GraphcalError> {
+) -> Result<(Vec<RuntimeDeclKey>, HashMap<RuntimeDeclKey, Expr>), GraphcalError> {
     // Merge params and nodes, then sort by name for canonical tie-breaking
     // among incomparable nodes in the topological sort.
     enum DeclRef<'a> {
@@ -406,7 +408,7 @@ fn build_runtime_dag(
     }
 
     let dag = tir.root();
-    let mut expressions: HashMap<ScopedName, Expr> = HashMap::new();
+    let mut expressions: HashMap<RuntimeDeclKey, Expr> = HashMap::new();
     let mut decl_spans: Vec<(ScopedName, Span)> = Vec::new();
 
     let mut all_decls: Vec<DeclRef<'_>> = dag
@@ -419,11 +421,12 @@ fn build_runtime_dag(
 
     for decl in &all_decls {
         let name = decl.name().clone();
+        let key = RuntimeDeclKey::for_local_decl(dag, &name);
         decl_spans.push((name.clone(), decl.span()));
         match decl {
             DeclRef::Param(entry) => match &entry.default_expr {
                 Some(expr) => {
-                    expressions.insert(name, expr.clone());
+                    expressions.insert(key, expr.clone());
                 }
                 None => {
                     return Err(GraphcalError::RequiredParamNotProvided {
@@ -434,12 +437,15 @@ fn build_runtime_dag(
                 }
             },
             DeclRef::Node(entry) => {
-                expressions.insert(name, entry.expr.clone());
+                expressions.insert(key, entry.expr.clone());
             }
         }
     }
 
-    let topo_order = runtime_eval_order(dag, &decl_spans, src)?;
+    let topo_order = runtime_eval_order(dag, &decl_spans, src)?
+        .into_iter()
+        .map(|name| RuntimeDeclKey::for_local_decl(dag, &name))
+        .collect();
     Ok((topo_order, expressions))
 }
 
@@ -566,9 +572,9 @@ fn runtime_eval_order_legacy(
 )]
 pub fn resolve_domain_constraints(
     tir: &TIR,
-    const_values: &HashMap<ScopedName, RuntimeValue>,
+    const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, ResolvedDomainConstraint>, GraphcalError> {
+) -> Result<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>, GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
@@ -691,8 +697,9 @@ pub fn resolve_domain_constraints(
         };
 
         // For const declarations, validate the (already-known) value at compile time.
+        let key = RuntimeDeclKey::for_local_decl(tir.root(), name);
         if is_const
-            && let Some(value) = const_values.get(name)
+            && let Some(value) = const_values.get(&key)
             && let Err(violation) =
                 crate::domain_check::check_domain_constraint(value, &resolved_constraint)
         {
@@ -705,7 +712,7 @@ pub fn resolve_domain_constraints(
             });
         }
 
-        constraints.insert(name.clone(), resolved_constraint);
+        constraints.insert(key, resolved_constraint);
     }
 
     Ok(constraints)
@@ -728,7 +735,7 @@ pub fn resolve_domain_constraints(
 )]
 pub fn resolve_struct_field_constraints(
     tir: &TIR,
-    const_values: &HashMap<ScopedName, RuntimeValue>,
+    const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
     let builtin_consts = builtin_constants();
@@ -876,12 +883,13 @@ pub fn resolve_struct_field_constraints(
 /// Returns the first [`GraphcalError::DomainViolation`] encountered.
 pub fn check_const_struct_field_constraints_at_compile_time(
     tir: &TIR,
-    const_values: &HashMap<ScopedName, RuntimeValue>,
+    const_values: &RuntimeValueMap,
     field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for entry in &tir.root().consts {
-        if let Some(value) = const_values.get(&entry.name) {
+        let key = RuntimeDeclKey::for_local_decl(tir.root(), &entry.name);
+        if let Some(value) = const_values.get(&key) {
             let owning_type = tir
                 .root()
                 .resolved_decl_types
@@ -1182,12 +1190,14 @@ mod tests {
         }
     }
 
+    fn legacy_key(name: &str) -> RuntimeDeclKey {
+        RuntimeDeclKey::legacy(ScopedName::local(name))
+    }
+
     #[test]
     fn compile_simple_const() {
         let plan = compile_source("const node g0: Dimensionless = 9.80665;").unwrap();
-        assert!(
-            (scalar(&plan.const_values[&ScopedName::local("g0")]) - 9.80665).abs() < f64::EPSILON
-        );
+        assert!((scalar(&plan.const_values[&legacy_key("g0")]) - 9.80665).abs() < f64::EPSILON);
         assert!(plan.topo_order.is_empty());
     }
 
@@ -1197,7 +1207,7 @@ mod tests {
             "const node g0: Dimensionless = 9.80665;\nconst node two_g0: Dimensionless = 2.0 * @g0;",
         )
         .unwrap();
-        assert!((scalar(&plan.const_values[&ScopedName::local("two_g0")]) - 19.6133).abs() < 1e-10);
+        assert!((scalar(&plan.const_values[&legacy_key("two_g0")]) - 19.6133).abs() < 1e-10);
     }
 
     #[test]
@@ -1271,7 +1281,16 @@ mod tests {
         );
 
         let plan = compile(&tir, &src).unwrap();
-        assert!((scalar(&plan.const_values[&ScopedName::local("b")]) - 2.0).abs() < 1e-10);
+        assert!(
+            (scalar(
+                &plan.const_values[&RuntimeDeclKey::resolved(ResolvedName::from_def(
+                    tir.root_dag_id.clone(),
+                    DeclName::new("b")
+                ))]
+            ) - 2.0)
+                .abs()
+                < 1e-10
+        );
     }
 
     #[test]
@@ -1306,12 +1325,22 @@ mod tests {
         let a_pos = plan
             .topo_order
             .iter()
-            .position(|name| name == &ScopedName::local("a"))
+            .position(|name| {
+                name == &RuntimeDeclKey::resolved(ResolvedName::from_def(
+                    tir.root_dag_id.clone(),
+                    DeclName::new("a"),
+                ))
+            })
             .unwrap();
         let b_pos = plan
             .topo_order
             .iter()
-            .position(|name| name == &ScopedName::local("b"))
+            .position(|name| {
+                name == &RuntimeDeclKey::resolved(ResolvedName::from_def(
+                    tir.root_dag_id.clone(),
+                    DeclName::new("b"),
+                ))
+            })
             .unwrap();
         assert!(a_pos < b_pos);
     }

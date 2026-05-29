@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, MatchArm, MatchPattern};
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
-use graphcal_compiler::syntax::names::{IndexName, NamePath, ResolvedIndexVariant, ScopedName};
+use graphcal_compiler::syntax::names::{IndexName, NamePath, ResolvedIndexVariant};
 use graphcal_compiler::tir::typed::{
     ResolvedConstructorPattern, ResolvedConstructorTarget, ResolvedPatternBinding,
 };
@@ -11,6 +11,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
 use super::EvalContext;
+use super::RuntimeValueMap;
 use super::eval_expr;
 use super::index_ref_matches_resolved_or_legacy;
 
@@ -160,7 +161,7 @@ pub(super) fn eval_if(
     condition: &Expr,
     then_branch: &Expr,
     else_branch: &Expr,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -179,7 +180,7 @@ pub(super) fn eval_match(
     expr: &Expr,
     scrutinee: &Expr,
     arms: &[MatchArm],
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {

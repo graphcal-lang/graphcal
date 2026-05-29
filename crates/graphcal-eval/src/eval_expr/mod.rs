@@ -24,7 +24,10 @@ use graphcal_compiler::tir::typed::{
     StructFieldConstraintKey,
 };
 
+use crate::decl_key::RuntimeDeclKey;
+
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
+pub(crate) type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 
 /// Immutable evaluation environment shared across all expression evaluations.
 ///
@@ -53,7 +56,7 @@ pub struct EvalContext<'a> {
     /// Root-file values visible to nested inline DAG calls. This lets DAG-body
     /// self-imports route by their canonical source `DagId` rather than by a
     /// same-leaf name in the immediate caller's local value map.
-    pub root_values: Option<&'a HashMap<ScopedName, RuntimeValue>>,
+    pub root_values: Option<&'a RuntimeValueMap>,
     /// Resolved domain constraints declared on struct/union member fields,
     /// keyed by owner-qualified struct/constructor/field identity. Looked up at
     /// every `ExprKind::ConstructorCall` to validate field values immediately.
@@ -87,6 +90,71 @@ fn resolved_value_index_variant<'a>(
 
 fn runtime_label_from_resolved_variant(resolved: &ResolvedIndexVariant) -> RuntimeValue {
     RuntimeValue::resolved_label(resolved)
+}
+
+fn resolved_graph_ref_target<'a>(
+    ctx: &'a EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+) -> Option<&'a ResolvedName<namespace::Decl>> {
+    ctx.current_dag
+        .and_then(|dag| dag.resolved_deps.as_ref())
+        .and_then(|deps| deps.graph_ref_targets.get(&span))
+}
+
+fn resolved_const_ref_target<'a>(
+    ctx: &'a EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+) -> Option<&'a ResolvedName<namespace::Decl>> {
+    ctx.current_dag
+        .and_then(|dag| dag.resolved_deps.as_ref())
+        .and_then(|deps| deps.const_ref_targets.get(&span))
+}
+
+fn visible_decl_runtime_key(ctx: &EvalContext<'_>, legacy: &ScopedName) -> Option<RuntimeDeclKey> {
+    let dag = ctx.current_dag?;
+    dag.resolved_decl_bindings
+        .as_ref()
+        .and_then(|bindings| bindings.get(legacy))
+        .cloned()
+        .map(RuntimeDeclKey::resolved)
+        .or_else(|| {
+            dag.resolved_decl_key_for_local(legacy)
+                .map(RuntimeDeclKey::resolved)
+        })
+}
+
+fn graph_ref_runtime_key(
+    ctx: &EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+    legacy: &ScopedName,
+) -> Result<RuntimeDeclKey, GraphcalError> {
+    match ctx.current_dag.and_then(|dag| dag.resolved_deps.as_ref()) {
+        Some(_) => resolved_graph_ref_target(ctx, span)
+            .cloned()
+            .map(RuntimeDeclKey::resolved)
+            .or_else(|| visible_decl_runtime_key(ctx, legacy))
+            .ok_or_else(|| {
+                ctx.internal_error(
+                    format!("resolved graph-reference sidecar missing target for `@{legacy}`"),
+                    span,
+                )
+            }),
+        None => Ok(RuntimeDeclKey::legacy(legacy.clone())),
+    }
+}
+
+fn const_ref_runtime_key(
+    ctx: &EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+    legacy: &ScopedName,
+) -> Result<Option<RuntimeDeclKey>, GraphcalError> {
+    match ctx.current_dag.and_then(|dag| dag.resolved_deps.as_ref()) {
+        Some(_) => Ok(resolved_const_ref_target(ctx, span)
+            .cloned()
+            .map(RuntimeDeclKey::resolved)
+            .or_else(|| visible_decl_runtime_key(ctx, legacy))),
+        None => Ok(Some(RuntimeDeclKey::legacy(legacy.clone()))),
+    }
 }
 
 pub(super) fn index_ref_matches_resolved_or_legacy(
@@ -196,7 +264,7 @@ impl EvalContext<'_> {
 #[expect(clippy::too_many_lines, reason = "large match on ExprKind variants")]
 pub fn eval_expr(
     expr: &Expr,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -229,25 +297,29 @@ pub fn eval_expr(
                     )
                 }))
         }
-        ExprKind::GraphRef(ident) => values.get(&ident.value).cloned().ok_or_else(|| {
-            ctx.eval_error(
-                format!("undefined graph reference `@{}`", ident.value),
-                expr.span,
-            )
-        }),
+        ExprKind::GraphRef(ident) => {
+            let key = graph_ref_runtime_key(ctx, ident.span, &ident.value)?;
+            values.get(&key).cloned().ok_or_else(|| {
+                ctx.eval_error(
+                    format!("undefined graph reference `@{}`", ident.value),
+                    expr.span,
+                )
+            })
+        }
         ExprKind::ConstRef(ident) => {
             if let Some(resolved_variant) = resolved_value_index_variant(ctx, ident.span) {
                 return Ok(runtime_label_from_resolved_variant(resolved_variant));
             }
 
-            values
-                .get(&ident.value)
-                .cloned()
-                .or_else(|| {
-                    ctx.builtin_consts
-                        .get(ident.value.member())
-                        .map(|v| RuntimeValue::Scalar(*v))
-                })
+            if let Some(key) = const_ref_runtime_key(ctx, ident.span, &ident.value)?
+                && let Some(value) = values.get(&key)
+            {
+                return Ok(value.clone());
+            }
+
+            ctx.builtin_consts
+                .get(ident.value.member())
+                .map(|v| RuntimeValue::Scalar(*v))
                 .or_else(|| {
                     // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
                     // and may be referenced in expression position as ConstRef (uppercase).
@@ -473,20 +545,41 @@ fn resolved_inline_call<'a>(
         .and_then(|refs| refs.calls.get(&expr.span))
 }
 
-fn resolved_decl_local_key(name: &ResolvedName<namespace::Decl>) -> ScopedName {
-    ScopedName::local(name.as_str())
+fn dag_decl_runtime_key(dag_tir: &DagTIR, name: &ResolvedName<namespace::Decl>) -> RuntimeDeclKey {
+    if dag_tir.resolved_deps.is_some() {
+        RuntimeDeclKey::resolved(name.clone())
+    } else {
+        RuntimeDeclKey::legacy(ScopedName::local(name.as_str()))
+    }
+}
+
+fn imported_value_source_key(
+    source: &graphcal_compiler::ir::lower::ImportedValueSource,
+    source_dag: &DagTIR,
+) -> RuntimeDeclKey {
+    if source_dag.resolved_deps.is_some() {
+        RuntimeDeclKey::resolved(ResolvedName::from_def(
+            source.dag_id.clone(),
+            source.source_name.clone(),
+        ))
+    } else {
+        RuntimeDeclKey::legacy(ScopedName::local(source.source_name.as_str()))
+    }
 }
 
 fn imported_value_source_value<'a>(
     source: &graphcal_compiler::ir::lower::ImportedValueSource,
-    caller_values: &'a HashMap<ScopedName, RuntimeValue>,
+    caller_values: &'a RuntimeValueMap,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a RuntimeValue> {
-    let source_key = ScopedName::local(source.source_name.as_str());
     match ctx.current_dag {
-        Some(caller_dag) if source.dag_id.eq(&caller_dag.dag_id) => caller_values.get(&source_key),
+        Some(caller_dag) if source.dag_id.eq(&caller_dag.dag_id) => {
+            caller_values.get(&imported_value_source_key(source, caller_dag))
+        }
         _ if source.dag_id.eq(&ctx.tir.root_dag_id) => {
-            ctx.root_values.and_then(|values| values.get(&source_key))
+            let root_dag = ctx.tir.dags.get(&ctx.tir.root_dag_id)?;
+            ctx.root_values
+                .and_then(|values| values.get(&imported_value_source_key(source, root_dag)))
         }
         _ => None,
     }
@@ -516,7 +609,7 @@ fn eval_inline_dag_call(
     path: &graphcal_compiler::syntax::ast::ModulePath,
     args: &[graphcal_compiler::desugar::resolved_ast::ParamBinding],
     output: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::DeclName>,
-    caller_values: &HashMap<ScopedName, RuntimeValue>,
+    caller_values: &RuntimeValueMap,
     caller_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -545,16 +638,21 @@ fn eval_inline_dag_call(
     // Evaluate argument expressions in the caller's scope so loop variables
     // and other enclosing bindings resolve correctly. Param-binding names are
     // always bare locals.
-    let mut dag_values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
+    let mut dag_values: RuntimeValueMap = HashMap::new();
     for binding in args {
         let value = eval_expr(&binding.value, caller_values, caller_locals, ctx)?;
-        let target_name = resolved_call
+        let target_key = resolved_call
             .and_then(|call| call.arg_targets.get(&binding.name.span))
             .map_or_else(
-                || ScopedName::local(binding.name.name.as_str()),
-                resolved_decl_local_key,
+                || {
+                    RuntimeDeclKey::for_local_decl(
+                        dag_tir,
+                        &ScopedName::local(binding.name.name.as_str()),
+                    )
+                },
+                |target| dag_decl_runtime_key(dag_tir, target),
             );
-        dag_values.insert(target_name, value);
+        dag_values.insert(target_key, value);
     }
 
     // Resolve explicit DAG-body imports. Cross-file qualified calls receive
@@ -576,8 +674,10 @@ fn eval_inline_dag_call(
         .collect();
     for scoped in outer_scope_keys {
         let member = scoped.member();
-        let local_key = ScopedName::local(member);
-        if own_names.contains(member) || dag_values.contains_key(&local_key) {
+        let visible_key = RuntimeDeclKey::for_visible_name(dag_tir, scoped);
+        if (matches!(visible_key, RuntimeDeclKey::Legacy(_)) && own_names.contains(member))
+            || dag_values.contains_key(&visible_key)
+        {
             continue;
         }
         let value = dag_tir
@@ -591,7 +691,7 @@ fn eval_inline_dag_call(
                     .and_then(|source| imported_value_source_value(source, caller_values, ctx))
             });
         if let Some(value) = value {
-            dag_values.insert(local_key, value.clone());
+            dag_values.insert(visible_key, value.clone());
         }
     }
 
@@ -618,7 +718,7 @@ fn eval_inline_dag_call(
     // `args` and never execute body code.
     let topo = topo_order_for_dag_body(dag_tir);
     for name in topo {
-        let local_key = ScopedName::local(name.member());
+        let local_key = RuntimeDeclKey::for_local_decl(dag_tir, &name);
         if dag_values.contains_key(&local_key) {
             continue;
         }
@@ -631,8 +731,8 @@ fn eval_inline_dag_call(
     }
 
     let output_key = resolved_call.map_or_else(
-        || ScopedName::local(output.value.as_str()),
-        |call| resolved_decl_local_key(&call.output.value),
+        || RuntimeDeclKey::for_local_decl(dag_tir, &ScopedName::local(output.value.as_str())),
+        |call| dag_decl_runtime_key(dag_tir, &call.output.value),
     );
     dag_values.get(&output_key).cloned().ok_or_else(|| {
         ctx.internal_error(
@@ -824,7 +924,7 @@ fn lookup_dag_body_expr<'a>(
 /// fails to evaluate to a scalar.
 pub fn resolve_unit_scale(
     unit: &UnitExpr,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<f64, GraphcalError> {
