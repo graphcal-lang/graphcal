@@ -10,6 +10,7 @@ use graphcal_compiler::syntax::names::{
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
 
+use graphcal_compiler::registry::declared_type::IndexTypeRef;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::IndexDef;
@@ -86,15 +87,15 @@ fn resolved_map_entry_variant<'a>(
     resolved_collection_refs(ctx).and_then(|refs| refs.map_entry_variants.get(&span))
 }
 
-fn map_entry_index_name(key: &MapEntryKey, ctx: &EvalContext<'_>) -> IndexName {
+fn map_entry_index_ref(key: &MapEntryKey, ctx: &EvalContext<'_>) -> IndexTypeRef {
     resolved_map_entry_variant(ctx, key)
-        .map(|resolved| resolved.index().to_def_name())
-        .unwrap_or_else(|| key.index.value.registry_name())
+        .map(|resolved| IndexTypeRef::from_resolved(resolved.index().clone()))
+        .unwrap_or_else(|| IndexTypeRef::legacy(key.index.value.registry_name()))
 }
 
 fn map_entry_index_def<'a>(
     key: &MapEntryKey,
-    index_name: &IndexName,
+    index_name: &IndexTypeRef,
     ctx: &EvalContext<'a>,
 ) -> Option<&'a IndexDef> {
     resolved_map_entry_variant(ctx, key)
@@ -322,9 +323,7 @@ pub(super) fn eval_unfold(
     overlay_values.insert(
         self_key.clone(),
         RuntimeValue::Indexed {
-            // Runtime values are still leaf-keyed until the runtime/public value
-            // identity migration; drop the owner only at this boundary.
-            index_name: index_ref.to_legacy_name(),
+            index_name: index_ref.clone(),
             entries: IndexMap::new(),
         },
     );
@@ -365,9 +364,7 @@ pub(super) fn eval_unfold(
     }
 
     Ok(RuntimeValue::Indexed {
-        // Runtime values are still leaf-keyed until the runtime/public value
-        // identity migration; drop the owner only at this boundary.
-        index_name: index_ref.to_legacy_name(),
+        index_name: index_ref,
         entries: result_entries,
     })
 }
@@ -395,7 +392,7 @@ pub(super) fn eval_map_literal(
     })?;
     let first_key = first.keys.first();
     let arity = first.keys.len();
-    let idx_name = map_entry_index_name(first_key, ctx);
+    let idx_name = map_entry_index_ref(first_key, ctx);
 
     if arity == 1 {
         // Single-axis: flat Indexed
@@ -481,8 +478,10 @@ pub(super) fn eval_for_comp(
             (
                 resolved
                     .as_ref()
-                    .map(ResolvedName::to_def_name)
-                    .unwrap_or_else(|| legacy_index_name_from_path(&spanned.value)),
+                    .map(|resolved| IndexTypeRef::from_resolved(resolved.clone()))
+                    .unwrap_or_else(|| {
+                        IndexTypeRef::legacy(legacy_index_name_from_path(&spanned.value))
+                    }),
                 spanned.span,
                 None,
                 resolved,
@@ -493,7 +492,7 @@ pub(super) fn eval_for_comp(
             let idx_name = graphcal_compiler::syntax::names::IndexName::new(
                 graphcal_compiler::registry::types::nat_range_index_name(size),
             );
-            (idx_name, *span, Some(size), None)
+            (IndexTypeRef::legacy(idx_name), *span, Some(size), None)
         }
     };
 
@@ -522,7 +521,7 @@ pub(super) fn eval_for_comp(
             )
         })?;
         dynamic_nat_def = graphcal_compiler::registry::types::IndexDef {
-            name: idx_name.clone(),
+            name: idx_name.to_legacy_name(),
             kind: graphcal_compiler::registry::types::IndexKind::NatRange { size },
         };
         &dynamic_nat_def

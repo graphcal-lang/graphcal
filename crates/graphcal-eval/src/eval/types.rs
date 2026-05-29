@@ -5,6 +5,7 @@ use miette::Diagnostic;
 use thiserror::Error;
 
 use graphcal_compiler::desugar::resolved_ast::EncodingChannel;
+use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::syntax::names::{
     DeclName, FieldName, IndexName, IndexVariantName, ScopedName, StructTypeName,
@@ -29,7 +30,7 @@ pub struct DisplayUnit {
 }
 
 /// A runtime value: either a scalar with dimension and display info, a bool, an integer, or a struct.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Scalar {
         /// The value in base SI units.
@@ -43,23 +44,28 @@ pub enum Value {
     Int(i64),
     /// A label value from a named index (e.g., `Maneuver.Departure`).
     Label {
-        /// The index name (e.g., `Maneuver`).
-        index_name: IndexName,
+        /// The index identity (e.g., `Maneuver`), including a canonical owner when available.
+        index_name: IndexTypeRef,
         /// The variant name (e.g., `Departure`).
         variant: IndexVariantName,
     },
     Struct {
-        /// The concrete type name (e.g., `Impulsive`, `TransferResult`).
-        type_name: StructTypeName,
+        /// The concrete type/constructor display leaf plus canonical owning struct identity when available.
+        type_name: StructTypeRef,
         /// Fields in definition order.
         fields: IndexMap<FieldName, Self>,
     },
     /// An indexed collection: maps variant names to values.
     Indexed {
-        /// The index type name.
-        index_name: IndexName,
-        /// Entries in declaration order.
+        /// The index type identity, including a canonical owner when available.
+        index_name: IndexTypeRef,
+        /// Entries in declaration order, keyed by semantic variant leaves.
         entries: IndexMap<IndexVariantName, Self>,
+        /// Optional display labels for entry keys (for example, range-index step values).
+        ///
+        /// These are presentation strings only. Semantic consumers must continue to
+        /// use `entries` keys rather than parsing these labels.
+        entry_display_names: Option<IndexMap<IndexVariantName, String>>,
     },
     /// A datetime instant.
     Datetime {
@@ -72,6 +78,103 @@ pub enum Value {
     },
 }
 
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Scalar {
+                    si_value: l_si,
+                    dimension: l_dim,
+                    display_unit: l_unit,
+                },
+                Self::Scalar {
+                    si_value: r_si,
+                    dimension: r_dim,
+                    display_unit: r_unit,
+                },
+            ) => l_si == r_si && l_dim == r_dim && l_unit == r_unit,
+            (Self::Bool(l), Self::Bool(r)) => l == r,
+            (Self::Int(l), Self::Int(r)) => l == r,
+            (
+                Self::Label {
+                    index_name: l_index,
+                    variant: l_variant,
+                },
+                Self::Label {
+                    index_name: r_index,
+                    variant: r_variant,
+                },
+            ) => l_index.matches_ref(r_index) && l_variant == r_variant,
+            (
+                Self::Struct {
+                    type_name: l_type,
+                    fields: l_fields,
+                },
+                Self::Struct {
+                    type_name: r_type,
+                    fields: r_fields,
+                },
+            ) => {
+                struct_value_type_refs_equal(l_type, r_type)
+                    && value_field_maps_equal(l_fields, r_fields)
+            }
+            (
+                Self::Indexed {
+                    index_name: l_index,
+                    entries: l_entries,
+                    ..
+                },
+                Self::Indexed {
+                    index_name: r_index,
+                    entries: r_entries,
+                    ..
+                },
+            ) => l_index.matches_ref(r_index) && value_entry_maps_equal(l_entries, r_entries),
+            (
+                Self::Datetime {
+                    epoch: l_epoch,
+                    time_scale: l_scale,
+                    display_tz: l_tz,
+                },
+                Self::Datetime {
+                    epoch: r_epoch,
+                    time_scale: r_scale,
+                    display_tz: r_tz,
+                },
+            ) => l_epoch == r_epoch && l_scale == r_scale && l_tz == r_tz,
+            _ => false,
+        }
+    }
+}
+
+fn struct_value_type_refs_equal(lhs: &StructTypeRef, rhs: &StructTypeRef) -> bool {
+    lhs.name() == rhs.name()
+        && match (lhs.resolved(), rhs.resolved()) {
+            (Some(lhs), Some(rhs)) => lhs == rhs,
+            _ => true,
+        }
+}
+
+fn value_field_maps_equal(
+    lhs: &IndexMap<FieldName, Value>,
+    rhs: &IndexMap<FieldName, Value>,
+) -> bool {
+    lhs.len() == rhs.len()
+        && lhs
+            .iter()
+            .all(|(field, value)| rhs.get(field).is_some_and(|rhs_value| value == rhs_value))
+}
+
+fn value_entry_maps_equal(
+    lhs: &IndexMap<IndexVariantName, Value>,
+    rhs: &IndexMap<IndexVariantName, Value>,
+) -> bool {
+    lhs.len() == rhs.len()
+        && lhs
+            .iter()
+            .all(|(variant, value)| rhs.get(variant).is_some_and(|rhs_value| value == rhs_value))
+}
+
 /// Error returned when a [`Value`] accessor is called on an incompatible variant.
 #[derive(Debug, Clone, Error)]
 #[error("expected Scalar value, got {actual}")]
@@ -81,6 +184,55 @@ pub struct ValueError {
 }
 
 impl Value {
+    /// Construct a standalone/legacy label value from leaf names.
+    #[must_use]
+    pub fn legacy_label(index_name: IndexName, variant: IndexVariantName) -> Self {
+        Self::Label {
+            index_name: IndexTypeRef::legacy(index_name),
+            variant,
+        }
+    }
+
+    /// Construct a standalone/legacy struct value from a concrete type/constructor leaf.
+    #[must_use]
+    pub fn legacy_struct(type_name: StructTypeName, fields: IndexMap<FieldName, Self>) -> Self {
+        Self::Struct {
+            type_name: StructTypeRef::legacy(type_name),
+            fields,
+        }
+    }
+
+    /// Construct a standalone/legacy indexed value from an index leaf.
+    #[must_use]
+    pub fn legacy_indexed(
+        index_name: IndexName,
+        entries: IndexMap<IndexVariantName, Self>,
+    ) -> Self {
+        Self::Indexed {
+            index_name: IndexTypeRef::legacy(index_name),
+            entries,
+            entry_display_names: None,
+        }
+    }
+
+    /// Display label for an indexed entry key.
+    ///
+    /// This is an I/O helper: it renders optional range-index labels and falls
+    /// back to the semantic variant leaf. Core logic should use `entries` keys.
+    #[must_use]
+    pub fn indexed_entry_display_name(&self, variant: &IndexVariantName) -> String {
+        match self {
+            Self::Indexed {
+                entry_display_names: Some(display_names),
+                ..
+            } => display_names
+                .get(variant)
+                .cloned()
+                .unwrap_or_else(|| variant.as_str().to_string()),
+            _ => variant.as_str().to_string(),
+        }
+    }
+
     /// A short description of this value's variant for error messages.
     fn variant_description(&self) -> String {
         match self {
@@ -90,7 +242,7 @@ impl Value {
             Self::Label {
                 index_name,
                 variant,
-            } => variant.qualified_by(index_name).to_string(),
+            } => variant.qualified_by(index_name.name()).to_string(),
             Self::Struct { type_name, .. } => format!("struct `{type_name}`"),
             Self::Indexed { index_name, .. } => format!("indexed `{index_name}[...]`"),
             Self::Datetime { .. } => "Datetime".to_string(),
@@ -183,7 +335,7 @@ impl Value {
             Self::Label {
                 index_name,
                 variant,
-            } => variant.qualified_by(index_name).to_string(),
+            } => variant.qualified_by(index_name.name()).to_string(),
             Self::Struct { type_name, .. } => type_name.as_str().to_string(),
             Self::Datetime {
                 epoch, display_tz, ..

@@ -22,17 +22,15 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
+use crate::convert::position_to_byte_offset;
+use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
+use crate::symbol_table::{self, DefinitionInfo, SymbolKey, SymbolTable};
 use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
-use graphcal_compiler::syntax::names::{DeclName, IndexVariantName};
+use graphcal_compiler::syntax::names::DeclName;
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
 };
 use graphcal_eval::loader::LoadedProject;
-use indexmap::IndexMap;
-
-use crate::convert::position_to_byte_offset;
-use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
-use crate::symbol_table::{self, DefinitionInfo, SymbolKey, SymbolTable};
 
 /// A definition from an imported file, for cross-file go-to-definition and hover.
 pub(crate) struct ImportedDefinition {
@@ -646,15 +644,17 @@ fn format_value_inline_with_budget(
             // For multi-indexed maps (nested Indexed values), flatten into
             // tuple-keyed form: `{ (A, X): 1, (A, Y): 2, (B, X): 3 }` instead
             // of nested braces: `{ A: { X: 1, Y: 2 }, B: { X: 3 } }`.
-            let mut flat: Vec<(Vec<&str>, &Value)> = Vec::new();
-            flatten_indexed_entries(entries, &mut Vec::new(), &mut flat);
+            let mut flat: Vec<(Vec<String>, &Value)> = Vec::new();
+            flatten_indexed_entries(value, &mut Vec::new(), &mut flat);
             let is_multi = flat.first().is_some_and(|(keys, _)| keys.len() > 1);
             if is_multi {
                 format_tuple_keyed_entries("", &flat, symbols, max_len)
             } else {
-                let single: Vec<(&str, &Value)> =
-                    entries.iter().map(|(k, v)| (k.as_str(), v)).collect();
-                format_braced_entries("", &single, symbols, max_len)
+                let single: Vec<(String, &Value)> = entries
+                    .iter()
+                    .map(|(k, v)| (value.indexed_entry_display_name(k), v))
+                    .collect();
+                format_entries("", &single, |k| k.clone(), symbols, max_len)
             }
         }
     }
@@ -719,14 +719,17 @@ fn format_braced_entries(
 /// For a nested `Indexed { A: Indexed { X: 1, Y: 2 }, B: Indexed { X: 3 } }`,
 /// produces `[([A, X], 1), ([A, Y], 2), ([B, X], 3)]`.
 fn flatten_indexed_entries<'a>(
-    entries: &'a IndexMap<IndexVariantName, Value>,
-    prefix: &mut Vec<&'a str>,
-    out: &mut Vec<(Vec<&'a str>, &'a Value)>,
+    value: &'a Value,
+    prefix: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, &'a Value)>,
 ) {
+    let Value::Indexed { entries, .. } = value else {
+        return;
+    };
     for (key, val) in entries {
-        prefix.push(key.as_str());
-        if let Value::Indexed { entries: inner, .. } = val {
-            flatten_indexed_entries(inner, prefix, out);
+        prefix.push(value.indexed_entry_display_name(key));
+        if matches!(val, Value::Indexed { .. }) {
+            flatten_indexed_entries(val, prefix, out);
         } else {
             out.push((prefix.clone(), val));
         }
@@ -736,7 +739,7 @@ fn flatten_indexed_entries<'a>(
 
 fn format_tuple_keyed_entries(
     prefix: &str,
-    entries: &[(Vec<&str>, &Value)],
+    entries: &[(Vec<String>, &Value)],
     symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
@@ -1238,10 +1241,7 @@ mod tests {
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("dv1"), scalar(100.0));
         fields.insert(FieldName::new("dv2"), scalar(200.0));
-        let val = Value::Struct {
-            type_name: StructTypeName::new("TransferResult"),
-            fields,
-        };
+        let val = Value::legacy_struct(StructTypeName::new("TransferResult"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "TransferResult { dv1: 100, dv2: 200 }"
@@ -1251,10 +1251,7 @@ mod tests {
     #[test]
     fn format_struct_empty_fields() {
         let symbols = empty_symbols();
-        let val = Value::Struct {
-            type_name: StructTypeName::new("Nominal"),
-            fields: IndexMap::new(),
-        };
+        let val = Value::legacy_struct(StructTypeName::new("Nominal"), IndexMap::new());
         assert_eq!(format_value_inline(&val, &symbols), "Nominal {}");
     }
 
@@ -1264,10 +1261,7 @@ mod tests {
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("thrust"), scalar(0.5));
         fields.insert(FieldName::new("duration"), scalar(3600.0));
-        let val = Value::Struct {
-            type_name: StructTypeName::new("ManeuverKind"),
-            fields,
-        };
+        let val = Value::legacy_struct(StructTypeName::new("ManeuverKind"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "ManeuverKind { thrust: 0.5, duration: 3600 }"
@@ -1281,20 +1275,14 @@ mod tests {
         entries.insert(IndexVariantName::new("A"), scalar(1.0));
         entries.insert(IndexVariantName::new("B"), scalar(2.0));
         entries.insert(IndexVariantName::new("C"), scalar(3.0));
-        let val = Value::Indexed {
-            index_name: IndexName::new("Phase"),
-            entries,
-        };
+        let val = Value::legacy_indexed(IndexName::new("Phase"), entries);
         assert_eq!(format_value_inline(&val, &symbols), "{ A: 1, B: 2, C: 3 }");
     }
 
     #[test]
     fn format_indexed_empty() {
         let symbols = empty_symbols();
-        let val = Value::Indexed {
-            index_name: IndexName::new("Phase"),
-            entries: IndexMap::new(),
-        };
+        let val = Value::legacy_indexed(IndexName::new("Phase"), IndexMap::new());
         assert_eq!(format_value_inline(&val, &symbols), "{}");
     }
 
@@ -1307,10 +1295,7 @@ mod tests {
         entries.insert(IndexVariantName::new("LongVariantBeta"), scalar(2.34567));
         entries.insert(IndexVariantName::new("LongVariantGamma"), scalar(3.45678));
         entries.insert(IndexVariantName::new("LongVariantDelta"), scalar(4.56789));
-        let val = Value::Indexed {
-            index_name: IndexName::new("Idx"),
-            entries,
-        };
+        let val = Value::legacy_indexed(IndexName::new("Idx"), entries);
         let result = format_value_inline(&val, &symbols);
         assert!(
             result.len() <= INLAY_HINT_MAX_LEN + 10,
@@ -1324,16 +1309,10 @@ mod tests {
         let symbols = empty_symbols();
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("x"), scalar(1.0));
-        let struct_val = Value::Struct {
-            type_name: StructTypeName::new("Point"),
-            fields,
-        };
+        let struct_val = Value::legacy_struct(StructTypeName::new("Point"), fields);
         let mut entries = IndexMap::new();
         entries.insert(IndexVariantName::new("A"), struct_val);
-        let val = Value::Indexed {
-            index_name: IndexName::new("Idx"),
-            entries,
-        };
+        let val = Value::legacy_indexed(IndexName::new("Idx"), entries);
         assert_eq!(format_value_inline(&val, &symbols), "{ A: Point { x: 1 } }");
     }
 
@@ -1349,22 +1328,13 @@ mod tests {
         let mut entries = IndexMap::new();
         entries.insert(
             IndexVariantName::new("A"),
-            Value::Indexed {
-                index_name: IndexName::new("Col"),
-                entries: inner_a,
-            },
+            Value::legacy_indexed(IndexName::new("Col"), inner_a),
         );
         entries.insert(
             IndexVariantName::new("B"),
-            Value::Indexed {
-                index_name: IndexName::new("Col"),
-                entries: inner_b,
-            },
+            Value::legacy_indexed(IndexName::new("Col"), inner_b),
         );
-        let val = Value::Indexed {
-            index_name: IndexName::new("Row"),
-            entries,
-        };
+        let val = Value::legacy_indexed(IndexName::new("Row"), entries);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "{ (A, X): 1, (A, Y): 2, (B, X): 3, (B, Y): 4 }"
@@ -1380,23 +1350,14 @@ mod tests {
         let mut mid = IndexMap::new();
         mid.insert(
             IndexVariantName::new("Launch"),
-            Value::Indexed {
-                index_name: IndexName::new("Maneuver"),
-                entries: inner_most,
-            },
+            Value::legacy_indexed(IndexName::new("Maneuver"), inner_most),
         );
         let mut outer = IndexMap::new();
         outer.insert(
             IndexVariantName::new("Nom"),
-            Value::Indexed {
-                index_name: IndexName::new("Phase"),
-                entries: mid,
-            },
+            Value::legacy_indexed(IndexName::new("Phase"), mid),
         );
-        let val = Value::Indexed {
-            index_name: IndexName::new("Scenario"),
-            entries: outer,
-        };
+        let val = Value::legacy_indexed(IndexName::new("Scenario"), outer);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "{ (Nom, Launch, Dep): 100 }"
@@ -1417,22 +1378,13 @@ mod tests {
         let mut entries = IndexMap::new();
         entries.insert(
             IndexVariantName::new("LongOuter1"),
-            Value::Indexed {
-                index_name: IndexName::new("Inner"),
-                entries: inner_a,
-            },
+            Value::legacy_indexed(IndexName::new("Inner"), inner_a),
         );
         entries.insert(
             IndexVariantName::new("LongOuter2"),
-            Value::Indexed {
-                index_name: IndexName::new("Inner"),
-                entries: inner_b,
-            },
+            Value::legacy_indexed(IndexName::new("Inner"), inner_b),
         );
-        let val = Value::Indexed {
-            index_name: IndexName::new("Outer"),
-            entries,
-        };
+        let val = Value::legacy_indexed(IndexName::new("Outer"), entries);
         let result = format_value_inline(&val, &symbols);
         assert!(
             result.len() <= INLAY_HINT_MAX_LEN + 10,

@@ -140,6 +140,70 @@ fn eval_indexed_json_output() {
 }
 
 #[test]
+fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node phase_a: a.Phase = a.Phase.Burn;\n\
+         node phase_b: b.Phase = b.Phase.Burn;\n\
+         node series_a: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
+         node series_b: Dimensionless[b.Phase] = for p: b.Phase { 2.0 };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("phase_a"), "stdout: {stdout}");
+    assert!(stdout.contains("Phase.Burn"), "stdout: {stdout}");
+    assert!(stdout.contains("series_a[Burn]"), "stdout: {stdout}");
+    assert!(stdout.contains("series_b[Coast]"), "stdout: {stdout}");
+
+    let output = graphcal_bin()
+        .args(["eval", root.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
+    assert_eq!(json["node"]["phase_a"]["index"].as_str(), Some("Phase"));
+    assert_eq!(json["node"]["phase_b"]["index"].as_str(), Some("Phase"));
+    assert_eq!(json["node"]["series_a"]["index"].as_str(), Some("Phase"));
+    assert_eq!(json["node"]["series_b"]["index"].as_str(), Some("Phase"));
+}
+
+#[test]
 fn eval_invalid_syntax_fails() {
     // Create a temp file with invalid syntax
     let dir = std::env::temp_dir().join("graphcal_test");

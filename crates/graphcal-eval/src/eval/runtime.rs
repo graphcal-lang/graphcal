@@ -16,7 +16,7 @@ use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail};
 use graphcal_compiler::registry::builtins::{
     BuiltinFunction, builtin_constants, builtin_functions,
 };
-use graphcal_compiler::registry::declared_type::DeclaredType;
+use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::Registry;
 
@@ -25,6 +25,78 @@ use super::project::resolve_field_declared_type;
 use super::types::{
     AssertResult, AxisMeta, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
 };
+
+fn declared_label_index_ref(declared_type: Option<&DeclaredType>) -> Option<&IndexTypeRef> {
+    match declared_type {
+        Some(DeclaredType::Label(index)) => Some(index),
+        _ => None,
+    }
+}
+
+fn declared_indexed_index_ref(declared_type: Option<&DeclaredType>) -> Option<&IndexTypeRef> {
+    match declared_type {
+        Some(DeclaredType::Indexed { index, .. }) => Some(index),
+        _ => None,
+    }
+}
+
+fn declared_struct_type_ref(declared_type: Option<&DeclaredType>) -> Option<&StructTypeRef> {
+    match declared_type {
+        Some(DeclaredType::Struct(type_name, _)) => Some(type_name),
+        _ => None,
+    }
+}
+
+fn merge_index_ref_owner(
+    runtime_ref: &IndexTypeRef,
+    declared_ref: Option<&IndexTypeRef>,
+) -> IndexTypeRef {
+    match (
+        runtime_ref.resolved(),
+        declared_ref.and_then(IndexTypeRef::resolved),
+    ) {
+        (None, Some(resolved)) => {
+            IndexTypeRef::new(runtime_ref.name().clone(), Some(resolved.clone()))
+        }
+        _ => runtime_ref.clone(),
+    }
+}
+
+fn merge_struct_ref_owner(
+    runtime_ref: &StructTypeRef,
+    declared_ref: Option<&StructTypeRef>,
+) -> StructTypeRef {
+    match (
+        runtime_ref.resolved(),
+        declared_ref.and_then(StructTypeRef::resolved),
+    ) {
+        (None, Some(resolved)) => {
+            StructTypeRef::new(runtime_ref.name().clone(), Some(resolved.clone()))
+        }
+        _ => runtime_ref.clone(),
+    }
+}
+
+fn public_label_index_ref(
+    runtime_ref: &IndexTypeRef,
+    declared_type: Option<&DeclaredType>,
+) -> IndexTypeRef {
+    merge_index_ref_owner(runtime_ref, declared_label_index_ref(declared_type))
+}
+
+fn public_indexed_index_ref(
+    runtime_ref: &IndexTypeRef,
+    declared_type: Option<&DeclaredType>,
+) -> IndexTypeRef {
+    merge_index_ref_owner(runtime_ref, declared_indexed_index_ref(declared_type))
+}
+
+fn public_struct_type_ref(
+    runtime_ref: &StructTypeRef,
+    declared_type: Option<&DeclaredType>,
+) -> StructTypeRef {
+    merge_struct_ref_owner(runtime_ref, declared_struct_type_ref(declared_type))
+}
 
 pub(super) fn runtime_to_value(
     rv: &RuntimeValue,
@@ -49,11 +121,13 @@ pub(super) fn runtime_to_value(
             index_name,
             variant,
         } => Value::Label {
-            index_name: index_name.clone(),
+            index_name: public_label_index_ref(index_name, declared_type),
             variant: variant.clone(),
         },
         RuntimeValue::Struct { type_name, fields } => {
-            let type_def = registry.types.get_type(type_name.as_str());
+            let public_type_name = public_struct_type_ref(type_name, declared_type);
+            let registry_type_name = declared_struct_type_ref(declared_type).unwrap_or(type_name);
+            let type_def = registry.types.get_type(registry_type_name.as_str());
 
             // Build a substitution map from generic param names to concrete DeclaredTypes
             // when we have concrete type args from the declared type.
@@ -84,7 +158,7 @@ pub(super) fn runtime_to_value(
                 })
                 .collect();
             Value::Struct {
-                type_name: type_name.clone(),
+                type_name: public_type_name,
                 fields: converted_fields,
             }
         }
@@ -96,25 +170,29 @@ pub(super) fn runtime_to_value(
                 Some(DeclaredType::Indexed { element, .. }) => Some(element.as_ref()),
                 _ => None,
             };
-            // For range indexes, replace synthetic #N keys with formatted display values.
+            // For range indexes, keep semantic #N keys in the public value and
+            // carry formatted step labels as presentation metadata. This keeps
+            // display strings at I/O boundaries instead of fabricating variant
+            // leaves like `0.5 s`.
             let idx_def = registry.indexes.get_index(index_name.as_str());
+            let entry_display_names = idx_def.filter(|def| def.is_range()).map(|def| {
+                entries
+                    .keys()
+                    .enumerate()
+                    .map(|(i, variant)| (variant.clone(), format_range_step(def, i)))
+                    .collect()
+            });
             let converted_entries = entries
                 .iter()
-                .enumerate()
-                .map(|(i, (variant, entry_rv))| {
-                    let display_key = match idx_def {
-                        Some(def) if def.is_range() => {
-                            IndexVariantName::new(format_range_step(def, i))
-                        }
-                        _ => variant.clone(),
-                    };
+                .map(|(variant, entry_rv)| {
                     let val = runtime_to_value(entry_rv, element_declared, registry);
-                    (display_key, val)
+                    (variant.clone(), val)
                 })
                 .collect();
             Value::Indexed {
-                index_name: index_name.clone(),
+                index_name: public_indexed_index_ref(index_name, declared_type),
                 entries: converted_entries,
+                entry_display_names,
             }
         }
         #[expect(
@@ -560,16 +638,33 @@ fn evaluate_assert_with_expected_fail(
     }
 }
 
+fn expected_index_key_matches(actual: &IndexTypeRef, expected: &IndexName) -> bool {
+    actual.name() == expected
+}
+
+fn expected_fail_key_matches_path(
+    path: &[(IndexTypeRef, IndexVariantName)],
+    key: &[(IndexName, IndexVariantName)],
+) -> bool {
+    path.len() == key.len()
+        && path.iter().zip(key.iter()).all(
+            |((actual_index, actual_variant), (expected_index, expected_variant))| {
+                expected_index_key_matches(actual_index, expected_index)
+                    && actual_variant == expected_variant
+            },
+        )
+}
+
 /// Invert specific variant entries in an indexed `RuntimeValue`.
 ///
 /// For each entry in the indexed value, if the variant key matches one of the
 /// expected-fail keys, flip `Bool(true)` → `Bool(false)` and vice versa.
 /// For nested indexed values (multi-index), recurse.
 fn invert_indexed_variants(
-    index_name: &IndexName,
+    index_name: &IndexTypeRef,
     entries: IndexMap<IndexVariantName, RuntimeValue>,
     keys: &[Vec<(IndexName, IndexVariantName)>],
-) -> (IndexName, IndexMap<IndexVariantName, RuntimeValue>) {
+) -> (IndexTypeRef, IndexMap<IndexVariantName, RuntimeValue>) {
     let inverted_entries = entries
         .into_iter()
         .map(|(variant, value)| {
@@ -577,7 +672,9 @@ fn invert_indexed_variants(
                 RuntimeValue::Bool(b) => {
                     // Single-index: check if this variant is in any key
                     let should_invert = keys.iter().any(|key| {
-                        key.len() == 1 && key[0].0 == *index_name && key[0].1 == variant
+                        key.len() == 1
+                            && expected_index_key_matches(index_name, &key[0].0)
+                            && key[0].1 == variant
                     });
                     if should_invert {
                         RuntimeValue::Bool(!b)
@@ -594,7 +691,9 @@ fn invert_indexed_variants(
                     let sub_keys: Vec<Vec<(IndexName, IndexVariantName)>> = keys
                         .iter()
                         .filter(|key| {
-                            key.len() >= 2 && key[0].0 == *index_name && key[0].1 == variant
+                            key.len() >= 2
+                                && expected_index_key_matches(index_name, &key[0].0)
+                                && key[0].1 == variant
                         })
                         .map(|key| key[1..].to_vec())
                         .collect();
@@ -623,11 +722,11 @@ fn invert_indexed_variants(
 
 /// Format a list of indexed paths for assertion failure messages.
 ///
-/// Each path is a slice of `(IndexName, VariantName)` index/variant pairs from outermost to innermost.
+/// Each path is a slice of index/variant pairs from outermost to innermost.
 /// For single-index paths, formats as `Mode.Boost, Mode.Cruise`.
 /// For multi-index paths, formats as `(Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`.
 fn format_indexed_paths(
-    paths: &[&[(IndexName, IndexVariantName)]],
+    paths: &[&[(IndexTypeRef, IndexVariantName)]],
     is_multi_index: bool,
 ) -> String {
     let formatted: Vec<String> = if is_multi_index {
@@ -637,7 +736,7 @@ fn format_indexed_paths(
                 format!(
                     "({})",
                     p.iter()
-                        .map(|(idx, var)| format!("{idx}.{var}"))
+                        .map(|(idx, var)| format!("{}.{var}", idx.name()))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -646,7 +745,7 @@ fn format_indexed_paths(
     } else {
         paths
             .iter()
-            .map(|p| format!("{}.{}", p[0].0, p[0].1))
+            .map(|p| format!("{}.{}", p[0].0.name(), p[0].1))
             .collect()
     };
     formatted.join(", ")
@@ -664,7 +763,7 @@ fn format_indexed_paths(
 /// We reuse `collect_failing_paths` on the inverted entries, then classify each
 /// failing path as either "unexpected pass" or "unexpected fail".
 fn check_indexed_assert_with_expected_fail(
-    index_name: &IndexName,
+    index_name: &IndexTypeRef,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
     keys: &[Vec<(IndexName, IndexVariantName)>],
 ) -> AssertResult {
@@ -676,7 +775,9 @@ fn check_indexed_assert_with_expected_fail(
             let mut unexpected_fails = Vec::new();
 
             for path in &paths {
-                let is_expected_fail_key = keys.contains(path);
+                let is_expected_fail_key = keys
+                    .iter()
+                    .any(|key| expected_fail_key_matches_path(path, key));
                 if is_expected_fail_key {
                     // This was an expected-fail key but the value is false after inversion,
                     // meaning the original was true → unexpected pass
@@ -721,7 +822,7 @@ fn check_indexed_assert_with_expected_fail(
 /// Multi-index failure message example:
 ///   `failed at (Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`
 pub(super) fn check_indexed_assert(
-    index_name: &IndexName,
+    index_name: &IndexTypeRef,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
 ) -> AssertResult {
     match collect_failing_paths(index_name, entries) {
@@ -744,12 +845,12 @@ pub(super) fn check_indexed_assert(
 
 /// Recursively collect failing variant paths from an indexed assertion value.
 ///
-/// Each path is a `Vec<(IndexName, VariantName)>` of index/variant pairs from outermost to innermost.
-/// For example, `vec![(IndexName::new("Phase"), VariantName::new("Launch")), (IndexName::new("Maneuver"), VariantName::new("Correction"))]` for a 2D failure.
+/// Each path is a `Vec<(IndexTypeRef, VariantName)>` of index/variant pairs from outermost to innermost.
+/// For example, `vec![(IndexTypeRef::legacy(IndexName::new("Phase")), VariantName::new("Launch")), ...]` for a 2D failure.
 fn collect_failing_paths(
-    index_name: &IndexName,
+    index_name: &IndexTypeRef,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
-) -> Result<Vec<Vec<(IndexName, IndexVariantName)>>, String> {
+) -> Result<Vec<Vec<(IndexTypeRef, IndexVariantName)>>, String> {
     let mut paths = Vec::new();
     for (variant, value) in entries {
         let key = (index_name.clone(), variant.clone());
@@ -770,7 +871,8 @@ fn collect_failing_paths(
             }
             other => {
                 return Err(format!(
-                    "expected Bool for {index_name}::{variant}, got {other:?}"
+                    "expected Bool for {}::{variant}, got {other:?}",
+                    index_name.name()
                 ));
             }
         }

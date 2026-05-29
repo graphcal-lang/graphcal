@@ -586,7 +586,12 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
                 map.insert("index".to_string(), serde_json::json!(index_name.as_str()));
                 let entries_map: serde_json::Map<String, serde_json::Value> = entries
                     .iter()
-                    .map(|(name, val)| (name.as_str().to_string(), value_to_json(val, symbols)))
+                    .map(|(name, val)| {
+                        (
+                            v.indexed_entry_display_name(name),
+                            value_to_json(val, symbols),
+                        )
+                    })
                     .collect();
                 map.insert(
                     "entries".to_string(),

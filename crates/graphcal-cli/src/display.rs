@@ -114,7 +114,7 @@ pub fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatE
         Value::Indexed { entries: idx, .. } => {
             for (variant, entry_val) in idx {
                 flatten_value(
-                    &format!("{prefix}[{}]", variant.as_str()),
+                    &format!("{prefix}[{}]", value.indexed_entry_display_name(variant)),
                     entry_val,
                     entries,
                 );
@@ -206,27 +206,27 @@ pub fn format_table_grid(value: &Value) -> String {
     else {
         return String::new();
     };
-    let col_names: Vec<&str> = col_entries
-        .keys()
-        .map(graphcal_compiler::syntax::names::IndexVariantName::as_str)
-        .collect();
+    let col_variants: Vec<_> = col_entries.keys().cloned().collect();
 
     let mut builder = Builder::default();
 
     // Header row: empty corner cell + column variant names
     let mut header_row = vec![String::new()];
-    header_row.extend(col_names.iter().map(|s| (*s).to_string()));
+    header_row.extend(
+        col_variants
+            .iter()
+            .map(|variant| first_row.indexed_entry_display_name(variant)),
+    );
     builder.push_record(header_row);
 
     // Data rows: row variant name + cell values
     for (row_variant, row_val) in row_entries {
-        let mut row = vec![row_variant.as_str().to_string()];
+        let mut row = vec![value.indexed_entry_display_name(row_variant)];
         if let Value::Indexed { entries: cells, .. } = row_val {
-            for col_name in &col_names {
+            for col_variant in &col_variants {
                 let cell_val = cells
-                    .iter()
-                    .find(|(k, _)| k.as_str() == *col_name)
-                    .map(|(_, v)| v.format_display(None))
+                    .get(col_variant)
+                    .map(|v| v.format_display(None))
                     .unwrap_or_default();
                 row.push(cell_val);
             }
@@ -261,6 +261,7 @@ pub fn format_table_slices(
     let Value::Indexed {
         index_name,
         entries,
+        ..
     } = value
     else {
         return;
@@ -274,7 +275,11 @@ pub fn format_table_slices(
 
     // depth >= 3: emit section headers and recurse
     for (variant, inner_val) in entries {
-        parts.push(format!("\n  [{}]", variant.qualified_by(index_name)));
+        parts.push(format!(
+            "\n  [{}.{}]",
+            index_name.name(),
+            value.indexed_entry_display_name(variant)
+        ));
         format_table_slices(inner_val, symbols, depth - 1, parts);
     }
 }
@@ -331,10 +336,7 @@ mod tests {
         for (k, v) in pairs {
             entries.insert(IndexVariantName::new(*k), v.clone());
         }
-        Value::Indexed {
-            index_name: IndexName::new(name),
-            entries,
-        }
+        Value::legacy_indexed(IndexName::new(name), entries)
     }
 
     #[test]
@@ -403,10 +405,7 @@ mod tests {
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("x"), scalar(1.0));
         fields.insert(FieldName::new("y"), scalar(2.0));
-        let s = Value::Struct {
-            type_name: StructTypeName::new("Pair"),
-            fields,
-        };
+        let s = Value::legacy_struct(StructTypeName::new("Pair"), fields);
         let mut out = Vec::new();
         flatten_value("p", &s, &mut out);
         let names: Vec<&str> = out
@@ -420,10 +419,7 @@ mod tests {
 
     #[test]
     fn flatten_empty_struct_keeps_single_entry() {
-        let s = Value::Struct {
-            type_name: StructTypeName::new("Unit"),
-            fields: IndexMap::new(),
-        };
+        let s = Value::legacy_struct(StructTypeName::new("Unit"), IndexMap::new());
         let mut out = Vec::new();
         flatten_value("u", &s, &mut out);
         assert_eq!(out.len(), 1);

@@ -2091,6 +2091,94 @@ fn eval_cross_file_inline_dag_nested_call_uses_canonical_target_with_same_leaf_o
 }
 
 #[test]
+fn eval_public_values_preserve_same_leaf_imported_index_owners() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node phase_a: a.Phase = a.Phase.Burn;\n\
+         node phase_b: b.Phase = b.Phase.Burn;\n\
+         node series_a: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
+         node series_b: Dimensionless[b.Phase] = for p: b.Phase { 2.0 };\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+
+    let label_index_owner = |name: &str| {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == name)
+            .unwrap_or_else(|| panic!("value `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"));
+        let Value::Label {
+            index_name,
+            variant,
+        } = value
+        else {
+            panic!("expected label value for `{name}`, got {value:?}");
+        };
+        assert_eq!(index_name.name().as_str(), "Phase");
+        assert_eq!(variant.as_str(), "Burn");
+        index_name
+            .resolved()
+            .cloned()
+            .unwrap_or_else(|| panic!("label `{name}` did not preserve a resolved index owner"))
+    };
+
+    let phase_a_owner = label_index_owner("phase_a");
+    let phase_b_owner = label_index_owner("phase_b");
+    assert_ne!(phase_a_owner, phase_b_owner);
+
+    for (name, expected_owner) in [
+        ("series_a", phase_a_owner.clone()),
+        ("series_b", phase_b_owner.clone()),
+    ] {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == name)
+            .unwrap_or_else(|| panic!("value `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"));
+        let Value::Indexed {
+            index_name,
+            entries,
+            ..
+        } = value
+        else {
+            panic!("expected indexed value for `{name}`, got {value:?}");
+        };
+        assert_eq!(index_name.name().as_str(), "Phase");
+        assert_eq!(index_name.resolved(), Some(&expected_owner));
+        assert_eq!(entries.len(), 2);
+    }
+}
+
+#[test]
 fn eval_inline_dag_call_indexed_output_projection() {
     // Projected output is itself indexed; the call site reads one cell.
     let source = "\

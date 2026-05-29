@@ -955,7 +955,7 @@ fn check_const_struct_field_constraints(
 ) -> Result<(), GraphcalError> {
     match value {
         RuntimeValue::Struct { type_name, fields } => {
-            let constructor = ConstructorName::from_atom(type_name.atom().clone());
+            let constructor = ConstructorName::from_atom(type_name.name().atom().clone());
             for (field_name, field_value) in fields {
                 if let Some(constraint) = find_struct_field_constraint(
                     field_constraints,
@@ -973,9 +973,9 @@ fn check_const_struct_field_constraints(
                         span: decl_span.into(),
                     });
                 }
-                // Recurse for nested struct fields. The field's declared struct
-                // owner is not available at the runtime value boundary yet, so
-                // nested lookups intentionally fall back to constructor+field.
+                // Recurse for nested struct fields. Field-declared struct owners are
+                // not threaded through this runtime walk yet, so nested lookups
+                // intentionally fall back to constructor+field.
                 check_const_struct_field_constraints(
                     field_value,
                     &format!("{decl_name}.{field_name}"),

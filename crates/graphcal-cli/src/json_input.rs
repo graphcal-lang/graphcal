@@ -314,15 +314,21 @@ fn convert_indexed(
 
     let entries = entries_obj
         .iter()
-        .map(|(variant, value)| {
+        .enumerate()
+        .map(|(entry_index, (variant, value))| {
             let value_expr = convert_value(value, &format!("{param_name}[{variant}]"))?;
+            // HIR/TIR sidecars key resolved map-entry variants by source span.
+            // JSON input has no real source locations, so give each synthetic
+            // key part a distinct span instead of reusing `SYNTH_SPAN`.
+            let index_span = Span::new(entry_index * 2 + 1, 0);
+            let variant_span = Span::new(entry_index * 2 + 2, 0);
             Ok(MapEntry {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: Spanned::new(
                         MapEntryIndex::Named(IndexName::new(index_name).into()),
-                        SYNTH_SPAN,
+                        index_span,
                     ),
-                    variant: Spanned::new(IndexVariantName::new(variant), SYNTH_SPAN),
+                    variant: Spanned::new(IndexVariantName::new(variant), variant_span),
                 }),
                 value: value_expr,
             })

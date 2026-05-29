@@ -86,10 +86,7 @@ fn resolved_value_index_variant<'a>(
 }
 
 fn runtime_label_from_resolved_variant(resolved: &ResolvedIndexVariant) -> RuntimeValue {
-    RuntimeValue::Label {
-        index_name: resolved.index().to_def_name(),
-        variant: resolved.variant().clone(),
-    }
+    RuntimeValue::resolved_label(resolved)
 }
 
 fn constructor_call_target<'a>(
@@ -192,9 +189,11 @@ pub fn eval_expr(
             let full_span = index.span.merge(variant.span);
             Ok(resolved_value_index_variant(ctx, full_span)
                 .map(runtime_label_from_resolved_variant)
-                .unwrap_or_else(|| RuntimeValue::Label {
-                    index_name: legacy_index_name_from_path(&index.value),
-                    variant: variant.value.clone(),
+                .unwrap_or_else(|| {
+                    RuntimeValue::legacy_label(
+                        legacy_index_name_from_path(&index.value),
+                        variant.value.clone(),
+                    )
                 }))
         }
         ExprKind::GraphRef(ident) => values.get(&ident.value).cloned().ok_or_else(|| {
@@ -358,8 +357,23 @@ pub fn eval_expr(
                 }
                 field_map.insert(field_init.name.value.clone(), val);
             }
+            let type_name = resolved_constructor.map_or_else(
+                || {
+                    StructTypeRef::legacy(graphcal_compiler::syntax::names::StructTypeName::new(
+                        &constructor.name,
+                    ))
+                },
+                |target| {
+                    StructTypeRef::new(
+                        graphcal_compiler::syntax::names::StructTypeName::from_atom(
+                            target.variant.name.atom().clone(),
+                        ),
+                        Some(target.owning_type.clone()),
+                    )
+                },
+            );
             Ok(RuntimeValue::Struct {
-                type_name: graphcal_compiler::syntax::names::StructTypeName::new(&constructor.name),
+                type_name,
                 fields: field_map,
             })
         }
