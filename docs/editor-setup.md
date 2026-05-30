@@ -10,20 +10,20 @@ Graphcal provides editor extensions with rich language support through the built
 
 The Graphcal LSP server (`graphcal lsp`) provides:
 
-| Feature | Description |
-|---------|-------------|
-| **Inlay hints** | Computed param and node values displayed inline next to each declaration |
-| **Diagnostics** | Real-time error reporting: parse errors, dimension mismatches, unknown references, visibility violations |
-| **Code actions** | Quick fixes for common errors (e.g., "Add `pub`" for visibility violations) |
-| **Go to definition** | Jump from a reference to its declaration |
-| **Hover** | Show type, dimension, and unit information |
-| **Find references** | Locate all usages of a declaration |
-| **Document symbols** | Outline view of all declarations in the file |
-| **Formatting** | Format the current document (same as `graphcal format`) |
-| **Document links** | Clickable links for `import` paths |
+| Feature              | Description                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Inlay hints**      | Computed param and node values displayed inline next to each declaration                                 |
+| **Diagnostics**      | Real-time error reporting: parse errors, dimension mismatches, unknown references, visibility violations |
+| **Code actions**     | Quick fixes for common errors (e.g., "Add `pub`" for visibility violations)                              |
+| **Go to definition** | Jump from a reference to its declaration                                                                 |
+| **Hover**            | Show type, dimension, and unit information                                                               |
+| **Find references**  | Locate all usages of a declaration                                                                       |
+| **Document symbols** | Outline view of all declarations in the file                                                             |
+| **Formatting**       | Format the current document (same as `graphcal format`)                                                  |
+| **Document links**   | Clickable links for `import` paths                                                                       |
 
 !!! tip "Inlay hints: live calculation view"
-    The inlay hints feature is what makes Graphcal feel like a live spreadsheet. As you edit your `.gcl` file, the LSP evaluates the computation graph and shows the resulting values next to each `param` and `node` declaration. Change an input and watch all dependent values update.
+The inlay hints feature is what makes Graphcal feel like a live spreadsheet. As you edit your `.gcl` file, the LSP evaluates the computation graph and shows the resulting values next to each `param` and `node` declaration. Change an input and watch all dependent values update.
 
 For multi-file projects, editor navigation follows module-qualified identity for
 same-leaf declarations. If `a.gcl` and `b.gcl` both export `Phase`, `Item`, and
@@ -46,10 +46,10 @@ You can also install it from VS Code:
 
 ### Configuration
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `graphcal.lsp.enabled` | `true` | Enable/disable the LSP server |
-| `graphcal.lsp.path` | `"graphcal"` | Path to the `graphcal` binary |
+| Setting                | Default      | Description                   |
+| ---------------------- | ------------ | ----------------------------- |
+| `graphcal.lsp.enabled` | `true`       | Enable/disable the LSP server |
+| `graphcal.lsp.path`    | `"graphcal"` | Path to the `graphcal` binary |
 
 If `graphcal` is not on your `PATH`, set `graphcal.lsp.path` to the full path of the binary.
 
@@ -100,17 +100,25 @@ hx --grammar fetch
 hx --grammar build
 ```
 
-Restart Helix and verify the setup:
-
-```sh
-hx --health graphcal
-```
-
 `graphcal` must be available on your `PATH`; otherwise, set `command` to the full path of the Graphcal binary.
 
-The configuration above is enough for file detection, grammar installation, formatting, and LSP features. Helix does not install query files from custom grammar repositories automatically; if `hx --health graphcal` reports `Highlight queries: ✘`, syntax highlighting is not enabled yet.
+### Helix syntax highlighting queries
 
-To enable syntax highlighting, optionally install the highlight query from the tree-sitter grammar repository into Helix's runtime directory. Copying the query file is recommended over symlinking into Helix's grammar source cache, because `hx --grammar fetch` may replace that cache and leave the symlink broken.
+The commands above install/update the parser binary, but Helix does **not** automatically install or refresh highlight query files from custom grammar repositories. Graphcal highlighting is loaded separately from:
+
+```text
+~/.config/helix/runtime/queries/graphcal/highlights.scm
+```
+
+Install the highlight query after fetching the grammar:
+
+```sh
+mkdir -p ~/.config/helix/runtime/queries/graphcal
+cp ~/.config/helix/runtime/grammars/sources/graphcal/queries/highlights.scm \
+  ~/.config/helix/runtime/queries/graphcal/highlights.scm
+```
+
+If you prefer not to rely on Helix's grammar source cache, download the query directly instead:
 
 ```sh
 mkdir -p ~/.config/helix/runtime/queries/graphcal
