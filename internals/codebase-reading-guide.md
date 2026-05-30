@@ -66,9 +66,10 @@ Read the pipeline as a sequence of practical questions:
    qualified names may still need import/include context.
 4. **Loader and `ModuleResolver`: which file or DAG does a module path mean?**
    The loader performs filesystem work and turns import/include paths into
-   canonical `DagId`s. The compiler-side `ModuleResolver` then answers semantic
-   lookup questions without doing I/O. This keeps disk paths and import aliases
-   out of the core compiler data.
+   canonical `DagId`s, but it does not merge dependency ASTs into the root
+   `File`. Each loaded file keeps its own `File<Resolved>`. The compiler-side
+   `ModuleResolver` then answers semantic lookup questions without doing I/O.
+   This keeps disk paths and import aliases out of the core compiler data.
 5. **IR: what declarations does this DAG body contain?**
    IR groups the body into consts, params, nodes, asserts, registry entries, and
    dependency maps. This is where checks such as duplicate names, visibility,
@@ -252,9 +253,11 @@ qualifier text is used only to find a module alias; successful lookups carry the
 canonical `DagId` owner.
 
 `graphcal-eval/src/loader.rs` remains the only layer that resolves import paths
-to files/DAGs. `LoadedProject::build_module_resolver()` hands those already
-resolved edges to the pure compiler resolver, including inline DAGs and
-instantiated include owners.
+to files/DAGs. This is physical project loading and path resolution, not
+semantic AST merging: each loaded file owns its own `File<Resolved>`, and inline
+`dag` bodies are lifted into `LoadedDag`s. `LoadedProject::build_module_resolver()`
+hands those already resolved edges to the pure compiler resolver, including
+inline DAGs and instantiated include owners.
 
 `crates/graphcal-compiler/src/hir/` is the semantic boundary after syntax:
 
@@ -314,8 +317,9 @@ TIR
 ```
 
 Each file root and inline `dag` body is represented by a `DagTIR`. Dependency
-files and dependency DAGs are merged into the same `DagRegistry` using their
-canonical `DagId`s.
+files are not merged at the AST stage; dependency DAG TIRs are merged into the
+same `DagRegistry` during project lowering/finalization using their canonical
+`DagId`s.
 
 `DagTIR` carries one semantic body:
 
@@ -398,41 +402,41 @@ graphcal-fmt
 
 The compiler crate owns the functional core through TIR.
 
-| Path                     | Purpose                                                    |
-| ------------------------ | ---------------------------------------------------------- |
-| `syntax/ast.rs`          | Phase-parameterized AST definitions                        |
-| `syntax/phase.rs`        | `Raw`, `Desugared`, `Resolved`, sugar/path slots, `never`  |
-| `syntax/names.rs`        | `NameAtom`, typed name newtypes, paths, resolved names     |
-| `dag_id.rs`              | Filesystem-independent DAG identity                        |
-| `syntax/parser/`         | Parser for declarations, expressions, types, tables        |
-| `syntax/name_resolve.rs` | Local unresolved-expression rewrite to `File<Resolved>`    |
-| `syntax/module_resolve.rs` | Owner-qualified module symbol tables and path resolution |
-| `desugar/`               | Phase walker and AST alias modules                         |
-| `hir/`                   | Resolved type/value expression boundary                    |
-| `ir/lower.rs`            | IR entries and lowering entry points                       |
-| `ir/resolve/`            | Name, scope, dependency, visibility resolution             |
-| `registry/`              | Dimensions, units, indexes, types, values, built-ins       |
-| `tir/typed.rs`           | `TIR`, `DagTIR`, `DagSemanticBody`, resolved type expressions |
-| `tir/dim_check/`         | Dimension/type inference and checking                      |
+| Path                       | Purpose                                                       |
+| -------------------------- | ------------------------------------------------------------- |
+| `syntax/ast.rs`            | Phase-parameterized AST definitions                           |
+| `syntax/phase.rs`          | `Raw`, `Desugared`, `Resolved`, sugar/path slots, `never`     |
+| `syntax/names.rs`          | `NameAtom`, typed name newtypes, paths, resolved names        |
+| `dag_id.rs`                | Filesystem-independent DAG identity                           |
+| `syntax/parser/`           | Parser for declarations, expressions, types, tables           |
+| `syntax/name_resolve.rs`   | Local unresolved-expression rewrite to `File<Resolved>`       |
+| `syntax/module_resolve.rs` | Owner-qualified module symbol tables and path resolution      |
+| `desugar/`                 | Phase walker and AST alias modules                            |
+| `hir/`                     | Resolved type/value expression boundary                       |
+| `ir/lower.rs`              | IR entries and lowering entry points                          |
+| `ir/resolve/`              | Name, scope, dependency, visibility resolution                |
+| `registry/`                | Dimensions, units, indexes, types, values, built-ins          |
+| `tir/typed.rs`             | `TIR`, `DagTIR`, `DagSemanticBody`, resolved type expressions |
+| `tir/dim_check/`           | Dimension/type inference and checking                         |
 
 ### 2.2 `graphcal-eval`
 
 The evaluator owns project loading, cross-file orchestration, execution-plan
 compilation, and expression evaluation.
 
-| Path                 | Purpose                                                        |
-| -------------------- | -------------------------------------------------------------- |
-| `loader.rs`          | `LoadedProject`, `LoadedFile`, `LoadedDag`, import resolution  |
-| `eval/project/`      | Multi-file compile/eval orchestration                          |
-| `inline_dag.rs`      | Inline DAG compilation helpers                                 |
-| `decl_key.rs`        | Runtime declaration keys backed by `ResolvedName<Decl>`        |
-| `exec_plan.rs`       | Const evaluation, runtime topological order, domain prep       |
-| `domain_check.rs`    | Runtime and compile-time domain validation                     |
-| `eval/runtime.rs`    | Evaluation loop                                                |
-| `eval/display.rs`    | Display-unit extraction and attachment                         |
-| `eval/types.rs`      | Public `EvalResult`, `Value`, plot/assert result types         |
-| `eval_expr/`         | Syntax-AST expression evaluator by expression family           |
-| `eval_expr/hir_eval.rs` | HIR expression evaluator with canonical references          |
+| Path                    | Purpose                                                       |
+| ----------------------- | ------------------------------------------------------------- |
+| `loader.rs`             | `LoadedProject`, `LoadedFile`, `LoadedDag`, import resolution |
+| `eval/project/`         | Multi-file compile/eval orchestration                         |
+| `inline_dag.rs`         | Inline DAG compilation helpers                                |
+| `decl_key.rs`           | Runtime declaration keys backed by `ResolvedName<Decl>`       |
+| `exec_plan.rs`          | Const evaluation, runtime topological order, domain prep      |
+| `domain_check.rs`       | Runtime and compile-time domain validation                    |
+| `eval/runtime.rs`       | Evaluation loop                                               |
+| `eval/display.rs`       | Display-unit extraction and attachment                        |
+| `eval/types.rs`         | Public `EvalResult`, `Value`, plot/assert result types        |
+| `eval_expr/`            | Syntax-AST expression evaluator by expression family          |
+| `eval_expr/hir_eval.rs` | HIR expression evaluator with canonical references            |
 
 The public API is re-exported from `eval/mod.rs`, including
 `compile_and_eval_project`, `compile_to_tir_project`, and
@@ -615,6 +619,11 @@ joined strings as map keys inside the loader. `LoadedProject::build_module_resol
 then turns the loaded files, inline DAGs, and pre-resolved edges into the
 compiler's `ModuleResolver`.
 
+The loader's `ast: File<Resolved>` field is per file. It means "this source file
+has been parsed, desugared, locally name-resolved, and connected to loader-side
+import/include edges"; it does not mean imported declarations have been copied
+into the root file AST.
+
 ### 3.5 IR
 
 `IR` contains the semantic declaration lists and dependency metadata for one DAG
@@ -760,8 +769,8 @@ Graphcal has separate mechanisms for compile-time names and DAG/value reuse:
 
 - `import` brings compile-time declarations into scope: const nodes,
   dimensions, units, types, indexes, DAG names, and evaluated asserts.
-- `include` instantiates or merges runtime outputs, with optional param/index
-  bindings.
+- `include` instantiates DAG declarations or exposes runtime outputs, with
+  optional param/index bindings.
 
 Import/include paths are dot-separated module paths in source. Loader internals
 drop spans and store path segments in `ModulePathKey`; compiled DAG identity is
@@ -777,10 +786,27 @@ Project loading:
 5. Build a dependency-first `load_order`.
 6. Detect circular imports during traversal.
 
+After project loading, the compiler performs several assembly steps. Do not read
+these as repeated merges of one giant project AST. They merge different products
+at the stage where each product first has the information it needs:
+
+| Step                          | Merged Product                                                   | Stage                                   | Why Here                                                                                                                       |
+| ----------------------------- | ---------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Import scope assembly         | imported names, pre-evaluated values, module aliases             | before current-file IR lowering         | The current file needs these names available while lowering declarations.                                                      |
+| Type-system assembly          | dependency dimensions, units, indexes, types, constructors       | IR builder / `ModuleTypeRegistry` setup | Type and dimension resolution needs dependency registries, not dependency AST copies.                                          |
+| Instantiated include assembly | included DAG declarations after bindings/substitutions           | unfrozen IR builder                     | Includes create declarations in the importer, so the importer dependency graph and registry must see them before IR is frozen. |
+| Dependency DAG attachment     | already-compiled dependency `DagTIR`s keyed by canonical `DagId` | TIR finalization                        | Cross-file inline DAG calls need callable checked DAGs, but those DAGs remain separate owners.                                 |
+
+The invariant is that source `File<Resolved>` ASTs stay per file. `import` and
+module-style `include` assemble scope, values, and type-system facts around the
+current file; instantiated `include` is the only operation that copies
+declaration bodies into the importer's DAG, and it does so at the IR-builder
+stage after binding validation.
+
 Project lowering then builds the `ModuleResolver` from the loaded graph, builds a
 `ModuleTypeRegistry` from the current file, prelude, and evaluated dependencies,
-lowers dependencies before dependents, merges registries/DAG TIRs, and evaluates
-the requested root.
+lowers dependencies before dependents, performs those semantic merge steps, and
+evaluates the requested root.
 
 ## 6. Errors
 
@@ -854,24 +880,24 @@ just lint
 
 ## 8. Conventions Worth Keeping in Mind
 
-| Convention                         | Where                    | Why                                                                 |
-| ---------------------------------- | ------------------------ | ------------------------------------------------------------------- |
-| AST phases                         | `syntax/phase.rs`        | Parser-only constructs are statically excluded downstream           |
-| `NameAtom` / `NameDef<Ns>`         | `syntax/names.rs`        | Definition leaves cannot accidentally contain dotted paths           |
-| `NamePath` / `IdentPath`           | syntax AST               | Preserve source qualification until a resolver has module context    |
-| `ResolvedName` / variants          | HIR/TIR/eval             | Carry canonical owner identity instead of source alias strings       |
-| `ModuleResolver`                   | `syntax/module_resolve.rs` | Keep module lookup pure and owner-qualified                        |
-| HIR                                | `hir/`                   | Consume syntax paths and expose semantic references                  |
-| `DagId`                            | `dag_id.rs`              | Keep filesystem paths at loader boundaries                           |
-| `ModulePathKey`                    | `loader.rs`              | Keep module paths structured instead of separator-joined             |
-| `RuntimeDeclKey`                   | `crates/graphcal-eval/src/decl_key.rs` | Prevent runtime value collisions across DAG owners      |
-| `TypeNameRef` identity carriers    | `registry/declared_type.rs` | Preserve index/struct owners through runtime/public values       |
-| Trait-based I/O                    | `graphcal-io`            | Deterministic tests and editor integration                           |
-| Visitor pattern                    | `syntax/visitor.rs`      | Centralized AST traversal                                            |
-| `BTreeSet` in dep values           | IR/TIR deps              | Deterministic graph construction                                     |
-| `IndexMap` in output-facing maps   | eval/display output      | Stable user-facing order                                             |
-| Separate const/runtime phases      | `exec_plan.rs`           | Compile-time values and runtime values have different failure modes  |
-| Display units outside dimensions   | `eval/display.rs`        | Compute in SI, display in requested units                            |
+| Convention                       | Where                                  | Why                                                                 |
+| -------------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
+| AST phases                       | `syntax/phase.rs`                      | Parser-only constructs are statically excluded downstream           |
+| `NameAtom` / `NameDef<Ns>`       | `syntax/names.rs`                      | Definition leaves cannot accidentally contain dotted paths          |
+| `NamePath` / `IdentPath`         | syntax AST                             | Preserve source qualification until a resolver has module context   |
+| `ResolvedName` / variants        | HIR/TIR/eval                           | Carry canonical owner identity instead of source alias strings      |
+| `ModuleResolver`                 | `syntax/module_resolve.rs`             | Keep module lookup pure and owner-qualified                         |
+| HIR                              | `hir/`                                 | Consume syntax paths and expose semantic references                 |
+| `DagId`                          | `dag_id.rs`                            | Keep filesystem paths at loader boundaries                          |
+| `ModulePathKey`                  | `loader.rs`                            | Keep module paths structured instead of separator-joined            |
+| `RuntimeDeclKey`                 | `crates/graphcal-eval/src/decl_key.rs` | Prevent runtime value collisions across DAG owners                  |
+| `TypeNameRef` identity carriers  | `registry/declared_type.rs`            | Preserve index/struct owners through runtime/public values          |
+| Trait-based I/O                  | `graphcal-io`                          | Deterministic tests and editor integration                          |
+| Visitor pattern                  | `syntax/visitor.rs`                    | Centralized AST traversal                                           |
+| `BTreeSet` in dep values         | IR/TIR deps                            | Deterministic graph construction                                    |
+| `IndexMap` in output-facing maps | eval/display output                    | Stable user-facing order                                            |
+| Separate const/runtime phases    | `exec_plan.rs`                         | Compile-time values and runtime values have different failure modes |
+| Display units outside dimensions | `eval/display.rs`                      | Compute in SI, display in requested units                           |
 
 When adding a feature, update the grammar, parser, compiler stages, evaluator,
 LSP/editor surfaces, docs, and fixtures together. The compiler core should carry
