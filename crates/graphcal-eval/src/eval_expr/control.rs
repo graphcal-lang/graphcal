@@ -20,9 +20,7 @@ fn resolved_match_label_variant<'a>(
     ctx: &'a EvalContext<'_>,
     pattern: &MatchPattern,
 ) -> Option<&'a ResolvedIndexVariant> {
-    let refs = ctx
-        .current_dag
-        .and_then(|dag| dag.resolved_collection_refs.as_ref())?;
+    let refs = ctx.current_dag.map(|dag| &dag.semantic.collection_refs)?;
     refs.match_label_variants
         .get(&pattern.span())
         .or_else(|| match pattern {
@@ -58,9 +56,7 @@ fn resolved_match_constructor_pattern<'a>(
     ctx: &'a EvalContext<'_>,
     pattern: &MatchPattern,
 ) -> Option<&'a ResolvedConstructorPattern> {
-    let refs = ctx
-        .current_dag
-        .and_then(|dag| dag.resolved_constructor_refs.as_ref())?;
+    let refs = ctx.current_dag.map(|dag| &dag.semantic.constructor_refs)?;
     refs.match_pattern_constructors
         .get(&pattern.span())
         .or_else(|| match pattern {
@@ -210,7 +206,7 @@ pub(super) fn eval_match(
                 })?;
 
             // Bind pattern variables. Qualified `MatchPattern::Path` arms are
-            // selected and bound through the HIR-derived constructor sidecar;
+            // selected and bound through HIR-derived constructor metadata;
             // standalone/bare constructor arms keep the source syntax bindings.
             let mut arm_locals = local_values.clone();
             if let Some(resolved) = resolved_match_constructor_pattern(ctx, &matched_arm.pattern) {

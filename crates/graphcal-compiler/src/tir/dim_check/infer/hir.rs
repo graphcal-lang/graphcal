@@ -303,14 +303,14 @@ fn infer_resolved_decl_ref_type(
         return Ok(inferred);
     }
 
-    if let Some(bindings) = &dag.resolved_decl_bindings {
-        for name in bindings
-            .iter()
-            .filter_map(|(name, resolved)| (resolved == target).then_some(name))
-        {
-            if let Some(inferred) = infer_bound_decl_type(name, declared_types, dag, src)? {
-                return Ok(inferred);
-            }
+    for name in dag
+        .semantic
+        .decl_bindings
+        .iter()
+        .filter_map(|(name, resolved)| (resolved == target).then_some(name))
+    {
+        if let Some(inferred) = infer_bound_decl_type(name, declared_types, dag, src)? {
+            return Ok(inferred);
         }
     }
 
@@ -1171,9 +1171,10 @@ fn index_def_for_inferred<'a>(
     dag: &'a crate::tir::typed::DagTIR,
     registry: &'a Registry,
 ) -> Option<&'a crate::registry::types::IndexDef> {
-    dag.resolved_collection_refs
-        .as_ref()
-        .and_then(|refs| refs.index_defs.get(index.resolved()))
+    dag.semantic
+        .collection_refs
+        .index_defs
+        .get(index.resolved())
         .or_else(|| registry.indexes.get_index(index.name().as_str()))
 }
 

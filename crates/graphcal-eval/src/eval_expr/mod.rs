@@ -47,9 +47,7 @@ pub struct EvalContext<'a> {
     /// The enclosing file's full TIR.
     ///
     /// Used by [`eval_inline_dag_call`] to reach the file's flat per-DAG body
-    /// map. Module-aware TIRs route calls through [`current_dag`]'s resolved
-    /// inline-DAG sidecar; standalone TIRs fall back to source-path
-    /// lookup on this TIR.
+    /// map after semantic call metadata has selected a canonical DAG id.
     pub tir: &'a graphcal_compiler::tir::typed::TIR,
     /// DAG whose expression is currently being evaluated. When present, inline
     /// DAG calls can use HIR-derived canonical `DagId` / `ResolvedName<Decl>`
@@ -108,7 +106,7 @@ fn resolved_value_index_variant<'a>(
     span: graphcal_compiler::syntax::span::Span,
 ) -> Option<&'a ResolvedIndexVariant> {
     ctx.current_dag
-        .and_then(|dag| dag.resolved_collection_refs.as_ref())
+        .map(|dag| &dag.semantic.collection_refs)
         .and_then(|refs| refs.variant_literals.get(&span))
 }
 
@@ -121,7 +119,7 @@ fn resolved_graph_ref_target<'a>(
     span: graphcal_compiler::syntax::span::Span,
 ) -> Option<&'a ResolvedName<namespace::Decl>> {
     ctx.current_dag
-        .map(|dag| &dag.resolved_deps)
+        .map(|dag| &dag.semantic.dependencies)
         .and_then(|deps| deps.graph_ref_targets.get(&span))
 }
 
@@ -130,15 +128,15 @@ fn resolved_const_ref_target<'a>(
     span: graphcal_compiler::syntax::span::Span,
 ) -> Option<&'a ResolvedName<namespace::Decl>> {
     ctx.current_dag
-        .map(|dag| &dag.resolved_deps)
+        .map(|dag| &dag.semantic.dependencies)
         .and_then(|deps| deps.const_ref_targets.get(&span))
 }
 
 fn visible_decl_runtime_key(ctx: &EvalContext<'_>, scoped: &ScopedName) -> Option<RuntimeDeclKey> {
     let dag = ctx.current_dag?;
-    dag.resolved_decl_bindings
-        .as_ref()
-        .and_then(|bindings| bindings.get(scoped))
+    dag.semantic
+        .decl_bindings
+        .get(scoped)
         .cloned()
         .map(RuntimeDeclKey::resolved)
         .or_else(|| {
@@ -163,7 +161,7 @@ fn graph_ref_runtime_key(
         .or_else(|| visible_decl_runtime_key(ctx, scoped))
         .ok_or_else(|| {
             ctx.internal_error(
-                format!("resolved graph-reference sidecar missing target for `@{scoped}`"),
+                format!("semantic graph-reference metadata missing target for `@{scoped}`"),
                 span,
             )
         })
@@ -223,7 +221,7 @@ fn constructor_call_target<'a>(
     span: graphcal_compiler::syntax::span::Span,
 ) -> Option<&'a graphcal_compiler::tir::typed::ResolvedConstructorTarget> {
     ctx.current_dag
-        .and_then(|dag| dag.resolved_constructor_refs.as_ref())
+        .map(|dag| &dag.semantic.constructor_refs)
         .and_then(|refs| refs.constructor_calls.get(&span))
 }
 
@@ -235,8 +233,8 @@ fn runtime_struct_type_def<'a>(
         .dags
         .values()
         .find_map(|dag| {
-            dag.resolved_type_defs
-                .as_ref()?
+            dag.semantic
+                .type_defs
                 .struct_types
                 .get(type_name.resolved())
         })
@@ -584,7 +582,7 @@ fn resolved_inline_call<'a>(
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a ResolvedInlineDagCall> {
     ctx.current_dag
-        .and_then(|dag| dag.resolved_inline_dag_refs.as_ref())
+        .map(|dag| &dag.semantic.inline_dag_refs)
         .and_then(|refs| refs.calls.get(&expr.span))
 }
 
@@ -635,12 +633,9 @@ fn imported_value_source_value<'a>(
 /// - The projected output's value is returned.
 ///
 /// The dag body is evaluated against the pre-compiled [`TIR`] carried in
-/// [`EvalContext::tir`]. Module-aware callers use the current DAG's
-/// HIR-derived sidecar to route directly to a canonical
-/// [`DagId`](graphcal_compiler::dag_id::DagId); standalone callers fall back to
-/// source-path lookup through the enclosing TIR. The dag's own registry is used
-/// for all nested lookups so sibling dag calls from inside the body resolve
-/// through the same pipeline.
+/// [`EvalContext::tir`]. Calls route through canonical semantic call metadata;
+/// the dag's own registry is used for all nested lookups so sibling dag calls
+/// from inside the body resolve through the same pipeline.
 #[expect(
     clippy::too_many_lines,
     reason = "inline DAG evaluation validates bindings and executes selected body"
@@ -655,26 +650,21 @@ fn eval_inline_dag_call(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let display_path = path.display_path();
-    let resolved_call = resolved_inline_call(call_expr, ctx);
-    let dag_tir = match resolved_call {
-        Some(call) => ctx.tir.dags.get(&call.target).ok_or_else(|| {
-            ctx.internal_error(
-                format!(
-                    "dag `{}` has no compiled TIR (should have been caught by dim-check)",
-                    call.target
-                ),
-                path.span,
-            )
-        })?,
-        None => ctx.tir.lookup_call_target(path).ok_or_else(|| {
-            ctx.internal_error(
-                format!(
-                    "dag `{display_path}` has no compiled TIR (should have been caught by dim-check)"
-                ),
-                path.span,
-            )
-        })?,
-    };
+    let resolved_call = resolved_inline_call(call_expr, ctx).ok_or_else(|| {
+        ctx.internal_error(
+            format!("semantic TIR missing inline-DAG call metadata for `{display_path}`"),
+            call_expr.span,
+        )
+    })?;
+    let dag_tir = ctx.tir.dags.get(&resolved_call.target).ok_or_else(|| {
+        ctx.internal_error(
+            format!(
+                "dag `{}` has no compiled TIR (should have been caught by dim-check)",
+                resolved_call.target
+            ),
+            path.span,
+        )
+    })?;
 
     // Evaluate argument expressions in the caller's scope so loop variables
     // and other enclosing bindings resolve correctly. Param-binding names are
@@ -683,16 +673,18 @@ fn eval_inline_dag_call(
     for binding in args {
         let value = eval_expr(&binding.value, caller_values, caller_locals, ctx)?;
         let target_key = resolved_call
-            .and_then(|call| call.arg_targets.get(&binding.name.span))
-            .map_or_else(
-                || {
-                    RuntimeDeclKey::for_local_decl(
-                        dag_tir,
-                        &ScopedName::local(binding.name.name.as_str()),
-                    )
-                },
-                |target| dag_decl_runtime_key(dag_tir, target),
-            );
+            .arg_targets
+            .get(&binding.name.span)
+            .map(|target| dag_decl_runtime_key(dag_tir, target))
+            .ok_or_else(|| {
+                ctx.internal_error(
+                    format!(
+                        "semantic TIR missing inline-DAG arg target for `{}`",
+                        binding.name.name
+                    ),
+                    binding.name.span,
+                )
+            })?;
         dag_values.insert(target_key, value);
     }
 
@@ -716,12 +708,8 @@ fn eval_inline_dag_call(
     for scoped in outer_scope_keys {
         let member = scoped.member();
         let visible_key = RuntimeDeclKey::for_visible_name(dag_tir, scoped);
-        let unresolved_local_import = dag_tir
-            .resolved_decl_bindings
-            .as_ref()
-            .and_then(|bindings| bindings.get(scoped))
-            .is_none()
-            && own_names.contains(member);
+        let unresolved_local_import =
+            !dag_tir.semantic.decl_bindings.contains_key(scoped) && own_names.contains(member);
         if unresolved_local_import || dag_values.contains_key(&visible_key) {
             continue;
         }
@@ -756,7 +744,7 @@ fn eval_inline_dag_call(
         struct_field_constraints: ctx.struct_field_constraints,
     };
 
-    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    let empty_hir_locals = HirLocalValueMap::new();
 
     // Evaluate consts and nodes in topological order derived from
     // `runtime_deps` ∪ `const_deps`. Params are leaves — they arrive via
@@ -767,18 +755,28 @@ fn eval_inline_dag_call(
         if dag_values.contains_key(&local_key) {
             continue;
         }
-        let expr = lookup_dag_body_expr(dag_tir, &name);
-        let Some(expr) = expr else {
-            continue;
-        };
-        let value = eval_expr(expr, &dag_values, &empty_locals, &dag_ctx)?;
+        let key = dag_tir.resolved_decl_key_for_local(&name).ok_or_else(|| {
+            ctx.internal_error(format!("no semantic key for `{name}`"), path.span)
+        })?;
+        let hir_expr = dag_tir
+            .semantic
+            .expressions
+            .consts
+            .get(&key)
+            .or_else(|| dag_tir.semantic.expressions.runtime_expr(&key))
+            .ok_or_else(|| {
+                ctx.internal_error(
+                    format!(
+                        "semantic TIR missing HIR expression for DAG body declaration `{name}`"
+                    ),
+                    path.span,
+                )
+            })?;
+        let value = eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx)?;
         dag_values.insert(local_key, value);
     }
 
-    let output_key = resolved_call.map_or_else(
-        || RuntimeDeclKey::for_local_decl(dag_tir, &ScopedName::local(output.value.as_str())),
-        |call| dag_decl_runtime_key(dag_tir, &call.output.value),
-    );
+    let output_key = dag_decl_runtime_key(dag_tir, &resolved_call.output.value);
     dag_values.get(&output_key).cloned().ok_or_else(|| {
         ctx.internal_error(
             format!(
@@ -796,7 +794,7 @@ fn eval_inline_dag_call(
 /// of its runtime and const dependencies. Cycles are impossible in a
 /// well-typed dag body because compile-time dep collection rejects them.
 fn topo_order_for_dag_body(dag_tir: &DagTIR) -> Vec<ScopedName> {
-    topo_order_for_dag_body_resolved(dag_tir, &dag_tir.resolved_deps)
+    topo_order_for_dag_body_resolved(dag_tir, &dag_tir.semantic.dependencies)
 }
 
 type ResolvedDeclKey = ResolvedName<namespace::Decl>;
@@ -871,23 +869,6 @@ fn topo_order_for_dag_body_resolved(
         }
     }
     order
-}
-
-/// Look up the evaluation expression for a declaration in a dag body.
-///
-/// Returns `None` for params (they receive their value from the call-site
-/// argument binding, not from a body-local expression).
-fn lookup_dag_body_expr<'a>(
-    dag_tir: &'a graphcal_compiler::tir::typed::DagTIR,
-    name: &ScopedName,
-) -> Option<&'a Expr> {
-    if let Some(c) = dag_tir.consts.iter().find(|c| &c.name == name) {
-        return Some(&c.expr);
-    }
-    if let Some(n) = dag_tir.nodes.iter().find(|n| &n.name == name) {
-        return Some(&n.expr);
-    }
-    None
 }
 
 /// Resolve a `UnitExpr` to its compound scale factor at runtime.

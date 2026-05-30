@@ -76,8 +76,7 @@ fn eval_nat_expr(
 fn resolved_collection_refs<'a>(
     ctx: &EvalContext<'a>,
 ) -> Option<&'a graphcal_compiler::tir::typed::ResolvedCollectionRefs> {
-    ctx.current_dag
-        .and_then(|dag| dag.resolved_collection_refs.as_ref())
+    ctx.current_dag.map(|dag| &dag.semantic.collection_refs)
 }
 
 fn resolved_map_entry_variant<'a>(

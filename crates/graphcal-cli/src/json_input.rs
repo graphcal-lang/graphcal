@@ -377,7 +377,7 @@ fn convert_indexed(
         .enumerate()
         .map(|(entry_index, (variant, value))| {
             let value_expr = convert_value(value, &format!("{param_name}[{variant}]"))?;
-            // HIR/TIR sidecars key resolved map-entry variants by source span.
+            // TIR semantic metadata keys resolved map-entry variants by source span.
             // JSON input has no real source locations, so give each synthetic
             // key part a distinct span instead of reusing `SYNTH_SPAN`.
             let index_span = Span::new(entry_index * 2 + 1, 0);

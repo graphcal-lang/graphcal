@@ -100,10 +100,11 @@ Some names in this pipeline can sound misleading if read too literally:
   it must be built before IR.
 - TIR is not just HIR with types; it is the checked, per-DAG program model.
 
-`DagTIR` currently carries HIR/resolved "sidecars" next to older AST-shaped data.
-That is a migration aid: new code should prefer the HIR/resolved data, and old
-syntax-AST consumers should shrink over time. If those sidecars ever stop being
-transitional, they should be folded into the main TIR data model.
+`DagTIR` keeps source-facing declarations for diagnostics and presentation, but
+semantic value bodies live in `DagSemanticBody`. Checked expression,
+dependency, constructor, collection, inline-DAG, type-definition, and
+declaration-binding facts are required fields of that semantic body and are
+keyed by canonical `ResolvedName`/`DagId` identities where ownership matters.
 
 Every `.gcl` file moves forward through the same core stages:
 
@@ -135,7 +136,7 @@ IR + ModuleResolver
   |  crates/graphcal-compiler/src/hir/
   |  crates/graphcal-compiler/src/tir/
   v
-TIR  (DagTIR + HIR/resolved sidecars)
+TIR  (DagTIR + DagSemanticBody)
   |
   |  crates/graphcal-eval/src/exec_plan.rs
   v
@@ -148,9 +149,9 @@ EvalResult
 
 The pipeline is forward-only: parser sugar is removed before IR, module paths
 are resolved to canonical owners before module-aware TIR/eval, and runtime maps
-use owner-qualified declaration identities. A few compatibility sidecars remain
-because some consumers still walk the resolved syntax AST, but new semantic work
-should prefer HIR and `ResolvedName`-based data.
+use owner-qualified declaration identities. Source `ScopedName`s and spans are
+kept at diagnostics and formatting boundaries; semantic compile/eval decisions
+use HIR and `ResolvedName`-based data.
 
 ### 1.1 AST Phases
 
@@ -262,9 +263,10 @@ instantiated include owners.
 - `hir/lower.rs` lowers syntax AST type references into HIR with a
   `ModuleResolver`, a `GenericScope`, and an optional prelude scope.
 
-TIR currently stores HIR expressions and HIR-derived sidecars while some
-legacy consumers still walk the resolved syntax AST. New semantic consumers
-should prefer the HIR data directly.
+TIR stores HIR expressions and HIR-derived semantic metadata in
+`DagSemanticBody`. Syntax AST data remains attached to declarations for
+source-facing features such as diagnostics, formatting, assertions, plots, and
+LSP presentation.
 
 ### 1.6 IR Lowering
 
@@ -294,10 +296,9 @@ construction.
 
 In the module-aware project path, TIR resolution receives both a
 `ModuleResolver` and a `ModuleTypeRegistry`. Syntax type expressions are first
-lowered to HIR, then resolved against owner-qualified definitions. The
-standalone path still exists for tests and single-file helpers, but project
-compilation should use `type_resolve_with_modules()` /
-`type_resolve_single_with_modules()`.
+lowered to HIR, then resolved against owner-qualified definitions. Checked DAG
+body construction uses `type_resolve_with_modules()` for file roots and
+`type_resolve_single_with_modules()` for inline DAG bodies.
 
 The TIR is not flat:
 
@@ -313,19 +314,19 @@ Each file root and inline `dag` body is represented by a `DagTIR`. Dependency
 files and dependency DAGs are merged into the same `DagRegistry` using their
 canonical `DagId`s.
 
-`DagTIR` carries both compatibility and canonical data:
+`DagTIR` carries one semantic body:
 
-- `runtime_deps` / `const_deps`: `ScopedName`-keyed maps from IR.
-- `resolved_exprs`: HIR expressions for const/default/node bodies.
-- `resolved_deps`: owner-qualified declaration dependency maps.
-- `resolved_collection_refs`: canonical index and variant references for
+- `semantic.expressions`: HIR expressions for const/default/node bodies.
+- `semantic.dependencies`: owner-qualified declaration dependency maps and
+  source-span graph/const-reference targets.
+- `semantic.collection_refs`: canonical index and variant references for
   map/table/index/match inference.
-- `resolved_constructor_refs`: canonical constructor-call and constructor-match
+- `semantic.constructor_refs`: canonical constructor-call and constructor-match
   metadata.
-- `resolved_inline_dag_refs`: canonical inline-DAG call routing metadata.
-- `resolved_type_defs`: owner-qualified struct/type definitions used by eval.
-- `resolved_decl_bindings`: visible `ScopedName` keys mapped to
-  `ResolvedName<Decl>` identities.
+- `semantic.inline_dag_refs`: canonical inline-DAG call routing metadata.
+- `semantic.type_defs`: owner-qualified struct/type definitions used by eval.
+- `semantic.decl_bindings`: visible `ScopedName` keys mapped to
+  `ResolvedName<Decl>` identities at the source boundary.
 
 Dimensions are exact exponent maps:
 
@@ -334,9 +335,10 @@ Dimension = BTreeMap<BaseDimId, Rational>
 ```
 
 Dimension inference is split by expression families under
-`tir/dim_check/infer/`. HIR-derived sidecars let those syntax-AST consumers
-compare canonical index/constructor owners without re-resolving dotted source
-paths.
+`tir/dim_check/infer/`. When an inference helper still receives a syntax AST
+expression for span-oriented diagnostics, it consults the semantic body for
+canonical index/constructor/inline-DAG ownership instead of re-resolving dotted
+source paths.
 
 ### 1.8 Execution and Runtime Evaluation
 
@@ -347,9 +349,9 @@ paths.
 
 Runtime execution is keyed by `RuntimeDeclKey`, which wraps canonical
 `ResolvedName<Decl>` identities so same-leaf declarations from different DAGs do
-not collide. When `DagTIR::resolved_exprs` is present, const and runtime
-evaluation use `eval_expr/hir_eval.rs` first and fall back to the syntax-AST
-evaluator only as a compatibility path.
+not collide. Const and runtime declaration evaluation require
+`DagSemanticBody::expressions` and use `eval_expr/hir_eval.rs`; missing semantic
+expressions are internal consistency errors.
 
 The execution plan also resolves domain constraints from type annotations and
 from struct/union member fields. Domain checks run both when compile-time values
@@ -407,7 +409,7 @@ The compiler crate owns the functional core through TIR.
 | `ir/lower.rs`            | IR entries and lowering entry points                       |
 | `ir/resolve/`            | Name, scope, dependency, visibility resolution             |
 | `registry/`              | Dimensions, units, indexes, types, values, built-ins       |
-| `tir/typed.rs`           | `TIR`, `DagTIR`, resolved type expressions, HIR sidecars   |
+| `tir/typed.rs`           | `TIR`, `DagTIR`, `DagSemanticBody`, resolved type expressions |
 | `tir/dim_check/`         | Dimension/type inference and checking                      |
 
 ### 2.2 `graphcal-eval`
@@ -633,7 +635,7 @@ IR
 
 The dependency maps are keyed by `ScopedName`. Value sets use `BTreeSet` so DAG
 construction is deterministic. Owner-qualified dependency maps are collected
-later from HIR and stored on `DagTIR::resolved_deps`.
+later from HIR and stored on `DagTIR::semantic.dependencies`.
 
 ### 3.6 Registry
 
@@ -671,17 +673,10 @@ TIR
 DagTIR
   dag_id: DagId
   consts, params, nodes, asserts, plots, figures, layers
-  runtime_deps, const_deps
-  resolved_exprs
-  resolved_deps
-  resolved_collection_refs
-  resolved_constructor_refs
-  resolved_inline_dag_refs
-  resolved_type_defs
+  semantic: DagSemanticBody
   source_order
   assert_names, assumes_map, expected_fail
   resolved_decl_types
-  resolved_decl_bindings
   domain_constraints
   imported_values
   imported_decl_types
@@ -692,7 +687,7 @@ DagTIR
 `TIR::root()` and `TIR::root_mut()` access the file root. `TIR::lookup_call_target`
 and `TIR::resolve_call_path` resolve inline DAG call paths through same-file
 children or `module_aliases`. Module-aware callers should prefer
-`DagTIR::resolved_inline_dag_refs` when evaluating a specific expression because
+`DagTIR::semantic.inline_dag_refs` when evaluating a specific expression because
 it already carries canonical call routing.
 
 ### 3.8 ExecPlan

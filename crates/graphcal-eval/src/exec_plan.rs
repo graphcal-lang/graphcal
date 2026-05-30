@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::resolved_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
+use graphcal_compiler::desugar::resolved_ast::{AssertBody, FigureDecl, LayerDecl, PlotDecl};
 use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::syntax::names::{
     ConstructorName, FieldName, ResolvedName, ScopedName, namespace,
@@ -70,9 +70,6 @@ pub struct ExecPlan {
     pub(crate) imported_values: RuntimeValueMap,
     /// Topologically sorted names for runtime evaluation (params + nodes).
     pub(crate) topo_order: Vec<RuntimeDeclKey>,
-    /// Runtime expressions keyed by declaration name (params + nodes).
-    /// Key-lookup only, order irrelevant.
-    pub(crate) expressions: HashMap<RuntimeDeclKey, Expr>,
     /// Assert bodies in source order.
     pub(crate) assert_bodies: Vec<AssertBodyEntry>,
     /// Plot declarations in source order.
@@ -109,7 +106,7 @@ pub struct ExecPlan {
 /// const evaluation fails.
 pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, GraphcalError> {
     let const_values = eval_consts_from_tir(tir, src)?;
-    let (topo_order, expressions) = build_runtime_dag(tir, src)?;
+    let topo_order = build_runtime_dag(tir, src)?;
 
     let assert_bodies: Vec<AssertBodyEntry> = tir
         .root()
@@ -179,7 +176,6 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
             .map(|(k, (v, _dt))| (RuntimeDeclKey::for_visible_name(tir.root(), k), v.clone()))
             .collect(),
         topo_order,
-        expressions,
         assert_bodies,
         plot_bodies,
         figure_bodies,
@@ -201,9 +197,9 @@ fn local_resolved_decl_key(
 ) -> Result<ResolvedDeclKey, GraphcalError> {
     dag.resolved_decl_key_for_local(name)
         .ok_or_else(|| GraphcalError::InternalError {
-            message: format!(
-                "resolved dependency sidecar contains no local canonical key for declaration `{name}`"
-            ),
+                message: format!(
+                    "semantic dependency metadata contains no local canonical key for declaration `{name}`"
+                ),
             src: src.clone(),
             span: span.into(),
         })
@@ -241,19 +237,11 @@ pub fn eval_consts_from_tir(
 
     let sorted_names = const_eval_order(dag, src)?;
 
-    let const_exprs: HashMap<ScopedName, &Expr> = dag
-        .consts
-        .iter()
-        .map(|entry| (entry.name.clone(), &entry.expr))
-        .collect();
-
-    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
     let empty_hir_locals = HirLocalValueMap::new();
     let mut visible_values = visible_values_with_imports(dag, &HashMap::new());
     let mut local_const_values: RuntimeValueMap = HashMap::new();
 
     for name in sorted_names {
-        let expr = const_exprs[&name];
         let key = RuntimeDeclKey::for_local_decl(dag, &name);
         let ctx = EvalContext {
             builtin_consts,
@@ -266,15 +254,17 @@ pub fn eval_consts_from_tir(
             root_values: Some(&visible_values),
             struct_field_constraints: None,
         };
-        let value = match dag
-            .resolved_exprs
-            .as_ref()
-            .and_then(|exprs| exprs.consts.get(key.as_resolved()))
-        {
-            Some(hir_expr) => eval_hir_expr(hir_expr, &visible_values, &empty_hir_locals, &ctx)
-                .or_else(|_| eval_expr(expr, &visible_values, &empty_locals, &ctx))?,
-            None => eval_expr(expr, &visible_values, &empty_locals, &ctx)?,
-        };
+        let hir_expr = dag
+            .semantic
+            .expressions
+            .consts
+            .get(key.as_resolved())
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("semantic TIR missing HIR const expression for `{name}`"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        let value = eval_hir_expr(hir_expr, &visible_values, &empty_hir_locals, &ctx)?;
         visible_values.insert(key.clone(), value.clone());
         local_const_values.insert(key, value);
     }
@@ -286,7 +276,7 @@ fn const_eval_order(
     dag: &DagTIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
-    const_eval_order_resolved(dag, &dag.resolved_deps, src)
+    const_eval_order_resolved(dag, &dag.semantic.dependencies, src)
 }
 
 fn const_eval_order_resolved(
@@ -347,7 +337,7 @@ fn const_eval_order_resolved(
 fn build_runtime_dag(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<(Vec<RuntimeDeclKey>, HashMap<RuntimeDeclKey, Expr>), GraphcalError> {
+) -> Result<Vec<RuntimeDeclKey>, GraphcalError> {
     // Merge params and nodes, then sort by name for canonical tie-breaking
     // among incomparable nodes in the topological sort.
     enum DeclRef<'a> {
@@ -372,7 +362,6 @@ fn build_runtime_dag(
     }
 
     let dag = tir.root();
-    let mut expressions: HashMap<RuntimeDeclKey, Expr> = HashMap::new();
     let mut decl_spans: Vec<(ScopedName, Span)> = Vec::new();
 
     let mut all_decls: Vec<DeclRef<'_>> = dag
@@ -385,32 +374,23 @@ fn build_runtime_dag(
 
     for decl in &all_decls {
         let name = decl.name().clone();
-        let key = RuntimeDeclKey::for_local_decl(dag, &name);
         decl_spans.push((name.clone(), decl.span()));
         match decl {
-            DeclRef::Param(entry) => match &entry.default_expr {
-                Some(expr) => {
-                    expressions.insert(key, expr.clone());
-                }
-                None => {
-                    return Err(GraphcalError::RequiredParamNotProvided {
-                        name: name.to_string(),
-                        src: src.clone(),
-                        span: entry.span.into(),
-                    });
-                }
-            },
-            DeclRef::Node(entry) => {
-                expressions.insert(key, entry.expr.clone());
+            DeclRef::Param(entry) if entry.default_expr.is_none() => {
+                return Err(GraphcalError::RequiredParamNotProvided {
+                    name: name.to_string(),
+                    src: src.clone(),
+                    span: entry.span.into(),
+                });
             }
+            DeclRef::Param(_) | DeclRef::Node(_) => {}
         }
     }
 
-    let topo_order = runtime_eval_order(dag, &decl_spans, src)?
+    Ok(runtime_eval_order(dag, &decl_spans, src)?
         .into_iter()
         .map(|name| RuntimeDeclKey::for_local_decl(dag, &name))
-        .collect();
-    Ok((topo_order, expressions))
+        .collect())
 }
 
 fn runtime_eval_order(
@@ -418,7 +398,7 @@ fn runtime_eval_order(
     decl_spans: &[(ScopedName, Span)],
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
-    runtime_eval_order_resolved(dag, decl_spans, &dag.resolved_deps, src)
+    runtime_eval_order_resolved(dag, decl_spans, &dag.semantic.dependencies, src)
 }
 
 fn runtime_eval_order_resolved(
@@ -638,7 +618,7 @@ pub fn resolve_domain_constraints(
 /// Resolve domain constraints declared on struct/union member fields.
 ///
 /// For every `TypeDef` in the registry and every owner-qualified type
-/// definition recorded in module-aware TIR sidecars, evaluates each constrained
+/// definition recorded in module-aware TIR semantic metadata, evaluates each constrained
 /// field's `min`/`max` bound expressions to SI scalars, validates `min ≤ max`,
 /// and stores the result keyed by the owning struct type, constructor, and
 /// field name.
@@ -768,22 +748,19 @@ pub fn resolve_struct_field_constraints(
         Ok(())
     };
 
-    if let Some(resolved_type_defs) = tir.root().resolved_type_defs.as_ref() {
-        for (resolved_owner, type_def) in &resolved_type_defs.struct_types {
-            resolve_for_type(
-                StructTypeRef::from_resolved(resolved_owner.clone()),
-                type_def,
-                &mut constraints,
-            )?;
-        }
-    } else {
-        for type_def in tir.registry.types.all_types() {
-            resolve_for_type(
-                StructTypeRef::with_owner(tir.root_dag_id.clone(), type_def.name.clone()),
-                type_def,
-                &mut constraints,
-            )?;
-        }
+    for (resolved_owner, type_def) in &tir.root().semantic.type_defs.struct_types {
+        resolve_for_type(
+            StructTypeRef::from_resolved(resolved_owner.clone()),
+            type_def,
+            &mut constraints,
+        )?;
+    }
+    for type_def in tir.registry.types.all_types() {
+        resolve_for_type(
+            StructTypeRef::with_owner(tir.root_dag_id.clone(), type_def.name.clone()),
+            type_def,
+            &mut constraints,
+        )?;
     }
 
     Ok(constraints)
@@ -1057,9 +1034,12 @@ fn format_bound_display(
 mod tests {
     use super::*;
     use graphcal_compiler::ir::lower::lower;
+    use graphcal_compiler::syntax::module_resolve::ModuleResolver;
     use graphcal_compiler::syntax::names::DeclName;
     use graphcal_compiler::syntax::parser::Parser;
-    use graphcal_compiler::tir::typed::{ResolvedDagDependencies, type_resolve};
+    use graphcal_compiler::tir::typed::{
+        ModuleTypeRegistry, ResolvedDagDependencies, type_resolve_with_modules,
+    };
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
         NamedSource::new("test.gcl", Arc::new(source.to_string()))
@@ -1081,7 +1061,14 @@ mod tests {
         let dag_id =
             graphcal_compiler::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl"))
                 .unwrap();
-        let tir = type_resolve(ir, dag_id, &src).unwrap();
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(dag_id.clone(), &file.declarations)
+            .unwrap();
+        let mut module_types = ModuleTypeRegistry::default();
+        module_types.insert_graphcal_prelude().unwrap();
+        module_types.insert_registry(&dag_id, &ir.registry);
+        let tir = type_resolve_with_modules(ir, dag_id, &src, &resolver, &module_types).unwrap();
         (tir, src)
     }
 
@@ -1160,7 +1147,7 @@ mod tests {
     }
 
     #[test]
-    fn compile_prefers_resolved_const_deps_when_present() {
+    fn compile_uses_semantic_const_deps() {
         use std::collections::BTreeSet;
 
         let (mut tir, src) = tir_from_source(
@@ -1173,19 +1160,7 @@ mod tests {
         let mut resolved = ResolvedDagDependencies::default();
         resolved.const_deps.insert(a.clone(), BTreeSet::new());
         resolved.const_deps.insert(b, BTreeSet::from([a]));
-        tir.root_mut().resolved_deps = resolved;
-
-        // If compile-time const ordering still reads the source-keyed map, this
-        // artificial cycle wins and compilation fails. The HIR sidecar above is
-        // acyclic and must be authoritative when present.
-        tir.root_mut().const_deps.insert(
-            ScopedName::local("a"),
-            BTreeSet::from([ScopedName::local("b")]),
-        );
-        tir.root_mut().const_deps.insert(
-            ScopedName::local("b"),
-            BTreeSet::from([ScopedName::local("a")]),
-        );
+        tir.root_mut().semantic.dependencies = resolved;
 
         let plan = compile(&tir, &src).unwrap();
         assert!(
@@ -1201,7 +1176,7 @@ mod tests {
     }
 
     #[test]
-    fn compile_prefers_resolved_runtime_deps_when_present() {
+    fn compile_uses_semantic_runtime_deps() {
         use std::collections::BTreeSet;
 
         let (mut tir, src) = tir_from_source(
@@ -1214,19 +1189,7 @@ mod tests {
         let mut resolved = ResolvedDagDependencies::default();
         resolved.runtime_deps.insert(a.clone(), BTreeSet::new());
         resolved.runtime_deps.insert(b, BTreeSet::from([a]));
-        tir.root_mut().resolved_deps = resolved;
-
-        // If runtime graph construction still reads the source-keyed map, this
-        // artificial cycle wins and compilation fails. The HIR sidecar above is
-        // acyclic and must be authoritative when present.
-        tir.root_mut().runtime_deps.insert(
-            ScopedName::local("a"),
-            BTreeSet::from([ScopedName::local("b")]),
-        );
-        tir.root_mut().runtime_deps.insert(
-            ScopedName::local("b"),
-            BTreeSet::from([ScopedName::local("a")]),
-        );
+        tir.root_mut().semantic.dependencies = resolved;
 
         let plan = compile(&tir, &src).unwrap();
         let a_pos = plan

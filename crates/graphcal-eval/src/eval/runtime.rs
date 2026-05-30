@@ -233,7 +233,6 @@ pub(super) fn run_eval_loop(
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, BuiltinFunction>,
 ) -> EvalLoopResult {
-    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
     let empty_hir_locals = HirLocalValueMap::new();
 
     let mut values: RuntimeValueMap = HashMap::new();
@@ -269,8 +268,6 @@ pub(super) fn run_eval_loop(
             continue;
         }
 
-        let expr = &plan.expressions[name];
-
         // Build eval context with unfold support for this node.
         let unfold_ctx = UnfoldContext {
             self_name: &name_str,
@@ -290,16 +287,15 @@ pub(super) fn run_eval_loop(
 
         let result = tir
             .root()
-            .resolved_exprs
-            .as_ref()
-            .and_then(|exprs| exprs.runtime_expr(name.as_resolved()))
-            .map_or_else(
-                || eval_expr(expr, &values, &empty_locals, &ctx),
-                |hir_expr| {
-                    eval_hir_expr(hir_expr, &values, &empty_hir_locals, &ctx)
-                        .or_else(|_| eval_expr(expr, &values, &empty_locals, &ctx))
-                },
-            );
+            .semantic
+            .expressions
+            .runtime_expr(name.as_resolved())
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("semantic TIR missing HIR runtime expression for `{name}`"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })
+            .and_then(|hir_expr| eval_hir_expr(hir_expr, &values, &empty_hir_locals, &ctx));
 
         match result {
             Ok(val) => {
@@ -336,7 +332,8 @@ fn failed_runtime_dependencies(
     name: &RuntimeDeclKey,
     errors: &HashMap<RuntimeDeclKey, NodeError>,
 ) -> Vec<DeclName> {
-    dag.resolved_deps
+    dag.semantic
+        .dependencies
         .runtime_deps
         .get(name.as_resolved())
         .map(|deps| {

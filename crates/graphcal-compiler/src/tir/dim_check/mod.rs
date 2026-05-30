@@ -258,8 +258,11 @@ impl DimCheckContext<'_> {
     ) -> Option<&crate::hir::Expr> {
         let dag = self.dag?;
         let key = dag.resolved_decl_key_for_local(name)?;
-        let exprs = dag.resolved_exprs.as_ref()?;
-        exprs.consts.get(&key).or_else(|| exprs.runtime_expr(&key))
+        dag.semantic
+            .expressions
+            .consts
+            .get(&key)
+            .or_else(|| dag.semantic.expressions.runtime_expr(&key))
     }
 }
 
@@ -1096,65 +1099,19 @@ enum DagCycleFrame {
     Leave(crate::dag_id::DagId),
 }
 
-struct DagTargetCollector<'a, 'b> {
-    /// Caller TIR — used to translate user-typed call paths to canonical
-    /// [`DagId`](crate::dag_id::DagId) keys via
-    /// [`crate::tir::typed::TIR::resolve_call_path`].
-    tir: &'a crate::tir::typed::TIR,
-    out: &'b mut std::collections::BTreeSet<crate::dag_id::DagId>,
-}
-
-impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Resolved>
-    for DagTargetCollector<'_, '_>
-{
-    type Error = std::convert::Infallible;
-
-    fn visit_inline_dag_ref(
-        &mut self,
-        expr: &crate::desugar::resolved_ast::Expr,
-        args: &[crate::desugar::resolved_ast::ParamBinding],
-    ) -> Result<(), Self::Error> {
-        if let crate::desugar::resolved_ast::ExprKind::InlineDagRef { path, .. } = &expr.kind
-            && let Some(id) = self.tir.resolve_call_path(path)
-        {
-            self.out.insert(id);
-        }
-        for b in args {
-            self.visit_expr(&b.value)?;
-        }
-        Ok(())
-    }
-}
-
-/// Collect inline dag call targets from a compiled DAG's body expressions.
-///
-/// Module-aware TIRs carry HIR-derived canonical call targets, which are
-/// authoritative when present. Standalone TIRs fall back to walking the
-/// syntax AST and resolving source paths through the caller `TIR`.
+/// Collect inline dag call targets from a compiled DAG's semantic body.
 fn collect_dag_call_targets_from_dag(
-    tir: &crate::tir::typed::TIR,
+    _tir: &crate::tir::typed::TIR,
     dag: &crate::tir::typed::DagTIR,
     out: &mut std::collections::BTreeSet<crate::dag_id::DagId>,
 ) {
-    use crate::syntax::visitor::ExprVisitor;
-
-    if let Some(refs) = &dag.resolved_inline_dag_refs {
-        out.extend(refs.calls.values().map(|call| call.target.clone()));
-        return;
-    }
-
-    let mut collector = DagTargetCollector { tir, out };
-    for entry in &dag.consts {
-        let _ = collector.visit_expr(&entry.expr);
-    }
-    for entry in &dag.nodes {
-        let _ = collector.visit_expr(&entry.expr);
-    }
-    for entry in &dag.params {
-        if let Some(expr) = &entry.default_expr {
-            let _ = collector.visit_expr(expr);
-        }
-    }
+    out.extend(
+        dag.semantic
+            .inline_dag_refs
+            .calls
+            .values()
+            .map(|call| call.target.clone()),
+    );
 }
 
 /// Detect cycles in same-file declaration dependencies.
@@ -1187,7 +1144,7 @@ fn detect_decl_cycles(
         dag.resolved_decl_key_for_local(name)
             .ok_or_else(|| GraphcalError::InternalError {
                 message: format!(
-                    "resolved dependency sidecar contains no local canonical key for declaration `{name}`"
+                    "semantic dependency metadata contains no local canonical key for declaration `{name}`"
                 ),
                 src: src.clone(),
                 span: span.into(),
@@ -1242,7 +1199,7 @@ fn detect_decl_cycles(
     }
 
     for dag in tir.dags.values() {
-        let deps = &dag.resolved_deps;
+        let deps = &dag.semantic.dependencies;
         check_resolved(
             dag,
             dag.consts.iter().map(|e| (&e.name, e.span)),

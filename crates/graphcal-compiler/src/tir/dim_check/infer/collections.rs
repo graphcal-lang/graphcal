@@ -28,10 +28,10 @@ use super::super::helpers::{
 use super::super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
 use super::infer_type;
 
-/// Collapse a syntactic index path to a leaf-only name for standalone TIR.
+/// Collapse a syntactic index path to a leaf-only name at syntax boundaries.
 ///
 /// Module-aware inference must use `ResolvedCollectionRefs`; this adapter is
-/// only for standalone callers whose registries are leaf-keyed.
+/// only for callers that still receive syntax-only collection references.
 fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
 }
@@ -119,18 +119,12 @@ fn validate_index_path_module_scope(
     }
 }
 
-fn resolved_collection_refs(
-    dag: Option<&crate::tir::typed::DagTIR>,
-) -> Option<&crate::tir::typed::ResolvedCollectionRefs> {
-    dag.and_then(|dag| dag.resolved_collection_refs.as_ref())
-}
-
 fn inferred_index_for_path(
     path: &NamePath,
     span: Span,
     dag: Option<&crate::tir::typed::DagTIR>,
 ) -> InferredIndex {
-    resolved_collection_refs(dag)
+    dag.map(|dag| &dag.semantic.collection_refs)
         .and_then(|refs| refs.for_binding_indexes.get(&span))
         .cloned()
         .map_or_else(
@@ -145,7 +139,8 @@ fn resolved_index_variant_for_arg(
     dag: Option<&crate::tir::typed::DagTIR>,
 ) -> Option<&crate::syntax::names::ResolvedIndexVariant> {
     let span = index_span.merge(variant_span);
-    resolved_collection_refs(dag).and_then(|refs| refs.index_access_variants.get(&span))
+    dag.map(|dag| &dag.semantic.collection_refs)
+        .and_then(|refs| refs.index_access_variants.get(&span))
 }
 
 fn index_def_for_inferred<'a>(
@@ -153,7 +148,7 @@ fn index_def_for_inferred<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a crate::registry::types::IndexDef> {
-    resolved_collection_refs(dag)
+    dag.map(|dag| &dag.semantic.collection_refs)
         .and_then(|refs| refs.index_defs.get(index.resolved()))
         .or_else(|| registry.indexes.get_index(index.name().as_str()))
 }
@@ -163,7 +158,8 @@ fn resolved_map_entry_variant_for_key<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
 ) -> Option<&'a ResolvedIndexVariant> {
     let span = key.index.span.merge(key.variant.span);
-    resolved_collection_refs(dag).and_then(|refs| refs.map_entry_variants.get(&span))
+    dag.map(|dag| &dag.semantic.collection_refs)
+        .and_then(|refs| refs.map_entry_variants.get(&span))
 }
 
 fn inferred_index_for_map_entry_key(
@@ -228,7 +224,8 @@ pub(super) fn infer_for_comp(
         let var_type =
             match &binding.index {
                 ForBindingIndex::Named(spanned_idx) => {
-                    if resolved_collection_refs(dag)
+                    if dag
+                        .map(|dag| &dag.semantic.collection_refs)
                         .and_then(|refs| refs.for_binding_indexes.get(&spanned_idx.span))
                         .is_none()
                     {
@@ -650,10 +647,9 @@ pub(super) fn infer_index_access(
                     });
                 }
                 if resolved_variant.is_none() {
-                    // Validate variant exists on the leaf-keyed compatibility path only
-                    // when no HIR-resolved variant sidecar is available. The
-                    // HIR sidecar itself is produced by successful canonical
-                    // `ResolvedIndexVariant` lookup.
+                    // Validate variant existence through the leaf-keyed
+                    // registry when this syntax path has no canonical variant
+                    // metadata.
                     let idx_def =
                         index_def_for_inferred(&idx_name, dag, registry).ok_or_else(|| {
                             GraphcalError::UnknownIndex {
@@ -1351,7 +1347,7 @@ pub(super) fn infer_constructor_call(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let resolved_target = dag
-        .and_then(|dag| dag.resolved_constructor_refs.as_ref())
+        .map(|dag| &dag.semantic.constructor_refs)
         .and_then(|refs| refs.constructor_calls.get(&callee.span()));
 
     // Resolve through the constructor namespace. With every user-defined

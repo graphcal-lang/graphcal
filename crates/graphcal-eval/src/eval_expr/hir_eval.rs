@@ -17,9 +17,9 @@ use miette::NamedSource;
 use crate::decl_key::RuntimeDeclKey;
 
 use super::{
-    EvalContext, RuntimeValueMap, constructor_fields_for_runtime_struct, eval_expr,
+    EvalContext, RuntimeValueMap, constructor_fields_for_runtime_struct,
     find_struct_field_constraint, imported_value_source_value, index_ref_matches_resolved_or_leaf,
-    lookup_dag_body_expr, resolve_unit_scale, runtime_struct_type_def, topo_order_for_dag_body,
+    resolve_unit_scale, runtime_struct_type_def, topo_order_for_dag_body,
 };
 
 pub type HirLocalValueMap = HashMap<hir::LocalId, RuntimeValue>;
@@ -31,7 +31,7 @@ type ResolvedDeclKey = ResolvedName<namespace::Decl>;
 /// Module-aware TIR construction stores HIR for const/default/node expressions.
 /// This evaluator consumes canonical declaration, constructor, index-variant,
 /// inline-DAG, local, and built-in references directly instead of consulting
-/// span-keyed syntax-AST sidecars.
+/// span-keyed syntax-AST metadata.
 pub fn eval_hir_expr(
     expr: &hir::Expr,
     values: &RuntimeValueMap,
@@ -806,7 +806,7 @@ fn constructor_target<'a>(
     constructor: &ResolvedName<namespace::Constructor>,
 ) -> Option<&'a ResolvedConstructorTarget> {
     ctx.current_dag
-        .and_then(|dag| dag.resolved_constructor_refs.as_ref())
+        .map(|dag| &dag.semantic.constructor_refs)
         .and_then(|refs| refs.constructor_defs.get(constructor))
 }
 
@@ -861,7 +861,7 @@ fn index_def_for_ref<'a>(
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a IndexDef> {
     ctx.current_dag
-        .and_then(|dag| dag.resolved_collection_refs.as_ref())
+        .map(|dag| &dag.semantic.collection_refs)
         .and_then(|refs| refs.index_defs.get(index_ref.resolved()))
         .or_else(|| ctx.registry.indexes.get_index(index_ref.as_str()))
 }
@@ -918,7 +918,7 @@ fn map_entry_index_def<'a>(
     match key {
         hir::expr::MapEntryKey::IndexVariant(variant) => ctx
             .current_dag
-            .and_then(|dag| dag.resolved_collection_refs.as_ref())
+            .map(|dag| &dag.semantic.collection_refs)
             .and_then(|refs| refs.index_defs.get(variant.value.index())),
         hir::expr::MapEntryKey::NatRangeVariant { .. } => index_def_for_ref(index_ref, ctx),
     }
@@ -1412,14 +1412,14 @@ fn dag_decl_runtime_key(dag_tir: &DagTIR, name: &ResolvedDeclKey) -> RuntimeDecl
 
 fn hir_expr_for_dag_body_name<'a>(dag_tir: &'a DagTIR, name: &ScopedName) -> Option<&'a hir::Expr> {
     let key = dag_tir.resolved_decl_key_for_local(name)?;
-    let exprs = dag_tir.resolved_exprs.as_ref()?;
-    exprs.consts.get(&key).or_else(|| exprs.runtime_expr(&key))
+    dag_tir
+        .semantic
+        .expressions
+        .consts
+        .get(&key)
+        .or_else(|| dag_tir.semantic.expressions.runtime_expr(&key))
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "inline DAG evaluation performs argument binding, body scheduling, and fallback evaluation"
-)]
 fn eval_hir_inline_dag_call(
     target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
     args: &[hir::expr::ParamBinding],
@@ -1459,12 +1459,8 @@ fn eval_hir_inline_dag_call(
     for scoped in outer_scope_keys {
         let member = scoped.member();
         let visible_key = RuntimeDeclKey::for_visible_name(dag_tir, scoped);
-        let unresolved_local_import = dag_tir
-            .resolved_decl_bindings
-            .as_ref()
-            .and_then(|bindings| bindings.get(scoped))
-            .is_none()
-            && own_names.contains(member);
+        let unresolved_local_import =
+            !dag_tir.semantic.decl_bindings.contains_key(scoped) && own_names.contains(member);
         if unresolved_local_import || dag_values.contains_key(&visible_key) {
             continue;
         }
@@ -1495,37 +1491,20 @@ fn eval_hir_inline_dag_call(
         struct_field_constraints: ctx.struct_field_constraints,
     };
     let empty_hir_locals = HirLocalValueMap::new();
-    let empty_syntax_locals = HashMap::new();
 
     for name in topo_order_for_dag_body(dag_tir) {
         let local_key = RuntimeDeclKey::for_local_decl(dag_tir, &name);
         if dag_values.contains_key(&local_key) {
             continue;
         }
-        let syntax_expr = lookup_dag_body_expr(dag_tir, &name);
-        let value = if let Some(hir_expr) = hir_expr_for_dag_body_name(dag_tir, &name) {
-            Some(
-                eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx).or_else(
-                    |_| {
-                        syntax_expr.map_or_else(
-                            || eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx),
-                            |expr| eval_expr(expr, &dag_values, &empty_syntax_locals, &dag_ctx),
-                        )
-                    },
-                )?,
-            )
-        } else if let Some(expr) = lookup_dag_body_expr(dag_tir, &name) {
-            Some(eval_expr(
-                expr,
-                &dag_values,
-                &empty_syntax_locals,
-                &dag_ctx,
-            )?)
-        } else {
-            None
-        };
-        if let Some(value) = value {
+        if let Some(hir_expr) = hir_expr_for_dag_body_name(dag_tir, &name) {
+            let value = eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx)?;
             dag_values.insert(local_key, value);
+        } else {
+            return Err(ctx.internal_error(
+                format!("semantic TIR missing HIR expression for DAG body declaration `{name}`"),
+                output.span,
+            ));
         }
     }
 

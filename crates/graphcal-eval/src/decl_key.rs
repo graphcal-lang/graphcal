@@ -37,16 +37,12 @@ impl RuntimeDeclKey {
 
     /// Build the key for a visible declaration name in `dag`.
     ///
-    /// Imported/selective names are resolved through `DagTIR::resolved_decl_bindings`
-    /// when available; otherwise the DAG owner plus leaf name provides the
-    /// standalone identity.
+    /// Imported/selective names are resolved through the DAG semantic binding
+    /// map; otherwise the DAG owner plus leaf name provides the standalone
+    /// identity.
     #[must_use]
     pub(crate) fn for_visible_name(dag: &DagTIR, name: &ScopedName) -> Self {
-        if let Some(resolved) = dag
-            .resolved_decl_bindings
-            .as_ref()
-            .and_then(|bindings| bindings.get(name))
-        {
+        if let Some(resolved) = dag.semantic.decl_bindings.get(name) {
             return Self::Resolved(resolved.clone());
         }
         Self::local_or_leaf(dag, name)

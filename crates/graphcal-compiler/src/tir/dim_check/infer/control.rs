@@ -20,25 +20,19 @@ use super::super::helpers::{
 use super::super::{DeclaredType, InferredIndex, InferredType};
 use super::infer_type;
 
-/// Collapse a syntactic index path to a leaf-only name for standalone TIR.
+/// Collapse a syntactic index path to a leaf-only name at syntax boundaries.
 ///
 /// Module-aware label matching must use `ResolvedCollectionRefs`; this adapter
-/// is only for standalone callers whose registries are leaf-keyed.
+/// is only for callers that still receive a syntax-only pattern.
 fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
     IndexName::from(path.leaf().clone())
-}
-
-fn resolved_collection_refs(
-    dag: Option<&crate::tir::typed::DagTIR>,
-) -> Option<&crate::tir::typed::ResolvedCollectionRefs> {
-    dag.and_then(|dag| dag.resolved_collection_refs.as_ref())
 }
 
 fn resolved_match_label_variant<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
     pattern: &MatchPattern,
 ) -> Option<&'a ResolvedIndexVariant> {
-    let refs = resolved_collection_refs(dag)?;
+    let refs = dag.map(|dag| &dag.semantic.collection_refs)?;
     refs.match_label_variants
         .get(&pattern.span())
         .or_else(|| match pattern {
@@ -55,7 +49,7 @@ fn index_def_for_label_index<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a IndexDef> {
-    resolved_collection_refs(dag)
+    dag.map(|dag| &dag.semantic.collection_refs)
         .and_then(|refs| refs.index_defs.get(index.resolved()))
         .or_else(|| registry.indexes.get_index(index.name().as_str()))
 }
@@ -146,7 +140,7 @@ fn resolved_constructor_pattern<'a>(
     pattern: &MatchPattern,
 ) -> Option<&'a ResolvedConstructorPattern> {
     let span = constructor_pattern_lookup_span(pattern)?;
-    dag.and_then(|dag| dag.resolved_constructor_refs.as_ref())
+    dag.map(|dag| &dag.semantic.constructor_refs)
         .and_then(|refs| refs.match_pattern_constructors.get(&span))
 }
 

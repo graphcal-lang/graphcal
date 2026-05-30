@@ -27,7 +27,44 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     let src = make_src(source);
     let ir = crate::ir::lower::lower(&file, &src)?;
     let parent_dag_id = test_dag_id();
-    let mut tir = crate::tir::typed::type_resolve(ir, parent_dag_id.clone(), &src)?;
+    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    resolver
+        .add_module(parent_dag_id.clone(), &file.declarations)
+        .map_err(|err| GraphcalError::InternalError {
+            message: format!("test module resolver failed for root module: {err}"),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    for decl in &file.declarations {
+        if let crate::desugar::resolved_ast::DeclKind::Dag(dag) = &decl.kind {
+            resolver
+                .add_module(parent_dag_id.child(dag.name.value.as_str()), &dag.body)
+                .map_err(|err| GraphcalError::InternalError {
+                    message: format!(
+                        "test module resolver failed for inline dag `{}`: {err}",
+                        dag.name.value
+                    ),
+                    src: src.clone(),
+                    span: Span::new(0, 0).into(),
+                })?;
+        }
+    }
+    let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
+    module_types
+        .insert_graphcal_prelude()
+        .map_err(|err| GraphcalError::InternalError {
+            message: format!("test module type prelude failed: {err}"),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    module_types.insert_registry(&parent_dag_id, &ir.registry);
+    let mut tir = crate::tir::typed::type_resolve_with_modules(
+        ir,
+        parent_dag_id.clone(),
+        &src,
+        &resolver,
+        &module_types,
+    )?;
     compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id, &file.declarations)?;
     check_dimensions_tir(&tir, &src)?;
     tir.build_declared_types(&src)
@@ -123,21 +160,15 @@ fn compile_inline_dag_bodies_test(
 }
 
 #[test]
-fn cycle_detection_prefers_resolved_dependency_sidecar_when_present() {
+fn cycle_detection_uses_semantic_dependencies() {
     use std::collections::BTreeSet;
 
     let source = "const node a: Dimensionless = 1.0;\n\
                   const node b: Dimensionless = @a + 1.0;\n\
                   node x: Dimensionless = 1.0;\n\
                   node y: Dimensionless = @x + 1.0;";
-    let raw_file = Parser::new(source).parse_file().unwrap();
-    let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-    let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
-    let src = make_src(source);
-    let ir = crate::ir::lower::lower(&file, &src).unwrap();
-    let dag_id =
-        crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
-    let mut tir = crate::tir::typed::type_resolve(ir, dag_id.clone(), &src).unwrap();
+    let (mut tir, src) = module_aware_tir(source);
+    let dag_id = test_dag_id();
 
     let a = ResolvedName::from_def(dag_id.clone(), DeclName::new("a"));
     let b = ResolvedName::from_def(dag_id.clone(), DeclName::new("b"));
@@ -150,24 +181,7 @@ fn cycle_detection_prefers_resolved_dependency_sidecar_when_present() {
     resolved.runtime_deps.insert(x.clone(), BTreeSet::new());
     resolved.runtime_deps.insert(y, BTreeSet::from([x]));
 
-    let root = tir.root_mut();
-    root.resolved_deps = resolved;
-    root.const_deps.insert(
-        ScopedName::local("a"),
-        BTreeSet::from([ScopedName::local("b")]),
-    );
-    root.const_deps.insert(
-        ScopedName::local("b"),
-        BTreeSet::from([ScopedName::local("a")]),
-    );
-    root.runtime_deps.insert(
-        ScopedName::local("x"),
-        BTreeSet::from([ScopedName::local("y")]),
-    );
-    root.runtime_deps.insert(
-        ScopedName::local("y"),
-        BTreeSet::from([ScopedName::local("x")]),
-    );
+    tir.root_mut().semantic.dependencies = resolved;
 
     check_dimensions_tir(&tir, &src).unwrap();
 }
@@ -175,7 +189,7 @@ fn cycle_detection_prefers_resolved_dependency_sidecar_when_present() {
 #[test]
 fn hir_dim_check_uses_lowered_builtin_function_not_mutated_syntax_callee() {
     let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
-    assert!(tir.root().resolved_exprs.is_some());
+    assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
         crate::desugar::resolved_ast::ExprKind::StringLiteral("not the HIR".to_string());
 
@@ -186,7 +200,7 @@ fn hir_dim_check_uses_lowered_builtin_function_not_mutated_syntax_callee() {
 fn hir_dim_check_uses_lexical_local_ids_not_mutated_syntax_names() {
     let (mut tir, src) =
         module_aware_tir("index Phase = { Burn };\nnode y: Phase[Phase] = for p: Phase { p };");
-    assert!(tir.root().resolved_exprs.is_some());
+    assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
         crate::desugar::resolved_ast::ExprKind::StringLiteral("not the HIR".to_string());
 
@@ -1320,7 +1334,7 @@ node y: Length = @nope(v: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownDag { .. }),
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("unknown module")),
         "got: {err:?}"
     );
 }
@@ -1338,7 +1352,7 @@ node y: Length = @id_len(bogus: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownInlineDagParam { .. }),
+        matches!(err, GraphcalError::UnknownLocalRef { .. }),
         "got: {err:?}"
     );
 }
@@ -1375,7 +1389,7 @@ node y: Length = @id_len(v: @src).nope;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownInlineDagOutput { .. }),
+        matches!(err, GraphcalError::UnknownLocalRef { .. }),
         "got: {err:?}"
     );
 }

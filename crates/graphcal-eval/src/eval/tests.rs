@@ -110,7 +110,7 @@ fn eval_constants_ksr() {
 fn eval_uses_hir_builtin_dispatch_after_syntax_mutation() {
     let source = "node y: Dimensionless = sqrt(4.0);";
     let mut tir = compile_to_tir(source, "test.gcl").unwrap();
-    assert!(tir.root().resolved_exprs.is_some());
+    assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
         graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(
             "mutated syntax".to_string(),
@@ -129,7 +129,7 @@ fn eval_uses_hir_builtin_dispatch_after_syntax_mutation() {
 fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
     let source = "index Phase = { Burn };\nnode y: Dimensionless[Phase] = for p: Phase { if p == Phase.Burn { 1.0 } else { 0.0 } };";
     let mut tir = compile_to_tir(source, "test.gcl").unwrap();
-    assert!(tir.root().resolved_exprs.is_some());
+    assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
         graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(
             "mutated syntax".to_string(),

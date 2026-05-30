@@ -60,8 +60,8 @@ impl ParentValueDecls {
 /// `DagTIR` and insert it into `tir.dags`, keyed by the loader-supplied
 /// canonical [`DagId`](DagId).
 ///
-/// `parent_pub_names` is captured from the IR before `type_resolve` consumes
-/// it. Each [`LoadedDag`] supplies the body in source order plus its
+/// `parent_pub_names` is captured from the IR before module-aware TIR
+/// construction consumes it. Each [`LoadedDag`] supplies the body in source order plus its
 /// pre-resolved imports map (path display → [`DagId`]), letting
 /// [`preprocess_dag_body_self_imports`] detect self-imports by structured
 /// equality against `parent_dag_id` rather than a file-level path-set.
