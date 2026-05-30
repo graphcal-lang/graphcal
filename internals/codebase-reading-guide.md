@@ -6,6 +6,97 @@ typed data structures that carry language semantics through the system.
 
 ## 1. Pipeline
 
+### Representation Names
+
+Compiler code commonly names data shapes by how far they are from source text
+and how many semantic invariants they carry:
+
+- **AST** means **Abstract Syntax Tree**. It is a tree-shaped representation of
+  source syntax after parsing. An AST is still source-oriented: it preserves
+  spans, syntactic forms, and source paths so tools can point back to what the
+  user wrote.
+- **IR** means **Intermediate Representation**. In general compiler terminology,
+  an IR is any representation between syntax and execution. In Graphcal,
+  `IR` specifically means the declaration-level representation for one DAG body:
+  checked declaration lists, dependency edges, visibility/import metadata, and a
+  registry built from declarations.
+- **HIR** means **High-level Intermediate Representation**. It is still close to
+  source expression/type structure, but reference positions are semantic rather
+  than syntactic. HIR replaces source paths with canonical owner-qualified names,
+  lexical IDs, and typed built-in variants.
+- **TIR** means **Typed Intermediate Representation**. It is the type- and
+  dimension-checked representation used by the evaluator. TIR combines IR's
+  declaration/DAG structure with HIR-derived resolved references, resolved type
+  expressions, dimension facts, and per-DAG compilation state.
+
+These names are relative, not universal. Another compiler may use "HIR" or
+"TIR" differently; in this codebase, read them as the boundaries above.
+
+### Pipeline Rationale
+
+The pipeline is split into these representations because each stage enforces a
+stronger invariant than the previous one. The key design goal is not merely to
+"parse then evaluate"; it is to move from source-shaped data to semantic data
+without smuggling meaning through strings, filesystem paths, or implicit lookup
+rules.
+
+The easiest way to understand the current shape is to ask why each boundary is
+necessary and how it differs from adjacent ones:
+
+1. **Why is an AST necessary?** The compiler first needs a faithful model of
+   what the user wrote: source spans, syntactic paths, sugar, and constructs
+   that matter to formatter/LSP/diagnostics. Jumping directly from tokens to a
+   semantic graph would lose source fidelity and make editor tooling much
+   harder.
+2. **Why is `File<Resolved>` still not enough?** `File<Resolved>` means the AST
+   has no unresolved expression-reference nodes; it does not mean every
+   qualified path has a canonical owner. It is still syntax-shaped and can still
+   contain source paths in type/index/module-sensitive positions.
+3. **Why is IR necessary if we already have an AST?** AST nodes answer "what
+   syntax was written?" IR answers "what declarations does this DAG body define,
+   and how do they depend on each other?" IR is where Graphcal validates
+   duplicate names, visibility, bindability, declaration categories, dependency
+   edges, import metadata, and registry construction. Those checks require a
+   complete DAG body, not isolated syntax nodes.
+4. **How is IR different from HIR?** IR is declaration-centric: lists of consts,
+   params, nodes, asserts, registry entries, and dependency maps for one DAG
+   body. HIR is expression/type-centric: trees whose reference positions are
+   semantic. IR tells us what declarations exist; HIR tells us exactly which
+   declaration/type/index/constructor/local/built-in each expression or type
+   reference means.
+5. **Why is `ModuleResolver` separate from IR/HIR?** The loader owns I/O and
+   resolves import/include paths to canonical `DagId`s. `ModuleResolver` is the
+   pure compiler-side structure that uses those loader-resolved edges to answer
+   "which module/DAG owns this source path?" Keeping it separate prevents
+   filesystem concerns from leaking into HIR/TIR and prevents source aliases from
+   becoming semantic identities.
+6. **Why is HIR necessary if IR already checked names and deps?** IR still
+   carries some source-shaped keys and compatibility dependency maps. HIR is the
+   boundary where expression/type references stop being source paths and become
+   typed semantic identities: `ResolvedName`, `ResolvedIndexVariant`, lexical
+   `LocalId`s, `GenericParamId`s, and built-in enums. Without HIR, dim-checking
+   and eval would repeatedly re-resolve paths or dispatch on strings such as
+   `"sum"`, `"PI"`, or `"module.Name"`.
+7. **Why is TIR necessary if HIR has semantic references?** HIR says what each
+   expression/type reference denotes, but it is not the checked program. TIR
+   combines HIR-derived references with IR's DAG/declaration structure, resolved
+   type expressions, dimension facts, domain constraints, inline DAG bodies, and
+   dependency DAGs. TIR is the representation after type and dimension analysis
+   has enough information to drive execution.
+8. **How is TIR different from `ExecPlan`?** TIR is still a checked program
+   representation: it contains declarations, DAGs, registries, resolved sidecars,
+   and constraints. `ExecPlan` is runtime-ready: consts are evaluated, runtime
+   declarations are topologically sorted, and the evaluator no longer needs to
+   rebuild registries, dependency graphs, or type-resolution data.
+
+This separation is why several adjacent representations can look redundant at
+first glance. `File<Resolved>` is "resolved" only in the syntax-phase sense: no
+`UnresolvedRef` nodes remain, but qualified names may still be source paths. IR
+is not "just another AST"; it is the DAG-body declaration and registry layer.
+HIR is not "the final typed IR"; it is the semantic reference boundary used by
+TIR and eval. TIR is where those semantic references are combined with resolved
+types, dimension facts, and per-DAG compilation state.
+
 Every `.gcl` file moves forward through the same core stages:
 
 ```text
