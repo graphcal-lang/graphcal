@@ -217,6 +217,12 @@ assert x_greater = @x > @y;
   `node`, `const node`, etc. is a compile error (A008).
 - Evaluation errors (e.g., division by zero) are never inverted -- they remain
   errors regardless of `#[expected_fail]`.
+- `#[expected_fail]` without arguments is valid only on scalar assertions.
+  Indexed assertions must list the exact expected-fail keys (A011).
+- Per-variant keys are valid only on indexed assertions (A010).
+- Each expected-fail key must be unique (A012).
+- Single-index keys must belong to the assertion's index. Multi-index tuple
+  keys must include every axis in the assertion's axis order (A013, A014).
 
 #### Blanket Form
 
@@ -312,3 +318,7 @@ node ratio: Dimensionless = @limit / 2.0;
 | A008 | `#[expected_fail]` on invalid declaration kind (not `assert`) |
 | A009 | Invalid argument in `#[expected_fail(...)]` |
 | A010 | `#[expected_fail(...)]` with variant args on non-indexed assertion |
+| A011 | `#[expected_fail]` without keys on indexed assertion |
+| A012 | Duplicate key in `#[expected_fail(...)]` |
+| A013 | `#[expected_fail(...)]` key has the wrong index shape |
+| A014 | `#[expected_fail(...)]` key uses the wrong assertion index |

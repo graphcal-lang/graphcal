@@ -1,12 +1,15 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::Expr;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey};
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{IndexName, ResolvedName, ScopedName, StructTypeName, namespace};
+use crate::syntax::names::{
+    IndexName, IndexVariantName, ResolvedName, ScopedName, StructTypeName, namespace,
+};
 
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
@@ -329,6 +332,35 @@ fn check_decl_expr_type(
     Ok(())
 }
 
+#[derive(Debug)]
+struct AssertionIndexShape {
+    axes: Vec<InferredIndex>,
+}
+
+impl AssertionIndexShape {
+    const fn scalar() -> Self {
+        Self { axes: Vec::new() }
+    }
+
+    fn from_bool_type(ty: &InferredType) -> Self {
+        let mut axes = Vec::new();
+        let mut current = ty;
+        while let InferredType::Indexed { element, index } = current {
+            axes.push(index.clone());
+            current = element;
+        }
+        Self { axes }
+    }
+
+    const fn is_indexed(&self) -> bool {
+        !self.axes.is_empty()
+    }
+
+    const fn rank(&self) -> usize {
+        self.axes.len()
+    }
+}
+
 /// Check dimension consistency of an assert body.
 ///
 /// For expression asserts, verifies the body is boolean. For tolerance asserts,
@@ -337,7 +369,7 @@ fn check_assert_body(
     ctx: &DimCheckContext<'_>,
     body: &crate::desugar::resolved_ast::AssertBody,
     span: crate::syntax::span::Span,
-) -> Result<(), GraphcalError> {
+) -> Result<AssertionIndexShape, GraphcalError> {
     let registry = ctx.registry;
     let src = ctx.src;
     match body {
@@ -350,6 +382,7 @@ fn check_assert_body(
                     span: span.into(),
                 });
             }
+            Ok(AssertionIndexShape::from_bool_type(&inferred))
         }
         crate::desugar::resolved_ast::AssertBody::Tolerance {
             actual,
@@ -404,9 +437,87 @@ fn check_assert_body(
                     span: tolerance.span.into(),
                 });
             }
+            Ok(AssertionIndexShape::scalar())
         }
     }
+}
+
+fn expected_fail_key_span(key: &ExpectedFailKey) -> crate::syntax::span::Span {
+    key.iter()
+        .map(|part| part.span)
+        .reduce(crate::syntax::span::Span::merge)
+        .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0))
+}
+
+fn expected_fail_key_signature(key: &ExpectedFailKey) -> Vec<(IndexTypeRef, IndexVariantName)> {
+    key.iter()
+        .map(|part| (part.index.clone(), part.variant.clone()))
+        .collect()
+}
+
+fn validate_expected_fail_key(
+    key: &ExpectedFailKey,
+    shape: &AssertionIndexShape,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    if key.len() != shape.rank() {
+        return Err(GraphcalError::ExpectedFailKeyShapeMismatch {
+            expected: shape.rank(),
+            found: key.len(),
+            src: src.clone(),
+            span: expected_fail_key_span(key).into(),
+        });
+    }
+
+    for (part, expected_axis) in key.iter().zip(&shape.axes) {
+        if !part.index.matches_ref(expected_axis.type_ref()) {
+            return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
+                expected: expected_axis.resolved().to_string(),
+                found: part.index.resolved().to_string(),
+                src: src.clone(),
+                span: part.span.into(),
+            });
+        }
+    }
+
     Ok(())
+}
+
+fn validate_expected_fail(
+    expected_fail: &ExpectedFail,
+    shape: &AssertionIndexShape,
+    src: &NamedSource<Arc<String>>,
+    assert_span: crate::syntax::span::Span,
+) -> Result<(), GraphcalError> {
+    match expected_fail {
+        ExpectedFail::All if shape.is_indexed() => Err(GraphcalError::ExpectedFailAllOnIndexed {
+            src: src.clone(),
+            span: assert_span.into(),
+        }),
+        ExpectedFail::All => Ok(()),
+        ExpectedFail::Variants(keys) if !shape.is_indexed() => {
+            Err(GraphcalError::ExpectedFailNotIndexed {
+                src: src.clone(),
+                span: keys
+                    .first()
+                    .map_or(assert_span, expected_fail_key_span)
+                    .into(),
+            })
+        }
+        ExpectedFail::Variants(keys) => {
+            let mut seen = HashSet::new();
+            for key in keys {
+                validate_expected_fail_key(key, shape, src)?;
+                if !seen.insert(expected_fail_key_signature(key)) {
+                    return Err(GraphcalError::ExpectedFailDuplicateKey {
+                        src: src.clone(),
+                        span: expected_fail_key_span(key).into(),
+                    });
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Check dimensions for all declarations in a file.
@@ -495,7 +606,10 @@ fn check_dimensions_dag(
     }
 
     for entry in &dag.asserts {
-        check_assert_body(&ctx, &entry.body, entry.span)?;
+        let shape = check_assert_body(&ctx, &entry.body, entry.span)?;
+        if let Some(expected_fail) = dag.expected_fail.get(&entry.name) {
+            validate_expected_fail(expected_fail, &shape, src, entry.span)?;
+        }
     }
 
     check_domain_constraint_targets_dag(dag, src)?;
