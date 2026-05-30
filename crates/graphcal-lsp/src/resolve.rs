@@ -5,7 +5,7 @@ use tower_lsp::lsp_types::{Location, Url};
 
 use crate::convert::LineIndex;
 use crate::server::{AnalysisResult, ImportedDefinition};
-use crate::symbol_table::{DefinitionInfo, SymbolKey};
+use crate::symbol_table::{DefinitionInfo, SymbolKey, SymbolPath};
 
 /// Where a resolved symbol lives.
 pub enum SymbolLocation<'a> {
@@ -58,23 +58,24 @@ pub fn definition_location(
 pub fn resolve_symbol_at(analysis: &AnalysisResult, offset: usize) -> Option<ResolvedSymbol<'_>> {
     // First check references.
     if let Some(reference) = analysis.symbol_table.find_reference_at(offset) {
-        let key = reference.target.clone();
         let span = reference.span;
-        if let Some(def) = analysis.symbol_table.definitions.get(&key) {
-            return Some(ResolvedSymbol {
-                key,
-                location: SymbolLocation::Local(def),
-                is_reference: true,
-                cursor_span: span,
-            });
-        }
-        if let Some(imported) = analysis.imported_definitions.get(&key) {
-            return Some(ResolvedSymbol {
-                key,
-                location: SymbolLocation::Imported(imported),
-                is_reference: true,
-                cursor_span: span,
-            });
+        for key in reference_lookup_keys(&reference.target) {
+            if let Some(def) = analysis.symbol_table.definitions.get(&key) {
+                return Some(ResolvedSymbol {
+                    key,
+                    location: SymbolLocation::Local(def),
+                    is_reference: true,
+                    cursor_span: span,
+                });
+            }
+            if let Some(imported) = analysis.imported_definitions.get(&key) {
+                return Some(ResolvedSymbol {
+                    key,
+                    location: SymbolLocation::Imported(imported),
+                    is_reference: true,
+                    cursor_span: span,
+                });
+            }
         }
     }
     // Then check definitions.
@@ -89,4 +90,58 @@ pub fn resolve_symbol_at(analysis: &AnalysisResult, offset: usize) -> Option<Res
         });
     }
     None
+}
+
+pub fn reference_lookup_keys(key: &SymbolKey) -> Vec<SymbolKey> {
+    let mut keys = vec![key.clone()];
+    match key {
+        SymbolKey::Qualified { module, name } => {
+            if let Some((leaf, parent_module)) = module.split_last() {
+                let parent = if parent_module.is_empty() {
+                    SymbolPath::local(leaf.clone())
+                } else {
+                    SymbolPath::Qualified {
+                        module: parent_module.to_vec(),
+                        name: leaf.clone(),
+                    }
+                };
+                keys.push(SymbolKey::Variant {
+                    parent,
+                    variant: name.clone(),
+                });
+            }
+            keys.push(SymbolKey::Constructor(SymbolPath::Qualified {
+                module: module.clone(),
+                name: name.clone(),
+            }));
+        }
+        SymbolKey::Variant { parent, variant } => {
+            let (module, name) = qualified_key_parts_from_parent(parent, variant);
+            keys.push(SymbolKey::Qualified { module, name });
+        }
+        SymbolKey::Constructor(path) => match path {
+            SymbolPath::Local(name) => keys.push(SymbolKey::TopLevel(name.clone())),
+            SymbolPath::Qualified { module, name } => keys.push(SymbolKey::Qualified {
+                module: module.clone(),
+                name: name.clone(),
+            }),
+        },
+        SymbolKey::TopLevel(name) => {
+            keys.push(SymbolKey::Constructor(SymbolPath::local(name.clone())));
+        }
+        _ => {}
+    }
+    keys
+}
+
+fn qualified_key_parts_from_parent(parent: &SymbolPath, leaf: &str) -> (Vec<String>, String) {
+    match parent {
+        SymbolPath::Local(parent_name) => (vec![parent_name.clone()], leaf.to_string()),
+        SymbolPath::Qualified { module, name } => {
+            let mut qualified = Vec::with_capacity(module.len() + 1);
+            qualified.extend(module.iter().cloned());
+            qualified.push(name.clone());
+            (qualified, leaf.to_string())
+        }
+    }
 }

@@ -2,6 +2,7 @@ mod arithmetic;
 mod collections;
 mod control;
 mod functions;
+mod hir_eval;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,15 +11,25 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, ExprKind, MulDivOp, UnitExpr};
-use graphcal_compiler::syntax::names::{FieldName, ScopedName, StructTypeName};
+use graphcal_compiler::syntax::names::{
+    ConstructorName, FieldName, IndexName, NamePath, ResolvedIndexVariant, ResolvedName,
+    ScopedName, namespace,
+};
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
-use graphcal_compiler::registry::declared_type::DeclaredType;
+use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::{Registry, UnitScale};
-use graphcal_compiler::tir::typed::ResolvedDomainConstraint;
+use graphcal_compiler::registry::types::{Registry, TypeDef, UnitScale};
+use graphcal_compiler::tir::typed::{
+    DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint, ResolvedInlineDagCall,
+    StructFieldConstraintKey,
+};
+
+use crate::decl_key::RuntimeDeclKey;
 
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
+pub use hir_eval::{HirLocalValueMap, eval_hir_expr};
+pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 
 /// Immutable evaluation environment shared across all expression evaluations.
 ///
@@ -35,20 +46,24 @@ pub struct EvalContext<'a> {
     pub unfold_context: Option<UnfoldContext<'a>>,
     /// The enclosing file's full TIR.
     ///
-    /// Used by [`eval_inline_dag_call`] to translate `@dag(args)::out` /
-    /// `@alias.dag(args)::out` paths to canonical
-    /// [`DagId`](graphcal_compiler::dag_id::DagId)s via
-    /// [`graphcal_compiler::tir::typed::TIR::lookup_call_target`] and to
-    /// reach the file's flat per-DAG body map. Shared across nested inline
-    /// calls so a dag body invoking another dag can still resolve it.
+    /// Used by [`eval_inline_dag_call`] to reach the file's flat per-DAG body
+    /// map after semantic call metadata has selected a canonical DAG id.
     pub tir: &'a graphcal_compiler::tir::typed::TIR,
+    /// DAG whose expression is currently being evaluated. When present, inline
+    /// DAG calls can use HIR-derived canonical `DagId` / `ResolvedName<Decl>`
+    /// identities instead of resolving source paths again at eval time.
+    pub current_dag: Option<&'a graphcal_compiler::tir::typed::DagTIR>,
+    /// Root-file values visible to nested inline DAG calls. This lets DAG-body
+    /// self-imports route by their canonical source `DagId` rather than by a
+    /// same-leaf name in the immediate caller's local value map.
+    pub root_values: Option<&'a RuntimeValueMap>,
     /// Resolved domain constraints declared on struct/union member fields,
-    /// keyed by `(struct type name, field name)`. Looked up at every
-    /// `ExprKind::ConstructorCall` to validate field values immediately.
+    /// keyed by owner-qualified struct/constructor/field identity. Looked up at
+    /// every `ExprKind::ConstructorCall` to validate field values immediately.
     /// `None` means "skip the check" (used by paths that haven't resolved
     /// constraints yet, e.g. const-bound evaluation inside `exec_plan`).
     pub struct_field_constraints:
-        Option<&'a HashMap<(StructTypeName, FieldName), ResolvedDomainConstraint>>,
+        Option<&'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>,
 }
 
 /// Context required to evaluate an `unfold(...)` expression inline.
@@ -58,6 +73,196 @@ pub struct EvalContext<'a> {
 pub struct UnfoldContext<'a> {
     pub self_name: &'a str,
     pub declared_types: &'a HashMap<ScopedName, DeclaredType>,
+}
+
+/// Collapse a syntactic index path to a leaf-only name for eval diagnostics.
+///
+/// Module-aware variant literals must use HIR/resolved collection refs.
+fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
+    IndexName::from(path.leaf().clone())
+}
+
+fn eval_owner(ctx: &EvalContext<'_>) -> graphcal_compiler::dag_id::DagId {
+    ctx.current_dag
+        .map_or_else(|| ctx.tir.root_dag_id.clone(), |dag| dag.dag_id.clone())
+}
+
+fn index_ref_with_eval_owner(ctx: &EvalContext<'_>, name: IndexName) -> IndexTypeRef {
+    if name.as_str().starts_with("__nat_range_") {
+        IndexTypeRef::from_resolved(
+            graphcal_compiler::registry::types::nat_range_resolved_index_name(name),
+        )
+    } else {
+        IndexTypeRef::with_owner(eval_owner(ctx), name)
+    }
+}
+
+fn index_ref_from_path(ctx: &EvalContext<'_>, path: &NamePath) -> IndexTypeRef {
+    index_ref_with_eval_owner(ctx, standalone_index_name_from_path(path))
+}
+
+fn resolved_value_index_variant<'a>(
+    ctx: &'a EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+) -> Option<&'a ResolvedIndexVariant> {
+    ctx.current_dag
+        .map(|dag| &dag.semantic.collection_refs)
+        .and_then(|refs| refs.variant_literals.get(&span))
+}
+
+fn runtime_label_from_resolved_variant(resolved: &ResolvedIndexVariant) -> RuntimeValue {
+    RuntimeValue::resolved_label(resolved)
+}
+
+fn resolved_graph_ref_target<'a>(
+    ctx: &'a EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+) -> Option<&'a ResolvedName<namespace::Decl>> {
+    ctx.current_dag
+        .map(|dag| &dag.semantic.dependencies)
+        .and_then(|deps| deps.graph_ref_targets.get(&span))
+}
+
+fn resolved_const_ref_target<'a>(
+    ctx: &'a EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+) -> Option<&'a ResolvedName<namespace::Decl>> {
+    ctx.current_dag
+        .map(|dag| &dag.semantic.dependencies)
+        .and_then(|deps| deps.const_ref_targets.get(&span))
+}
+
+fn visible_decl_runtime_key(ctx: &EvalContext<'_>, scoped: &ScopedName) -> Option<RuntimeDeclKey> {
+    let dag = ctx.current_dag?;
+    dag.semantic
+        .decl_bindings
+        .get(scoped)
+        .cloned()
+        .map(RuntimeDeclKey::resolved)
+        .or_else(|| {
+            dag.resolved_decl_key_for_local(scoped)
+                .map(RuntimeDeclKey::resolved)
+        })
+}
+
+fn graph_ref_runtime_key(
+    ctx: &EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+    scoped: &ScopedName,
+) -> Result<RuntimeDeclKey, GraphcalError> {
+    resolved_graph_ref_target(ctx, span)
+        .and_then(|target| imported_source_runtime_key(ctx, scoped, target))
+        .or_else(|| scoped_visible_runtime_key(scoped, ctx))
+        .or_else(|| {
+            resolved_graph_ref_target(ctx, span)
+                .cloned()
+                .map(RuntimeDeclKey::resolved)
+        })
+        .or_else(|| visible_decl_runtime_key(ctx, scoped))
+        .ok_or_else(|| {
+            ctx.internal_error(
+                format!("semantic graph-reference metadata missing target for `@{scoped}`"),
+                span,
+            )
+        })
+}
+
+fn const_ref_runtime_key(
+    ctx: &EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+    scoped: &ScopedName,
+) -> Option<RuntimeDeclKey> {
+    resolved_const_ref_target(ctx, span)
+        .and_then(|target| imported_source_runtime_key(ctx, scoped, target))
+        .or_else(|| scoped_visible_runtime_key(scoped, ctx))
+        .or_else(|| {
+            resolved_const_ref_target(ctx, span)
+                .cloned()
+                .map(RuntimeDeclKey::resolved)
+        })
+        .or_else(|| visible_decl_runtime_key(ctx, scoped))
+}
+
+fn imported_source_runtime_key(
+    ctx: &EvalContext<'_>,
+    scoped: &ScopedName,
+    target: &ResolvedName<namespace::Decl>,
+) -> Option<RuntimeDeclKey> {
+    let dag = ctx.current_dag?;
+    let source = dag.imported_value_sources.get(scoped)?;
+    (source.dag_id == *target.owner() && source.source_name.as_str() == target.as_str())
+        .then(|| visible_decl_runtime_key(ctx, scoped))
+        .flatten()
+}
+
+fn scoped_visible_runtime_key(
+    scoped: &ScopedName,
+    ctx: &EvalContext<'_>,
+) -> Option<RuntimeDeclKey> {
+    let dag = ctx.current_dag?;
+    scoped
+        .is_qualified()
+        .then(|| {
+            dag.resolved_decl_key_for_local(scoped)
+                .map(RuntimeDeclKey::resolved)
+        })
+        .flatten()
+}
+
+pub fn index_ref_matches_resolved_or_leaf(
+    actual: &IndexTypeRef,
+    expected: &ResolvedName<namespace::Index>,
+) -> bool {
+    actual.resolved() == expected
+}
+
+fn constructor_call_target<'a>(
+    ctx: &'a EvalContext<'_>,
+    span: graphcal_compiler::syntax::span::Span,
+) -> Option<&'a graphcal_compiler::tir::typed::ResolvedConstructorTarget> {
+    ctx.current_dag
+        .map(|dag| &dag.semantic.constructor_refs)
+        .and_then(|refs| refs.constructor_calls.get(&span))
+}
+
+fn runtime_struct_type_def<'a>(
+    type_name: &StructTypeRef,
+    ctx: &'a EvalContext<'_>,
+) -> Option<&'a TypeDef> {
+    ctx.tir
+        .dags
+        .values()
+        .find_map(|dag| {
+            dag.semantic
+                .type_defs
+                .struct_types
+                .get(type_name.resolved())
+        })
+        .or_else(|| ctx.registry.types.get_type(type_name.as_str()))
+}
+
+fn constructor_fields_for_runtime_struct<'a>(
+    type_def: &'a TypeDef,
+    type_name: &StructTypeRef,
+) -> Option<&'a [graphcal_compiler::registry::types::StructField]> {
+    type_def.union_members()?.iter().find_map(|member| {
+        (member.name.as_str() == type_name.as_str()).then_some(member.fields.as_slice())
+    })
+}
+
+fn find_struct_field_constraint<'a>(
+    constraints: &'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
+    owning_type: Option<&StructTypeRef>,
+    constructor: &ConstructorName,
+    field: &FieldName,
+) -> Option<&'a ResolvedDomainConstraint> {
+    owning_type.and_then(|owning_type| {
+        constraints.get(&StructFieldConstraintKey::new(
+            owning_type.clone(),
+            constructor.clone(),
+            field.clone(),
+        ))
+    })
 }
 
 impl EvalContext<'_> {
@@ -98,7 +303,7 @@ impl EvalContext<'_> {
 #[expect(clippy::too_many_lines, reason = "large match on ExprKind variants")]
 pub fn eval_expr(
     expr: &Expr,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -120,37 +325,56 @@ pub fn eval_expr(
             Ok(RuntimeValue::Scalar(*value * scale))
         }
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
-        ExprKind::VariantLiteral { index, variant } => Ok(RuntimeValue::Label {
-            index_name: index.value.clone(),
-            variant: variant.value.clone(),
-        }),
-        ExprKind::GraphRef(ident) => values.get(&ident.value).cloned().ok_or_else(|| {
-            ctx.eval_error(
-                format!("undefined graph reference `@{}`", ident.value),
-                expr.span,
-            )
-        }),
-        ExprKind::ConstRef(ident) => values
-            .get(&ident.value)
-            .cloned()
-            .or_else(|| {
-                ctx.builtin_consts
-                    .get(ident.value.member())
-                    .map(|v| RuntimeValue::Scalar(*v))
+        ExprKind::VariantLiteral { index, variant } => {
+            let full_span = index.span.merge(variant.span);
+            Ok(resolved_value_index_variant(ctx, full_span).map_or_else(
+                || {
+                    RuntimeValue::label_with_owner(
+                        eval_owner(ctx),
+                        standalone_index_name_from_path(&index.value),
+                        variant.value.clone(),
+                    )
+                },
+                runtime_label_from_resolved_variant,
+            ))
+        }
+        ExprKind::GraphRef(ident) => {
+            let key = graph_ref_runtime_key(ctx, ident.span, &ident.value)?;
+            values.get(&key).cloned().ok_or_else(|| {
+                ctx.eval_error(
+                    format!("undefined graph reference `@{}`", ident.value),
+                    expr.span,
+                )
             })
-            .or_else(|| {
-                // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
-                // and may be referenced in expression position as ConstRef (uppercase).
-                // Locals are always bare names (no module qualification).
-                if ident.value.is_qualified() {
-                    None
-                } else {
-                    local_values.get(ident.value.member()).cloned()
-                }
-            })
-            .ok_or_else(|| {
-                ctx.eval_error(format!("undefined constant `{}`", ident.value), expr.span)
-            }),
+        }
+        ExprKind::ConstRef(ident) => {
+            if let Some(resolved_variant) = resolved_value_index_variant(ctx, ident.span) {
+                return Ok(runtime_label_from_resolved_variant(resolved_variant));
+            }
+
+            if let Some(key) = const_ref_runtime_key(ctx, ident.span, &ident.value)
+                && let Some(value) = values.get(&key)
+            {
+                return Ok(value.clone());
+            }
+
+            ctx.builtin_consts
+                .get(ident.value.member())
+                .map(|v| RuntimeValue::Scalar(*v))
+                .or_else(|| {
+                    // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
+                    // and may be referenced in expression position as ConstRef (uppercase).
+                    // Locals are always bare names (no module qualification).
+                    if ident.value.is_qualified() {
+                        None
+                    } else {
+                        local_values.get(ident.value.member()).cloned()
+                    }
+                })
+                .ok_or_else(|| {
+                    ctx.eval_error(format!("undefined constant `{}`", ident.value), expr.span)
+                })
+        }
         ExprKind::LocalRef(ident) => {
             local_values
                 .get(ident.name.as_str())
@@ -172,8 +396,8 @@ pub fn eval_expr(
         }
 
         // --- Function calls (delegated) ---
-        ExprKind::FnCall { name, args, .. } => {
-            functions::eval_fn_call(expr, name, args, values, local_values, ctx)
+        ExprKind::FnCall { callee, args, .. } => {
+            functions::eval_fn_call(expr, callee, args, values, local_values, ctx)
         }
 
         // --- Control flow (delegated) ---
@@ -230,7 +454,30 @@ pub fn eval_expr(
         ExprKind::FieldAccess { expr: inner, field } => {
             let inner_val = eval_expr(inner, values, local_values, ctx)?;
             match inner_val {
-                RuntimeValue::Struct { fields, .. } => {
+                RuntimeValue::Struct { type_name, fields } => {
+                    if let Some(type_def) = runtime_struct_type_def(&type_name, ctx) {
+                        let constructor_fields =
+                            constructor_fields_for_runtime_struct(type_def, &type_name)
+                                .ok_or_else(|| {
+                                    ctx.eval_error(
+                                        format!(
+                                            "constructor `{}` is not a member of struct `{}`",
+                                            type_name.name(),
+                                            type_def.name
+                                        ),
+                                        inner.span,
+                                    )
+                                })?;
+                        if !constructor_fields
+                            .iter()
+                            .any(|field_def| field_def.name == field.value)
+                        {
+                            return Err(ctx.eval_error(
+                                format!("no field `{}` on struct `{type_name}`", field.value),
+                                field.span,
+                            ));
+                        }
+                    }
                     fields.get(field.value.as_str()).cloned().ok_or_else(|| {
                         ctx.eval_error(format!("no field `{}` on struct", field.value), field.span)
                     })
@@ -240,23 +487,36 @@ pub fn eval_expr(
         }
 
         // --- Constructor call ---
-        ExprKind::ConstructorCall {
-            constructor,
-            fields,
-            ..
-        } => {
+        ExprKind::ConstructorCall { callee, fields, .. } => {
+            let resolved_constructor = constructor_call_target(ctx, callee.span());
+            let (constructor_name, owning_type) = if let Some(target) = resolved_constructor {
+                (
+                    target.variant.name.clone(),
+                    Some(StructTypeRef::from_resolved(target.owning_type.clone())),
+                )
+            } else {
+                let Some(constructor) = callee.as_bare() else {
+                    return Err(ctx.eval_error(
+                        format!("unknown constructor `{}`", callee.display_path()),
+                        callee.span(),
+                    ));
+                };
+                (ConstructorName::from_atom(constructor.name.clone()), None)
+            };
             let mut field_map = IndexMap::new();
             for field_init in fields {
                 let val = eval_expr(&field_init.value, values, local_values, ctx)?;
                 // Validate against any field-level domain constraint declared
-                // on `<constructor>.<field_name>`. The check fires at the field's
-                // span so the diagnostic points at the offending value.
-                let constructor_type_name = graphcal_compiler::syntax::names::StructTypeName::new(
-                    constructor.value.as_str(),
-                );
+                // on `<constructor>.<field_name>`. Prefer the HIR-resolved owning
+                // struct identity when available; runtime values still store the
+                // constructor leaf for display/variant identity.
                 if let Some(field_constraints) = ctx.struct_field_constraints
-                    && let Some(constraint) = field_constraints
-                        .get(&(constructor_type_name.clone(), field_init.name.value.clone()))
+                    && let Some(constraint) = find_struct_field_constraint(
+                        field_constraints,
+                        owning_type.as_ref(),
+                        &constructor_name,
+                        &field_init.name.value,
+                    )
                     && let Err(violation) =
                         crate::domain_check::check_domain_constraint(&val, constraint)
                 {
@@ -264,17 +524,33 @@ pub fn eval_expr(
                     return Err(ctx.eval_error(
                         format!(
                             "field `{}.{}` {}",
-                            constructor.value, field_init.name.value, violation.message
+                            constructor_name, field_init.name.value, violation.message
                         ),
                         span,
                     ));
                 }
                 field_map.insert(field_init.name.value.clone(), val);
             }
+            let type_name = resolved_constructor.map_or_else(
+                || {
+                    StructTypeRef::with_owner(
+                        eval_owner(ctx),
+                        graphcal_compiler::syntax::names::StructTypeName::from_atom(
+                            constructor_name.atom().clone(),
+                        ),
+                    )
+                },
+                |target| {
+                    StructTypeRef::with_display_leaf(
+                        graphcal_compiler::syntax::names::StructTypeName::from_atom(
+                            target.variant.name.atom().clone(),
+                        ),
+                        target.owning_type.clone(),
+                    )
+                },
+            );
             Ok(RuntimeValue::Struct {
-                type_name: graphcal_compiler::syntax::names::StructTypeName::new(
-                    constructor.value.as_str(),
-                ),
+                type_name,
                 fields: field_map,
             })
         }
@@ -301,6 +577,49 @@ pub fn eval_expr(
     }
 }
 
+fn resolved_inline_call<'a>(
+    expr: &Expr,
+    ctx: &'a EvalContext<'_>,
+) -> Option<&'a ResolvedInlineDagCall> {
+    ctx.current_dag
+        .map(|dag| &dag.semantic.inline_dag_refs)
+        .and_then(|refs| refs.calls.get(&expr.span))
+}
+
+fn dag_decl_runtime_key(dag_tir: &DagTIR, name: &ResolvedName<namespace::Decl>) -> RuntimeDeclKey {
+    let _ = dag_tir;
+    RuntimeDeclKey::resolved(name.clone())
+}
+
+fn imported_value_source_key(
+    source: &graphcal_compiler::ir::lower::ImportedValueSource,
+    source_dag: &DagTIR,
+) -> RuntimeDeclKey {
+    let _ = source_dag;
+    RuntimeDeclKey::resolved(ResolvedName::from_def(
+        source.dag_id.clone(),
+        source.source_name.clone(),
+    ))
+}
+
+fn imported_value_source_value<'a>(
+    source: &graphcal_compiler::ir::lower::ImportedValueSource,
+    caller_values: &'a RuntimeValueMap,
+    ctx: &'a EvalContext<'_>,
+) -> Option<&'a RuntimeValue> {
+    match ctx.current_dag {
+        Some(caller_dag) if source.dag_id.eq(&caller_dag.dag_id) => {
+            caller_values.get(&imported_value_source_key(source, caller_dag))
+        }
+        _ if source.dag_id.eq(&ctx.tir.root_dag_id) => {
+            let root_dag = ctx.tir.dags.get(&ctx.tir.root_dag_id)?;
+            ctx.root_values
+                .and_then(|values| values.get(&imported_value_source_key(source, root_dag)))
+        }
+        _ => None,
+    }
+}
+
 /// Evaluate an inline DAG invocation `@<path>(args).<out>`.
 ///
 /// Semantics (from issue #451):
@@ -313,30 +632,35 @@ pub fn eval_expr(
 ///   order), so forward references across body nodes resolve correctly.
 /// - The projected output's value is returned.
 ///
-/// The dag body is evaluated against the pre-compiled [`TIR`] stored on the
-/// enclosing file's TIR and carried in [`EvalContext::compiled_dags`]. The
-/// dag's own registry is used for all nested lookups so sibling dag calls
+/// The dag body is evaluated against the pre-compiled [`TIR`] carried in
+/// [`EvalContext::tir`]. Calls route through canonical semantic call metadata;
+/// the dag's own registry is used for all nested lookups so sibling dag calls
 /// from inside the body resolve through the same pipeline.
-///
-/// `ctx.compiled_dags` is keyed by [`DagKey`](graphcal_compiler::tir::typed::DagKey):
-/// a single-segment key for same-file calls (`@dag(args).out`) and a two-
-/// segment `(module-alias, dag-name)` key for cross-file qualified calls
-/// (`@module.dag(args).out`) brought into scope via `import path as module;`
-/// or `import path;`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "inline DAG evaluation validates bindings and executes selected body"
+)]
 fn eval_inline_dag_call(
-    _call_expr: &Expr,
+    call_expr: &Expr,
     path: &graphcal_compiler::syntax::ast::ModulePath,
     args: &[graphcal_compiler::desugar::resolved_ast::ParamBinding],
     output: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::DeclName>,
-    caller_values: &HashMap<ScopedName, RuntimeValue>,
+    caller_values: &RuntimeValueMap,
     caller_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let display_path = path.display_path();
-    let dag_tir = ctx.tir.lookup_call_target(path).ok_or_else(|| {
+    let resolved_call = resolved_inline_call(call_expr, ctx).ok_or_else(|| {
+        ctx.internal_error(
+            format!("semantic TIR missing inline-DAG call metadata for `{display_path}`"),
+            call_expr.span,
+        )
+    })?;
+    let dag_tir = ctx.tir.dags.get(&resolved_call.target).ok_or_else(|| {
         ctx.internal_error(
             format!(
-                "dag `{display_path}` has no compiled TIR (should have been caught by dim-check)"
+                "dag `{}` has no compiled TIR (should have been caught by dim-check)",
+                resolved_call.target
             ),
             path.span,
         )
@@ -345,16 +669,30 @@ fn eval_inline_dag_call(
     // Evaluate argument expressions in the caller's scope so loop variables
     // and other enclosing bindings resolve correctly. Param-binding names are
     // always bare locals.
-    let mut dag_values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
+    let mut dag_values: RuntimeValueMap = HashMap::new();
     for binding in args {
         let value = eval_expr(&binding.value, caller_values, caller_locals, ctx)?;
-        dag_values.insert(ScopedName::local(binding.name.name.clone()), value);
+        let target_key = resolved_call
+            .arg_targets
+            .get(&binding.name.span)
+            .map(|target| dag_decl_runtime_key(dag_tir, target))
+            .ok_or_else(|| {
+                ctx.internal_error(
+                    format!(
+                        "semantic TIR missing inline-DAG arg target for `{}`",
+                        binding.name.name
+                    ),
+                    binding.name.span,
+                )
+            })?;
+        dag_values.insert(target_key, value);
     }
 
     // Resolve explicit DAG-body imports. Cross-file qualified calls receive
     // concrete imported values when the dependency dag TIR is cloned into the
-    // caller; same-file calls resolve through the source binding map against
-    // the caller's current values.
+    // caller; same-file calls route source bindings by their canonical source
+    // DAG so nested inline calls do not accidentally capture same-leaf values
+    // from the immediate caller.
     let own_names: std::collections::HashSet<&str> = dag_tir
         .consts
         .iter()
@@ -369,8 +707,10 @@ fn eval_inline_dag_call(
         .collect();
     for scoped in outer_scope_keys {
         let member = scoped.member();
-        let local_key = ScopedName::local(member);
-        if own_names.contains(member) || dag_values.contains_key(&local_key) {
+        let visible_key = RuntimeDeclKey::for_visible_name(dag_tir, scoped);
+        let unresolved_local_import =
+            !dag_tir.semantic.decl_bindings.contains_key(scoped) && own_names.contains(member);
+        if unresolved_local_import || dag_values.contains_key(&visible_key) {
             continue;
         }
         let value = dag_tir
@@ -381,12 +721,10 @@ fn eval_inline_dag_call(
                 dag_tir
                     .imported_value_sources
                     .get(scoped)
-                    .and_then(|source| {
-                        caller_values.get(&ScopedName::local(source.source_name.as_str()))
-                    })
+                    .and_then(|source| imported_value_source_value(source, caller_values, ctx))
             });
         if let Some(value) = value {
-            dag_values.insert(local_key, value.clone());
+            dag_values.insert(visible_key, value.clone());
         }
     }
 
@@ -401,40 +739,53 @@ fn eval_inline_dag_call(
         src: ctx.src,
         unfold_context: None,
         tir: ctx.tir,
+        current_dag: Some(dag_tir),
+        root_values: ctx.root_values,
         struct_field_constraints: ctx.struct_field_constraints,
     };
 
-    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    let empty_hir_locals = HirLocalValueMap::new();
 
     // Evaluate consts and nodes in topological order derived from
     // `runtime_deps` ∪ `const_deps`. Params are leaves — they arrive via
     // `args` and never execute body code.
     let topo = topo_order_for_dag_body(dag_tir);
     for name in topo {
-        let local_key = ScopedName::local(name.member());
+        let local_key = RuntimeDeclKey::for_local_decl(dag_tir, &name);
         if dag_values.contains_key(&local_key) {
             continue;
         }
-        let expr = lookup_dag_body_expr(dag_tir, &name);
-        let Some(expr) = expr else {
-            continue;
-        };
-        let value = eval_expr(expr, &dag_values, &empty_locals, &dag_ctx)?;
+        let key = dag_tir.resolved_decl_key_for_local(&name).ok_or_else(|| {
+            ctx.internal_error(format!("no semantic key for `{name}`"), path.span)
+        })?;
+        let hir_expr = dag_tir
+            .semantic
+            .expressions
+            .consts
+            .get(&key)
+            .or_else(|| dag_tir.semantic.expressions.runtime_expr(&key))
+            .ok_or_else(|| {
+                ctx.internal_error(
+                    format!(
+                        "semantic TIR missing HIR expression for DAG body declaration `{name}`"
+                    ),
+                    path.span,
+                )
+            })?;
+        let value = eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx)?;
         dag_values.insert(local_key, value);
     }
 
-    dag_values
-        .get(&ScopedName::local(output.value.as_str()))
-        .cloned()
-        .ok_or_else(|| {
-            ctx.internal_error(
-                format!(
-                    "dag `{display_path}` has no node `{}` after evaluation (should have been caught by dim-check)",
-                    output.value,
-                ),
-                output.span,
-            )
-        })
+    let output_key = dag_decl_runtime_key(dag_tir, &resolved_call.output.value);
+    dag_values.get(&output_key).cloned().ok_or_else(|| {
+        ctx.internal_error(
+            format!(
+                "dag `{display_path}` has no node `{}` after evaluation (should have been caught by dim-check)",
+                output.value,
+            ),
+            output.span,
+        )
+    })
 }
 
 /// Kahn-style topological sort over a dag body's combined dep graph.
@@ -442,10 +793,18 @@ fn eval_inline_dag_call(
 /// Produces an order in which each const/param/node appears after every one
 /// of its runtime and const dependencies. Cycles are impossible in a
 /// well-typed dag body because compile-time dep collection rejects them.
-fn topo_order_for_dag_body(dag_tir: &graphcal_compiler::tir::typed::DagTIR) -> Vec<ScopedName> {
+fn topo_order_for_dag_body(dag_tir: &DagTIR) -> Vec<ScopedName> {
+    topo_order_for_dag_body_resolved(dag_tir, &dag_tir.semantic.dependencies)
+}
+
+type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+
+fn topo_order_for_dag_body_resolved(
+    dag_tir: &DagTIR,
+    deps: &ResolvedDagDependencies,
+) -> Vec<ScopedName> {
     use std::collections::BTreeSet;
 
-    // All declaration names in a stable order.
     let mut names: Vec<ScopedName> = dag_tir
         .source_order
         .iter()
@@ -453,74 +812,63 @@ fn topo_order_for_dag_body(dag_tir: &graphcal_compiler::tir::typed::DagTIR) -> V
         .collect();
     names.sort();
 
-    // Incoming-edge counts and reverse adjacency keyed by name.
-    let mut incoming: HashMap<ScopedName, usize> = HashMap::new();
-    let mut outgoing: HashMap<ScopedName, Vec<ScopedName>> = HashMap::new();
+    let mut key_by_name: HashMap<ScopedName, ResolvedDeclKey> = HashMap::new();
+    let mut name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
     for name in &names {
-        incoming.insert(name.clone(), 0);
-        outgoing.insert(name.clone(), Vec::new());
+        let Some(key) = dag_tir.resolved_decl_key_for_local(name) else {
+            continue;
+        };
+        key_by_name.insert(name.clone(), key.clone());
+        name_by_key.insert(key, name.clone());
     }
 
-    let add_edge = |from: &ScopedName,
-                    to: &ScopedName,
-                    incoming: &mut HashMap<ScopedName, usize>,
-                    outgoing: &mut HashMap<ScopedName, Vec<ScopedName>>| {
-        if let (Some(out), Some(deg)) = (outgoing.get_mut(from), incoming.get_mut(to)) {
-            out.push(to.clone());
-            *deg += 1;
-        }
-    };
+    let mut incoming: HashMap<ResolvedDeclKey, usize> = HashMap::new();
+    let mut outgoing: HashMap<ResolvedDeclKey, Vec<ResolvedDeclKey>> = HashMap::new();
+    for key in key_by_name.values() {
+        incoming.insert(key.clone(), 0);
+        outgoing.insert(key.clone(), Vec::new());
+    }
 
-    for (name, deps) in &dag_tir.runtime_deps {
-        for dep in deps {
+    let add_edge =
+        |from: &ResolvedDeclKey,
+         to: &ResolvedDeclKey,
+         incoming: &mut HashMap<ResolvedDeclKey, usize>,
+         outgoing: &mut HashMap<ResolvedDeclKey, Vec<ResolvedDeclKey>>| {
+            if let (Some(out), Some(deg)) = (outgoing.get_mut(from), incoming.get_mut(to)) {
+                out.push(to.clone());
+                *deg += 1;
+            }
+        };
+
+    for (name, dep_set) in deps.runtime_deps.iter().chain(deps.const_deps.iter()) {
+        for dep in dep_set {
             add_edge(dep, name, &mut incoming, &mut outgoing);
         }
     }
-    for (name, deps) in &dag_tir.const_deps {
-        for dep in deps {
-            add_edge(dep, name, &mut incoming, &mut outgoing);
-        }
-    }
 
-    // Kahn with a sorted ready set for deterministic tie-breaking.
-    let mut ready: BTreeSet<ScopedName> = incoming
+    let mut ready: BTreeSet<ResolvedDeclKey> = incoming
         .iter()
         .filter(|(_, deg)| **deg == 0)
-        .map(|(n, _)| n.clone())
+        .map(|(name, _)| name.clone())
         .collect();
     let mut order = Vec::with_capacity(names.len());
-    while let Some(n) = ready.iter().next().cloned() {
-        ready.remove(&n);
-        order.push(n.clone());
-        if let Some(succs) = outgoing.remove(&n) {
-            for s in succs {
-                if let Some(deg) = incoming.get_mut(&s) {
+    while let Some(key) = ready.iter().next().cloned() {
+        ready.remove(&key);
+        if let Some(name) = name_by_key.get(&key) {
+            order.push(name.clone());
+        }
+        if let Some(succs) = outgoing.remove(&key) {
+            for succ in succs {
+                if let Some(deg) = incoming.get_mut(&succ) {
                     *deg -= 1;
                     if *deg == 0 {
-                        ready.insert(s);
+                        ready.insert(succ);
                     }
                 }
             }
         }
     }
     order
-}
-
-/// Look up the evaluation expression for a declaration in a dag body.
-///
-/// Returns `None` for params (they receive their value from the call-site
-/// argument binding, not from a body-local expression).
-fn lookup_dag_body_expr<'a>(
-    dag_tir: &'a graphcal_compiler::tir::typed::DagTIR,
-    name: &ScopedName,
-) -> Option<&'a Expr> {
-    if let Some(c) = dag_tir.consts.iter().find(|c| &c.name == name) {
-        return Some(&c.expr);
-    }
-    if let Some(n) = dag_tir.nodes.iter().find(|n| &n.name == name) {
-        return Some(&n.expr);
-    }
-    None
 }
 
 /// Resolve a `UnitExpr` to its compound scale factor at runtime.
@@ -535,7 +883,7 @@ fn lookup_dag_body_expr<'a>(
 /// fails to evaluate to a scalar.
 pub fn resolve_unit_scale(
     unit: &UnitExpr,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<f64, GraphcalError> {

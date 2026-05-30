@@ -7,6 +7,7 @@
 mod collections;
 mod control;
 mod functions;
+pub(super) mod hir;
 mod scalar;
 
 use std::collections::HashMap;
@@ -18,9 +19,41 @@ use crate::desugar::resolved_ast::{Expr, ExprKind};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{DeclName, ScopedName, UnitName};
+use crate::syntax::names::{
+    GenericParamName, IndexName, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName,
+    UnitName, namespace,
+};
 
-use super::{DeclaredType, InferredType};
+use super::{DeclaredType, InferredIndex, InferredType};
+
+/// Collapse a syntactic index path to a leaf-only name at syntax boundaries.
+///
+/// Module-aware variant literals must use `ResolvedCollectionRefs`; this
+/// adapter is only for callers that still receive syntax-only variant literals.
+fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
+    IndexName::from(path.leaf().clone())
+}
+
+fn inference_owner(dag: Option<&crate::tir::typed::DagTIR>) -> crate::dag_id::DagId {
+    dag.map_or_else(
+        || crate::dag_id::DagId::root("<type-inference>"),
+        |dag| dag.dag_id.clone(),
+    )
+}
+
+fn resolved_value_index_variant(
+    dag: Option<&crate::tir::typed::DagTIR>,
+    span: crate::syntax::span::Span,
+) -> Option<&ResolvedIndexVariant> {
+    dag.map(|dag| &dag.semantic.collection_refs)
+        .and_then(|refs| refs.variant_literals.get(&span))
+}
+
+fn infer_resolved_index_variant_label(resolved_variant: &ResolvedIndexVariant) -> InferredType {
+    InferredType::Label(InferredIndex::from_resolved(
+        resolved_variant.index().clone(),
+    ))
+}
 
 /// Infer the type (dimension or struct) of an expression.
 ///
@@ -32,6 +65,7 @@ pub(super) fn infer_type(
     expr: &Expr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -42,6 +76,7 @@ pub(super) fn infer_type(
         None,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -56,6 +91,7 @@ pub(super) fn infer_type_with_owner(
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -82,12 +118,18 @@ pub(super) fn infer_type_with_owner(
         }),
 
         ExprKind::VariantLiteral { index, variant } => {
+            let full_span = index.span.merge(variant.span);
+            if let Some(resolved_variant) = resolved_value_index_variant(dag, full_span) {
+                return Ok(infer_resolved_index_variant_label(resolved_variant));
+            }
+
+            let index_name = standalone_index_name_from_path(&index.value);
             // Validate index exists
             let idx_def = registry
                 .indexes
-                .get_index(index.value.as_str())
+                .get_index(index_name.as_str())
                 .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: index.value.clone(),
+                    name: index_name.clone(),
                     src: src.clone(),
                     span: index.span.into(),
                 })?;
@@ -98,13 +140,16 @@ pub(super) fn infer_type_with_owner(
                 .any(|v| v.as_str() == variant.value.as_str())
             {
                 return Err(GraphcalError::UnknownVariant {
-                    index_name: index.value.clone(),
+                    index_name: index_name.clone(),
                     variant_name: variant.value.clone(),
                     src: src.clone(),
                     span: variant.span.into(),
                 });
             }
-            Ok(InferredType::Label(index.value.clone()))
+            Ok(InferredType::Label(InferredIndex::with_owner(
+                inference_owner(dag),
+                index_name,
+            )))
         }
 
         ExprKind::UnitLiteral { unit, .. } => {
@@ -135,35 +180,30 @@ pub(super) fn infer_type_with_owner(
         }
 
         ExprKind::ConstRef(ident) => {
-            let dt =
-                declared_types
-                    .get(&ident.value)
-                    .ok_or_else(|| GraphcalError::UnknownConstRef {
-                        name: DeclName::new(ident.value.to_string()),
-                        src: src.clone(),
-                        span: ident.span.into(),
-                    })?;
-            Ok(InferredType::from(dt))
+            if let Some(resolved_variant) = resolved_value_index_variant(dag, ident.span) {
+                return Ok(infer_resolved_index_variant_label(resolved_variant));
+            }
+
+            infer_decl_ref_type(&ident.value, ident.span, declared_types, dag, src).map_err(|err| {
+                match err {
+                    GraphcalError::UnknownGraphRef { name, src, span } => {
+                        GraphcalError::UnknownConstRef { name, src, span }
+                    }
+                    err => err,
+                }
+            })
         }
 
         ExprKind::GraphRef(ident) => {
-            let dt =
-                declared_types
-                    .get(&ident.value)
-                    .ok_or_else(|| GraphcalError::UnknownGraphRef {
-                        name: DeclName::new(ident.value.to_string()),
-                        src: src.clone(),
-                        span: ident.span.into(),
-                    })?;
-            Ok(InferredType::from(dt))
+            infer_decl_ref_type(&ident.value, ident.span, declared_types, dag, src)
         }
 
         ExprKind::LocalRef(ident) => {
             local_types
-                .get(&ident.name)
+                .get(ident.name.as_str())
                 .cloned()
                 .ok_or_else(|| GraphcalError::UnknownLocalRef {
-                    name: ident.name.clone(),
+                    name: ident.name.to_string(),
                     src: src.clone(),
                     span: ident.span.into(),
                 })
@@ -177,6 +217,7 @@ pub(super) fn infer_type_with_owner(
             rhs,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -188,6 +229,7 @@ pub(super) fn infer_type_with_owner(
             operand,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -202,6 +244,7 @@ pub(super) fn infer_type_with_owner(
             target,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -217,6 +260,7 @@ pub(super) fn infer_type_with_owner(
             timezone,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -224,11 +268,12 @@ pub(super) fn infer_type_with_owner(
         ),
 
         // --- Function calls ---
-        ExprKind::FnCall { name, args, .. } => functions::infer_fn_call(
-            name,
+        ExprKind::FnCall { callee, args, .. } => functions::infer_fn_call(
+            callee,
             args,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -246,6 +291,7 @@ pub(super) fn infer_type_with_owner(
             else_branch,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -260,6 +306,7 @@ pub(super) fn infer_type_with_owner(
             arms,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -272,6 +319,7 @@ pub(super) fn infer_type_with_owner(
             body,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -283,6 +331,7 @@ pub(super) fn infer_type_with_owner(
             entries,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -295,6 +344,7 @@ pub(super) fn infer_type_with_owner(
             args,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -315,6 +365,7 @@ pub(super) fn infer_type_with_owner(
             body,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -334,6 +385,7 @@ pub(super) fn infer_type_with_owner(
             owner_decl_name,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -345,6 +397,7 @@ pub(super) fn infer_type_with_owner(
             field,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -352,16 +405,17 @@ pub(super) fn infer_type_with_owner(
         ),
 
         ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args: constructor_generic_args,
             fields,
         } => collections::infer_constructor_call(
             expr,
-            constructor,
+            callee,
             constructor_generic_args,
             fields,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -375,6 +429,7 @@ pub(super) fn infer_type_with_owner(
             output,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -391,15 +446,79 @@ pub(super) fn infer_type_with_owner(
     }
 }
 
+fn infer_decl_ref_type(
+    name: &ScopedName,
+    span: crate::syntax::span::Span,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    fn resolved_decl_type_for_key<'a>(
+        dag: &'a crate::tir::typed::DagTIR,
+        key: &ResolvedName<namespace::Decl>,
+    ) -> Option<&'a crate::tir::typed::ResolvedTypeExpr> {
+        dag.resolved_decl_types
+            .iter()
+            .find_map(|(name, resolved_type)| {
+                (dag.resolved_decl_key_for_local(name).as_ref() == Some(key))
+                    .then_some(resolved_type)
+            })
+    }
+
+    let resolved_type = dag.and_then(|dag| {
+        dag.semantic
+            .dependencies
+            .graph_ref_targets
+            .get(&span)
+            .or_else(|| dag.semantic.dependencies.const_ref_targets.get(&span))
+            .and_then(|key| resolved_decl_type_for_key(dag, key))
+            .or_else(|| dag.resolved_decl_types.get(name))
+            .or_else(|| {
+                (!name.is_qualified()).then(|| {
+                    let mut candidates = dag
+                        .resolved_decl_types
+                        .iter()
+                        .filter(|(candidate, _)| candidate.member() == name.member())
+                        .map(|(_, resolved_type)| resolved_type);
+                    candidates.next().filter(|_| candidates.next().is_none())
+                })?
+            })
+    });
+
+    if let Some(resolved) = resolved_type {
+        let dim_sub = HashMap::new();
+        let index_sub =
+            HashMap::<GenericParamName, crate::registry::declared_type::IndexTypeRef>::new();
+        let nat_sub = HashMap::new();
+        return crate::tir::typed::substitute_resolved_type(
+            resolved, &dim_sub, &index_sub, &nat_sub, src,
+        );
+    }
+
+    declared_types
+        .get(name)
+        .or_else(|| {
+            (!name.is_qualified()).then(|| {
+                let mut candidates = declared_types
+                    .iter()
+                    .filter(|(candidate, _)| candidate.member() == name.member())
+                    .map(|(_, declared)| declared);
+                candidates.next().filter(|_| candidates.next().is_none())
+            })?
+        })
+        .map(InferredType::from)
+        .ok_or_else(|| GraphcalError::UnknownGraphRef {
+            name: name.clone(),
+            src: src.clone(),
+            span: span.into(),
+        })
+}
+
 /// Infer the type of an inline DAG invocation `@<path>(args).<out>`.
 ///
-/// Looks up the called dag via `tir`, indexed by [`DagKey`]: the bare
-/// DAG name for same-file calls (`@dag(args).out`) or a `(module-alias,
-/// dag-name)` pair for cross-file qualified calls (`@module.dag(args).out`,
-/// matching the key inserted by the cross-file dag-merge step). Both
-/// variants share the same compiled-TIR resolution path: param types come
-/// from `dag_tir.resolved_decl_types`, and `dag_tir.pub_nodes` gates
-/// projection of non-`pub` outputs.
+/// Semantic TIR carries HIR-derived [`ResolvedInlineDagCall`] metadata for
+/// call routing. The canonical `DagId` / `ResolvedName<Decl>` identities are
+/// authoritative.
 #[expect(
     clippy::too_many_arguments,
     reason = "passes inference context through"
@@ -411,50 +530,78 @@ fn infer_inline_dag_ref(
     output: &crate::syntax::span::Spanned<crate::syntax::names::DeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
+    use crate::syntax::names::{ResolvedName, namespace};
+
+    type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+
     let display_path = path.display_path();
+    let dag = dag.ok_or_else(|| GraphcalError::InternalError {
+        message: format!("semantic TIR missing current DAG for inline-DAG call `{display_path}`"),
+        src: src.clone(),
+        span: expr.span.into(),
+    })?;
+    let resolved_call = dag
+        .semantic
+        .inline_dag_refs
+        .calls
+        .get(&expr.span)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("semantic TIR missing inline-DAG call metadata for `{display_path}`"),
+            src: src.clone(),
+            span: expr.span.into(),
+        })?;
     let dag_tir = tir
-        .lookup_call_target(path)
+        .dags
+        .get(&resolved_call.target)
         .ok_or_else(|| GraphcalError::UnknownDag {
-            name: display_path.clone(),
+            name: resolved_call.target.to_string(),
             src: src.clone(),
             span: path.span.into(),
         })?;
 
-    // Map param/node member names to their pre-resolved declared types.
-    // Using the compiled TIR (not the raw AST) means the same code path
-    // serves same-file and cross-file calls — the dep's TIR has already
-    // resolved its type annotations in its own registry's scope.
-    //
-    // Locals only here: param/node binding names at a call site are bare
-    // identifiers, so a `String`-keyed table is the right shape.
-    let mut param_decl_types: HashMap<String, DeclaredType> = HashMap::new();
+    let mut param_decl_types_by_key: HashMap<ResolvedDeclKey, DeclaredType> = HashMap::new();
     for p in &dag_tir.params {
         if let Some(resolved) = dag_tir.resolved_decl_types.get(&p.name) {
             let dt = crate::tir::typed::resolved_to_declared_type(resolved, src)?;
-            param_decl_types.insert(p.name.member().to_string(), dt);
+            if let Some(key) = dag_tir.resolved_decl_key_for_local(&p.name) {
+                param_decl_types_by_key.insert(key, dt);
+            }
         }
     }
-    let mut node_decl_types: HashMap<String, DeclaredType> = HashMap::new();
+    let mut node_decl_types_by_key: HashMap<ResolvedDeclKey, DeclaredType> = HashMap::new();
     for n in &dag_tir.nodes {
         if let Some(resolved) = dag_tir.resolved_decl_types.get(&n.name) {
             let dt = crate::tir::typed::resolved_to_declared_type(resolved, src)?;
-            node_decl_types.insert(n.name.member().to_string(), dt);
+            if let Some(key) = dag_tir.resolved_decl_key_for_local(&n.name) {
+                node_decl_types_by_key.insert(key, dt);
+            }
         }
     }
 
-    // Check each binding names a real param and type-matches its annotation.
-    let mut bound_names: std::collections::HashSet<String> =
+    let mut bound_resolved_names: std::collections::HashSet<ResolvedDeclKey> =
         std::collections::HashSet::with_capacity(args.len());
     for binding in args {
         let binding_name = binding.name.name.as_str();
-        let expected = param_decl_types.get(binding_name).ok_or_else(|| {
+        let target = resolved_call
+            .arg_targets
+            .get(&binding.name.span)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!(
+                    "semantic TIR has no inline-DAG arg target for binding `{binding_name}`"
+                ),
+                src: src.clone(),
+                span: binding.name.span.into(),
+            })?;
+        bound_resolved_names.insert(target.clone());
+        let expected = param_decl_types_by_key.get(target).ok_or_else(|| {
             GraphcalError::UnknownInlineDagParam {
-                name: binding_name.to_string(),
+                name: target.as_str().to_string(),
                 dag_name: display_path.clone(),
                 src: src.clone(),
                 span: binding.name.span.into(),
@@ -464,6 +611,7 @@ fn infer_inline_dag_ref(
             &binding.value,
             declared_types,
             local_types,
+            Some(dag),
             tir,
             registry,
             builtin_fns,
@@ -478,14 +626,12 @@ fn infer_inline_dag_ref(
                 span: binding.value.span.into(),
             });
         }
-        bound_names.insert(binding_name.to_string());
     }
 
-    // Every param declared in the dag must be bound at the call site.
-    let mut missing: Vec<String> = param_decl_types
+    let mut missing: Vec<String> = param_decl_types_by_key
         .keys()
-        .filter(|p| !bound_names.contains(p.as_str()))
-        .cloned()
+        .filter(|p| !bound_resolved_names.contains(*p))
+        .map(|p| p.as_str().to_string())
         .collect();
     if !missing.is_empty() {
         missing.sort();
@@ -497,19 +643,19 @@ fn infer_inline_dag_ref(
         });
     }
 
-    // Project the output node; reject projection of a non-`pub` node with
-    // the same shape as the `include lib_dag(args) { private_result }` form.
-    let output_decl = node_decl_types.get(output.value.as_str()).ok_or_else(|| {
+    let output_key = &resolved_call.output.value;
+    let output_decl = node_decl_types_by_key.get(output_key).ok_or_else(|| {
         GraphcalError::UnknownInlineDagOutput {
-            name: output.value.to_string(),
+            name: output_key.as_str().to_string(),
             dag_name: display_path.clone(),
             src: src.clone(),
             span: output.span.into(),
         }
     })?;
-    if !dag_tir.pub_nodes.contains(output.value.as_str()) {
+    let output_name = output_key.as_str();
+    if !dag_tir.pub_nodes.contains(output_name) {
         return Err(GraphcalError::ImportPrivateItem {
-            name: output.value.to_string(),
+            name: output_name.to_string(),
             file_path: display_path,
             src: src.clone(),
             span: output.span.into(),

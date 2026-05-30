@@ -239,7 +239,7 @@ param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
 };
 ```
 
-Each `[SliceLabel]` section contains its own header row and data rows. Named slice labels use `Index.Variant` syntax; Nat range slice labels use `#N`.
+Each `[SliceLabel]` section contains its own header row and data rows. Named slice labels use `Index.Variant` syntax (or `module.Index.Variant` when the index is imported); Nat range slice labels use `#N`.
 
 ### Nat Range Tables
 
@@ -302,7 +302,7 @@ const node mass_per_unit:     Mass[Component]
 ```
 
 - Each slot on the left-hand side is a full declaration: kind (`param` / `node` / `const node`), name, and type annotation.
-- The `table[SharedAxis, (…)]` bracket declares the row axis followed by a parenthesized slot tuple. Each tuple entry is either `_` (1-D slot typed `T[SharedAxis]`) or a named axis (2-D slot typed `T[SharedAxis, ExtraAxis]`).
+- The `table[SharedAxis, (…)]` bracket declares the row axis followed by a parenthesized slot tuple. Each tuple entry is either `_` (1-D slot typed `T[SharedAxis]`) or a named axis, including module-qualified axes (2-D slot typed `T[SharedAxis, ExtraAxis]`).
 - The header row `: …;` has exactly one cell per column. For 1-D slots the cell must be `_`; for 2-D slots, list the extra-axis variants in order (bare, e.g., `Safe, Nominal`, or qualified `OpMode.Safe`). Qualification is never required but is accepted for readability.
 
 Mixed 1-D / 2-D slots:
@@ -353,6 +353,7 @@ Slice labels must qualify each shared axis in the declared order (`Phase.Launch`
 ### Editor integration
 
 Each slot in a multi-declaration is its own declaration for the purposes of navigation: `gotoDefinition`, `findReferences`, `rename`, and `hover` all land on the slot header, and each slot receives its own inlay hint at its name. The formatter preserves the multi-decl surface form on round-trip — it emits the original source slice verbatim rather than the N desugared single-decls. Cell-level inlay hints (projecting slot names into the header row of the source) and canonicalization of the multi-decl body remain future work.
+
 - Multi-declarations are **pure syntactic sugar**: each slot desugars to an ordinary declaration with its own `table[SharedAxis] { … }` initializer. Cross-slot references work exactly as for any other declarations (`@other_slot[Variant]`).
 - Attributes (`#[…]`) and visibility annotations (`pub` / `pub(bind)`) are not allowed on a multi-declaration or its slots in v1.
 

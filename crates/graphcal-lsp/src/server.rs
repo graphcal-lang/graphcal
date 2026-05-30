@@ -22,17 +22,15 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
+use crate::convert::position_to_byte_offset;
+use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
+use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
-use graphcal_compiler::syntax::names::{DeclName, IndexVariantName};
+use graphcal_compiler::syntax::names::DeclName;
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
 };
 use graphcal_eval::loader::LoadedProject;
-use indexmap::IndexMap;
-
-use crate::convert::position_to_byte_offset;
-use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
-use crate::symbol_table::{self, DefinitionInfo, SymbolKey, SymbolTable};
 
 /// A definition from an imported file, for cross-file go-to-definition and hover.
 pub(crate) struct ImportedDefinition {
@@ -646,15 +644,17 @@ fn format_value_inline_with_budget(
             // For multi-indexed maps (nested Indexed values), flatten into
             // tuple-keyed form: `{ (A, X): 1, (A, Y): 2, (B, X): 3 }` instead
             // of nested braces: `{ A: { X: 1, Y: 2 }, B: { X: 3 } }`.
-            let mut flat: Vec<(Vec<&str>, &Value)> = Vec::new();
-            flatten_indexed_entries(entries, &mut Vec::new(), &mut flat);
+            let mut flat: Vec<(Vec<String>, &Value)> = Vec::new();
+            flatten_indexed_entries(value, &mut Vec::new(), &mut flat);
             let is_multi = flat.first().is_some_and(|(keys, _)| keys.len() > 1);
             if is_multi {
                 format_tuple_keyed_entries("", &flat, symbols, max_len)
             } else {
-                let single: Vec<(&str, &Value)> =
-                    entries.iter().map(|(k, v)| (k.as_str(), v)).collect();
-                format_braced_entries("", &single, symbols, max_len)
+                let single: Vec<(String, &Value)> = entries
+                    .iter()
+                    .map(|(k, v)| (value.indexed_entry_display_name(k), v))
+                    .collect();
+                format_entries("", &single, Clone::clone, symbols, max_len)
             }
         }
     }
@@ -719,14 +719,17 @@ fn format_braced_entries(
 /// For a nested `Indexed { A: Indexed { X: 1, Y: 2 }, B: Indexed { X: 3 } }`,
 /// produces `[([A, X], 1), ([A, Y], 2), ([B, X], 3)]`.
 fn flatten_indexed_entries<'a>(
-    entries: &'a IndexMap<IndexVariantName, Value>,
-    prefix: &mut Vec<&'a str>,
-    out: &mut Vec<(Vec<&'a str>, &'a Value)>,
+    value: &'a Value,
+    prefix: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, &'a Value)>,
 ) {
+    let Value::Indexed { entries, .. } = value else {
+        return;
+    };
     for (key, val) in entries {
-        prefix.push(key.as_str());
-        if let Value::Indexed { entries: inner, .. } = val {
-            flatten_indexed_entries(inner, prefix, out);
+        prefix.push(value.indexed_entry_display_name(key));
+        if matches!(val, Value::Indexed { .. }) {
+            flatten_indexed_entries(val, prefix, out);
         } else {
             out.push((prefix.clone(), val));
         }
@@ -736,7 +739,7 @@ fn flatten_indexed_entries<'a>(
 
 fn format_tuple_keyed_entries(
     prefix: &str,
-    entries: &[(Vec<&str>, &Value)],
+    entries: &[(Vec<String>, &Value)],
     symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
@@ -831,9 +834,13 @@ fn collect_imported_definitions(
                     // (DAG body member) miss because their non-TopLevel keys
                     // would never travel with the selective import.
                     for (key, def) in &imported_table.definitions {
-                        let Some(local_key) =
-                            rekey_selective_import(key, &original_name, &local_name)
-                        else {
+                        let Some(local_key) = rekey_selective_import(
+                            key,
+                            def.category,
+                            import_item.namespace,
+                            original_name.as_str(),
+                            &local_name,
+                        ) else {
                             continue;
                         };
                         insert_imported_def(&mut result, local_key, imported_uri, source, def);
@@ -864,23 +871,43 @@ fn collect_imported_definitions(
 /// Returns `Some(local_key)` if `key` denotes the imported name `original` or
 /// something semantically attached to it (its variants, fields, qualified body
 /// members) — with the parent / qualifier rewritten to the local alias `local`.
-/// Returns `None` for unrelated entries.
-fn rekey_selective_import(key: &SymbolKey, original: &str, local: &str) -> Option<SymbolKey> {
+/// Returns `None` for unrelated entries or entries in a namespace the import
+/// item did not request (for example, `import lib.{type Student}` must not also
+/// import the `Student` constructor).
+fn rekey_selective_import(
+    key: &SymbolKey,
+    category: SymbolCategory,
+    namespace: graphcal_compiler::desugar::resolved_ast::ImportItemNamespace,
+    original: &str,
+    local: &str,
+) -> Option<SymbolKey> {
+    if !selective_import_allows_category(namespace, category) {
+        return None;
+    }
+
     match key {
         SymbolKey::TopLevel(name) if name == original => {
             Some(SymbolKey::TopLevel(local.to_string()))
         }
-        SymbolKey::Variant { parent, variant } if parent == original => Some(SymbolKey::Variant {
-            parent: local.to_string(),
-            variant: variant.clone(),
-        }),
-        SymbolKey::Field {
-            struct_name,
-            field_name,
-        } if struct_name == original => Some(SymbolKey::Field {
-            struct_name: local.to_string(),
-            field_name: field_name.clone(),
-        }),
+        SymbolKey::Constructor(path) => path
+            .rekey_first_segment(original, local)
+            .map(SymbolKey::Constructor),
+        SymbolKey::Variant { parent, variant } => {
+            parent
+                .rekey_first_segment(original, local)
+                .map(|parent| SymbolKey::Variant {
+                    parent,
+                    variant: variant.clone(),
+                })
+        }
+        SymbolKey::Field { owner, field_name } => {
+            owner
+                .rekey_first_segment(original, local)
+                .map(|owner| SymbolKey::Field {
+                    owner,
+                    field_name: field_name.clone(),
+                })
+        }
         SymbolKey::Qualified { module, name } if module.first().is_some_and(|m| m == original) => {
             let mut rekeyed = Vec::with_capacity(module.len());
             rekeyed.push(local.to_string());
@@ -894,14 +921,29 @@ fn rekey_selective_import(key: &SymbolKey, original: &str, local: &str) -> Optio
     }
 }
 
+const fn selective_import_allows_category(
+    namespace: graphcal_compiler::desugar::resolved_ast::ImportItemNamespace,
+    category: SymbolCategory,
+) -> bool {
+    match namespace {
+        graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Type => {
+            matches!(category, SymbolCategory::StructType | SymbolCategory::Field)
+        }
+        graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Default => {
+            !matches!(category, SymbolCategory::StructType)
+        }
+    }
+}
+
 /// Re-key an imported-file table entry for a module import (`import lib as m;`).
 ///
 /// `TopLevel(x)` becomes `Qualified { module: [m], name: x }`. `Qualified` keys
 /// nest the module alias as a new outer segment so `Qualified { module: [dag], name: out }`
 /// in the imported file becomes `Qualified { module: [m, dag], name: out }` here —
-/// matching the call-site key produced for `@m.dag(args).out`. Non-addressable
-/// keys (`Variant`, `Field`, `ExprScoped`) pass through unchanged since the
-/// grammar gives the caller no way to qualify them with the module alias.
+/// matching the call-site key produced for `@m.dag(args).out`. Variant,
+/// constructor, and field parents are re-keyed structurally, so
+/// `module.Index.Variant` and `module.Constructor(field: ...)` navigate to the
+/// declaration that owns the imported module rather than a same-leaf local item.
 fn rekey_module_import(key: &SymbolKey, module_name: &str) -> SymbolKey {
     match key {
         SymbolKey::TopLevel(name) => SymbolKey::Qualified {
@@ -917,7 +959,16 @@ fn rekey_module_import(key: &SymbolKey, module_name: &str) -> SymbolKey {
                 name: name.clone(),
             }
         }
-        other => other.clone(),
+        SymbolKey::Constructor(path) => SymbolKey::Constructor(path.prepend_module(module_name)),
+        SymbolKey::Variant { parent, variant } => SymbolKey::Variant {
+            parent: parent.prepend_module(module_name),
+            variant: variant.clone(),
+        },
+        SymbolKey::Field { owner, field_name } => SymbolKey::Field {
+            owner: owner.prepend_module(module_name),
+            field_name: field_name.clone(),
+        },
+        other @ SymbolKey::ExprScoped { .. } => other.clone(),
     }
 }
 
@@ -1212,6 +1263,18 @@ mod tests {
         }
     }
 
+    fn test_owner() -> graphcal_compiler::dag_id::DagId {
+        graphcal_compiler::dag_id::DagId::root("<lsp-format-test>")
+    }
+
+    fn test_struct(type_name: StructTypeName, fields: IndexMap<FieldName, Value>) -> Value {
+        Value::struct_with_owner(test_owner(), type_name, fields)
+    }
+
+    fn test_indexed(index_name: IndexName, entries: IndexMap<IndexVariantName, Value>) -> Value {
+        Value::indexed_with_owner(test_owner(), index_name, entries)
+    }
+
     #[test]
     fn format_scalar_dimensionless() {
         let symbols = empty_symbols();
@@ -1238,10 +1301,7 @@ mod tests {
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("dv1"), scalar(100.0));
         fields.insert(FieldName::new("dv2"), scalar(200.0));
-        let val = Value::Struct {
-            type_name: StructTypeName::new("TransferResult"),
-            fields,
-        };
+        let val = test_struct(StructTypeName::new("TransferResult"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "TransferResult { dv1: 100, dv2: 200 }"
@@ -1251,10 +1311,7 @@ mod tests {
     #[test]
     fn format_struct_empty_fields() {
         let symbols = empty_symbols();
-        let val = Value::Struct {
-            type_name: StructTypeName::new("Nominal"),
-            fields: IndexMap::new(),
-        };
+        let val = test_struct(StructTypeName::new("Nominal"), IndexMap::new());
         assert_eq!(format_value_inline(&val, &symbols), "Nominal {}");
     }
 
@@ -1264,10 +1321,7 @@ mod tests {
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("thrust"), scalar(0.5));
         fields.insert(FieldName::new("duration"), scalar(3600.0));
-        let val = Value::Struct {
-            type_name: StructTypeName::new("ManeuverKind"),
-            fields,
-        };
+        let val = test_struct(StructTypeName::new("ManeuverKind"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "ManeuverKind { thrust: 0.5, duration: 3600 }"
@@ -1281,20 +1335,14 @@ mod tests {
         entries.insert(IndexVariantName::new("A"), scalar(1.0));
         entries.insert(IndexVariantName::new("B"), scalar(2.0));
         entries.insert(IndexVariantName::new("C"), scalar(3.0));
-        let val = Value::Indexed {
-            index_name: IndexName::new("Phase"),
-            entries,
-        };
+        let val = test_indexed(IndexName::new("Phase"), entries);
         assert_eq!(format_value_inline(&val, &symbols), "{ A: 1, B: 2, C: 3 }");
     }
 
     #[test]
     fn format_indexed_empty() {
         let symbols = empty_symbols();
-        let val = Value::Indexed {
-            index_name: IndexName::new("Phase"),
-            entries: IndexMap::new(),
-        };
+        let val = test_indexed(IndexName::new("Phase"), IndexMap::new());
         assert_eq!(format_value_inline(&val, &symbols), "{}");
     }
 
@@ -1307,10 +1355,7 @@ mod tests {
         entries.insert(IndexVariantName::new("LongVariantBeta"), scalar(2.34567));
         entries.insert(IndexVariantName::new("LongVariantGamma"), scalar(3.45678));
         entries.insert(IndexVariantName::new("LongVariantDelta"), scalar(4.56789));
-        let val = Value::Indexed {
-            index_name: IndexName::new("Idx"),
-            entries,
-        };
+        let val = test_indexed(IndexName::new("Idx"), entries);
         let result = format_value_inline(&val, &symbols);
         assert!(
             result.len() <= INLAY_HINT_MAX_LEN + 10,
@@ -1324,16 +1369,10 @@ mod tests {
         let symbols = empty_symbols();
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("x"), scalar(1.0));
-        let struct_val = Value::Struct {
-            type_name: StructTypeName::new("Point"),
-            fields,
-        };
+        let struct_val = test_struct(StructTypeName::new("Point"), fields);
         let mut entries = IndexMap::new();
         entries.insert(IndexVariantName::new("A"), struct_val);
-        let val = Value::Indexed {
-            index_name: IndexName::new("Idx"),
-            entries,
-        };
+        let val = test_indexed(IndexName::new("Idx"), entries);
         assert_eq!(format_value_inline(&val, &symbols), "{ A: Point { x: 1 } }");
     }
 
@@ -1349,22 +1388,13 @@ mod tests {
         let mut entries = IndexMap::new();
         entries.insert(
             IndexVariantName::new("A"),
-            Value::Indexed {
-                index_name: IndexName::new("Col"),
-                entries: inner_a,
-            },
+            test_indexed(IndexName::new("Col"), inner_a),
         );
         entries.insert(
             IndexVariantName::new("B"),
-            Value::Indexed {
-                index_name: IndexName::new("Col"),
-                entries: inner_b,
-            },
+            test_indexed(IndexName::new("Col"), inner_b),
         );
-        let val = Value::Indexed {
-            index_name: IndexName::new("Row"),
-            entries,
-        };
+        let val = test_indexed(IndexName::new("Row"), entries);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "{ (A, X): 1, (A, Y): 2, (B, X): 3, (B, Y): 4 }"
@@ -1380,23 +1410,14 @@ mod tests {
         let mut mid = IndexMap::new();
         mid.insert(
             IndexVariantName::new("Launch"),
-            Value::Indexed {
-                index_name: IndexName::new("Maneuver"),
-                entries: inner_most,
-            },
+            test_indexed(IndexName::new("Maneuver"), inner_most),
         );
         let mut outer = IndexMap::new();
         outer.insert(
             IndexVariantName::new("Nom"),
-            Value::Indexed {
-                index_name: IndexName::new("Phase"),
-                entries: mid,
-            },
+            test_indexed(IndexName::new("Phase"), mid),
         );
-        let val = Value::Indexed {
-            index_name: IndexName::new("Scenario"),
-            entries: outer,
-        };
+        let val = test_indexed(IndexName::new("Scenario"), outer);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "{ (Nom, Launch, Dep): 100 }"
@@ -1417,22 +1438,13 @@ mod tests {
         let mut entries = IndexMap::new();
         entries.insert(
             IndexVariantName::new("LongOuter1"),
-            Value::Indexed {
-                index_name: IndexName::new("Inner"),
-                entries: inner_a,
-            },
+            test_indexed(IndexName::new("Inner"), inner_a),
         );
         entries.insert(
             IndexVariantName::new("LongOuter2"),
-            Value::Indexed {
-                index_name: IndexName::new("Inner"),
-                entries: inner_b,
-            },
+            test_indexed(IndexName::new("Inner"), inner_b),
         );
-        let val = Value::Indexed {
-            index_name: IndexName::new("Outer"),
-            entries,
-        };
+        let val = test_indexed(IndexName::new("Outer"), entries);
         let result = format_value_inline(&val, &symbols);
         assert!(
             result.len() <= INLAY_HINT_MAX_LEN + 10,
@@ -1801,7 +1813,7 @@ node bad: Mass = mass + length;
         let analysis = run_analysis(&uri, &text);
 
         let palette_red_key = crate::symbol_table::SymbolKey::Variant {
-            parent: "Palette".to_string(),
+            parent: crate::symbol_table::SymbolPath::local("Palette"),
             variant: "Red".to_string(),
         };
         assert!(
@@ -1809,5 +1821,64 @@ node bad: Mass = mass + length;
             "expected imported variant under local alias `Palette.Red`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
+    }
+
+    #[test]
+    fn goto_definition_uses_qualified_same_leaf_import_identity() {
+        use crate::resolve::{SymbolLocation, resolve_symbol_at};
+
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"proj\"\n"),
+            (
+                "src/proj/a.gcl",
+                "pub index Phase = { Burn, Coast };\n\
+                 pub type Item { Pick(distance: Dimensionless), Idle }\n\
+                 pub const node bias: Dimensionless = 1.0;\n",
+            ),
+            (
+                "src/proj/b.gcl",
+                "pub index Phase = { Burn, Coast };\n\
+                 pub type Item { Pick(distance: Dimensionless), Idle }\n\
+                 pub const node bias: Dimensionless = 2.0;\n",
+            ),
+            (
+                "src/proj/main.gcl",
+                "import proj.a as a;\n\
+                 import proj.b as b;\n\n\
+                 const node from_a: Dimensionless = a.bias;\n\
+                 node phase: a.Phase = a.Phase.Burn;\n\
+                 node item: a.Item = a.Pick(distance: a.bias);\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/proj/main.gcl");
+        let a_path = dir.path().join("src/proj/a.gcl");
+        let b_path = dir.path().join("src/proj/b.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let a_uri = Url::from_file_path(a_path.canonicalize().unwrap()).unwrap();
+        let b_uri = Url::from_file_path(b_path.canonicalize().unwrap()).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        for (needle, token_prefix) in [
+            ("a.bias", "a."),
+            ("a.Phase =", "a."),
+            ("a.Phase.Burn", "a.Phase."),
+            ("a.Item", "a."),
+            ("a.Pick", "a."),
+        ] {
+            let offset = text.find(needle).expect("token in main.gcl") + token_prefix.len();
+            let resolved = resolve_symbol_at(&analysis, offset + 1)
+                .unwrap_or_else(|| panic!("resolve `{needle}`"));
+            let SymbolLocation::Imported(imported) = resolved.location else {
+                panic!("expected `{needle}` to resolve to an imported definition");
+            };
+            assert_eq!(imported.uri, a_uri, "`{needle}` should jump to a.gcl");
+            assert_ne!(imported.uri, b_uri, "`{needle}` must not jump to b.gcl");
+        }
     }
 }

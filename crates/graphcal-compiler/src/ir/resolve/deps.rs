@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::desugar::resolved_ast::{Expr, ExprKind, ParamBinding};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{classify_special_fn, is_aggregation_fn, is_time_scale_name};
-use crate::syntax::names::{DeclName, ScopedName};
+use crate::syntax::names::ScopedName;
 use crate::syntax::visitor::ExprVisitor;
 use miette::NamedSource;
 
@@ -52,7 +52,7 @@ impl RefCollector<'_> {
                     Ok(())
                 } else {
                     Err(GraphcalError::UnknownConstRef {
-                        name: DeclName::new(scoped.to_string()),
+                        name: scoped.clone(),
                         src: self.src.clone(),
                         span: ident.span.into(),
                     })
@@ -72,7 +72,7 @@ impl RefCollector<'_> {
                     Ok(())
                 } else {
                     Err(GraphcalError::UnknownGraphRef {
-                        name: DeclName::new(scoped.to_string()),
+                        name: scoped.clone(),
                         src: self.src.clone(),
                         span: ident.span.into(),
                     })
@@ -93,9 +93,15 @@ impl RefCollector<'_> {
         let is_bare = !ident.value.is_qualified();
         if is_bare && (self.builtin_consts.contains_key(lookup) || is_time_scale_name(lookup)) {
             Ok(())
+        } else if !is_bare {
+            // A qualified const-like path may later resolve to an index
+            // variant or constructor through module-aware HIR. This source-AST
+            // dependency visitor has no module resolver, so it must not reject
+            // the path before the typed consumer gets a chance to classify it.
+            Ok(())
         } else {
             Err(GraphcalError::UnknownConstRef {
-                name: DeclName::new(ident.value.to_string()),
+                name: ident.value.clone(),
                 src: self.src.clone(),
                 span: ident.span.into(),
             })
@@ -104,13 +110,20 @@ impl RefCollector<'_> {
 
     fn handle_fn_call(
         &self,
-        name: &crate::syntax::span::Spanned<crate::syntax::names::FnName>,
+        callee: &crate::syntax::ast::IdentPath,
         args: &[Expr],
     ) -> Result<(), GraphcalError> {
-        let name_str = name.value.as_str();
+        let Some(name) = callee.as_bare() else {
+            return Err(GraphcalError::UnknownFunction {
+                name: callee.display_path(),
+                src: self.src.clone(),
+                span: callee.span().into(),
+            });
+        };
+        let name_str = name.name.as_str();
         if !self.builtin_fns.contains_key(name_str) && classify_special_fn(name_str).is_none() {
             return Err(GraphcalError::UnknownFunction {
-                name: name.value.clone(),
+                name: name_str.to_string(),
                 src: self.src.clone(),
                 span: name.span.into(),
             });
@@ -122,7 +135,7 @@ impl RefCollector<'_> {
             && !is_aggregation_fn(name_str)
         {
             return Err(GraphcalError::WrongArity {
-                name: name.value.clone(),
+                name: crate::syntax::names::FnName::new(name_str),
                 expected: builtin.arity(),
                 got: args.len(),
                 src: self.src.clone(),
@@ -151,8 +164,8 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for RefCollector<'_> {
     }
 
     fn visit_fn_call(&mut self, expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
-        if let ExprKind::FnCall { name, .. } = &expr.kind {
-            self.handle_fn_call(name, args)?;
+        if let ExprKind::FnCall { callee, .. } = &expr.kind {
+            self.handle_fn_call(callee, args)?;
         }
         for arg in args {
             self.visit_expr(arg)?;

@@ -363,6 +363,30 @@ pub fn nat_range_index_name(size: u64) -> String {
     format!("__nat_range_{size}")
 }
 
+/// Canonical owner for compiler-generated Nat range indexes.
+#[must_use]
+pub fn nat_range_synthetic_owner() -> crate::dag_id::DagId {
+    crate::dag_id::DagId::root("<graphcal-synthetic>").child("nat-range")
+}
+
+/// Resolve a compiler-generated Nat range index name under its synthetic owner.
+#[must_use]
+pub fn nat_range_resolved_index_name(
+    name: crate::syntax::names::IndexName,
+) -> crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Index> {
+    crate::syntax::names::ResolvedName::from_def(nat_range_synthetic_owner(), name)
+}
+
+/// Resolve a compiler-generated Nat range index of the given size.
+#[must_use]
+pub fn nat_range_resolved_index_size(
+    size: u64,
+) -> crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Index> {
+    nat_range_resolved_index_name(crate::syntax::names::IndexName::new(nat_range_index_name(
+        size,
+    )))
+}
+
 /// Check if an index name is a synthetic nat range index and extract its size.
 #[must_use]
 pub fn parse_nat_range_index_name(name: &str) -> Option<u64> {
@@ -385,7 +409,10 @@ fn resolve_dim_expr_impl(
             let Some(acc) = acc else {
                 return Ok(None);
             };
-            let Some(base) = dimensions.get(item.term.name.value.as_str()) else {
+            let Some(atom) = item.term.name.value.as_bare() else {
+                return Ok(None);
+            };
+            let Some(base) = dimensions.get(atom.as_str()) else {
                 return Ok(None);
             };
             let exp = item.term.power.unwrap_or(1);
@@ -997,7 +1024,7 @@ mod tests {
     use crate::registry::prelude::load_prelude;
     use crate::syntax::ast::{DimExprItem, DimTerm, UnitExprItem};
     use crate::syntax::dimension::BaseDimId;
-    use crate::syntax::names::TypeLevelName;
+    use crate::syntax::names::NamePath;
     use crate::syntax::span::Span;
     use crate::syntax::span::Spanned;
 
@@ -1018,8 +1045,8 @@ mod tests {
         b.build()
     }
 
-    fn make_dim_term_name(name: &str) -> Spanned<TypeLevelName> {
-        Spanned::new(TypeLevelName::new(name), Span::new(0, 0))
+    fn make_dim_term_name(name: &str) -> Spanned<NamePath> {
+        Spanned::new(NamePath::from(name), Span::new(0, 0))
     }
 
     /// Create a simple dimension `TypeExpr` from a name string.

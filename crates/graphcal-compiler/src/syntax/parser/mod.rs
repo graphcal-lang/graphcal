@@ -3,9 +3,10 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
-use crate::syntax::ast::{Expr, Ident};
+use crate::syntax::ast::{Expr, Ident, IdentPath};
 use crate::syntax::comments::SourceMetadata;
 use crate::syntax::lexer::Lexer;
+use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
@@ -182,18 +183,6 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
-    #[error("index label patterns cannot have field bindings")]
-    #[diagnostic(
-        code(graphcal::P013),
-        help("index labels are bare tags; remove the parenthesized bindings")
-    )]
-    IndexVariantPatternWithBindings {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("field bindings here")]
-        span: SourceSpan,
-    },
-
     #[error("inline DAG call requires `.<out>` projection")]
     #[diagnostic(
         code(graphcal::P014),
@@ -232,7 +221,6 @@ impl ParseError {
             | Self::MultiDeclSingleSlot { src, .. }
             | Self::MultiDeclNoSharedAxis { src, .. }
             | Self::MultiDeclUnsupportedShape { src, .. }
-            | Self::IndexVariantPatternWithBindings { src, .. }
             | Self::InlineDagCallMissingProjection { src, .. } => src,
         }
     }
@@ -447,12 +435,27 @@ impl<'src> Parser<'src> {
     pub(super) fn parse_any_ident(&mut self) -> Result<Ident, ParseError> {
         match self.lexer.next_token() {
             Some((Token::Ident, span)) => Ok(Ident {
-                name: self.lexer.slice_at(span).to_string(),
+                name: NameAtom::new_unchecked_for_parser(self.lexer.slice_at(span).to_string()),
                 span,
             }),
             Some((tok, span)) => Err(self.unexpected_token("identifier", &tok.to_string(), span)),
             None => Err(self.unexpected_eof("identifier")),
         }
+    }
+
+    /// Parse a non-empty dot-separated identifier path.
+    pub(super) fn parse_ident_path(&mut self) -> Result<IdentPath, ParseError> {
+        let first = self.parse_any_ident()?;
+        let mut rest = Vec::new();
+        while self.lexer.peek() == Some(&Token::Dot)
+            && self.lexer.peek_second() == Some(&Token::Ident)
+        {
+            self.lexer.next_token(); // consume `.`
+            rest.push(self.parse_any_ident()?);
+        }
+        Ok(IdentPath::new(crate::syntax::non_empty::NonEmpty::new(
+            first, rest,
+        )))
     }
 }
 

@@ -28,7 +28,7 @@ use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{self, Registry, RegistryBuilder, UnitScale};
 use crate::syntax::dimension::Rational;
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, IndexName, ScopedName, StructTypeName,
+    ConstructorName, DeclName, DimName, IndexName, NameAtom, ScopedName, StructTypeName,
 };
 use crate::syntax::span::Span;
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
@@ -1043,11 +1043,8 @@ impl UnfrozenIR {
             }
             // Prefix plot names referenced by the figure
             for plot_name in &mut entry.decl.plot_names {
-                if dep_names.contains(plot_name.value.as_str()) {
-                    plot_name.value = crate::syntax::names::DeclName::new(format!(
-                        "{prefix}.{}",
-                        plot_name.value
-                    ));
+                if dep_names.contains(plot_name.value.member()) {
+                    plot_name.value = plot_name.value.with_prefix(prefix);
                 }
             }
             let prefixed = entry.name.with_prefix(prefix);
@@ -1068,11 +1065,8 @@ impl UnfrozenIR {
             }
             // Prefix plot names referenced by the layer
             for plot_name in &mut entry.decl.plot_names {
-                if dep_names.contains(plot_name.value.as_str()) {
-                    plot_name.value = crate::syntax::names::DeclName::new(format!(
-                        "{prefix}.{}",
-                        plot_name.value
-                    ));
+                if dep_names.contains(plot_name.value.member()) {
+                    plot_name.value = plot_name.value.with_prefix(prefix);
                 }
             }
             let prefixed = entry.name.with_prefix(prefix);
@@ -1110,8 +1104,9 @@ impl UnfrozenIR {
                             .into_iter()
                             .filter(|key| {
                                 // Drop keys that reference any overridden index.
-                                !key.iter()
-                                    .any(|(idx, _)| index_bindings.contains_key(idx.as_str()))
+                                !key.iter().any(|part| {
+                                    index_bindings.contains_key(part.index.name().as_str())
+                                })
                             })
                             .collect();
                         if !filtered.is_empty() {
@@ -1205,10 +1200,12 @@ impl OverrideReconciliationChecker<'_> {
             TypeExprKind::DimExpr(dim_expr) => {
                 for item in &dim_expr.terms {
                     let name = &item.term.name.value;
-                    if self.type_bindings.contains_key(name.as_str()) {
+                    if let Some(atom) = name.as_bare()
+                        && self.type_bindings.contains_key(atom.as_str())
+                    {
                         return Err(self.orphan_error(
                             "type",
-                            name.as_str(),
+                            atom.as_str(),
                             format!("type `{name}`"),
                         ));
                     }
@@ -1216,9 +1213,14 @@ impl OverrideReconciliationChecker<'_> {
                 Ok(())
             }
             TypeExprKind::TypeApplication { name, type_args } => {
-                let n = name.as_str();
-                if self.type_bindings.contains_key(n) {
-                    return Err(self.orphan_error("type", n, format!("type `{n}`")));
+                if let Some(atom) = name.value.as_bare()
+                    && self.type_bindings.contains_key(atom.as_str())
+                {
+                    return Err(self.orphan_error(
+                        "type",
+                        atom.as_str(),
+                        format!("type `{}`", name.value),
+                    ));
                 }
                 for arg in type_args {
                     self.check_type_expr(arg)?;
@@ -1245,12 +1247,14 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
 
     fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::VariantLiteral { index, variant } = &expr.kind
-            && self.index_bindings.contains_key(index.value.as_str())
+            && self
+                .index_bindings
+                .contains_key(index.value.leaf().as_str())
         {
             return Err(self.orphan_error(
                 "index",
-                index.value.as_ref(),
-                format!("`{}`", variant.value.qualified_by(&index.value)),
+                index.value.leaf().as_str(),
+                format!("`{}.{}`", index.value, variant.value),
             ));
         }
         Ok(())
@@ -1260,12 +1264,14 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
         if let ExprKind::IndexAccess { args, .. } = &expr.kind {
             for arg in args {
                 if let crate::desugar::resolved_ast::IndexArg::Variant { index, variant } = arg
-                    && self.index_bindings.contains_key(index.value.as_str())
+                    && self
+                        .index_bindings
+                        .contains_key(index.value.leaf().as_str())
                 {
                     return Err(self.orphan_error(
                         "index",
-                        index.value.as_ref(),
-                        format!("`{}`", variant.value.qualified_by(&index.value)),
+                        index.value.leaf().as_str(),
+                        format!("`{}.{}`", index.value, variant.value),
                     ));
                 }
             }
@@ -1281,12 +1287,12 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
         for entry in entries {
             let key = entry.keys.first();
             if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
-                && self.index_bindings.contains_key(index_name.as_str())
+                && self.index_bindings.contains_key(index_name.leaf().as_str())
             {
                 return Err(self.orphan_error(
                     "index",
-                    index_name.as_ref(),
-                    format!("`{}`", key.variant.value.qualified_by(index_name)),
+                    index_name.leaf().as_str(),
+                    format!("`{}.{}`", index_name, key.variant.value),
                 ));
             }
             self.visit_expr(&entry.value)?;
@@ -1304,12 +1310,14 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
         for arm in arms {
             if let crate::desugar::resolved_ast::MatchPattern::IndexLabel { index, variant, .. } =
                 &arm.pattern
-                && self.index_bindings.contains_key(index.value.as_str())
+                && self
+                    .index_bindings
+                    .contains_key(index.value.leaf().as_str())
             {
                 return Err(self.orphan_error(
                     "index",
-                    index.value.as_ref(),
-                    format!("`{}`", variant.value.qualified_by(&index.value)),
+                    index.value.leaf().as_str(),
+                    format!("`{}.{}`", index.value, variant.value),
                 ));
             }
             self.visit_expr(&arm.body)?;
@@ -1323,14 +1331,16 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
         fields: &[crate::desugar::resolved_ast::FieldInit],
     ) -> Result<(), Self::Error> {
         if let ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             ..
         } = &expr.kind
         {
-            let n = constructor.value.as_str();
-            if self.type_bindings.contains_key(n) {
-                return Err(self.orphan_error("type", n, format!("constructor `{n}(...)`")));
+            if let Some(constructor) = callee.as_bare() {
+                let n = constructor.name.as_str();
+                if self.type_bindings.contains_key(n) {
+                    return Err(self.orphan_error("type", n, format!("constructor `{n}(...)`")));
+                }
             }
             for arg in generic_args {
                 if let crate::desugar::resolved_ast::GenericArg::Type(ty) = arg {
@@ -1439,9 +1449,9 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
 
     fn visit_variant_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         if let ExprKind::VariantLiteral { index, .. } = &mut expr.kind
-            && let Some(new) = self.bindings.get(index.value.as_str())
+            && let Some(new) = self.bindings.get(index.value.leaf().as_str())
         {
-            index.value = new.clone();
+            index.value = new.clone().into();
         }
         Ok(())
     }
@@ -1451,9 +1461,9 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
             for b in bindings {
                 if let crate::desugar::resolved_ast::ForBindingIndex::Named(ref mut spanned_idx) =
                     b.index
-                    && let Some(new) = self.bindings.get(spanned_idx.value.as_str())
+                    && let Some(new) = self.bindings.get(spanned_idx.value.leaf().as_str())
                 {
-                    spanned_idx.value = new.clone();
+                    spanned_idx.value = new.clone().into();
                 }
             }
             self.visit_expr_mut(body)?;
@@ -1467,8 +1477,8 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
             for arg in args.iter_mut() {
                 match arg {
                     IndexArg::Variant { index, .. } => {
-                        if let Some(new) = self.bindings.get(index.value.as_str()) {
-                            index.value = new.clone();
+                        if let Some(new) = self.bindings.get(index.value.leaf().as_str()) {
+                            index.value = new.clone().into();
                         }
                     }
                     IndexArg::Expr(e) => {
@@ -1487,9 +1497,10 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
             for entry in entries.iter_mut() {
                 for key in &mut entry.keys {
                     if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
-                        && let Some(new) = self.bindings.get(index_name.as_str())
+                        && let Some(new) = self.bindings.get(index_name.leaf().as_str())
                     {
-                        key.index.value = crate::syntax::ast::MapEntryIndex::Named(new.clone());
+                        key.index.value =
+                            crate::syntax::ast::MapEntryIndex::Named(new.clone().into());
                     }
                 }
                 self.visit_expr_mut(&mut entry.value)?;
@@ -1504,9 +1515,9 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
             for arm in arms {
                 if let crate::desugar::resolved_ast::MatchPattern::IndexLabel { index, .. } =
                     &mut arm.pattern
-                    && let Some(new) = self.bindings.get(index.value.as_str())
+                    && let Some(new) = self.bindings.get(index.value.leaf().as_str())
                 {
-                    index.value = new.clone();
+                    index.value = new.clone().into();
                 }
                 self.visit_expr_mut(&mut arm.body)?;
             }
@@ -1553,10 +1564,11 @@ pub fn substitute_type_expr_index_names(
     match &mut type_expr.kind {
         TypeExprKind::Indexed { base, indexes } => {
             for idx_expr in indexes.iter_mut() {
-                if let crate::desugar::resolved_ast::IndexExpr::Name(ident) = idx_expr
-                    && let Some(new_name) = bindings.get(ident.as_str())
+                if let crate::desugar::resolved_ast::IndexExpr::Name(path) = idx_expr
+                    && let Some(atom) = path.value.as_bare()
+                    && let Some(new_name) = bindings.get(atom.as_str())
                 {
-                    ident.value = crate::syntax::names::TypeLevelName::new(new_name.as_str());
+                    path.value = crate::syntax::names::NamePath::from(new_name.as_str());
                 }
             }
             substitute_type_expr_index_names(base, bindings);
@@ -1599,9 +1611,10 @@ where
     match &mut type_expr.kind {
         TypeExprKind::DimExpr(dim_expr) => {
             for item in &mut dim_expr.terms {
-                if let Some(new_name) = bindings.get(item.term.name.as_str()) {
-                    item.term.name.value =
-                        crate::syntax::names::TypeLevelName::new(new_name.as_ref());
+                if let Some(atom) = item.term.name.value.as_bare()
+                    && let Some(new_name) = bindings.get(atom.as_str())
+                {
+                    item.term.name.value = crate::syntax::names::NamePath::from(new_name.as_ref());
                 }
             }
         }
@@ -1609,8 +1622,10 @@ where
             substitute_type_expr_nominal_names(base, bindings);
         }
         TypeExprKind::TypeApplication { name, type_args } => {
-            if let Some(new_name) = bindings.get(name.as_str()) {
-                name.value = crate::syntax::names::TypeLevelName::new(new_name.as_ref());
+            if let Some(atom) = name.value.as_bare()
+                && let Some(new_name) = bindings.get(atom.as_str())
+            {
+                name.value = crate::syntax::names::NamePath::from(new_name.as_ref());
             }
             for arg in type_args {
                 substitute_type_expr_nominal_names(arg, bindings);
@@ -1667,12 +1682,15 @@ pub(crate) fn substitute_type_names_in_expr(
         }
 
         ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             fields,
         } => {
-            if let Some(new_name) = bindings.get(constructor.value.as_str()) {
-                constructor.value = ConstructorName::new(new_name.as_str());
+            if let Some(constructor) = callee.as_bare_mut()
+                && let Some(new_name) = bindings.get(constructor.name.as_str())
+                && let Ok(parsed_name) = NameAtom::parse(new_name.as_ref())
+            {
+                constructor.name = parsed_name;
             }
             for arg in generic_args.iter_mut() {
                 if let GenericArg::Type(ty) = arg {
@@ -1992,7 +2010,15 @@ fn topo_sort_derived_dims<'a>(
             continue;
         };
         for item in &definition.terms {
-            let dep_name = item.term.name.as_str();
+            let Some(dep_name) = item
+                .term
+                .name
+                .value
+                .as_bare()
+                .map(super::super::syntax::names::NameAtom::as_str)
+            else {
+                continue;
+            };
             if dep_name != self_name
                 && let Some(&to) = name_to_idx.get(dep_name)
             {

@@ -26,6 +26,26 @@ fn find_value(result: &EvalResult, name: &str) -> f64 {
         .unwrap()
 }
 
+fn run_mutated_tir_values(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    source: &str,
+) -> crate::eval_expr::RuntimeValueMap {
+    let src = miette::NamedSource::new("test.gcl", std::sync::Arc::new(source.to_string()));
+    let plan = crate::exec_plan::compile(tir, &src).unwrap();
+    let declared_types = tir.build_declared_types(&src).unwrap();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
+    super::runtime::run_eval_loop(
+        &plan,
+        tir,
+        &declared_types,
+        &src,
+        builtin_consts,
+        builtin_fns,
+    )
+    .values
+}
+
 #[test]
 #[expect(
     clippy::suboptimal_flops,
@@ -84,6 +104,48 @@ fn eval_constants_ksr() {
     let area = find_value(&result, "area");
     let expected_area = std::f64::consts::PI * 100.0_f64.powf(2.0);
     assert!((area - expected_area).abs() < 1e-10, "area = {area}");
+}
+
+#[test]
+fn eval_uses_hir_builtin_dispatch_after_syntax_mutation() {
+    let source = "node y: Dimensionless = sqrt(4.0);";
+    let mut tir = compile_to_tir(source, "test.gcl").unwrap();
+    assert!(!tir.root().semantic.expressions.nodes.is_empty());
+    tir.root_mut().nodes[0].expr.kind =
+        graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(
+            "mutated syntax".to_string(),
+        );
+
+    let values = run_mutated_tir_values(&tir, source);
+    let key = crate::decl_key::RuntimeDeclKey::for_local_decl(
+        tir.root(),
+        &graphcal_compiler::syntax::names::ScopedName::local("y"),
+    );
+    let value = values[&key].expect_scalar("y").unwrap();
+    assert!((value - 2.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
+    let source = "index Phase = { Burn };\nnode y: Dimensionless[Phase] = for p: Phase { if p == Phase.Burn { 1.0 } else { 0.0 } };";
+    let mut tir = compile_to_tir(source, "test.gcl").unwrap();
+    assert!(!tir.root().semantic.expressions.nodes.is_empty());
+    tir.root_mut().nodes[0].expr.kind =
+        graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(
+            "mutated syntax".to_string(),
+        );
+
+    let values = run_mutated_tir_values(&tir, source);
+    let key = crate::decl_key::RuntimeDeclKey::for_local_decl(
+        tir.root(),
+        &graphcal_compiler::syntax::names::ScopedName::local("y"),
+    );
+    let crate::eval_expr::RuntimeValue::Indexed { entries, .. } = &values[&key] else {
+        panic!("expected indexed value, got {:?}", values[&key]);
+    };
+    let burn = graphcal_compiler::syntax::names::IndexVariantName::new("Burn");
+    let value = entries[&burn].expect_scalar("Burn entry").unwrap();
+    assert!((value - 1.0).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -891,6 +953,1127 @@ fn project_instantiated_import_graph_ref() {
     );
 }
 
+#[test]
+fn project_qualified_index_type_annotation_and_variant_arg() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/mission");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"mission\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("lib.gcl"),
+        "pub index Phase = { Burn, Coast };\n\
+         pub dim Acceleration = Length / Time^2;\n\
+         pub node thrust: Dimensionless[Phase] = { Phase.Burn: 3.0, Phase.Coast: 5.0 };\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import mission.lib as lib;\n\
+         node thrust: Dimensionless[lib.Phase] = { lib.Phase.Burn: 3.0, lib.Phase.Coast: 5.0 };\n\
+         node burn: Dimensionless = @thrust[lib.Phase.Burn];\n\
+         node accel: lib.Acceleration = 9.80665 m/s^2;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+
+    assert!((find_value(&result, "burn") - 3.0).abs() < f64::EPSILON);
+    assert!((find_value(&result, "accel") - 9.80665).abs() < f64::EPSILON);
+}
+
+fn write_same_leaf_index_project(main_source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub index Phase = { Warm, Cold };\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+fn write_same_leaf_same_variant_index_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+fn write_same_leaf_range_index_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub index Step = linspace(0.0 s, 1.0 s, step: 1.0 s);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub index Step = linspace(0.0 s, 2.0 s, step: 1.0 s);\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+fn write_same_leaf_constructor_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub type Action { Pick(distance: Length), Idle }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub type Command { Pick(duration: Time), Idle }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+fn write_same_leaf_struct_type_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub type Item { Pick(distance: Length), Idle }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub type Item { Pick(duration: Time), Idle }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+fn write_same_leaf_record_type_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub type Item { Item(distance: Length) }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub type Item { Item(duration: Time) }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+fn write_same_leaf_constrained_record_type_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub type Item { Item(distance: Length(min: 1.0 m)) }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub type Item { Item(duration: Time(min: 1.0 s)) }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+fn write_same_leaf_same_field_constrained_record_type_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub type Item { Item(value: Length(min: 1.0 m)) }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub type Item { Item(value: Length(min: 10.0 m)) }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+fn loaded_file_dag_id(
+    project: &crate::loader::LoadedProject,
+    file_name: &str,
+) -> graphcal_compiler::dag_id::DagId {
+    project
+        .files
+        .values()
+        .find(|file| file.path.file_name().and_then(|name| name.to_str()) == Some(file_name))
+        .map_or_else(
+            || panic!("loaded file `{file_name}` not found"),
+            |file| file.dag_id.clone(),
+        )
+}
+
+#[test]
+fn project_constructor_call_uses_resolved_owner_with_same_leaf_constructors() {
+    let (_dir, root) = write_same_leaf_constructor_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node action: a.Action = a.Pick(distance: 2.0 m);\n\
+         node command: b.Command = b.Pick(duration: 3.0 s);\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_match_pattern_uses_resolved_constructor_and_binding() {
+    let (_dir, root) = write_same_leaf_constructor_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node action: a.Action = a.Pick(distance: 2.0 m);\n\
+         node distance: Length = match @action {\n\
+             a.Pick(distance: d) => d,\n\
+             a.Idle => 0.0 m,\n\
+         };\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_struct_type_uses_resolved_owner_with_same_leaf_types() {
+    let (_dir, root) = write_same_leaf_struct_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node action: a.Item = a.Pick(distance: 2.0 m);\n\
+         node command: b.Item = b.Pick(duration: 3.0 s);\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_struct_type_rejects_same_leaf_wrong_owner_constructor() {
+    let (_dir, root) = write_same_leaf_struct_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node bad: a.Item = b.Pick(duration: 3.0 s);\n",
+    );
+
+    match compile_to_tir_project(&root, None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })) => {}
+        other => panic!("expected DimensionMismatchInAnnotation, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_field_access_uses_resolved_struct_type_def_with_same_leaf_types() {
+    let (_dir, root) = write_same_leaf_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node item: a.Item = a.Item(distance: 2.0 m);\n\
+         node distance: Length = @item.distance;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn eval_constructor_calls_preserve_same_leaf_struct_owners() {
+    let (_dir, root) = write_same_leaf_constructor_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node action: a.Action = a.Pick(distance: 2.0 m);\n\
+         node command: b.Command = b.Pick(duration: 3.0 s);\n",
+    );
+
+    let (_tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let a_id = loaded_file_dag_id(&project, "a.gcl");
+    let b_id = loaded_file_dag_id(&project, "b.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+
+    let owner_of_struct = |name: &str| {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == name)
+            .unwrap_or_else(|| panic!("node `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("node `{name}` failed: {e}"));
+        let Value::Struct { type_name, .. } = value else {
+            panic!("expected struct value for `{name}`, got {value:?}");
+        };
+        assert_eq!(type_name.name().as_str(), "Pick");
+        type_name.resolved().clone()
+    };
+
+    assert_eq!(owner_of_struct("action").owner(), &a_id);
+    assert_eq!(owner_of_struct("command").owner(), &b_id);
+}
+
+#[test]
+fn eval_constructor_match_uses_resolved_owner_and_binding() {
+    let (_dir, root) = write_same_leaf_constructor_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node action: a.Action = a.Pick(distance: 2.0 m);\n\
+         node command: b.Command = b.Pick(duration: 3.0 s);\n\
+         node distance: Length = match @action {\n\
+             a.Pick(distance: d) => d,\n\
+             a.Idle => 0.0 m,\n\
+         };\n\
+         node duration: Time = match @command {\n\
+             b.Pick(duration: t) => t,\n\
+             b.Idle => 0.0 s,\n\
+         };\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "distance") - 2.0).abs() < f64::EPSILON);
+    assert!((find_value(&result, "duration") - 3.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_field_access_uses_resolved_struct_type_def_with_same_leaf_types() {
+    let (_dir, root) = write_same_leaf_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node item: a.Item = a.Item(distance: 2.0 m);\n\
+         node other: b.Item = b.Item(duration: 3.0 s);\n\
+         node distance: Length = @item.distance;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "distance") - 2.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_constructor() {
+    let (_dir, root) = write_same_leaf_constructor_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node action: a.Action = a.Pick(distance: 2.0 m);\n\
+         node distance: Length = match @action {\n\
+             a.Pick(distance: d) => d,\n\
+             a.Idle => 0.0 m,\n\
+         };\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let expr = &tir
+        .root()
+        .nodes
+        .iter()
+        .find(|entry| entry.name.member() == "distance")
+        .expect("distance node")
+        .expr;
+    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+        loaded_file_dag_id(&project, "b.gcl"),
+        graphcal_compiler::syntax::names::StructTypeName::new("Command"),
+    );
+    let mut fields = indexmap::IndexMap::new();
+    fields.insert(
+        graphcal_compiler::syntax::names::FieldName::new("distance"),
+        crate::eval_expr::RuntimeValue::Scalar(9.0),
+    );
+    let values = HashMap::from([(
+        crate::decl_key::RuntimeDeclKey::for_local_decl(
+            tir.root(),
+            &graphcal_compiler::syntax::names::ScopedName::local("action"),
+        ),
+        crate::eval_expr::RuntimeValue::Struct {
+            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
+                graphcal_compiler::syntax::names::StructTypeName::new("Pick"),
+                b_owner,
+            ),
+            fields,
+        },
+    )]);
+    let empty_locals = HashMap::new();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
+    let src = &project.files[&project.root].named_source;
+    let ctx = crate::eval_expr::EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+        tir: &tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&values),
+        struct_field_constraints: None,
+    };
+
+    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    match err {
+        GraphcalError::EvalError { message, .. } => {
+            assert!(message.contains("no match arm for variant"), "{message}");
+        }
+        other => panic!("expected EvalError, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
+    let (_dir, root) = write_same_leaf_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node item: a.Item = a.Item(distance: 2.0 m);\n\
+         node other: b.Item = b.Item(duration: 3.0 s);\n\
+         node distance: Length = @item.distance;\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let expr = &tir
+        .root()
+        .nodes
+        .iter()
+        .find(|entry| entry.name.member() == "distance")
+        .expect("distance node")
+        .expr;
+    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+        loaded_file_dag_id(&project, "b.gcl"),
+        graphcal_compiler::syntax::names::StructTypeName::new("Item"),
+    );
+    let mut fields = indexmap::IndexMap::new();
+    fields.insert(
+        graphcal_compiler::syntax::names::FieldName::new("distance"),
+        crate::eval_expr::RuntimeValue::Scalar(99.0),
+    );
+    let values = HashMap::from([(
+        crate::decl_key::RuntimeDeclKey::for_local_decl(
+            tir.root(),
+            &graphcal_compiler::syntax::names::ScopedName::local("item"),
+        ),
+        crate::eval_expr::RuntimeValue::Struct {
+            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
+                graphcal_compiler::syntax::names::StructTypeName::new("Item"),
+                b_owner,
+            ),
+            fields,
+        },
+    )]);
+    let empty_locals = HashMap::new();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
+    let src = &project.files[&project.root].named_source;
+    let ctx = crate::eval_expr::EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+        tir: &tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&values),
+        struct_field_constraints: None,
+    };
+
+    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    match err {
+        GraphcalError::EvalError { message, .. } => {
+            assert!(message.contains("no field `distance`"), "{message}");
+        }
+        other => panic!("expected EvalError, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fields() {
+    let (_dir, root) = write_same_leaf_same_field_constrained_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node a_ok: a.Item = a.Item(value: 2.0 m);\n\
+         node b_bad: b.Item = b.Item(value: 2.0 m);\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let a_ok = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "a_ok")
+        .expect("node a_ok")
+        .1
+        .as_ref();
+    assert!(
+        a_ok.is_ok(),
+        "a_ok should satisfy a.Item's constraint: {a_ok:?}"
+    );
+    let b_bad = result
+        .nodes
+        .iter()
+        .find(|(n, _)| n.as_str() == "b_bad")
+        .expect("node b_bad")
+        .1
+        .as_ref();
+    match b_bad {
+        Err(NodeError::EvalFailed { message }) => {
+            assert!(message.contains("minimum"), "{message}");
+        }
+        other => panic!("expected b_bad constraint failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_declared_type_preserves_same_leaf_index_owner() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let src = &project.files[&project.root].named_source;
+    let a_id = loaded_file_dag_id(&project, "a.gcl");
+    let declared = tir.root().build_declared_types(src).unwrap();
+
+    let graphcal_compiler::registry::declared_type::DeclaredType::Indexed { index, .. } =
+        &declared[&graphcal_compiler::syntax::names::ScopedName::local("series")]
+    else {
+        panic!("expected indexed declared type for `series`");
+    };
+    assert_eq!(index.name().as_str(), "Phase");
+    assert_eq!(index.resolved().owner(), &a_id);
+}
+
+#[test]
+fn project_declared_type_preserves_same_leaf_struct_owner() {
+    let (_dir, root) = write_same_leaf_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node item: a.Item = a.Item(distance: 2.0 m);\n\
+         node other: b.Item = b.Item(duration: 3.0 s);\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let src = &project.files[&project.root].named_source;
+    let a_id = loaded_file_dag_id(&project, "a.gcl");
+    let b_id = loaded_file_dag_id(&project, "b.gcl");
+    let declared = tir.root().build_declared_types(src).unwrap();
+
+    let graphcal_compiler::registry::declared_type::DeclaredType::Struct(item, _) =
+        &declared[&graphcal_compiler::syntax::names::ScopedName::local("item")]
+    else {
+        panic!("expected struct declared type for `item`");
+    };
+    let graphcal_compiler::registry::declared_type::DeclaredType::Struct(other, _) =
+        &declared[&graphcal_compiler::syntax::names::ScopedName::local("other")]
+    else {
+        panic!("expected struct declared type for `other`");
+    };
+    assert_eq!(item.name().as_str(), "Item");
+    assert_eq!(other.name().as_str(), "Item");
+    assert_eq!(item.resolved().owner(), &a_id);
+    assert_eq!(other.resolved().owner(), &b_id);
+}
+
+#[test]
+fn project_struct_field_constraints_preserve_same_leaf_struct_owner() {
+    let (_dir, root) = write_same_leaf_constrained_record_type_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node item: a.Item = a.Item(distance: 2.0 m);\n\
+         node other: b.Item = b.Item(duration: 3.0 s);\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let src = &project.files[&project.root].named_source;
+    let constraints =
+        crate::exec_plan::resolve_struct_field_constraints(&tir, &HashMap::new(), src).unwrap();
+    let a_id = loaded_file_dag_id(&project, "a.gcl");
+    let b_id = loaded_file_dag_id(&project, "b.gcl");
+
+    assert!(constraints.keys().any(|key| {
+        key.owning_type.resolved().owner() == &a_id
+            && key.owning_type.name().as_str() == "Item"
+            && key.constructor.as_str() == "Item"
+            && key.field.as_str() == "distance"
+    }));
+    assert!(constraints.keys().any(|key| {
+        key.owning_type.resolved().owner() == &b_id
+            && key.owning_type.name().as_str() == "Item"
+            && key.constructor.as_str() == "Item"
+            && key.field.as_str() == "duration"
+    }));
+    assert!(
+        constraints
+            .keys()
+            .all(|key| key.owning_type.resolved().owner().segment_count() >= 1)
+    );
+}
+
+#[test]
+fn project_generic_struct_defaults_preserve_same_leaf_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    let module_source = "pub type Marker { Marker }\n\
+         pub type Wrap<D: Dim, F: Type = Marker> { Wrap(value: D) }\n";
+    std::fs::write(root_dir.join("a.gcl"), module_source).unwrap();
+    std::fs::write(root_dir.join("b.gcl"), module_source).unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node a_wrap: a.Wrap<Length> = a.Wrap<Length>(value: 1.0 m);\n\
+         node b_wrap: b.Wrap<Time> = b.Wrap<Time>(value: 1.0 s);\n",
+    )
+    .unwrap();
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let a_id = loaded_file_dag_id(&project, "a.gcl");
+    let b_id = loaded_file_dag_id(&project, "b.gcl");
+    let marker_owner = |decl: &str| {
+        let key = graphcal_compiler::syntax::names::ScopedName::local(decl);
+        let graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct {
+            name: wrap,
+            type_args,
+            ..
+        } = &tir.root().resolved_decl_types[&key]
+        else {
+            panic!("expected generic struct annotation for `{decl}`");
+        };
+        assert_eq!(wrap.as_str(), "Wrap");
+        let graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(marker_resolved, _) =
+            &type_args[1]
+        else {
+            panic!(
+                "expected default marker type arg for `{decl}`, got {:?}",
+                type_args[1]
+            );
+        };
+        assert_eq!(marker_resolved.as_str(), "Marker");
+        marker_resolved.owner().clone()
+    };
+
+    assert_eq!(marker_owner("a_wrap"), a_id);
+    assert_eq!(marker_owner("b_wrap"), b_id);
+}
+
+#[test]
+fn project_index_access_uses_resolved_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
+         node burn: Dimensionless = @series[a.Phase.Burn];\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_index_access_rejects_same_leaf_wrong_owner() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
+         node bad: Dimensionless = @series[b.Phase.Warm];\n",
+    );
+
+    match compile_to_tir_project(&root, None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::IndexMismatch { .. })) => {}
+        other => panic!("expected IndexMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_for_comp_rejects_same_leaf_wrong_owner() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = for p: b.Phase { 1.0 };\n",
+    );
+
+    match compile_to_tir_project(&root, None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })) => {}
+        other => panic!("expected DimensionMismatchInAnnotation, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_map_literal_uses_resolved_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = {\n\
+             a.Phase.Burn: 1.0,\n\
+             a.Phase.Coast: 2.0,\n\
+         };\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_map_literal_rejects_same_leaf_wrong_owner_key() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = {\n\
+             a.Phase.Burn: 1.0,\n\
+             b.Phase.Warm: 2.0,\n\
+         };\n",
+    );
+
+    match compile_to_tir_project(&root, None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::IndexMismatch { .. })) => {}
+        other => panic!("expected IndexMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_map_literal_missing_variants_uses_resolved_owner() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = {\n\
+             a.Phase.Burn: 1.0,\n\
+         };\n",
+    );
+
+    match compile_to_tir_project(&root, None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::MissingVariants { missing, .. })) => {
+            assert_eq!(missing.len(), 1);
+            assert_eq!(missing[0].as_str(), "Coast");
+        }
+        other => panic!("expected MissingVariants, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_table_literal_uses_resolved_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a.{ Phase };\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[Phase] = table[Phase] {\n\
+             Burn: 1.0;\n\
+             Coast: 2.0;\n\
+         };\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_variant_literal_uses_resolved_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node phase: a.Phase = a.Phase.Burn;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn project_label_match_uses_resolved_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node phase: a.Phase = a.Phase.Burn;\n\
+         node code: Dimensionless = match @phase {\n\
+             a.Phase.Burn => 1.0,\n\
+             a.Phase.Coast => 2.0,\n\
+         };\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "code") - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn project_label_match_rejects_same_leaf_wrong_owner_pattern() {
+    let (_dir, root) = write_same_leaf_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node phase: a.Phase = a.Phase.Burn;\n\
+         node code: Dimensionless = match @phase {\n\
+             a.Phase.Burn => 1.0,\n\
+             b.Phase.Warm => 2.0,\n\
+         };\n",
+    );
+
+    match compile_to_tir_project(&root, None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::IndexMismatch { .. })) => {}
+        other => panic!("expected IndexMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_expected_fail_keys_use_resolved_index_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_same_variant_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node a_checks: Bool[a.Phase] = {\n\
+             a.Phase.Burn: false,\n\
+             a.Phase.Coast: true,\n\
+         };\n\
+         #[expected_fail(a.Phase.Burn)]\n\
+         assert a_expected = @a_checks;\n\
+         node b_checks: Bool[b.Phase] = {\n\
+             b.Phase.Burn: false,\n\
+             b.Phase.Coast: true,\n\
+         };\n\
+         #[expected_fail(a.Phase.Burn)]\n\
+         assert b_unexpected = @b_checks;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let assert_result = |name: &str| {
+        result
+            .assertions
+            .iter()
+            .find(|(assert_name, _, _)| assert_name.as_str() == name)
+            .unwrap_or_else(|| panic!("assertion `{name}` not found"))
+            .1
+            .clone()
+    };
+    assert_eq!(assert_result("a_expected"), AssertResult::Pass);
+    match assert_result("b_unexpected") {
+        AssertResult::Fail { message } => assert!(message.contains("failed at"), "{message}"),
+        other => panic!("expected b_unexpected to fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() {
+    let (_dir, root) = write_same_leaf_same_variant_index_project(
+        "import collide.a.{ Phase };\n\
+         import collide.a as a;\n\
+         import collide.b as b;\n\
+         dag pick_a {\n\
+             param series: Dimensionless[Phase];\n\
+             pub node burn: Dimensionless = @series[Phase.Burn];\n\
+             pub node echoed: Dimensionless[Phase] = for p: Phase { @series[p] };\n\
+         }\n\
+         node literal_a: a.Phase = a.Phase.Burn;\n\
+         node literal_b: b.Phase = b.Phase.Burn;\n\
+         node map_a: Dimensionless[a.Phase] = {\n\
+             a.Phase.Burn: 10.0,\n\
+             a.Phase.Coast: 20.0,\n\
+         };\n\
+         node table_a: Dimensionless[Phase] = table[Phase] {\n\
+             Burn: 3.0;\n\
+             Coast: 4.0;\n\
+         };\n\
+         node for_a: Dimensionless[a.Phase] = for p: a.Phase {\n\
+             match p {\n\
+                 a.Phase.Burn => @map_a[p],\n\
+                 a.Phase.Coast => @pick_a(series: @map_a).echoed[p],\n\
+             }\n\
+         };\n\
+         node scan_a: Dimensionless[a.Phase] = scan(@map_a, 0.0, |acc, val| acc + val);\n\
+         node total: Dimensionless = @pick_a(series: @map_a).burn\n\
+             + @table_a[Phase.Burn]\n\
+             + @for_a[a.Phase.Coast]\n\
+             + @scan_a[a.Phase.Coast];\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "total") - 63.0).abs() < f64::EPSILON);
+
+    let owner_of_indexed = |name: &str| {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == name)
+            .unwrap_or_else(|| panic!("node `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("node `{name}` failed: {e}"));
+        let Value::Indexed { index_name, .. } = value else {
+            panic!("expected indexed value for `{name}`, got {value:?}");
+        };
+        index_name.resolved().clone()
+    };
+    let owner_of_label = |name: &str| {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == name)
+            .unwrap_or_else(|| panic!("node `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("node `{name}` failed: {e}"));
+        let Value::Label { index_name, .. } = value else {
+            panic!("expected label value for `{name}`, got {value:?}");
+        };
+        index_name.resolved().clone()
+    };
+
+    let a_owner = owner_of_indexed("map_a");
+    let b_owner = owner_of_label("literal_b");
+    assert_ne!(a_owner, b_owner);
+    assert_eq!(owner_of_indexed("table_a"), a_owner);
+    assert_eq!(owner_of_indexed("for_a"), a_owner);
+    assert_eq!(owner_of_indexed("scan_a"), a_owner);
+    assert_eq!(owner_of_label("literal_a"), a_owner);
+}
+
+#[test]
+fn eval_unfold_uses_resolved_declared_range_index_owner_with_same_leaf_indexes() {
+    let (_dir, root) = write_same_leaf_range_index_project(
+        "import collide.b as b;\n\
+         import collide.a as a;\n\
+         node y: Dimensionless[a.Step] = unfold(0.0, |prev_t, t| @y[prev_t] + 1.0);\n",
+    );
+
+    let (_tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let a_owner = loaded_file_dag_id(&project, "a.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let value = result
+        .nodes
+        .iter()
+        .find(|(name, _)| name.as_str() == "y")
+        .expect("node y")
+        .1
+        .as_ref()
+        .expect("node y value");
+    let Value::Indexed {
+        index_name,
+        entries,
+        ..
+    } = value
+    else {
+        panic!("expected indexed value for `y`, got {value:?}");
+    };
+    assert_eq!(entries.len(), 2);
+    assert_eq!(index_name.resolved().owner(), &a_owner);
+}
+
+#[test]
+fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
+    let (_dir, root) = write_same_leaf_same_variant_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node series: Dimensionless[a.Phase] = {\n\
+             a.Phase.Burn: 1.0,\n\
+             a.Phase.Coast: 2.0,\n\
+         };\n\
+         node burn: Dimensionless = @series[a.Phase.Burn];\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let expr = &tir
+        .root()
+        .nodes
+        .iter()
+        .find(|entry| entry.name.member() == "burn")
+        .expect("burn node")
+        .expr;
+    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+        loaded_file_dag_id(&project, "b.gcl"),
+        graphcal_compiler::syntax::names::IndexName::new("Phase"),
+    );
+    let mut entries = indexmap::IndexMap::new();
+    entries.insert(
+        graphcal_compiler::syntax::names::IndexVariantName::new("Burn"),
+        crate::eval_expr::RuntimeValue::Scalar(99.0),
+    );
+    entries.insert(
+        graphcal_compiler::syntax::names::IndexVariantName::new("Coast"),
+        crate::eval_expr::RuntimeValue::Scalar(100.0),
+    );
+    let values = HashMap::from([(
+        crate::decl_key::RuntimeDeclKey::for_local_decl(
+            tir.root(),
+            &graphcal_compiler::syntax::names::ScopedName::local("series"),
+        ),
+        crate::eval_expr::RuntimeValue::Indexed {
+            index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
+                b_owner,
+            ),
+            entries,
+        },
+    )]);
+    let empty_locals = HashMap::new();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
+    let src = &project.files[&project.root].named_source;
+    let ctx = crate::eval_expr::EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+        tir: &tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&values),
+        struct_field_constraints: None,
+    };
+
+    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    match err {
+        GraphcalError::EvalError { message, .. } => {
+            assert!(message.contains("index argument belongs to"), "{message}");
+        }
+        other => panic!("expected EvalError, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
+    let (_dir, root) = write_same_leaf_same_variant_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node phase: a.Phase = a.Phase.Burn;\n\
+         node code: Dimensionless = match @phase {\n\
+             a.Phase.Burn => 1.0,\n\
+             a.Phase.Coast => 2.0,\n\
+         };\n",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let expr = &tir
+        .root()
+        .nodes
+        .iter()
+        .find(|entry| entry.name.member() == "code")
+        .expect("code node")
+        .expr;
+    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+        loaded_file_dag_id(&project, "b.gcl"),
+        graphcal_compiler::syntax::names::IndexName::new("Phase"),
+    );
+    let values = HashMap::from([(
+        crate::decl_key::RuntimeDeclKey::for_local_decl(
+            tir.root(),
+            &graphcal_compiler::syntax::names::ScopedName::local("phase"),
+        ),
+        crate::eval_expr::RuntimeValue::Label {
+            index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
+                b_owner,
+            ),
+            variant: graphcal_compiler::syntax::names::IndexVariantName::new("Burn"),
+        },
+    )]);
+    let empty_locals = HashMap::new();
+    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
+    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
+    let src = &project.files[&project.root].named_source;
+    let ctx = crate::eval_expr::EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+        tir: &tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&values),
+        struct_field_constraints: None,
+    };
+
+    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    match err {
+        GraphcalError::EvalError { message, .. } => {
+            assert!(message.contains("no match arm for label"), "{message}");
+        }
+        other => panic!("expected EvalError, got {other:?}"),
+    }
+}
+
 // ---- Bare module path eval tests ----
 mod prop {
     use super::*;
@@ -1330,6 +2513,185 @@ fn eval_import_namespace_alias_at_field() {
 }
 
 #[test]
+fn eval_qualified_const_refs_with_colliding_leaf_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub const node shared: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub const node shared: Dimensionless = 3.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         const node combined: Dimensionless = @a.shared + @b.shared;\n\
+         const node shared: Dimensionless = @combined + 1.0;\n\
+         node out: Dimensionless = @shared;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let out = find_value(&result, "out");
+    assert!((out - 6.0).abs() < 1e-10, "out = {out}");
+}
+
+#[test]
+fn eval_qualified_runtime_refs_with_colliding_leaf_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub node shared: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub node shared: Dimensionless = 3.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include collide.a() as a;\n\
+         include collide.b() as b;\n\
+         node total: Dimensionless = @a.shared + @b.shared;\n\
+         node shared: Dimensionless = @total + 1.0;\n\
+         node out: Dimensionless = @shared;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let out = find_value(&result, "out");
+    assert!((out - 6.0).abs() < 1e-10, "out = {out}");
+}
+
+#[test]
+fn eval_qualified_params_with_colliding_leaf_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "param shared: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "param shared: Dimensionless = 3.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include collide.a() as a;\n\
+         include collide.b() as b;\n\
+         param shared: Dimensionless = 100.0;\n\
+         node total: Dimensionless = @a.shared + @b.shared + @shared;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let total = find_value(&result, "total");
+    assert!((total - 105.0).abs() < 1e-10, "total = {total}");
+}
+
+#[test]
+fn eval_selective_import_aliases_with_colliding_leaf_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub const node shared: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub const node shared: Dimensionless = 3.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import collide.a.{ shared as a_shared };\n\
+         import collide.b.{ shared as b_shared };\n\
+         const node shared: Dimensionless = 100.0;\n\
+         node total: Dimensionless = @a_shared + @b_shared + @shared;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let total = find_value(&result, "total");
+    assert!((total - 105.0).abs() < 1e-10, "total = {total}");
+}
+
+#[test]
+fn eval_overrides_route_selective_same_leaf_params_by_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "param shared: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "param shared: Dimensionless = 3.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include collide.a().{ shared as a_shared };\n\
+         include collide.b().{ shared as b_shared };\n\
+         node total: Dimensionless = @a_shared + @b_shared;\n",
+    )
+    .unwrap();
+
+    let mut overrides = HashMap::new();
+    overrides.insert(DeclName::new("a_shared"), parse_expr("20.0"));
+    overrides.insert(DeclName::new("b_shared"), parse_expr("30.0"));
+    let result = compile_and_eval_project(&root, &overrides, None, &fs()).unwrap();
+    let total = find_value(&result, "total");
+    assert!((total - 50.0).abs() < 1e-10, "total = {total}");
+}
+
+#[test]
 fn eval_inline_dag_include_cross_file_self_import() {
     // Cross-file `include` of a DAG whose body has `import <self>.{...}`
     // (resolved against the dag's parent file). The parent's value must
@@ -1480,6 +2842,147 @@ node out: Length = @forward(v: @src).b;
     let out = find_value(&result, "out");
     // (3 + 1) * 2 = 8
     assert!((out - 8.0).abs() < 1e-10, "expected 8.0, got {out}");
+}
+
+#[test]
+fn eval_cross_file_inline_dag_nested_call_uses_canonical_target_with_same_leaf_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub dag helper {\n\
+             pub node result: Dimensionless = 2.0;\n\
+         }\n\
+         pub dag outer {\n\
+             pub node result: Dimensionless = @helper().result + 10.0;\n\
+         }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub dag helper {\n\
+             pub node result: Dimensionless = 100.0;\n\
+         }\n\
+         pub dag outer {\n\
+             pub node result: Dimensionless = @helper().result + 1000.0;\n\
+         }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         dag helper {\n\
+             pub node result: Dimensionless = 10000.0;\n\
+         }\n\
+         node out_a: Dimensionless = @a.outer().result;\n\
+         node out_b: Dimensionless = @b.outer().result;\n\
+         node out_local: Dimensionless = @helper().result;\n\
+         node total: Dimensionless = @out_a + @out_b + @out_local;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let out_a = find_value(&result, "out_a");
+    let out_b = find_value(&result, "out_b");
+    let out_local = find_value(&result, "out_local");
+    let total = find_value(&result, "total");
+    assert!((out_a - 12.0).abs() < 1e-10, "out_a = {out_a}");
+    assert!((out_b - 1100.0).abs() < 1e-10, "out_b = {out_b}");
+    assert!(
+        (out_local - 10000.0).abs() < 1e-10,
+        "out_local = {out_local}"
+    );
+    assert!((total - 11112.0).abs() < 1e-10, "total = {total}");
+}
+
+#[test]
+fn eval_public_values_preserve_same_leaf_imported_index_owners() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("b.gcl"),
+        "pub index Phase = { Burn, Coast };\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node phase_a: a.Phase = a.Phase.Burn;\n\
+         node phase_b: b.Phase = b.Phase.Burn;\n\
+         node series_a: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
+         node series_b: Dimensionless[b.Phase] = for p: b.Phase { 2.0 };\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+
+    let label_index_owner = |name: &str| {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == name)
+            .unwrap_or_else(|| panic!("value `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"));
+        let Value::Label {
+            index_name,
+            variant,
+        } = value
+        else {
+            panic!("expected label value for `{name}`, got {value:?}");
+        };
+        assert_eq!(index_name.name().as_str(), "Phase");
+        assert_eq!(variant.as_str(), "Burn");
+        index_name.resolved().clone()
+    };
+
+    let phase_a_owner = label_index_owner("phase_a");
+    let other_phase_owner = label_index_owner("phase_b");
+    assert_ne!(phase_a_owner, other_phase_owner);
+
+    for (name, expected_owner) in [("series_a", phase_a_owner), ("series_b", other_phase_owner)] {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.as_str() == name)
+            .unwrap_or_else(|| panic!("value `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"));
+        let Value::Indexed {
+            index_name,
+            entries,
+            ..
+        } = value
+        else {
+            panic!("expected indexed value for `{name}`, got {value:?}");
+        };
+        assert_eq!(index_name.name().as_str(), "Phase");
+        assert_eq!(index_name.resolved(), &expected_owner);
+        assert_eq!(entries.len(), 2);
+    }
 }
 
 #[test]

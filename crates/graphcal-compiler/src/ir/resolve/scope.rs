@@ -54,7 +54,7 @@ pub(super) fn check_no_runtime_graph_refs(
         src,
         make_error: |name: &ScopedName, src: &NamedSource<Arc<String>>, span: Span| {
             GraphcalError::GraphRefInConst {
-                name: name.to_string().into(),
+                name: name.clone(),
                 src: src.clone(),
                 span: span.into(),
             }
@@ -123,7 +123,7 @@ where
     fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::VariantLiteral { index, variant } = &expr.kind {
             (self.check)(
-                index.value.as_ref(),
+                index.value.leaf().as_str(),
                 variant.value.as_ref(),
                 expr.span,
                 self.src,
@@ -137,7 +137,7 @@ where
             for arg in args {
                 if let IndexArg::Variant { index, variant } = arg {
                     (self.check)(
-                        index.value.as_ref(),
+                        index.value.leaf().as_str(),
                         variant.value.as_ref(),
                         expr.span,
                         self.src,
@@ -153,7 +153,7 @@ where
             let key = entry.keys.first();
             if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value {
                 (self.check)(
-                    index_name.as_ref(),
+                    index_name.leaf().as_str(),
                     key.variant.value.as_ref(),
                     key.index.span,
                     self.src,
@@ -179,7 +179,7 @@ where
             } = &arm.pattern
             {
                 (self.check)(
-                    index.value.as_ref(),
+                    index.value.leaf().as_str(),
                     variant.value.as_ref(),
                     *span,
                     self.src,

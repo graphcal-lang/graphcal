@@ -1,6 +1,6 @@
 use crate::syntax::names::{
     DeclName, DimName, FieldName, FnName, GenericParamName, IndexName, IndexVariantName,
-    ModuleAliasName, StructTypeName, UnitName,
+    ModuleAliasName, NameAtom, StructTypeName, UnitName,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
@@ -127,6 +127,30 @@ impl ModulePath {
         self.span
     }
 
+    /// Borrow all path segments in source order.
+    #[must_use]
+    pub fn segments(&self) -> &[Ident] {
+        self.segments.as_slice()
+    }
+
+    /// Number of path segments. Always at least 1.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Returns `false`; provided for API compatibility with sequence-like code.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Returns whether this is a one-segment module path.
+    #[must_use]
+    pub const fn is_bare(&self) -> bool {
+        self.segments.len() == 1
+    }
+
     /// Human-readable path string for diagnostics: `"nasa.rocket.dynamics"`.
     #[must_use]
     pub fn display_path(&self) -> String {
@@ -141,6 +165,28 @@ impl ModulePath {
     #[must_use]
     pub fn leaf(&self) -> &Ident {
         self.segments.last()
+    }
+
+    /// Split the path into qualifier segments and the leaf segment.
+    ///
+    /// The qualifier slice is empty for one-segment paths.
+    #[must_use]
+    pub fn split_last(&self) -> (&[Ident], &Ident) {
+        let (leaf, qualifier) = self.segments.split_last();
+        (qualifier, leaf)
+    }
+
+    /// Returns the qualifier segments before the leaf. Empty for bare paths.
+    #[must_use]
+    pub fn qualifier_segments(&self) -> &[Ident] {
+        self.split_last().0
+    }
+
+    /// Returns qualifier segments and leaf only when this path is qualified.
+    #[must_use]
+    pub fn qualifier_and_leaf(&self) -> Option<(&[Ident], &Ident)> {
+        let (qualifier, leaf) = self.split_last();
+        (!qualifier.is_empty()).then_some((qualifier, leaf))
     }
 }
 /// A single item in an `import` declaration, optionally aliased.
@@ -182,7 +228,9 @@ impl ImportItem {
     /// Returns the alias if present, otherwise the original name.
     #[must_use]
     pub fn local_name(&self) -> &str {
-        self.alias.as_ref().map_or(&self.name.name, |a| &a.name)
+        self.alias
+            .as_ref()
+            .map_or(self.name.name.as_str(), |a| a.name.as_str())
     }
 
     /// The span of the local name (alias span if aliased, otherwise original name span).
@@ -192,16 +240,16 @@ impl ImportItem {
     }
 }
 /// An identifier with its source span.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Ident {
-    pub name: String,
+    pub name: NameAtom,
     pub span: Span,
 }
 
 impl Ident {
     /// Convert this identifier into a `Spanned<T>`, consuming the name and span.
     #[must_use]
-    pub fn into_spanned<T: From<String>>(self) -> Spanned<T> {
+    pub fn into_spanned<T: From<NameAtom>>(self) -> Spanned<T> {
         Spanned::new(T::from(self.name), self.span)
     }
 

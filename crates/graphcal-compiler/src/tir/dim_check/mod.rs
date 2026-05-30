@@ -4,8 +4,9 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::Expr;
+use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{IndexName, ScopedName, StructTypeName};
+use crate::syntax::names::{IndexName, ResolvedName, ScopedName, StructTypeName, namespace};
 
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
@@ -14,7 +15,9 @@ use crate::registry::types::Registry;
 use crate::tir::typed::NatLinearForm;
 
 pub(crate) use helpers::format_inferred_type;
-use helpers::{expect_scalar, format_declared_type, is_bool_type, types_match};
+use helpers::{
+    expect_scalar, format_declared_type, is_bool_type, resolved_type_matches_inferred, types_match,
+};
 use infer::{infer_type, infer_type_with_owner};
 
 mod builtins;
@@ -33,6 +36,156 @@ mod tests;
 
 pub use crate::registry::declared_type::DeclaredType;
 
+/// Index identity carried by inferred collection/label types.
+///
+/// Equality is owner-sensitive; leaf-only names must be resolved before they
+/// become inferred semantic types.
+#[derive(Debug, Clone, Eq)]
+pub struct InferredIndex {
+    reference: IndexTypeRef,
+}
+
+impl InferredIndex {
+    #[must_use]
+    pub fn with_owner(owner: crate::dag_id::DagId, name: IndexName) -> Self {
+        Self {
+            reference: IndexTypeRef::with_owner(owner, name),
+        }
+    }
+
+    #[must_use]
+    pub fn from_resolved(resolved: ResolvedName<namespace::Index>) -> Self {
+        Self {
+            reference: IndexTypeRef::from_resolved(resolved),
+        }
+    }
+
+    #[must_use]
+    pub const fn from_ref(reference: IndexTypeRef) -> Self {
+        Self { reference }
+    }
+
+    #[must_use]
+    pub const fn type_ref(&self) -> &IndexTypeRef {
+        &self.reference
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &IndexName {
+        self.reference.name()
+    }
+
+    #[must_use]
+    pub const fn resolved(&self) -> &ResolvedName<namespace::Index> {
+        self.reference.resolved()
+    }
+
+    #[must_use]
+    pub fn matches_resolved(&self, expected: &ResolvedName<namespace::Index>) -> bool {
+        self.resolved() == expected
+    }
+
+    #[must_use]
+    pub fn matches_ref(&self, expected: &IndexTypeRef) -> bool {
+        self.reference.matches_ref(expected)
+    }
+}
+
+impl PartialEq for InferredIndex {
+    fn eq(&self, other: &Self) -> bool {
+        self.reference.matches_ref(&other.reference)
+    }
+}
+
+impl std::fmt::Display for InferredIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.reference.fmt(f)
+    }
+}
+
+impl std::ops::Deref for InferredIndex {
+    type Target = IndexName;
+
+    fn deref(&self) -> &Self::Target {
+        self.name()
+    }
+}
+
+/// Struct/type identity carried by inferred constructor, match, and field types.
+///
+/// Equality is owner-sensitive; leaf-only names must be resolved before they
+/// become inferred semantic types.
+#[derive(Debug, Clone, Eq)]
+pub struct InferredStructType {
+    reference: StructTypeRef,
+}
+
+impl InferredStructType {
+    #[must_use]
+    pub fn with_owner(owner: crate::dag_id::DagId, name: StructTypeName) -> Self {
+        Self {
+            reference: StructTypeRef::with_owner(owner, name),
+        }
+    }
+
+    #[must_use]
+    pub fn from_resolved(resolved: ResolvedName<namespace::StructType>) -> Self {
+        Self {
+            reference: StructTypeRef::from_resolved(resolved),
+        }
+    }
+
+    #[must_use]
+    pub const fn from_ref(reference: StructTypeRef) -> Self {
+        Self { reference }
+    }
+
+    #[must_use]
+    pub const fn type_ref(&self) -> &StructTypeRef {
+        &self.reference
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &StructTypeName {
+        self.reference.name()
+    }
+
+    #[must_use]
+    pub const fn resolved(&self) -> &ResolvedName<namespace::StructType> {
+        self.reference.resolved()
+    }
+
+    #[must_use]
+    pub fn matches_resolved(&self, expected: &ResolvedName<namespace::StructType>) -> bool {
+        self.resolved() == expected
+    }
+
+    #[must_use]
+    pub fn matches_ref(&self, expected: &StructTypeRef) -> bool {
+        self.reference.matches_ref(expected)
+    }
+}
+
+impl PartialEq for InferredStructType {
+    fn eq(&self, other: &Self) -> bool {
+        self.reference.matches_ref(&other.reference)
+    }
+}
+
+impl std::fmt::Display for InferredStructType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.reference.fmt(f)
+    }
+}
+
+impl std::ops::Deref for InferredStructType {
+    type Target = StructTypeName;
+
+    fn deref(&self) -> &Self::Target {
+        self.name()
+    }
+}
+
 /// The inferred type of an expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InferredType {
@@ -50,12 +203,12 @@ pub enum InferredType {
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
     /// A label of a named index (e.g., `Maneuver.Departure` has type `Label(Maneuver)`).
-    Label(IndexName),
+    Label(InferredIndex),
     /// A struct type, optionally with concrete type arguments for generic structs.
-    Struct(StructTypeName, Vec<Self>),
+    Struct(InferredStructType, Vec<Self>),
     Indexed {
         element: Box<Self>,
-        index: IndexName,
+        index: InferredIndex,
     },
 }
 
@@ -76,6 +229,7 @@ impl InferredType {
 struct DimCheckContext<'a> {
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
     empty_locals: &'a HashMap<String, InferredType>,
+    dag: Option<&'a crate::tir::typed::DagTIR>,
     tir: &'a crate::tir::typed::TIR,
     registry: &'a Registry,
     builtin_fns: &'a HashMap<&'a str, crate::registry::builtins::BuiltinFunction>,
@@ -89,11 +243,26 @@ impl DimCheckContext<'_> {
             expr,
             self.declared_types,
             self.empty_locals,
+            self.dag,
             self.tir,
             self.registry,
             self.builtin_fns,
             self.src,
         )
+    }
+
+    /// Look up the module-aware HIR expression for a local declaration.
+    fn hir_expr_for_decl(
+        &self,
+        name: &crate::syntax::names::ScopedName,
+    ) -> Option<&crate::hir::Expr> {
+        let dag = self.dag?;
+        let key = dag.resolved_decl_key_for_local(name)?;
+        dag.semantic
+            .expressions
+            .consts
+            .get(&key)
+            .or_else(|| dag.semantic.expressions.runtime_expr(&key))
     }
 }
 
@@ -112,17 +281,44 @@ fn check_decl_expr_type(
             src: ctx.src.clone(),
             span: (*type_ann_span).into(),
         })?;
-    let inferred = infer_type_with_owner(
-        expr,
-        Some(name.member()),
-        ctx.declared_types,
-        ctx.empty_locals,
-        ctx.tir,
-        ctx.registry,
-        ctx.builtin_fns,
-        ctx.src,
-    )?;
-    if !types_match(declared, &inferred) {
+    let infer_from_source = || {
+        infer_type_with_owner(
+            expr,
+            Some(name.member()),
+            ctx.declared_types,
+            ctx.empty_locals,
+            ctx.dag,
+            ctx.tir,
+            ctx.registry,
+            ctx.builtin_fns,
+            ctx.src,
+        )
+    };
+    let inferred = match (ctx.dag, ctx.hir_expr_for_decl(name)) {
+        (Some(dag), Some(hir_expr)) => match infer::hir::infer_hir_type_with_owner(
+            hir_expr,
+            Some(name.member()),
+            ctx.declared_types,
+            dag,
+            ctx.tir,
+            ctx.registry,
+            ctx.builtin_fns,
+            ctx.src,
+        ) {
+            Ok(Some(inferred)) => inferred,
+            Ok(None) => infer_from_source()?,
+            Err(err) => return Err(err),
+        },
+        _ => infer_from_source()?,
+    };
+    let matches = ctx
+        .dag
+        .and_then(|dag| dag.resolved_decl_types.get(name))
+        .map_or_else(
+            || types_match(declared, &inferred),
+            |resolved| resolved_type_matches_inferred(resolved, &inferred),
+        );
+    if !matches {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_declared_type(declared, ctx.registry),
             inferred: format_inferred_type(&inferred, ctx.registry),
@@ -278,6 +474,7 @@ fn check_dimensions_dag(
     let ctx = DimCheckContext {
         declared_types: &declared_types,
         empty_locals: &empty_locals,
+        dag: Some(dag),
         tir,
         registry,
         builtin_fns,
@@ -374,6 +571,7 @@ fn check_domain_constraint_dimensions_dag(
                 &bound.value,
                 declared_types,
                 empty_locals,
+                Some(dag),
                 tir,
                 registry,
                 builtin_fns,
@@ -464,15 +662,18 @@ fn check_domain_constraint_targets_dag(
         let type_kind = match strip_indexed(resolved) {
             crate::tir::typed::ResolvedTypeExpr::Bool => "Bool".to_string(),
             crate::tir::typed::ResolvedTypeExpr::Datetime(_) => "Datetime".to_string(),
-            crate::tir::typed::ResolvedTypeExpr::Label(idx, _) => format!("Label({idx})"),
+            crate::tir::typed::ResolvedTypeExpr::Label(idx, _) => {
+                format!("Label({})", idx.as_str())
+            }
             crate::tir::typed::ResolvedTypeExpr::Struct(struct_name, _)
             | crate::tir::typed::ResolvedTypeExpr::GenericStruct {
                 name: struct_name, ..
-            } => format!("struct `{struct_name}`"),
+            } => format!("struct `{}`", struct_name.as_str()),
             crate::tir::typed::ResolvedTypeExpr::Scalar(_)
             | crate::tir::typed::ResolvedTypeExpr::Dimensionless
             | crate::tir::typed::ResolvedTypeExpr::Int
             | crate::tir::typed::ResolvedTypeExpr::GenericDimParam(_, _)
+            | crate::tir::typed::ResolvedTypeExpr::GenericTypeParam(_, _)
             | crate::tir::typed::ResolvedTypeExpr::GenericDimExpr { .. }
             | crate::tir::typed::ResolvedTypeExpr::Indexed { .. } => continue,
         };
@@ -553,7 +754,9 @@ fn field_constraint_target_kind(
         TypeExprKind::Datetime | TypeExprKind::DatetimeApplication { .. } => {
             Some("Datetime".to_string())
         }
-        TypeExprKind::TypeApplication { name, .. } => Some(format!("struct `{}`", name.as_str())),
+        TypeExprKind::TypeApplication { name, .. } => {
+            Some(format!("struct `{}`", name.value.display_path()))
+        }
         // The outer `Indexed` wrapper was stripped above; a nested indexed
         // type at this depth is unusual but constraint-compatible (the base
         // dim is what carries the constraint).
@@ -566,7 +769,17 @@ fn field_constraint_target_kind(
                 && dim_expr.terms[0].term.power.is_none()
                 && let Some(item) = dim_expr.terms.first()
             {
-                let name = item.term.name.as_str();
+                let Some(name) = item
+                    .term
+                    .name
+                    .value
+                    .as_bare()
+                    .map(super::super::syntax::names::NameAtom::as_str)
+                else {
+                    // Qualified type-level references are rejected by type
+                    // resolution; skip this compatibility classifier here.
+                    return None;
+                };
                 if registry.dimensions.get_dimension(name).is_some() {
                     None
                 } else if registry.types.get_type(name).is_some() {
@@ -626,6 +839,7 @@ fn check_field_domain_constraint_dimensions(
                     &bound.value,
                     declared_types,
                     empty_locals,
+                    None,
                     tir,
                     registry,
                     builtin_fns,
@@ -847,6 +1061,7 @@ pub fn check_override_dimension(
         expr,
         declared_types,
         &empty_locals,
+        Some(tir.root()),
         tir,
         registry,
         builtin_fns,
@@ -884,63 +1099,19 @@ enum DagCycleFrame {
     Leave(crate::dag_id::DagId),
 }
 
-struct DagTargetCollector<'a, 'b> {
-    /// Caller TIR — used to translate user-typed call paths to canonical
-    /// [`DagId`](crate::dag_id::DagId) keys via
-    /// [`crate::tir::typed::TIR::resolve_call_path`].
-    tir: &'a crate::tir::typed::TIR,
-    out: &'b mut std::collections::BTreeSet<crate::dag_id::DagId>,
-}
-
-impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Resolved>
-    for DagTargetCollector<'_, '_>
-{
-    type Error = std::convert::Infallible;
-
-    fn visit_inline_dag_ref(
-        &mut self,
-        expr: &crate::desugar::resolved_ast::Expr,
-        args: &[crate::desugar::resolved_ast::ParamBinding],
-    ) -> Result<(), Self::Error> {
-        if let crate::desugar::resolved_ast::ExprKind::InlineDagRef { path, .. } = &expr.kind
-            && let Some(id) = self.tir.resolve_call_path(path)
-        {
-            self.out.insert(id);
-        }
-        for b in args {
-            self.visit_expr(&b.value)?;
-        }
-        Ok(())
-    }
-}
-
-/// Collect inline dag call targets from a compiled DAG's body expressions.
-///
-/// Walks every const/param/node RHS expression and records the canonical
-/// [`DagId`](crate::dag_id::DagId) for each `@dag(args).out` /
-/// `@mod.dag(args).out` reference. The translation from user-typed
-/// `ModulePath` to canonical id goes through
-/// [`crate::tir::typed::TIR::resolve_call_path`] so cross-file qualified
-/// calls use the importer's `module_aliases` map.
+/// Collect inline dag call targets from a compiled DAG's semantic body.
 fn collect_dag_call_targets_from_dag(
-    tir: &crate::tir::typed::TIR,
+    _tir: &crate::tir::typed::TIR,
     dag: &crate::tir::typed::DagTIR,
     out: &mut std::collections::BTreeSet<crate::dag_id::DagId>,
 ) {
-    use crate::syntax::visitor::ExprVisitor;
-
-    let mut collector = DagTargetCollector { tir, out };
-    for entry in &dag.consts {
-        let _ = collector.visit_expr(&entry.expr);
-    }
-    for entry in &dag.nodes {
-        let _ = collector.visit_expr(&entry.expr);
-    }
-    for entry in &dag.params {
-        if let Some(expr) = &entry.default_expr {
-            let _ = collector.visit_expr(expr);
-        }
-    }
+    out.extend(
+        dag.semantic
+            .inline_dag_refs
+            .calls
+            .values()
+            .map(|call| call.target.clone()),
+    );
 }
 
 /// Detect cycles in same-file declaration dependencies.
@@ -960,43 +1131,67 @@ fn detect_decl_cycles(
     use petgraph::algo::toposort;
     use petgraph::graph::DiGraph;
 
-    use crate::syntax::names::ScopedName;
+    use crate::syntax::names::{ResolvedName, ScopedName, namespace};
 
-    fn check<'a>(
+    type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+
+    fn local_resolved_decl_key(
+        dag: &crate::tir::typed::DagTIR,
+        name: &ScopedName,
+        span: crate::syntax::span::Span,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<ResolvedDeclKey, GraphcalError> {
+        dag.resolved_decl_key_for_local(name)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!(
+                    "semantic dependency metadata contains no local canonical key for declaration `{name}`"
+                ),
+                src: src.clone(),
+                span: span.into(),
+            })
+    }
+
+    fn check_resolved<'a>(
+        dag: &crate::tir::typed::DagTIR,
         names_with_spans: impl Iterator<Item = (&'a ScopedName, crate::syntax::span::Span)>,
-        deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
+        deps: &HashMap<ResolvedDeclKey, BTreeSet<ResolvedDeclKey>>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
-        let mut graph = DiGraph::<String, ()>::new();
-        let mut index_map: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
-        let mut spans: HashMap<String, crate::syntax::span::Span> = HashMap::new();
+        let mut graph = DiGraph::<ResolvedDeclKey, ()>::new();
+        let mut index_map: HashMap<ResolvedDeclKey, petgraph::graph::NodeIndex> = HashMap::new();
+        let mut local_name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
+        let mut span_by_key: HashMap<ResolvedDeclKey, crate::syntax::span::Span> = HashMap::new();
         for (name, span) in names_with_spans {
-            let key = name.to_string();
+            let key = local_resolved_decl_key(dag, name, span, src)?;
             let idx = graph.add_node(key.clone());
             index_map.insert(key.clone(), idx);
-            spans.insert(key, span);
+            local_name_by_key.insert(key.clone(), name.clone());
+            span_by_key.insert(key, span);
         }
         if index_map.is_empty() {
             return Ok(());
         }
         for (name, dep_set) in deps {
-            let Some(&to) = index_map.get(name.to_string().as_str()) else {
+            let Some(&to) = index_map.get(name) else {
                 continue;
             };
             for dep in dep_set {
-                if let Some(&from) = index_map.get(dep.to_string().as_str()) {
+                if let Some(&from) = index_map.get(dep) {
                     graph.add_edge(from, to, ());
                 }
             }
         }
         toposort(&graph, None).map(|_| ()).map_err(|cycle| {
             let cycle_node = &graph[cycle.node_id()];
-            let span = spans
+            let span = span_by_key
                 .get(cycle_node)
                 .copied()
                 .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
+            let name = local_name_by_key
+                .get(cycle_node)
+                .map_or_else(|| cycle_node.to_string(), std::string::ToString::to_string);
             GraphcalError::CyclicDependency {
-                name: crate::syntax::names::DeclName::new(cycle_node.clone()),
+                name,
                 src: src.clone(),
                 span: span.into(),
             }
@@ -1004,17 +1199,20 @@ fn detect_decl_cycles(
     }
 
     for dag in tir.dags.values() {
-        check(
+        let deps = &dag.semantic.dependencies;
+        check_resolved(
+            dag,
             dag.consts.iter().map(|e| (&e.name, e.span)),
-            &dag.const_deps,
+            &deps.const_deps,
             src,
         )?;
-        check(
+        check_resolved(
+            dag,
             dag.params
                 .iter()
                 .map(|e| (&e.name, e.span))
                 .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
-            &dag.runtime_deps,
+            &deps.runtime_deps,
             src,
         )?;
     }
@@ -1070,7 +1268,7 @@ fn detect_cross_dag_cycles(
                             .copied()
                             .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
                         return Err(GraphcalError::CyclicDependency {
-                            name: crate::syntax::names::DeclName::new(key.to_string()),
+                            name: key.to_string(),
                             src: src.clone(),
                             span: span.into(),
                         });

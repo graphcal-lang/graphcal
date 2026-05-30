@@ -31,7 +31,7 @@ use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
 use crate::syntax::ast::{ImportItemNamespace, ImportKind, TypeSystemRefKind};
 use crate::syntax::names::{
     ConstructorName, DimName, GenericParamName, IndexName, IndexVariantName, LocalName,
-    ModuleAliasName, ScopedName, StructTypeName,
+    ModuleAliasName, NamePath, ScopedName, StructTypeName,
 };
 use crate::syntax::phase::never;
 use crate::syntax::span::Spanned;
@@ -584,9 +584,9 @@ fn lift_type_expr_kind(
 }
 
 fn lift_type_application_name(
-    name: &Spanned<crate::syntax::names::TypeLevelName>,
+    name: &Spanned<crate::syntax::names::NamePath>,
     _ctx: &ResolveContext,
-) -> Spanned<crate::syntax::names::TypeLevelName> {
+) -> Spanned<crate::syntax::names::NamePath> {
     name.clone()
 }
 
@@ -666,11 +666,11 @@ fn lift_expr_kind(
             operand: Box::new(lift_expr(*operand, ctx)),
         },
         S::FnCall {
-            name,
+            callee,
             type_args,
             args,
         } => dst_ast::ExprKind::FnCall {
-            name,
+            callee,
             type_args: type_args
                 .into_iter()
                 .map(|t| lift_generic_arg(t, ctx))
@@ -699,11 +699,11 @@ fn lift_expr_kind(
             field,
         },
         S::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             fields,
         } => dst_ast::ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args: generic_args
                 .into_iter()
                 .map(|arg| lift_generic_arg(arg, ctx))
@@ -804,7 +804,7 @@ fn lift_expr_kind(
                     let body = lift_expr(arm.body, ctx);
                     ctx.pop_scope();
                     dst_ast::MatchArm {
-                        pattern: arm.pattern,
+                        pattern: lift_match_pattern(arm.pattern, ctx),
                         body,
                         span: arm.span,
                     }
@@ -831,6 +831,72 @@ fn lift_expr_kind(
     }
 }
 
+fn lift_match_pattern(
+    pattern: src_ast::MatchPattern,
+    ctx: &ResolveContext,
+) -> dst_ast::MatchPattern {
+    match pattern {
+        src_ast::MatchPattern::Path {
+            path,
+            bindings,
+            span,
+        } => match path.segments() {
+            [index_ident, variant_ident]
+                if bindings.is_empty()
+                    && ctx
+                        .index_variants
+                        .get(&IndexName::new(&index_ident.name))
+                        .is_some_and(|variants| {
+                            variants.contains(&IndexVariantName::new(&variant_ident.name))
+                        }) =>
+            {
+                dst_ast::MatchPattern::IndexLabel {
+                    index: Spanned::new(
+                        NamePath::local(index_ident.name.clone()),
+                        index_ident.span,
+                    ),
+                    variant: Spanned::new(
+                        IndexVariantName::new(&variant_ident.name),
+                        variant_ident.span,
+                    ),
+                    span,
+                }
+            }
+            [constructor_ident] => dst_ast::MatchPattern::Constructor {
+                name: Spanned::new(
+                    ConstructorName::new(&constructor_ident.name),
+                    constructor_ident.span,
+                ),
+                bindings,
+                span,
+            },
+            _ => dst_ast::MatchPattern::Path {
+                path,
+                bindings,
+                span,
+            },
+        },
+        src_ast::MatchPattern::Constructor {
+            name,
+            bindings,
+            span,
+        } => dst_ast::MatchPattern::Constructor {
+            name,
+            bindings,
+            span,
+        },
+        src_ast::MatchPattern::IndexLabel {
+            index,
+            variant,
+            span,
+        } => dst_ast::MatchPattern::IndexLabel {
+            index,
+            variant,
+            span,
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Actual unresolved-ref resolution
 // ---------------------------------------------------------------------------
@@ -847,13 +913,9 @@ fn resolve_unresolved_ref(
 
 /// Resolve an identifier path to a concrete [`dst_ast::ExprKind`].
 fn resolve_ident_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKind {
-    match path.segments.len() {
-        1 => {
-            let mut segments = path.segments.into_vec();
-            let ident = segments.remove(0);
-            resolve_name_ref(ident, ctx)
-        }
-        _ => resolve_dotted_path(path, ctx),
+    match path.into_bare() {
+        Ok(ident) => resolve_name_ref(ident, ctx),
+        Err(path) => resolve_dotted_path(&path, ctx),
     }
 }
 
@@ -889,7 +951,7 @@ fn resolve_name_ref(ident: Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
 
     if ctx.constructor_names.contains(name.as_str()) {
         return dst_ast::ExprKind::ConstructorCall {
-            constructor: Spanned::new(ConstructorName::new(name), ident.span),
+            callee: IdentPath::bare(ident),
             generic_args: Vec::new(),
             fields: Vec::new(),
         };
@@ -943,24 +1005,24 @@ fn resolve_name_ref(ident: Ident, ctx: &ResolveContext) -> dst_ast::ExprKind {
 ///    `VariantLiteral`
 /// 2. Otherwise → `ConstRef` carrying a qualified `ScopedName`
 ///    (module-qualified constant, validated later)
-fn resolve_dotted_path(path: IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKind {
+fn resolve_dotted_path(path: &IdentPath, ctx: &ResolveContext) -> dst_ast::ExprKind {
     let span = path.span();
-    let segments = path.segments;
 
-    if let [qualifier, member] = segments.as_slice()
+    if let [qualifier, member] = path.segments()
         && ctx.index_variants.contains_key(qualifier.name.as_str())
     {
         return dst_ast::ExprKind::VariantLiteral {
-            index: Spanned::new(IndexName::new(&qualifier.name), qualifier.span),
+            index: Spanned::new(IndexName::new(&qualifier.name).into(), qualifier.span),
             variant: Spanned::new(IndexVariantName::new(&member.name), member.span),
         };
     }
 
-    let qualifier_names = segments.as_slice()[..segments.len() - 1]
-        .iter()
-        .map(|segment| segment.name.clone());
+    let (qualifier, member) = path.split_last();
     dst_ast::ExprKind::ConstRef(Spanned::new(
-        ScopedName::qualified_path(qualifier_names, segments.last().name.clone()),
+        ScopedName::qualified_path(
+            qualifier.iter().map(|segment| segment.name.to_string()),
+            member.name.to_string(),
+        ),
         span,
     ))
 }
@@ -989,16 +1051,16 @@ mod tests {
             _ => None,
         }
         .unwrap();
-        let (constructor, generic_args, fields) = match &node.value.kind {
+        let (callee, generic_args, fields) = match &node.value.kind {
             ExprKind::ConstructorCall {
-                constructor,
+                callee,
                 generic_args,
                 fields,
-            } => Some((constructor, generic_args, fields)),
+            } => Some((callee, generic_args, fields)),
             _ => None,
         }
         .unwrap();
-        assert_eq!(constructor.value.as_str(), "WeightlessStudent");
+        assert_eq!(callee.as_bare().unwrap().name, "WeightlessStudent");
         assert!(generic_args.is_empty());
         assert!(fields.is_empty());
     }

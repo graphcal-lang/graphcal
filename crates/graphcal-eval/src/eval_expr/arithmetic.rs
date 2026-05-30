@@ -1,11 +1,12 @@
 use graphcal_compiler::desugar::resolved_ast::{BinOp, Expr, UnaryOp};
-use graphcal_compiler::syntax::names::ScopedName;
+use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
 use super::EvalContext;
+use super::RuntimeValueMap;
 use super::eval_expr;
 
 /// Evaluate a `BinOp` expression.
@@ -20,7 +21,7 @@ pub(super) fn eval_binop_expr(
     op: BinOp,
     lhs: &Expr,
     rhs: &Expr,
-    values: &std::collections::HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &std::collections::HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -65,7 +66,7 @@ pub(super) fn eval_binop_expr(
                         index_name: ri,
                         variant: rv,
                     },
-                ) => li == ri && lv == rv,
+                ) => li.matches_ref(ri) && lv == rv,
                 (RuntimeValue::Struct { .. }, RuntimeValue::Struct { .. }) => {
                     runtime_value_equals(&l, &r)
                 }
@@ -176,7 +177,7 @@ pub(super) fn eval_unaryop_expr(
     expr: &Expr,
     op: UnaryOp,
     operand: &Expr,
-    values: &std::collections::HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &std::collections::HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -209,8 +210,29 @@ pub(super) fn eval_unaryop_expr(
 // Helper functions
 // ---------------------------------------------------------------------------
 
+fn struct_value_type_refs_equal(lhs: &StructTypeRef, rhs: &StructTypeRef) -> bool {
+    lhs.matches_ref(rhs)
+}
+
 pub(super) fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
     match (lhs, rhs) {
+        #[expect(
+            clippy::float_cmp,
+            reason = "Graphcal equality uses exact IEEE scalar equality"
+        )]
+        (RuntimeValue::Scalar(lhs), RuntimeValue::Scalar(rhs)) => lhs == rhs,
+        (RuntimeValue::Bool(lhs), RuntimeValue::Bool(rhs)) => lhs == rhs,
+        (RuntimeValue::Int(lhs), RuntimeValue::Int(rhs)) => lhs == rhs,
+        (
+            RuntimeValue::Label {
+                index_name: lhs_index,
+                variant: lhs_variant,
+            },
+            RuntimeValue::Label {
+                index_name: rhs_index,
+                variant: rhs_variant,
+            },
+        ) => lhs_index.matches_ref(rhs_index) && lhs_variant == rhs_variant,
         (
             RuntimeValue::Struct {
                 type_name: lt,
@@ -221,12 +243,31 @@ pub(super) fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bo
                 fields: rf,
             },
         ) => {
-            lt == rt
+            struct_value_type_refs_equal(lt, rt)
                 && lf.len() == rf.len()
                 && lf
                     .iter()
                     .all(|(k, lvf)| rf.get(k).is_some_and(|rvf| runtime_value_equals(lvf, rvf)))
         }
+        (
+            RuntimeValue::Indexed {
+                index_name: lhs_index,
+                entries: lhs_entries,
+            },
+            RuntimeValue::Indexed {
+                index_name: rhs_index,
+                entries: rhs_entries,
+            },
+        ) => {
+            lhs_index.matches_ref(rhs_index)
+                && lhs_entries.len() == rhs_entries.len()
+                && lhs_entries.iter().all(|(variant, lhs_value)| {
+                    rhs_entries
+                        .get(variant)
+                        .is_some_and(|rhs_value| runtime_value_equals(lhs_value, rhs_value))
+                })
+        }
+        (RuntimeValue::Datetime(lhs), RuntimeValue::Datetime(rhs)) => lhs == rhs,
         _ => false,
     }
 }

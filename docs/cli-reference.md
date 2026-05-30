@@ -53,6 +53,11 @@ graphcal eval [OPTIONS] <FILE>
 
 When both `--set` and `--input` are provided, `--set` takes precedence.
 
+Override names are unqualified parameter names in the entry file (or the local
+alias of a selectively included/imported parameter). Qualified strings such as
+`module.x=...` are rejected at the CLI boundary instead of being interpreted as
+leaf names; the override key never carries module identity.
+
 Params not given via `--set` or `--input` keep their declared defaults.
 Params declared without a default (required params) must be provided.
 
@@ -93,6 +98,17 @@ delta_v    = 4284.300858 m/s
 ```bash
 # Provide a required param (param declared without a default value)
 $ graphcal eval engine.gcl --set 'dry_mass=800.0 kg'
+```
+
+The JSON parser preserves module-qualified constructor and index paths inside
+structured value payloads. The top-level JSON keys are still parameter names,
+and type/dimension checking reports whether the value is valid for that target:
+
+```json
+{
+  "phase": { "index": "mission.Phase", "entries": { "Burn": 1, "Coast": 0 } },
+  "choice": { "variant": "mission.Pick", "fields": { "distance": "2.0 m" } }
+}
 ```
 
 ```bash

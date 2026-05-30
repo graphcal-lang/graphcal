@@ -21,8 +21,8 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
             let idx_docs: Vec<RcDoc<'static>> = indexes
                 .iter()
                 .map(|i| match i {
-                    graphcal_compiler::syntax::ast::IndexExpr::Name(ident) => {
-                        RcDoc::text(ident.value.as_str().to_string())
+                    graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
+                        RcDoc::text(name.value.display_path())
                     }
                     graphcal_compiler::syntax::ast::IndexExpr::NatExpr(nat_expr) => {
                         RcDoc::text(nat_expr.to_string())
@@ -35,7 +35,7 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
                 .append(RcDoc::text("]"))
         }
         TypeExprKind::TypeApplication { name, type_args } => {
-            let mut doc = RcDoc::text(name.value.as_str().to_string());
+            let mut doc = RcDoc::text(name.value.display_path());
             if !type_args.is_empty() {
                 let arg_docs: Vec<RcDoc<'static>> = type_args
                     .iter()
@@ -104,7 +104,7 @@ pub fn format_dim_expr_inline(de: &DimExpr) -> RcDoc<'static> {
 }
 
 fn format_dim_term(t: &DimTerm) -> RcDoc<'static> {
-    let mut doc = RcDoc::text(t.name.value.as_str().to_string());
+    let mut doc = RcDoc::text(t.name.value.display_path());
     if let Some(power) = t.power {
         doc = doc.append(RcDoc::text(format!("^{power}")));
     }

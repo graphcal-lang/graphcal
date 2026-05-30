@@ -8,15 +8,19 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::syntax::dimension::Dimension;
-use graphcal_compiler::syntax::names::{DeclName, IndexName, IndexVariantName, ScopedName};
+use graphcal_compiler::syntax::names::{DeclName, IndexVariantName, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
-use crate::eval_expr::{EvalContext, RuntimeValue, UnfoldContext, eval_expr};
-use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail};
+use crate::decl_key::RuntimeDeclKey;
+use crate::eval_expr::{
+    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, UnfoldContext, eval_expr,
+    eval_hir_expr,
+};
+use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail, ExpectedFailKey};
 use graphcal_compiler::registry::builtins::{
     BuiltinFunction, builtin_constants, builtin_functions,
 };
-use graphcal_compiler::registry::declared_type::DeclaredType;
+use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::Registry;
 
@@ -26,6 +30,68 @@ use super::types::{
     AssertResult, AxisMeta, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
 };
 
+const fn declared_label_index_ref(declared_type: Option<&DeclaredType>) -> Option<&IndexTypeRef> {
+    match declared_type {
+        Some(DeclaredType::Label(index)) => Some(index),
+        _ => None,
+    }
+}
+
+const fn declared_indexed_index_ref(declared_type: Option<&DeclaredType>) -> Option<&IndexTypeRef> {
+    match declared_type {
+        Some(DeclaredType::Indexed { index, .. }) => Some(index),
+        _ => None,
+    }
+}
+
+const fn declared_struct_type_ref(declared_type: Option<&DeclaredType>) -> Option<&StructTypeRef> {
+    match declared_type {
+        Some(DeclaredType::Struct(type_name, _)) => Some(type_name),
+        _ => None,
+    }
+}
+
+fn merge_index_ref_owner(
+    runtime_ref: &IndexTypeRef,
+    declared_ref: Option<&IndexTypeRef>,
+) -> IndexTypeRef {
+    let _ = declared_ref;
+    runtime_ref.clone()
+}
+
+fn merge_struct_ref_owner(
+    runtime_ref: &StructTypeRef,
+    declared_ref: Option<&StructTypeRef>,
+) -> StructTypeRef {
+    let _ = declared_ref;
+    runtime_ref.clone()
+}
+
+fn public_label_index_ref(
+    runtime_ref: &IndexTypeRef,
+    declared_type: Option<&DeclaredType>,
+) -> IndexTypeRef {
+    merge_index_ref_owner(runtime_ref, declared_label_index_ref(declared_type))
+}
+
+fn public_indexed_index_ref(
+    runtime_ref: &IndexTypeRef,
+    declared_type: Option<&DeclaredType>,
+) -> IndexTypeRef {
+    merge_index_ref_owner(runtime_ref, declared_indexed_index_ref(declared_type))
+}
+
+fn public_struct_type_ref(
+    runtime_ref: &StructTypeRef,
+    declared_type: Option<&DeclaredType>,
+) -> StructTypeRef {
+    merge_struct_ref_owner(runtime_ref, declared_struct_type_ref(declared_type))
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "runtime value conversion mirrors all value variants"
+)]
 pub(super) fn runtime_to_value(
     rv: &RuntimeValue,
     declared_type: Option<&DeclaredType>,
@@ -49,11 +115,13 @@ pub(super) fn runtime_to_value(
             index_name,
             variant,
         } => Value::Label {
-            index_name: index_name.clone(),
+            index_name: public_label_index_ref(index_name, declared_type),
             variant: variant.clone(),
         },
         RuntimeValue::Struct { type_name, fields } => {
-            let type_def = registry.types.get_type(type_name.as_str());
+            let public_type_name = public_struct_type_ref(type_name, declared_type);
+            let registry_type_name = declared_struct_type_ref(declared_type).unwrap_or(type_name);
+            let type_def = registry.types.get_type(registry_type_name.as_str());
 
             // Build a substitution map from generic param names to concrete DeclaredTypes
             // when we have concrete type args from the declared type.
@@ -84,7 +152,7 @@ pub(super) fn runtime_to_value(
                 })
                 .collect();
             Value::Struct {
-                type_name: type_name.clone(),
+                type_name: public_type_name,
                 fields: converted_fields,
             }
         }
@@ -96,25 +164,29 @@ pub(super) fn runtime_to_value(
                 Some(DeclaredType::Indexed { element, .. }) => Some(element.as_ref()),
                 _ => None,
             };
-            // For range indexes, replace synthetic #N keys with formatted display values.
+            // For range indexes, keep semantic #N keys in the public value and
+            // carry formatted step labels as presentation metadata. This keeps
+            // display strings at I/O boundaries instead of fabricating variant
+            // leaves like `0.5 s`.
             let idx_def = registry.indexes.get_index(index_name.as_str());
+            let entry_display_names = idx_def.filter(|def| def.is_range()).map(|def| {
+                entries
+                    .keys()
+                    .enumerate()
+                    .map(|(i, variant)| (variant.clone(), format_range_step(def, i)))
+                    .collect()
+            });
             let converted_entries = entries
                 .iter()
-                .enumerate()
-                .map(|(i, (variant, entry_rv))| {
-                    let display_key = match idx_def {
-                        Some(def) if def.is_range() => {
-                            IndexVariantName::new(format_range_step(def, i))
-                        }
-                        _ => variant.clone(),
-                    };
+                .map(|(variant, entry_rv)| {
                     let val = runtime_to_value(entry_rv, element_declared, registry);
-                    (display_key, val)
+                    (variant.clone(), val)
                 })
                 .collect();
             Value::Indexed {
-                index_name: index_name.clone(),
+                index_name: public_indexed_index_ref(index_name, declared_type),
                 entries: converted_entries,
+                entry_display_names,
             }
         }
         #[expect(
@@ -142,8 +214,8 @@ pub(super) fn runtime_to_value(
 
 /// Result of running the core eval loop: successfully evaluated values and per-node errors.
 pub(super) struct EvalLoopResult {
-    pub values: HashMap<ScopedName, RuntimeValue>,
-    pub errors: HashMap<String, NodeError>,
+    pub values: RuntimeValueMap,
+    pub errors: HashMap<RuntimeDeclKey, NodeError>,
 }
 
 /// Core evaluation loop shared by `evaluate_plan` and `extract_runtime_values`.
@@ -161,10 +233,10 @@ pub(super) fn run_eval_loop(
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, BuiltinFunction>,
 ) -> EvalLoopResult {
-    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    let empty_hir_locals = HirLocalValueMap::new();
 
-    let mut values: HashMap<ScopedName, RuntimeValue> = HashMap::new();
-    let mut errors: HashMap<String, NodeError> = HashMap::new();
+    let mut values: RuntimeValueMap = HashMap::new();
+    let mut errors: HashMap<RuntimeDeclKey, NodeError> = HashMap::new();
 
     // Insert imported values into the lookup table (pre-evaluated by dependency files).
     // Imported values keep their original `ScopedName` qualification.
@@ -185,25 +257,16 @@ pub(super) fn run_eval_loop(
             continue;
         }
 
-        // Check if any dependency has failed
-        let failed_deps: Vec<DeclName> = tir
-            .root()
-            .runtime_deps
-            .get(name)
-            .map(|deps| {
-                deps.iter()
-                    .filter(|dep| errors.contains_key(dep.member()))
-                    .map(|dep| DeclName::new(dep.member()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Check if any local runtime dependency has failed. Module-aware TIRs
+        // carry canonical dependency identities; use those when present so a
+        // qualified imported dependency with the same leaf as a local failure
+        // cannot be mistaken for the local declaration.
+        let failed_deps = failed_runtime_dependencies(tir.root(), name, &errors);
 
         if !failed_deps.is_empty() {
-            errors.insert(name_str, NodeError::DependencyFailed { failed_deps });
+            errors.insert(name.clone(), NodeError::DependencyFailed { failed_deps });
             continue;
         }
-
-        let expr = &plan.expressions[name];
 
         // Build eval context with unfold support for this node.
         let unfold_ctx = UnfoldContext {
@@ -217,10 +280,22 @@ pub(super) fn run_eval_loop(
             src,
             unfold_context: Some(unfold_ctx),
             tir,
+            current_dag: Some(tir.root()),
+            root_values: Some(&values),
             struct_field_constraints: Some(&plan.struct_field_constraints),
         };
 
-        let result = eval_expr(expr, &values, &empty_locals, &ctx);
+        let result = tir
+            .root()
+            .semantic
+            .expressions
+            .runtime_expr(name.as_resolved())
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("semantic TIR missing HIR runtime expression for `{name}`"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })
+            .and_then(|hir_expr| eval_hir_expr(hir_expr, &values, &empty_hir_locals, &ctx));
 
         match result {
             Ok(val) => {
@@ -230,7 +305,7 @@ pub(super) fn run_eval_loop(
                         crate::domain_check::check_domain_constraint(&val, constraint)
                 {
                     errors.insert(
-                        name_str,
+                        name.clone(),
                         NodeError::EvalFailed {
                             message: violation.message,
                         },
@@ -244,12 +319,30 @@ pub(super) fn run_eval_loop(
                     GraphcalError::EvalError { message, .. } => message.clone(),
                     other => format!("{other}"),
                 };
-                errors.insert(name_str, NodeError::EvalFailed { message });
+                errors.insert(name.clone(), NodeError::EvalFailed { message });
             }
         }
     }
 
     EvalLoopResult { values, errors }
+}
+
+fn failed_runtime_dependencies(
+    dag: &graphcal_compiler::tir::typed::DagTIR,
+    name: &RuntimeDeclKey,
+    errors: &HashMap<RuntimeDeclKey, NodeError>,
+) -> Vec<DeclName> {
+    dag.semantic
+        .dependencies
+        .runtime_deps
+        .get(name.as_resolved())
+        .map(|deps| {
+            deps.iter()
+                .filter(|dep| errors.contains_key(&RuntimeDeclKey::resolved((*dep).clone())))
+                .map(|dep| DeclName::from_atom(dep.atom().clone()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Evaluate using TIR + `ExecPlan` (new linear pipeline).
@@ -270,6 +363,9 @@ pub(super) fn evaluate_plan(
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
 
+    let EvalLoopResult { values, errors } =
+        run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
+
     let ctx = EvalContext {
         builtin_consts,
         builtin_fns,
@@ -277,11 +373,10 @@ pub(super) fn evaluate_plan(
         src,
         unfold_context: None,
         tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(&values),
         struct_field_constraints: Some(&plan.struct_field_constraints),
     };
-
-    let EvalLoopResult { values, errors } =
-        run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
 
     // Build a map from name -> expression for display unit extraction.
     // Top-level decls are always `Local`-form names.
@@ -299,18 +394,20 @@ pub(super) fn evaluate_plan(
         .chain(tir.root().nodes.iter().map(|e| (e.name.clone(), &e.expr)))
         .collect();
 
+    let local_key = |name: &ScopedName| RuntimeDeclKey::for_local_decl(tir.root(), name);
+
     let make_value = |name: &ScopedName, rv: &RuntimeValue| -> Value {
         let mut value = runtime_to_value(rv, declared_types.get(name), &tir.registry);
         if let Some(expr) = expr_map.get(name) {
-            attach_display_units(&mut value, expr, &tir.registry, &values);
+            attach_display_units(&mut value, expr, &ctx, &values);
         }
         value
     };
 
     let make_result = |name: &ScopedName| -> Result<Value, NodeError> {
-        let leaf = name.member();
-        errors.get(leaf).map_or_else(
-            || Ok(make_value(name, &values[name])),
+        let key = local_key(name);
+        errors.get(&key).map_or_else(
+            || Ok(make_value(name, &values[&key])),
             |err| Err(err.clone()),
         )
     };
@@ -320,7 +417,8 @@ pub(super) fn evaluate_plan(
         .consts
         .iter()
         .map(|e| {
-            let val = make_value(&e.name, &plan.const_values[&e.name]);
+            let key = local_key(&e.name);
+            let val = make_value(&e.name, &plan.const_values[&key]);
             (DeclName::new(e.name.member()), val)
         })
         .collect();
@@ -352,7 +450,10 @@ pub(super) fn evaluate_plan(
                 | DeclCategory::Layer => return None,
             };
             let result = match cat {
-                DeclCategory::Const => Ok(make_value(name, &plan.const_values[name])),
+                DeclCategory::Const => {
+                    let key = local_key(name);
+                    Ok(make_value(name, &plan.const_values[&key]))
+                }
                 DeclCategory::Param | DeclCategory::Node => make_result(name),
                 DeclCategory::Assert
                 | DeclCategory::Plot
@@ -386,7 +487,7 @@ pub(super) fn evaluate_plan(
         .filter_map(|entry| {
             evaluate_plot(
                 &entry.decl,
-                entry.name.member(),
+                &entry.name,
                 entry.is_pub,
                 &values,
                 &empty_locals,
@@ -409,7 +510,7 @@ pub(super) fn evaluate_plan(
                 &ctx,
             );
             super::types::FigureSpec {
-                name: DeclName::new(entry.name.member()),
+                name: entry.name.clone(),
                 plot_names,
                 properties,
             }
@@ -429,7 +530,7 @@ pub(super) fn evaluate_plan(
                 &ctx,
             );
             super::types::LayerSpec {
-                name: DeclName::new(entry.name.member()),
+                name: entry.name.clone(),
                 plot_names,
                 properties,
             }
@@ -439,7 +540,7 @@ pub(super) fn evaluate_plan(
     let domain_constraints: HashMap<DeclName, _> = plan
         .domain_constraints
         .iter()
-        .map(|(k, v)| (DeclName::new(k.member()), v.clone()))
+        .map(|(k, v)| (k.to_decl_name(), v.clone()))
         .collect();
     let assumes_map: HashMap<DeclName, Vec<DeclName>> = plan
         .assumes_map
@@ -477,7 +578,7 @@ pub(super) fn evaluate_plan(
 fn evaluate_assert_with_expected_fail(
     body: &graphcal_compiler::desugar::resolved_ast::AssertBody,
     ef: Option<&ExpectedFail>,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
@@ -534,16 +635,34 @@ fn evaluate_assert_with_expected_fail(
     }
 }
 
+fn expected_index_key_matches(actual: &IndexTypeRef, expected: &IndexTypeRef) -> bool {
+    actual.matches_ref(expected)
+}
+
+fn expected_fail_key_matches_path(
+    path: &[(IndexTypeRef, IndexVariantName)],
+    key: &ExpectedFailKey,
+) -> bool {
+    path.len() == key.len()
+        && path
+            .iter()
+            .zip(key.iter())
+            .all(|((actual_index, actual_variant), expected)| {
+                expected_index_key_matches(actual_index, &expected.index)
+                    && actual_variant == &expected.variant
+            })
+}
+
 /// Invert specific variant entries in an indexed `RuntimeValue`.
 ///
 /// For each entry in the indexed value, if the variant key matches one of the
 /// expected-fail keys, flip `Bool(true)` → `Bool(false)` and vice versa.
 /// For nested indexed values (multi-index), recurse.
 fn invert_indexed_variants(
-    index_name: &IndexName,
+    index_name: &IndexTypeRef,
     entries: IndexMap<IndexVariantName, RuntimeValue>,
-    keys: &[Vec<(IndexName, IndexVariantName)>],
-) -> (IndexName, IndexMap<IndexVariantName, RuntimeValue>) {
+    keys: &[ExpectedFailKey],
+) -> (IndexTypeRef, IndexMap<IndexVariantName, RuntimeValue>) {
     let inverted_entries = entries
         .into_iter()
         .map(|(variant, value)| {
@@ -551,7 +670,9 @@ fn invert_indexed_variants(
                 RuntimeValue::Bool(b) => {
                     // Single-index: check if this variant is in any key
                     let should_invert = keys.iter().any(|key| {
-                        key.len() == 1 && key[0].0 == *index_name && key[0].1 == variant
+                        key.len() == 1
+                            && expected_index_key_matches(index_name, &key[0].index)
+                            && key[0].variant == variant
                     });
                     if should_invert {
                         RuntimeValue::Bool(!b)
@@ -565,10 +686,12 @@ fn invert_indexed_variants(
                 } => {
                     // Multi-index: filter keys that match the current variant at position 0,
                     // then strip the first element and recurse.
-                    let sub_keys: Vec<Vec<(IndexName, IndexVariantName)>> = keys
+                    let sub_keys: Vec<ExpectedFailKey> = keys
                         .iter()
                         .filter(|key| {
-                            key.len() >= 2 && key[0].0 == *index_name && key[0].1 == variant
+                            key.len() >= 2
+                                && expected_index_key_matches(index_name, &key[0].index)
+                                && key[0].variant == variant
                         })
                         .map(|key| key[1..].to_vec())
                         .collect();
@@ -597,11 +720,11 @@ fn invert_indexed_variants(
 
 /// Format a list of indexed paths for assertion failure messages.
 ///
-/// Each path is a slice of `(IndexName, VariantName)` index/variant pairs from outermost to innermost.
+/// Each path is a slice of index/variant pairs from outermost to innermost.
 /// For single-index paths, formats as `Mode.Boost, Mode.Cruise`.
 /// For multi-index paths, formats as `(Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`.
 fn format_indexed_paths(
-    paths: &[&[(IndexName, IndexVariantName)]],
+    paths: &[&[(IndexTypeRef, IndexVariantName)]],
     is_multi_index: bool,
 ) -> String {
     let formatted: Vec<String> = if is_multi_index {
@@ -611,7 +734,7 @@ fn format_indexed_paths(
                 format!(
                     "({})",
                     p.iter()
-                        .map(|(idx, var)| format!("{idx}.{var}"))
+                        .map(|(idx, var)| format!("{}.{var}", idx.name()))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -620,7 +743,7 @@ fn format_indexed_paths(
     } else {
         paths
             .iter()
-            .map(|p| format!("{}.{}", p[0].0, p[0].1))
+            .map(|p| format!("{}.{}", p[0].0.name(), p[0].1))
             .collect()
     };
     formatted.join(", ")
@@ -638,9 +761,9 @@ fn format_indexed_paths(
 /// We reuse `collect_failing_paths` on the inverted entries, then classify each
 /// failing path as either "unexpected pass" or "unexpected fail".
 fn check_indexed_assert_with_expected_fail(
-    index_name: &IndexName,
+    index_name: &IndexTypeRef,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
-    keys: &[Vec<(IndexName, IndexVariantName)>],
+    keys: &[ExpectedFailKey],
 ) -> AssertResult {
     match collect_failing_paths(index_name, entries) {
         Ok(paths) if paths.is_empty() => AssertResult::Pass,
@@ -650,7 +773,9 @@ fn check_indexed_assert_with_expected_fail(
             let mut unexpected_fails = Vec::new();
 
             for path in &paths {
-                let is_expected_fail_key = keys.contains(path);
+                let is_expected_fail_key = keys
+                    .iter()
+                    .any(|key| expected_fail_key_matches_path(path, key));
                 if is_expected_fail_key {
                     // This was an expected-fail key but the value is false after inversion,
                     // meaning the original was true → unexpected pass
@@ -695,7 +820,7 @@ fn check_indexed_assert_with_expected_fail(
 /// Multi-index failure message example:
 ///   `failed at (Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`
 pub(super) fn check_indexed_assert(
-    index_name: &IndexName,
+    index_name: &IndexTypeRef,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
 ) -> AssertResult {
     match collect_failing_paths(index_name, entries) {
@@ -718,12 +843,12 @@ pub(super) fn check_indexed_assert(
 
 /// Recursively collect failing variant paths from an indexed assertion value.
 ///
-/// Each path is a `Vec<(IndexName, VariantName)>` of index/variant pairs from outermost to innermost.
-/// For example, `vec![(IndexName::new("Phase"), VariantName::new("Launch")), (IndexName::new("Maneuver"), VariantName::new("Correction"))]` for a 2D failure.
+/// Each path is a `Vec<(IndexTypeRef, VariantName)>` of index/variant pairs from outermost to innermost.
+/// For example, `vec![(IndexTypeRef::with_owner(owner, IndexName::new("Phase")), VariantName::new("Launch")), ...]` for a 2D failure.
 fn collect_failing_paths(
-    index_name: &IndexName,
+    index_name: &IndexTypeRef,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
-) -> Result<Vec<Vec<(IndexName, IndexVariantName)>>, String> {
+) -> Result<Vec<Vec<(IndexTypeRef, IndexVariantName)>>, String> {
     let mut paths = Vec::new();
     for (variant, value) in entries {
         let key = (index_name.clone(), variant.clone());
@@ -744,7 +869,8 @@ fn collect_failing_paths(
             }
             other => {
                 return Err(format!(
-                    "expected Bool for {index_name}::{variant}, got {other:?}"
+                    "expected Bool for {}::{variant}, got {other:?}",
+                    index_name.name()
                 ));
             }
         }
@@ -755,7 +881,7 @@ fn collect_failing_paths(
 /// Evaluate a single assert body and return an `AssertResult`.
 pub(super) fn evaluate_assert_body(
     body: &graphcal_compiler::desugar::resolved_ast::AssertBody,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
@@ -861,7 +987,7 @@ pub(super) fn evaluate_assert_body(
 /// best-effort, so a single bad encoding/property aborts the plot.
 fn eval_plot_property(
     expr: &graphcal_compiler::desugar::resolved_ast::Expr,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Option<PlotFieldValue> {
@@ -880,9 +1006,9 @@ fn eval_plot_property(
 /// Returns `None` if any expression evaluation fails (plots are best-effort).
 fn evaluate_plot(
     decl: &graphcal_compiler::desugar::resolved_ast::PlotDecl,
-    name: &str,
+    name: &ScopedName,
     is_pub: bool,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
@@ -895,8 +1021,7 @@ fn evaluate_plot(
         let field_value = eval_plot_property(&encoding.value, values, local_values, ctx)?;
 
         // Extract axis metadata: dimension from graph refs, display unit from expression
-        let meta =
-            extract_encoding_axis_meta(&encoding.value, declared_types, ctx.registry, values);
+        let meta = extract_encoding_axis_meta(&encoding.value, declared_types, ctx, values);
         encoding_meta.push((encoding.channel, meta));
 
         encodings.push((encoding.channel, field_value));
@@ -927,7 +1052,7 @@ fn evaluate_plot(
     }
 
     Some(PlotSpec {
-        name: DeclName::new(name),
+        name: name.clone(),
         mark_type: decl.mark.mark_type,
         encodings,
         encoding_meta,
@@ -945,11 +1070,11 @@ fn evaluate_plot(
 fn extract_encoding_axis_meta(
     expr: &graphcal_compiler::desugar::resolved_ast::Expr,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
-    registry: &Registry,
-    values: &HashMap<ScopedName, RuntimeValue>,
+    ctx: &EvalContext<'_>,
+    values: &RuntimeValueMap,
 ) -> AxisMeta {
-    let dimension_label = extract_dimension_from_expr(expr, declared_types, registry);
-    let unit_label = extract_flat_display_unit(expr, registry, values).map(|du| du.label);
+    let dimension_label = extract_dimension_from_expr(expr, declared_types, ctx.registry);
+    let unit_label = extract_flat_display_unit(expr, ctx, values).map(|du| du.label);
     AxisMeta {
         dimension_label,
         unit_label,
@@ -1007,13 +1132,13 @@ fn dimension_label_from_declared_type(
 /// Evaluate composition fields (properties and plot names) shared by figures and layers.
 fn eval_composition_fields(
     fields: &[graphcal_compiler::desugar::resolved_ast::PlotField],
-    plot_name_spans: &[graphcal_compiler::syntax::span::Spanned<DeclName>],
-    values: &HashMap<ScopedName, RuntimeValue>,
+    plot_name_spans: &[graphcal_compiler::syntax::span::Spanned<ScopedName>],
+    values: &RuntimeValueMap,
     empty_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> (
     Vec<(super::types::CompositionProperty, PlotFieldValue)>,
-    Vec<DeclName>,
+    Vec<ScopedName>,
 ) {
     let mut properties = Vec::new();
     for field in fields {

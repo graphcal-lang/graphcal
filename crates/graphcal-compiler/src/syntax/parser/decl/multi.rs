@@ -27,7 +27,7 @@ use crate::syntax::ast::{
     self as ast, BindableVisibility, DeclKind, Declaration, Expr, MapEntryIndex, MapEntryKey,
     TableIndexSpec, TypeExpr, Visibility,
 };
-use crate::syntax::names::{DeclName, IndexName, IndexVariantName};
+use crate::syntax::names::{DeclName, IndexName, IndexVariantName, NamePath};
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
@@ -397,12 +397,11 @@ impl Parser<'_> {
                     let axis_ident = self.parse_any_ident()?;
                     self.expect(Token::Dot)?;
                     let variant_ident = self.parse_any_ident()?;
-                    if axis_ident.name != axis.value.as_str() {
+                    if axis_ident.name != axis.value.leaf().as_str() {
                         return Err(ParseError::MultiDeclUnsupportedShape {
                             reason: format!(
                                 "slice label qualifies axis `{}`, but the shared axis at this position is `{}`",
-                                axis_ident.name,
-                                axis.value.as_str(),
+                                axis_ident.name, axis.value,
                             ),
                             src: self.named_source(),
                             span: axis_ident.span.into(),
@@ -547,7 +546,7 @@ impl Parser<'_> {
             }
             Some(Token::Ident) => {
                 let ident = self.parse_any_ident()?;
-                Ok(TableIndexSpec::Named(ident.into_spanned::<IndexName>()))
+                Ok(TableIndexSpec::Named(ident.into_spanned::<NamePath>()))
             }
             _ => {
                 let (tok, span) = self.advance()?;

@@ -26,8 +26,11 @@ use graphcal_compiler::ir::lower::{
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::syntax::module_resolve::ModuleResolver;
 use graphcal_compiler::syntax::names::DeclName;
-use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type, type_resolve_single};
+use graphcal_compiler::tir::typed::{
+    ModuleTypeRegistry, TIR, resolved_to_declared_type, type_resolve_single_with_modules,
+};
 
 use crate::loader::LoadedDag;
 
@@ -57,8 +60,8 @@ impl ParentValueDecls {
 /// `DagTIR` and insert it into `tir.dags`, keyed by the loader-supplied
 /// canonical [`DagId`](DagId).
 ///
-/// `parent_pub_names` is captured from the IR before `type_resolve` consumes
-/// it. Each [`LoadedDag`] supplies the body in source order plus its
+/// `parent_pub_names` is captured from the IR before module-aware TIR
+/// construction consumes it. Each [`LoadedDag`] supplies the body in source order plus its
 /// pre-resolved imports map (path display → [`DagId`]), letting
 /// [`preprocess_dag_body_self_imports`] detect self-imports by structured
 /// equality against `parent_dag_id` rather than a file-level path-set.
@@ -74,6 +77,8 @@ pub fn compile_inline_dag_bodies(
     parent_dag_id: &DagId,
     parent_pub_names: &HashSet<DeclName>,
     inline_dags: &[LoadedDag],
+    module_resolver: &ModuleResolver,
+    module_types: &ModuleTypeRegistry,
 ) -> Result<(), GraphcalError> {
     // Read parent's value decls directly from the (already type-resolved)
     // root DagTIR. With the flat registry, `tir.root()` IS the parent
@@ -106,7 +111,13 @@ pub fn compile_inline_dag_bodies(
             src,
             parent_dag_id,
         )?;
-        let mut compiled_dag = type_resolve_single(dag_body_ir, &loaded_dag.dag_id, src)?;
+        let mut compiled_dag = type_resolve_single_with_modules(
+            dag_body_ir,
+            &loaded_dag.dag_id,
+            src,
+            module_resolver,
+            module_types,
+        )?;
         compiled_dag.populate_pub_nodes(&loaded_dag.body);
         tir.dags.insert(loaded_dag.dag_id.clone(), compiled_dag);
     }
@@ -194,7 +205,7 @@ pub fn preprocess_dag_body_self_imports(
 
                     if !exists_as_type_system && !parent_values.contains(orig_name.as_str()) {
                         return Err(GraphcalError::ImportNameNotFound {
-                            name: orig_name.clone(),
+                            name: orig_name.to_string(),
                             file_path: import_decl.path.display_path(),
                             src: src.clone(),
                             span: span.into(),
@@ -203,7 +214,7 @@ pub fn preprocess_dag_body_self_imports(
 
                     if !parent_pub_names.contains(orig_name.as_str()) {
                         return Err(GraphcalError::ImportPrivateItem {
-                            name: orig_name.clone(),
+                            name: orig_name.to_string(),
                             file_path: import_decl.path.display_path(),
                             src: src.clone(),
                             span: span.into(),
@@ -223,7 +234,7 @@ pub fn preprocess_dag_body_self_imports(
                         );
                     } else if is_runtime {
                         return Err(GraphcalError::ImportRuntimeItem {
-                            name: orig_name.clone(),
+                            name: orig_name.to_string(),
                             src: src.clone(),
                             span: span.into(),
                         });

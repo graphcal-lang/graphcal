@@ -16,7 +16,7 @@ fn dim_expr_name(te: &crate::syntax::ast::TypeExpr) -> &str {
     match &te.kind {
         TypeExprKind::DimExpr(dim) => {
             assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
-            dim.terms[0].term.name.value.as_str()
+            dim.terms[0].term.name.value.leaf().as_str()
         }
         other => panic!("expected DimExpr, got {other:?}"),
     }
@@ -51,7 +51,7 @@ fn parse_param_with_dim_type() {
             match &p.type_ann.kind {
                 TypeExprKind::DimExpr(d) => {
                     assert_eq!(d.terms.len(), 1);
-                    assert_eq!(d.terms[0].term.name.value, "Length");
+                    assert_eq!(d.terms[0].term.name.value.leaf().as_str(), "Length");
                 }
                 other => panic!("expected DimExpr, got {other:?}"),
             }
@@ -74,7 +74,7 @@ fn parse_param_required() {
             match &p.type_ann.kind {
                 TypeExprKind::DimExpr(d) => {
                     assert_eq!(d.terms.len(), 1);
-                    assert_eq!(d.terms[0].term.name.value, "Mass");
+                    assert_eq!(d.terms[0].term.name.value.leaf().as_str(), "Mass");
                 }
                 other => panic!("expected DimExpr, got {other:?}"),
             }
@@ -95,10 +95,10 @@ fn parse_node_with_compound_dim_type() {
             match &n.type_ann.kind {
                 TypeExprKind::DimExpr(d) => {
                     assert_eq!(d.terms.len(), 2);
-                    assert_eq!(d.terms[0].term.name.value, "Length");
+                    assert_eq!(d.terms[0].term.name.value.leaf().as_str(), "Length");
                     assert_eq!(d.terms[0].term.power, Some(3));
                     assert_eq!(d.terms[1].op, MulDivOp::Div);
-                    assert_eq!(d.terms[1].term.name.value, "Time");
+                    assert_eq!(d.terms[1].term.name.value.leaf().as_str(), "Time");
                     assert_eq!(d.terms[1].term.power, Some(2));
                 }
                 other => panic!("expected DimExpr, got {other:?}"),
@@ -143,9 +143,9 @@ fn parse_derived_dimension() {
             assert_eq!(d.name.value.as_str(), "Velocity");
             let def = d.definition.as_ref().expect("derived dim has a body");
             assert_eq!(def.terms.len(), 2);
-            assert_eq!(def.terms[0].term.name.value, "Length");
+            assert_eq!(def.terms[0].term.name.value.leaf().as_str(), "Length");
             assert_eq!(def.terms[1].op, MulDivOp::Div);
-            assert_eq!(def.terms[1].term.name.value, "Time");
+            assert_eq!(def.terms[1].term.name.value.leaf().as_str(), "Time");
         }
         _ => panic!("expected dimension"),
     }
@@ -171,7 +171,10 @@ fn parse_base_unit() {
     match &file.declarations[0].kind {
         DeclKind::Unit(u) => {
             assert_eq!(u.name.value.as_str(), "m");
-            assert_eq!(u.dim_type.terms[0].term.name.value, "Length");
+            assert_eq!(
+                u.dim_type.terms[0].term.name.value.leaf().as_str(),
+                "Length"
+            );
             assert!(u.definition.is_none());
         }
         _ => panic!("expected unit"),
@@ -906,21 +909,21 @@ fn parse_import_with_param_bindings_error() {
 }
 
 #[test]
-fn parse_import_legacy_double_colon_error() {
+fn parse_import_rejects_old_double_colon_error() {
     // `::` is no longer a valid token.
     let result = Parser::new("import nasa::rocket;").parse_file();
     assert!(result.is_err());
 }
 
 #[test]
-fn parse_import_legacy_string_path_error() {
+fn parse_import_rejects_old_string_path_error() {
     // File-path imports were removed.
     let result = Parser::new(r#"import "./helper.gcl";"#).parse_file();
     assert!(result.is_err());
 }
 
 #[test]
-fn parse_import_legacy_parent_path_error() {
+fn parse_import_rejects_old_parent_path_error() {
     // Parent-scope imports were removed.
     let result = Parser::new("import ..;").parse_file();
     assert!(result.is_err());
@@ -1208,7 +1211,7 @@ fn parse_required_range_simple() {
             match &idx.kind {
                 IndexDeclKind::RequiredRange { dimension } => {
                     assert_eq!(dimension.terms.len(), 1);
-                    assert_eq!(dimension.terms[0].term.name.value.as_str(), "Time");
+                    assert_eq!(dimension.terms[0].term.name.value.leaf().as_str(), "Time");
                 }
                 other => panic!("expected required range, got {other:?}"),
             }
@@ -1283,9 +1286,9 @@ fn parse_required_range_compound_dim() {
             match &idx.kind {
                 IndexDeclKind::RequiredRange { dimension } => {
                     assert_eq!(dimension.terms.len(), 3);
-                    assert_eq!(dimension.terms[0].term.name.value.as_str(), "Mass");
-                    assert_eq!(dimension.terms[1].term.name.value.as_str(), "Length");
-                    assert_eq!(dimension.terms[2].term.name.value.as_str(), "Time");
+                    assert_eq!(dimension.terms[0].term.name.value.leaf().as_str(), "Mass");
+                    assert_eq!(dimension.terms[1].term.name.value.leaf().as_str(), "Length");
+                    assert_eq!(dimension.terms[2].term.name.value.leaf().as_str(), "Time");
                     assert_eq!(dimension.terms[2].term.power, Some(2));
                     assert_eq!(dimension.terms[2].op, MulDivOp::Div);
                 }

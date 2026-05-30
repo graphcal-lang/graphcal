@@ -32,13 +32,7 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::ConstRef(name) => RcDoc::text(format_scoped_surface(&name.value)),
         ExprKind::LocalRef(ident) => RcDoc::text(ident.name.clone()),
         ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => {
-            RcDoc::text(
-                path.segments
-                    .iter()
-                    .map(|segment| segment.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join("."),
-            )
+            RcDoc::text(format_ident_path(path))
         }
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
@@ -49,10 +43,10 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             RcDoc::text(op_str).append(format_unary_operand(fmt, operand))
         }
         ExprKind::FnCall {
-            name,
+            callee,
             type_args,
             args,
-        } => format_fn_call_expr(fmt, name.value.as_str(), type_args, args),
+        } => format_fn_call_expr(fmt, callee, type_args, args),
         ExprKind::If {
             condition,
             then_branch,
@@ -83,10 +77,10 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             .append(RcDoc::text("."))
             .append(RcDoc::text(field.value.as_str().to_string())),
         ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             fields,
-        } => format_constructor_call(fmt, constructor, generic_args, fields),
+        } => format_constructor_call(fmt, callee, generic_args, fields),
         ExprKind::MapLiteral { entries } => format_map_literal(fmt, entries),
         ExprKind::Sugar(graphcal_compiler::syntax::ast::RawExprSugar::TableLiteral {
             indexes,
@@ -97,11 +91,9 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             let arg_docs: Vec<RcDoc<'static>> = args
                 .iter()
                 .map(|a| match a {
-                    IndexArg::Variant { index, variant } => RcDoc::text(format!(
-                        "{}.{}",
-                        index.value.as_str(),
-                        variant.value.as_str()
-                    )),
+                    IndexArg::Variant { index, variant } => {
+                        RcDoc::text(format!("{}.{}", index.value, variant.value.as_str()))
+                    }
                     IndexArg::Var(ident) => RcDoc::text(ident.name.clone()),
                     IndexArg::Expr(e) => format_expr(fmt, e),
                 })
@@ -245,9 +237,13 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
 }
 
 /// Format a `FnCall` expression with comment handling per argument.
+fn format_ident_path(path: &graphcal_compiler::syntax::ast::IdentPath) -> String {
+    path.display_path()
+}
+
 pub fn format_fn_call_expr(
     fmt: &mut Formatter<'_>,
-    fn_name: &str,
+    callee: &graphcal_compiler::syntax::ast::IdentPath,
     type_args: &[graphcal_compiler::syntax::ast::GenericArg],
     args: &[Expr],
 ) -> RcDoc<'static> {
@@ -265,7 +261,7 @@ pub fn format_fn_call_expr(
     }
     let sep = RcDoc::text(",").append(RcDoc::line());
     let inner = RcDoc::intersperse(arg_docs, sep);
-    let mut doc = RcDoc::text(fn_name.to_string());
+    let mut doc = RcDoc::text(format_ident_path(callee));
     if !type_args.is_empty() {
         doc = doc.append(format_generic_args(fmt, type_args));
     }
@@ -326,13 +322,11 @@ pub fn format_if(
 
 pub fn format_constructor_call(
     fmt: &mut Formatter<'_>,
-    constructor: &graphcal_compiler::syntax::span::Spanned<
-        graphcal_compiler::syntax::names::ConstructorName,
-    >,
+    callee: &graphcal_compiler::syntax::ast::IdentPath,
     generic_args: &[graphcal_compiler::syntax::ast::GenericArg],
     fields: &[FieldInit],
 ) -> RcDoc<'static> {
-    let mut header = RcDoc::text(constructor.value.as_str().to_string());
+    let mut header = RcDoc::text(format_ident_path(callee));
     if !generic_args.is_empty() {
         header = header.append(format_generic_args(fmt, generic_args));
     }
@@ -419,7 +413,7 @@ pub fn format_table_literal(
     let idx_names: Vec<String> = indexes
         .iter()
         .map(|i| match i {
-            TableIndexSpec::Named(s) => s.value.as_str().to_string(),
+            TableIndexSpec::Named(s) => s.value.to_string(),
             TableIndexSpec::NatRange(n, _) => n.to_string(),
         })
         .collect();
@@ -751,7 +745,7 @@ pub fn format_for_comp(
                 .append(RcDoc::text(": "))
                 .append(match &b.index {
                     graphcal_compiler::syntax::ast::ForBindingIndex::Named(spanned) => {
-                        RcDoc::text(spanned.value.as_str().to_string())
+                        RcDoc::text(spanned.value.to_string())
                     }
                     graphcal_compiler::syntax::ast::ForBindingIndex::Range { arg, .. } => {
                         let arg_str = arg.to_string();
@@ -845,6 +839,34 @@ pub fn format_match(
 
 pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
     match p {
+        MatchPattern::Path { path, bindings, .. } => {
+            let name = RcDoc::text(
+                path.segments
+                    .iter()
+                    .map(|segment| segment.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            );
+            if bindings.is_empty() {
+                return name;
+            }
+            let binding_docs: Vec<RcDoc<'static>> = bindings
+                .iter()
+                .map(|b| match b {
+                    PatternBinding::Bind { field, var } => {
+                        RcDoc::text(field.value.as_str().to_string())
+                            .append(RcDoc::text(": "))
+                            .append(RcDoc::text(var.name.clone()))
+                    }
+                    PatternBinding::Wildcard { field, .. } => {
+                        RcDoc::text(field.value.as_str().to_string()).append(RcDoc::text(": _"))
+                    }
+                })
+                .collect();
+            name.append(RcDoc::text("("))
+                .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
+                .append(RcDoc::text(")"))
+        }
         MatchPattern::IndexLabel { index, variant, .. } => {
             RcDoc::text(format!("{}.{}", index.value, variant.value))
         }

@@ -25,8 +25,8 @@ use crate::syntax::span::Span;
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
 pub use crate::registry::resolve_types::{
-    DeclCategory, ExpectedFail, ExpectedFailKey, ImportedValueNames, ResolvedFile,
-    is_aggregation_fn, is_time_scale_name,
+    DeclCategory, ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart, ImportedValueNames,
+    ResolvedFile, is_aggregation_fn, is_time_scale_name,
 };
 pub use crate::syntax::names::ScopedName;
 
@@ -926,13 +926,13 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(String, Span)>) {
         TypeExprKind::Indexed { base, indexes } => {
             collect_type_refs(base, refs);
             for idx in indexes {
-                if let IndexExpr::Name(ident) = idx {
-                    refs.push((ident.as_str().to_string(), ident.span));
+                if let IndexExpr::Name(path) = idx {
+                    refs.push((path.value.display_path(), path.span));
                 }
             }
         }
         TypeExprKind::TypeApplication { name, type_args } => {
-            refs.push((name.as_str().to_string(), name.span));
+            refs.push((name.value.display_path(), name.span));
             for arg in type_args {
                 collect_type_refs(arg, refs);
             }
@@ -955,7 +955,7 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(String, Span)>) {
 /// Collect every term name in a [`DimExpr`] as a `(name, span)` reference.
 fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(String, Span)>) {
     for item in &dim_expr.terms {
-        refs.push((item.term.name.as_str().to_string(), item.term.span));
+        refs.push((item.term.name.value.display_path(), item.term.span));
     }
 }
 
@@ -1027,7 +1027,7 @@ pub(crate) fn resolve_with_imports(
 
     // Pre-populate with imported names (they don't get duplicate-checked against
     // each other here because they were validated in their source files).
-    // The `imported.*` legacy entries pass bare names; the at-rest dep map
+    // The `imported.*` compatibility entries pass bare names; the at-rest dep map
     // produced upstream already classifies them as locals.
     for (name, _, _, span) in &imported.consts {
         names.insert(

@@ -25,6 +25,11 @@ The Graphcal LSP server (`graphcal lsp`) provides:
 !!! tip "Inlay hints: live calculation view"
     The inlay hints feature is what makes Graphcal feel like a live spreadsheet. As you edit your `.gcl` file, the LSP evaluates the computation graph and shows the resulting values next to each `param` and `node` declaration. Change an input and watch all dependent values update.
 
+For multi-file projects, editor navigation follows module-qualified identity for
+same-leaf declarations. If `a.gcl` and `b.gcl` both export `Phase`, `Item`, and
+`Pick`, go-to-definition on `a.Phase`, `a.Phase.Burn`, `a.Item`, or `a.Pick(...)`
+jumps to `a.gcl`, not whichever same-leaf symbol was seen first.
+
 ## VS Code
 
 The VS Code extension provides syntax highlighting (via TextMate grammar) and full LSP support.

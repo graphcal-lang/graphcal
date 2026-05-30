@@ -8,24 +8,56 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::{
-    BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, GenericArg, IndexArg, NatExpr,
+    BinOp, Expr, ExprKind, ForBinding, ForBindingIndex, GenericArg, IndexArg, IndexExpr, MulDivOp,
+    NatExpr, TypeExpr, TypeExprKind,
 };
+use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
-    ConstructorName, FieldName, GenericParamName, IndexName, ScopedName, StructTypeName,
+    FieldName, GenericParamName, IndexName, IndexVariantName, NamePath, ResolvedIndexVariant,
+    ScopedName, StructTypeName,
 };
+use crate::syntax::span::Span;
 use crate::tir::typed::NatLinearForm;
 
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeGenericConstraint};
 
-use super::super::helpers::{cartesian_product, format_inferred_type, resolve_field_type};
-use super::super::{DeclaredType, InferredType};
+use super::super::helpers::{
+    cartesian_product, format_inferred_type, resolve_field_type, struct_type_def_for_inferred,
+};
+use super::super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
 use super::infer_type;
+
+/// Collapse a syntactic index path to a leaf-only name at syntax boundaries.
+///
+/// Module-aware inference must use `ResolvedCollectionRefs`; this adapter is
+/// only for callers that still receive syntax-only collection references.
+fn standalone_index_name_from_path(path: &NamePath) -> IndexName {
+    IndexName::from(path.leaf().clone())
+}
+
+fn inference_owner(dag: Option<&crate::tir::typed::DagTIR>) -> crate::dag_id::DagId {
+    dag.map_or_else(
+        || crate::dag_id::DagId::root("<type-inference>"),
+        |dag| dag.dag_id.clone(),
+    )
+}
+
+fn inferred_index_for_leaf(
+    name: IndexName,
+    dag: Option<&crate::tir::typed::DagTIR>,
+) -> InferredIndex {
+    if name.as_str().starts_with("__nat_range_") {
+        InferredIndex::from_resolved(crate::registry::types::nat_range_resolved_index_name(name))
+    } else {
+        InferredIndex::with_owner(inference_owner(dag), name)
+    }
+}
 
 /// Get the index name for a for binding.
 fn for_binding_index_name(index: &ForBindingIndex) -> IndexName {
     match index {
-        ForBindingIndex::Named(spanned) => spanned.value.clone(),
+        ForBindingIndex::Named(spanned) => standalone_index_name_from_path(&spanned.value),
         ForBindingIndex::Range { arg, .. } => IndexName::new(nat_expr_to_index_name_str(arg)),
     }
 }
@@ -64,12 +96,123 @@ fn normalize_nat_expr_lenient(expr: &NatExpr) -> NatLinearForm {
     }
 }
 
+fn validate_index_path_module_scope(
+    path: &crate::syntax::names::NamePath,
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), GraphcalError> {
+    let Some((qualifier, _)) = path.qualifier_and_leaf() else {
+        return Ok(());
+    };
+    let Some(alias) = qualifier.first() else {
+        return Ok(());
+    };
+    if tir.module_aliases.contains_key(alias.as_str()) {
+        Ok(())
+    } else {
+        Err(GraphcalError::EvalError {
+            message: format!("module alias `{alias}` is not in scope for index path `{path}`"),
+            src: src.clone(),
+            span: span.into(),
+        })
+    }
+}
+
+fn inferred_index_for_path(
+    path: &NamePath,
+    span: Span,
+    dag: Option<&crate::tir::typed::DagTIR>,
+) -> InferredIndex {
+    dag.map(|dag| &dag.semantic.collection_refs)
+        .and_then(|refs| refs.for_binding_indexes.get(&span))
+        .cloned()
+        .map_or_else(
+            || inferred_index_for_leaf(standalone_index_name_from_path(path), dag),
+            InferredIndex::from_resolved,
+        )
+}
+
+fn resolved_index_variant_for_arg(
+    index_span: Span,
+    variant_span: Span,
+    dag: Option<&crate::tir::typed::DagTIR>,
+) -> Option<&crate::syntax::names::ResolvedIndexVariant> {
+    let span = index_span.merge(variant_span);
+    dag.map(|dag| &dag.semantic.collection_refs)
+        .and_then(|refs| refs.index_access_variants.get(&span))
+}
+
+fn index_def_for_inferred<'a>(
+    index: &InferredIndex,
+    dag: Option<&'a crate::tir::typed::DagTIR>,
+    registry: &'a Registry,
+) -> Option<&'a crate::registry::types::IndexDef> {
+    dag.map(|dag| &dag.semantic.collection_refs)
+        .and_then(|refs| refs.index_defs.get(index.resolved()))
+        .or_else(|| registry.indexes.get_index(index.name().as_str()))
+}
+
+fn resolved_map_entry_variant_for_key<'a>(
+    key: &crate::desugar::resolved_ast::MapEntryKey,
+    dag: Option<&'a crate::tir::typed::DagTIR>,
+) -> Option<&'a ResolvedIndexVariant> {
+    let span = key.index.span.merge(key.variant.span);
+    dag.map(|dag| &dag.semantic.collection_refs)
+        .and_then(|refs| refs.map_entry_variants.get(&span))
+}
+
+fn inferred_index_for_map_entry_key(
+    key: &crate::desugar::resolved_ast::MapEntryKey,
+    dag: Option<&crate::tir::typed::DagTIR>,
+) -> InferredIndex {
+    resolved_map_entry_variant_for_key(key, dag).map_or_else(
+        || inferred_index_for_leaf(key.index.value.registry_name(), dag),
+        |variant| InferredIndex::from_resolved(variant.index().clone()),
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum MapLiteralVariantKey {
+    Resolved(ResolvedIndexVariant),
+}
+
+impl MapLiteralVariantKey {
+    const fn variant(&self) -> &IndexVariantName {
+        match self {
+            Self::Resolved(resolved) => resolved.variant(),
+        }
+    }
+
+    fn display_index(&self) -> IndexName {
+        match self {
+            Self::Resolved(resolved) => resolved.index().to_unowned_def_name(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MapLiteralAxis {
+    index: InferredIndex,
+    variants: Vec<IndexVariantName>,
+}
+
+impl MapLiteralAxis {
+    fn variant_key(&self, variant: IndexVariantName) -> MapLiteralVariantKey {
+        MapLiteralVariantKey::Resolved(ResolvedIndexVariant::new(
+            self.index.resolved().clone(),
+            variant,
+        ))
+    }
+}
+
 /// Infer the type of a for comprehension.
 pub(super) fn infer_for_comp(
     bindings: &[ForBinding],
     body: &Expr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -78,43 +221,57 @@ pub(super) fn infer_for_comp(
     // Add loop variables to local_types, infer body type, wrap in Indexed layers
     let mut inner_locals = local_types.clone();
     for binding in bindings {
-        let var_type = match &binding.index {
-            ForBindingIndex::Named(spanned_idx) => {
-                let idx_name = spanned_idx.value.as_str();
-                let idx_def = registry.indexes.get_index(idx_name).ok_or_else(|| {
-                    GraphcalError::UnknownIndex {
-                        name: spanned_idx.value.clone(),
-                        src: src.clone(),
-                        span: spanned_idx.span.into(),
+        let var_type =
+            match &binding.index {
+                ForBindingIndex::Named(spanned_idx) => {
+                    if dag
+                        .map(|dag| &dag.semantic.collection_refs)
+                        .and_then(|refs| refs.for_binding_indexes.get(&spanned_idx.span))
+                        .is_none()
+                    {
+                        validate_index_path_module_scope(
+                            &spanned_idx.value,
+                            tir,
+                            src,
+                            spanned_idx.span,
+                        )?;
                     }
-                })?;
-                match &idx_def.kind {
-                    crate::registry::types::IndexKind::Named { .. }
-                    | crate::registry::types::IndexKind::RequiredNamed => {
-                        InferredType::Label(spanned_idx.value.clone())
-                    }
-                    crate::registry::types::IndexKind::Range(
-                        crate::registry::types::RangeIndexData { dimension, .. },
-                    )
-                    | crate::registry::types::IndexKind::RequiredRange { dimension } => {
-                        InferredType::Scalar(dimension.clone())
-                    }
-                    crate::registry::types::IndexKind::NatRange { size } => {
-                        InferredType::Fin(NatLinearForm::from_constant(*size as u64))
+                    let index_identity =
+                        inferred_index_for_path(&spanned_idx.value, spanned_idx.span, dag);
+                    let idx_def = index_def_for_inferred(&index_identity, dag, registry)
+                        .ok_or_else(|| GraphcalError::UnknownIndex {
+                            name: index_identity.name().clone(),
+                            src: src.clone(),
+                            span: spanned_idx.span.into(),
+                        })?;
+                    match &idx_def.kind {
+                        crate::registry::types::IndexKind::Named { .. }
+                        | crate::registry::types::IndexKind::RequiredNamed => {
+                            InferredType::Label(index_identity)
+                        }
+                        crate::registry::types::IndexKind::Range(
+                            crate::registry::types::RangeIndexData { dimension, .. },
+                        )
+                        | crate::registry::types::IndexKind::RequiredRange { dimension } => {
+                            InferredType::Scalar(dimension.clone())
+                        }
+                        crate::registry::types::IndexKind::NatRange { size } => {
+                            InferredType::Fin(NatLinearForm::from_constant(*size as u64))
+                        }
                     }
                 }
-            }
-            ForBindingIndex::Range { arg, .. } => {
-                // `for i: range(N)` — loop variable is Fin(N)
-                InferredType::Fin(normalize_nat_expr_lenient(arg))
-            }
-        };
+                ForBindingIndex::Range { arg, .. } => {
+                    // `for i: range(N)` — loop variable is Fin(N)
+                    InferredType::Fin(normalize_nat_expr_lenient(arg))
+                }
+            };
         inner_locals.insert(binding.var.value.as_str().to_owned(), var_type);
     }
     let body_type = infer_type(
         body,
         declared_types,
         &inner_locals,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -123,10 +280,17 @@ pub(super) fn infer_for_comp(
     // Wrap body type with index layers (outermost binding first)
     let mut result = body_type;
     for binding in bindings.iter().rev() {
-        let idx_name = for_binding_index_name(&binding.index);
+        let index = match &binding.index {
+            ForBindingIndex::Named(spanned_idx) => {
+                inferred_index_for_path(&spanned_idx.value, spanned_idx.span, dag)
+            }
+            ForBindingIndex::Range { .. } => {
+                inferred_index_for_leaf(for_binding_index_name(&binding.index), dag)
+            }
+        };
         result = InferredType::Indexed {
             element: Box::new(result),
-            index: idx_name,
+            index,
         };
     }
     Ok(result)
@@ -142,6 +306,7 @@ pub(super) fn infer_map_or_table_literal(
     entries: &[crate::desugar::resolved_ast::MapEntry],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -175,37 +340,27 @@ pub(super) fn infer_map_or_table_literal(
             });
         }
     }
-    // Validate index names: all entries must use the same indexes in the same order
-    let index_names: Vec<IndexName> = entries[0]
-        .keys
-        .iter()
-        .map(|k| k.index.value.registry_name())
-        .collect();
-    for entry in &entries[1..] {
-        for (i, key) in entry.keys.iter().enumerate() {
-            let key_index_name = key.index.value.registry_name();
-            if key_index_name != index_names[i] {
-                return Err(GraphcalError::IndexMismatch {
-                    expected: index_names[i].clone(),
-                    found: key_index_name,
-                    src: src.clone(),
-                    span: key.index.span.into(),
-                });
+    for entry in entries {
+        for key in &entry.keys {
+            if let crate::syntax::ast::MapEntryIndex::Named(path) = &key.index.value
+                && resolved_map_entry_variant_for_key(key, dag).is_none()
+            {
+                validate_index_path_module_scope(path, tir, src, key.index.span)?;
             }
         }
     }
-    // Validate each index exists, reject range indexes as keys, and collect variant lists
-    let mut axes_variants: Vec<Vec<crate::syntax::names::IndexVariantName>> = Vec::new();
+
+    // Validate index identities: all entries must use the same indexes in the same order.
+    let mut axes = Vec::with_capacity(arity);
     for key in &entries[0].keys {
-        let key_index_name = key.index.value.registry_name();
-        let idx_def = registry
-            .indexes
-            .get_index(key_index_name.as_str())
-            .ok_or_else(|| GraphcalError::UnknownIndex {
-                name: key_index_name.clone(),
+        let index = inferred_index_for_map_entry_key(key, dag);
+        let idx_def = index_def_for_inferred(&index, dag, registry).ok_or_else(|| {
+            GraphcalError::UnknownIndex {
+                name: index.name().clone(),
                 src: src.clone(),
                 span: key.index.span.into(),
-            })?;
+            }
+        })?;
         if idx_def.is_range() {
             return Err(GraphcalError::EvalError {
                 message: format!(
@@ -216,19 +371,54 @@ pub(super) fn infer_map_or_table_literal(
                 span: key.index.span.into(),
             });
         }
-        axes_variants.push(idx_def.variants());
+        axes.push(MapLiteralAxis {
+            index,
+            variants: idx_def.variants(),
+        });
     }
-    // Check totality over the Cartesian product
-    let mut expected_tuples: std::collections::HashSet<Vec<&str>> =
+    for entry in &entries[1..] {
+        for (i, key) in entry.keys.iter().enumerate() {
+            let key_index = inferred_index_for_map_entry_key(key, dag);
+            if key_index != axes[i].index {
+                return Err(GraphcalError::IndexMismatch {
+                    expected: axes[i].index.name().clone(),
+                    found: key_index.name().clone(),
+                    src: src.clone(),
+                    span: key.index.span.into(),
+                });
+            }
+        }
+    }
+
+    // Check totality over the Cartesian product, preserving resolved index owners where known.
+    let axes_variant_keys: Vec<Vec<MapLiteralVariantKey>> = axes
+        .iter()
+        .map(|axis| {
+            axis.variants
+                .iter()
+                .cloned()
+                .map(|variant| axis.variant_key(variant))
+                .collect()
+        })
+        .collect();
+    let mut expected_tuples: std::collections::HashSet<Vec<MapLiteralVariantKey>> =
         std::collections::HashSet::new();
-    cartesian_product(&axes_variants, &mut Vec::new(), &mut expected_tuples);
-    let mut provided_tuples: std::collections::HashSet<Vec<&str>> =
+    cartesian_product(&axes_variant_keys, &mut Vec::new(), &mut expected_tuples);
+    let mut provided_tuples: std::collections::HashSet<Vec<MapLiteralVariantKey>> =
         std::collections::HashSet::new();
     for entry in entries {
-        let tuple: Vec<&str> = entry
+        let tuple: Vec<MapLiteralVariantKey> = entry
             .keys
             .iter()
-            .map(|k| k.variant.value.as_str())
+            .enumerate()
+            .map(|(i, key)| {
+                resolved_map_entry_variant_for_key(key, dag)
+                    .cloned()
+                    .map_or_else(
+                        || axes[i].variant_key(key.variant.value.clone()),
+                        MapLiteralVariantKey::Resolved,
+                    )
+            })
             .collect();
         if !provided_tuples.insert(tuple.clone()) {
             return Err(GraphcalError::EvalError {
@@ -237,12 +427,12 @@ pub(super) fn infer_map_or_table_literal(
                     entry
                         .keys
                         .iter()
-                        .map(|k| {
-                            k.variant
-                                .value
-                                .qualified_by(&k.index.value.registry_name())
-                                .to_string()
-                        })
+                        .enumerate()
+                        .map(|(i, k)| k
+                            .variant
+                            .value
+                            .qualified_by(axes[i].index.name())
+                            .to_string())
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
@@ -255,13 +445,12 @@ pub(super) fn infer_map_or_table_literal(
         // handles it with more specific error types (ExtraVariants/MissingVariants).
         if arity > 1 {
             for (i, key) in entry.keys.iter().enumerate() {
-                if !axes_variants[i]
-                    .iter()
-                    .any(|v| v.as_str() == key.variant.value.as_str())
-                {
+                let key_variant = resolved_map_entry_variant_for_key(key, dag)
+                    .map_or(&key.variant.value, ResolvedIndexVariant::variant);
+                if !axes[i].variants.iter().any(|v| v == key_variant) {
                     return Err(GraphcalError::UnknownVariant {
-                        index_name: key.index.value.registry_name(),
-                        variant_name: key.variant.value.clone(),
+                        index_name: axes[i].index.name().clone(),
+                        variant_name: key_variant.clone(),
                         src: src.clone(),
                         span: key.variant.span.into(),
                     });
@@ -270,18 +459,16 @@ pub(super) fn infer_map_or_table_literal(
         }
     }
     // Check for extra variants (provided but not in expected set)
-    let extra: Vec<Vec<&str>> = provided_tuples
+    let extra: Vec<Vec<MapLiteralVariantKey>> = provided_tuples
         .difference(&expected_tuples)
         .cloned()
         .collect();
     if !extra.is_empty() {
         if arity == 1 {
-            let extra_variants: Vec<crate::syntax::names::IndexVariantName> = extra
-                .iter()
-                .map(|t| crate::syntax::names::IndexVariantName::new(t[0]))
-                .collect();
+            let extra_variants: Vec<IndexVariantName> =
+                extra.iter().map(|t| t[0].variant().clone()).collect();
             return Err(GraphcalError::ExtraVariants {
-                index_name: index_names[0].clone(),
+                index_name: axes[0].index.name().clone(),
                 extra: extra_variants,
                 src: src.clone(),
                 span: expr.span.into(),
@@ -291,11 +478,9 @@ pub(super) fn infer_map_or_table_literal(
             .iter()
             .map(|t| {
                 t.iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        crate::syntax::names::IndexVariantName::new(*v)
-                            .qualified_by(&index_names[i])
-                            .to_string()
+                    .map(|v| {
+                        let display_index = v.display_index();
+                        v.variant().qualified_by(&display_index).to_string()
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -311,18 +496,16 @@ pub(super) fn infer_map_or_table_literal(
         });
     }
     // Check for missing tuples
-    let missing: Vec<Vec<&str>> = expected_tuples
+    let missing: Vec<Vec<MapLiteralVariantKey>> = expected_tuples
         .difference(&provided_tuples)
         .cloned()
         .collect();
     if !missing.is_empty() {
         if arity == 1 {
-            let missing_variants: Vec<crate::syntax::names::IndexVariantName> = missing
-                .iter()
-                .map(|t| crate::syntax::names::IndexVariantName::new(t[0]))
-                .collect();
+            let missing_variants: Vec<IndexVariantName> =
+                missing.iter().map(|t| t[0].variant().clone()).collect();
             return Err(GraphcalError::MissingVariants {
-                index_name: index_names[0].clone(),
+                index_name: axes[0].index.name().clone(),
                 missing: missing_variants,
                 src: src.clone(),
                 span: expr.span.into(),
@@ -332,11 +515,9 @@ pub(super) fn infer_map_or_table_literal(
             .iter()
             .map(|t| {
                 t.iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        crate::syntax::names::IndexVariantName::new(*v)
-                            .qualified_by(&index_names[i])
-                            .to_string()
+                    .map(|v| {
+                        let display_index = v.display_index();
+                        v.variant().qualified_by(&display_index).to_string()
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -356,6 +537,7 @@ pub(super) fn infer_map_or_table_literal(
         &entries[0].value,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -366,10 +548,8 @@ pub(super) fn infer_map_or_table_literal(
     // Allow when the inner index is a range index, enabling mixed-index construction:
     //   { LabelIndex.Variant: for t: RangeIndex { ... }, ... }
     if let InferredType::Indexed { index, .. } = &first_type {
-        let inner_is_label = registry
-            .indexes
-            .get_index(index.as_str())
-            .is_some_and(|def| !def.is_range());
+        let inner_is_label =
+            index_def_for_inferred(index, dag, registry).is_some_and(|def| !def.is_range());
         if inner_is_label {
             return Err(GraphcalError::EvalError {
                 message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
@@ -383,6 +563,7 @@ pub(super) fn infer_map_or_table_literal(
             &entry.value,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -399,10 +580,10 @@ pub(super) fn infer_map_or_table_literal(
     }
     // Wrap in nested Indexed layers (reverse order, matching `for` comprehension)
     let mut result = first_type;
-    for idx_name in index_names.iter().rev() {
+    for axis in axes.iter().rev() {
         result = InferredType::Indexed {
             element: Box::new(result),
-            index: (*idx_name).clone(),
+            index: axis.index.clone(),
         };
     }
     Ok(result)
@@ -415,6 +596,7 @@ pub(super) fn infer_index_access(
     args: &[IndexArg],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -424,6 +606,7 @@ pub(super) fn infer_index_access(
         inner,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -446,62 +629,74 @@ pub(super) fn infer_index_access(
         // Validate the argument matches the index
         match arg {
             IndexArg::Variant { index, variant } => {
-                if index.value.as_str() != idx_name.as_str() {
+                let resolved_variant =
+                    resolved_index_variant_for_arg(index.span, variant.span, dag);
+                if resolved_variant.is_none() {
+                    validate_index_path_module_scope(&index.value, tir, src, index.span)?;
+                }
+                let arg_index = resolved_variant.map_or_else(
+                    || inferred_index_for_leaf(standalone_index_name_from_path(&index.value), dag),
+                    |variant| InferredIndex::from_resolved(variant.index().clone()),
+                );
+                if arg_index != idx_name {
                     return Err(GraphcalError::IndexMismatch {
-                        expected: idx_name,
-                        found: index.value.clone(),
+                        expected: idx_name.name().clone(),
+                        found: arg_index.name().clone(),
                         src: src.clone(),
                         span: index.span.into(),
                     });
                 }
-                // Validate variant exists
-                let idx_def = registry
-                    .indexes
-                    .get_index(idx_name.as_str())
-                    .ok_or_else(|| GraphcalError::UnknownIndex {
-                        name: idx_name.clone(),
-                        src: src.clone(),
-                        span: index.span.into(),
-                    })?;
-                if !idx_def
-                    .variants()
-                    .iter()
-                    .any(|v| v.as_str() == variant.value.as_str())
-                {
-                    return Err(GraphcalError::UnknownVariant {
-                        index_name: idx_name,
-                        variant_name: variant.value.clone(),
-                        src: src.clone(),
-                        span: variant.span.into(),
-                    });
+                if resolved_variant.is_none() {
+                    // Validate variant existence through the leaf-keyed
+                    // registry when this syntax path has no canonical variant
+                    // metadata.
+                    let idx_def =
+                        index_def_for_inferred(&idx_name, dag, registry).ok_or_else(|| {
+                            GraphcalError::UnknownIndex {
+                                name: idx_name.name().clone(),
+                                src: src.clone(),
+                                span: index.span.into(),
+                            }
+                        })?;
+                    if !idx_def
+                        .variants()
+                        .iter()
+                        .any(|v| v.as_str() == variant.value.as_str())
+                    {
+                        return Err(GraphcalError::UnknownVariant {
+                            index_name: idx_name.name().clone(),
+                            variant_name: variant.value.clone(),
+                            src: src.clone(),
+                            span: variant.span.into(),
+                        });
+                    }
                 }
             }
             IndexArg::Var(ident) => {
                 // Must be a loop variable with matching index
-                let var_type =
-                    local_types
-                        .get(&ident.name)
-                        .ok_or_else(|| GraphcalError::UnknownLocalRef {
-                            name: ident.name.clone(),
-                            src: src.clone(),
-                            span: ident.span.into(),
-                        })?;
+                let var_type = local_types.get(ident.name.as_str()).ok_or_else(|| {
+                    GraphcalError::UnknownLocalRef {
+                        name: ident.name.to_string(),
+                        src: src.clone(),
+                        span: ident.span.into(),
+                    }
+                })?;
                 match var_type {
                     InferredType::Label(label_index) => {
-                        if label_index.as_str() != idx_name.as_str() {
+                        if label_index != &idx_name {
                             return Err(GraphcalError::IndexMismatch {
-                                expected: idx_name,
-                                found: label_index.clone(),
+                                expected: idx_name.name().clone(),
+                                found: label_index.name().clone(),
                                 src: src.clone(),
                                 span: ident.span.into(),
                             });
                         }
                     }
                     InferredType::Struct(type_name, args) => {
-                        if type_name.as_str() != idx_name.as_str() || !args.is_empty() {
+                        if type_name.name().as_str() != idx_name.as_str() || !args.is_empty() {
                             return Err(GraphcalError::IndexMismatch {
-                                expected: idx_name,
-                                found: IndexName::new(type_name.as_str()),
+                                expected: idx_name.name().clone(),
+                                found: IndexName::new(type_name.name().as_str()),
                                 src: src.clone(),
                                 span: ident.span.into(),
                             });
@@ -511,14 +706,13 @@ pub(super) fn infer_index_access(
                         // Allow scalar locals to be used as index args
                         // for range indexes (e.g. prev_i, i in Unfold)
                         let idx_def =
-                            registry
-                                .indexes
-                                .get_index(idx_name.as_str())
-                                .ok_or_else(|| GraphcalError::UnknownIndex {
-                                    name: idx_name.clone(),
+                            index_def_for_inferred(&idx_name, dag, registry).ok_or_else(|| {
+                                GraphcalError::UnknownIndex {
+                                    name: idx_name.name().clone(),
                                     src: src.clone(),
                                     span: ident.span.into(),
-                                })?;
+                                }
+                            })?;
                         if !idx_def.is_range() {
                             return Err(GraphcalError::EvalError {
                                 message: format!("`{}` is not a loop variable", ident.name),
@@ -530,7 +724,7 @@ pub(super) fn infer_index_access(
                     InferredType::Int => {
                         // Allow Int locals to be used as index args for nat range indexes
                         // (e.g. `for i: range(3) { v[i] }`)
-                        if let Some(idx_def) = registry.indexes.get_index(idx_name.as_str())
+                        if let Some(idx_def) = index_def_for_inferred(&idx_name, dag, registry)
                             && !idx_def.is_nat_range()
                         {
                             return Err(GraphcalError::EvalError {
@@ -550,7 +744,7 @@ pub(super) fn infer_index_access(
                         // Fin(N) can index into nat-range indexes with bounds checking.
                         // Extract the index size as a NatLinearForm and check: fin_bound <= size.
                         let index_form = if let Some(idx_def) =
-                            registry.indexes.get_index(idx_name.as_str())
+                            index_def_for_inferred(&idx_name, dag, registry)
                         {
                             if !idx_def.is_nat_range() {
                                 return Err(GraphcalError::EvalError {
@@ -601,6 +795,7 @@ pub(super) fn infer_index_access(
                     index_expr,
                     declared_types,
                     local_types,
+                    dag,
                     tir,
                     registry,
                     builtin_fns,
@@ -617,7 +812,7 @@ pub(super) fn infer_index_access(
                     });
                 }
                 // Check that the indexed type is a nat-range index.
-                if let Some(idx_def) = registry.indexes.get_index(idx_name.as_str())
+                if let Some(idx_def) = index_def_for_inferred(&idx_name, dag, registry)
                     && !idx_def.is_nat_range()
                 {
                     return Err(GraphcalError::EvalError {
@@ -630,7 +825,7 @@ pub(super) fn infer_index_access(
                 }
                 // Try to compute a static Fin bound for bounds checking.
                 if let Some(fin_bound) = compute_index_fin_bound(index_expr, local_types) {
-                    let index_form = registry.indexes.get_index(idx_name.as_str()).map_or_else(
+                    let index_form = index_def_for_inferred(&idx_name, dag, registry).map_or_else(
                         // Symbolic nat range from generic param.
                         || NatLinearForm::from_index_name(idx_name.as_str()),
                         |idx_def| idx_def.nat_range_size().map(NatLinearForm::from_constant),
@@ -673,7 +868,7 @@ fn compute_index_fin_bound(
     local_types: &HashMap<String, InferredType>,
 ) -> Option<NatLinearForm> {
     match &expr.kind {
-        ExprKind::LocalRef(ident) => match local_types.get(&ident.name)? {
+        ExprKind::LocalRef(ident) => match local_types.get(ident.name.as_str())? {
             InferredType::Fin(bound) => Some(bound.clone()),
             _ => None,
         },
@@ -720,6 +915,7 @@ pub(super) fn infer_scan(
     body: &Expr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -730,6 +926,7 @@ pub(super) fn infer_scan(
         source,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -746,6 +943,7 @@ pub(super) fn infer_scan(
         init,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -769,6 +967,7 @@ pub(super) fn infer_scan(
         body,
         declared_types,
         &scan_locals,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -800,6 +999,7 @@ pub(super) fn infer_unfold(
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -809,6 +1009,7 @@ pub(super) fn infer_unfold(
         init,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -866,6 +1067,7 @@ pub(super) fn infer_unfold(
         body,
         declared_types,
         &scan_locals,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -885,7 +1087,7 @@ pub(super) fn infer_unfold(
     if let Some((index_name, _)) = owner_range_index {
         return Ok(InferredType::Indexed {
             element: Box::new(init_type),
-            index: index_name,
+            index: InferredIndex::from_ref(index_name),
         });
     }
 
@@ -899,6 +1101,7 @@ pub(super) fn infer_field_access(
     field: &crate::syntax::span::Spanned<FieldName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -908,6 +1111,7 @@ pub(super) fn infer_field_access(
         inner,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -915,22 +1119,26 @@ pub(super) fn infer_field_access(
     )?;
     match &inner_type {
         InferredType::Struct(type_name, type_args) => {
-            let type_def = registry.types.get_type(type_name.as_str()).ok_or_else(|| {
-                GraphcalError::UnknownStructType {
-                    name: type_name.clone(),
-                    src: src.clone(),
-                    span: inner.span.into(),
-                }
-            })?;
+            let type_def =
+                struct_type_def_for_inferred(type_name, dag, registry).ok_or_else(|| {
+                    GraphcalError::UnknownStructType {
+                        name: type_name.to_string(),
+                        src: src.clone(),
+                        span: inner.span.into(),
+                    }
+                })?;
             // Field access is only valid on the record-shape: a single
             // -variant union whose sole constructor's name equals the
             // type's name. Multi-variant unions must be destructured
             // via `match`; required type stubs carry no fields.
             let fields = type_def.record_fields().ok_or_else(|| {
                 let detail = if type_def.is_required() {
-                    format!("required type `{type_name}` has no fields")
+                    format!("required type `{}` has no fields", type_name.name())
                 } else {
-                    format!("union type `{type_name}` (use `match` to access fields)")
+                    format!(
+                        "union type `{}` (use `match` to access fields)",
+                        type_name.name()
+                    )
                 };
                 GraphcalError::NotAStruct {
                     name: detail,
@@ -942,7 +1150,7 @@ pub(super) fn infer_field_access(
                 .iter()
                 .find(|f| f.name.as_str() == field.value.as_str())
                 .ok_or_else(|| GraphcalError::UnknownField {
-                    type_name: type_name.clone(),
+                    type_name: type_name.name().clone(),
                     field_name: field.value.clone(),
                     src: src.clone(),
                     span: field.span.into(),
@@ -957,35 +1165,231 @@ pub(super) fn infer_field_access(
     }
 }
 
-/// Infer the type of a constructor call expression.
-#[expect(
-    clippy::too_many_lines,
-    reason = "exhaustive validation of constructor calls"
-)]
+fn infer_ast_generic_type_arg(
+    type_expr: &TypeExpr,
+    owner: &crate::dag_id::DagId,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    match &type_expr.kind {
+        TypeExprKind::Dimensionless => Ok(InferredType::Scalar(Dimension::dimensionless())),
+        TypeExprKind::Bool => Ok(InferredType::Bool),
+        TypeExprKind::Int => Ok(InferredType::Int),
+        TypeExprKind::Datetime => Ok(InferredType::Datetime(
+            crate::registry::time_scale::TimeScale::UTC,
+        )),
+        TypeExprKind::DatetimeApplication { .. } => {
+            let resolved =
+                crate::tir::typed::resolve_type_expr(type_expr, registry, &[], &[], &[], src)?;
+            let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
+            Ok(InferredType::from(&dt))
+        }
+        TypeExprKind::DimExpr(dim_expr) => {
+            infer_ast_dim_or_nominal_type(dim_expr, owner, registry, src)
+        }
+        TypeExprKind::Indexed { base, indexes } => {
+            let mut result = infer_ast_generic_type_arg(base, owner, registry, src)?;
+            for index in indexes {
+                let inferred_index = match index {
+                    IndexExpr::Name(path) => InferredIndex::with_owner(
+                        owner.clone(),
+                        IndexName::from(path.value.leaf().clone()),
+                    ),
+                    IndexExpr::NatExpr(nat_expr) => {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "Nat index argument `{nat_expr}` is not yet representable in constructor value types"
+                            ),
+                            src: src.clone(),
+                            span: nat_expr.span().into(),
+                        });
+                    }
+                };
+                result = InferredType::Indexed {
+                    element: Box::new(result),
+                    index: inferred_index,
+                };
+            }
+            Ok(result)
+        }
+        TypeExprKind::TypeApplication { name, type_args } => {
+            let type_name = StructTypeName::from_atom(name.value.leaf().clone());
+            let type_def = registry.types.get_type(type_name.as_str()).ok_or_else(|| {
+                GraphcalError::UnknownStructType {
+                    name: name.value.display_path(),
+                    src: src.clone(),
+                    span: name.span.into(),
+                }
+            })?;
+            let mut args = type_args
+                .iter()
+                .map(|arg| infer_ast_generic_type_arg(arg, owner, registry, src))
+                .collect::<Result<Vec<_>, _>>()?;
+            for param in type_def.generic_params.iter().skip(type_args.len()) {
+                let default_expr =
+                    param
+                        .default
+                        .as_ref()
+                        .ok_or_else(|| GraphcalError::EvalError {
+                            message: format!(
+                                "internal: generic parameter `{}` has no default",
+                                param.name
+                            ),
+                            src: src.clone(),
+                            span: type_expr.span.into(),
+                        })?;
+                args.push(infer_ast_generic_type_arg(
+                    default_expr,
+                    owner,
+                    registry,
+                    src,
+                )?);
+            }
+            Ok(InferredType::Struct(
+                InferredStructType::with_owner(owner.clone(), type_name),
+                args,
+            ))
+        }
+    }
+}
+
+fn infer_ast_dim_or_nominal_type(
+    dim_expr: &crate::desugar::resolved_ast::DimExpr,
+    owner: &crate::dag_id::DagId,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    if let [item] = dim_expr.terms.as_slice()
+        && item.term.power.is_none()
+        && let Some(atom) = item.term.name.value.as_bare()
+    {
+        if registry.indexes.get_index(atom.as_str()).is_some() {
+            return Ok(InferredType::Label(InferredIndex::with_owner(
+                owner.clone(),
+                IndexName::from_atom(atom.clone()),
+            )));
+        }
+        if registry.types.get_type(atom.as_str()).is_some() {
+            return Ok(InferredType::Struct(
+                InferredStructType::with_owner(
+                    owner.clone(),
+                    StructTypeName::from_atom(atom.clone()),
+                ),
+                vec![],
+            ));
+        }
+    }
+    infer_ast_dimension_expr(dim_expr, registry, src).map(InferredType::Scalar)
+}
+
+fn infer_ast_dimension_expr(
+    dim_expr: &crate::desugar::resolved_ast::DimExpr,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Dimension, GraphcalError> {
+    dim_expr
+        .terms
+        .iter()
+        .try_fold(Dimension::dimensionless(), |acc, item| {
+            let name = item.term.name.value.leaf();
+            let base = registry
+                .dimensions
+                .get_dimension(name.as_str())
+                .cloned()
+                .ok_or_else(|| GraphcalError::UnknownDimension {
+                    name: crate::syntax::names::DimName::from_atom(name.clone()),
+                    src: src.clone(),
+                    span: item.term.name.span.into(),
+                })?;
+            apply_dimension_term(
+                acc,
+                &base,
+                item.term.power.unwrap_or(1),
+                item.op,
+                src,
+                item.term.span,
+            )
+        })
+}
+
+fn apply_dimension_term(
+    acc: Dimension,
+    base: &Dimension,
+    power: i32,
+    op: MulDivOp,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<Dimension, GraphcalError> {
+    let overflow_err = || GraphcalError::DimensionOverflow {
+        src: src.clone(),
+        span: span.into(),
+    };
+    let powered = base
+        .pow(Rational::from_int(power))
+        .map_err(|_| overflow_err())?;
+    match op {
+        MulDivOp::Mul => (acc * powered).map_err(|_| overflow_err()),
+        MulDivOp::Div => (acc / powered).map_err(|_| overflow_err()),
+    }
+}
+
 pub(super) fn infer_constructor_call(
     expr: &Expr,
-    constructor: &crate::syntax::span::Spanned<ConstructorName>,
+    callee: &crate::syntax::ast::IdentPath,
     constructor_generic_args: &[GenericArg],
     fields: &[crate::desugar::resolved_ast::FieldInit],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
+    let resolved_target = dag
+        .map(|dag| &dag.semantic.constructor_refs)
+        .and_then(|refs| refs.constructor_calls.get(&callee.span()));
+
     // Resolve through the constructor namespace. With every user-defined
     // `type` stored as an n-variant union, a constructor call names a
     // constructor — not a type. The union the constructor belongs to becomes
     // the value's type.
-    let (type_def, variant) = registry
-        .types
-        .lookup_ctor(&constructor.value)
-        .ok_or_else(|| GraphcalError::UnknownStructType {
-            name: StructTypeName::new(constructor.value.as_str()),
-            src: src.clone(),
-            span: constructor.span.into(),
-        })?;
+    let (type_def, variant, constructor_name, constructor_span, owning_type_identity) =
+        if let Some(target) = resolved_target {
+            (
+                &target.type_def,
+                &target.variant,
+                target.variant.name.clone(),
+                callee.span(),
+                InferredStructType::from_resolved(target.owning_type.clone()),
+            )
+        } else {
+            let Some(constructor) = callee.as_bare() else {
+                return Err(GraphcalError::UnknownStructType {
+                    name: callee.display_path(),
+                    src: src.clone(),
+                    span: callee.span().into(),
+                });
+            };
+            let constructor_name =
+                crate::syntax::names::ConstructorName::from_atom(constructor.name.clone());
+            let (type_def, variant) =
+                registry
+                    .types
+                    .lookup_ctor(&constructor_name)
+                    .ok_or_else(|| GraphcalError::UnknownStructType {
+                        name: constructor.name.to_string(),
+                        src: src.clone(),
+                        span: constructor.span.into(),
+                    })?;
+            (
+                type_def,
+                variant,
+                constructor_name,
+                constructor.span,
+                InferredStructType::with_owner(inference_owner(dag), type_def.name.clone()),
+            )
+        };
     let owning_type_name = type_def.name.clone();
     let variant_fields: &[crate::registry::types::StructField] = &variant.fields;
 
@@ -1012,16 +1416,13 @@ pub(super) fn infer_constructor_call(
             return Err(GraphcalError::EvalError {
                 message: format!(
                     "type `{}` expects {hint} generic argument(s), got {}",
-                    constructor.value,
+                    owning_type_name,
                     constructor_generic_args.len()
                 ),
                 src: src.clone(),
-                span: constructor.span.into(),
+                span: constructor_span.into(),
             });
         }
-        let no_dim_params: &[GenericParamName] = &[];
-        let no_index_params: &[GenericParamName] = &[];
-        let no_nat_params: &[GenericParamName] = &[];
         let mut args = Vec::with_capacity(total_params);
         for (param, arg) in type_def.generic_params.iter().zip(constructor_generic_args) {
             match (param.constraint, arg) {
@@ -1056,16 +1457,12 @@ pub(super) fn infer_constructor_call(
                     });
                 }
                 (_, GenericArg::Type(type_expr)) => {
-                    let resolved = crate::tir::typed::resolve_type_expr(
+                    args.push(infer_ast_generic_type_arg(
                         type_expr,
+                        owning_type_identity.resolved().owner(),
                         registry,
-                        no_dim_params,
-                        no_index_params,
-                        no_nat_params,
                         src,
-                    )?;
-                    let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-                    args.push(InferredType::from(&dt));
+                    )?);
                 }
             }
         }
@@ -1084,18 +1481,15 @@ pub(super) fn infer_constructor_call(
                         param.name
                     ),
                     src: src.clone(),
-                    span: constructor.span.into(),
+                    span: constructor_span.into(),
                 })?;
-            let resolved = crate::tir::typed::resolve_type_expr(
+            let resolved = infer_ast_generic_type_arg(
                 default_expr,
+                owning_type_identity.resolved().owner(),
                 registry,
-                no_dim_params,
-                no_index_params,
-                no_nat_params,
                 src,
             )?;
-            let dt = crate::tir::typed::resolved_to_declared_type(&resolved, src)?;
-            args.push(InferredType::from(&dt));
+            args.push(resolved);
         }
         args
     } else {
@@ -1113,7 +1507,7 @@ pub(super) fn infer_constructor_call(
         .collect();
     if !extra.is_empty() {
         return Err(GraphcalError::ExtraFields {
-            type_name: StructTypeName::new(constructor.value.as_str()),
+            type_name: owning_type_name,
             extra,
             src: src.clone(),
             span: expr.span.into(),
@@ -1129,7 +1523,7 @@ pub(super) fn infer_constructor_call(
         .collect();
     if !missing.is_empty() {
         return Err(GraphcalError::MissingFields {
-            type_name: StructTypeName::new(constructor.value.as_str()),
+            type_name: owning_type_name,
             missing,
             src: src.clone(),
             span: expr.span.into(),
@@ -1144,7 +1538,7 @@ pub(super) fn infer_constructor_call(
             .ok_or_else(|| GraphcalError::EvalError {
                 message: format!(
                     "internal: unknown field `{}` in constructor `{}`",
-                    field_init.name.value, constructor.value
+                    field_init.name.value, constructor_name
                 ),
                 src: src.clone(),
                 span: field_init.name.span.into(),
@@ -1154,6 +1548,7 @@ pub(super) fn infer_constructor_call(
             &field_init.value,
             declared_types,
             local_types,
+            dag,
             tir,
             registry,
             builtin_fns,
@@ -1169,7 +1564,7 @@ pub(super) fn infer_constructor_call(
         )?;
         if value_type != expected_field_type {
             return Err(GraphcalError::FieldDimensionMismatch {
-                type_name: StructTypeName::new(constructor.value.as_str()),
+                type_name: owning_type_name,
                 field_name: field_init.name.value.clone(),
                 expected: format_inferred_type(&expected_field_type, registry),
                 found: format_inferred_type(&value_type, registry),
@@ -1179,5 +1574,8 @@ pub(super) fn infer_constructor_call(
         }
     }
 
-    Ok(InferredType::Struct(owning_type_name, resolved_type_args))
+    Ok(InferredType::Struct(
+        owning_type_identity,
+        resolved_type_args,
+    ))
 }

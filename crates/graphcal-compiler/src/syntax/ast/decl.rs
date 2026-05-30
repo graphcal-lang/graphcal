@@ -6,7 +6,7 @@ use crate::syntax::ast::value::{
 };
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
-    PlotPropertyName, StructTypeName, UnitName,
+    PlotPropertyName, ScopedName, StructTypeName, UnitName,
 };
 use crate::syntax::phase::{Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
@@ -65,7 +65,7 @@ pub enum DeclKind<P: Phase = Raw> {
     Node(NodeDecl<P>),
     ConstNode(ConstNodeDecl<P>),
     BaseDimension(BaseDimDecl),
-    Dimension(DimDecl<P>),
+    Dimension(DimDecl),
     Unit(UnitDecl<P>),
     Type(TypeDecl<P>),
     Index(IndexDecl<P>),
@@ -249,7 +249,7 @@ pub struct FigureDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     /// The plot names referenced by this figure (from the `plots: [...]` field).
-    pub plot_names: Vec<Spanned<DeclName>>,
+    pub plot_names: Vec<Spanned<ScopedName>>,
     /// Additional fields (e.g., `title`).
     pub fields: Vec<PlotField<P>>,
 }
@@ -266,7 +266,7 @@ pub struct LayerDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     /// The plot names to overlay (from the `plots: [...]` field).
-    pub plot_names: Vec<Spanned<DeclName>>,
+    pub plot_names: Vec<Spanned<ScopedName>>,
     /// Additional fields (e.g., `title`).
     pub fields: Vec<PlotField<P>>,
 }
@@ -489,10 +489,10 @@ pub struct BaseDimDecl {
 ///   dim bindings). Treated like an opaque base dimension when the
 ///   library is compiled standalone.
 #[derive(Debug, Clone)]
-pub struct DimDecl<P: Phase = Raw> {
+pub struct DimDecl {
     pub visibility: BindableVisibility,
     pub name: Spanned<DimName>,
-    pub definition: Option<DimExpr<P>>,
+    pub definition: Option<DimExpr>,
 }
 
 /// Unit declaration: `unit km: Length = 1000 m;`, `const unit km: Length = 1000 m;`,
@@ -502,7 +502,7 @@ pub struct UnitDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<UnitName>,
     /// The dimension this unit measures.
-    pub dim_type: DimExpr<P>,
+    pub dim_type: DimExpr,
     /// Scale definition: `(scale_value, base_unit_expr)`.
     /// `None` iff this is a base unit (`base unit m: Length;`).
     pub definition: Option<UnitDef<P>>,
@@ -587,7 +587,7 @@ pub enum IndexDeclKind<P: Phase = Raw> {
     /// Required range index with dimension constraint: `index Foo: Time;`
     ///
     /// Must be bound via parameterized import.
-    RequiredRange { dimension: DimExpr<P> },
+    RequiredRange { dimension: DimExpr },
 }
 
 impl<P: Phase> IndexDeclKind<P> {

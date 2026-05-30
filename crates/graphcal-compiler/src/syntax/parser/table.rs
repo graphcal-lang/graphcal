@@ -1,5 +1,5 @@
 use crate::syntax::ast::{Expr, ExprKind, MapEntry, MapEntryIndex, MapEntryKey, TableIndexSpec};
-use crate::syntax::names::{IndexName, IndexVariantName};
+use crate::syntax::names::{IndexVariantName, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
@@ -85,7 +85,7 @@ impl Parser<'_> {
             }
             Some(Token::Ident) => {
                 let ident = self.parse_any_ident()?;
-                Ok(TableIndexSpec::Named(ident.into_spanned::<IndexName>()))
+                Ok(TableIndexSpec::Named(ident.into_spanned::<NamePath>()))
             }
             _ => {
                 let (tok, span) = self.advance()?;
@@ -94,11 +94,11 @@ impl Parser<'_> {
         }
     }
 
-    fn named_index_spanned(index: &Spanned<IndexName>) -> Spanned<MapEntryIndex> {
+    fn named_index_spanned(index: &Spanned<NamePath>) -> Spanned<MapEntryIndex> {
         Spanned::new(MapEntryIndex::Named(index.value.clone()), index.span)
     }
 
-    fn named_index_spanned_owned(index: Spanned<IndexName>) -> Spanned<MapEntryIndex> {
+    fn named_index_spanned_owned(index: Spanned<NamePath>) -> Spanned<MapEntryIndex> {
         Spanned::new(MapEntryIndex::Named(index.value), index.span)
     }
 
@@ -125,7 +125,7 @@ impl Parser<'_> {
 
     fn parse_table_1d_named(
         &mut self,
-        index: &Spanned<IndexName>,
+        index: &Spanned<NamePath>,
     ) -> Result<Vec<MapEntry>, ParseError> {
         let mut entries = Vec::new();
         while self.lexer.peek() != Some(&Token::RBrace) {
@@ -337,7 +337,7 @@ impl Parser<'_> {
                         let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
                         prefix_keys.push(MapEntryKey {
                             index: Spanned::new(
-                                MapEntryIndex::Named(IndexName::new(index_ident.name)),
+                                MapEntryIndex::Named(NamePath::local(index_ident.name.clone())),
                                 index_ident.span,
                             ),
                             variant,
@@ -390,7 +390,7 @@ impl Parser<'_> {
     pub(super) fn parse_map_literal_after_first_entry(
         &mut self,
         brace_span: Span,
-        first_index: Spanned<IndexName>,
+        first_index: Spanned<NamePath>,
         first_variant: Spanned<IndexVariantName>,
     ) -> Result<Expr, ParseError> {
         self.expect(Token::Colon)?;
@@ -408,9 +408,7 @@ impl Parser<'_> {
             if self.lexer.peek() == Some(&Token::RBrace) {
                 break; // trailing comma
             }
-            let index = self.parse_any_ident()?.into_spanned::<IndexName>();
-            self.expect(Token::Dot)?;
-            let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+            let (index, variant, _) = self.parse_index_variant_path()?;
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             entries.push(MapEntry {
@@ -439,9 +437,7 @@ impl Parser<'_> {
                 break;
             }
             self.expect(Token::LParen)?;
-            let index = self.parse_any_ident()?.into_spanned::<IndexName>();
-            self.expect(Token::Dot)?;
-            let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+            let (index, variant, _) = self.parse_index_variant_path()?;
             let first_key = MapEntryKey {
                 index: Self::named_index_spanned_owned(index),
                 variant,
@@ -449,9 +445,7 @@ impl Parser<'_> {
             let mut rest_keys = Vec::new();
             while self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
-                let index = self.parse_any_ident()?.into_spanned::<IndexName>();
-                self.expect(Token::Dot)?;
-                let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+                let (index, variant, _) = self.parse_index_variant_path()?;
                 rest_keys.push(MapEntryKey {
                     index: Self::named_index_spanned_owned(index),
                     variant,
@@ -502,7 +496,7 @@ mod tests {
 
     fn named_index_name(spec: &TableIndexSpec) -> &str {
         match spec {
-            TableIndexSpec::Named(s) => s.value.as_str(),
+            TableIndexSpec::Named(s) => s.value.leaf().as_str(),
             TableIndexSpec::NatRange(..) => panic!("expected Named spec"),
         }
     }

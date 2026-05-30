@@ -5,8 +5,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::dag_id::DagId;
 use crate::desugar::resolved_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
-use crate::syntax::names::{DeclName, IndexName, IndexVariantName, ScopedName};
+use crate::registry::declared_type::IndexTypeRef;
+use crate::syntax::names::{
+    DeclName, IndexName, IndexVariantName, NamePath, ResolvedIndexVariant, ScopedName,
+};
 use crate::syntax::span::Span;
 
 // ---------------------------------------------------------------------------
@@ -376,11 +380,75 @@ pub struct ResolvedLayerEntry {
     pub span: Span,
 }
 
-/// A single expected-fail key: a list of `(IndexName, VariantName)` pairs.
+/// One axis segment in a per-variant `#[expected_fail(...)]` key.
 ///
-/// - Length 1 for single-index assertions: `[("Mode", "Boost")]`
-/// - Length >1 for multi-index assertions: `[("Mode", "Boost"), ("Phase", "Launch")]`
-pub type ExpectedFailKey = Vec<(IndexName, IndexVariantName)>;
+/// The `index` carrier is the semantic key used by runtime assertion checks.
+/// Before module-aware TIR resolution, `source_index_path` preserves the
+/// structured syntax path. After resolution, `index` carries the canonical owner
+/// used by runtime checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedFailKeyPart {
+    pub index: IndexTypeRef,
+    pub variant: IndexVariantName,
+    pub source_index_path: Option<NamePath>,
+    pub span: Span,
+}
+
+impl ExpectedFailKeyPart {
+    fn unresolved_owner() -> DagId {
+        DagId::root("<expected-fail-unresolved>")
+    }
+
+    #[must_use]
+    pub fn unresolved(index_path: NamePath, variant: IndexVariantName, span: Span) -> Self {
+        Self {
+            index: IndexTypeRef::with_owner(
+                Self::unresolved_owner(),
+                IndexName::from_atom(index_path.leaf().clone()),
+            ),
+            variant,
+            source_index_path: Some(index_path),
+            span,
+        }
+    }
+
+    #[must_use]
+    pub fn with_owner(
+        owner: DagId,
+        index: IndexName,
+        variant: IndexVariantName,
+        span: Span,
+    ) -> Self {
+        Self {
+            index: IndexTypeRef::with_owner(owner, index),
+            variant,
+            source_index_path: None,
+            span,
+        }
+    }
+
+    #[must_use]
+    pub fn resolved(resolved: ResolvedIndexVariant, span: Span) -> Self {
+        let (index, variant) = resolved.into_parts();
+        Self {
+            index: IndexTypeRef::from_resolved(index),
+            variant,
+            source_index_path: None,
+            span,
+        }
+    }
+
+    #[must_use]
+    pub fn with_resolved_variant(&self, resolved: ResolvedIndexVariant) -> Self {
+        Self::resolved(resolved, self.span)
+    }
+}
+
+/// A single expected-fail key: a list of index/variant pairs.
+///
+/// - Length 1 for single-index assertions: `[Mode.Boost]`
+/// - Length >1 for multi-index assertions: `[(Mode.Boost, Phase.Launch)]`
+pub type ExpectedFailKey = Vec<ExpectedFailKeyPart>;
 
 /// Describes how an assertion is expected to fail.
 #[derive(Debug, Clone)]

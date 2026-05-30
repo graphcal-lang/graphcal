@@ -13,6 +13,10 @@ use super::*;
     clippy::too_many_arguments,
     reason = "pipeline function threading project context through IR lowering stages"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "project lowering coordinates resolver, TIR, and plan construction"
+)]
 pub(in crate::eval::project) fn lower_and_finalize(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
@@ -88,14 +92,38 @@ pub(in crate::eval::project) fn lower_and_finalize(
     // explicitly (loader supplies the per-file self-import set and the
     // canonical parent `DagId`). Cross-file dep dag TIRs are merged in
     // afterward by `merge_dep_dag_tirs`.
+    let module_resolver = project
+        .build_module_resolver()
+        .map_err(|err| module_resolve_compile_error(err, file_src))?;
+    let mut module_types = graphcal_compiler::tir::typed::ModuleTypeRegistry::default();
+    module_types
+        .insert_graphcal_prelude()
+        .map_err(|err| GraphcalError::InternalError {
+            message: format!("failed to build prelude type registry: {err}"),
+            src: file_src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    module_types.insert_registry(file_dag_id, &ir.registry);
+    for (dep_dag_id, evaluated) in evaluated_files {
+        module_types.insert_registry(dep_dag_id, &evaluated.registry);
+    }
+
     let parent_pub_names = ir.pub_names.clone();
-    let mut tir = graphcal_compiler::tir::typed::type_resolve(ir, file_dag_id.clone(), file_src)?;
+    let mut tir = graphcal_compiler::tir::typed::type_resolve_with_modules(
+        ir,
+        file_dag_id.clone(),
+        file_src,
+        &module_resolver,
+        &module_types,
+    )?;
     crate::inline_dag::compile_inline_dag_bodies(
         &mut tir,
         file_src,
         file_dag_id,
         &parent_pub_names,
         &importer_loaded.inline_dags,
+        &module_resolver,
+        &module_types,
     )?;
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
     graphcal_compiler::tir::dim_check::check_dimensions_tir(&tir, file_src)?;
@@ -138,6 +166,41 @@ pub(in crate::eval::project) fn lower_and_finalize(
         imported_values: saved_imported_values,
         imported_source_order: ctx.imported_source_order,
     })
+}
+
+fn module_resolve_compile_error(
+    err: graphcal_compiler::syntax::module_resolve::ModuleResolveError,
+    src: &NamedSource<Arc<String>>,
+) -> CompileError {
+    match err {
+        graphcal_compiler::syntax::module_resolve::ModuleResolveError::PrivateName {
+            owner,
+            name,
+            ..
+        } => CompileError::Eval(GraphcalError::ImportPrivateItem {
+            name,
+            file_path: owner.to_string(),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        }),
+        graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateSymbol {
+            duplicate,
+            ..
+        }
+        | graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateImportName {
+            duplicate,
+            ..
+        } => CompileError::Eval(GraphcalError::EvalError {
+            message: err.to_string(),
+            src: src.clone(),
+            span: duplicate.into(),
+        }),
+        other => CompileError::Eval(GraphcalError::EvalError {
+            message: other.to_string(),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        }),
+    }
 }
 
 /// Merge compiled per-DAG TIRs from each module-imported dependency into
@@ -681,12 +744,19 @@ pub(in crate::eval::project) fn extract_index_name_from_binding_expr(
         }
         ExprKind::TypeSystemRef(name) => Ok(name.value.as_str().to_string()),
         ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             fields,
-        } if generic_args.is_empty() && fields.is_empty() => {
-            Ok(constructor.value.as_str().to_string())
-        }
+        } if generic_args.is_empty() && fields.is_empty() => callee
+            .as_bare()
+            .map(|ident| ident.name.to_string())
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::BindingTargetsIndex {
+                    name: dep_index_name.to_string(),
+                    src: file_src.clone(),
+                    span: expr.span.into(),
+                })
+            }),
         _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
             name: dep_index_name.to_string(),
             src: file_src.clone(),
@@ -711,12 +781,19 @@ pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
         }
         ExprKind::TypeSystemRef(name) => Ok(name.value.as_str().to_string()),
         ExprKind::ConstructorCall {
-            constructor,
+            callee,
             generic_args,
             fields,
-        } if generic_args.is_empty() && fields.is_empty() => {
-            Ok(constructor.value.as_str().to_string())
-        }
+        } if generic_args.is_empty() && fields.is_empty() => callee
+            .as_bare()
+            .map(|ident| ident.name.to_string())
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::BindingTargetsIndex {
+                    name: dep_type_name.to_string(),
+                    src: file_src.clone(),
+                    span: expr.span.into(),
+                })
+            }),
         _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
             name: dep_type_name.to_string(),
             src: file_src.clone(),
@@ -892,19 +969,19 @@ fn collect_type_expr_names(
     match &type_expr.kind {
         TypeExprKind::DimExpr(dim_expr) => {
             for item in &dim_expr.terms {
-                refs.push(item.term.name.as_str().to_string());
+                refs.push(item.term.name.value.display_path());
             }
         }
         TypeExprKind::Indexed { base, indexes } => {
             collect_type_expr_names(base, refs);
             for idx in indexes {
-                if let IndexExpr::Name(ident) = idx {
-                    refs.push(ident.as_str().to_string());
+                if let IndexExpr::Name(path) = idx {
+                    refs.push(path.value.display_path());
                 }
             }
         }
         TypeExprKind::TypeApplication { name, type_args } => {
-            refs.push(name.as_str().to_string());
+            refs.push(name.value.display_path());
             for arg in type_args {
                 collect_type_expr_names(arg, refs);
             }
@@ -981,13 +1058,13 @@ fn check_generics_leakage(
             DeclKind::ConstNode(c) => collect_type_expr_names(&c.type_ann, &mut refs),
             DeclKind::Unit(u) => {
                 for item in &u.dim_type.terms {
-                    refs.push(item.term.name.as_str().to_string());
+                    refs.push(item.term.name.value.display_path());
                 }
             }
             DeclKind::Dimension(d) => {
                 if let Some(def) = &d.definition {
                     for item in &def.terms {
-                        refs.push(item.term.name.as_str().to_string());
+                        refs.push(item.term.name.value.display_path());
                     }
                 }
             }

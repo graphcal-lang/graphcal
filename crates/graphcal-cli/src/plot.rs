@@ -30,7 +30,7 @@ pub fn build_figures(
             continue;
         }
         result.push(RenderedFigure {
-            name: spec.name.as_str().to_string(),
+            name: spec.name.to_string(),
             spec: build_single_spec(spec),
         });
     }
@@ -38,7 +38,7 @@ pub fn build_figures(
     // Combined figures from figure specs
     for fig in figures {
         result.push(RenderedFigure {
-            name: fig.name.as_str().to_string(),
+            name: fig.name.to_string(),
             spec: build_figure_spec(fig, plots),
         });
     }
@@ -46,7 +46,7 @@ pub fn build_figures(
     // Layered figures from layer specs
     for layer in layers {
         result.push(RenderedFigure {
-            name: layer.name.as_str().to_string(),
+            name: layer.name.to_string(),
             spec: build_layer_spec(layer, plots),
         });
     }

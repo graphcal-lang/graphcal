@@ -4,12 +4,14 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::resolved_ast::Expr;
+use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::Registry;
+use crate::registry::types::{Registry, TypeDef};
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{GenericParamName, IndexName, IndexVariantName};
+use crate::syntax::names::GenericParamName;
 
-use super::{DeclaredType, InferredType};
+use super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
+use crate::tir::typed::{ResolvedIndex, ResolvedTypeExpr};
 
 pub(super) fn is_bool_type(ty: &InferredType) -> bool {
     match ty {
@@ -31,9 +33,9 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
         (DeclaredType::Bool, InferredType::Bool) => true,
         (DeclaredType::Int, inferred) if inferred.is_int_like() => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
-        (DeclaredType::Label(d), InferredType::Label(i)) => d == i,
+        (DeclaredType::Label(d), InferredType::Label(i)) => i.matches_ref(d),
         (DeclaredType::Struct(d, d_args), InferredType::Struct(i, i_args)) => {
-            d == i
+            i.matches_ref(d)
                 && d_args.len() == i_args.len()
                 && d_args
                     .iter()
@@ -49,14 +51,101 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
                 element: i_elem,
                 index: i_idx,
             },
-        ) => d_idx == i_idx && types_match(d_elem, i_elem),
+        ) => i_idx.matches_ref(d_idx) && types_match(d_elem, i_elem),
         _ => false,
+    }
+}
+
+/// Check if a resolved declaration type matches an inferred expression type,
+/// preserving canonical index identity when both sides carry it.
+pub(super) fn resolved_type_matches_inferred(
+    resolved: &ResolvedTypeExpr,
+    inferred: &InferredType,
+) -> bool {
+    match (resolved, inferred) {
+        (ResolvedTypeExpr::Dimensionless, InferredType::Scalar(d)) => d.is_dimensionless(),
+        (ResolvedTypeExpr::Bool, InferredType::Bool) => true,
+        (ResolvedTypeExpr::Int, inferred) => inferred.is_int_like(),
+        (ResolvedTypeExpr::Datetime(expected), InferredType::Datetime(actual)) => {
+            expected == actual
+        }
+        (ResolvedTypeExpr::Scalar(expected), InferredType::Scalar(actual)) => expected == actual,
+        (ResolvedTypeExpr::Label(expected, _), InferredType::Label(actual)) => {
+            actual.matches_resolved(expected)
+        }
+        (ResolvedTypeExpr::Struct(expected, _), InferredType::Struct(actual, args)) => {
+            actual.matches_resolved(expected) && args.is_empty()
+        }
+        (
+            ResolvedTypeExpr::GenericStruct {
+                name, type_args, ..
+            },
+            InferredType::Struct(actual, actual_args),
+        ) => {
+            actual.matches_resolved(name)
+                && type_args.len() == actual_args.len()
+                && type_args
+                    .iter()
+                    .zip(actual_args)
+                    .all(|(expected, actual)| resolved_type_matches_inferred(expected, actual))
+        }
+        (ResolvedTypeExpr::Indexed { base, indexes }, _) => {
+            resolved_indexed_type_matches_inferred(base, indexes, inferred)
+        }
+        _ => false,
+    }
+}
+
+fn resolved_indexed_type_matches_inferred(
+    base: &ResolvedTypeExpr,
+    indexes: &[ResolvedIndex],
+    inferred: &InferredType,
+) -> bool {
+    let mut current = inferred;
+    for index in indexes {
+        let InferredType::Indexed {
+            element,
+            index: actual,
+        } = current
+        else {
+            return false;
+        };
+        if !resolved_index_matches_inferred(index, actual) {
+            return false;
+        }
+        current = element;
+    }
+    resolved_type_matches_inferred(base, current)
+}
+
+fn resolved_index_matches_inferred(index: &ResolvedIndex, actual: &InferredIndex) -> bool {
+    match index {
+        ResolvedIndex::Concrete(expected, _) => actual.matches_resolved(expected),
+        ResolvedIndex::NatExpr(form, _) => form
+            .is_constant()
+            .then(|| crate::registry::types::nat_range_resolved_index_size(form.constant()))
+            .is_some_and(|expected| actual.resolved() == &expected),
+        ResolvedIndex::GenericParam(expected, _) => actual.name().as_str() == expected.as_str(),
     }
 }
 
 /// Format a declared type for display in diagnostics.
 pub(super) fn format_declared_type(dt: &DeclaredType, registry: &Registry) -> String {
     dt.format(&registry.dimensions)
+}
+
+/// Look up the definition for an inferred struct identity.
+///
+/// Prefer canonical semantic TIR type definitions, then consult the leaf-keyed
+/// registry for boundary-created synthetic owners.
+pub(super) fn struct_type_def_for_inferred<'a>(
+    ty: &InferredStructType,
+    dag: Option<&'a crate::tir::typed::DagTIR>,
+    registry: &'a Registry,
+) -> Option<&'a TypeDef> {
+    dag.map(|dag| &dag.semantic.type_defs)
+        .and_then(|defs| defs.struct_types.get(ty.resolved()))
+        .or_else(|| registry.types.get_type(ty.name().as_str()))
 }
 
 /// Format an inferred type for display in diagnostics.
@@ -75,13 +164,13 @@ impl From<&InferredType> for DeclaredType {
             InferredType::Bool => Self::Bool,
             InferredType::Int | InferredType::Fin(_) => Self::Int,
             InferredType::Datetime(scale) => Self::Datetime(*scale),
-            InferredType::Label(index) => Self::Label(index.clone()),
+            InferredType::Label(index) => Self::Label(index.type_ref().clone()),
             InferredType::Struct(n, args) => {
-                Self::Struct(n.clone(), args.iter().map(Self::from).collect())
+                Self::Struct(n.type_ref().clone(), args.iter().map(Self::from).collect())
             }
             InferredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),
-                index: index.clone(),
+                index: index.type_ref().clone(),
             },
         }
     }
@@ -94,13 +183,14 @@ impl From<&DeclaredType> for InferredType {
             DeclaredType::Bool => Self::Bool,
             DeclaredType::Int => Self::Int,
             DeclaredType::Datetime(scale) => Self::Datetime(*scale),
-            DeclaredType::Label(index) => Self::Label(index.clone()),
-            DeclaredType::Struct(n, args) => {
-                Self::Struct(n.clone(), args.iter().map(Self::from).collect())
-            }
+            DeclaredType::Label(index) => Self::Label(InferredIndex::from_ref(index.clone())),
+            DeclaredType::Struct(n, args) => Self::Struct(
+                InferredStructType::from_ref(n.clone()),
+                args.iter().map(Self::from).collect(),
+            ),
             DeclaredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),
-                index: index.clone(),
+                index: InferredIndex::from_ref(index.clone()),
             },
         }
     }
@@ -139,7 +229,7 @@ pub(super) fn resolve_field_type(
 
     // Generic type: build substitution maps from generic params + type args
     let mut dim_sub: HashMap<GenericParamName, Dimension> = HashMap::new();
-    let mut index_sub: HashMap<GenericParamName, IndexName> = HashMap::new();
+    let mut index_sub: HashMap<GenericParamName, IndexTypeRef> = HashMap::new();
     // Track unconstrained (Type) params separately — they map to InferredType
     let mut type_sub: HashMap<GenericParamName, InferredType> = HashMap::new();
 
@@ -162,8 +252,8 @@ pub(super) fn resolve_field_type(
                 }
             },
             TypeGenericConstraint::Index => match arg {
-                InferredType::Struct(name, _) => {
-                    index_sub.insert(param.name.clone(), IndexName::new(name.as_str()));
+                InferredType::Label(index) => {
+                    index_sub.insert(param.name.clone(), index.type_ref().clone());
                 }
                 other => {
                     return Err(GraphcalError::EvalError {
@@ -204,11 +294,15 @@ pub(super) fn resolve_field_type(
     if let crate::desugar::resolved_ast::TypeExprKind::DimExpr(dim_expr) = &field_type_ann.kind
         && dim_expr.terms.len() == 1
         && dim_expr.terms[0].term.power.is_none()
+        && let Some(name) = dim_expr.terms[0]
+            .term
+            .name
+            .value
+            .as_bare()
+            .map(crate::syntax::names::NameAtom::as_str)
+        && let Some(inferred) = type_sub.get(name)
     {
-        let name = dim_expr.terms[0].term.name.as_str();
-        if let Some(inferred) = type_sub.get(name) {
-            return Ok(inferred.clone());
-        }
+        return Ok(inferred.clone());
     }
 
     // Resolve using TIR type resolution with generic params in scope, then substitute
@@ -272,11 +366,11 @@ pub(super) fn expect_scalar(
     }
 }
 
-/// Build the Cartesian product of variant name slices across multiple axes.
-pub(super) fn cartesian_product<'a>(
-    axes: &'a [Vec<IndexVariantName>],
-    current: &mut Vec<&'a str>,
-    result: &mut std::collections::HashSet<Vec<&'a str>>,
+/// Build the Cartesian product of variant-key slices across multiple axes.
+pub(super) fn cartesian_product<T: Clone + Eq + std::hash::Hash>(
+    axes: &[Vec<T>],
+    current: &mut Vec<T>,
+    result: &mut std::collections::HashSet<Vec<T>>,
 ) {
     if current.len() == axes.len() {
         result.insert(current.clone());
@@ -284,7 +378,7 @@ pub(super) fn cartesian_product<'a>(
     }
     let axis_idx = current.len();
     for variant in &axes[axis_idx] {
-        current.push(variant.as_str());
+        current.push(variant.clone());
         cartesian_product(axes, current, result);
         current.pop();
     }

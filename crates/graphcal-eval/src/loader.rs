@@ -8,7 +8,8 @@ use crate::eval::CompileError;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::resolved_ast::{Declaration, File};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
+use graphcal_compiler::syntax::ast::{DeclKind, ImportKind, IncludeDecl, ModulePath};
+use graphcal_compiler::syntax::phase::Phase;
 use graphcal_io::{FileSystemReader, RealFileSystem};
 
 /// Span-free identity for an `import`/`include` path.
@@ -26,7 +27,7 @@ impl ModulePathKey {
     /// this layer.
     #[must_use]
     pub fn from_path(path: &ModulePath) -> Self {
-        Self(path.segments.iter().map(|s| s.name.clone()).collect())
+        Self(path.segments.iter().map(|s| s.name.to_string()).collect())
     }
 
     /// Segments in order, without separators.
@@ -220,6 +221,247 @@ impl LoadedProject {
             load_order: vec![dag_id],
         })
     }
+
+    /// Build module-aware symbol tables for every loaded file and inline DAG.
+    ///
+    /// The loader remains the only layer that resolves import paths to
+    /// canonical [`DagId`]s. This method hands those pre-resolved edges to the
+    /// compiler's pure module resolver, which can then resolve syntactic name
+    /// paths to [`graphcal_compiler::syntax::names::ResolvedName`] values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`graphcal_compiler::syntax::module_resolve::ModuleResolveError`]
+    /// if duplicate symbols are found or a resolved import edge names a symbol
+    /// that is absent/private in its target module.
+    pub fn build_module_resolver(
+        &self,
+    ) -> Result<
+        graphcal_compiler::syntax::module_resolve::ModuleResolver,
+        graphcal_compiler::syntax::module_resolve::ModuleResolveError,
+    > {
+        let mut resolver = graphcal_compiler::syntax::module_resolve::ModuleResolver::default();
+
+        for dag_id in &self.load_order {
+            let loaded = &self.files[dag_id];
+            resolver.add_module(loaded.dag_id.clone(), &loaded.ast.declarations)?;
+            for inline in &loaded.inline_dags {
+                resolver.add_module(inline.dag_id.clone(), &inline.body)?;
+            }
+        }
+
+        for dag_id in &self.load_order {
+            let loaded = &self.files[dag_id];
+            add_instantiated_include_modules(
+                &mut resolver,
+                &loaded.dag_id,
+                &loaded.ast.declarations,
+                &loaded.resolved_imports,
+                &self.files,
+            )?;
+            for inline in &loaded.inline_dags {
+                add_inline_instantiated_include_modules(
+                    &mut resolver,
+                    &inline.dag_id,
+                    &inline.body,
+                    &inline.resolved_imports,
+                    &self.files,
+                )?;
+            }
+        }
+
+        for dag_id in &self.load_order {
+            let loaded = &self.files[dag_id];
+            register_file_module_imports(
+                &mut resolver,
+                &loaded.dag_id,
+                &loaded.ast.declarations,
+                &loaded.resolved_imports,
+                &self.files,
+            )?;
+            for inline in &loaded.inline_dags {
+                register_inline_module_imports(
+                    &mut resolver,
+                    &inline.dag_id,
+                    &inline.body,
+                    &inline.resolved_imports,
+                    &self.files,
+                )?;
+            }
+        }
+
+        Ok(resolver)
+    }
+}
+
+fn add_instantiated_include_modules(
+    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    owner: &DagId,
+    declarations: &[Declaration],
+    resolved_imports: &HashMap<ModulePathKey, DagId>,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+    for decl in declarations {
+        let DeclKind::Include(include) = &decl.kind else {
+            continue;
+        };
+        let Some(prefix) = instantiated_include_prefix(include) else {
+            continue;
+        };
+        let Some(file_target) = resolved_imports.get(&ModulePathKey::from_path(&include.path))
+        else {
+            continue;
+        };
+        let target = module_resolver_target_for_path(&include.path, file_target, files);
+        let Some(target_decls) = module_declarations(&target, files) else {
+            continue;
+        };
+        resolver.add_module(owner.child(prefix.as_str()), target_decls)?;
+    }
+    Ok(())
+}
+
+fn add_inline_instantiated_include_modules(
+    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    owner: &DagId,
+    declarations: &[Declaration],
+    resolved_imports: &HashMap<ModulePathKey, InlineBodyImportResolution>,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+    for decl in declarations {
+        let DeclKind::Include(include) = &decl.kind else {
+            continue;
+        };
+        let Some(prefix) = instantiated_include_prefix(include) else {
+            continue;
+        };
+        let Some(InlineBodyImportResolution::Resolved(file_target)) =
+            resolved_imports.get(&ModulePathKey::from_path(&include.path))
+        else {
+            continue;
+        };
+        let target = module_resolver_target_for_path(&include.path, file_target, files);
+        let Some(target_decls) = module_declarations(&target, files) else {
+            continue;
+        };
+        resolver.add_module(owner.child(prefix.as_str()), target_decls)?;
+    }
+    Ok(())
+}
+
+fn instantiated_include_prefix<P: Phase>(include: &IncludeDecl<P>) -> Option<String> {
+    (!include.param_bindings.is_empty()).then(|| match &include.kind {
+        ImportKind::Module { alias } => alias.as_ref().map_or_else(
+            || include.path.leaf().name.to_string(),
+            |alias| alias.value.to_string(),
+        ),
+        ImportKind::Selective(_) => include.path.leaf().name.to_string(),
+    })
+}
+
+fn module_declarations<'a>(
+    target: &DagId,
+    files: &'a HashMap<DagId, LoadedFile>,
+) -> Option<&'a [Declaration]> {
+    if let Some(file) = files.get(target) {
+        return Some(file.ast.declarations.as_slice());
+    }
+    files.values().find_map(|file| {
+        file.inline_dags
+            .iter()
+            .find(|inline| inline.dag_id == *target)
+            .map(|inline| inline.body.as_slice())
+    })
+}
+
+fn register_file_module_imports(
+    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    owner: &DagId,
+    declarations: &[Declaration],
+    resolved_imports: &HashMap<ModulePathKey, DagId>,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+    for decl in declarations {
+        match &decl.kind {
+            DeclKind::Import(import) => {
+                if let Some(target) = resolved_imports.get(&ModulePathKey::from_path(&import.path))
+                {
+                    resolver.register_import(
+                        owner,
+                        &import.path,
+                        &import.kind,
+                        &module_resolver_target_for_path(&import.path, target, files),
+                    )?;
+                }
+            }
+            DeclKind::Include(include) => {
+                if let Some(target) = resolved_imports.get(&ModulePathKey::from_path(&include.path))
+                {
+                    let synthetic_owner = instantiated_include_prefix(include)
+                        .map(|prefix| owner.child(prefix.as_str()));
+                    let target = synthetic_owner.unwrap_or_else(|| {
+                        module_resolver_target_for_path(&include.path, target, files)
+                    });
+                    resolver.register_include(owner, &include.path, &include.kind, &target)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn register_inline_module_imports(
+    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    owner: &DagId,
+    declarations: &[Declaration],
+    resolved_imports: &HashMap<ModulePathKey, InlineBodyImportResolution>,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+    for decl in declarations {
+        let DeclKind::Import(import) = &decl.kind else {
+            continue;
+        };
+        if let Some(InlineBodyImportResolution::Resolved(target)) =
+            resolved_imports.get(&ModulePathKey::from_path(&import.path))
+        {
+            resolver.register_import(
+                owner,
+                &import.path,
+                &import.kind,
+                &module_resolver_target_for_path(&import.path, target, files),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Refine a loader-resolved file target to an inline-DAG child target when
+/// the source module path used the loader's `parent-file + dag leaf` fallback.
+///
+/// The loader still owns filesystem resolution: `file_target` is the canonical
+/// file chosen for `path`. This helper only maps that already-loaded file to
+/// its already-lifted inline DAG child when the path leaf names one.
+fn module_resolver_target_for_path(
+    path: &ModulePath,
+    file_target: &DagId,
+    files: &HashMap<DagId, LoadedFile>,
+) -> DagId {
+    let leaf = path.leaf().name.as_str();
+    if leaf == file_target.name() {
+        return file_target.clone();
+    }
+
+    files
+        .get(file_target)
+        .and_then(|loaded| {
+            loaded
+                .inline_dags
+                .iter()
+                .find(|inline| inline.name.as_str() == leaf)
+                .map(|inline| inline.dag_id.clone())
+        })
+        .unwrap_or_else(|| file_target.clone())
 }
 
 /// Load a project starting from `root_path`, recursively loading all
@@ -840,7 +1082,7 @@ fn resolve_module_path<F: FileSystemReader>(
         // Real package: first segment must match the package name.
         if !segments.is_empty() && segments[0].name != m.package_name {
             return Err(CompileError::Eval(GraphcalError::PackageNameMismatch {
-                path_first: segments[0].name.clone(),
+                path_first: segments[0].name.to_string(),
                 package_name: m.package_name.clone(),
                 src: src.clone(),
                 span: span.into(),
@@ -850,7 +1092,7 @@ fn resolve_module_path<F: FileSystemReader>(
         // Build path: <project_root>/<source_dir>/seg0/seg1/.../segN.gcl
         let mut file_path = project_root.join(&m.source_dir);
         for seg in segments {
-            file_path = file_path.join(&seg.name);
+            file_path = file_path.join(seg.name.as_str());
         }
         file_path.set_extension("gcl");
 
@@ -864,7 +1106,7 @@ fn resolve_module_path<F: FileSystemReader>(
         if segments.len() >= 2 {
             let mut parent_path = project_root.join(&m.source_dir);
             for seg in &segments[..segments.len() - 1] {
-                parent_path = parent_path.join(&seg.name);
+                parent_path = parent_path.join(seg.name.as_str());
             }
             parent_path.set_extension("gcl");
             if let Ok(canonical) = fs.canonicalize(&parent_path) {
@@ -925,6 +1167,16 @@ mod tests {
         dir
     }
 
+    fn name_path(segments: &[&str]) -> graphcal_compiler::syntax::names::NamePath {
+        let atoms = segments
+            .iter()
+            .map(|segment| graphcal_compiler::syntax::names::NameAtom::parse(*segment).unwrap())
+            .collect::<Vec<_>>();
+        graphcal_compiler::syntax::names::NamePath::new(
+            graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(atoms).unwrap(),
+        )
+    }
+
     #[test]
     fn load_standalone_file() {
         let dir = setup_temp_dir(&[("standalone.gcl", "param x: Dimensionless = 1.0;")]);
@@ -951,6 +1203,26 @@ mod tests {
         let main_dag_id = DagId::new("src", ["helper", "main"]);
         assert_eq!(project.load_order[0], lib_dag_id);
         assert_eq!(project.load_order[1], main_dag_id);
+    }
+
+    #[test]
+    fn loaded_project_builds_module_resolver_for_qualified_index_variant() {
+        let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"helper\"\n"),
+            ("src/helper/lib.gcl", "pub index Phase = { Burn, Coast };"),
+            ("src/helper/main.gcl", "import helper.lib as lib;"),
+        ]);
+        let project = load_project(&dir.path().join("src/helper/main.gcl"), None, &fs()).unwrap();
+        let resolver = project.build_module_resolver().unwrap();
+        let lib_dag_id = DagId::new("src", ["helper", "lib"]);
+
+        let resolved_variant = resolver
+            .resolve_index_variant_path(&project.root, &name_path(&["lib", "Phase", "Burn"]))
+            .unwrap();
+
+        assert_eq!(resolved_variant.index().owner(), &lib_dag_id);
+        assert_eq!(resolved_variant.index().as_str(), "Phase");
+        assert_eq!(resolved_variant.variant().as_str(), "Burn");
     }
 
     #[test]

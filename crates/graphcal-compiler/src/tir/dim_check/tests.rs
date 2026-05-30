@@ -1,10 +1,23 @@
 use super::*;
+use crate::registry::declared_type::IndexTypeRef;
 use crate::syntax::dimension::BaseDimId;
-use crate::syntax::names::ScopedName;
+use crate::syntax::names::{DeclName, ResolvedName, ScopedName, namespace};
 use crate::syntax::parser::Parser;
+use crate::syntax::span::Span;
 
 fn make_src(source: &str) -> NamedSource<Arc<String>> {
     NamedSource::new("test.gcl", Arc::new(source.to_string()))
+}
+
+fn test_dag_id() -> crate::dag_id::DagId {
+    crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap()
+}
+
+fn test_index_ref(name: &str) -> IndexTypeRef {
+    IndexTypeRef::with_owner(
+        test_dag_id(),
+        crate::syntax::names::IndexName::new(name.to_string()),
+    )
 }
 
 fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalError> {
@@ -13,12 +26,69 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
     let src = make_src(source);
     let ir = crate::ir::lower::lower(&file, &src)?;
-    let parent_dag_id =
-        crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
-    let mut tir = crate::tir::typed::type_resolve(ir, parent_dag_id.clone(), &src)?;
-    compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id)?;
+    let parent_dag_id = test_dag_id();
+    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    resolver
+        .add_module(parent_dag_id.clone(), &file.declarations)
+        .map_err(|err| GraphcalError::InternalError {
+            message: format!("test module resolver failed for root module: {err}"),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    for decl in &file.declarations {
+        if let crate::desugar::resolved_ast::DeclKind::Dag(dag) = &decl.kind {
+            resolver
+                .add_module(parent_dag_id.child(dag.name.value.as_str()), &dag.body)
+                .map_err(|err| GraphcalError::InternalError {
+                    message: format!(
+                        "test module resolver failed for inline dag `{}`: {err}",
+                        dag.name.value
+                    ),
+                    src: src.clone(),
+                    span: Span::new(0, 0).into(),
+                })?;
+        }
+    }
+    let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
+    module_types
+        .insert_graphcal_prelude()
+        .map_err(|err| GraphcalError::InternalError {
+            message: format!("test module type prelude failed: {err}"),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    module_types.insert_registry(&parent_dag_id, &ir.registry);
+    let mut tir = crate::tir::typed::type_resolve_with_modules(
+        ir,
+        parent_dag_id.clone(),
+        &src,
+        &resolver,
+        &module_types,
+    )?;
+    compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id, &file.declarations)?;
     check_dimensions_tir(&tir, &src)?;
     tir.build_declared_types(&src)
+}
+
+fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<String>>) {
+    let raw_file = Parser::new(source).parse_file().unwrap();
+    let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
+    let src = make_src(source);
+    let dag_id =
+        crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+    let ir = crate::ir::lower::lower(&file, &src).unwrap();
+    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    resolver
+        .add_module(dag_id.clone(), &file.declarations)
+        .unwrap();
+    let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
+    module_types.insert_graphcal_prelude().unwrap();
+    module_types.insert_registry(&dag_id, &ir.registry);
+    let tir =
+        crate::tir::typed::type_resolve_with_modules(ir, dag_id, &src, &resolver, &module_types)
+            .unwrap();
+    (tir, src)
 }
 
 /// Compile each inline dag body in `tir` with no self-import preprocessing.
@@ -28,20 +98,43 @@ fn compile_inline_dag_bodies_test(
     tir: &mut crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
+    parent_declarations: &[crate::desugar::resolved_ast::Declaration],
 ) -> Result<(), GraphcalError> {
-    let dag_names: Vec<String> = tir
+    let dag_bodies = tir
         .registry
         .dags
         .all_dags()
-        .map(|(name, _)| name.clone())
-        .collect();
-    for name in dag_names {
-        let body = tir
-            .registry
-            .dags
-            .get(&name)
-            .map(|d| d.body.clone())
-            .unwrap_or_default();
+        .map(|(name, dag)| (name.clone(), dag.body.clone()))
+        .collect::<Vec<_>>();
+
+    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    resolver
+        .add_module(parent_dag_id.clone(), parent_declarations)
+        .map_err(|err| GraphcalError::InternalError {
+            message: format!("test module resolver failed for parent module: {err}"),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    for (name, body) in &dag_bodies {
+        resolver
+            .add_module(parent_dag_id.child(name.as_str()), body)
+            .map_err(|err| GraphcalError::InternalError {
+                message: format!("test module resolver failed for inline dag `{name}`: {err}"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+    }
+    let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
+    module_types
+        .insert_graphcal_prelude()
+        .map_err(|err| GraphcalError::InternalError {
+            message: format!("test module type prelude failed: {err}"),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    module_types.insert_registry(parent_dag_id, &tir.registry);
+
+    for (name, body) in dag_bodies {
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
             &name,
             &body,
@@ -53,11 +146,65 @@ fn compile_inline_dag_bodies_test(
             parent_dag_id,
         )?;
         let dag_id = parent_dag_id.child(name.as_str());
-        let mut compiled_dag = crate::tir::typed::type_resolve_single(dag_body_ir, &dag_id, src)?;
+        let mut compiled_dag = crate::tir::typed::type_resolve_single_with_modules(
+            dag_body_ir,
+            &dag_id,
+            src,
+            &resolver,
+            &module_types,
+        )?;
         compiled_dag.populate_pub_nodes(&body);
         tir.dags.insert(dag_id, compiled_dag);
     }
     Ok(())
+}
+
+#[test]
+fn cycle_detection_uses_semantic_dependencies() {
+    use std::collections::BTreeSet;
+
+    let source = "const node a: Dimensionless = 1.0;\n\
+                  const node b: Dimensionless = @a + 1.0;\n\
+                  node x: Dimensionless = 1.0;\n\
+                  node y: Dimensionless = @x + 1.0;";
+    let (mut tir, src) = module_aware_tir(source);
+    let dag_id = test_dag_id();
+
+    let a = ResolvedName::from_def(dag_id.clone(), DeclName::new("a"));
+    let b = ResolvedName::from_def(dag_id.clone(), DeclName::new("b"));
+    let x = ResolvedName::from_def(dag_id.clone(), DeclName::new("x"));
+    let y = ResolvedName::<namespace::Decl>::from_def(dag_id, DeclName::new("y"));
+
+    let mut resolved = crate::tir::typed::ResolvedDagDependencies::default();
+    resolved.const_deps.insert(a.clone(), BTreeSet::new());
+    resolved.const_deps.insert(b, BTreeSet::from([a]));
+    resolved.runtime_deps.insert(x.clone(), BTreeSet::new());
+    resolved.runtime_deps.insert(y, BTreeSet::from([x]));
+
+    tir.root_mut().semantic.dependencies = resolved;
+
+    check_dimensions_tir(&tir, &src).unwrap();
+}
+
+#[test]
+fn hir_dim_check_uses_lowered_builtin_function_not_mutated_syntax_callee() {
+    let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
+    assert!(!tir.root().semantic.expressions.nodes.is_empty());
+    tir.root_mut().nodes[0].expr.kind =
+        crate::desugar::resolved_ast::ExprKind::StringLiteral("not the HIR".to_string());
+
+    check_dimensions_tir(&tir, &src).unwrap();
+}
+
+#[test]
+fn hir_dim_check_uses_lexical_local_ids_not_mutated_syntax_names() {
+    let (mut tir, src) =
+        module_aware_tir("index Phase = { Burn };\nnode y: Phase[Phase] = for p: Phase { p };");
+    assert!(!tir.root().semantic.expressions.nodes.is_empty());
+    tir.root_mut().nodes[0].expr.kind =
+        crate::desugar::resolved_ast::ExprKind::StringLiteral("not the HIR".to_string());
+
+    check_dimensions_tir(&tir, &src).unwrap();
 }
 
 #[test]
@@ -215,7 +362,7 @@ Maneuver.Insertion: 1.8 km / s,
         types[&ScopedName::local("dv")],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Scalar(velocity)),
-            index: IndexName::new("Maneuver"),
+            index: test_index_ref("Maneuver"),
         }
     );
 }
@@ -1187,7 +1334,7 @@ node y: Length = @nope(v: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownDag { .. }),
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("unknown module")),
         "got: {err:?}"
     );
 }
@@ -1205,7 +1352,7 @@ node y: Length = @id_len(bogus: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownInlineDagParam { .. }),
+        matches!(err, GraphcalError::UnknownLocalRef { .. }),
         "got: {err:?}"
     );
 }
@@ -1242,7 +1389,7 @@ node y: Length = @id_len(v: @src).nope;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownInlineDagOutput { .. }),
+        matches!(err, GraphcalError::UnknownLocalRef { .. }),
         "got: {err:?}"
     );
 }
@@ -1286,7 +1433,7 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
         types[&ScopedName::local("distances")],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Scalar(length)),
-            index: crate::syntax::names::IndexName::new("Region".to_string()),
+            index: test_index_ref("Region"),
         }
     );
 }

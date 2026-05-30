@@ -2,8 +2,8 @@ use std::marker::PhantomData;
 
 use crate::syntax::ast::common::{Ident, ModulePath};
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, FnName, IndexName, IndexVariantName, LocalName,
-    ScopedName, StructTypeName, UnitName,
+    ConstructorName, DeclName, DimName, FieldName, IndexName, IndexVariantName, LocalName,
+    NamePath, ScopedName, StructTypeName, UnitName,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Phase, Raw};
@@ -90,7 +90,7 @@ pub enum UnresolvedRef {
 }
 
 /// A non-empty dot-separated identifier path in expression position.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IdentPath {
     pub segments: NonEmpty<Ident>,
 }
@@ -102,10 +102,86 @@ impl IdentPath {
         Self { segments }
     }
 
+    /// Construct a one-segment path from an identifier.
+    #[must_use]
+    pub fn bare(ident: Ident) -> Self {
+        Self::new(NonEmpty::singleton(ident))
+    }
+
+    /// Borrow all path segments in source order.
+    #[must_use]
+    pub fn segments(&self) -> &[Ident] {
+        self.segments.as_slice()
+    }
+
+    /// Mutably borrow all path segments in source order.
+    #[must_use]
+    pub fn segments_mut(&mut self) -> &mut [Ident] {
+        self.segments.as_mut_slice()
+    }
+
+    /// Consume and return the non-empty segment sequence.
+    #[must_use]
+    pub fn into_segments(self) -> NonEmpty<Ident> {
+        self.segments
+    }
+
+    /// Consume and return the segment vector.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<Ident> {
+        self.segments.into_vec()
+    }
+
+    /// Number of path segments. Always at least 1.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Returns `false`; provided for API compatibility with sequence-like code.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Returns whether this is a one-segment identifier path.
+    #[must_use]
+    pub const fn is_bare(&self) -> bool {
+        self.segments.len() == 1
+    }
+
     /// Returns the source span covering the whole path.
     #[must_use]
     pub fn span(&self) -> Span {
         self.segments.first().span.merge(self.segments.last().span)
+    }
+
+    /// Returns the leaf segment of the path.
+    #[must_use]
+    pub fn leaf(&self) -> &Ident {
+        self.segments.last()
+    }
+
+    /// Split the path into qualifier segments and the leaf segment.
+    ///
+    /// The qualifier slice is empty for one-segment paths.
+    #[must_use]
+    pub fn split_last(&self) -> (&[Ident], &Ident) {
+        let (leaf, qualifier) = self.segments.split_last();
+        (qualifier, leaf)
+    }
+
+    /// Returns the qualifier segments before the leaf. Empty for bare paths.
+    #[must_use]
+    pub fn qualifier_segments(&self) -> &[Ident] {
+        self.split_last().0
+    }
+
+    /// Returns qualifier segments and leaf only when this path is qualified.
+    #[must_use]
+    pub fn qualifier_and_leaf(&self) -> Option<(&[Ident], &Ident)> {
+        let (qualifier, leaf) = self.split_last();
+        (!qualifier.is_empty()).then_some((qualifier, leaf))
     }
 
     /// Returns the only segment when this is a bare identifier path.
@@ -115,6 +191,67 @@ impl IdentPath {
             [ident] => Some(ident),
             _ => None,
         }
+    }
+
+    /// Mutably returns the only segment when this is a bare identifier path.
+    pub fn as_bare_mut(&mut self) -> Option<&mut Ident> {
+        match self.segments.as_mut_slice() {
+            [ident] => Some(ident),
+            _ => None,
+        }
+    }
+
+    /// Consume this path and return its segment when it is bare.
+    ///
+    /// Returns the original path unchanged when it is qualified.
+    pub fn into_bare(self) -> Result<Ident, Self> {
+        if self.is_bare() {
+            let mut segments = self.segments.into_vec();
+            Ok(segments.remove(0))
+        } else {
+            Err(self)
+        }
+    }
+
+    /// Convert this spanned syntax path into a span-less [`NamePath`].
+    #[must_use]
+    pub fn into_name_path(self) -> NamePath {
+        NamePath::new(self.segments.map(|ident| ident.name))
+    }
+
+    /// Convert this syntax path into a [`NamePath`] paired with the path's full span.
+    #[must_use]
+    pub fn into_spanned_name_path(self) -> Spanned<NamePath> {
+        let span = self.span();
+        Spanned::new(self.into_name_path(), span)
+    }
+
+    /// Human-readable path string for diagnostics and formatting boundaries.
+    #[must_use]
+    pub fn display_path(&self) -> String {
+        self.segments
+            .iter()
+            .map(|segment| segment.name.as_str())
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+}
+
+impl From<Ident> for IdentPath {
+    fn from(ident: Ident) -> Self {
+        Self::bare(ident)
+    }
+}
+
+impl std::fmt::Display for IdentPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (idx, segment) in self.segments.iter().enumerate() {
+            if idx > 0 {
+                f.write_str(".")?;
+            }
+            f.write_str(segment.name.as_str())?;
+        }
+        Ok(())
     }
 }
 
@@ -172,18 +309,19 @@ pub struct DomainBound<P: Phase = Raw> {
 /// A type expression (dimension annotation on declarations).
 /// An expression in index position of an indexed type.
 ///
-/// In `Velocity[Maneuver]`, the `Maneuver` is an `IndexExpr::Name`.
+/// In `Velocity[Maneuver]` or `Velocity[module.Maneuver]`, the index path is
+/// an `IndexExpr::Name`.
 /// In `Dimensionless[3, 4]`, `3` and `4` are `IndexExpr::NatExpr(NatExpr::Literal(..))`.
 /// In `D[N + 1]`, `N + 1` is an `IndexExpr::NatExpr`.
 #[derive(Debug, Clone)]
-pub enum IndexExpr<P: Phase = Raw> {
-    /// A named index or generic parameter: `Maneuver`, `I`, `N`
-    Name(Spanned<P::IndexExprName>),
+pub enum IndexExpr {
+    /// A named index or generic parameter path: `Maneuver`, `I`, `N`, `module.Maneuver`
+    Name(Spanned<NamePath>),
     /// A type-level natural-number expression in index position: `3`, `N + 1`, `M + N`.
     NatExpr(NatExpr),
 }
 
-impl<P: Phase> IndexExpr<P> {
+impl IndexExpr {
     /// Get the source span of this index expression.
     #[must_use]
     pub const fn span(&self) -> Span {
@@ -222,17 +360,17 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// built-in name.
     DatetimeApplication { type_args: Vec<TypeExpr<P>> },
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
-    DimExpr(DimExpr<P>),
+    DimExpr(DimExpr),
     /// An indexed type like `Velocity[Maneuver]`, `Dimensionless[3, 4]`, or `D[M, N]`
     Indexed {
         base: Box<TypeExpr<P>>,
-        indexes: Vec<IndexExpr<P>>,
+        indexes: Vec<IndexExpr>,
     },
     /// A user-defined generic type application like `Vec3<Length, ECI>`.
     /// Built-in parameterized types (currently only `Datetime<...>`) have their
     /// own variants instead — see [`Self::DatetimeApplication`].
     TypeApplication {
-        name: Spanned<P::TypeApplicationName>,
+        name: Spanned<NamePath>,
         type_args: Vec<TypeExpr<P>>,
     },
 }
@@ -240,23 +378,23 @@ pub enum TypeExprKind<P: Phase = Raw> {
 /// A dimension expression: product/quotient of dimension terms.
 /// E.g., `Length^3 / Time^2`
 #[derive(Debug, Clone)]
-pub struct DimExpr<P: Phase = Raw> {
-    pub terms: Vec<DimExprItem<P>>,
+pub struct DimExpr {
+    pub terms: Vec<DimExprItem>,
     pub span: Span,
 }
 
 /// One term in a dimension expression with its combining operator.
 #[derive(Debug, Clone)]
-pub struct DimExprItem<P: Phase = Raw> {
+pub struct DimExprItem {
     /// `Mul` for the first term and for `*`, `Div` for `/`.
     pub op: MulDivOp,
-    pub term: DimTerm<P>,
+    pub term: DimTerm,
 }
 
-/// A single dimension term: `IDENT` or `IDENT ^ INTEGER`
+/// A single dimension term: `ident_path` or `ident_path ^ INTEGER`
 #[derive(Debug, Clone)]
-pub struct DimTerm<P: Phase = Raw> {
-    pub name: Spanned<P::DimTermName>,
+pub struct DimTerm {
+    pub name: Spanned<NamePath>,
     /// `None` means exponent 1.
     pub power: Option<i32>,
     pub span: Span,
@@ -350,9 +488,12 @@ pub enum ExprKind<P: Phase = Raw> {
     },
     /// Unary operation: `-x`, `!x`
     UnaryOp { op: UnaryOp, operand: Box<Expr<P>> },
-    /// Function call: `sqrt(x)`, `atan2(y, x)`, `eye<3>()`
+    /// Function call syntax: `sqrt(x)`, `atan2(y, x)`, `eye<3>()`, or `module.fn(x)`.
+    ///
+    /// The callee is a syntactic path. Bare calls and qualified calls have the
+    /// same AST shape; semantic categorization/resolution happens later.
     FnCall {
-        name: Spanned<FnName>,
+        callee: IdentPath,
         type_args: Vec<GenericArg<P>>,
         args: Vec<Expr<P>>,
     },
@@ -381,13 +522,14 @@ pub enum ExprKind<P: Phase = Raw> {
         expr: Box<Expr<P>>,
         field: Spanned<FieldName>,
     },
-    /// Constructor call for values of user-defined unified `type` declarations.
+    /// Constructor-call syntax for values of user-defined unified `type` declarations.
     ///
     /// Payload constructors use named arguments, e.g.
-    /// `TransferResult(dv1: @dv1, dv2: @dv2)`. Unit constructors may be used as
-    /// bare identifiers after name resolution, e.g. `Coast`.
+    /// `TransferResult(dv1: @dv1, dv2: @dv2)` or
+    /// `module.TransferResult(dv1: @dv1)`. The callee is a syntactic path; name
+    /// resolution decides whether it denotes a constructor.
     ConstructorCall {
-        constructor: Spanned<ConstructorName>,
+        callee: IdentPath,
         generic_args: Vec<GenericArg<P>>,
         fields: Vec<FieldInit<P>>,
     },
@@ -427,10 +569,13 @@ pub enum ExprKind<P: Phase = Raw> {
         scrutinee: Box<Expr<P>>,
         arms: Vec<MatchArm<P>>,
     },
-    /// Standalone index variant reference: `Maneuver.Departure`
-    /// Used in comparisons with loop variables: `m == Maneuver.Departure`
+    /// Standalone index variant reference after name resolution has proven a
+    /// local `Index.Variant` reference.
+    ///
+    /// Qualified module variants currently stay as syntactic paths until a
+    /// module-aware resolver can prove the target index.
     VariantLiteral {
-        index: Spanned<IndexName>,
+        index: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
     },
     /// Inline DAG invocation: `@dag(args).out` or `@module.dag(args).out`.
@@ -482,8 +627,8 @@ pub enum ExprKind<P: Phase = Raw> {
 /// desugar to `range(N)` with synthetic variants `#0`, `#1`, etc.
 #[derive(Debug, Clone)]
 pub enum TableIndexSpec {
-    /// A named index: `Phase`, `Maneuver`
-    Named(Spanned<IndexName>),
+    /// A named index: `Phase`, `Maneuver`, or `module.Maneuver`
+    Named(Spanned<NamePath>),
     /// A Nat range literal: `3` (desugars to `range(3)`)
     NatRange(u64, Span),
 }
@@ -579,7 +724,7 @@ impl std::ops::Index<usize> for MultiDeclSharedAxes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MapEntryIndex {
     /// A declared named index.
-    Named(IndexName),
+    Named(NamePath),
     /// A Nat range literal index, `range(N)`.
     NatRange(u64),
 }
@@ -589,7 +734,10 @@ impl MapEntryIndex {
     #[must_use]
     pub fn registry_name(&self) -> IndexName {
         match self {
-            Self::Named(name) => name.clone(),
+            // Local registries are still keyed by leaf index names. A
+            // module-aware resolver should replace this boundary with a
+            // resolved index identity instead of inspecting the path leaf.
+            Self::Named(name) => IndexName::from(name.leaf().clone()),
             Self::NatRange(size) => {
                 IndexName::new(crate::registry::types::nat_range_index_name(*size))
             }
@@ -599,6 +747,12 @@ impl MapEntryIndex {
 
 impl From<IndexName> for MapEntryIndex {
     fn from(value: IndexName) -> Self {
+        Self::Named(NamePath::from(value))
+    }
+}
+
+impl From<NamePath> for MapEntryIndex {
+    fn from(value: NamePath) -> Self {
         Self::Named(value)
     }
 }
@@ -684,8 +838,8 @@ pub struct ForBinding {
 /// The index in a for binding: either a named index or a `range(...)` expression.
 #[derive(Debug, Clone)]
 pub enum ForBindingIndex {
-    /// A named index: `for m: Maneuver { ... }`
-    Named(Spanned<IndexName>),
+    /// A named index: `for m: Maneuver { ... }` or `for m: module.Maneuver { ... }`
+    Named(Spanned<NamePath>),
     /// A range expression: `for i: range(3) { ... }` or `for i: range(N) { ... }`
     Range {
         /// The argument to `range(...)` — a nat literal or generic nat param.
@@ -758,9 +912,9 @@ impl<P: Phase> GenericArg<P> {
 /// An argument in an index access: a qualified variant, a loop variable, or an expression.
 #[derive(Debug, Clone)]
 pub enum IndexArg<P: Phase = Raw> {
-    /// Qualified variant: `Maneuver.Departure`
+    /// Qualified variant: `Maneuver.Departure` or `module.Maneuver.Departure`
     Variant {
-        index: Spanned<IndexName>,
+        index: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
     },
     /// Loop variable: `m`
@@ -787,6 +941,18 @@ pub struct MatchArm<P: Phase = Raw> {
 /// A match pattern: `Impulsive(delta_v: dv)`, `Nominal`, `Maneuver.Departure`.
 #[derive(Debug, Clone)]
 pub enum MatchPattern {
+    /// Syntactic path pattern before semantic categorization.
+    ///
+    /// The parser emits this for both constructor-looking and index-label-looking
+    /// patterns. Name resolution may rewrite it to [`Self::Constructor`] or
+    /// [`Self::IndexLabel`] only when it can prove that categorization from the
+    /// local symbol context. Qualified paths that require module-aware lookup
+    /// remain syntactic paths instead of being half-resolved.
+    Path {
+        path: IdentPath,
+        bindings: Vec<PatternBinding>,
+        span: Span,
+    },
     /// Tagged-union constructor pattern: `Impulsive(delta_v: dv)` or `Nominal`.
     Constructor {
         name: Spanned<ConstructorName>,
@@ -796,9 +962,10 @@ pub enum MatchPattern {
     /// Named-index label pattern: `Maneuver.Departure`.
     ///
     /// Index labels are fieldless, so this variant deliberately has no
-    /// binding payload.
+    /// binding payload. This variant is semantic: producers should construct it
+    /// only after proving that the path denotes an index variant.
     IndexLabel {
-        index: Spanned<IndexName>,
+        index: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
         span: Span,
     },
@@ -808,14 +975,16 @@ impl MatchPattern {
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
-            Self::Constructor { span, .. } | Self::IndexLabel { span, .. } => *span,
+            Self::Path { span, .. }
+            | Self::Constructor { span, .. }
+            | Self::IndexLabel { span, .. } => *span,
         }
     }
 
     #[must_use]
     pub fn bindings(&self) -> &[PatternBinding] {
         match self {
-            Self::Constructor { bindings, .. } => bindings,
+            Self::Path { bindings, .. } | Self::Constructor { bindings, .. } => bindings,
             Self::IndexLabel { .. } => &[],
         }
     }

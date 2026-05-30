@@ -8,6 +8,7 @@ use miette::NamedSource;
 use crate::desugar::resolved_ast::{Expr, ExprKind};
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{FnName, ScopedName};
+use crate::syntax::span::Spanned;
 
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{
@@ -28,6 +29,7 @@ struct InferCtx<'a> {
     args: &'a [Expr],
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
     local_types: &'a HashMap<String, InferredType>,
+    dag: Option<&'a crate::tir::typed::DagTIR>,
     tir: &'a crate::tir::typed::TIR,
     registry: &'a Registry,
     builtin_fns: &'a HashMap<&'a str, crate::registry::builtins::BuiltinFunction>,
@@ -41,6 +43,7 @@ impl InferCtx<'_> {
             arg,
             self.declared_types,
             self.local_types,
+            self.dag,
             self.tir,
             self.registry,
             self.builtin_fns,
@@ -372,7 +375,7 @@ impl InferCtx<'_> {
         }
 
         Err(GraphcalError::UnknownFunction {
-            name: self.name.value.clone(),
+            name: self.name.value.to_string(),
             src: self.src.clone(),
             span: self.name.span.into(),
         })
@@ -381,20 +384,30 @@ impl InferCtx<'_> {
 
 /// Infer the type of a function call (FnCall only; built-in functions).
 pub(super) fn infer_fn_call(
-    name: &crate::syntax::span::Spanned<FnName>,
+    callee: &crate::syntax::ast::IdentPath,
     args: &[Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
+    let Some(segment) = callee.as_bare() else {
+        return Err(GraphcalError::UnknownFunction {
+            name: callee.display_path(),
+            src: src.clone(),
+            span: callee.span().into(),
+        });
+    };
+    let name = Spanned::new(FnName::new(&segment.name), segment.span);
     let ctx = InferCtx {
-        name,
+        name: &name,
         args,
         declared_types,
         local_types,
+        dag,
         tir,
         registry,
         builtin_fns,
