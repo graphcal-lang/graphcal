@@ -417,10 +417,9 @@ assert order = for m: Mode { @lhs[m] > @rhs[m] };
 }
 
 #[test]
-#[should_panic(expected = "should")]
-fn known_unfixed_check_rejects_private_include_output() {
-    // Known unfixed suspicious case: include brace selection exposes a private
-    // node from a public DAG in another module.
+fn check_rejects_private_include_output() {
+    // Include brace selection must not expose a private node from a public DAG
+    // in another module.
     let dir = tempfile::tempdir().unwrap();
     let pkg = dir.path().join("src/pkg");
     std::fs::create_dir_all(&pkg).unwrap();
@@ -456,10 +455,9 @@ fn known_unfixed_check_rejects_private_include_output() {
 }
 
 #[test]
-#[should_panic(expected = "should")]
-fn known_unfixed_check_rejects_private_include_output_renamed() {
-    // Known unfixed suspicious case: include brace renaming exposes a private
-    // node from a public DAG in another module.
+fn check_rejects_private_include_output_renamed() {
+    // Include brace renaming must not expose a private node from a public DAG
+    // in another module.
     let dir = tempfile::tempdir().unwrap();
     let pkg = dir.path().join("src/pkg");
     std::fs::create_dir_all(&pkg).unwrap();
@@ -495,10 +493,9 @@ fn known_unfixed_check_rejects_private_include_output_renamed() {
 }
 
 #[test]
-#[should_panic(expected = "should")]
-fn known_unfixed_check_rejects_private_include_output_via_alias() {
-    // Known unfixed suspicious case: include module alias projection exposes a
-    // private node from a public DAG in another module.
+fn check_rejects_private_include_output_via_alias() {
+    // Include module aliases must not expose a private node from a public DAG
+    // in another module.
     let dir = tempfile::tempdir().unwrap();
     let pkg = dir.path().join("src/pkg");
     std::fs::create_dir_all(&pkg).unwrap();
@@ -534,10 +531,8 @@ fn known_unfixed_check_rejects_private_include_output_via_alias() {
 }
 
 #[test]
-#[should_panic(expected = "should")]
-fn known_unfixed_check_rejects_private_dag_include() {
-    // Known unfixed suspicious case: a private DAG can be instantiated from
-    // another module by full path.
+fn check_rejects_private_dag_include() {
+    // A private DAG must not be instantiated from another module by full path.
     let dir = tempfile::tempdir().unwrap();
     let pkg = dir.path().join("src/pkg");
     std::fs::create_dir_all(&pkg).unwrap();

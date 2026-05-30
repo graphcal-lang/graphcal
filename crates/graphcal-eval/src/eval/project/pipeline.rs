@@ -118,9 +118,12 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
         };
 
         imports::process_inline_dag_include(
-            dag_def,
-            dag_name,
-            file_dag_id,
+            &imports::InlineDagIncludeTarget {
+                dag_def,
+                dag_name,
+                parent_dag_id: file_dag_id,
+                boundary: imports::IncludeVisibilityBoundary::Local,
+            },
             include_decl,
             decl,
             file_src,
@@ -169,14 +172,25 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
                     span: include_decl.path.span().into(),
                 })
             })?;
+        if !target_dag_def.visibility.is_public() {
+            return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
+                name: dag_name.to_string(),
+                file_path: include_decl.path.display_path(),
+                src: file_src.clone(),
+                span: include_decl.path.leaf().span.into(),
+            }));
+        }
 
         // Inline DAGs are strictly isolated, so same-file and cross-file
         // share the same processing. The dag's `parent` is the file where it
         // was *defined* (target_loaded), not the importing file.
         imports::process_inline_dag_include(
-            target_dag_def,
-            dag_name,
-            &target_loaded.dag_id,
+            &imports::InlineDagIncludeTarget {
+                dag_def: target_dag_def,
+                dag_name,
+                parent_dag_id: &target_loaded.dag_id,
+                boundary: imports::IncludeVisibilityBoundary::CrossModule,
+            },
             include_decl,
             decl,
             file_src,

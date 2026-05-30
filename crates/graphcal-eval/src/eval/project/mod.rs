@@ -498,60 +498,6 @@ pub(in crate::eval::project) fn extract_pub_names(
     pub_names
 }
 
-/// selective import name is not found among the dependency's evaluated values.
-///
-/// Also matches re-exported names introduced by `import "X" { pub name }` or
-/// `include "X" { pub name }`. Issue #452 — a re-exported name stands in for a
-/// local declaration when a downstream importer asks "does this file have
-/// `name`?".
-pub(in crate::eval::project) fn file_has_declaration(
-    file: &graphcal_compiler::desugar::resolved_ast::File,
-    name: &str,
-) -> bool {
-    file.declarations.iter().any(|decl| match &decl.kind {
-        DeclKind::Param(_)
-        | DeclKind::Node(_)
-        | DeclKind::ConstNode(_)
-        | DeclKind::Assert(_)
-        | DeclKind::BaseDimension(_)
-        | DeclKind::Dimension(_)
-        | DeclKind::Unit(_)
-        | DeclKind::Index(_)
-        | DeclKind::Type(_)
-        | DeclKind::Plot(_)
-        | DeclKind::Figure(_)
-        | DeclKind::Layer(_)
-        | DeclKind::Dag(_) => decl_identity(decl).is_some_and(|identity| {
-            matches!(
-                identity.kind,
-                ProjectDeclKind::Param
-                    | ProjectDeclKind::Node
-                    | ProjectDeclKind::Const
-                    | ProjectDeclKind::Assert
-                    | ProjectDeclKind::Dimension
-                    | ProjectDeclKind::Unit
-                    | ProjectDeclKind::Index
-                    | ProjectDeclKind::Type
-                    | ProjectDeclKind::Plot
-                    | ProjectDeclKind::Figure
-                    | ProjectDeclKind::Layer
-                    | ProjectDeclKind::Dag
-            ) && identity.name == name
-        }),
-        DeclKind::Import(d) => matches!(
-            &d.kind,
-            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
-                if items.iter().any(|it| it.is_pub && it.local_name() == name)
-        ),
-        DeclKind::Include(d) => matches!(
-            &d.kind,
-            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
-                if items.iter().any(|it| it.is_pub && it.local_name() == name)
-        ),
-        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
-    })
-}
-
 pub(in crate::eval::project) fn file_has_import_item(
     file: &graphcal_compiler::desugar::resolved_ast::File,
     name: &str,

@@ -110,12 +110,8 @@ impl std::fmt::Display for DeclSymbolKind {
 /// Visibility rule applied by a module alias or selective import edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModuleAccess {
-    /// Cross-module `import`: only public target symbols are accessible.
+    /// Cross-module import/include boundary: only public target symbols are accessible.
     PublicOnly,
-    /// Instantiated `include`: the imported DAG body is being embedded, so
-    /// private implementation declarations can be addressed by the include
-    /// lowering boundary.
-    IncludePrivate,
 }
 
 impl ModuleAccess {
@@ -835,10 +831,9 @@ impl ModuleResolver {
 
     /// Register one loader-resolved `include` edge in `owner`'s scope.
     ///
-    /// Instantiated includes embed the dependency DAG body, so this boundary is
-    /// allowed to address private implementation declarations in the target.
-    /// Use [`Self::register_import`] for source `import` declarations, which
-    /// enforce public visibility.
+    /// Instantiated includes embed the dependency DAG body, but the source-level
+    /// names introduced by the include are still a cross-module boundary and
+    /// must preserve public visibility.
     pub fn register_include(
         &mut self,
         owner: &DagId,
@@ -846,7 +841,7 @@ impl ModuleResolver {
         kind: &ImportKind,
         target: &DagId,
     ) -> Result<(), ModuleResolveError> {
-        self.register_import_with_access(owner, path, kind, target, ModuleAccess::IncludePrivate)
+        self.register_import_with_access(owner, path, kind, target, ModuleAccess::PublicOnly)
     }
 
     fn register_import_with_access(
@@ -1206,8 +1201,9 @@ impl ModuleResolver {
             .iter()
             .map(|segment| segment.name.clone())
             .collect::<Vec<_>>();
-        self.resolve_module_qualifier(owner, &atoms)
-            .map(|resolved| resolved.owner)
+        let resolved = self.resolve_module_qualifier(owner, &atoms)?;
+        self.ensure_module_visible(&resolved.owner, resolved.access)?;
+        Ok(resolved.owner)
     }
 
     fn import_additions(
@@ -1648,6 +1644,33 @@ impl ModuleResolver {
                 owner: owner.clone(),
             })
     }
+
+    fn ensure_module_visible(
+        &self,
+        target: &DagId,
+        access: ModuleAccess,
+    ) -> Result<(), ModuleResolveError> {
+        if !access.requires_public() {
+            return Ok(());
+        }
+        let Some(parent) = target.parent() else {
+            return Ok(());
+        };
+        let Some(parent_symbols) = self.modules.get(&parent) else {
+            return Ok(());
+        };
+        let Some(symbol) = parent_symbols.decls.get(target.name()) else {
+            return Ok(());
+        };
+        if symbol.kind() == DeclSymbolKind::Dag && !symbol.visibility().is_public() {
+            return Err(ModuleResolveError::PrivateName {
+                owner: parent,
+                namespace: "dag",
+                name: target.name().to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl ModuleScope {
@@ -1945,6 +1968,7 @@ pub enum ModuleResolveError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::syntax::ast::Ident;
     use crate::syntax::parser::Parser;
 
     fn resolved_source(source: &str) -> ast::File {
@@ -1963,6 +1987,16 @@ mod tests {
             .expect("source should contain an import")
     }
 
+    fn first_include(file: &ast::File) -> (&ModulePath, &ImportKind) {
+        file.declarations
+            .iter()
+            .find_map(|decl| match &decl.kind {
+                ast::DeclKind::Include(include) => Some((&include.path, &include.kind)),
+                _ => None,
+            })
+            .expect("source should contain an include")
+    }
+
     fn atom(s: &str) -> NameAtom {
         NameAtom::parse(s).unwrap()
     }
@@ -1970,6 +2004,30 @@ mod tests {
     fn path(segments: &[&str]) -> NamePath {
         let atoms = segments.iter().map(|s| atom(s)).collect::<Vec<_>>();
         NamePath::new(NonEmpty::try_from_vec(atoms).unwrap())
+    }
+
+    fn module_path(segments: &[&str]) -> ModulePath {
+        let idents = segments
+            .iter()
+            .map(|s| Ident {
+                name: atom(s),
+                span: Span::new(0, 0),
+            })
+            .collect::<Vec<_>>();
+        ModulePath {
+            segments: NonEmpty::try_from_vec(idents).unwrap(),
+            span: Span::new(0, 0),
+        }
+    }
+
+    fn first_dag(file: &ast::File) -> &ast::DagDecl {
+        file.declarations
+            .iter()
+            .find_map(|decl| match &decl.kind {
+                ast::DeclKind::Dag(dag) => Some(dag),
+                _ => None,
+            })
+            .expect("source should contain a dag")
     }
 
     #[test]
@@ -2057,6 +2115,77 @@ mod tests {
                 namespace: "StructTypeName",
                 name,
             } if owner == lib_id && name == "Secret"
+        ));
+    }
+
+    #[test]
+    fn include_selective_private_decl_is_rejected() {
+        let lib_id = DagId::root("lib");
+        let main_id = DagId::root("main");
+        let lib = resolved_source("node hidden: Dimensionless = 1.0;");
+        let main = resolved_source("include lib().{ hidden };");
+        let (include_path, include_kind) = first_include(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+
+        let err = resolver
+            .register_include(&main_id, include_path, include_kind, &lib_id)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ModuleResolveError::PrivateName {
+                owner,
+                namespace: _,
+                name,
+            } if owner == lib_id && name == "hidden"
+        ));
+    }
+
+    #[test]
+    fn qualified_private_dag_path_is_rejected() {
+        let lib_id = DagId::root("lib");
+        let helper_id = lib_id.child("helper");
+        let main_id = DagId::root("main");
+        let lib = resolved_source(
+            "dag helper {
+                pub node shown: Dimensionless = 1.0;
+            }",
+        );
+        let main = resolved_source("import lib as lib;");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(helper_id, &first_dag(&lib).body)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, import_path, import_kind, &lib_id)
+            .unwrap();
+
+        let err = resolver
+            .resolve_module_path(&main_id, &module_path(&["lib", "helper"]))
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ModuleResolveError::PrivateName {
+                owner,
+                namespace: "dag",
+                name,
+            } if owner == lib_id && name == "helper"
         ));
     }
 

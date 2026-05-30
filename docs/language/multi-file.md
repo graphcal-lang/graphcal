@@ -226,6 +226,11 @@ node t: Force = @thrust;
 | `include path.dag(args).{x as y};`                              | Same, renamed                                         |
 | `include path.dag(args) as a.{x};`                              | parse error — alias and brace mutually exclusive      |
 
+Across module boundaries, the DAG named by `path.dag` must be `pub`, and
+each output selected through a brace list or reached through an include alias
+must be public. Renaming an output does not change its visibility. Private
+nodes inside the included DAG remain implementation details.
+
 ### `include` does not require `import` of the DAG
 
 Because the include path is absolute from the package root, no preceding
@@ -298,6 +303,9 @@ is still a node, and prefixing the path with the in-scope module alias
 just adds a qualifier. The "post-`@` expression must denote a node"
 rule is unchanged; it has nothing to do with how many segments appear
 before the `(`.
+
+The projected output must be a public node of the called DAG. For
+module-qualified calls, the called DAG itself must also be public.
 
 What *is* still rejected is dropping the projection: `@dag(args)` and
 `@module.dag(args)` (without the trailing `.<out>`) are both parse
