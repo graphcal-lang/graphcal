@@ -16,10 +16,10 @@
 //!   unreachable. The unresolved-ref slot is still inhabited — name
 //!   resolution has not yet run.
 //! - [`Resolved`] — produced by
-//!   [`crate::syntax::name_resolve::resolve_name_refs`]. Every phase slot
-//!   ([`Phase::DeclSugar`], [`Phase::ExprSugar`], [`Phase::RefSugar`]) is
+//!   [`crate::syntax::name_resolve::resolve_name_refs`]. Every phase-varying
+//!   slot ([`Phase::DeclSugar`], [`Phase::ExprSugar`], [`Phase::RefSugar`]) is
 //!   [`Infallible`], so the AST is a strict subset of the desugared form
-//!   with no unresolved references remaining.
+//!   with no unresolved expression references remaining.
 //!
 //! ```text
 //! parser → File<Raw> → desugar → File<Desugared> → name_resolve → File<Resolved> → IR → TIR → eval
@@ -60,15 +60,6 @@ pub trait Phase: 'static + sealed::Sealed {
     /// the variant cannot be constructed and the name-resolution pass is
     /// statically known to have eliminated every unresolved reference.
     type RefSugar: Debug + Clone;
-
-    /// Phase-specific syntactic path carried by `TypeExprKind::TypeApplication`.
-    type TypeApplicationName: Debug + Clone;
-
-    /// Phase-specific syntactic path carried by dimension terms in type expressions.
-    type DimTermName: Debug + Clone;
-
-    /// Phase-specific syntactic path carried by `IndexExpr::Name`.
-    type IndexExprName: Debug + Clone;
 }
 
 /// Pre-desugar phase: every surface sugar is representable.

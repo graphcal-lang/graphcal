@@ -32,11 +32,11 @@
 //! eliminates them entirely via `expand_multi_decl`.
 
 use crate::syntax::ast::{
-    AssertBody, AssertDecl, ConstNodeDecl, DagDecl, DeclKind, Declaration, DimExpr, DimExprItem,
-    DimTerm, DomainBound, Encoding, Expr, ExprKind, FieldDecl, FieldInit, FigureDecl, File,
-    GenericArg, GenericParam, IncludeDecl, IndexArg, IndexDecl, IndexDeclKind, IndexExpr,
-    LayerDecl, MapEntry, MarkSpec, MatchArm, NodeDecl, ParamBinding, ParamDecl, PlotDecl,
-    PlotField, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember, UnitDecl, UnitDef,
+    AssertBody, AssertDecl, ConstNodeDecl, DagDecl, DeclKind, Declaration, DomainBound, Encoding,
+    Expr, ExprKind, FieldDecl, FieldInit, FigureDecl, File, GenericArg, GenericParam, IncludeDecl,
+    IndexArg, IndexDecl, IndexDeclKind, LayerDecl, MapEntry, MarkSpec, MatchArm, NodeDecl,
+    ParamBinding, ParamDecl, PlotDecl, PlotField, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind,
+    UnionMember, UnitDecl, UnitDef,
 };
 use crate::syntax::ast::{RawDeclSugar, RawExprSugar};
 use crate::syntax::phase::{Desugared, Raw};
@@ -110,7 +110,7 @@ fn convert_decl_kind_non_sugar(k: DeclKind<Raw>) -> DeclKind<Desugared> {
         DeclKind::Node(n) => DeclKind::Node(n.into()),
         DeclKind::ConstNode(c) => DeclKind::ConstNode(c.into()),
         DeclKind::BaseDimension(d) => DeclKind::BaseDimension(d),
-        DeclKind::Dimension(d) => DeclKind::Dimension(d.into()),
+        DeclKind::Dimension(d) => DeclKind::Dimension(d),
         DeclKind::Unit(u) => DeclKind::Unit(u.into()),
         DeclKind::Type(t) => DeclKind::Type(t.into()),
         DeclKind::Index(i) => DeclKind::Index(i.into()),
@@ -163,22 +163,12 @@ impl From<ConstNodeDecl<Raw>> for ConstNodeDecl<Desugared> {
     }
 }
 
-impl From<crate::syntax::ast::DimDecl<Raw>> for crate::syntax::ast::DimDecl<Desugared> {
-    fn from(d: crate::syntax::ast::DimDecl<Raw>) -> Self {
-        Self {
-            visibility: d.visibility,
-            name: d.name,
-            definition: d.definition.map(convert_dim_expr),
-        }
-    }
-}
-
 impl From<UnitDecl<Raw>> for UnitDecl<Desugared> {
     fn from(u: UnitDecl<Raw>) -> Self {
         Self {
             visibility: u.visibility,
             name: u.name,
-            dim_type: convert_dim_expr(u.dim_type),
+            dim_type: u.dim_type,
             definition: u.definition.map(Into::into),
         }
     }
@@ -259,9 +249,7 @@ impl From<IndexDeclKind<Raw>> for IndexDeclKind<Desugared> {
                 step: Box::new((*step).into()),
             },
             IndexDeclKind::RequiredNamed => Self::RequiredNamed,
-            IndexDeclKind::RequiredRange { dimension } => Self::RequiredRange {
-                dimension: convert_dim_expr(dimension),
-            },
+            IndexDeclKind::RequiredRange { dimension } => Self::RequiredRange { dimension },
         }
     }
 }
@@ -418,10 +406,10 @@ impl From<TypeExprKind<Raw>> for TypeExprKind<Desugared> {
             TypeExprKind::Bool => Self::Bool,
             TypeExprKind::Int => Self::Int,
             TypeExprKind::Datetime => Self::Datetime,
-            TypeExprKind::DimExpr(d) => Self::DimExpr(convert_dim_expr(d)),
+            TypeExprKind::DimExpr(d) => Self::DimExpr(d),
             TypeExprKind::Indexed { base, indexes } => Self::Indexed {
                 base: Box::new((*base).into()),
-                indexes: indexes.into_iter().map(convert_index_expr).collect(),
+                indexes,
             },
             TypeExprKind::TypeApplication { name, type_args } => Self::TypeApplication {
                 name,
@@ -431,31 +419,6 @@ impl From<TypeExprKind<Raw>> for TypeExprKind<Desugared> {
                 type_args: type_args.into_iter().map(Into::into).collect(),
             },
         }
-    }
-}
-
-fn convert_dim_expr(d: DimExpr<Raw>) -> DimExpr<Desugared> {
-    DimExpr {
-        terms: d
-            .terms
-            .into_iter()
-            .map(|item| DimExprItem {
-                op: item.op,
-                term: DimTerm {
-                    name: item.term.name,
-                    power: item.term.power,
-                    span: item.term.span,
-                },
-            })
-            .collect(),
-        span: d.span,
-    }
-}
-
-fn convert_index_expr(idx: IndexExpr<Raw>) -> IndexExpr<Desugared> {
-    match idx {
-        IndexExpr::Name(name) => IndexExpr::Name(name),
-        IndexExpr::NatExpr(expr) => IndexExpr::NatExpr(expr),
     }
 }
 

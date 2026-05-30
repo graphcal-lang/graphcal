@@ -62,16 +62,17 @@ The AST is parameterized by a `Phase` marker in
 File<Raw> -> File<Desugared> -> File<Resolved>
 ```
 
-The marker controls phase-specific slots:
+The marker controls only the slots that actually vary by phase:
 
-| Slot                  | Raw             | Desugared       | Resolved     |
-| --------------------- | --------------- | --------------- | ------------ |
-| `DeclSugar`           | `RawDeclSugar`  | `Infallible`    | `Infallible` |
-| `ExprSugar`           | `RawExprSugar`  | `Infallible`    | `Infallible` |
-| `RefSugar`            | `UnresolvedRef` | `UnresolvedRef` | `Infallible` |
-| `TypeApplicationName` | `NamePath`      | `NamePath`      | `NamePath`   |
-| `DimTermName`         | `NamePath`      | `NamePath`      | `NamePath`   |
-| `IndexExprName`       | `NamePath`      | `NamePath`      | `NamePath`   |
+| Slot        | Raw             | Desugared       | Resolved     |
+| ----------- | --------------- | --------------- | ------------ |
+| `DeclSugar` | `RawDeclSugar`  | `Infallible`    | `Infallible` |
+| `ExprSugar` | `RawExprSugar`  | `Infallible`    | `Infallible` |
+| `RefSugar`  | `UnresolvedRef` | `UnresolvedRef` | `Infallible` |
+
+Type-level syntactic references such as type applications, dimension terms, and
+index expressions are `NamePath` in every phase, so they are represented
+directly as `NamePath` fields rather than as `Phase` associated types.
 
 `File<Raw>` is produced by the parser and consumed by surface-aware tooling such
 as the formatter. `File<Desugared>` has no multi-decl or table-literal sugar,

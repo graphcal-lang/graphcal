@@ -314,14 +314,14 @@ pub struct DomainBound<P: Phase = Raw> {
 /// In `Dimensionless[3, 4]`, `3` and `4` are `IndexExpr::NatExpr(NatExpr::Literal(..))`.
 /// In `D[N + 1]`, `N + 1` is an `IndexExpr::NatExpr`.
 #[derive(Debug, Clone)]
-pub enum IndexExpr<P: Phase = Raw> {
+pub enum IndexExpr {
     /// A named index or generic parameter path: `Maneuver`, `I`, `N`, `module.Maneuver`
-    Name(Spanned<P::IndexExprName>),
+    Name(Spanned<NamePath>),
     /// A type-level natural-number expression in index position: `3`, `N + 1`, `M + N`.
     NatExpr(NatExpr),
 }
 
-impl<P: Phase> IndexExpr<P> {
+impl IndexExpr {
     /// Get the source span of this index expression.
     #[must_use]
     pub const fn span(&self) -> Span {
@@ -360,17 +360,17 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// built-in name.
     DatetimeApplication { type_args: Vec<TypeExpr<P>> },
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
-    DimExpr(DimExpr<P>),
+    DimExpr(DimExpr),
     /// An indexed type like `Velocity[Maneuver]`, `Dimensionless[3, 4]`, or `D[M, N]`
     Indexed {
         base: Box<TypeExpr<P>>,
-        indexes: Vec<IndexExpr<P>>,
+        indexes: Vec<IndexExpr>,
     },
     /// A user-defined generic type application like `Vec3<Length, ECI>`.
     /// Built-in parameterized types (currently only `Datetime<...>`) have their
     /// own variants instead — see [`Self::DatetimeApplication`].
     TypeApplication {
-        name: Spanned<P::TypeApplicationName>,
+        name: Spanned<NamePath>,
         type_args: Vec<TypeExpr<P>>,
     },
 }
@@ -378,23 +378,23 @@ pub enum TypeExprKind<P: Phase = Raw> {
 /// A dimension expression: product/quotient of dimension terms.
 /// E.g., `Length^3 / Time^2`
 #[derive(Debug, Clone)]
-pub struct DimExpr<P: Phase = Raw> {
-    pub terms: Vec<DimExprItem<P>>,
+pub struct DimExpr {
+    pub terms: Vec<DimExprItem>,
     pub span: Span,
 }
 
 /// One term in a dimension expression with its combining operator.
 #[derive(Debug, Clone)]
-pub struct DimExprItem<P: Phase = Raw> {
+pub struct DimExprItem {
     /// `Mul` for the first term and for `*`, `Div` for `/`.
     pub op: MulDivOp,
-    pub term: DimTerm<P>,
+    pub term: DimTerm,
 }
 
 /// A single dimension term: `ident_path` or `ident_path ^ INTEGER`
 #[derive(Debug, Clone)]
-pub struct DimTerm<P: Phase = Raw> {
-    pub name: Spanned<P::DimTermName>,
+pub struct DimTerm {
+    pub name: Spanned<NamePath>,
     /// `None` means exponent 1.
     pub power: Option<i32>,
     pub span: Span,
