@@ -34,68 +34,76 @@ These names are relative, not universal. Another compiler may use "HIR" or
 
 ### Pipeline Rationale
 
-The pipeline is split into these representations because each stage enforces a
-stronger invariant than the previous one. The key design goal is not merely to
-"parse then evaluate"; it is to move from source-shaped data to semantic data
-without smuggling meaning through strings, filesystem paths, or implicit lookup
-rules.
+A `.gcl` file cannot safely go straight from text to evaluation. Early stages
+need to remember exactly what the user wrote, while later stages need to know
+what those words mean in the whole project.
 
-The easiest way to understand the current shape is to ask why each boundary is
-necessary and how it differs from adjacent ones:
+For example, this source reference:
 
-1. **Why is an AST necessary?** The compiler first needs a faithful model of
-   what the user wrote: source spans, syntactic paths, sugar, and constructs
-   that matter to formatter/LSP/diagnostics. Jumping directly from tokens to a
-   semantic graph would lose source fidelity and make editor tooling much
-   harder.
-2. **Why is `File<Resolved>` still not enough?** `File<Resolved>` means the AST
-   has no unresolved expression-reference nodes; it does not mean every
-   qualified path has a canonical owner. It is still syntax-shaped and can still
-   contain source paths in type/index/module-sensitive positions.
-3. **Why is IR necessary if we already have an AST?** AST nodes answer "what
-   syntax was written?" IR answers "what declarations does this DAG body define,
-   and how do they depend on each other?" IR is where Graphcal validates
-   duplicate names, visibility, bindability, declaration categories, dependency
-   edges, import metadata, and registry construction. Those checks require a
-   complete DAG body, not isolated syntax nodes.
-4. **How is IR different from HIR?** IR is declaration-centric: lists of consts,
-   params, nodes, asserts, registry entries, and dependency maps for one DAG
-   body. HIR is expression/type-centric: trees whose reference positions are
-   semantic. IR tells us what declarations exist; HIR tells us exactly which
-   declaration/type/index/constructor/local/built-in each expression or type
-   reference means.
-5. **Why is `ModuleResolver` separate from IR/HIR?** The loader owns I/O and
-   resolves import/include paths to canonical `DagId`s. `ModuleResolver` is the
-   pure compiler-side structure that uses those loader-resolved edges to answer
-   "which module/DAG owns this source path?" Keeping it separate prevents
-   filesystem concerns from leaking into HIR/TIR and prevents source aliases from
-   becoming semantic identities.
-6. **Why is HIR necessary if IR already checked names and deps?** IR still
-   carries some source-shaped keys and compatibility dependency maps. HIR is the
-   boundary where expression/type references stop being source paths and become
-   typed semantic identities: `ResolvedName`, `ResolvedIndexVariant`, lexical
-   `LocalId`s, `GenericParamId`s, and built-in enums. Without HIR, dim-checking
-   and eval would repeatedly re-resolve paths or dispatch on strings such as
-   `"sum"`, `"PI"`, or `"module.Name"`.
-7. **Why is TIR necessary if HIR has semantic references?** HIR says what each
-   expression/type reference denotes, but it is not the checked program. TIR
-   combines HIR-derived references with IR's DAG/declaration structure, resolved
+```gcl
+import helpers.physics
+node force = helpers.physics.mass * acceleration
+```
+
+starts life as text with spans, then as a dotted path, and eventually as a
+reference to one specific declaration owned by one specific `DagId`. Keeping
+those steps separate prevents bugs where two files define the same leaf name, an
+import alias changes, or a runtime map accidentally treats `a.mass` and
+`b.mass` as the same value.
+
+Read the pipeline as a sequence of practical questions:
+
+1. **Parser / AST: what did the user write?**
+   The AST keeps source spans, punctuation-sensitive shapes, and surface syntax
+   needed by diagnostics, formatting, and the LSP. At this point `foo.bar` is
+   still just a path written in the file.
+2. **Desugared AST: what is the simpler form of that syntax?**
+   Parser conveniences such as multi-declarations and table literals are
+   expanded so later passes do not each need to understand every shortcut.
+3. **`File<Resolved>`: what can be resolved using only this file?**
+   Local expression names are rewritten into more specific AST forms, but this
+   is still not project-wide resolution. Type paths, index paths, and module
+   qualified names may still need import/include context.
+4. **Loader and `ModuleResolver`: which file or DAG does a module path mean?**
+   The loader performs filesystem work and turns import/include paths into
+   canonical `DagId`s. The compiler-side `ModuleResolver` then answers semantic
+   lookup questions without doing I/O. This keeps disk paths and import aliases
+   out of the core compiler data.
+5. **IR: what declarations does this DAG body contain?**
+   IR groups the body into consts, params, nodes, asserts, registry entries, and
+   dependency maps. This is where checks such as duplicate names, visibility,
+   bindability, declaration categories, and dependency edges are easiest because
+   they require seeing the whole DAG body.
+6. **HIR: what does each reference point to?**
+   HIR lowers expression and type references from source paths into typed
+   identities: declarations, dimensions, indexes, constructors, locals, generic
+   params, and built-ins. After this boundary, code should not need to ask
+   whether the string `"sum"`, `"PI"`, or `"helpers.physics.mass"` has a special
+   meaning; it should pattern-match on typed values instead.
+7. **TIR: is the program type- and dimension-correct?**
+   TIR combines the declaration structure from IR with HIR references, resolved
    type expressions, dimension facts, domain constraints, inline DAG bodies, and
-   dependency DAGs. TIR is the representation after type and dimension analysis
-   has enough information to drive execution.
-8. **How is TIR different from `ExecPlan`?** TIR is still a checked program
-   representation: it contains declarations, DAGs, registries, resolved sidecars,
-   and constraints. `ExecPlan` is runtime-ready: consts are evaluated, runtime
-   declarations are topologically sorted, and the evaluator no longer needs to
-   rebuild registries, dependency graphs, or type-resolution data.
+   dependency DAGs. This is the checked program representation used to prepare
+   execution.
+8. **ExecPlan: what exact work should runtime evaluation do?**
+   `ExecPlan` evaluates compile-time constants, sorts runtime declarations, and
+   stores runtime-ready maps. The evaluator should not need to rebuild registries,
+   re-resolve names, or recompute dependency order.
 
-This separation is why several adjacent representations can look redundant at
-first glance. `File<Resolved>` is "resolved" only in the syntax-phase sense: no
-`UnresolvedRef` nodes remain, but qualified names may still be source paths. IR
-is not "just another AST"; it is the DAG-body declaration and registry layer.
-HIR is not "the final typed IR"; it is the semantic reference boundary used by
-TIR and eval. TIR is where those semantic references are combined with resolved
-types, dimension facts, and per-DAG compilation state.
+Some names in this pipeline can sound misleading if read too literally:
+
+- `File<Resolved>` means local unresolved expression nodes are gone; it does
+  **not** mean every path has a canonical module owner.
+- IR is not another copy of the AST; it is the declaration and registry view of
+  one DAG body.
+- HIR is "high-level" because it keeps expression/type tree shapes, not because
+  it must be built before IR.
+- TIR is not just HIR with types; it is the checked, per-DAG program model.
+
+`DagTIR` currently carries HIR/resolved "sidecars" next to older AST-shaped data.
+That is a migration aid: new code should prefer the HIR/resolved data, and old
+syntax-AST consumers should shrink over time. If those sidecars ever stop being
+transitional, they should be folded into the main TIR data model.
 
 Every `.gcl` file moves forward through the same core stages:
 
