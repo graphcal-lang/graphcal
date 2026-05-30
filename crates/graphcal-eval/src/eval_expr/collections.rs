@@ -415,8 +415,10 @@ pub(super) fn eval_unfold(
     // `result_entries` in/out of this slot via `std::mem::take` to avoid a full
     // O(N) clone of the map every iteration (which would make the loop O(N²)).
     let self_scoped = ScopedName::local(self_name);
-    let self_key =
-        RuntimeDeclKey::for_local_decl(ctx.current_dag.unwrap_or(ctx.tir.root()), &self_scoped);
+    let self_key = RuntimeDeclKey::for_local_decl(
+        ctx.current_dag.unwrap_or_else(|| ctx.tir.root()),
+        &self_scoped,
+    );
     overlay_values.insert(
         self_key.clone(),
         RuntimeValue::Indexed {
@@ -562,6 +564,10 @@ pub(super) fn eval_map_literal(
 /// For single binding `for m: Maneuver { body }`, iterates over Maneuver variants
 /// and collects results into `Indexed`.
 /// For multi-binding, produces nested `Indexed` values.
+#[expect(
+    clippy::too_many_lines,
+    reason = "for-comprehension evaluation handles cartesian products, filters, and result construction"
+)]
 pub(super) fn eval_for_comp(
     bindings: &[graphcal_compiler::desugar::resolved_ast::ForBinding],
     body: &Expr,

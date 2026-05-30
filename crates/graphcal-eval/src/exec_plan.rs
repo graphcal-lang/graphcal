@@ -266,11 +266,11 @@ pub fn eval_consts_from_tir(
             root_values: Some(&visible_values),
             struct_field_constraints: None,
         };
-        let value = match key.as_resolved().and_then(|resolved| {
-            dag.resolved_exprs
-                .as_ref()
-                .and_then(|exprs| exprs.consts.get(resolved))
-        }) {
+        let value = match dag
+            .resolved_exprs
+            .as_ref()
+            .and_then(|exprs| exprs.consts.get(key.as_resolved()))
+        {
             Some(hir_expr) => eval_hir_expr(hir_expr, &visible_values, &empty_hir_locals, &ctx)
                 .or_else(|_| eval_expr(expr, &visible_values, &empty_locals, &ctx))?,
             None => eval_expr(expr, &visible_values, &empty_locals, &ctx)?,
@@ -843,14 +843,13 @@ fn find_struct_field_constraint<'a>(
     constructor: &ConstructorName,
     field: &FieldName,
 ) -> Option<&'a ResolvedDomainConstraint> {
-    match owning_type {
-        Some(owning_type) => field_constraints.get(&StructFieldConstraintKey::new(
+    owning_type.and_then(|owning_type| {
+        field_constraints.get(&StructFieldConstraintKey::new(
             owning_type.clone(),
             constructor.clone(),
             field.clone(),
-        )),
-        None => None,
-    }
+        ))
+    })
 }
 
 /// Recursively validate a const value against resolved struct-field

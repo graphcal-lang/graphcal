@@ -288,14 +288,11 @@ pub(super) fn run_eval_loop(
             struct_field_constraints: Some(&plan.struct_field_constraints),
         };
 
-        let result = name
-            .as_resolved()
-            .and_then(|resolved| {
-                tir.root()
-                    .resolved_exprs
-                    .as_ref()
-                    .and_then(|exprs| exprs.runtime_expr(resolved))
-            })
+        let result = tir
+            .root()
+            .resolved_exprs
+            .as_ref()
+            .and_then(|exprs| exprs.runtime_expr(name.as_resolved()))
             .map_or_else(
                 || eval_expr(expr, &values, &empty_locals, &ctx),
                 |hir_expr| {
@@ -339,12 +336,9 @@ fn failed_runtime_dependencies(
     name: &RuntimeDeclKey,
     errors: &HashMap<RuntimeDeclKey, NodeError>,
 ) -> Vec<DeclName> {
-    let Some(key) = name.as_resolved() else {
-        return Vec::new();
-    };
     dag.resolved_deps
         .runtime_deps
-        .get(key)
+        .get(name.as_resolved())
         .map(|deps| {
             deps.iter()
                 .filter(|dep| errors.contains_key(&RuntimeDeclKey::resolved((*dep).clone())))

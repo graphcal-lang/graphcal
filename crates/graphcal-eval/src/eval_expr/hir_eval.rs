@@ -1275,8 +1275,10 @@ fn eval_hir_unfold(
     result_entries.insert(variants[0].clone(), init_val);
 
     let self_scoped = ScopedName::local(self_name);
-    let self_key =
-        RuntimeDeclKey::for_local_decl(ctx.current_dag.unwrap_or(ctx.tir.root()), &self_scoped);
+    let self_key = RuntimeDeclKey::for_local_decl(
+        ctx.current_dag.unwrap_or_else(|| ctx.tir.root()),
+        &self_scoped,
+    );
     let mut overlay_values = values.clone();
     overlay_values.insert(
         self_key.clone(),
@@ -1414,6 +1416,10 @@ fn hir_expr_for_dag_body_name<'a>(dag_tir: &'a DagTIR, name: &ScopedName) -> Opt
     exprs.consts.get(&key).or_else(|| exprs.runtime_expr(&key))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "inline DAG evaluation performs argument binding, body scheduling, and fallback evaluation"
+)]
 fn eval_hir_inline_dag_call(
     target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
     args: &[hir::expr::ParamBinding],
@@ -1500,9 +1506,11 @@ fn eval_hir_inline_dag_call(
         let value = if let Some(hir_expr) = hir_expr_for_dag_body_name(dag_tir, &name) {
             Some(
                 eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx).or_else(
-                    |_| match syntax_expr {
-                        Some(expr) => eval_expr(expr, &dag_values, &empty_syntax_locals, &dag_ctx),
-                        None => eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx),
+                    |_| {
+                        syntax_expr.map_or_else(
+                            || eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx),
+                            |expr| eval_expr(expr, &dag_values, &empty_syntax_locals, &dag_ctx),
+                        )
                     },
                 )?,
             )

@@ -1521,10 +1521,8 @@ impl ModuleResolver {
                     )? {
                         return Ok(resolved);
                     }
-                    Err(err)
-                } else {
-                    Err(err)
                 }
+                Err(err)
             }
         }
     }

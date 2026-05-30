@@ -258,14 +258,13 @@ fn find_struct_field_constraint<'a>(
     constructor: &ConstructorName,
     field: &FieldName,
 ) -> Option<&'a ResolvedDomainConstraint> {
-    match owning_type {
-        Some(owning_type) => constraints.get(&StructFieldConstraintKey::new(
+    owning_type.and_then(|owning_type| {
+        constraints.get(&StructFieldConstraintKey::new(
             owning_type.clone(),
             constructor.clone(),
             field.clone(),
-        )),
-        None => None,
-    }
+        ))
+    })
 }
 
 impl EvalContext<'_> {
@@ -818,9 +817,9 @@ fn topo_order_for_dag_body_resolved(
     let mut key_by_name: HashMap<ScopedName, ResolvedDeclKey> = HashMap::new();
     let mut name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
     for name in &names {
-        let key = dag_tir
-            .resolved_decl_key_for_local(name)
-            .expect("DAG body source order contains a non-local declaration key");
+        let Some(key) = dag_tir.resolved_decl_key_for_local(name) else {
+            continue;
+        };
         key_by_name.insert(name.clone(), key.clone());
         name_by_key.insert(key, name.clone());
     }

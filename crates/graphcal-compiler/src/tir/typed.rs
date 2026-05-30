@@ -1415,6 +1415,10 @@ fn type_resolve_single_impl(
 
 /// Internal helper: resolve type annotations for the const/param/node
 /// declarations of a single DAG, returning a partially-built [`DagTIR`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "orchestrates per-DAG type resolution across IR declarations and module sidecars"
+)]
 fn type_resolve_dag(
     consts: Vec<crate::ir::lower::ConstEntry>,
     params: Vec<crate::ir::lower::ParamEntry>,
@@ -1594,6 +1598,10 @@ fn record_resolved_struct_type_def(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "HIR lowering needs declaration slices plus dependency sidecars from IR lowering"
+)]
 fn lower_resolved_expressions(
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
@@ -2404,6 +2412,10 @@ fn collect_hir_decl_bindings(
     Ok(bindings)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "collects local and imported declaration binding sources for a completed DAG"
+)]
 fn collect_resolved_decl_bindings(
     ctx: ModuleTypeContext<'_>,
     consts: &[crate::ir::lower::ConstEntry],
@@ -3906,6 +3918,10 @@ fn lower_type_generic_default(
         .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resolves one AST index path against generic params, local registry, and module context"
+)]
 fn resolve_index_expr_name(
     path: &NamePath,
     span: Span,
@@ -4132,6 +4148,10 @@ pub fn resolve_type_expr_with_modules(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "recursive resolver threads generic parameter scopes and optional module context"
+)]
 fn resolve_type_expr_inner(
     type_ann: &TypeExpr,
     registry: &Registry,
@@ -4486,14 +4506,13 @@ fn resolve_type_application(
                 src: src.clone(),
                 span: type_ann.span.into(),
             })?;
-        let default_ctx = match module_ctx {
-            Some(ctx) => Some(ModuleTypeContext::new(
+        let default_ctx = module_ctx.map_or(module_ctx, |ctx| {
+            Some(ModuleTypeContext::new(
                 type_name.owner(),
                 ctx.resolver,
                 ctx.types,
-            )),
-            None => module_ctx,
-        };
+            ))
+        });
         let resolved = resolve_type_expr_inner(
             default_expr,
             registry,

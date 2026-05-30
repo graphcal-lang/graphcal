@@ -53,9 +53,9 @@ impl RuntimeDeclKey {
     }
 
     #[must_use]
-    pub(crate) const fn as_resolved(&self) -> Option<&ResolvedName<namespace::Decl>> {
+    pub(crate) const fn as_resolved(&self) -> &ResolvedName<namespace::Decl> {
         match self {
-            Self::Resolved(name) => Some(name),
+            Self::Resolved(name) => name,
         }
     }
 
