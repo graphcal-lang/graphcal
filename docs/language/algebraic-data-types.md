@@ -109,7 +109,7 @@ node coast: ManeuverKind = Coast;
 
 ## Match Expressions
 
-Use `match` to destructure union types:
+Use `match` to destructure union types. `match` is reserved for exhaustive case analysis over closed alternatives; use `if` for ordinary boolean predicates and comparisons.
 
 ```
 node fuel_proxy: Force = match @maneuver {
@@ -118,9 +118,10 @@ node fuel_proxy: Force = match @maneuver {
 };
 ```
 
-- Each arm matches a member and binds its fields
+- Each arm uses a bare constructor pattern and binds its fields
 - `_` discards a field value
 - Each field binding must be explicit: `field: variable` or `field: _`
+- Named-index labels can also be matched exhaustively with qualified, fieldless patterns such as `Maneuver.Departure`
 
 ### Exhaustiveness Checking
 

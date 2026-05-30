@@ -1,7 +1,7 @@
 use crate::syntax::ast::{
     Expr, ExprKind, ForBinding, ForBindingIndex, MatchArm, MatchPattern, NatExpr, PatternBinding,
 };
-use crate::syntax::names::{FieldName, IndexName, IndexVariantName};
+use crate::syntax::names::{ConstructorName, FieldName, IndexName, IndexVariantName};
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
@@ -46,7 +46,7 @@ impl Parser<'_> {
         let pattern = self.parse_match_pattern()?;
         self.expect(Token::FatArrow)?;
         let body = self.parse_expr()?;
-        let span = pattern.span.merge(body.span);
+        let span = pattern.span().merge(body.span);
         Ok(MatchArm {
             pattern,
             body,
@@ -77,22 +77,18 @@ impl Parser<'_> {
                     span: lparen_span.into(),
                 });
             }
-            return Ok(MatchPattern {
-                qualified_index: Some(Spanned::new(
-                    IndexName::new(&first_ident.name),
-                    first_ident.span,
-                )),
-                variant_name: Spanned::new(
+            return Ok(MatchPattern::IndexLabel {
+                index: Spanned::new(IndexName::new(&first_ident.name), first_ident.span),
+                variant: Spanned::new(
                     IndexVariantName::new(&variant_ident.name),
                     variant_ident.span,
                 ),
-                bindings: vec![],
                 span: start_span.merge(end_span),
             });
         }
 
         // Type-constructor pattern: bare VariantName or VariantName(fields)
-        let variant_name = Spanned::new(IndexVariantName::new(&first_ident.name), first_ident.span);
+        let name = Spanned::new(ConstructorName::new(&first_ident.name), first_ident.span);
 
         let (bindings, end_span) = if self.lexer.peek() == Some(&Token::LParen) {
             self.lexer.next_token(); // consume '('
@@ -105,9 +101,8 @@ impl Parser<'_> {
             (Vec::new(), start_span)
         };
 
-        Ok(MatchPattern {
-            qualified_index: None,
-            variant_name,
+        Ok(MatchPattern::Constructor {
+            name,
             bindings,
             span: start_span.merge(end_span),
         })
@@ -605,9 +600,12 @@ mod tests {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Match { arms, .. } => {
                     assert_eq!(arms.len(), 2);
-                    assert_eq!(arms[0].pattern.variant_name.value.as_str(), "LowThrust");
-                    assert_eq!(arms[0].pattern.bindings.len(), 2);
-                    match &arms[0].pattern.bindings[0] {
+                    let MatchPattern::Constructor { name, bindings, .. } = &arms[0].pattern else {
+                        panic!("expected constructor pattern");
+                    };
+                    assert_eq!(name.value.as_str(), "LowThrust");
+                    assert_eq!(bindings.len(), 2);
+                    match &bindings[0] {
                         PatternBinding::Bind { field, var } => {
                             assert_eq!(field.value.as_str(), "thrust");
                             assert_eq!(var.name, "thrust");
@@ -616,7 +614,7 @@ mod tests {
                             panic!("expected bind, got {other:?}")
                         }
                     }
-                    match &arms[0].pattern.bindings[1] {
+                    match &bindings[1] {
                         PatternBinding::Wildcard { field, .. } => {
                             assert_eq!(field.value.as_str(), "duration");
                         }
@@ -624,7 +622,10 @@ mod tests {
                             panic!("expected wildcard, got {other:?}")
                         }
                     }
-                    assert!(arms[1].pattern.bindings.is_empty());
+                    let MatchPattern::Constructor { bindings, .. } = &arms[1].pattern else {
+                        panic!("expected constructor pattern");
+                    };
+                    assert!(bindings.is_empty());
                 }
                 other => panic!("expected Match, got {other:?}"),
             },

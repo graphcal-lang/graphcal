@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use graphcal_compiler::desugar::resolved_ast::{Expr, MatchArm};
+use graphcal_compiler::desugar::resolved_ast::{Expr, MatchArm, MatchPattern};
 use graphcal_compiler::syntax::names::ScopedName;
 
 use graphcal_compiler::registry::error::GraphcalError;
@@ -45,7 +45,12 @@ pub(super) fn eval_match(
             // Label match (index label pattern matching)
             let matched_arm = arms
                 .iter()
-                .find(|arm| arm.pattern.variant_name.value.as_str() == variant.as_str())
+                .find(|arm| match &arm.pattern {
+                    MatchPattern::IndexLabel { variant: v, .. } => {
+                        v.value.as_str() == variant.as_str()
+                    }
+                    MatchPattern::Constructor { .. } => false,
+                })
                 .ok_or_else(|| {
                     ctx.eval_error(format!("no match arm for label `{variant}`"), expr.span)
                 })?;
@@ -60,14 +65,26 @@ pub(super) fn eval_match(
             // Tagged union match — type_name is the concrete variant type name
             let matched_arm = arms
                 .iter()
-                .find(|arm| arm.pattern.variant_name.value.as_str() == type_name.as_str())
+                .find(|arm| match &arm.pattern {
+                    MatchPattern::Constructor { name, .. } => {
+                        name.value.as_str() == type_name.as_str()
+                    }
+                    MatchPattern::IndexLabel { .. } => false,
+                })
                 .ok_or_else(|| {
                     ctx.eval_error(format!("no match arm for variant `{type_name}`"), expr.span)
                 })?;
 
+            let MatchPattern::Constructor { bindings, .. } = &matched_arm.pattern else {
+                return Err(ctx.eval_error(
+                    "internal: selected non-constructor arm for struct match",
+                    matched_arm.span,
+                ));
+            };
+
             // Bind pattern variables
             let mut arm_locals = local_values.clone();
-            for binding in &matched_arm.pattern.bindings {
+            for binding in bindings {
                 match binding {
                     graphcal_compiler::desugar::resolved_ast::PatternBinding::Bind {
                         field,

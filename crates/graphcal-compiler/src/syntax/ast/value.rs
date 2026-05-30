@@ -784,15 +784,41 @@ pub struct MatchArm<P: Phase = Raw> {
     pub span: Span,
 }
 
-/// A match pattern: `Impulsive(delta_v: dv)`, `Nominal`, `Maneuver.Departure`
+/// A match pattern: `Impulsive(delta_v: dv)`, `Nominal`, `Maneuver.Departure`.
 #[derive(Debug, Clone)]
-pub struct MatchPattern {
-    /// For index-label match: `Maneuver.Departure` → `Some(Spanned<IndexName>)`
-    /// For type-constructor match: `Nominal(...)` → `None`
-    pub qualified_index: Option<Spanned<IndexName>>,
-    pub variant_name: Spanned<IndexVariantName>,
-    pub bindings: Vec<PatternBinding>,
-    pub span: Span,
+pub enum MatchPattern {
+    /// Tagged-union constructor pattern: `Impulsive(delta_v: dv)` or `Nominal`.
+    Constructor {
+        name: Spanned<ConstructorName>,
+        bindings: Vec<PatternBinding>,
+        span: Span,
+    },
+    /// Named-index label pattern: `Maneuver.Departure`.
+    ///
+    /// Index labels are fieldless, so this variant deliberately has no
+    /// binding payload.
+    IndexLabel {
+        index: Spanned<IndexName>,
+        variant: Spanned<IndexVariantName>,
+        span: Span,
+    },
+}
+
+impl MatchPattern {
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Constructor { span, .. } | Self::IndexLabel { span, .. } => *span,
+        }
+    }
+
+    #[must_use]
+    pub fn bindings(&self) -> &[PatternBinding] {
+        match self {
+            Self::Constructor { bindings, .. } => bindings,
+            Self::IndexLabel { .. } => &[],
+        }
+    }
 }
 
 /// A binding in a match pattern.

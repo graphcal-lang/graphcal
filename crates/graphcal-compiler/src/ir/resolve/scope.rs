@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::desugar::resolved_ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm};
+use crate::desugar::resolved_ast::{Expr, ExprKind, IndexArg, MapEntry, MatchArm, MatchPattern};
 use crate::registry::error::GraphcalError;
 use crate::syntax::names::{DeclName, IndexName, ScopedName};
 use crate::syntax::span::Span;
@@ -172,11 +172,16 @@ where
     ) -> Result<(), Self::Error> {
         self.visit_expr(scrutinee)?;
         for arm in arms {
-            if let Some(qi) = &arm.pattern.qualified_index {
+            if let MatchPattern::IndexLabel {
+                index,
+                variant,
+                span,
+            } = &arm.pattern
+            {
                 (self.check)(
-                    qi.value.as_ref(),
-                    arm.pattern.variant_name.value.as_ref(),
-                    arm.pattern.span,
+                    index.value.as_ref(),
+                    variant.value.as_ref(),
+                    *span,
                     self.src,
                 )?;
             }
