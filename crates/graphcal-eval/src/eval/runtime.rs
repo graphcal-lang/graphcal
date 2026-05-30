@@ -612,18 +612,11 @@ fn evaluate_assert_with_expected_fail(
                     let inverted = invert_indexed_variants(&index_name, entries, keys);
                     check_indexed_assert_with_expected_fail(&inverted.0, &inverted.1, keys)
                 }
-                Ok(RuntimeValue::Bool(b)) => {
-                    // Non-indexed assertion with Variants — shouldn't happen after resolver,
-                    // but handle gracefully by treating as All.
-                    if b {
-                        AssertResult::Fail {
-                            message: "assertion passed but was marked #[expected_fail(...)]"
-                                .to_string(),
-                        }
-                    } else {
-                        AssertResult::Pass
-                    }
-                }
+                Ok(RuntimeValue::Bool(_)) => AssertResult::Error {
+                    message:
+                        "invalid compiled plan: per-variant #[expected_fail(...)] on a non-indexed assertion"
+                            .to_string(),
+                },
                 Ok(other) => AssertResult::Error {
                     message: format!("expected Bool or Indexed, got {other:?}"),
                 },

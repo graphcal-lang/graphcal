@@ -211,10 +211,8 @@ fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
 }
 
 #[test]
-#[should_panic(expected = "should")]
-fn known_unfixed_check_rejects_duplicate_expected_fail_variant() {
-    // Known unfixed suspicious case: duplicate expected_fail keys are accepted
-    // by `graphcal check` and treated as expected failures at evaluation time.
+fn check_rejects_duplicate_expected_fail_variant() {
+    // Duplicate expected_fail keys are ambiguous and must be rejected at check time.
     let dir = tempfile::tempdir().unwrap();
     let root = write_temp_file(
         dir.path(),
@@ -239,10 +237,9 @@ assert order = for m: Mode { @lhs[m] > @rhs[m] };
 }
 
 #[test]
-#[should_panic(expected = "expected_fail keys must belong")]
-fn known_unfixed_check_rejects_foreign_expected_fail_variant() {
-    // Known unfixed suspicious case: a foreign index label with the same leaf
-    // shape is accepted in expected_fail metadata.
+fn check_rejects_foreign_expected_fail_variant() {
+    // Expected-fail keys must use the assertion's semantic index, not a foreign
+    // index with the same variant leaves.
     let dir = tempfile::tempdir().unwrap();
     let root = write_temp_file(
         dir.path(),
@@ -268,10 +265,8 @@ assert order = for m: Mode { @lhs[m] > @rhs[m] };
 }
 
 #[test]
-#[should_panic(expected = "should")]
-fn known_unfixed_check_rejects_duplicate_expected_fail_tuple() {
-    // Known unfixed suspicious case: duplicate multi-index expected_fail tuple
-    // keys are accepted by `graphcal check`.
+fn check_rejects_duplicate_expected_fail_tuple() {
+    // Duplicate multi-index expected_fail tuple keys must be rejected at check time.
     let dir = tempfile::tempdir().unwrap();
     let root = write_temp_file(
         dir.path(),
@@ -302,10 +297,8 @@ assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
 }
 
 #[test]
-#[should_panic(expected = "should")]
-fn known_unfixed_check_rejects_partial_expected_fail_tuple() {
-    // Known unfixed suspicious case: a partial key is accepted on a multi-index
-    // assertion instead of being rejected at check time.
+fn check_rejects_partial_expected_fail_tuple() {
+    // Multi-index assertions require full tuple keys.
     let dir = tempfile::tempdir().unwrap();
     let root = write_temp_file(
         dir.path(),
@@ -331,10 +324,8 @@ assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
 }
 
 #[test]
-#[should_panic(expected = "should")]
-fn known_unfixed_check_rejects_wrong_axis_expected_fail_tuple() {
-    // Known unfixed suspicious case: tuple keys from the wrong axes/order are
-    // accepted in expected_fail metadata.
+fn check_rejects_wrong_axis_expected_fail_tuple() {
+    // Multi-index tuple keys must match the assertion's axis order exactly.
     let dir = tempfile::tempdir().unwrap();
     let root = write_temp_file(
         dir.path(),
@@ -360,10 +351,8 @@ assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
 }
 
 #[test]
-#[should_panic(expected = "should")]
-fn known_unfixed_check_rejects_variant_arg_on_scalar_expected_fail() {
-    // Known unfixed suspicious case: per-variant expected_fail metadata is
-    // accepted on a scalar assertion.
+fn check_rejects_variant_arg_on_scalar_expected_fail() {
+    // Scalar assertions cannot accept per-variant expected_fail metadata.
     let dir = tempfile::tempdir().unwrap();
     let root = write_temp_file(
         dir.path(),
@@ -388,10 +377,8 @@ assert order = @lhs > @rhs;
 }
 
 #[test]
-#[should_panic(expected = "should")]
-fn known_unfixed_check_rejects_foreign_expected_fail_when_all_pass() {
-    // Known unfixed suspicious case: a foreign expected_fail key is accepted
-    // even when all actual assertion variants pass.
+fn check_rejects_foreign_expected_fail_when_all_pass() {
+    // Foreign expected_fail keys are invalid even if the assertion currently passes.
     let dir = tempfile::tempdir().unwrap();
     let root = write_temp_file(
         dir.path(),

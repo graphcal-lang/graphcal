@@ -699,6 +699,45 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("duplicate key in `#[expected_fail(...)]`")]
+    #[diagnostic(code(graphcal::A012), help("each expected-fail key must be unique"))]
+    ExpectedFailDuplicateKey {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate expected-fail key")]
+        span: SourceSpan,
+    },
+
+    #[error("`#[expected_fail(...)]` key has the wrong index shape")]
+    #[diagnostic(
+        code(graphcal::A013),
+        help(
+            "single-index assertions require `Index.Variant` keys; multi-index assertions require full tuple keys in assertion axis order"
+        )
+    )]
+    ExpectedFailKeyShapeMismatch {
+        expected: usize,
+        found: usize,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("expected {expected} index axis/axes, found {found}")]
+        span: SourceSpan,
+    },
+
+    #[error("`#[expected_fail(...)]` key does not belong to the assertion index")]
+    #[diagnostic(
+        code(graphcal::A014),
+        help("expected-fail keys must use the assertion's indexes in axis order")
+    )]
+    ExpectedFailKeyIndexMismatch {
+        expected: String,
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("expected index `{expected}`, found `{found}`")]
+        span: SourceSpan,
+    },
+
     #[error("import path `{path}` resolves outside the project root")]
     #[diagnostic(
         code(graphcal::M008),
@@ -1350,6 +1389,9 @@ impl GraphcalError {
             | Self::ExpectedFailInvalidArg { src, .. }
             | Self::ExpectedFailNotIndexed { src, .. }
             | Self::ExpectedFailAllOnIndexed { src, .. }
+            | Self::ExpectedFailDuplicateKey { src, .. }
+            | Self::ExpectedFailKeyShapeMismatch { src, .. }
+            | Self::ExpectedFailKeyIndexMismatch { src, .. }
             | Self::ImportOutsideRoot { src, .. }
             | Self::RequiredParamNotProvided { src, .. }
             | Self::UnknownParamBinding { src, .. }

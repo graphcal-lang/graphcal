@@ -1802,7 +1802,7 @@ fn project_label_match_rejects_same_leaf_wrong_owner_pattern() {
 }
 
 #[test]
-fn project_expected_fail_keys_use_resolved_index_owner_with_same_leaf_indexes() {
+fn project_expected_fail_keys_accept_resolved_index_owner_with_same_leaf_indexes() {
     let (_dir, root) = write_same_leaf_same_variant_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
@@ -1816,8 +1816,8 @@ fn project_expected_fail_keys_use_resolved_index_owner_with_same_leaf_indexes() 
              b.Phase.Burn: false,\n\
              b.Phase.Coast: true,\n\
          };\n\
-         #[expected_fail(a.Phase.Burn)]\n\
-         assert b_unexpected = @b_checks;\n",
+         #[expected_fail(b.Phase.Burn)]\n\
+         assert b_expected = @b_checks;\n",
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
@@ -1831,9 +1831,29 @@ fn project_expected_fail_keys_use_resolved_index_owner_with_same_leaf_indexes() 
             .clone()
     };
     assert_eq!(assert_result("a_expected"), AssertResult::Pass);
-    match assert_result("b_unexpected") {
-        AssertResult::Fail { message } => assert!(message.contains("failed at"), "{message}"),
-        other => panic!("expected b_unexpected to fail, got {other:?}"),
+    assert_eq!(assert_result("b_expected"), AssertResult::Pass);
+}
+
+#[test]
+fn project_expected_fail_keys_reject_same_leaf_wrong_owner() {
+    let (_dir, root) = write_same_leaf_same_variant_index_project(
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         node b_checks: Bool[b.Phase] = {\n\
+             b.Phase.Burn: false,\n\
+             b.Phase.Coast: true,\n\
+         };\n\
+         #[expected_fail(a.Phase.Burn)]\n\
+         assert b_expected = @b_checks;\n",
+    );
+
+    match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::ExpectedFailKeyIndexMismatch { .. })) => {}
+        other => {
+            panic!(
+                "expected ExpectedFailKeyIndexMismatch for foreign expected_fail key, got {other:?}"
+            )
+        }
     }
 }
 

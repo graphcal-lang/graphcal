@@ -266,6 +266,87 @@ fn check_annotation_mismatch() {
 }
 
 #[test]
+fn check_expected_fail_rejects_duplicate_key() {
+    let source = "\
+pub index Mode = { A, B };
+param lhs: Dimensionless[Mode] = { Mode.A: 1.0, Mode.B: 1.0 };
+param rhs: Dimensionless[Mode] = { Mode.A: 2.0, Mode.B: 0.0 };
+#[expected_fail(Mode.A, Mode.A)]
+assert order = for m: Mode { @lhs[m] > @rhs[m] };
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::ExpectedFailDuplicateKey { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_expected_fail_rejects_foreign_index_key() {
+    let source = "\
+pub index Mode = { A, B };
+pub index Other = { A, B };
+param lhs: Dimensionless[Mode] = { Mode.A: 1.0, Mode.B: 1.0 };
+param rhs: Dimensionless[Mode] = { Mode.A: 2.0, Mode.B: 0.0 };
+#[expected_fail(Other.A)]
+assert order = for m: Mode { @lhs[m] > @rhs[m] };
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::ExpectedFailKeyIndexMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_expected_fail_rejects_partial_tuple_key() {
+    let source = "\
+pub index Mode = { A, B };
+pub index Phase = { Hot, Cold };
+param lhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 1.0 };
+param rhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 2.0 };
+#[expected_fail(Mode.A)]
+assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::ExpectedFailKeyShapeMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_expected_fail_rejects_variant_key_on_scalar_assertion() {
+    let source = "\
+pub index Mode = { A, B };
+param lhs: Dimensionless = 1.0;
+param rhs: Dimensionless = 2.0;
+#[expected_fail(Mode.A)]
+assert order = @lhs > @rhs;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::ExpectedFailNotIndexed { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_expected_fail_rejects_blanket_on_indexed_graph_ref() {
+    let source = "\
+pub index Mode = { A, B };
+node flags: Bool[Mode] = for m: Mode { true };
+#[expected_fail]
+assert order = @flags;
+";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::ExpectedFailAllOnIndexed { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
 fn check_conversion_same_dimension() {
     let source =
         "param speed: Velocity = 100.0 m / s;\nnode speed_kmh: Velocity = @speed -> km / hour;";
