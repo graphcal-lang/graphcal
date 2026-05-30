@@ -42,6 +42,25 @@ struct DepDeclIndex<'a> {
     other: HashMap<DeclName, OtherDeclKind>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::eval::project) enum IncludeVisibilityBoundary {
+    Local,
+    CrossModule,
+}
+
+impl IncludeVisibilityBoundary {
+    const fn requires_public_outputs(self) -> bool {
+        matches!(self, Self::CrossModule)
+    }
+}
+
+pub(in crate::eval::project) struct InlineDagIncludeTarget<'a> {
+    pub(in crate::eval::project) dag_def: &'a graphcal_compiler::desugar::resolved_ast::DagDecl,
+    pub(in crate::eval::project) dag_name: &'a str,
+    pub(in crate::eval::project) parent_dag_id: &'a graphcal_compiler::dag_id::DagId,
+    pub(in crate::eval::project) boundary: IncludeVisibilityBoundary,
+}
+
 impl DepDeclIndex<'_> {
     fn is_const(&self, name: &str) -> bool {
         matches!(self.other.get(name), Some(OtherDeclKind::ConstNode))
@@ -54,6 +73,65 @@ impl DepDeclIndex<'_> {
             || self.units.contains(name)
             || self.indexes.contains_key(name)
             || self.types.contains(name)
+    }
+}
+
+fn include_item_is_visible(
+    file: &graphcal_compiler::desugar::resolved_ast::File,
+    name: &str,
+    namespace: ImportItemNamespace,
+    boundary: IncludeVisibilityBoundary,
+) -> bool {
+    if boundary.requires_public_outputs() {
+        file_exports_import_item(file, name, namespace)
+    } else {
+        file_has_import_item(file, name, namespace)
+    }
+}
+
+fn ensure_include_item_visible(
+    file: &graphcal_compiler::desugar::resolved_ast::File,
+    name: &str,
+    namespace: ImportItemNamespace,
+    boundary: IncludeVisibilityBoundary,
+    file_path: &str,
+    file_src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), CompileError> {
+    if include_item_is_visible(file, name, namespace, boundary) {
+        return Ok(());
+    }
+    if file_has_import_item(file, name, namespace) {
+        return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
+            name: name.to_string(),
+            file_path: file_path.to_string(),
+            src: file_src.clone(),
+            span: span.into(),
+        }));
+    }
+    Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
+        name: name.to_string(),
+        file_path: file_path.to_string(),
+        src: file_src.clone(),
+        span: span.into(),
+    }))
+}
+
+fn include_value_decl(
+    decl: &graphcal_compiler::desugar::resolved_ast::Declaration,
+    boundary: IncludeVisibilityBoundary,
+) -> Option<(String, bool)> {
+    match &decl.kind {
+        DeclKind::Param(p) => Some((p.name.value.to_string(), false)),
+        DeclKind::ConstNode(c)
+            if !boundary.requires_public_outputs() || c.visibility.is_public() =>
+        {
+            Some((c.name.value.to_string(), true))
+        }
+        DeclKind::Node(n) if !boundary.requires_public_outputs() || n.visibility.is_public() => {
+            Some((n.name.value.to_string(), false))
+        }
+        _ => None,
     }
 }
 
@@ -367,15 +445,15 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
 
-                // Verify the name exists in the dependency.
-                if !file_has_declaration(&dep_loaded.ast, orig_name) {
-                    return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                        name: orig_name.to_string(),
-                        file_path: include_decl.path.display_path(),
-                        src: file_src.clone(),
-                        span: import_item.name.span.into(),
-                    }));
-                }
+                ensure_include_item_visible(
+                    &dep_loaded.ast,
+                    orig_name,
+                    import_item.namespace,
+                    IncludeVisibilityBoundary::CrossModule,
+                    &include_decl.path.display_path(),
+                    file_src,
+                    import_item.name.span,
+                )?;
 
                 // Collect import-item attributes for deferred processing.
                 if !import_item.attributes.is_empty() {
@@ -419,14 +497,10 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
             // Register all dep names under the prefix for scope checking.
             let import_span = include_decl.path.span();
             for dep_decl in &dep_loaded.ast.declarations {
-                let (dep_name, is_const) = match &dep_decl.kind {
-                    DeclKind::Param(p) => (Some(p.name.value.to_string()), false),
-                    DeclKind::ConstNode(c) => (Some(c.name.value.to_string()), true),
-                    DeclKind::Node(n) => (Some(n.name.value.to_string()), false),
-                    _ => (None, false),
-                };
-                if let Some(name) = dep_name {
-                    let scoped = ScopedName::qualified(prefix.as_str(), name);
+                if let Some((name, is_const)) =
+                    include_value_decl(dep_decl, IncludeVisibilityBoundary::CrossModule)
+                {
+                    let scoped = ScopedName::qualified(prefix.as_str(), name.as_str());
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
                     } else {
@@ -501,15 +575,18 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
     reason = "binding validation, scope registration, and deferred include setup form a single cohesive pipeline"
 )]
 pub(in crate::eval::project) fn process_inline_dag_include(
-    dag_def: &graphcal_compiler::desugar::resolved_ast::DagDecl,
-    dag_name: &str,
-    parent_dag_id: &graphcal_compiler::dag_id::DagId,
+    target: &InlineDagIncludeTarget<'_>,
     include_decl: &graphcal_compiler::desugar::resolved_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::resolved_ast::Declaration,
     file_src: &NamedSource<Arc<String>>,
     ctx: &mut ImportContext<'_>,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::desugar::resolved_ast::ImportKind;
+
+    let dag_def = target.dag_def;
+    let dag_name = target.dag_name;
+    let parent_dag_id = target.parent_dag_id;
+    let boundary = target.boundary;
 
     // Determine the prefix (namespace) for the merged declarations.
     let prefix = match &include_decl.kind {
@@ -563,15 +640,15 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
 
-                // Verify the name exists in the DAG body.
-                if !file_has_declaration(&dag_body, orig_name) {
-                    return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                        name: orig_name.to_string(),
-                        file_path: dag_name.to_string(),
-                        src: file_src.clone(),
-                        span: import_item.name.span.into(),
-                    }));
-                }
+                ensure_include_item_visible(
+                    &dag_body,
+                    orig_name,
+                    import_item.namespace,
+                    boundary,
+                    dag_name,
+                    file_src,
+                    import_item.name.span,
+                )?;
 
                 if !import_item.attributes.is_empty() {
                     import_item_attributes
@@ -607,14 +684,8 @@ pub(in crate::eval::project) fn process_inline_dag_include(
             // Register all DAG body names under the prefix.
             let import_span = include_decl.path.span();
             for dep_decl in &dag_body.declarations {
-                let (dep_name, is_const) = match &dep_decl.kind {
-                    DeclKind::Param(p) => (Some(p.name.value.to_string()), false),
-                    DeclKind::ConstNode(c) => (Some(c.name.value.to_string()), true),
-                    DeclKind::Node(n) => (Some(n.name.value.to_string()), false),
-                    _ => (None, false),
-                };
-                if let Some(name) = dep_name {
-                    let scoped = ScopedName::qualified(prefix.as_str(), name);
+                if let Some((name, is_const)) = include_value_decl(dep_decl, boundary) {
+                    let scoped = ScopedName::qualified(prefix.as_str(), name.as_str());
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
                     } else {

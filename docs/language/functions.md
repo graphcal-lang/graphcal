@@ -98,6 +98,10 @@ include lib.orbital.hohmann_transfer(gm: @gm_earth, r1: @r1, r2: @r2)
 The path before `(` is absolute from the package root. See
 [Multi-File Projects](multi-file.md) for the full path-resolution rules.
 
+Across a module boundary, the DAG declaration must be `pub`, and every
+selected or alias-accessed output must be public. Private nodes inside the
+DAG are available only to the DAG body itself.
+
 ## Inline DAG Invocation (Expression Form)
 
 Inside an expression, `@dag(args).out` is sugar for an anonymous
@@ -123,6 +127,7 @@ The thing immediately after `@` may be a DAG in scope by its leaf name or a
 module-qualified DAG path such as `@module.dag(args).out`. The projection after
 the call is still mandatory; `@dag(args)` and `@module.dag(args)` are rejected
 because a DAG instance without an output projection is not a node.
+The projected output must be a public node.
 
 ## Import vs Include
 
