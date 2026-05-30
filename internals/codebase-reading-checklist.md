@@ -11,12 +11,12 @@ Files to read in library-consumer order. The goal is that implementation buildin
 - [ ] `crates/graphcal-compiler/src/syntax/names.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/attribute.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/comments.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/non_empty.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/lexer.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/phase.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/common.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/value.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/decl.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/ast/tuple_desugar.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/visitor.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/mod.rs`
@@ -66,6 +66,7 @@ Files to read in library-consumer order. The goal is that implementation buildin
 ## Stage 4 - Name resolution and IR lowering
 
 - [ ] `crates/graphcal-compiler/src/syntax/name_resolve.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/module_resolve.rs`
 - [ ] `crates/graphcal-compiler/src/ir/resolve/names.rs`
 - [ ] `crates/graphcal-compiler/src/ir/resolve/deps.rs`
 - [ ] `crates/graphcal-compiler/src/ir/resolve/scope.rs`
@@ -74,13 +75,21 @@ Files to read in library-consumer order. The goal is that implementation buildin
 - [ ] `crates/graphcal-compiler/src/ir/lower.rs`
 - [ ] `crates/graphcal-compiler/src/ir/mod.rs`
 
-## Stage 5 - TIR and dimension checking
+## Stage 5 - HIR lowering
+
+- [ ] `crates/graphcal-compiler/src/hir/types.rs`
+- [ ] `crates/graphcal-compiler/src/hir/expr.rs`
+- [ ] `crates/graphcal-compiler/src/hir/lower.rs`
+- [ ] `crates/graphcal-compiler/src/hir/mod.rs`
+
+## Stage 6 - TIR and dimension checking
 
 - [ ] `crates/graphcal-compiler/src/tir/typed.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/builtins.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
+- [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/scalar.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/control.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/collections.rs`
@@ -89,18 +98,20 @@ Files to read in library-consumer order. The goal is that implementation buildin
 - [ ] `crates/graphcal-compiler/src/tir/mod.rs`
 - [ ] `crates/graphcal-compiler/src/lib.rs`
 
-## Stage 6 - Filesystem abstraction (`graphcal-io`)
+## Stage 7 - Filesystem abstraction (`graphcal-io`)
 
 - [ ] `crates/graphcal-io/src/lib.rs`
 - [ ] `crates/graphcal-io/src/in_memory_fs.rs`
 - [ ] `crates/graphcal-io/src/real_fs.rs`
 - [ ] `crates/graphcal-io/src/overlay_fs.rs`
 
-## Stage 7 - Runtime values and expression evaluator
+## Stage 8 - Runtime values and expression evaluator
 
+- [ ] `crates/graphcal-eval/src/decl_key.rs`
 - [ ] `crates/graphcal-eval/src/eval/types.rs`
 - [ ] `crates/graphcal-eval/src/eval/display.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/mod.rs`
+- [ ] `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/collections.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/control.rs`
@@ -108,7 +119,7 @@ Files to read in library-consumer order. The goal is that implementation buildin
 - [ ] `crates/graphcal-eval/src/domain_check.rs`
 - [ ] `crates/graphcal-eval/src/exec_plan.rs`
 
-## Stage 8 - Project loading and runtime orchestration
+## Stage 9 - Project loading and runtime orchestration
 
 - [ ] `crates/graphcal-eval/src/loader.rs`
 - [ ] `crates/graphcal-eval/src/inline_dag.rs`
@@ -121,7 +132,7 @@ Files to read in library-consumer order. The goal is that implementation buildin
 - [ ] `crates/graphcal-eval/src/eval/mod.rs`
 - [ ] `crates/graphcal-eval/src/lib.rs`
 
-## Stage 9 - Formatter (`graphcal-fmt`)
+## Stage 10 - Formatter (`graphcal-fmt`)
 
 - [ ] `crates/graphcal-fmt/src/format/type_expr.rs`
 - [ ] `crates/graphcal-fmt/src/format/expr.rs`
@@ -129,7 +140,7 @@ Files to read in library-consumer order. The goal is that implementation buildin
 - [ ] `crates/graphcal-fmt/src/format/mod.rs`
 - [ ] `crates/graphcal-fmt/src/lib.rs`
 
-## Stage 10 - Language server (`graphcal-lsp`)
+## Stage 11 - Language server (`graphcal-lsp`)
 
 - [ ] `crates/graphcal-lsp/src/convert.rs`
 - [ ] `crates/graphcal-lsp/src/cursor_context.rs`
@@ -150,7 +161,7 @@ Files to read in library-consumer order. The goal is that implementation buildin
 - [ ] `crates/graphcal-lsp/src/code_actions.rs`
 - [ ] `crates/graphcal-lsp/src/lib.rs`
 
-## Stage 11 - CLI shell
+## Stage 12 - CLI shell
 
 - [ ] `crates/graphcal-cli/src/json_input.rs`
 - [ ] `crates/graphcal-cli/src/overrides.rs`
@@ -158,7 +169,7 @@ Files to read in library-consumer order. The goal is that implementation buildin
 - [ ] `crates/graphcal-cli/src/plot.rs`
 - [ ] `crates/graphcal-cli/src/main.rs`
 
-## Stage 12 - Integration tests (read after the corresponding stage)
+## Stage 13 - Integration tests (read after the corresponding stage)
 
 - [ ] `crates/graphcal-eval/tests/declaration_order.rs`
 - [ ] `crates/graphcal-eval/tests/edge_case_bugs.rs`
