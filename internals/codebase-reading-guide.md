@@ -134,6 +134,9 @@ File<Resolved>  (locally normalized syntax AST)
 IR + ModuleResolver
   |
   |  crates/graphcal-compiler/src/hir/
+  v
+HIR  (canonical type/value expression references)
+  |
   |  crates/graphcal-compiler/src/tir/
   v
 TIR  (DagTIR + DagSemanticBody)
@@ -148,10 +151,10 @@ EvalResult
 ```
 
 The pipeline is forward-only: parser sugar is removed before IR, module paths
-are resolved to canonical owners before module-aware TIR/eval, and runtime maps
-use owner-qualified declaration identities. Source `ScopedName`s and spans are
-kept at diagnostics and formatting boundaries; semantic compile/eval decisions
-use HIR and `ResolvedName`-based data.
+are lowered through HIR to canonical owners before module-aware TIR/eval, and
+runtime maps use owner-qualified declaration identities. Source `ScopedName`s
+and spans are kept at diagnostics and formatting boundaries; semantic
+compile/eval decisions use HIR and `ResolvedName`-based data.
 
 ### 1.1 AST Phases
 
