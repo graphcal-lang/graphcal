@@ -25,6 +25,13 @@ fn fixture(name: &str) -> String {
     )
 }
 
+fn write_temp_file(root: &Path, rel: &str, source: &str) -> PathBuf {
+    let path = root.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, source).unwrap();
+    path
+}
+
 #[test]
 fn eval_rocket_text_output() {
     let output = graphcal_bin()
@@ -201,6 +208,368 @@ fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
     assert_eq!(json["node"]["phase_b"]["index"].as_str(), Some("Phase"));
     assert_eq!(json["node"]["series_a"]["index"].as_str(), Some("Phase"));
     assert_eq!(json["node"]["series_b"]["index"].as_str(), Some("Phase"));
+}
+
+#[test]
+#[should_panic(expected = "should")]
+fn known_unfixed_check_rejects_duplicate_expected_fail_variant() {
+    // Known unfixed suspicious case: duplicate expected_fail keys are accepted
+    // by `graphcal check` and treated as expected failures at evaluation time.
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        r"
+pub index Mode = { A, B };
+param lhs: Dimensionless[Mode] = { Mode.A: 1.0, Mode.B: 1.0 };
+param rhs: Dimensionless[Mode] = { Mode.A: 2.0, Mode.B: 0.0 };
+#[expected_fail(Mode.A, Mode.A)]
+assert order = for m: Mode { @lhs[m] > @rhs[m] };
+",
+    );
+
+    let output = graphcal_bin()
+        .args(["check", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "duplicate expected_fail keys should be rejected"
+    );
+}
+
+#[test]
+#[should_panic(expected = "expected_fail keys must belong")]
+fn known_unfixed_check_rejects_foreign_expected_fail_variant() {
+    // Known unfixed suspicious case: a foreign index label with the same leaf
+    // shape is accepted in expected_fail metadata.
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        r"
+pub index Mode = { A, B };
+pub index Other = { A, B };
+param lhs: Dimensionless[Mode] = { Mode.A: 1.0, Mode.B: 1.0 };
+param rhs: Dimensionless[Mode] = { Mode.A: 2.0, Mode.B: 0.0 };
+#[expected_fail(Other.A)]
+assert order = for m: Mode { @lhs[m] > @rhs[m] };
+",
+    );
+
+    let output = graphcal_bin()
+        .args(["check", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "expected_fail keys must belong to the assertion index"
+    );
+}
+
+#[test]
+#[should_panic(expected = "should")]
+fn known_unfixed_check_rejects_duplicate_expected_fail_tuple() {
+    // Known unfixed suspicious case: duplicate multi-index expected_fail tuple
+    // keys are accepted by `graphcal check`.
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        r"
+pub index Mode = { A, B };
+pub index Phase = { Hot, Cold };
+param lhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 1.0 };
+param rhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase {
+    match p {
+        Phase.Hot => 2.0,
+        Phase.Cold => 0.0,
+    }
+};
+#[expected_fail((Mode.A, Phase.Hot), (Mode.A, Phase.Hot))]
+assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
+",
+    );
+
+    let output = graphcal_bin()
+        .args(["check", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "duplicate expected_fail tuple keys should be rejected"
+    );
+}
+
+#[test]
+#[should_panic(expected = "should")]
+fn known_unfixed_check_rejects_partial_expected_fail_tuple() {
+    // Known unfixed suspicious case: a partial key is accepted on a multi-index
+    // assertion instead of being rejected at check time.
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        r"
+pub index Mode = { A, B };
+pub index Phase = { Hot, Cold };
+param lhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 1.0 };
+param rhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 2.0 };
+#[expected_fail(Mode.A)]
+assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
+",
+    );
+
+    let output = graphcal_bin()
+        .args(["check", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "multi-index expected_fail should require full tuple keys"
+    );
+}
+
+#[test]
+#[should_panic(expected = "should")]
+fn known_unfixed_check_rejects_wrong_axis_expected_fail_tuple() {
+    // Known unfixed suspicious case: tuple keys from the wrong axes/order are
+    // accepted in expected_fail metadata.
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        r"
+pub index Mode = { A, B };
+pub index Phase = { Hot, Cold };
+param lhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 1.0 };
+param rhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 2.0 };
+#[expected_fail((Phase.Hot, Mode.A))]
+assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
+",
+    );
+
+    let output = graphcal_bin()
+        .args(["check", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "expected_fail tuple keys should match assertion axis order"
+    );
+}
+
+#[test]
+#[should_panic(expected = "should")]
+fn known_unfixed_check_rejects_variant_arg_on_scalar_expected_fail() {
+    // Known unfixed suspicious case: per-variant expected_fail metadata is
+    // accepted on a scalar assertion.
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        r"
+pub index Mode = { A, B };
+param lhs: Dimensionless = 1.0;
+param rhs: Dimensionless = 2.0;
+#[expected_fail(Mode.A)]
+assert order = @lhs > @rhs;
+",
+    );
+
+    let output = graphcal_bin()
+        .args(["check", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "scalar expected_fail should not accept per-variant keys"
+    );
+}
+
+#[test]
+#[should_panic(expected = "should")]
+fn known_unfixed_check_rejects_foreign_expected_fail_when_all_pass() {
+    // Known unfixed suspicious case: a foreign expected_fail key is accepted
+    // even when all actual assertion variants pass.
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        r"
+pub index Mode = { A, B };
+pub index Other = { A, B };
+param lhs: Dimensionless[Mode] = { Mode.A: 3.0, Mode.B: 3.0 };
+param rhs: Dimensionless[Mode] = { Mode.A: 2.0, Mode.B: 2.0 };
+#[expected_fail(Other.A)]
+assert order = for m: Mode { @lhs[m] > @rhs[m] };
+",
+    );
+
+    let output = graphcal_bin()
+        .args(["check", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "foreign expected_fail keys should be rejected before evaluation"
+    );
+}
+
+#[test]
+#[should_panic(expected = "should")]
+fn known_unfixed_check_rejects_private_include_output() {
+    // Known unfixed suspicious case: include brace selection exposes a private
+    // node from a public DAG in another module.
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("lib.gcl"),
+        "pub dag helper {\n  param x: Dimensionless;\n  node hidden: Dimensionless = @x + 1.0;\n}\n",
+    )
+    .unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "src/pkg/main.gcl",
+        "include pkg.lib.helper(x: 1.0).{ hidden };\nnode y: Dimensionless = @hidden;\n",
+    );
+
+    let output = graphcal_bin()
+        .args([
+            "check",
+            "--root",
+            dir.path().to_str().unwrap(),
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "include should not expose private outputs across modules"
+    );
+}
+
+#[test]
+#[should_panic(expected = "should")]
+fn known_unfixed_check_rejects_private_include_output_renamed() {
+    // Known unfixed suspicious case: include brace renaming exposes a private
+    // node from a public DAG in another module.
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("lib.gcl"),
+        "pub dag helper {\n  param x: Dimensionless;\n  node hidden: Dimensionless = @x + 1.0;\n}\n",
+    )
+    .unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "src/pkg/main.gcl",
+        "include pkg.lib.helper(x: 1.0).{ hidden as leaked };\nnode y: Dimensionless = @leaked;\n",
+    );
+
+    let output = graphcal_bin()
+        .args([
+            "check",
+            "--root",
+            dir.path().to_str().unwrap(),
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "include output renaming should not bypass visibility"
+    );
+}
+
+#[test]
+#[should_panic(expected = "should")]
+fn known_unfixed_check_rejects_private_include_output_via_alias() {
+    // Known unfixed suspicious case: include module alias projection exposes a
+    // private node from a public DAG in another module.
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("lib.gcl"),
+        "pub dag helper {\n  param x: Dimensionless;\n  node hidden: Dimensionless = @x + 1.0;\n}\n",
+    )
+    .unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "src/pkg/main.gcl",
+        "include pkg.lib.helper(x: 1.0) as h;\nnode y: Dimensionless = @h.hidden;\n",
+    );
+
+    let output = graphcal_bin()
+        .args([
+            "check",
+            "--root",
+            dir.path().to_str().unwrap(),
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "include aliases should not expose private outputs"
+    );
+}
+
+#[test]
+#[should_panic(expected = "should")]
+fn known_unfixed_check_rejects_private_dag_include() {
+    // Known unfixed suspicious case: a private DAG can be instantiated from
+    // another module by full path.
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.join("lib.gcl"),
+        "dag helper {\n  param x: Dimensionless;\n  pub node shown: Dimensionless = @x + 1.0;\n}\n",
+    )
+    .unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "src/pkg/main.gcl",
+        "include pkg.lib.helper(x: 1.0).{ shown };\nnode y: Dimensionless = @shown;\n",
+    );
+
+    let output = graphcal_bin()
+        .args([
+            "check",
+            "--root",
+            dir.path().to_str().unwrap(),
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "private DAGs should not be includable across modules"
+    );
 }
 
 #[test]
