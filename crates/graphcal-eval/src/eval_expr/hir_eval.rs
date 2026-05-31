@@ -19,7 +19,7 @@ use crate::decl_key::RuntimeDeclKey;
 use super::{
     EvalContext, RuntimeValueMap, checked_finite_scalar, checked_unit_scaled_value,
     constructor_fields_for_runtime_struct, find_struct_field_constraint,
-    imported_value_source_value, index_ref_matches_resolved_or_leaf, resolve_unit_scale,
+    imported_value_source_value, index_ref_matches_resolved, resolve_unit_scale,
     runtime_struct_type_def, topo_order_for_dag_body,
 };
 
@@ -817,8 +817,7 @@ fn index_def_for_ref<'a>(
     }
     ctx.current_dag
         .map(|dag| &dag.semantic.collection_refs)
-        .and_then(|refs| refs.index_defs.get(index_ref.resolved()))
-        .or_else(|| ctx.registry.indexes.get_index(index_ref.as_str()))
+        .and_then(|refs| refs.index_defs.get(index_ref.declared_resolved()?))
 }
 
 fn ensure_index_ref_matches_resolved(
@@ -827,29 +826,31 @@ fn ensure_index_ref_matches_resolved(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
-    if index_ref_matches_resolved_or_leaf(actual, expected) {
+    if index_ref_matches_resolved(actual, expected) {
         return Ok(());
     }
     Err(ctx.eval_error(
         format!(
             "index argument belongs to `{}`, but value is indexed by `{}`",
             expected.as_str(),
-            actual.name()
+            actual.display_name()
         ),
         span,
     ))
 }
 
-fn map_entry_index_ref(key: &hir::expr::MapEntryKey) -> IndexTypeRef {
+fn map_entry_index_ref(
+    key: &hir::expr::MapEntryKey,
+    ctx: &EvalContext<'_>,
+) -> Result<IndexTypeRef, GraphcalError> {
     match key {
         hir::expr::MapEntryKey::IndexVariant(variant) => {
-            IndexTypeRef::from_resolved(variant.value.index().clone())
+            Ok(IndexTypeRef::from_resolved(variant.value.index().clone()))
         }
-        hir::expr::MapEntryKey::NatRangeVariant { size, .. } => {
-            graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(*size).map_or_else(
-                || IndexTypeRef::from_symbolic_nat_range(size.to_string()),
-                IndexTypeRef::from_nat_range,
-            )
+        hir::expr::MapEntryKey::NatRangeVariant { size, variant } => {
+            let nat_range = graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(*size)
+                .map_err(|err| ctx.eval_error(err.to_string(), variant.span))?;
+            Ok(IndexTypeRef::from_nat_range(nat_range))
         }
     }
 }
@@ -893,7 +894,7 @@ fn eval_hir_map_literal(
         .ok_or_else(|| ctx.internal_error("empty map literal", Span::new(0, 0)))?;
     let first_key = first.keys.first();
     let arity = first.keys.len();
-    let idx_name = map_entry_index_ref(first_key);
+    let idx_name = map_entry_index_ref(first_key, ctx)?;
 
     if arity == 1 {
         let mut result = IndexMap::new();
@@ -1002,12 +1003,7 @@ fn eval_hir_for_comp(
                 ));
             }
             let nat_range = graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(size)
-                .ok_or_else(|| {
-                ctx.eval_error(
-                    format!("nat range size {size} does not fit in usize on this target"),
-                    *span,
-                )
-            })?;
+                .map_err(|err| ctx.eval_error(err.to_string(), *span))?;
             (
                 IndexTypeRef::from_nat_range(nat_range),
                 *span,
@@ -1313,7 +1309,7 @@ fn eval_hir_match(
                 .iter()
                 .find(|arm| match &arm.pattern {
                     hir::expr::MatchPattern::IndexLabel { variant: pat, .. } => {
-                        index_ref_matches_resolved_or_leaf(index_name, pat.value.index())
+                        index_ref_matches_resolved(index_name, pat.value.index())
                             && pat.value.variant() == variant
                     }
                     hir::expr::MatchPattern::Constructor { .. } => false,

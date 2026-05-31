@@ -209,11 +209,11 @@ fn scoped_visible_runtime_key(
         .flatten()
 }
 
-pub fn index_ref_matches_resolved_or_leaf(
+pub fn index_ref_matches_resolved(
     actual: &IndexTypeRef,
     expected: &ResolvedName<namespace::Index>,
 ) -> bool {
-    actual.resolved() == expected
+    actual.declared_resolved() == Some(expected)
 }
 
 fn constructor_call_target<'a>(

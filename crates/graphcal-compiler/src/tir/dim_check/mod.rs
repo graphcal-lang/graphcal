@@ -47,7 +47,6 @@ pub use crate::registry::declared_type::DeclaredType;
 #[derive(Debug, Clone, Eq)]
 pub struct InferredIndex {
     reference: IndexTypeRef,
-    nat_range: Option<NatRangeIndexIdentity>,
 }
 
 impl InferredIndex {
@@ -60,32 +59,36 @@ impl InferredIndex {
     pub fn from_resolved(resolved: ResolvedName<namespace::Index>) -> Self {
         Self {
             reference: IndexTypeRef::from_resolved(resolved),
-            nat_range: None,
         }
     }
 
     #[must_use]
-    pub fn from_ref(reference: IndexTypeRef) -> Self {
-        let nat_range = reference.nat_range().map(|index| {
-            NatRangeIndexIdentity::from_form(NatLinearForm::from_constant(index.size_u64()))
-        });
-        Self {
-            reference,
-            nat_range,
-        }
+    pub const fn from_ref(reference: IndexTypeRef) -> Self {
+        Self { reference }
     }
 
-    #[must_use]
-    pub fn from_nat_range_identity(identity: NatRangeIndexIdentity) -> Self {
-        Self {
-            reference: identity.to_index_type_ref(),
-            nat_range: Some(identity),
-        }
+    /// Create an inferred Nat range index from a validated Nat-range identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the identity cannot be converted to an index type reference.
+    pub fn from_nat_range_identity(
+        identity: &NatRangeIndexIdentity,
+    ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
+        Ok(Self {
+            reference: identity.to_index_type_ref()?,
+        })
     }
 
-    #[must_use]
-    pub fn from_nat_range_form(form: NatLinearForm) -> Self {
-        Self::from_nat_range_identity(NatRangeIndexIdentity::from_form(form))
+    /// Create an inferred Nat range index from a normalized Nat form.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the form is a concrete invalid Nat range size.
+    pub fn from_nat_range_form(
+        form: NatLinearForm,
+    ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
+        Self::from_nat_range_identity(&NatRangeIndexIdentity::try_from_form(form)?)
     }
 
     #[must_use]
@@ -94,61 +97,45 @@ impl InferredIndex {
     }
 
     #[must_use]
-    pub const fn name(&self) -> &IndexName {
-        self.reference.name()
+    pub fn name(&self) -> IndexName {
+        self.reference.display_name()
     }
 
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedName<namespace::Index> {
-        self.reference.resolved()
+    pub const fn declared_resolved(&self) -> Option<&ResolvedName<namespace::Index>> {
+        self.reference.declared_resolved()
     }
 
     #[must_use]
-    pub const fn nat_range_identity(&self) -> Option<&NatRangeIndexIdentity> {
-        self.nat_range.as_ref()
+    pub const fn concrete_nat_range(&self) -> Option<crate::registry::types::NatRangeIndex> {
+        self.reference.nat_range()
     }
 
     #[must_use]
-    pub fn nat_range_form(&self) -> Option<&NatLinearForm> {
-        self.nat_range.as_ref().map(NatRangeIndexIdentity::form)
+    pub fn nat_range_form(&self) -> Option<NatLinearForm> {
+        self.reference.nat_range_form()
     }
 
     #[must_use]
     pub fn matches_resolved(&self, expected: &ResolvedName<namespace::Index>) -> bool {
-        self.nat_range_identity().is_none() && self.resolved() == expected
+        self.declared_resolved() == Some(expected)
     }
 
     #[must_use]
     pub fn matches_ref(&self, expected: &IndexTypeRef) -> bool {
-        match (self.nat_range_identity(), expected.nat_range()) {
-            (Some(actual), Some(expected)) => {
-                actual.form().is_constant() && actual.form().constant() == expected.size_u64()
-            }
-            _ => self.reference.matches_ref(expected),
-        }
+        self.reference.matches_ref(expected)
     }
 }
 
 impl PartialEq for InferredIndex {
     fn eq(&self, other: &Self) -> bool {
-        match (self.nat_range_identity(), other.nat_range_identity()) {
-            (Some(lhs), Some(rhs)) => lhs == rhs,
-            _ => self.reference.matches_ref(&other.reference),
-        }
+        self.reference.matches_ref(&other.reference)
     }
 }
 
 impl std::fmt::Display for InferredIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.reference.fmt(f)
-    }
-}
-
-impl std::ops::Deref for InferredIndex {
-    type Target = IndexName;
-
-    fn deref(&self) -> &Self::Target {
-        self.name()
     }
 }
 
@@ -510,8 +497,8 @@ fn validate_expected_fail_key(
     for (part, expected_axis) in key.iter().zip(&shape.axes) {
         if !part.index.matches_ref(expected_axis.type_ref()) {
             return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
-                expected: expected_axis.resolved().to_string(),
-                found: part.index.resolved().to_string(),
+                expected: expected_axis.name().to_string(),
+                found: part.index.display_name().to_string(),
                 src: src.clone(),
                 span: part.span.into(),
             });

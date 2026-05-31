@@ -1527,8 +1527,13 @@ fn project_declared_type_preserves_same_leaf_index_owner() {
     else {
         panic!("expected indexed declared type for `series`");
     };
-    assert_eq!(index.name().as_str(), "Phase");
-    assert_eq!(index.resolved().owner(), &a_id);
+    assert_eq!(index.display_name().as_str(), "Phase");
+    assert_eq!(
+        index
+            .declared_resolved()
+            .map(graphcal_compiler::syntax::names::ResolvedName::owner,),
+        Some(&a_id)
+    );
 }
 
 #[test]
@@ -1906,7 +1911,10 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
         let Value::Indexed { index_name, .. } = value else {
             panic!("expected indexed value for `{name}`, got {value:?}");
         };
-        index_name.resolved().clone()
+        index_name
+            .declared_resolved()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected declared index for `{name}`"))
     };
     let owner_of_label = |name: &str| {
         let value = result
@@ -1920,7 +1928,10 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
         let Value::Label { index_name, .. } = value else {
             panic!("expected label value for `{name}`, got {value:?}");
         };
-        index_name.resolved().clone()
+        index_name
+            .declared_resolved()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected declared index for `{name}`"))
     };
 
     let a_owner = owner_of_indexed("map_a");
@@ -1960,7 +1971,12 @@ fn eval_unfold_uses_resolved_declared_range_index_owner_with_same_leaf_indexes()
         panic!("expected indexed value for `y`, got {value:?}");
     };
     assert_eq!(entries.len(), 2);
-    assert_eq!(index_name.resolved().owner(), &a_owner);
+    assert_eq!(
+        index_name
+            .declared_resolved()
+            .map(graphcal_compiler::syntax::names::ResolvedName::owner),
+        Some(&a_owner)
+    );
 }
 
 #[test]
@@ -2973,9 +2989,12 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
         else {
             panic!("expected label value for `{name}`, got {value:?}");
         };
-        assert_eq!(index_name.name().as_str(), "Phase");
+        assert_eq!(index_name.display_name().as_str(), "Phase");
         assert_eq!(variant.as_str(), "Burn");
-        index_name.resolved().clone()
+        index_name
+            .declared_resolved()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected declared index for `{name}`"))
     };
 
     let phase_a_owner = label_index_owner("phase_a");
@@ -2999,8 +3018,8 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
         else {
             panic!("expected indexed value for `{name}`, got {value:?}");
         };
-        assert_eq!(index_name.name().as_str(), "Phase");
-        assert_eq!(index_name.resolved(), &expected_owner);
+        assert_eq!(index_name.display_name().as_str(), "Phase");
+        assert_eq!(index_name.declared_resolved(), Some(&expected_owner));
         assert_eq!(entries.len(), 2);
     }
 }

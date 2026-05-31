@@ -570,7 +570,7 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
                 variant,
             } => {
                 serde_json::json!({
-                    "index": index_name.as_str(),
+                    "index": index_name.display_name().as_str(),
                     "variant": variant.as_str()
                 })
             }
@@ -590,7 +590,10 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
                 ..
             } => {
                 let mut map = serde_json::Map::new();
-                map.insert("index".to_string(), serde_json::json!(index_name.as_str()));
+                map.insert(
+                    "index".to_string(),
+                    serde_json::json!(index_name.display_name().as_str()),
+                );
                 let entries_map: serde_json::Map<String, serde_json::Value> = entries
                     .iter()
                     .map(|(name, val)| {

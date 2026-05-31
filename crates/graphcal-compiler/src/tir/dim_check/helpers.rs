@@ -123,7 +123,7 @@ fn resolved_index_matches_inferred(index: &ResolvedIndex, actual: &InferredIndex
         ResolvedIndex::Concrete(expected, _) => actual.matches_resolved(expected),
         ResolvedIndex::NatExpr(form, _) => actual
             .nat_range_form()
-            .is_some_and(|actual_form| actual_form == form),
+            .is_some_and(|actual_form| actual_form == *form),
         ResolvedIndex::GenericParam(expected, _) => actual.name().as_str() == expected.as_str(),
     }
 }

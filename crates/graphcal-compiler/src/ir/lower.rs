@@ -1108,7 +1108,7 @@ impl UnfrozenIR {
                             .filter(|key| {
                                 // Drop keys that reference any overridden index.
                                 !key.iter().any(|part| {
-                                    index_bindings.contains_key(part.index.name().as_str())
+                                    index_bindings.contains_key(part.index.display_name().as_str())
                                 })
                             })
                             .collect();

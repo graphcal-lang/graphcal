@@ -16,6 +16,7 @@ use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{GenericParamName, ResolvedName, ScopedName, UnitName, namespace};
+use crate::syntax::span::Span;
 use crate::tir::typed::NatLinearForm;
 
 use super::super::builtins::infer_fn_dim;
@@ -1164,22 +1165,30 @@ fn hir_nat_to_linear_form(expr: &hir::NatExpr) -> NatLinearForm {
     }
 }
 
+fn nat_range_error(
+    err: crate::registry::types::NatRangeIndexError,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    GraphcalError::EvalError {
+        message: err.to_string(),
+        src: src.clone(),
+        span: span.into(),
+    }
+}
+
 fn index_def_for_inferred<'a>(
     index: &InferredIndex,
     dag: &'a crate::tir::typed::DagTIR,
     registry: &'a Registry,
 ) -> Option<&'a crate::registry::types::IndexDef> {
-    if let Some(nat_range) = index
-        .nat_range_identity()
-        .and_then(crate::tir::typed::NatRangeIndexIdentity::concrete_index)
-    {
+    if let Some(nat_range) = index.concrete_nat_range() {
         return registry.indexes.get_nat_range(nat_range);
     }
     dag.semantic
         .collection_refs
         .index_defs
-        .get(index.resolved())
-        .or_else(|| registry.indexes.get_index(index.name().as_str()))
+        .get(index.declared_resolved()?)
 }
 
 #[expect(clippy::too_many_arguments, reason = "for-comprehension context")]
@@ -1203,7 +1212,7 @@ fn infer_hir_for_comp(
                     let index_identity = InferredIndex::from_resolved(index.value.clone());
                     let idx_def = index_def_for_inferred(&index_identity, dag, registry)
                         .ok_or_else(|| GraphcalError::UnknownIndex {
-                            name: index_identity.name().clone(),
+                            name: index_identity.name(),
                             src: src.clone(),
                             span: index.span.into(),
                         })?;
@@ -1248,8 +1257,9 @@ fn infer_hir_for_comp(
             hir::expr::ForBindingIndex::Named(index) => {
                 InferredIndex::from_resolved(index.value.clone())
             }
-            hir::expr::ForBindingIndex::Range { arg, .. } => {
+            hir::expr::ForBindingIndex::Range { arg, span } => {
                 InferredIndex::from_nat_range_form(hir_nat_to_linear_form(arg))
+                    .map_err(|err| nat_range_error(err, src, *span))?
             }
         };
         result = InferredType::Indexed {
@@ -1301,8 +1311,8 @@ fn infer_hir_index_access(
                 let arg_index = InferredIndex::from_resolved(variant.value.index().clone());
                 if arg_index != index {
                     return Err(GraphcalError::IndexMismatch {
-                        expected: index.name().clone(),
-                        found: arg_index.name().clone(),
+                        expected: index.name(),
+                        found: arg_index.name(),
                         src: src.clone(),
                         span: variant.span.into(),
                     });
@@ -1320,8 +1330,8 @@ fn infer_hir_index_access(
                     && label_index != &index
                 {
                     return Err(GraphcalError::IndexMismatch {
-                        expected: index.name().clone(),
-                        found: label_index.name().clone(),
+                        expected: index.name(),
+                        found: label_index.name(),
                         src: src.clone(),
                         span: local.span.into(),
                     });

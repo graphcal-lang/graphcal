@@ -1,13 +1,12 @@
 //! Declared type of a const/param/node.
 
-use std::sync::Arc;
-
 use crate::dag_id::DagId;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{NameDef, NameNamespace, ResolvedName, namespace};
 
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{DimensionRegistry, NatRangeIndex, nat_range_display_owner};
+use crate::registry::types::{DimensionRegistry, NatRangeIndex, NatRangeIndexError};
+use crate::syntax::nat::NatPolyForm;
 
 /// A type-level reference to a named compiler entity.
 ///
@@ -90,20 +89,77 @@ impl<Ns: NameNamespace> std::fmt::Display for TypeNameRef<Ns> {
     }
 }
 
+/// Type-level reference to a compiler-generated Nat range index.
+///
+/// Concrete Nat ranges carry a validated in-memory size. Symbolic Nat ranges
+/// carry the normalized type-level arithmetic form directly; no fake resolved
+/// name or parseable display string is used as semantic identity.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NatRangeIndexRef {
+    Concrete(NatRangeIndex),
+    Symbolic(NatPolyForm),
+}
+
+impl NatRangeIndexRef {
+    /// Create a Nat range reference from a normalized Nat form.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the form is a concrete invalid Nat range size.
+    pub fn from_form(form: NatPolyForm) -> Result<Self, NatRangeIndexError> {
+        if form.is_constant() {
+            NatRangeIndex::try_from_u64(form.constant()).map(Self::Concrete)
+        } else {
+            Ok(Self::Symbolic(form))
+        }
+    }
+
+    /// Return the concrete Nat range identity, if this reference is concrete.
+    #[must_use]
+    pub const fn concrete_index(&self) -> Option<NatRangeIndex> {
+        match self {
+            Self::Concrete(index) => Some(*index),
+            Self::Symbolic(_) => None,
+        }
+    }
+
+    /// Return the normalized Nat form for this reference.
+    #[must_use]
+    pub fn form(&self) -> NatPolyForm {
+        match self {
+            Self::Concrete(index) => NatPolyForm::from_constant(index.size_u64()),
+            Self::Symbolic(form) => form.clone(),
+        }
+    }
+
+    /// Render this Nat range as a source-like display name for diagnostics.
+    #[must_use]
+    pub fn display_name(&self) -> NameDef<namespace::Index> {
+        match self {
+            Self::Concrete(index) => index.display_name(),
+            Self::Symbolic(form) => NameDef::new(format!("range({})", form.format())),
+        }
+    }
+
+    /// Compare Nat range references by typed identity.
+    #[must_use]
+    pub fn matches_ref(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Concrete(lhs), Self::Concrete(rhs)) => lhs == rhs,
+            (Self::Symbolic(lhs), Self::Symbolic(rhs)) => lhs == rhs,
+            _ => false,
+        }
+    }
+}
+
 /// Type-level reference to an index definition.
 ///
 /// Declared indexes are owner-qualified names. Compiler-generated `range(N)`
-/// axes are typed Nat-range identities; their display name is cached only so
-/// existing diagnostics can render an index-like label without re-encoding the
-/// identity into a parseable string.
+/// axes are typed Nat-range identities and do not have declared resolved names.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IndexTypeRef {
     Declared(TypeNameRef<namespace::Index>),
-    NatRange {
-        index: Option<NatRangeIndex>,
-        display_name: NameDef<namespace::Index>,
-        display_resolved: ResolvedName<namespace::Index>,
-    },
+    NatRange(NatRangeIndexRef),
 }
 
 impl IndexTypeRef {
@@ -131,49 +187,49 @@ impl IndexTypeRef {
 
     /// Create a concrete compiler-generated Nat range reference.
     #[must_use]
-    pub fn from_nat_range(index: NatRangeIndex) -> Self {
-        let display_name = index.display_name();
-        let display_resolved =
-            ResolvedName::from_def(nat_range_display_owner(), display_name.clone());
-        Self::NatRange {
-            index: Some(index),
-            display_name,
-            display_resolved,
-        }
+    pub const fn from_nat_range(index: NatRangeIndex) -> Self {
+        Self::NatRange(NatRangeIndexRef::Concrete(index))
     }
 
-    /// Create a symbolic Nat range reference for display-only declared-type
-    /// adapters used while checking generic bodies.
-    #[must_use]
-    pub fn from_symbolic_nat_range(display: impl Into<Arc<str>>) -> Self {
-        let display_name = NameDef::new(format!("range({})", display.into()));
-        let display_resolved =
-            ResolvedName::from_def(nat_range_display_owner(), display_name.clone());
-        Self::NatRange {
-            index: None,
-            display_name,
-            display_resolved,
-        }
+    /// Create a Nat range reference from a normalized Nat form.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the form is a concrete invalid Nat range size.
+    pub fn from_nat_range_form(form: NatPolyForm) -> Result<Self, NatRangeIndexError> {
+        NatRangeIndexRef::from_form(form).map(Self::NatRange)
     }
 
-    /// The leaf definition/display name used by registries and diagnostics.
+    /// Wrap an already validated Nat range reference.
     #[must_use]
-    pub const fn name(&self) -> &NameDef<namespace::Index> {
+    pub const fn from_nat_range_ref(reference: NatRangeIndexRef) -> Self {
+        Self::NatRange(reference)
+    }
+
+    /// The declared leaf name, when this is a declared index.
+    #[must_use]
+    pub const fn declared_name(&self) -> Option<&NameDef<namespace::Index>> {
         match self {
-            Self::Declared(reference) => reference.name(),
-            Self::NatRange { display_name, .. } => display_name,
+            Self::Declared(reference) => Some(reference.name()),
+            Self::NatRange(_) => None,
         }
     }
 
-    /// The canonical declared owner/name identity, or a display-only identity
-    /// for compiler-generated Nat ranges.
+    /// The canonical declared owner/name identity, when this is a declared index.
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedName<namespace::Index> {
+    pub const fn declared_resolved(&self) -> Option<&ResolvedName<namespace::Index>> {
         match self {
-            Self::Declared(reference) => reference.resolved(),
-            Self::NatRange {
-                display_resolved, ..
-            } => display_resolved,
+            Self::Declared(reference) => Some(reference.resolved()),
+            Self::NatRange(_) => None,
+        }
+    }
+
+    /// Return the Nat range reference, when this is a compiler-generated Nat range.
+    #[must_use]
+    pub const fn nat_range_ref(&self) -> Option<&NatRangeIndexRef> {
+        match self {
+            Self::Declared(_) => None,
+            Self::NatRange(reference) => Some(reference),
         }
     }
 
@@ -181,8 +237,23 @@ impl IndexTypeRef {
     #[must_use]
     pub const fn nat_range(&self) -> Option<NatRangeIndex> {
         match self {
-            Self::NatRange { index, .. } => *index,
+            Self::NatRange(reference) => reference.concrete_index(),
             Self::Declared(_) => None,
+        }
+    }
+
+    /// Return the normalized Nat form, when this is a Nat range reference.
+    #[must_use]
+    pub fn nat_range_form(&self) -> Option<NatPolyForm> {
+        self.nat_range_ref().map(NatRangeIndexRef::form)
+    }
+
+    /// Render a display-only leaf name for diagnostics and formatting.
+    #[must_use]
+    pub fn display_name(&self) -> NameDef<namespace::Index> {
+        match self {
+            Self::Declared(reference) => reference.to_unowned_name(),
+            Self::NatRange(reference) => reference.display_name(),
         }
     }
 
@@ -191,28 +262,15 @@ impl IndexTypeRef {
     pub fn matches_ref(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Declared(lhs), Self::Declared(rhs)) => lhs.matches_ref(rhs),
-            (
-                Self::NatRange {
-                    index: Some(lhs), ..
-                },
-                Self::NatRange {
-                    index: Some(rhs), ..
-                },
-            ) => lhs == rhs,
-            _ => self.resolved() == other.resolved(),
+            (Self::NatRange(lhs), Self::NatRange(rhs)) => lhs.matches_ref(rhs),
+            _ => false,
         }
-    }
-
-    /// Borrow the leaf string for diagnostic/display-only formatting.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        self.name().as_str()
     }
 
     /// Clone the leaf definition/display name for diagnostic/display boundaries.
     #[must_use]
     pub fn to_unowned_name(&self) -> NameDef<namespace::Index> {
-        self.name().clone()
+        self.display_name()
     }
 }
 
@@ -224,7 +282,7 @@ impl From<ResolvedName<namespace::Index>> for IndexTypeRef {
 
 impl std::fmt::Display for IndexTypeRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.name().fmt(f)
+        self.display_name().fmt(f)
     }
 }
 

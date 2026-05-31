@@ -168,7 +168,9 @@ pub(super) fn runtime_to_value(
             // carry formatted step labels as presentation metadata. This keeps
             // display strings at I/O boundaries instead of fabricating variant
             // leaves like `0.5 s`.
-            let idx_def = registry.indexes.get_index(index_name.as_str());
+            let idx_def = index_name
+                .declared_name()
+                .and_then(|name| registry.indexes.get_index(name.as_str()));
             let entry_display_names = idx_def.filter(|def| def.is_range()).map(|def| {
                 entries
                     .keys()
@@ -727,7 +729,7 @@ fn format_indexed_paths(
                 format!(
                     "({})",
                     p.iter()
-                        .map(|(idx, var)| format!("{}.{var}", idx.name()))
+                        .map(|(idx, var)| format!("{}.{var}", idx.display_name()))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -736,7 +738,7 @@ fn format_indexed_paths(
     } else {
         paths
             .iter()
-            .map(|p| format!("{}.{}", p[0].0.name(), p[0].1))
+            .map(|p| format!("{}.{}", p[0].0.display_name(), p[0].1))
             .collect()
     };
     formatted.join(", ")
@@ -863,7 +865,7 @@ fn collect_failing_paths(
             other => {
                 return Err(format!(
                     "expected Bool for {}::{variant}, got {other:?}",
-                    index_name.name()
+                    index_name.display_name()
                 ));
             }
         }

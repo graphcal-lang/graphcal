@@ -405,6 +405,17 @@ impl IndexDef {
 // Nat range helpers
 // ---------------------------------------------------------------------------
 
+/// Error returned when an AST/runtime Nat range size cannot become a concrete index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum NatRangeIndexError {
+    /// Empty Nat ranges are deliberately not representable.
+    #[error("range(0) is not allowed; indexes must contain at least one element")]
+    Empty,
+    /// The source-level `u64` size does not fit in this target's in-memory index size.
+    #[error("nat range size {size} does not fit in usize on this target")]
+    DoesNotFitUsize { size: u64 },
+}
+
 /// Typed identity for a concrete compiler-generated Nat range index.
 ///
 /// The core carries this non-zero size directly; display names are derived only
@@ -422,10 +433,18 @@ impl NatRangeIndex {
     }
 
     /// Try to create an identity from an AST/runtime `u64` size.
-    #[must_use]
-    pub fn try_from_u64(size: u64) -> Option<Self> {
-        let size = usize::try_from(size).ok()?;
-        NonZeroUsize::new(size).map(Self::new)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `size` is zero or cannot fit in `usize` on this target.
+    pub fn try_from_u64(size: u64) -> Result<Self, NatRangeIndexError> {
+        if size == 0 {
+            return Err(NatRangeIndexError::Empty);
+        }
+        let size =
+            usize::try_from(size).map_err(|_| NatRangeIndexError::DoesNotFitUsize { size })?;
+        let size = NonZeroUsize::new(size).ok_or(NatRangeIndexError::Empty)?;
+        Ok(Self::new(size))
     }
 
     /// Return the non-zero in-memory size.
@@ -449,12 +468,6 @@ impl NatRangeIndex {
     pub fn display_name(self) -> IndexName {
         IndexName::new(format!("range({})", self.size_u64()))
     }
-}
-
-/// Canonical owner used only for display-oriented resolved names of compiler-generated Nat ranges.
-#[must_use]
-pub fn nat_range_display_owner() -> crate::dag_id::DagId {
-    crate::dag_id::DagId::root("<graphcal-synthetic>").child("nat-range")
 }
 
 // ---------------------------------------------------------------------------
