@@ -58,16 +58,17 @@ impl InferredIndex {
 
     #[must_use]
     pub fn from_resolved(resolved: ResolvedName<namespace::Index>) -> Self {
-        let nat_range = NatRangeIndexIdentity::from_resolved_index_name(&resolved);
         Self {
             reference: IndexTypeRef::from_resolved(resolved),
-            nat_range,
+            nat_range: None,
         }
     }
 
     #[must_use]
     pub fn from_ref(reference: IndexTypeRef) -> Self {
-        let nat_range = NatRangeIndexIdentity::from_resolved_index_name(reference.resolved());
+        let nat_range = reference.nat_range().map(|index| {
+            NatRangeIndexIdentity::from_form(NatLinearForm::from_constant(index.size_u64()))
+        });
         Self {
             reference,
             nat_range,
@@ -77,7 +78,7 @@ impl InferredIndex {
     #[must_use]
     pub fn from_nat_range_identity(identity: NatRangeIndexIdentity) -> Self {
         Self {
-            reference: IndexTypeRef::from_resolved(identity.synthetic_resolved_index_name()),
+            reference: identity.to_index_type_ref(),
             nat_range: Some(identity),
         }
     }
@@ -114,22 +115,15 @@ impl InferredIndex {
 
     #[must_use]
     pub fn matches_resolved(&self, expected: &ResolvedName<namespace::Index>) -> bool {
-        match (
-            self.nat_range_identity(),
-            NatRangeIndexIdentity::from_resolved_index_name(expected),
-        ) {
-            (Some(actual), Some(expected)) => actual == &expected,
-            _ => self.resolved() == expected,
-        }
+        self.nat_range_identity().is_none() && self.resolved() == expected
     }
 
     #[must_use]
     pub fn matches_ref(&self, expected: &IndexTypeRef) -> bool {
-        match (
-            self.nat_range_identity(),
-            NatRangeIndexIdentity::from_resolved_index_name(expected.resolved()),
-        ) {
-            (Some(actual), Some(expected)) => actual == &expected,
+        match (self.nat_range_identity(), expected.nat_range()) {
+            (Some(actual), Some(expected)) => {
+                actual.form().is_constant() && actual.form().constant() == expected.size_u64()
+            }
             _ => self.reference.matches_ref(expected),
         }
     }

@@ -94,10 +94,7 @@ fn eval_owner(ctx: &EvalContext<'_>) -> graphcal_compiler::dag_id::DagId {
 }
 
 fn index_ref_with_eval_owner(ctx: &EvalContext<'_>, name: IndexName) -> IndexTypeRef {
-    graphcal_compiler::registry::types::NatRangeIndex::from_index_name(&name).map_or_else(
-        || IndexTypeRef::with_owner(eval_owner(ctx), name),
-        |nat_range| IndexTypeRef::from_resolved(nat_range.resolved_name()),
-    )
+    IndexTypeRef::with_owner(eval_owner(ctx), name)
 }
 
 fn index_ref_from_path(ctx: &EvalContext<'_>, path: &NamePath) -> IndexTypeRef {

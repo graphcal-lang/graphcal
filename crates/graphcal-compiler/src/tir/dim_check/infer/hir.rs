@@ -1169,6 +1169,12 @@ fn index_def_for_inferred<'a>(
     dag: &'a crate::tir::typed::DagTIR,
     registry: &'a Registry,
 ) -> Option<&'a crate::registry::types::IndexDef> {
+    if let Some(nat_range) = index
+        .nat_range_identity()
+        .and_then(crate::tir::typed::NatRangeIndexIdentity::concrete_index)
+    {
+        return registry.indexes.get_nat_range(nat_range);
+    }
     dag.semantic
         .collection_refs
         .index_defs

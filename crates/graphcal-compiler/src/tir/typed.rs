@@ -305,9 +305,9 @@ pub type NatLinearForm = NatPolyForm;
 
 /// Typed identity for a Nat-range index used by type inference.
 ///
-/// Concrete registry entries still render as synthetic leaf names at the
-/// registry boundary, but generic forms such as `range(N + 1)` should be carried
-/// as a normalized [`NatPolyForm`] instead of recovered from a flat string.
+/// Generic forms such as `range(N + 1)` are carried as normalized
+/// [`NatPolyForm`] values. They are rendered to `range(...)` only for
+/// diagnostics or adapters that still require an [`IndexTypeRef`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NatRangeIndexIdentity {
     form: NatPolyForm,
@@ -332,44 +332,25 @@ impl NatRangeIndexIdentity {
         self.form
     }
 
-    /// Render this identity as the synthetic registry leaf name.
-    ///
-    /// This is a serialization boundary used by legacy leaf-keyed registries
-    /// and diagnostics; semantic comparisons should use [`Self::form`].
+    /// Return the concrete Nat-range identity when this form has a non-zero
+    /// constant value representable on this target.
     #[must_use]
-    pub fn synthetic_index_name(&self) -> IndexName {
-        let suffix = self.form.format();
-        IndexName::new(format!(
-            "{}{}",
-            crate::registry::types::NAT_RANGE_INDEX_PREFIX,
-            suffix
-        ))
+    pub fn concrete_index(&self) -> Option<crate::registry::types::NatRangeIndex> {
+        self.form
+            .is_constant()
+            .then(|| self.form.constant())
+            .and_then(crate::registry::types::NatRangeIndex::try_from_u64)
     }
 
-    /// Resolve this identity under the canonical synthetic Nat-range owner.
+    /// Convert to an index type reference without serializing the Nat form into
+    /// a recoverable string. Concrete forms keep their typed size; symbolic
+    /// forms keep a display-only `range(...)` label.
     #[must_use]
-    pub fn synthetic_resolved_index_name(&self) -> ResolvedName<namespace::Index> {
-        crate::registry::types::nat_range_resolved_index_name(self.synthetic_index_name())
-    }
-
-    /// Recover a Nat-range identity from a synthetic registry leaf name.
-    ///
-    /// This is a deserialization boundary for code paths that still receive an
-    /// [`IndexName`] instead of a typed Nat-range identity.
-    #[must_use]
-    pub fn from_synthetic_index_name(name: &IndexName) -> Option<Self> {
-        let suffix = name
-            .as_str()
-            .strip_prefix(crate::registry::types::NAT_RANGE_INDEX_PREFIX)?;
-        NatPolyForm::parse_poly_form(suffix).map(Self::from_form)
-    }
-
-    /// Recover a Nat-range identity from a resolved synthetic index name.
-    #[must_use]
-    pub fn from_resolved_index_name(resolved: &ResolvedName<namespace::Index>) -> Option<Self> {
-        (resolved.owner() == &crate::registry::types::nat_range_synthetic_owner())
-            .then(|| Self::from_synthetic_index_name(&resolved.to_unowned_def_name()))
-            .flatten()
+    pub fn to_index_type_ref(&self) -> IndexTypeRef {
+        self.concrete_index().map_or_else(
+            || IndexTypeRef::from_symbolic_nat_range(self.form.format()),
+            IndexTypeRef::from_nat_range,
+        )
     }
 }
 
@@ -498,52 +479,6 @@ impl NatPolyForm {
         }
         // Monomials only in `other` have coefficient 0 in self → always <=.
         true
-    }
-
-    /// Recover a `NatPolyForm` from a synthetic Nat-range registry leaf name.
-    ///
-    /// This is a deserialization boundary. New semantic code should prefer
-    /// carrying [`NatRangeIndexIdentity`] directly.
-    #[must_use]
-    pub fn from_synthetic_index_name(name: &IndexName) -> Option<Self> {
-        NatRangeIndexIdentity::from_synthetic_index_name(name).map(NatRangeIndexIdentity::into_form)
-    }
-
-    /// Parse a string like `"3"`, `"N"`, `"N + 1"`, `"M * N"`, `"2 * N^2 + 1"`
-    /// into a `NatPolyForm`.
-    #[must_use]
-    fn parse_poly_form(s: &str) -> Option<Self> {
-        let mut terms = BTreeMap::new();
-        for part in s.split(" + ") {
-            let part = part.trim();
-            if part.is_empty() {
-                return None;
-            }
-            // Split on " * " to get factors of this term
-            let factors: Vec<&str> = part.split(" * ").collect();
-            let mut coeff: u64 = 1;
-            let mut mono_vars = BTreeMap::new();
-            for factor in &factors {
-                let factor = factor.trim();
-                if let Ok(n) = factor.parse::<u64>() {
-                    // Numeric factor → coefficient
-                    coeff *= n;
-                } else if let Some((var_name, exp_str)) = factor.split_once('^') {
-                    // Variable with exponent: "N^2"
-                    let exp: u64 = exp_str.parse().ok()?;
-                    *mono_vars
-                        .entry(GenericParamName::new(var_name.trim()))
-                        .or_insert(0) += exp;
-                } else {
-                    // Plain variable name
-                    *mono_vars.entry(GenericParamName::new(factor)).or_insert(0) += 1;
-                }
-            }
-            let mono = Monomial(mono_vars);
-            *terms.entry(mono).or_insert(0) += coeff;
-        }
-        terms.retain(|_, c| *c != 0);
-        Some(Self { terms })
     }
 
     /// Collect all variable names that appear in any monomial of this polynomial.
@@ -2681,11 +2616,19 @@ pub fn resolved_to_declared_type(
                                 span: (*span).into(),
                             });
                         }
+                        let nat_range = form.to_nat_range_identity().concrete_index().ok_or_else(|| {
+                            GraphcalError::EvalError {
+                                message: format!(
+                                    "nat range size `{}` is not representable as a concrete non-empty index",
+                                    form.format()
+                                ),
+                                src: src.clone(),
+                                span: (*span).into(),
+                            }
+                        })?;
                         result = DeclaredType::Indexed {
                             element: Box::new(result),
-                            index: IndexTypeRef::from_resolved(
-                                form.to_nat_range_identity().synthetic_resolved_index_name(),
-                            ),
+                            index: IndexTypeRef::from_nat_range(nat_range),
                         };
                     }
                     ResolvedIndex::GenericParam(name, span) => {
@@ -2754,9 +2697,10 @@ fn unify_nat_poly_form(
             let expected = form.evaluate(nat_sub).map_or_else(
                 || IndexName::new(format!("range({})", form.format())),
                 |n| {
-                    NatPolyForm::from_constant(n)
-                        .to_nat_range_identity()
-                        .synthetic_index_name()
+                    crate::registry::types::NatRangeIndex::try_from_u64(n).map_or_else(
+                        || IndexName::new(format!("range({n})")),
+                        crate::registry::types::NatRangeIndex::display_name,
+                    )
                 },
             );
             return Err(GraphcalError::IndexMismatch {
@@ -2807,9 +2751,11 @@ fn unify_nat_poly_form(
             let value = remainder / total_coeff;
             bind_or_check(nat_sub, var, value, |prev, _| {
                 GraphcalError::IndexMismatch {
-                    expected: NatPolyForm::from_constant(*prev)
-                        .to_nat_range_identity()
-                        .synthetic_index_name(),
+                    expected: crate::registry::types::NatRangeIndex::try_from_u64(*prev)
+                        .map_or_else(
+                            || IndexName::new(format!("range({prev})")),
+                            crate::registry::types::NatRangeIndex::display_name,
+                        ),
                     found: actual_idx.clone(),
                     src: src.clone(),
                     span: span.into(),
@@ -3344,8 +3290,8 @@ pub fn substitute_resolved_type(
                                 span: (*span).into(),
                             }
                         })?;
-                        crate::tir::dim_check::InferredIndex::from_resolved(
-                            crate::registry::types::nat_range_resolved_index_size(n),
+                        crate::tir::dim_check::InferredIndex::from_nat_range_form(
+                            NatPolyForm::from_constant(n),
                         )
                     }
                 };
@@ -5430,45 +5376,31 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // NatRangeIndexIdentity synthetic-name boundary tests
+    // NatRangeIndexIdentity typed-reference tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn parse_index_name_constant() {
-        let form =
-            NatPolyForm::from_synthetic_index_name(&IndexName::new("__nat_range_3")).unwrap();
-        assert_eq!(form, NatPolyForm::from_constant(3));
+    fn nat_range_identity_concrete_to_index_type_ref() {
+        let reference = NatPolyForm::from_constant(3)
+            .to_nat_range_identity()
+            .to_index_type_ref();
+        assert_eq!(
+            reference
+                .nat_range()
+                .map(crate::registry::types::NatRangeIndex::size_u64),
+            Some(3)
+        );
+        assert_eq!(reference.name().as_str(), "range(3)");
     }
 
     #[test]
-    fn parse_index_name_variable() {
-        let form =
-            NatPolyForm::from_synthetic_index_name(&IndexName::new("__nat_range_N")).unwrap();
-        assert_eq!(form, NatPolyForm::from_var(GenericParamName::new("N")));
-    }
-
-    #[test]
-    fn parse_index_name_var_plus_constant() {
-        let form =
-            NatPolyForm::from_synthetic_index_name(&IndexName::new("__nat_range_N + 1")).unwrap();
-        let expected =
-            NatPolyForm::from_var(GenericParamName::new("N")).add(&NatPolyForm::from_constant(1));
-        assert_eq!(form, expected);
-    }
-
-    #[test]
-    fn parse_index_name_two_vars() {
-        let form = NatPolyForm::from_synthetic_index_name(&IndexName::new("__nat_range_M + N + 2"))
-            .unwrap();
-        let expected = NatPolyForm::from_var(GenericParamName::new("M"))
-            .add(&NatPolyForm::from_var(GenericParamName::new("N")))
-            .add(&NatPolyForm::from_constant(2));
-        assert_eq!(form, expected);
-    }
-
-    #[test]
-    fn parse_index_name_no_prefix() {
-        assert!(NatPolyForm::from_synthetic_index_name(&IndexName::new("Phase")).is_none());
+    fn nat_range_identity_symbolic_to_display_only_index_type_ref() {
+        let reference = NatPolyForm::from_var(GenericParamName::new("N"))
+            .add(&NatPolyForm::from_constant(1))
+            .to_nat_range_identity()
+            .to_index_type_ref();
+        assert_eq!(reference.nat_range(), None);
+        assert_eq!(reference.name().as_str(), "range(N + 1)");
     }
 
     // -----------------------------------------------------------------------
@@ -5563,24 +5495,5 @@ mod tests {
     fn nat_poly_format_zero() {
         let z = NatPolyForm::from_constant(0);
         assert_eq!(z.format(), "0");
-    }
-
-    #[test]
-    fn parse_index_name_mul() {
-        let form =
-            NatPolyForm::from_synthetic_index_name(&IndexName::new("__nat_range_M * N")).unwrap();
-        let expected = NatPolyForm::from_var(GenericParamName::new("M"))
-            .mul(&NatPolyForm::from_var(GenericParamName::new("N")));
-        assert_eq!(form, expected);
-    }
-
-    #[test]
-    fn parse_index_name_mul_plus_const() {
-        let form = NatPolyForm::from_synthetic_index_name(&IndexName::new("__nat_range_M * N + 1"))
-            .unwrap();
-        let expected = NatPolyForm::from_var(GenericParamName::new("M"))
-            .mul(&NatPolyForm::from_var(GenericParamName::new("N")))
-            .add(&NatPolyForm::from_constant(1));
-        assert_eq!(form, expected);
     }
 }

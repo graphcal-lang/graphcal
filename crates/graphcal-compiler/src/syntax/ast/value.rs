@@ -740,8 +740,8 @@ impl MapEntryIndex {
             Self::Named(name) => IndexName::from(name.leaf().clone()),
             Self::NatRange(size) => crate::registry::types::NatRangeIndex::try_from_u64(*size)
                 .map_or_else(
-                    || IndexName::new(crate::registry::types::nat_range_index_name(*size)),
-                    crate::registry::types::NatRangeIndex::index_name,
+                    || IndexName::new(format!("range({size})")),
+                    crate::registry::types::NatRangeIndex::display_name,
                 ),
         }
     }

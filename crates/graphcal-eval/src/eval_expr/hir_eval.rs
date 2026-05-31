@@ -812,6 +812,9 @@ fn index_def_for_ref<'a>(
     index_ref: &IndexTypeRef,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a IndexDef> {
+    if let Some(nat_range) = index_ref.nat_range() {
+        return ctx.registry.indexes.get_nat_range(nat_range);
+    }
     ctx.current_dag
         .map(|dag| &dag.semantic.collection_refs)
         .and_then(|refs| refs.index_defs.get(index_ref.resolved()))
@@ -844,12 +847,8 @@ fn map_entry_index_ref(key: &hir::expr::MapEntryKey) -> IndexTypeRef {
         }
         hir::expr::MapEntryKey::NatRangeVariant { size, .. } => {
             graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(*size).map_or_else(
-                || {
-                    IndexTypeRef::from_resolved(
-                        graphcal_compiler::registry::types::nat_range_resolved_index_size(*size),
-                    )
-                },
-                |nat_range| IndexTypeRef::from_resolved(nat_range.resolved_name()),
+                || IndexTypeRef::from_symbolic_nat_range(size.to_string()),
+                IndexTypeRef::from_nat_range,
             )
         }
     }
@@ -1010,7 +1009,7 @@ fn eval_hir_for_comp(
                 )
             })?;
             (
-                IndexTypeRef::from_resolved(nat_range.resolved_name()),
+                IndexTypeRef::from_nat_range(nat_range),
                 *span,
                 Some(nat_range),
             )
@@ -1022,7 +1021,7 @@ fn eval_hir_for_comp(
         def
     } else if let Some(nat_range) = dynamic_nat_size {
         dynamic_nat_def = IndexDef {
-            name: nat_range.index_name(),
+            name: nat_range.display_name(),
             kind: IndexKind::NatRange {
                 size: nat_range.size(),
             },

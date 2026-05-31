@@ -405,17 +405,10 @@ impl IndexDef {
 // Nat range helpers
 // ---------------------------------------------------------------------------
 
-/// Serialization prefix for compiler-generated Nat range index leaf names.
-///
-/// Prefer the typed helpers in this module; this constant is public so the TIR
-/// boundary can deserialize legacy synthetic names in one place.
-pub const NAT_RANGE_INDEX_PREFIX: &str = "__nat_range_";
-
 /// Typed identity for a concrete compiler-generated Nat range index.
 ///
-/// The registry still has to render a leaf [`IndexName`] at syntax/display
-/// boundaries, but the core should carry this typed size instead of checking or
-/// constructing the `__nat_range_*` convention directly.
+/// The core carries this non-zero size directly; display names are derived only
+/// for diagnostics and compatibility with APIs that still need an [`IndexName`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NatRangeIndex {
     size: NonZeroUsize,
@@ -451,84 +444,17 @@ impl NatRangeIndex {
         u64::try_from(self.size.get()).expect("usize fits in u64 on supported targets")
     }
 
-    /// Render this identity as the synthetic registry leaf name.
-    ///
-    /// This is a serialization boundary; core code should keep using
-    /// [`NatRangeIndex`] wherever possible.
+    /// Render this identity for diagnostics as source-level `range(N)` syntax.
     #[must_use]
-    pub fn index_name(self) -> IndexName {
-        IndexName::new(format!("{NAT_RANGE_INDEX_PREFIX}{}", self.size_u64()))
-    }
-
-    /// Resolve this identity under the canonical synthetic Nat-range owner.
-    #[must_use]
-    pub fn resolved_name(
-        self,
-    ) -> crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Index> {
-        crate::syntax::names::ResolvedName::from_def(nat_range_synthetic_owner(), self.index_name())
-    }
-
-    /// Recover a typed Nat-range identity from a synthetic registry leaf name.
-    ///
-    /// This is a deserialization boundary for older leaf-keyed registry paths.
-    #[must_use]
-    pub fn from_index_name(name: &IndexName) -> Option<Self> {
-        Self::from_name_str(name.as_str())
-    }
-
-    /// Recover a typed Nat-range identity from a resolved synthetic index name.
-    #[must_use]
-    pub fn from_resolved_name(
-        resolved: &crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Index>,
-    ) -> Option<Self> {
-        (resolved.owner() == &nat_range_synthetic_owner())
-            .then(|| Self::from_name_str(resolved.as_str()))
-            .flatten()
-    }
-
-    fn from_name_str(name: &str) -> Option<Self> {
-        let suffix = name.strip_prefix(NAT_RANGE_INDEX_PREFIX)?;
-        Self::try_from_u64(suffix.parse().ok()?)
+    pub fn display_name(self) -> IndexName {
+        IndexName::new(format!("range({})", self.size_u64()))
     }
 }
 
-/// Generate the synthetic index name for a nat range of given size.
-///
-/// Prefer [`NatRangeIndex::index_name`] in new code. This function remains as a
-/// display/serialization boundary for callers that cannot yet carry the typed
-/// identity.
+/// Canonical owner used only for display-oriented resolved names of compiler-generated Nat ranges.
 #[must_use]
-pub fn nat_range_index_name(size: u64) -> String {
-    format!("{NAT_RANGE_INDEX_PREFIX}{size}")
-}
-
-/// Canonical owner for compiler-generated Nat range indexes.
-#[must_use]
-pub fn nat_range_synthetic_owner() -> crate::dag_id::DagId {
+pub fn nat_range_display_owner() -> crate::dag_id::DagId {
     crate::dag_id::DagId::root("<graphcal-synthetic>").child("nat-range")
-}
-
-/// Resolve a compiler-generated Nat range index name under its synthetic owner.
-#[must_use]
-pub fn nat_range_resolved_index_name(
-    name: crate::syntax::names::IndexName,
-) -> crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Index> {
-    crate::syntax::names::ResolvedName::from_def(nat_range_synthetic_owner(), name)
-}
-
-/// Resolve a compiler-generated Nat range index of the given size.
-#[must_use]
-pub fn nat_range_resolved_index_size(
-    size: u64,
-) -> crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Index> {
-    NatRangeIndex::try_from_u64(size).map_or_else(
-        || {
-            nat_range_resolved_index_name(crate::syntax::names::IndexName::new(
-                nat_range_index_name(size),
-            ))
-        },
-        NatRangeIndex::resolved_name,
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -789,22 +715,29 @@ impl TypeRegistry {
     }
 }
 
-/// Index registry: maps index names to `IndexDef`.
+/// Index registry: maps declared index names and typed Nat-range identities to `IndexDef`.
 #[derive(Debug, Clone)]
 pub struct IndexRegistry {
     indexes: HashMap<IndexName, IndexDef>,
+    nat_ranges: HashMap<NatRangeIndex, IndexDef>,
 }
 
 impl IndexRegistry {
-    /// Look up an index definition by name.
+    /// Look up a declared index definition by name.
     #[must_use]
     pub fn get_index(&self, name: &str) -> Option<&IndexDef> {
         self.indexes.get(name)
     }
 
+    /// Look up a compiler-generated Nat range index by typed identity.
+    #[must_use]
+    pub fn get_nat_range(&self, index: NatRangeIndex) -> Option<&IndexDef> {
+        self.nat_ranges.get(&index)
+    }
+
     /// Iterate over all index definitions.
     pub fn all_indexes(&self) -> impl Iterator<Item = &IndexDef> {
-        self.indexes.values()
+        self.indexes.values().chain(self.nat_ranges.values())
     }
 }
 
@@ -867,6 +800,7 @@ pub struct RegistryBuilder {
     types: HashMap<StructTypeName, TypeDef>,
     ctors: HashMap<ConstructorName, StructTypeName>,
     indexes: HashMap<IndexName, IndexDef>,
+    nat_ranges: HashMap<NatRangeIndex, IndexDef>,
     dags: HashMap<String, DagDecl>,
 }
 
@@ -892,6 +826,7 @@ impl RegistryBuilder {
             },
             indexes: IndexRegistry {
                 indexes: self.indexes,
+                nat_ranges: self.nat_ranges,
             },
             dags: DagRegistry { dags: self.dags },
         }
@@ -947,6 +882,9 @@ impl RegistryBuilder {
             self.indexes
                 .entry(name.clone())
                 .or_insert_with(|| def.clone());
+        }
+        for (index, def) in &parent.indexes.nat_ranges {
+            self.nat_ranges.entry(*index).or_insert_with(|| def.clone());
         }
         for (name, decl) in &parent.dags.dags {
             self.dags
@@ -1047,26 +985,22 @@ impl RegistryBuilder {
         self.indexes.insert(def.name.clone(), def);
     }
 
-    /// Ensure a synthetic nat range index of the given size is registered.
+    /// Ensure a typed Nat range index of the given size is registered.
     ///
-    /// Returns the synthetic index name (e.g., `__nat_range_3`).
     /// If the index already exists, this is a no-op.
     ///
     /// `size` is `NonZeroUsize` because empty indexes are not representable.
     /// AST-level `u64` literals must be checked at the boundary before
     /// reaching this entry point.
-    pub fn ensure_nat_range_index(&mut self, size: NonZeroUsize) -> IndexName {
+    pub fn ensure_nat_range_index(&mut self, size: NonZeroUsize) -> NatRangeIndex {
         let nat_range = NatRangeIndex::new(size);
-        let name = nat_range.index_name();
-        self.indexes
-            .entry(name.clone())
+        self.nat_ranges
+            .entry(nat_range)
             .or_insert_with(|| IndexDef {
-                name: name.clone(),
-                kind: IndexKind::NatRange {
-                    size: nat_range.size(),
-                },
+                name: nat_range.display_name(),
+                kind: IndexKind::NatRange { size },
             });
-        name
+        nat_range
     }
 
     // -- Read methods (needed during mid-build reads in ir.rs) --
@@ -1096,10 +1030,16 @@ impl RegistryBuilder {
         self.types.get(name)
     }
 
-    /// Look up an index definition by name.
+    /// Look up a declared index definition by name.
     #[must_use]
     pub fn get_index(&self, name: &str) -> Option<&IndexDef> {
         self.indexes.get(name)
+    }
+
+    /// Look up a compiler-generated Nat range index by typed identity.
+    #[must_use]
+    pub fn get_nat_range(&self, index: NatRangeIndex) -> Option<&IndexDef> {
+        self.nat_ranges.get(&index)
     }
 
     /// Get the base dimension names map (for display purposes).

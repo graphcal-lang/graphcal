@@ -139,6 +139,9 @@ fn ensure_index_refs_match(
 }
 
 fn index_def_for_ref<'a>(index_ref: &IndexTypeRef, ctx: &EvalContext<'a>) -> Option<&'a IndexDef> {
+    if let Some(nat_range) = index_ref.nat_range() {
+        return ctx.registry.indexes.get_nat_range(nat_range);
+    }
     resolved_collection_refs(ctx)
         .and_then(|refs| refs.index_defs.get(index_ref.resolved()))
         .or_else(|| ctx.registry.indexes.get_index(index_ref.as_str()))
@@ -153,7 +156,7 @@ fn map_entry_variant_for_axis(
         ensure_index_ref_matches_resolved(axis, resolved.index(), key.index.span, ctx)?;
         Ok(resolved.variant().clone())
     } else {
-        let index_ref = index_ref_with_eval_owner(ctx, key.index.value.registry_name());
+        let index_ref = map_entry_index_ref(key, ctx);
         ensure_index_refs_match(axis, &index_ref, key.index.span, ctx)?;
         Ok(key.variant.value.clone())
     }
@@ -161,7 +164,17 @@ fn map_entry_variant_for_axis(
 
 fn map_entry_index_ref(key: &MapEntryKey, ctx: &EvalContext<'_>) -> IndexTypeRef {
     resolved_map_entry_variant(ctx, key).map_or_else(
-        || index_ref_with_eval_owner(ctx, key.index.value.registry_name()),
+        || match &key.index.value {
+            graphcal_compiler::syntax::ast::MapEntryIndex::Named(_) => {
+                index_ref_with_eval_owner(ctx, key.index.value.registry_name())
+            }
+            graphcal_compiler::syntax::ast::MapEntryIndex::NatRange(size) => {
+                graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(*size).map_or_else(
+                    || IndexTypeRef::from_symbolic_nat_range(size.to_string()),
+                    IndexTypeRef::from_nat_range,
+                )
+            }
+        },
         |resolved| IndexTypeRef::from_resolved(resolved.index().clone()),
     )
 }
@@ -607,7 +620,7 @@ pub(super) fn eval_for_comp(
                 )
             })?;
             (
-                IndexTypeRef::from_resolved(nat_range.resolved_name()),
+                IndexTypeRef::from_nat_range(nat_range),
                 *span,
                 Some(nat_range),
                 None,
@@ -634,7 +647,7 @@ pub(super) fn eval_for_comp(
         def
     } else if let Some(nat_range) = dynamic_nat_size {
         dynamic_nat_def = graphcal_compiler::registry::types::IndexDef {
-            name: nat_range.index_name(),
+            name: nat_range.display_name(),
             kind: graphcal_compiler::registry::types::IndexKind::NatRange {
                 size: nat_range.size(),
             },

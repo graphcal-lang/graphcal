@@ -47,10 +47,7 @@ fn inferred_index_for_leaf(
     name: IndexName,
     dag: Option<&crate::tir::typed::DagTIR>,
 ) -> InferredIndex {
-    NatRangeIndexIdentity::from_synthetic_index_name(&name).map_or_else(
-        || InferredIndex::with_owner(inference_owner(dag), name),
-        InferredIndex::from_nat_range_identity,
-    )
+    InferredIndex::with_owner(inference_owner(dag), name)
 }
 
 /// Normalize a `NatExpr` to `NatLinearForm` without requiring nat param validation.
@@ -122,6 +119,12 @@ fn index_def_for_inferred<'a>(
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a crate::registry::types::IndexDef> {
+    if let Some(nat_range) = index
+        .nat_range_identity()
+        .and_then(NatRangeIndexIdentity::concrete_index)
+    {
+        return registry.indexes.get_nat_range(nat_range);
+    }
     dag.map(|dag| &dag.semantic.collection_refs)
         .and_then(|refs| refs.index_defs.get(index.resolved()))
         .or_else(|| registry.indexes.get_index(index.name().as_str()))
@@ -141,7 +144,14 @@ fn inferred_index_for_map_entry_key(
     dag: Option<&crate::tir::typed::DagTIR>,
 ) -> InferredIndex {
     resolved_map_entry_variant_for_key(key, dag).map_or_else(
-        || inferred_index_for_leaf(key.index.value.registry_name(), dag),
+        || match &key.index.value {
+            crate::syntax::ast::MapEntryIndex::Named(_) => {
+                inferred_index_for_leaf(key.index.value.registry_name(), dag)
+            }
+            crate::syntax::ast::MapEntryIndex::NatRange(size) => {
+                InferredIndex::from_nat_range_form(NatLinearForm::from_constant(*size))
+            }
+        },
         |variant| InferredIndex::from_resolved(variant.index().clone()),
     )
 }
