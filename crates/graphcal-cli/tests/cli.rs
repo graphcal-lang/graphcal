@@ -1848,7 +1848,6 @@ fn format_check_recursive_directory() {
 
 #[cfg(unix)]
 #[test]
-#[should_panic(expected = "BUG: directory formatter must skip symlinked .gcl files")]
 fn format_directory_skips_symlinked_gcl_files() {
     let dir = tempfile::tempdir().unwrap();
     let outside = dir.path().join("outside.gcl");
@@ -1857,6 +1856,7 @@ fn format_directory_skips_symlinked_gcl_files() {
 
     let original = "param   x:Dimensionless=1.0;";
     std::fs::write(&outside, original).unwrap();
+    std::fs::write(tree.join("inside.gcl"), "param x: Dimensionless = 1.0;\n").unwrap();
     std::os::unix::fs::symlink(&outside, tree.join("link.gcl")).unwrap();
 
     let output = graphcal_bin()
@@ -2249,6 +2249,17 @@ fn eval_no_overrides_defaults_freely() {
 
 // --- Plot tests (Vega-Lite JSON) ---
 
+fn parse_plot_json_stdout(stdout: &str) -> serde_json::Value {
+    let json: serde_json::Value = serde_json::from_str(stdout).unwrap_or_else(|err| {
+        panic!("expected --plot json stdout to be only JSON: {err}: {stdout}")
+    });
+    assert!(
+        json.is_array(),
+        "expected --plot json stdout to be a top-level array: {stdout}"
+    );
+    json
+}
+
 #[test]
 fn eval_plot_json_output() {
     let output = graphcal_bin()
@@ -2262,6 +2273,7 @@ fn eval_plot_json_output() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let _json = parse_plot_json_stdout(&stdout);
     // Vega-Lite specs: "mark": "line" and "mark": "bar"
     assert!(
         stdout.contains("\"mark\": \"line\""),
@@ -2274,6 +2286,33 @@ fn eval_plot_json_output() {
     assert!(
         stdout.contains("vega-lite"),
         "expected Vega-Lite $schema: {stdout}"
+    );
+}
+
+#[test]
+fn eval_plot_json_suppresses_normal_eval_output_even_with_json_format() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/plot_basic.gcl"),
+            "--format",
+            "json",
+            "--plot",
+            "json",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    assert!(
+        json.get("param").is_none() && json.get("node").is_none(),
+        "--plot json should print only the plot array, not eval JSON: {stdout}"
     );
 }
 
@@ -2365,6 +2404,12 @@ fn eval_plot_no_plots_warns() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout.trim(),
+        "[]",
+        "expected --plot json stdout to remain valid JSON when no plots exist: {stdout}"
+    );
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
         stderr.contains("no plot declarations found"),
@@ -2388,21 +2433,13 @@ fn eval_figure_basic_json() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // Parse the JSON array from the --plot json output (after the text output).
-    // Find the JSON array start — it's on its own line starting with "[".
-    let json_start = stdout
-        .find("\n[")
-        .map(|i| i + 1)
-        .expect("expected JSON array in output");
-    let json_str = &stdout[json_start..];
-    let json: serde_json::Value = serde_json::from_str(json_str).expect("invalid JSON");
-
+    let json = parse_plot_json_stdout(&stdout);
     let arr = json.as_array().expect("expected JSON array");
     // 3 figures: curve_a (standalone), curve_b (standalone), comparison (figure)
     assert_eq!(
         arr.len(),
         3,
-        "expected 3 figures (2 standalone + 1 combined): {json_str}"
+        "expected 3 figures (2 standalone + 1 combined): {stdout}"
     );
     assert_eq!(arr[0]["name"].as_str(), Some("curve_a"));
     assert_eq!(arr[1]["name"].as_str(), Some("curve_b"));
@@ -2454,21 +2491,13 @@ fn eval_figure_hidden_json() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // Parse the JSON array from the --plot json output.
-    // Find the JSON array start — it's on its own line starting with "[".
-    let json_start = stdout
-        .find("\n[")
-        .map(|i| i + 1)
-        .expect("expected JSON array in output");
-    let json_str = &stdout[json_start..];
-    let json: serde_json::Value = serde_json::from_str(json_str).expect("invalid JSON");
-
+    let json = parse_plot_json_stdout(&stdout);
     let arr = json.as_array().expect("expected JSON array");
     // Only 1 figure: comparison (hidden plots suppress standalone output)
     assert_eq!(
         arr.len(),
         1,
-        "expected 1 figure (hidden plots suppressed): {json_str}"
+        "expected 1 figure (hidden plots suppressed): {stdout}"
     );
     assert_eq!(arr[0]["name"].as_str(), Some("comparison"));
 
@@ -2498,18 +2527,12 @@ fn eval_plot_basic_standalone_figures() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    let json_start = stdout
-        .find("\n[")
-        .map(|i| i + 1)
-        .expect("expected JSON array in output");
-    let json_str = &stdout[json_start..];
-    let json: serde_json::Value = serde_json::from_str(json_str).expect("invalid JSON");
-
+    let json = parse_plot_json_stdout(&stdout);
     let arr = json.as_array().expect("expected JSON array");
     assert_eq!(
         arr.len(),
         2,
-        "expected 2 standalone figures from plot_basic.gcl: {json_str}"
+        "expected 2 standalone figures from plot_basic.gcl: {stdout}"
     );
     assert_eq!(arr[0]["name"].as_str(), Some("my_line"));
     assert_eq!(arr[1]["name"].as_str(), Some("my_bar"));

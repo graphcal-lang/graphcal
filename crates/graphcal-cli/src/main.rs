@@ -188,50 +188,53 @@ fn handle_eval(
     let fs = build_rooted_filesystem(file, root);
     match compile_and_eval_project(file, overrides, root, &fs) {
         Ok(result) => {
-            match format {
-                OutputFormat::Text => print_text(&result),
-                OutputFormat::Json => {
-                    if let Err(e) = print_json(&result) {
-                        eprintln!("JSON serialization error: {e}");
-                        process::exit(2);
+            let plot_json_only = matches!(plot_output, Some(PlotOutput::Json));
+            if !plot_json_only {
+                match format {
+                    OutputFormat::Text => print_text(&result),
+                    OutputFormat::Json => {
+                        if let Err(e) = print_json(&result) {
+                            eprintln!("JSON serialization error: {e}");
+                            process::exit(2);
+                        }
                     }
                 }
             }
 
-            // Handle --plot output
+            // Handle --plot output. JSON plot mode has a pipe-friendly stdout
+            // contract: the entire stdout stream is the figure array, so normal
+            // evaluation output is suppressed above.
             if let Some(plot_mode) = plot_output {
                 let rendered = plot::build_figures(&result.plots, &result.figures, &result.layers);
                 if rendered.is_empty() {
                     eprintln!("warning: no plot declarations found");
-                } else {
-                    match plot_mode {
-                        PlotOutput::Browser => {
-                            let html = plot::render_html(&rendered).unwrap_or_else(|e| {
-                                bail_with("could not render plots as HTML", e, 2)
-                            });
-                            let mut tmp = tempfile::Builder::new()
-                                .prefix("graphcal_plot_")
-                                .suffix(".html")
-                                .tempfile()
-                                .unwrap_or_else(|e| bail_with("could not create temp file", e, 2));
-                            std::io::Write::write_all(&mut tmp, html.as_bytes())
-                                .unwrap_or_else(|e| bail_with("could not write HTML", e, 2));
-                            // Keep the temp file so the browser has time to read it.
-                            // The OS will clean it up on reboot.
-                            let path = tmp.into_temp_path();
-                            let kept = path
-                                .keep()
-                                .unwrap_or_else(|e| bail_with("could not persist temp file", e, 2));
-                            if let Err(e) = open::that(&kept) {
-                                bail_with("could not open browser", e, 2);
-                            }
+                }
+                match plot_mode {
+                    PlotOutput::Browser if rendered.is_empty() => {}
+                    PlotOutput::Browser => {
+                        let html = plot::render_html(&rendered)
+                            .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
+                        let mut tmp = tempfile::Builder::new()
+                            .prefix("graphcal_plot_")
+                            .suffix(".html")
+                            .tempfile()
+                            .unwrap_or_else(|e| bail_with("could not create temp file", e, 2));
+                        std::io::Write::write_all(&mut tmp, html.as_bytes())
+                            .unwrap_or_else(|e| bail_with("could not write HTML", e, 2));
+                        // Keep the temp file so the browser has time to read it.
+                        // The OS will clean it up on reboot.
+                        let path = tmp.into_temp_path();
+                        let kept = path
+                            .keep()
+                            .unwrap_or_else(|e| bail_with("could not persist temp file", e, 2));
+                        if let Err(e) = open::that(&kept) {
+                            bail_with("could not open browser", e, 2);
                         }
-                        PlotOutput::Json => {
-                            let json = plot::render_json(&rendered).unwrap_or_else(|e| {
-                                bail_with("could not render plots as JSON", e, 2)
-                            });
-                            println!("{json}");
-                        }
+                    }
+                    PlotOutput::Json => {
+                        let json = plot::render_json(&rendered)
+                            .unwrap_or_else(|e| bail_with("could not render plots as JSON", e, 2));
+                        println!("{json}");
                     }
                 }
             }
@@ -363,8 +366,9 @@ const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".build", "__pyca
 
 /// Recursively collect all `.gcl` files under a directory, sorted for deterministic output.
 ///
-/// Uses `walkdir` for safe traversal: symlinks are not followed and common
-/// generated directories (`.git`, `target`, `node_modules`, etc.) are skipped.
+/// Uses `walkdir` for safe traversal: only regular files are collected,
+/// symlinks are not followed, and common generated directories (`.git`,
+/// `target`, `node_modules`, etc.) are skipped.
 /// Traversal errors (permission denied, transient I/O) are logged to stderr
 /// rather than silently dropped so users know when `format` only saw part of
 /// the tree.
@@ -389,7 +393,10 @@ fn collect_gcl_files(dir: &Path) -> Vec<PathBuf> {
         })
     {
         match entry {
-            Ok(e) if e.path().extension().is_some_and(|ext| ext == "gcl") => {
+            Ok(e)
+                if e.file_type().is_file()
+                    && e.path().extension().is_some_and(|ext| ext == "gcl") =>
+            {
                 files.push(e.into_path());
             }
             Ok(_) => {}

@@ -326,11 +326,13 @@ Plot output is controlled by the `--plot` option on `graphcal eval`:
 # Open interactive chart in default browser
 graphcal eval file.gcl --plot browser
 
-# Print Vega-Lite JSON spec to stdout
+# Print only the plot JSON array to stdout
 graphcal eval file.gcl --plot json
 ```
 
-The JSON output is an array of figure objects, each with a `name` and `spec`:
+In `--plot json` mode, stdout is exactly one JSON array of figure objects,
+each with a `name` and `spec`; normal evaluation output is suppressed so the
+result can be piped directly to JSON tools:
 
 ```json
 [
