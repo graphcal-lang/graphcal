@@ -404,9 +404,29 @@ fn eval_hir_scalar_binop(
     super::arithmetic::check_finite(result, "arithmetic operation", ctx, span)
 }
 
+fn expect_hir_builtin_arity(
+    name: BuiltinFnName,
+    args: &[hir::Expr],
+    expected: usize,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<(), GraphcalError> {
+    if args.len() == expected {
+        return Ok(());
+    }
+    Err(ctx.internal_error(
+        format!(
+            "{}() received {} argument(s) after dim-check accepted arity {expected}",
+            name.as_str(),
+            args.len()
+        ),
+        span,
+    ))
+}
+
 #[expect(
     clippy::too_many_lines,
-    reason = "function dispatch handles all builtin and user-call forms"
+    reason = "function dispatch handles all built-in call forms"
 )]
 fn eval_hir_fn_call(
     expr: &hir::Expr,
@@ -433,6 +453,7 @@ fn eval_hir_fn_call(
         Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::TimeScaleConversion(
             scale,
         )) => {
+            expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg else {
                 return Err(ctx.internal_error(
@@ -448,6 +469,7 @@ fn eval_hir_fn_call(
             eval_hir_datetime_constructor(kind, expr.span, args, ctx.src)
         }
         Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::DatetimeExtract(kind)) => {
+            expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
@@ -498,6 +520,7 @@ fn eval_hir_fn_call(
             Ok(RuntimeValue::Int(result))
         }
         Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::DatetimeFrom(kind)) => {
+            expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let num = match arg_val {
                 RuntimeValue::Scalar(v) => v,
@@ -524,6 +547,7 @@ fn eval_hir_fn_call(
             Ok(RuntimeValue::Datetime(epoch))
         }
         Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::DatetimeTo(kind)) => {
+            expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
@@ -573,6 +597,13 @@ fn eval_hir_conversion_fn(
     local_values: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    let name = match kind {
+        graphcal_compiler::registry::resolve_types::TypeConversionFn::ToFloat => {
+            BuiltinFnName::ToFloat
+        }
+        graphcal_compiler::registry::resolve_types::TypeConversionFn::ToInt => BuiltinFnName::ToInt,
+    };
+    expect_hir_builtin_arity(name, args, 1, span, ctx)?;
     match kind {
         graphcal_compiler::registry::resolve_types::TypeConversionFn::ToFloat => {
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
@@ -607,6 +638,16 @@ fn eval_hir_datetime_constructor(
 ) -> Result<RuntimeValue, GraphcalError> {
     match kind {
         graphcal_compiler::registry::resolve_types::ConstructorFn::Datetime => {
+            if !(1..=2).contains(&args.len()) {
+                return Err(GraphcalError::InternalError {
+                    message: format!(
+                        "datetime() received {} argument(s) after dim-check accepted arity 1..2",
+                        args.len()
+                    ),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
             let hir::ExprKind::StringLiteral(s) = &args[0].kind else {
                 return Err(GraphcalError::InternalError {
                     message: "datetime() received non-string argument".to_string(),
@@ -637,6 +678,16 @@ fn eval_hir_datetime_constructor(
             Ok(RuntimeValue::Datetime(epoch))
         }
         graphcal_compiler::registry::resolve_types::ConstructorFn::Epoch => {
+            if args.len() != 2 {
+                return Err(GraphcalError::InternalError {
+                    message: format!(
+                        "epoch() received {} argument(s) after dim-check accepted arity 2",
+                        args.len()
+                    ),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
             let hir::ExprKind::StringLiteral(s) = &args[0].kind else {
                 return Err(GraphcalError::InternalError {
                     message: "epoch() received non-string first argument".to_string(),

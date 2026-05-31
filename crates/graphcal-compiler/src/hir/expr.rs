@@ -604,11 +604,11 @@ pub struct ExprDependencies {
     pub graph_refs: BTreeSet<ResolvedName<namespace::Decl>>,
     /// Compile-time const dependencies reached through const-like value refs.
     pub const_refs: BTreeSet<ResolvedName<namespace::Decl>>,
-    /// Source-span keyed graph references used by the current syntax-AST eval
-    /// compatibility path to route values by canonical declaration identity.
+    /// Source-span keyed graph references for syntax-AST boundary consumers
+    /// that still need to route references by canonical declaration identity.
     pub graph_ref_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
-    /// Source-span keyed const references used by the current syntax-AST eval
-    /// compatibility path to route values by canonical declaration identity.
+    /// Source-span keyed const references for syntax-AST boundary consumers
+    /// that still need to route references by canonical declaration identity.
     pub const_ref_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
 }
 

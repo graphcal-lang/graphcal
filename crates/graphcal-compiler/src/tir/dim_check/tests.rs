@@ -867,6 +867,44 @@ node o: Orbit = Orbit(altitude: 400.0 km, speed: 7.6 km / s, bonus: 1.0);";
     );
 }
 
+#[test]
+fn check_struct_duplicate_field_initializers() {
+    let source = "\
+type Orbit { Orbit(altitude: Length, speed: Velocity) }
+node o: Orbit = Orbit(altitude: 400.0 km, altitude: 401.0 km, speed: 7.6 km / s);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::EvalError { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_match_wildcard_binding_validates_field_name() {
+    let source = "\
+pub type Maybe { Some(value: Length), None }
+param x: Maybe = Some(value: 1.0 m);
+node y: Length = match @x { Some(nope: _) => 1.0 m, None => 0.0 m };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownField { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_match_rejects_duplicate_field_bindings() {
+    let source = "\
+pub type Pair { Pair(a: Length, b: Length) }
+param x: Pair = Pair(a: 1.0 m, b: 2.0 m);
+node y: Length = match @x { Pair(a: left, a: right) => left + right };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::EvalError { .. }),
+        "got: {err:?}"
+    );
+}
+
 // --- Block let-binding type annotation mismatch ---
 
 // --- types_match wildcard: mismatched kinds ---

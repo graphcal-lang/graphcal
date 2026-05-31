@@ -1049,36 +1049,32 @@ pub(super) fn infer_unfold(
         None
     });
 
-    if let Some((_index_name, idx_def)) = &owner_range_index {
-        let dimension = match &idx_def.kind {
-            crate::registry::types::IndexKind::Range(crate::registry::types::RangeIndexData {
-                dimension,
-                ..
-            })
-            | crate::registry::types::IndexKind::RequiredRange { dimension } => Some(dimension),
-            _ => None,
-        };
-        if let Some(dimension) = dimension {
-            scan_locals.insert(
-                prev_name.value.as_str().to_owned(),
-                InferredType::Scalar(dimension.clone()),
-            );
-            scan_locals.insert(
-                curr_name.value.as_str().to_owned(),
-                InferredType::Scalar(dimension.clone()),
-            );
-        }
-    } else {
-        // Fallback: dimensionless when owner is unknown or not an indexed range type
-        scan_locals.insert(
-            prev_name.value.as_str().to_owned(),
-            InferredType::Scalar(crate::syntax::dimension::Dimension::dimensionless()),
-        );
-        scan_locals.insert(
-            curr_name.value.as_str().to_owned(),
-            InferredType::Scalar(crate::syntax::dimension::Dimension::dimensionless()),
-        );
-    }
+    let (index_name, idx_def) = owner_range_index.ok_or_else(|| GraphcalError::EvalError {
+        message: "unfold expression must appear in a declaration with a range-indexed type"
+            .to_string(),
+        src: src.clone(),
+        span: body.span.into(),
+    })?;
+    let (crate::registry::types::IndexKind::Range(crate::registry::types::RangeIndexData {
+        dimension,
+        ..
+    })
+    | crate::registry::types::IndexKind::RequiredRange { dimension }) = &idx_def.kind
+    else {
+        return Err(GraphcalError::EvalError {
+            message: format!("unfold requires a range index, got `{index_name}`"),
+            src: src.clone(),
+            span: body.span.into(),
+        });
+    };
+    scan_locals.insert(
+        prev_name.value.as_str().to_owned(),
+        InferredType::Scalar(dimension.clone()),
+    );
+    scan_locals.insert(
+        curr_name.value.as_str().to_owned(),
+        InferredType::Scalar(dimension.clone()),
+    );
 
     let body_type = infer_type(
         body,
@@ -1100,16 +1096,10 @@ pub(super) fn infer_unfold(
         });
     }
 
-    // The result type is Indexed { element: init_type, index: <range_index> }
-    if let Some((index_name, _)) = owner_range_index {
-        return Ok(InferredType::Indexed {
-            element: Box::new(init_type),
-            index: InferredIndex::from_ref(index_name),
-        });
-    }
-
-    // Fallback: return init_type (will fail annotation check if declared as indexed)
-    Ok(init_type)
+    Ok(InferredType::Indexed {
+        element: Box::new(init_type),
+        index: InferredIndex::from_ref(index_name),
+    })
 }
 
 /// Infer the type of a field access expression.
@@ -1215,7 +1205,7 @@ fn infer_ast_generic_type_arg(
                     IndexExpr::NatExpr(nat_expr) => {
                         return Err(GraphcalError::EvalError {
                             message: format!(
-                                "Nat index argument `{nat_expr}` is not yet representable in constructor value types"
+                                "Nat index argument `{nat_expr}` cannot be used in constructor value types"
                             ),
                             src: src.clone(),
                             span: nat_expr.span().into(),
@@ -1446,7 +1436,7 @@ pub(super) fn infer_constructor_call(
                 (TypeGenericConstraint::Nat, GenericArg::Nat(nat_expr)) => {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "constructor generic argument `{}` for Nat parameter `{}` is not yet representable in value types",
+                            "constructor generic argument `{}` for Nat parameter `{}` cannot be used in constructor value types",
                             nat_expr, param.name
                         ),
                         src: src.clone(),

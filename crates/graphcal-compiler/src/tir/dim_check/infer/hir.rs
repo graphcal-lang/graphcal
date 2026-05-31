@@ -18,7 +18,7 @@ use crate::syntax::ast::UnaryOp;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
     FieldName, GenericParamName, IndexName, IndexVariantName, ResolvedIndexVariant, ResolvedName,
-    ScopedName, StructTypeName, UnitName, namespace,
+    ScopedName, UnitName, namespace,
 };
 use crate::syntax::span::Span;
 use crate::tir::typed::NatLinearForm;
@@ -745,6 +745,17 @@ fn infer_hir_builtin_fn(
             ),
         });
     };
+    if args.len() != func.dim_sig.params.len() {
+        return Err(GraphcalError::WrongArity {
+            name: crate::syntax::names::FnName::new(name.as_str()),
+            expected: func.dim_sig.params.len(),
+            got: args.len(),
+            src: src.clone(),
+            span: args
+                .first()
+                .map_or_else(|| Span::new(0, 0).into(), |arg| arg.span.into()),
+        });
+    }
     let arg_dims: Vec<Dimension> = args
         .iter()
         .map(|arg| {
@@ -2411,15 +2422,9 @@ fn infer_hir_constructor_call(
         .constructor_refs
         .constructor_calls
         .get(&callee.span)
-        .or_else(|| {
-            dag.semantic
-                .constructor_refs
-                .constructor_defs
-                .get(&callee.value)
-        })
         .ok_or_else(|| GraphcalError::InternalError {
             message: format!(
-                "semantic TIR missing constructor target for `{}`",
+                "semantic TIR missing constructor call target for `{}`",
                 callee.value
             ),
             src: src.clone(),
@@ -2449,6 +2454,19 @@ fn infer_hir_constructor_call(
         .iter()
         .map(|field| field.name.value.as_str())
         .collect();
+    let mut seen_fields = std::collections::HashSet::new();
+    for field in fields {
+        if !seen_fields.insert(field.name.value.clone()) {
+            return Err(GraphcalError::EvalError {
+                message: format!(
+                    "duplicate field `{}` in constructor `{}`",
+                    field.name.value, variant.name
+                ),
+                src: src.clone(),
+                span: field.name.span.into(),
+            });
+        }
+    }
     let extra: Vec<FieldName> = provided_names
         .iter()
         .filter(|name| !def_field_names.contains(**name))
@@ -2574,7 +2592,7 @@ fn resolve_constructor_generic_args(
             (TypeGenericConstraint::Nat, hir::expr::GenericArg::Nat(nat_expr)) => {
                 return Err(GraphcalError::EvalError {
                     message: format!(
-                        "constructor generic argument `{}` for Nat parameter `{}` is not yet representable in value types",
+                        "constructor generic argument `{}` for Nat parameter `{}` cannot be used in constructor value types",
                         hir_nat_to_linear_form(nat_expr).format(),
                         param.name
                     ),
@@ -3233,9 +3251,9 @@ fn infer_hir_match(
                 }
                 let variant_name = variant.value.variant();
                 if !variants.iter().any(|v| v == variant_name) {
-                    return Err(GraphcalError::UnknownField {
-                        type_name: StructTypeName::new(index_identity.name().as_str()),
-                        field_name: FieldName::new(variant_name.as_str()),
+                    return Err(GraphcalError::UnknownVariant {
+                        index_name: index_identity.name(),
+                        variant_name: variant_name.clone(),
                         src: src.clone(),
                         span: variant.span.into(),
                     });
@@ -3327,19 +3345,34 @@ fn infer_hir_match(
                     });
                 }
                 let mut arm_locals = local_types.clone();
+                let mut seen_pattern_fields = std::collections::HashSet::new();
                 for binding in bindings {
+                    let field = match binding {
+                        hir::expr::PatternBinding::Bind { field, .. }
+                        | hir::expr::PatternBinding::Wildcard { field, .. } => field,
+                    };
+                    if !seen_pattern_fields.insert(field.value.clone()) {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "duplicate pattern binding for field `{}` in `{}`",
+                                field.value, pattern.target.variant.name
+                            ),
+                            src: src.clone(),
+                            span: field.span.into(),
+                        });
+                    }
+                    let field_type = constructor_field_type(
+                        field,
+                        &pattern.target.variant,
+                        &pattern.target.owning_type,
+                        &pattern.target.type_def,
+                        scrutinee_type_args,
+                        dag,
+                        registry,
+                        src,
+                    )?;
                     match binding {
-                        hir::expr::PatternBinding::Bind { field, local } => {
-                            let field_type = constructor_field_type(
-                                field,
-                                &pattern.target.variant,
-                                &pattern.target.owning_type,
-                                &pattern.target.type_def,
-                                scrutinee_type_args,
-                                dag,
-                                registry,
-                                src,
-                            )?;
+                        hir::expr::PatternBinding::Bind { local, .. } => {
                             arm_locals.insert(local.id, field_type);
                         }
                         hir::expr::PatternBinding::Wildcard { .. } => {}
@@ -3461,22 +3494,59 @@ fn infer_hir_inline_dag_ref(
         dag_tir
             .params
             .iter()
-            .filter_map(|param| {
-                let key = dag_tir.resolved_decl_key_for_local(&param.name)?;
-                let resolved = dag_tir.resolved_decl_types.get(&param.name)?;
-                Some((key, resolved))
+            .map(|param| {
+                let key = dag_tir
+                    .resolved_decl_key_for_local(&param.name)
+                    .ok_or_else(|| GraphcalError::InternalError {
+                        message: format!(
+                            "semantic declaration key missing for inline-DAG param `{}`",
+                            param.name
+                        ),
+                        src: src.clone(),
+                        span: param.span.into(),
+                    })?;
+                let resolved = dag_tir
+                    .resolved_decl_types
+                    .get(&param.name)
+                    .ok_or_else(|| GraphcalError::InternalError {
+                        message: format!(
+                            "semantic type missing for inline-DAG param `{}`",
+                            param.name
+                        ),
+                        src: src.clone(),
+                        span: param.type_ann.span.into(),
+                    })?;
+                Ok((key, resolved))
             })
-            .collect();
+            .collect::<Result<_, GraphcalError>>()?;
     let node_decl_types_by_key: HashMap<ResolvedDeclKey, &crate::tir::typed::ResolvedTypeExpr> =
         dag_tir
             .nodes
             .iter()
-            .filter_map(|node| {
-                let key = dag_tir.resolved_decl_key_for_local(&node.name)?;
-                let resolved = dag_tir.resolved_decl_types.get(&node.name)?;
-                Some((key, resolved))
+            .map(|node| {
+                let key = dag_tir
+                    .resolved_decl_key_for_local(&node.name)
+                    .ok_or_else(|| GraphcalError::InternalError {
+                        message: format!(
+                            "semantic declaration key missing for inline-DAG node `{}`",
+                            node.name
+                        ),
+                        src: src.clone(),
+                        span: node.span.into(),
+                    })?;
+                let resolved = dag_tir.resolved_decl_types.get(&node.name).ok_or_else(|| {
+                    GraphcalError::InternalError {
+                        message: format!(
+                            "semantic type missing for inline-DAG node `{}`",
+                            node.name
+                        ),
+                        src: src.clone(),
+                        span: node.type_ann.span.into(),
+                    }
+                })?;
+                Ok((key, resolved))
             })
-            .collect();
+            .collect::<Result<_, GraphcalError>>()?;
 
     let mut bound_resolved_names: std::collections::HashSet<ResolvedDeclKey> =
         std::collections::HashSet::with_capacity(args.len());
@@ -3484,7 +3554,14 @@ fn infer_hir_inline_dag_ref(
         let target_key = resolved_call
             .arg_targets
             .get(&binding.target.span)
-            .unwrap_or(&binding.target.value);
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!(
+                    "semantic TIR missing inline-DAG arg target for binding `{}`",
+                    binding.target.value
+                ),
+                src: src.clone(),
+                span: binding.target.span.into(),
+            })?;
         bound_resolved_names.insert(target_key.clone());
         let expected = param_decl_types_by_key.get(target_key).ok_or_else(|| {
             GraphcalError::UnknownInlineDagParam {
