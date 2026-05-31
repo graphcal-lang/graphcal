@@ -10,7 +10,9 @@ use miette::NamedSource;
 use graphcal_compiler::desugar::resolved_ast::{
     DeclKind, Declaration, Expr, ExprKind, ImportItemNamespace, ModulePath, TypeDeclBody,
 };
-use graphcal_compiler::syntax::names::{DeclName, DimName, IndexName, StructTypeName};
+use graphcal_compiler::syntax::names::{
+    DeclName, DimName, IndexName, ModuleAliasName, StructTypeName,
+};
 use graphcal_compiler::syntax::phase::Resolved;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::span::Spanned;
@@ -102,8 +104,8 @@ pub(in crate::eval::project) struct ImportAlias {
 /// form and as the module-qualifier name for `import path;`.
 pub(in crate::eval::project) fn derive_module_name_from_import_path(
     import_path: &ModulePath,
-) -> String {
-    import_path.leaf().name.to_string()
+) -> ModuleAliasName {
+    ModuleAliasName::from_atom(import_path.leaf().name.clone())
 }
 
 /// Visitor that recognizes `FieldAccess(GraphRef(alias), field)` and rewrites
@@ -134,8 +136,8 @@ impl ExprVisitorMut<Resolved> for AliasFieldAccessRewriter<'_> {
             && let ExprKind::GraphRef(qualifier_name) = &inner.kind
             && !qualifier_name.value.is_qualified()
             && self.qualified_pairs.contains(&QualifiedMember {
-                module: qualifier_name.value.member().to_string(),
-                member: field.value.as_str().to_string(),
+                module: ModuleAliasName::new(qualifier_name.value.member()),
+                member: DeclName::from_atom(field.value.atom().clone()),
             }) {
             let merged_span = qualifier_name.span.merge(field.span);
             Some(ExprKind::GraphRef(Spanned {
@@ -157,8 +159,8 @@ impl ExprVisitorMut<Resolved> for AliasFieldAccessRewriter<'_> {
 /// the two halves cannot be swapped at call sites.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct QualifiedMember {
-    module: String,
-    member: String,
+    module: ModuleAliasName,
+    member: DeclName,
 }
 
 /// Promote `FieldAccess(GraphRef(Local(alias)), field)` to a qualified
@@ -250,7 +252,7 @@ pub(in crate::eval::project) struct DeferredDagInclude {
     pub(in crate::eval::project) source: DeferredDagSource,
     /// The prefix for all merged declarations (from alias or dag name or
     /// filename).
-    pub(in crate::eval::project) prefix: String,
+    pub(in crate::eval::project) prefix: ModuleAliasName,
     /// Param bindings: `param_name` → binding expression.
     pub(in crate::eval::project) bindings: HashMap<DeclName, Expr>,
     /// Index bindings: `dep_index_name` → `importer_index_name`.
@@ -321,7 +323,7 @@ pub(in crate::eval::project) struct ImportContext<'a> {
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
     pub(in crate::eval::project) module_map:
-        HashMap<String, (graphcal_compiler::dag_id::DagId, Span)>,
+        HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
     /// Registry + `pub_names` for module-imported dependencies.
     pub(in crate::eval::project) extra_registry_builders:
         Vec<(&'a Registry, &'a HashSet<DeclName>)>,
@@ -352,7 +354,7 @@ pub(in crate::eval::project) enum SelectiveImportResult {
 /// borrowed reference to the original AST.
 pub(in crate::eval::project) fn rewrite_qualified_refs_in_ast<'a>(
     ast: &'a graphcal_compiler::desugar::resolved_ast::File,
-    module_map: &HashMap<String, (graphcal_compiler::dag_id::DagId, Span)>,
+    module_map: &HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
     imported_names: &ImportedValueNames,
 ) -> std::borrow::Cow<'a, graphcal_compiler::desugar::resolved_ast::File> {
     let alias_pairs = collect_qualified_pairs(imported_names);
@@ -383,8 +385,8 @@ fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<QualifiedMe
     for (scoped, _) in entries {
         if let [module] = scoped.qualifier() {
             pairs.insert(QualifiedMember {
-                module: module.to_string(),
-                member: scoped.member().to_string(),
+                module: ModuleAliasName::new(module.as_ref()),
+                member: DeclName::new(scoped.member()),
             });
         }
     }
@@ -505,22 +507,60 @@ pub(in crate::eval::project) fn extract_pub_names(
     pub_names
 }
 
-pub(in crate::eval::project) fn file_has_import_item(
+/// Visibility-aware result of looking up an importable item in a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::eval::project) enum ImportItemPresence {
+    Missing,
+    Private,
+    Public,
+}
+
+impl ImportItemPresence {
+    const fn is_present(self) -> bool {
+        matches!(self, Self::Private | Self::Public)
+    }
+
+    const fn is_public(self) -> bool {
+        matches!(self, Self::Public)
+    }
+}
+
+pub(in crate::eval::project) fn file_import_item_presence(
     file: &graphcal_compiler::desugar::resolved_ast::File,
     name: &str,
     namespace: ImportItemNamespace,
-) -> bool {
-    file.declarations.iter().any(|decl| match &decl.kind {
-        DeclKind::Type(t) => {
-            (namespace == ImportItemNamespace::Type && t.name.value.as_str() == name)
-                || (namespace == ImportItemNamespace::Default
-                    && match &t.body {
-                        TypeDeclBody::Required => false,
-                        TypeDeclBody::Constructors(members) => members
-                            .iter()
-                            .any(|member| member.name.value.as_str() == name),
-                    })
-        }
+) -> ImportItemPresence {
+    file.declarations
+        .iter()
+        .filter_map(|decl| decl_import_item_presence(decl, name, namespace))
+        .fold(ImportItemPresence::Missing, |acc, presence| {
+            match (acc, presence) {
+                (ImportItemPresence::Public, _) | (_, ImportItemPresence::Public) => {
+                    ImportItemPresence::Public
+                }
+                (ImportItemPresence::Private, _) | (_, ImportItemPresence::Private) => {
+                    ImportItemPresence::Private
+                }
+                (ImportItemPresence::Missing, ImportItemPresence::Missing) => {
+                    ImportItemPresence::Missing
+                }
+            }
+        })
+}
+
+fn decl_import_item_presence(
+    decl: &graphcal_compiler::desugar::resolved_ast::Declaration,
+    name: &str,
+    namespace: ImportItemNamespace,
+) -> Option<ImportItemPresence> {
+    match &decl.kind {
+        DeclKind::Type(t) => type_decl_import_item_matches(t, name, namespace).then(|| {
+            if t.visibility.is_public() {
+                ImportItemPresence::Public
+            } else {
+                ImportItemPresence::Private
+            }
+        }),
         DeclKind::Param(_)
         | DeclKind::Node(_)
         | DeclKind::ConstNode(_)
@@ -532,26 +572,72 @@ pub(in crate::eval::project) fn file_has_import_item(
         | DeclKind::Plot(_)
         | DeclKind::Figure(_)
         | DeclKind::Layer(_)
-        | DeclKind::Dag(_) => decl_identity(decl).is_some_and(|identity| {
-            import_namespace_matches(identity.kind, namespace) && identity.name == name
-        }),
-        DeclKind::Import(d) => matches!(
-            &d.kind,
-            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
-                if items.iter().any(|it| {
-                    it.is_pub && it.namespace == namespace && it.local_name() == name
-                })
-        ),
-        DeclKind::Include(d) => {
-            namespace == ImportItemNamespace::Default
-                && matches!(
-                    &d.kind,
-                    graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
-                        if items.iter().any(|it| it.is_pub && it.local_name() == name)
-                )
-        }
+        | DeclKind::Dag(_) => decl_identity(decl)
+            .is_some_and(|identity| {
+                import_namespace_matches(identity.kind, namespace) && identity.name == name
+            })
+            .then(|| {
+                if decl_is_public(decl) {
+                    ImportItemPresence::Public
+                } else {
+                    ImportItemPresence::Private
+                }
+            }),
+        DeclKind::Import(d) => selective_reexport_matches(&d.kind, name, namespace)
+            .then_some(ImportItemPresence::Public),
+        DeclKind::Include(d) => (namespace == ImportItemNamespace::Default
+            && selective_include_reexport_matches(&d.kind, name))
+        .then_some(ImportItemPresence::Public),
         DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
-    })
+    }
+}
+
+fn type_decl_import_item_matches(
+    type_decl: &graphcal_compiler::desugar::resolved_ast::TypeDecl,
+    name: &str,
+    namespace: ImportItemNamespace,
+) -> bool {
+    (namespace == ImportItemNamespace::Type && type_decl.name.value.as_str() == name)
+        || (namespace == ImportItemNamespace::Default
+            && match &type_decl.body {
+                TypeDeclBody::Required => false,
+                TypeDeclBody::Constructors(members) => members
+                    .iter()
+                    .any(|member| member.name.value.as_str() == name),
+            })
+}
+
+fn selective_reexport_matches(
+    kind: &graphcal_compiler::desugar::resolved_ast::ImportKind,
+    name: &str,
+    namespace: ImportItemNamespace,
+) -> bool {
+    matches!(
+        kind,
+        graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
+            if items.iter().any(|it| {
+                it.is_pub && it.namespace == namespace && it.local_name() == name
+            })
+    )
+}
+
+fn selective_include_reexport_matches(
+    kind: &graphcal_compiler::desugar::resolved_ast::ImportKind,
+    name: &str,
+) -> bool {
+    matches!(
+        kind,
+        graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
+            if items.iter().any(|it| it.is_pub && it.local_name() == name)
+    )
+}
+
+pub(in crate::eval::project) fn file_has_import_item(
+    file: &graphcal_compiler::desugar::resolved_ast::File,
+    name: &str,
+    namespace: ImportItemNamespace,
+) -> bool {
+    file_import_item_presence(file, name, namespace).is_present()
 }
 
 pub(in crate::eval::project) fn file_exports_import_item(
@@ -559,52 +645,7 @@ pub(in crate::eval::project) fn file_exports_import_item(
     name: &str,
     namespace: ImportItemNamespace,
 ) -> bool {
-    file.declarations.iter().any(|decl| match &decl.kind {
-        DeclKind::Type(t) => {
-            t.visibility.is_public()
-                && ((namespace == ImportItemNamespace::Type && t.name.value.as_str() == name)
-                    || (namespace == ImportItemNamespace::Default
-                        && match &t.body {
-                            TypeDeclBody::Required => false,
-                            TypeDeclBody::Constructors(members) => members
-                                .iter()
-                                .any(|member| member.name.value.as_str() == name),
-                        }))
-        }
-        DeclKind::Param(_)
-        | DeclKind::Node(_)
-        | DeclKind::ConstNode(_)
-        | DeclKind::Assert(_)
-        | DeclKind::BaseDimension(_)
-        | DeclKind::Dimension(_)
-        | DeclKind::Unit(_)
-        | DeclKind::Index(_)
-        | DeclKind::Plot(_)
-        | DeclKind::Figure(_)
-        | DeclKind::Layer(_)
-        | DeclKind::Dag(_) => {
-            decl_is_public(decl)
-                && decl_identity(decl).is_some_and(|identity| {
-                    import_namespace_matches(identity.kind, namespace) && identity.name == name
-                })
-        }
-        DeclKind::Import(d) => matches!(
-            &d.kind,
-            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
-                if items.iter().any(|it| {
-                    it.is_pub && it.namespace == namespace && it.local_name() == name
-                })
-        ),
-        DeclKind::Include(d) => {
-            namespace == ImportItemNamespace::Default
-                && matches!(
-                    &d.kind,
-                    graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
-                        if items.iter().any(|it| it.is_pub && it.local_name() == name)
-                )
-        }
-        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
-    })
+    file_import_item_presence(file, name, namespace).is_public()
 }
 
 const fn import_namespace_matches(kind: ProjectDeclKind, namespace: ImportItemNamespace) -> bool {

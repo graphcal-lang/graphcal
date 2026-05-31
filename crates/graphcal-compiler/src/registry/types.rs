@@ -405,12 +405,101 @@ impl IndexDef {
 // Nat range helpers
 // ---------------------------------------------------------------------------
 
+/// Serialization prefix for compiler-generated Nat range index leaf names.
+///
+/// Prefer the typed helpers in this module; this constant is public so the TIR
+/// boundary can deserialize legacy synthetic names in one place.
+pub const NAT_RANGE_INDEX_PREFIX: &str = "__nat_range_";
+
+/// Typed identity for a concrete compiler-generated Nat range index.
+///
+/// The registry still has to render a leaf [`IndexName`] at syntax/display
+/// boundaries, but the core should carry this typed size instead of checking or
+/// constructing the `__nat_range_*` convention directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NatRangeIndex {
+    size: NonZeroUsize,
+}
+
+impl NatRangeIndex {
+    /// Create an identity for a non-empty Nat range index.
+    #[must_use]
+    pub const fn new(size: NonZeroUsize) -> Self {
+        Self { size }
+    }
+
+    /// Try to create an identity from an AST/runtime `u64` size.
+    #[must_use]
+    pub fn try_from_u64(size: u64) -> Option<Self> {
+        let size = usize::try_from(size).ok()?;
+        NonZeroUsize::new(size).map(Self::new)
+    }
+
+    /// Return the non-zero in-memory size.
+    #[must_use]
+    pub const fn size(self) -> NonZeroUsize {
+        self.size
+    }
+
+    /// Return the size as a `u64` for Nat-expression comparisons and display.
+    #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "Graphcal currently supports targets where usize fits in u64"
+    )]
+    pub fn size_u64(self) -> u64 {
+        u64::try_from(self.size.get()).expect("usize fits in u64 on supported targets")
+    }
+
+    /// Render this identity as the synthetic registry leaf name.
+    ///
+    /// This is a serialization boundary; core code should keep using
+    /// [`NatRangeIndex`] wherever possible.
+    #[must_use]
+    pub fn index_name(self) -> IndexName {
+        IndexName::new(format!("{NAT_RANGE_INDEX_PREFIX}{}", self.size_u64()))
+    }
+
+    /// Resolve this identity under the canonical synthetic Nat-range owner.
+    #[must_use]
+    pub fn resolved_name(
+        self,
+    ) -> crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Index> {
+        crate::syntax::names::ResolvedName::from_def(nat_range_synthetic_owner(), self.index_name())
+    }
+
+    /// Recover a typed Nat-range identity from a synthetic registry leaf name.
+    ///
+    /// This is a deserialization boundary for older leaf-keyed registry paths.
+    #[must_use]
+    pub fn from_index_name(name: &IndexName) -> Option<Self> {
+        Self::from_name_str(name.as_str())
+    }
+
+    /// Recover a typed Nat-range identity from a resolved synthetic index name.
+    #[must_use]
+    pub fn from_resolved_name(
+        resolved: &crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Index>,
+    ) -> Option<Self> {
+        (resolved.owner() == &nat_range_synthetic_owner())
+            .then(|| Self::from_name_str(resolved.as_str()))
+            .flatten()
+    }
+
+    fn from_name_str(name: &str) -> Option<Self> {
+        let suffix = name.strip_prefix(NAT_RANGE_INDEX_PREFIX)?;
+        Self::try_from_u64(suffix.parse().ok()?)
+    }
+}
+
 /// Generate the synthetic index name for a nat range of given size.
 ///
-/// E.g., `nat_range_index_name(3)` → `"__nat_range_3"`.
+/// Prefer [`NatRangeIndex::index_name`] in new code. This function remains as a
+/// display/serialization boundary for callers that cannot yet carry the typed
+/// identity.
 #[must_use]
 pub fn nat_range_index_name(size: u64) -> String {
-    format!("__nat_range_{size}")
+    format!("{NAT_RANGE_INDEX_PREFIX}{size}")
 }
 
 /// Canonical owner for compiler-generated Nat range indexes.
@@ -432,16 +521,14 @@ pub fn nat_range_resolved_index_name(
 pub fn nat_range_resolved_index_size(
     size: u64,
 ) -> crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Index> {
-    nat_range_resolved_index_name(crate::syntax::names::IndexName::new(nat_range_index_name(
-        size,
-    )))
-}
-
-/// Check if an index name is a synthetic nat range index and extract its size.
-#[must_use]
-pub fn parse_nat_range_index_name(name: &str) -> Option<u64> {
-    name.strip_prefix("__nat_range_")
-        .and_then(|s| s.parse().ok())
+    NatRangeIndex::try_from_u64(size).map_or_else(
+        || {
+            nat_range_resolved_index_name(crate::syntax::names::IndexName::new(
+                nat_range_index_name(size),
+            ))
+        },
+        NatRangeIndex::resolved_name,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -969,12 +1056,15 @@ impl RegistryBuilder {
     /// AST-level `u64` literals must be checked at the boundary before
     /// reaching this entry point.
     pub fn ensure_nat_range_index(&mut self, size: NonZeroUsize) -> IndexName {
-        let name = IndexName::new(nat_range_index_name(size.get() as u64));
+        let nat_range = NatRangeIndex::new(size);
+        let name = nat_range.index_name();
         self.indexes
             .entry(name.clone())
             .or_insert_with(|| IndexDef {
                 name: name.clone(),
-                kind: IndexKind::NatRange { size },
+                kind: IndexKind::NatRange {
+                    size: nat_range.size(),
+                },
             });
         name
     }

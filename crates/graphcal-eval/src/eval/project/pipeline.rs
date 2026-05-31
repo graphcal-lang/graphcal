@@ -37,13 +37,13 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
     };
 
     // Collect inline DAG definitions from the file's AST.
-    let dag_definitions: HashMap<String, &graphcal_compiler::desugar::resolved_ast::DagDecl> =
+    let dag_definitions: HashMap<DeclName, &graphcal_compiler::desugar::resolved_ast::DagDecl> =
         loaded_file
             .ast
             .declarations
             .iter()
             .filter_map(|d| match &d.kind {
-                DeclKind::Dag(dag) => Some((dag.name.value.to_string(), dag)),
+                DeclKind::Dag(dag) => Some((dag.name.value.clone(), dag)),
                 _ => None,
             })
             .collect();

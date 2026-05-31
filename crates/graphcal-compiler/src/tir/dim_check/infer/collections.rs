@@ -17,7 +17,7 @@ use crate::syntax::names::{
     ScopedName, StructTypeName,
 };
 use crate::syntax::span::Span;
-use crate::tir::typed::NatLinearForm;
+use crate::tir::typed::{NatLinearForm, NatRangeIndexIdentity};
 
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeGenericConstraint};
@@ -47,36 +47,10 @@ fn inferred_index_for_leaf(
     name: IndexName,
     dag: Option<&crate::tir::typed::DagTIR>,
 ) -> InferredIndex {
-    if name.as_str().starts_with("__nat_range_") {
-        InferredIndex::from_resolved(crate::registry::types::nat_range_resolved_index_name(name))
-    } else {
-        InferredIndex::with_owner(inference_owner(dag), name)
-    }
-}
-
-/// Get the index name for a for binding.
-fn for_binding_index_name(index: &ForBindingIndex) -> IndexName {
-    match index {
-        ForBindingIndex::Named(spanned) => standalone_index_name_from_path(&spanned.value),
-        ForBindingIndex::Range { arg, .. } => IndexName::new(nat_expr_to_index_name_str(arg)),
-    }
-}
-
-/// Convert a `NatExpr` to a canonical synthetic index name string.
-///
-/// For literals, produces `__nat_range_3`.
-/// For variables and compound expressions, produces symbolic names like
-/// `__nat_range_N` or `__nat_range_N + 1`.
-fn nat_expr_to_index_name_str(expr: &NatExpr) -> String {
-    match expr {
-        NatExpr::Literal(n, _) => crate::registry::types::nat_range_index_name(*n),
-        NatExpr::Var(ident) => format!("__nat_range_{}", ident.name),
-        NatExpr::Add(_, _, _) | NatExpr::Mul(_, _, _) => {
-            // Normalize to polynomial form for a canonical representation.
-            // During generic function body checking, we use symbolic names.
-            format!("__nat_range_{expr}")
-        }
-    }
+    NatRangeIndexIdentity::from_synthetic_index_name(&name).map_or_else(
+        || InferredIndex::with_owner(inference_owner(dag), name),
+        InferredIndex::from_nat_range_identity,
+    )
 }
 
 /// Normalize a `NatExpr` to `NatLinearForm` without requiring nat param validation.
@@ -284,8 +258,8 @@ pub(super) fn infer_for_comp(
             ForBindingIndex::Named(spanned_idx) => {
                 inferred_index_for_path(&spanned_idx.value, spanned_idx.span, dag)
             }
-            ForBindingIndex::Range { .. } => {
-                inferred_index_for_leaf(for_binding_index_name(&binding.index), dag)
+            ForBindingIndex::Range { arg, .. } => {
+                InferredIndex::from_nat_range_form(normalize_nat_expr_lenient(arg))
             }
         };
         result = InferredType::Indexed {
@@ -761,7 +735,7 @@ pub(super) fn infer_index_access(
                             idx_def.nat_range_size().map(NatLinearForm::from_constant)
                         } else {
                             // Index not in registry: symbolic nat range (generic param).
-                            NatLinearForm::from_index_name(idx_name.as_str())
+                            idx_name.nat_range_form().cloned()
                         };
                         if let Some(index_form) = &index_form
                             && !fin_bound.is_leq(index_form)
@@ -827,7 +801,7 @@ pub(super) fn infer_index_access(
                 if let Some(fin_bound) = compute_index_fin_bound(index_expr, local_types) {
                     let index_form = index_def_for_inferred(&idx_name, dag, registry).map_or_else(
                         // Symbolic nat range from generic param.
-                        || NatLinearForm::from_index_name(idx_name.as_str()),
+                        || idx_name.nat_range_form().cloned(),
                         |idx_def| idx_def.nat_range_size().map(NatLinearForm::from_constant),
                     );
                     if let Some(index_form) = &index_form

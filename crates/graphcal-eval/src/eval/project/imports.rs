@@ -79,19 +79,6 @@ impl DepDeclIndex<'_> {
     }
 }
 
-fn include_item_is_visible(
-    file: &graphcal_compiler::desugar::resolved_ast::File,
-    name: &str,
-    namespace: ImportItemNamespace,
-    boundary: IncludeVisibilityBoundary,
-) -> bool {
-    if boundary.requires_public_outputs() {
-        file_exports_import_item(file, name, namespace)
-    } else {
-        file_has_import_item(file, name, namespace)
-    }
-}
-
 fn ensure_include_item_visible(
     file: &graphcal_compiler::desugar::resolved_ast::File,
     name: &str,
@@ -101,23 +88,25 @@ fn ensure_include_item_visible(
     file_src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), CompileError> {
-    if include_item_is_visible(file, name, namespace, boundary) {
+    let presence = file_import_item_presence(file, name, namespace);
+    if presence.is_public() || (!boundary.requires_public_outputs() && presence.is_present()) {
         return Ok(());
     }
-    if file_has_import_item(file, name, namespace) {
-        return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
+    match presence {
+        ImportItemPresence::Private => Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
             name: name.to_string(),
             file_path: file_path.to_string(),
             src: file_src.clone(),
             span: span.into(),
-        }));
+        })),
+        ImportItemPresence::Missing => Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
+            name: name.to_string(),
+            file_path: file_path.to_string(),
+            src: file_src.clone(),
+            span: span.into(),
+        })),
+        ImportItemPresence::Public => Ok(()),
     }
-    Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-        name: name.to_string(),
-        file_path: file_path.to_string(),
-        src: file_src.clone(),
-        span: span.into(),
-    }))
 }
 
 fn runtime_artifact_unavailable_error(
@@ -323,7 +312,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
             alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(&include_decl.path),
-                |alias_ident| alias_ident.value.to_string(),
+                |alias_ident| alias_ident.value.clone(),
             )
         }
         graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(_) => {
@@ -336,7 +325,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
     // Check for duplicate module names (instantiated includes occupy the same namespace).
     if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
         return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
-            name: prefix,
+            name: prefix.to_string(),
             first: (*first_span).into(),
             src: file_src.clone(),
             span: include_decl.path.span().into(),
@@ -610,10 +599,10 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     // Determine the prefix (namespace) for the merged declarations.
     let prefix = match &include_decl.kind {
         ImportKind::Module { alias } => alias.as_ref().map_or_else(
-            || dag_name.to_string(),
-            |alias_ident| alias_ident.value.to_string(),
+            || ModuleAliasName::new(dag_name),
+            |alias_ident| alias_ident.value.clone(),
         ),
-        ImportKind::Selective(_) => dag_name.to_string(),
+        ImportKind::Selective(_) => ModuleAliasName::new(dag_name),
     };
 
     // Check for duplicate module names.
@@ -621,7 +610,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     let sentinel_dag_id = graphcal_compiler::dag_id::DagId::root(format!("<dag:{dag_name}>"));
     if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
         return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
-            name: prefix,
+            name: prefix.to_string(),
             first: (*first_span).into(),
             src: file_src.clone(),
             span: include_decl.path.span().into(),
@@ -959,11 +948,11 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
         graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
             let module_name = alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(import_path),
-                |alias_ident| alias_ident.value.to_string(),
+                |alias_ident| alias_ident.value.clone(),
             );
             if let Some((_, first_span)) = ctx.module_map.get(&module_name) {
                 return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
-                    name: module_name,
+                    name: module_name.to_string(),
                     first: (*first_span).into(),
                     src: file_src.clone(),
                     span: import_path.span().into(),
@@ -1007,7 +996,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
 /// Builds a dependency graph of inline DAGs and detects cycles.
 /// Returns an error if a DAG directly or indirectly includes itself.
 pub(in crate::eval::project) fn check_dag_recursion(
-    dag_definitions: &HashMap<String, &graphcal_compiler::desugar::resolved_ast::DagDecl>,
+    dag_definitions: &HashMap<DeclName, &graphcal_compiler::desugar::resolved_ast::DagDecl>,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
     fn dfs<'a>(
@@ -1073,12 +1062,18 @@ pub(in crate::eval::project) fn check_dag_recursion(
     let mut visited: HashSet<&str> = HashSet::new();
     let mut in_stack: HashSet<&str> = HashSet::new();
     for name in dag_definitions.keys() {
-        if let Some(cycle) = dfs(name, &deps, &mut visited, &mut in_stack, &mut Vec::new()) {
+        if let Some(cycle) = dfs(
+            name.as_str(),
+            &deps,
+            &mut visited,
+            &mut in_stack,
+            &mut Vec::new(),
+        ) {
             let cycle_str = cycle.join(" -> ");
             return Err(CompileError::Eval(GraphcalError::EvalError {
                 message: format!("recursive DAG instantiation: {cycle_str}"),
                 src: file_src.clone(),
-                span: dag_definitions[name.as_str()].span.into(),
+                span: dag_definitions[name].span.into(),
             }));
         }
     }
@@ -1163,7 +1158,7 @@ fn imported_declared_type(
 )]
 pub(in crate::eval::project) fn import_module_values(
     dep: &EvaluatedFile,
-    module_name: &str,
+    module_name: &ModuleAliasName,
     import_span: Span,
     src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
@@ -1180,7 +1175,7 @@ pub(in crate::eval::project) fn import_module_values(
             continue;
         }
         let rv = &dep.const_values[name];
-        let scoped = ScopedName::qualified(module_name, name.as_str());
+        let scoped = ScopedName::qualified(module_name.as_str(), name.as_str());
         imported_names
             .const_names
             .push((scoped.clone(), import_span));
@@ -1204,7 +1199,7 @@ pub(in crate::eval::project) fn import_module_values(
             continue;
         }
         let rv = &dep.values[name];
-        let scoped = ScopedName::qualified(module_name, name.as_str());
+        let scoped = ScopedName::qualified(module_name.as_str(), name.as_str());
         imported_names
             .param_names
             .push((scoped.clone(), import_span));

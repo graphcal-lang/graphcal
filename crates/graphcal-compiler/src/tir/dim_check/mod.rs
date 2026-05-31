@@ -15,7 +15,7 @@ use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::Registry;
-use crate::tir::typed::NatLinearForm;
+use crate::tir::typed::{NatLinearForm, NatRangeIndexIdentity};
 
 pub(crate) use helpers::format_inferred_type;
 use helpers::{
@@ -41,31 +41,50 @@ pub use crate::registry::declared_type::DeclaredType;
 
 /// Index identity carried by inferred collection/label types.
 ///
-/// Equality is owner-sensitive; leaf-only names must be resolved before they
-/// become inferred semantic types.
+/// Declared indexes compare by owner-qualified [`IndexTypeRef`]. Nat-range
+/// indexes additionally carry their normalized Nat form so generic ranges such
+/// as `range(N + 1)` are not encoded in or compared through synthetic strings.
 #[derive(Debug, Clone, Eq)]
 pub struct InferredIndex {
     reference: IndexTypeRef,
+    nat_range: Option<NatRangeIndexIdentity>,
 }
 
 impl InferredIndex {
     #[must_use]
     pub fn with_owner(owner: crate::dag_id::DagId, name: IndexName) -> Self {
-        Self {
-            reference: IndexTypeRef::with_owner(owner, name),
-        }
+        Self::from_ref(IndexTypeRef::with_owner(owner, name))
     }
 
     #[must_use]
     pub fn from_resolved(resolved: ResolvedName<namespace::Index>) -> Self {
+        let nat_range = NatRangeIndexIdentity::from_resolved_index_name(&resolved);
         Self {
             reference: IndexTypeRef::from_resolved(resolved),
+            nat_range,
         }
     }
 
     #[must_use]
-    pub const fn from_ref(reference: IndexTypeRef) -> Self {
-        Self { reference }
+    pub fn from_ref(reference: IndexTypeRef) -> Self {
+        let nat_range = NatRangeIndexIdentity::from_resolved_index_name(reference.resolved());
+        Self {
+            reference,
+            nat_range,
+        }
+    }
+
+    #[must_use]
+    pub fn from_nat_range_identity(identity: NatRangeIndexIdentity) -> Self {
+        Self {
+            reference: IndexTypeRef::from_resolved(identity.synthetic_resolved_index_name()),
+            nat_range: Some(identity),
+        }
+    }
+
+    #[must_use]
+    pub fn from_nat_range_form(form: NatLinearForm) -> Self {
+        Self::from_nat_range_identity(NatRangeIndexIdentity::from_form(form))
     }
 
     #[must_use]
@@ -84,19 +103,44 @@ impl InferredIndex {
     }
 
     #[must_use]
+    pub const fn nat_range_identity(&self) -> Option<&NatRangeIndexIdentity> {
+        self.nat_range.as_ref()
+    }
+
+    #[must_use]
+    pub fn nat_range_form(&self) -> Option<&NatLinearForm> {
+        self.nat_range.as_ref().map(NatRangeIndexIdentity::form)
+    }
+
+    #[must_use]
     pub fn matches_resolved(&self, expected: &ResolvedName<namespace::Index>) -> bool {
-        self.resolved() == expected
+        match (
+            self.nat_range_identity(),
+            NatRangeIndexIdentity::from_resolved_index_name(expected),
+        ) {
+            (Some(actual), Some(expected)) => actual == &expected,
+            _ => self.resolved() == expected,
+        }
     }
 
     #[must_use]
     pub fn matches_ref(&self, expected: &IndexTypeRef) -> bool {
-        self.reference.matches_ref(expected)
+        match (
+            self.nat_range_identity(),
+            NatRangeIndexIdentity::from_resolved_index_name(expected.resolved()),
+        ) {
+            (Some(actual), Some(expected)) => actual == &expected,
+            _ => self.reference.matches_ref(expected),
+        }
     }
 }
 
 impl PartialEq for InferredIndex {
     fn eq(&self, other: &Self) -> bool {
-        self.reference.matches_ref(&other.reference)
+        match (self.nat_range_identity(), other.nat_range_identity()) {
+            (Some(lhs), Some(rhs)) => lhs == rhs,
+            _ => self.reference.matches_ref(&other.reference),
+        }
     }
 }
 

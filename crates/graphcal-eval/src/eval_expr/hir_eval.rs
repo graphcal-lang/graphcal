@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use graphcal_compiler::hir::{self, BuiltinFnName, ConstRef, FunctionRef};
@@ -843,9 +842,16 @@ fn map_entry_index_ref(key: &hir::expr::MapEntryKey) -> IndexTypeRef {
         hir::expr::MapEntryKey::IndexVariant(variant) => {
             IndexTypeRef::from_resolved(variant.value.index().clone())
         }
-        hir::expr::MapEntryKey::NatRangeVariant { size, .. } => IndexTypeRef::from_resolved(
-            graphcal_compiler::registry::types::nat_range_resolved_index_size(*size),
-        ),
+        hir::expr::MapEntryKey::NatRangeVariant { size, .. } => {
+            graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(*size).map_or_else(
+                || {
+                    IndexTypeRef::from_resolved(
+                        graphcal_compiler::registry::types::nat_range_resolved_index_size(*size),
+                    )
+                },
+                |nat_range| IndexTypeRef::from_resolved(nat_range.resolved_name()),
+            )
+        }
     }
 }
 
@@ -996,12 +1002,17 @@ fn eval_hir_for_comp(
                     *span,
                 ));
             }
+            let nat_range = graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(size)
+                .ok_or_else(|| {
+                ctx.eval_error(
+                    format!("nat range size {size} does not fit in usize on this target"),
+                    *span,
+                )
+            })?;
             (
-                IndexTypeRef::from_resolved(
-                    graphcal_compiler::registry::types::nat_range_resolved_index_size(size),
-                ),
+                IndexTypeRef::from_resolved(nat_range.resolved_name()),
                 *span,
-                Some(size),
+                Some(nat_range),
             )
         }
     };
@@ -1009,28 +1020,12 @@ fn eval_hir_for_comp(
     let dynamic_nat_def;
     let idx_def = if let Some(def) = index_def_for_ref(&idx_name, ctx) {
         def
-    } else if let Some(size) = dynamic_nat_size {
-        if size == 0 {
-            return Err(ctx.eval_error(
-                "range(0) is not allowed; indexes must contain at least one element",
-                error_span,
-            ));
-        }
-        let size = usize::try_from(size).map_err(|_| {
-            ctx.eval_error(
-                format!("nat range size {size} does not fit in usize on this target"),
-                error_span,
-            )
-        })?;
-        let size = NonZeroUsize::new(size).ok_or_else(|| {
-            ctx.eval_error(
-                "range(0) is not allowed; indexes must contain at least one element",
-                error_span,
-            )
-        })?;
+    } else if let Some(nat_range) = dynamic_nat_size {
         dynamic_nat_def = IndexDef {
-            name: idx_name.to_unowned_name(),
-            kind: IndexKind::NatRange { size },
+            name: nat_range.index_name(),
+            kind: IndexKind::NatRange {
+                size: nat_range.size(),
+            },
         };
         &dynamic_nat_def
     } else {

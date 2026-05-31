@@ -15,9 +15,7 @@ use crate::hir::{self, BuiltinFnName, ConstRef, FunctionRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{
-    GenericParamName, IndexName, ResolvedName, ScopedName, UnitName, namespace,
-};
+use crate::syntax::names::{GenericParamName, ResolvedName, ScopedName, UnitName, namespace};
 use crate::tir::typed::NatLinearForm;
 
 use super::super::builtins::infer_fn_dim;
@@ -1244,12 +1242,9 @@ fn infer_hir_for_comp(
             hir::expr::ForBindingIndex::Named(index) => {
                 InferredIndex::from_resolved(index.value.clone())
             }
-            hir::expr::ForBindingIndex::Range { arg, .. } => InferredIndex::from_resolved(
-                crate::registry::types::nat_range_resolved_index_name(IndexName::new(format!(
-                    "__nat_range_{}",
-                    hir_nat_to_linear_form(arg).format()
-                ))),
-            ),
+            hir::expr::ForBindingIndex::Range { arg, .. } => {
+                InferredIndex::from_nat_range_form(hir_nat_to_linear_form(arg))
+            }
         };
         result = InferredType::Indexed {
             element: Box::new(result),

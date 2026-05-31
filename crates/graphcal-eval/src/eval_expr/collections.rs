@@ -1,7 +1,5 @@
-use std::collections::HashMap;
-use std::num::NonZeroUsize;
-
 use indexmap::IndexMap;
+use std::collections::HashMap;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, MapEntry, MapEntryKey};
 use graphcal_compiler::syntax::names::{
@@ -601,15 +599,17 @@ pub(super) fn eval_for_comp(
                     *span,
                 ));
             }
-            let idx_name = graphcal_compiler::syntax::names::IndexName::new(
-                graphcal_compiler::registry::types::nat_range_index_name(size),
-            );
+            let nat_range = graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(size)
+                .ok_or_else(|| {
+                ctx.eval_error(
+                    format!("nat range size {size} does not fit in usize on this target"),
+                    *span,
+                )
+            })?;
             (
-                IndexTypeRef::from_resolved(
-                    graphcal_compiler::registry::types::nat_range_resolved_index_name(idx_name),
-                ),
+                IndexTypeRef::from_resolved(nat_range.resolved_name()),
                 *span,
-                Some(size),
+                Some(nat_range),
                 None,
             )
         }
@@ -632,28 +632,12 @@ pub(super) fn eval_for_comp(
             })?
     } else if let Some(def) = ctx.registry.indexes.get_index(idx_name.as_str()) {
         def
-    } else if let Some(size) = dynamic_nat_size {
-        if size == 0 {
-            return Err(ctx.eval_error(
-                "range(0) is not allowed; indexes must contain at least one element",
-                error_span,
-            ));
-        }
-        let size = usize::try_from(size).map_err(|_| {
-            ctx.eval_error(
-                format!("nat range size {size} does not fit in usize on this target"),
-                error_span,
-            )
-        })?;
-        let size = NonZeroUsize::new(size).ok_or_else(|| {
-            ctx.eval_error(
-                "range(0) is not allowed; indexes must contain at least one element",
-                error_span,
-            )
-        })?;
+    } else if let Some(nat_range) = dynamic_nat_size {
         dynamic_nat_def = graphcal_compiler::registry::types::IndexDef {
-            name: idx_name.to_unowned_name(),
-            kind: graphcal_compiler::registry::types::IndexKind::NatRange { size },
+            name: nat_range.index_name(),
+            kind: graphcal_compiler::registry::types::IndexKind::NatRange {
+                size: nat_range.size(),
+            },
         };
         &dynamic_nat_def
     } else {

@@ -224,7 +224,7 @@ fn module_resolve_compile_error(
 /// resolves under the local alias at inline-call eval time.
 pub(in crate::eval::project) fn merge_dep_dag_tirs(
     tir: &mut graphcal_compiler::tir::typed::TIR,
-    module_map: &HashMap<String, (graphcal_compiler::dag_id::DagId, Span)>,
+    module_map: &HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
 ) {
     for (alias, (dep_dag_id, _)) in module_map {
@@ -508,7 +508,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
         // ---- 5. Merge dep IR into importer's IR ---------------------------
         unfrozen.merge_dependency(
             dep_unfrozen,
-            &deferred.prefix,
+            deferred.prefix.as_str(),
             &deferred.bindings,
             &dep_names,
             &deferred.index_bindings,
@@ -557,7 +557,7 @@ pub(in crate::eval::project) struct AliasSubstitutions<'a> {
 fn add_selective_aliases_inner(
     decls: &[graphcal_compiler::desugar::resolved_ast::Declaration],
     selective: &[ImportAlias],
-    prefix: &str,
+    prefix: &ModuleAliasName,
     subs: &AliasSubstitutions<'_>,
     import_span: Span,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
@@ -568,7 +568,7 @@ fn add_selective_aliases_inner(
         // The alias points at the dep's prefixed declaration: a typed
         // qualified `ScopedName`. No flat `prefix::orig_name` strings are
         // built — the qualification stays structural through the IR.
-        let target = ScopedName::qualified(prefix, orig_name);
+        let target = ScopedName::qualified(prefix.as_str(), orig_name);
 
         let type_ann = decls.iter().find_map(|d| match &d.kind {
             DeclKind::Param(p) if p.name.value.as_str() == orig_name => Some(p.type_ann.clone()),
@@ -924,7 +924,7 @@ pub(in crate::eval::project) fn build_dep_import_values_for_kind(
         graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
             let module_name = alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(import_path),
-                |alias_ident| alias_ident.value.to_string(),
+                |alias_ident| alias_ident.value.clone(),
             );
             let import_span = import_path.span();
             imports::import_module_values(
