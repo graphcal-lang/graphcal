@@ -177,8 +177,15 @@ fn rewrite_alias_field_access(expr: &mut Expr, qualified_pairs: &HashSet<Qualifi
 // Per-file evaluation types and pipeline
 // ---------------------------------------------------------------------------
 
-/// The result of evaluating a single file in the per-file pipeline.
+/// The compiled dependency artifact for a single file in the per-file pipeline.
+///
+/// Files with required params or indexes cannot be evaluated standalone, but
+/// downstream compile-time imports still need their registry, public names,
+/// declared types, const values, and DAG metadata. For those files,
+/// `runtime_available` is `false` and `values` / `assertions` are empty.
 pub(in crate::eval::project) struct EvaluatedFile {
+    /// Whether runtime values and assertion results were evaluated.
+    pub(in crate::eval::project) runtime_available: bool,
     /// Evaluated runtime values (params + nodes): name → `RuntimeValue`.
     pub(in crate::eval::project) values: HashMap<DeclName, RuntimeValue>,
     /// Evaluated const values: name → `RuntimeValue`.
@@ -203,7 +210,7 @@ pub(in crate::eval::project) struct EvaluatedFile {
 }
 
 impl EvaluatedFile {
-    /// Check whether this file declares an assertion with the given name.
+    /// Check whether this file has an evaluated assertion with the given name.
     pub(in crate::eval::project) fn has_assert(&self, name: &str) -> bool {
         self.assertions.keys().any(|n| n.as_str() == name)
     }
@@ -713,9 +720,11 @@ pub fn compile_to_tir_from_project(
 
 /// Compile and evaluate a [`LoadedProject`](crate::loader::LoadedProject).
 ///
-/// Uses per-file evaluation: each file is compiled and evaluated independently
-/// in topological order. Import declarations bind pre-evaluated values from
-/// dependency files. All assertions in all files are evaluated and aggregated.
+/// Uses per-file evaluation: each file is compiled in topological order, and
+/// files that can run standalone are evaluated independently. Library files
+/// with required runtime inputs keep compile-time artifacts only. Import
+/// declarations bind evaluated dependency values when available. All evaluated
+/// assertions are aggregated.
 ///
 /// # Errors
 ///

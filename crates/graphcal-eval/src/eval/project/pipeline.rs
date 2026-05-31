@@ -7,7 +7,7 @@
 )]
 use super::*;
 
-/// Compile a single file within a project, using pre-evaluated values from dependencies.
+/// Compile a single file within a project, using dependency artifacts for imports.
 ///
 /// Builds import bindings, lowers to IR, applies overrides, and type-resolves to TIR.
 /// Both [`evaluate_project_perfile`] and [`compile_to_tir_project_perfile`] call this
@@ -215,6 +215,113 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
     )
 }
 
+fn tir_has_required_indexes(tir: &graphcal_compiler::tir::typed::TIR) -> bool {
+    tir.registry
+        .indexes
+        .all_indexes()
+        .any(graphcal_compiler::registry::types::IndexDef::is_required)
+        || tir
+            .root()
+            .semantic
+            .collection_refs
+            .index_defs
+            .values()
+            .any(graphcal_compiler::registry::types::IndexDef::is_required)
+}
+
+fn tir_requires_runtime_inputs(tir: &graphcal_compiler::tir::typed::TIR) -> bool {
+    tir.root().params.iter().any(|p| p.default_expr.is_none()) || tir_has_required_indexes(tir)
+}
+
+fn first_required_index_diagnostic(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    ast: &graphcal_compiler::desugar::resolved_ast::File,
+) -> Option<(String, miette::SourceSpan)> {
+    for idx_def in tir.registry.indexes.all_indexes() {
+        if idx_def.is_required() {
+            let span = ast
+                .declarations
+                .iter()
+                .find_map(|d| {
+                    if let DeclKind::Index(idx) = &d.kind
+                        && idx.name.value.as_str() == idx_def.name.as_str()
+                    {
+                        Some(d.span.into())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| miette::SourceSpan::from((0, 0)));
+            return Some((idx_def.name.to_string(), span));
+        }
+    }
+
+    tir.root()
+        .semantic
+        .collection_refs
+        .index_defs
+        .values()
+        .find(|idx_def| idx_def.is_required())
+        .map(|idx_def| {
+            // Owner-qualified required indexes can enter through module type
+            // resolution. The reference span is not retained in index_defs, so
+            // point at the importing file as a whole rather than fabricating a
+            // declaration span.
+            (idx_def.name.to_string(), miette::SourceSpan::from((0, 0)))
+        })
+}
+
+fn top_level_const_values(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    const_values: &crate::eval_expr::RuntimeValueMap,
+) -> HashMap<DeclName, RuntimeValue> {
+    // Top-level consts are exposed by leaf name at the project import
+    // boundary; internal eval routing uses canonical declaration keys.
+    tir.root()
+        .consts
+        .iter()
+        .filter_map(|entry| {
+            let key = crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &entry.name);
+            const_values
+                .get(&key)
+                .cloned()
+                .map(|value| (DeclName::new(entry.name.member()), value))
+        })
+        .collect()
+}
+
+/// Store a compiled-but-not-evaluated non-root file for downstream compile-time imports.
+///
+/// Library files with required params or indexes cannot produce runtime values
+/// standalone, but their registry, declared types, consts, and DAG metadata are
+/// still needed by importers.
+pub(in crate::eval::project) fn store_compiled_file_artifact(
+    compiled: CompiledFile,
+    file_dag_id: &graphcal_compiler::dag_id::DagId,
+    file_src: &NamedSource<Arc<String>>,
+    pub_names: HashSet<DeclName>,
+    evaluated_files: &mut HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+) -> Result<(), CompileError> {
+    let const_values = crate::exec_plan::eval_consts_from_tir(&compiled.tir, file_src)?;
+    let top_level_consts = top_level_const_values(&compiled.tir, &const_values);
+    let dag_tirs = compiled.tir.dags.clone();
+
+    evaluated_files.insert(
+        file_dag_id.clone(),
+        EvaluatedFile {
+            runtime_available: false,
+            values: HashMap::new(),
+            const_values: top_level_consts,
+            declared_types: compiled.declared_types,
+            assertions: HashMap::new(),
+            registry: compiled.tir.registry,
+            pub_names,
+            dag_tirs,
+        },
+    );
+    Ok(())
+}
+
 /// Evaluate and store a non-root file, producing an [`EvaluatedFile`] for downstream imports.
 pub(in crate::eval::project) fn evaluate_and_store_file(
     compiled: CompiledFile,
@@ -227,6 +334,7 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
     let eval_result = evaluate_plan(&compiled.tir, &plan, &compiled.declared_types, file_src);
     let file_runtime_values =
         extract_runtime_values(&compiled.tir, &plan, &compiled.declared_types, file_src);
+    let top_level_consts = top_level_const_values(&compiled.tir, &plan.const_values);
 
     // Capture dag TIRs so cross-file qualified inline calls can merge them
     // into the importer's TIR::dags under module-prefixed keys.
@@ -235,25 +343,9 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
     evaluated_files.insert(
         file_dag_id.clone(),
         EvaluatedFile {
+            runtime_available: true,
             values: file_runtime_values,
-            // Top-level consts are exposed by leaf name at the project import
-            // boundary; internal eval routing used canonical declaration keys.
-            const_values: compiled
-                .tir
-                .root()
-                .consts
-                .iter()
-                .filter_map(|entry| {
-                    let key = crate::decl_key::RuntimeDeclKey::for_local_decl(
-                        compiled.tir.root(),
-                        &entry.name,
-                    );
-                    plan.const_values
-                        .get(&key)
-                        .cloned()
-                        .map(|value| (DeclName::new(entry.name.member()), value))
-                })
-                .collect(),
+            const_values: top_level_consts,
             declared_types: compiled.declared_types,
             assertions: eval_result
                 .assertions
@@ -270,9 +362,10 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
 
 /// Evaluate a project using per-file evaluation.
 ///
-/// Each file is compiled and evaluated as an independent unit, in topological
-/// order (dependencies first). Import declarations bind pre-evaluated values
-/// from dependency files into the importing file's scope.
+/// Each file is compiled in topological order (dependencies first). Files that
+/// can run standalone are also evaluated; library files with required runtime
+/// inputs keep compile-time artifacts only. Import declarations bind evaluated
+/// values from dependency files into the importing file's scope when available.
 ///
 /// All assertions in all files are evaluated and aggregated.
 #[expect(
@@ -303,15 +396,19 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
         // Files with required params (no default) or required indexes cannot be
         // evaluated standalone. They are only consumed via instantiated imports
         // where `merge_dependency` provides the bindings.
-        let is_library = compiled.tir.is_library();
-        let has_required_indexes = compiled
-            .tir
-            .registry
-            .indexes
-            .all_indexes()
-            .any(graphcal_compiler::registry::types::IndexDef::is_required);
+        let is_library = tir_requires_runtime_inputs(&compiled.tir);
+        let has_required_indexes = tir_has_required_indexes(&compiled.tir);
 
         if !is_root && is_library {
+            let file_src = &project.files[file_dag_id].named_source;
+            let pub_names = extract_pub_names(&project.files[file_dag_id].ast);
+            store_compiled_file_artifact(
+                compiled,
+                file_dag_id,
+                file_src,
+                pub_names,
+                &mut evaluated_files,
+            )?;
             continue;
         }
 
@@ -319,28 +416,14 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
             // Reject standalone evaluation of files with required indexes.
             if has_required_indexes {
                 let file_src = &project.files[file_dag_id].named_source;
-                for idx_def in compiled.tir.registry.indexes.all_indexes() {
-                    if idx_def.is_required() {
-                        let span = project.files[file_dag_id]
-                            .ast
-                            .declarations
-                            .iter()
-                            .find_map(|d| {
-                                if let DeclKind::Index(idx) = &d.kind
-                                    && idx.name.value.as_str() == idx_def.name.as_str()
-                                {
-                                    Some(d.span.into())
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or_else(|| miette::SourceSpan::from((0, 0)));
-                        return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
-                            name: idx_def.name.to_string(),
-                            src: file_src.clone(),
-                            span,
-                        }));
-                    }
+                if let Some((name, span)) =
+                    first_required_index_diagnostic(&compiled.tir, &project.files[file_dag_id].ast)
+                {
+                    return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
+                        name,
+                        src: file_src.clone(),
+                        span,
+                    }));
                 }
             }
             let file_src = &project.files[file_dag_id].named_source;
@@ -515,8 +598,10 @@ pub(in crate::eval::project) fn build_dep_import_spans(
 
 /// Compile a project to TIR using per-file evaluation.
 ///
-/// Non-root files are fully evaluated to produce `RuntimeValue`s for downstream
-/// imports. The root file stops at TIR and returns it.
+/// Non-root files are compiled to dependency artifacts. Files that can run
+/// standalone are evaluated to produce `RuntimeValue`s for downstream imports;
+/// library files with required runtime inputs keep compile-time artifacts only.
+/// The root file stops at TIR and returns it.
 pub(in crate::eval::project) fn compile_to_tir_project_perfile(
     project: &crate::loader::LoadedProject,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
@@ -539,14 +624,18 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
             return Ok(compiled.tir);
         }
 
-        // Skip standalone evaluation for files with required params (no default).
-        let has_required_params = compiled
-            .tir
-            .root()
-            .params
-            .iter()
-            .any(|e| e.default_expr.is_none());
-        if has_required_params {
+        // Skip standalone evaluation for files with required params or indexes,
+        // while still retaining compile-time artifacts for downstream imports.
+        if tir_requires_runtime_inputs(&compiled.tir) {
+            let file_src = &project.files[file_dag_id].named_source;
+            let pub_names = extract_pub_names(&project.files[file_dag_id].ast);
+            store_compiled_file_artifact(
+                compiled,
+                file_dag_id,
+                file_src,
+                pub_names,
+                &mut evaluated_files,
+            )?;
             continue;
         }
 

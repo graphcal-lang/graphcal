@@ -68,6 +68,9 @@ impl DepDeclIndex<'_> {
     fn is_runtime(&self, name: &str) -> bool {
         self.params.contains(name) || matches!(self.other.get(name), Some(OtherDeclKind::Node))
     }
+    fn is_assert(&self, name: &str) -> bool {
+        matches!(self.other.get(name), Some(OtherDeclKind::Assert))
+    }
     fn is_type_system(&self, name: &str) -> bool {
         self.dims.contains(name)
             || self.units.contains(name)
@@ -115,6 +118,22 @@ fn ensure_include_item_visible(
         src: file_src.clone(),
         span: span.into(),
     }))
+}
+
+fn runtime_artifact_unavailable_error(
+    item_description: &str,
+    import_path: &ModulePath,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> CompileError {
+    CompileError::Eval(GraphcalError::EvalError {
+        message: format!(
+            "cannot include {item_description} from `{}` because its runtime values are unavailable; if it has required runtime inputs, provide bindings with a parameterized `include`",
+            import_path.display_path()
+        ),
+        src: src.clone(),
+        span: span.into(),
+    })
 }
 
 fn include_value_decl(
@@ -204,7 +223,7 @@ pub(in crate::eval::project) struct ClassifiedBindings {
 /// dep declaration (const/node/assert) or no dep declaration at all.
 ///
 /// Caller-specific validation (e.g. index-kind matching, registry lookups for
-/// already-evaluated dependencies) layers on top of this — this helper only
+/// already-compiled dependency artifacts) layers on top of this — this helper only
 /// answers "is `binding_name` a param/type/dim/index of the dep, or invalid?".
 fn classify_param_bindings(
     param_bindings: &[graphcal_compiler::desugar::resolved_ast::ParamBinding],
@@ -374,7 +393,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                     DeclKind::Index(idx) if idx.name.value.as_str() == rhs_name => Some(idx),
                     _ => None,
                 });
-        // Check 2: already-evaluated dependency registries.
+        // Check 2: already-compiled dependency registries.
         let importer_idx_from_registry = if importer_idx_ast.is_none() {
             ctx.extra_registry_builders
                 .iter()
@@ -775,7 +794,7 @@ pub(in crate::eval::project) fn is_bare_module_dag_ref(
 }
 
 /// Process a non-instantiated import or include (no param bindings), importing values and
-/// type-system declarations from the already-evaluated dependency.
+/// type-system declarations from the dependency's compiled artifact.
 ///
 /// When `is_import` is `true`, only compile-time items (consts, dims, units, types, indexes,
 /// dags, assertions) are allowed. Runtime items (params, non-const nodes) trigger an error
@@ -800,19 +819,19 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
 ) -> Result<(), CompileError> {
     let dep = evaluated_files.get(import_dag_id).ok_or_else(|| {
         CompileError::Eval(GraphcalError::EvalError {
-            message: format!("internal: dependency {import_dag_id} not yet evaluated"),
+            message: format!("dependency `{import_dag_id}` is not available for imports"),
             src: file_src.clone(),
             span: import_path.span().into(),
         })
     })?;
+    let dep_loaded = &project.files[import_dag_id];
+    let dep_index = build_dep_decl_index(&dep_loaded.ast.declarations);
 
     match import_kind {
         graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(names) => {
             for import_item in names {
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
-
-                let dep_loaded = &project.files[import_dag_id];
 
                 // Visibility check: the item must be declared `pub` in the source file.
                 if !file_exports_import_item(&dep_loaded.ast, orig_name, import_item.namespace) {
@@ -844,6 +863,37 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                     continue;
                 }
 
+                let is_default_namespace = import_item.namespace
+                    == graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Default;
+                if is_default_namespace && dep_index.is_runtime(orig_name) {
+                    if is_import {
+                        return Err(CompileError::Eval(GraphcalError::ImportRuntimeItem {
+                            name: orig_name.to_string(),
+                            src: file_src.clone(),
+                            span: import_item.name.span.into(),
+                        }));
+                    }
+                    if !dep.runtime_available {
+                        let item_description = format!("runtime item `{orig_name}`");
+                        return Err(runtime_artifact_unavailable_error(
+                            &item_description,
+                            import_path,
+                            file_src,
+                            import_item.name.span,
+                        ));
+                    }
+                }
+                if is_default_namespace && dep_index.is_assert(orig_name) && !dep.runtime_available
+                {
+                    let item_description = format!("assertion `{orig_name}`");
+                    return Err(runtime_artifact_unavailable_error(
+                        &item_description,
+                        import_path,
+                        file_src,
+                        import_item.name.span,
+                    ));
+                }
+
                 match import_selective_item(
                     dep,
                     orig_name,
@@ -872,6 +922,17 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                             .push((local_name, import_item.name.span));
                     }
                     SelectiveImportResult::NotFound => {
+                        if is_default_namespace
+                            && (dep_index.is_runtime(orig_name) || dep_index.is_assert(orig_name))
+                        {
+                            let item_description = format!("runtime item `{orig_name}`");
+                            return Err(runtime_artifact_unavailable_error(
+                                &item_description,
+                                import_path,
+                                file_src,
+                                import_item.name.span,
+                            ));
+                        }
                         // Check if it's a type-system declaration in the dep's file.
                         if file_has_import_item(
                             &dep_loaded.ast,
@@ -915,6 +976,14 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
 
             // Import all values under module::name prefix.
             let import_span = import_path.span();
+            if !is_import && !dep.runtime_available {
+                return Err(runtime_artifact_unavailable_error(
+                    "runtime items",
+                    import_path,
+                    file_src,
+                    import_span,
+                ));
+            }
             import_module_values(
                 dep,
                 &module_name,
@@ -1154,6 +1223,7 @@ mod tests {
 
     fn empty_evaluated_file() -> EvaluatedFile {
         EvaluatedFile {
+            runtime_available: true,
             values: HashMap::new(),
             const_values: HashMap::new(),
             declared_types: HashMap::new(),

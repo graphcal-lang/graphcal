@@ -180,9 +180,9 @@ node m: Dimensionless = min(for i: range(0) { 1.0 });
     );
 }
 
-#[test]
-#[should_panic(expected = "BUG: type-only import required an evaluated dependency")]
-fn type_only_import_from_library_with_required_runtime_inputs_compiles() {
+fn write_required_runtime_input_type_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap_or_else(|err| {
         panic!("BUG: type-only import required an evaluated dependency: tempdir failed: {err}")
     });
@@ -211,21 +211,60 @@ param cost: Dimensionless[Phase];
         panic!("BUG: type-only import required an evaluated dependency: lib write failed: {err}")
     });
     let root = package_dir.join("main.gcl");
-    std::fs::write(
-        &root,
+    std::fs::write(&root, main_source).unwrap_or_else(|err| {
+        panic!("BUG: type-only import required an evaluated dependency: root write failed: {err}")
+    });
+
+    (dir, root)
+}
+
+#[test]
+fn type_only_import_from_library_with_required_runtime_inputs_compiles() {
+    let (_dir, root) = write_required_runtime_input_type_project(
         r"
 import pkg.lib.{ type Foo };
 pub type Bar { Bar(inner: Foo) }
 ",
-    )
-    .unwrap_or_else(|err| {
-        panic!("BUG: type-only import required an evaluated dependency: root write failed: {err}")
-    });
+    );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
     assert!(
         result.is_ok(),
         "BUG: type-only import required an evaluated dependency: {result:?}",
+    );
+}
+
+#[test]
+fn module_type_import_from_library_with_required_runtime_inputs_compiles() {
+    let (_dir, root) = write_required_runtime_input_type_project(
+        r"
+import pkg.lib as lib;
+pub type Bar { Bar(inner: lib.Foo) }
+",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
+    assert!(
+        result.is_ok(),
+        "BUG: module type resolution required an evaluated dependency: {result:?}",
+    );
+}
+
+#[test]
+fn runtime_include_from_library_with_required_runtime_inputs_is_user_error() {
+    let (_dir, root) = write_required_runtime_input_type_project(
+        r"
+include pkg.lib().{ cost };
+",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
+    let message = format!("{result:?}");
+    assert!(
+        result.is_err()
+            && message.contains("cannot include runtime item `cost`")
+            && !message.contains("internal"),
+        "BUG: runtime import from unevaluated library should be a user-facing diagnostic: {message}",
     );
 }
 
