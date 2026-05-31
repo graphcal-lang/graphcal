@@ -416,10 +416,7 @@ fn eval_hir_fn_call(
     local_values: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let FunctionRef::Builtin(name) = &callee.value else {
-        return Err(ctx.eval_error("user functions are not evaluable yet", callee.span));
-    };
-    let name = *name;
+    let FunctionRef::Builtin(name) = callee.value;
     match name.special_kind() {
         Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::Aggregation(kind))
             if args.len() == 1 =>

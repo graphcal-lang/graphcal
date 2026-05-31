@@ -208,6 +208,20 @@ fn hir_dim_check_uses_lexical_local_ids_not_mutated_syntax_names() {
 }
 
 #[test]
+fn hir_dim_check_uses_lowered_assert_body_not_mutated_syntax_body() {
+    let (mut tir, src) = module_aware_tir("assert ok = sqrt(4.0) == 2.0;");
+    assert!(!tir.root().semantic.expressions.asserts.is_empty());
+    let span = tir.root().asserts[0].span;
+    tir.root_mut().asserts[0].body =
+        crate::desugar::resolved_ast::AssertBody::Expr(crate::desugar::resolved_ast::Expr::new(
+            crate::desugar::resolved_ast::ExprKind::StringLiteral("not the HIR".to_string()),
+            span,
+        ));
+
+    check_dimensions_tir(&tir, &src).unwrap();
+}
+
+#[test]
 fn check_dimensionless_const() {
     let types = check("const node g0: Dimensionless = 9.80665;").unwrap();
     assert_eq!(

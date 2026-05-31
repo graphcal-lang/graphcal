@@ -364,6 +364,7 @@ pub(super) fn evaluate_plan(
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    let empty_hir_locals: HirLocalValueMap = HashMap::new();
 
     let EvalLoopResult { values, errors } =
         run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
@@ -472,8 +473,13 @@ pub(super) fn evaluate_plan(
         .iter()
         .map(|entry| {
             let ef = plan.expected_fail.get(&entry.name);
-            let assert_result =
-                evaluate_assert_with_expected_fail(&entry.body, ef, &values, &empty_locals, &ctx);
+            let assert_result = evaluate_assert_with_expected_fail(
+                &entry.body,
+                ef,
+                &values,
+                &empty_hir_locals,
+                &ctx,
+            );
             (
                 DeclName::new(entry.name.member()),
                 assert_result,
@@ -578,10 +584,10 @@ pub(super) fn evaluate_plan(
 /// the raw indexed `RuntimeValue`, invert only the matching variant entries,
 /// then aggregate.
 fn evaluate_assert_with_expected_fail(
-    body: &graphcal_compiler::desugar::resolved_ast::AssertBody,
+    body: &graphcal_compiler::hir::AssertBody,
     ef: Option<&ExpectedFail>,
     values: &RuntimeValueMap,
-    local_values: &HashMap<String, RuntimeValue>,
+    local_values: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
     match ef {
@@ -599,14 +605,14 @@ fn evaluate_assert_with_expected_fail(
         Some(ExpectedFail::Variants(keys)) => {
             // Per-variant: we need the raw RuntimeValue to invert specific entries.
             // Only Expr-based assertions can be indexed; Tolerance assertions are scalar.
-            let graphcal_compiler::desugar::resolved_ast::AssertBody::Expr(body_expr) = body else {
+            let graphcal_compiler::hir::AssertBody::Expr(body_expr) = body else {
                 // Tolerance assertions cannot be indexed, so Variants makes no sense.
                 // The resolver should have caught this, but be safe.
                 return AssertResult::Error {
                     message: "per-variant #[expected_fail] on a tolerance assertion".to_string(),
                 };
             };
-            match eval_expr(body_expr, values, local_values, ctx) {
+            match eval_hir_expr(body_expr, values, local_values, ctx) {
                 Ok(RuntimeValue::Indexed {
                     index_name,
                     entries,
@@ -875,14 +881,14 @@ fn collect_failing_paths(
 
 /// Evaluate a single assert body and return an `AssertResult`.
 pub(super) fn evaluate_assert_body(
-    body: &graphcal_compiler::desugar::resolved_ast::AssertBody,
+    body: &graphcal_compiler::hir::AssertBody,
     values: &RuntimeValueMap,
-    local_values: &HashMap<String, RuntimeValue>,
+    local_values: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
     match body {
-        graphcal_compiler::desugar::resolved_ast::AssertBody::Expr(body_expr) => {
-            match eval_expr(body_expr, values, local_values, ctx) {
+        graphcal_compiler::hir::AssertBody::Expr(body_expr) => {
+            match eval_hir_expr(body_expr, values, local_values, ctx) {
                 Ok(RuntimeValue::Bool(true)) => AssertResult::Pass,
                 Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
                     message: "assertion evaluated to false".to_string(),
@@ -899,13 +905,13 @@ pub(super) fn evaluate_assert_body(
                 },
             }
         }
-        graphcal_compiler::desugar::resolved_ast::AssertBody::Tolerance {
+        graphcal_compiler::hir::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
             is_relative,
         } => {
-            let actual_val = match eval_expr(actual, values, local_values, ctx) {
+            let actual_val = match eval_hir_expr(actual, values, local_values, ctx) {
                 Ok(RuntimeValue::Scalar(v)) => v,
                 Ok(other) => {
                     return AssertResult::Error {
@@ -918,7 +924,7 @@ pub(super) fn evaluate_assert_body(
                     };
                 }
             };
-            let expected_val = match eval_expr(expected, values, local_values, ctx) {
+            let expected_val = match eval_hir_expr(expected, values, local_values, ctx) {
                 Ok(RuntimeValue::Scalar(v)) => v,
                 Ok(other) => {
                     return AssertResult::Error {
@@ -931,7 +937,7 @@ pub(super) fn evaluate_assert_body(
                     };
                 }
             };
-            let tolerance_val = match eval_expr(tolerance, values, local_values, ctx) {
+            let tolerance_val = match eval_hir_expr(tolerance, values, local_values, ctx) {
                 Ok(RuntimeValue::Scalar(v)) => v,
                 #[expect(
                     clippy::cast_precision_loss,

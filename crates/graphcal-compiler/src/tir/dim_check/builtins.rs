@@ -9,6 +9,7 @@ use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::DimVarName;
+use crate::syntax::span::Span;
 
 pub(super) fn infer_fn_dim(
     fn_name: &str,
@@ -18,31 +19,60 @@ pub(super) fn infer_fn_dim(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
+    let arg_spans: Vec<Span> = args.iter().map(|arg| arg.span).collect();
+    infer_fn_dim_from_spans(fn_name, sig, arg_dims, &arg_spans, registry, src)
+}
+
+pub(super) fn infer_fn_dim_from_spans(
+    fn_name: &str,
+    sig: &DimSignature,
+    arg_dims: &[Dimension],
+    arg_spans: &[Span],
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Dimension, GraphcalError> {
     let mut bindings: HashMap<DimVarName, &Dimension> = HashMap::new();
 
     for (i, param) in sig.params.iter().enumerate() {
+        let Some(arg_dim) = arg_dims.get(i) else {
+            return Err(GraphcalError::InternalError {
+                message: format!("dimension signature for `{fn_name}` saw missing argument {i}"),
+                src: src.clone(),
+                span: arg_spans
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| Span::new(0, 0))
+                    .into(),
+            });
+        };
+        let arg_span = arg_spans.get(i).copied().unwrap_or_else(|| {
+            arg_spans
+                .first()
+                .copied()
+                .unwrap_or_else(|| Span::new(0, 0))
+        });
         match &param.dim {
             ParamDim::Fixed(expected) => {
-                if arg_dims[i] != *expected {
+                if arg_dim != expected {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: registry.dimensions.format_dimension(expected),
-                        found: registry.dimensions.format_dimension(&arg_dims[i]),
+                        found: registry.dimensions.format_dimension(arg_dim),
                         help: format!(
                             "parameter `{}` requires {}",
                             param.name,
                             registry.dimensions.format_dimension(expected),
                         ),
                         src: src.clone(),
-                        span: args[i].span.into(),
+                        span: arg_span.into(),
                     });
                 }
             }
             ParamDim::Bind(var) => {
-                bindings.insert(var.clone(), &arg_dims[i]);
+                bindings.insert(var.clone(), arg_dim);
             }
             ParamDim::Ref(var) => {
-                let bound = lookup_binding(&bindings, var, fn_name, src, args[i].span)?;
-                if arg_dims[i] != *bound {
+                let bound = lookup_binding(&bindings, var, fn_name, src, arg_span)?;
+                if arg_dim != bound {
                     let bind_param_name = sig
                         .params
                         .iter()
@@ -50,13 +80,13 @@ pub(super) fn infer_fn_dim(
                         .map_or("?", |p| &p.name);
                     return Err(GraphcalError::DimensionMismatch {
                         expected: registry.dimensions.format_dimension(bound),
-                        found: registry.dimensions.format_dimension(&arg_dims[i]),
+                        found: registry.dimensions.format_dimension(arg_dim),
                         help: format!(
                             "parameter `{}` must have the same dimension as `{}`",
                             param.name, bind_param_name,
                         ),
                         src: src.clone(),
-                        span: args[i].span.into(),
+                        span: arg_span.into(),
                     });
                 }
             }
@@ -67,9 +97,10 @@ pub(super) fn infer_fn_dim(
     // have been populated above. A missing binding here means the signature is
     // malformed (a `Ref`/`Var`/`VarPow` without a matching `Bind`) — surface
     // this as an internal error rather than panicking.
-    let result_span = args
+    let result_span = arg_spans
         .first()
-        .map_or(crate::syntax::span::Span::new(0, 0), |a| a.span);
+        .copied()
+        .unwrap_or_else(|| Span::new(0, 0));
     match &sig.result {
         ResultDim::Fixed(dim) => Ok(dim.clone()),
         ResultDim::Var(name) => {
