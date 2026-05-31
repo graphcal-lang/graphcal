@@ -481,13 +481,7 @@ impl Parser<'_> {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
                 let text = self.lexer.slice_at(span).replace('_', "");
-                let value: f64 = text.parse().map_err(|e: std::num::ParseFloatError| {
-                    ParseError::InvalidNumber {
-                        reason: e.to_string(),
-                        src: self.named_source(),
-                        span: span.into(),
-                    }
-                })?;
+                let value = self.parse_finite_f64_literal(&text, span)?;
                 Ok(Expr::new(ExprKind::Number(value), span))
             }
             Some(Token::LParen) => {

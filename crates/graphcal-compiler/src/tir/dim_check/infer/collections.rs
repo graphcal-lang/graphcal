@@ -256,7 +256,7 @@ pub(super) fn infer_for_comp(
                             InferredType::Scalar(dimension.clone())
                         }
                         crate::registry::types::IndexKind::NatRange { size } => {
-                            InferredType::Fin(NatLinearForm::from_constant(*size as u64))
+                            InferredType::Fin(NatLinearForm::from_constant(size.get() as u64))
                         }
                     }
                 }

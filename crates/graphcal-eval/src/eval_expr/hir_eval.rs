@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use graphcal_compiler::hir::{self, BuiltinFnName, ConstRef, FunctionRef};
@@ -17,9 +18,10 @@ use miette::NamedSource;
 use crate::decl_key::RuntimeDeclKey;
 
 use super::{
-    EvalContext, RuntimeValueMap, constructor_fields_for_runtime_struct,
-    find_struct_field_constraint, imported_value_source_value, index_ref_matches_resolved_or_leaf,
-    resolve_unit_scale, runtime_struct_type_def, topo_order_for_dag_body,
+    EvalContext, RuntimeValueMap, checked_finite_scalar, checked_unit_scaled_value,
+    constructor_fields_for_runtime_struct, find_struct_field_constraint,
+    imported_value_source_value, index_ref_matches_resolved_or_leaf, resolve_unit_scale,
+    runtime_struct_type_def, topo_order_for_dag_body,
 };
 
 pub type HirLocalValueMap = HashMap<hir::LocalId, RuntimeValue>;
@@ -39,7 +41,7 @@ pub fn eval_hir_expr(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match &expr.kind {
-        hir::ExprKind::Number(n) => Ok(RuntimeValue::Scalar(*n)),
+        hir::ExprKind::Number(n) => checked_finite_scalar(*n, "numeric literal", expr.span, ctx),
         hir::ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
         hir::ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
         hir::ExprKind::StringLiteral(_) => {
@@ -55,7 +57,7 @@ pub fn eval_hir_expr(
         hir::ExprKind::UnitLiteral { value, unit } => {
             let empty_syntax_locals = HashMap::new();
             let scale = resolve_unit_scale(unit, values, &empty_syntax_locals, ctx)?;
-            Ok(RuntimeValue::Scalar(*value * scale))
+            checked_unit_scaled_value(*value, scale, expr.span, ctx)
         }
         hir::ExprKind::GraphRef(target) => values
             .get(&RuntimeDeclKey::resolved(target.value.clone()))
@@ -154,16 +156,15 @@ fn eval_hir_const_ref(
             eval_hir_nullary_constructor(constructor, target.span, ctx)
         }
         ConstRef::IndexVariant(variant) => Ok(RuntimeValue::resolved_label(variant)),
-        ConstRef::Builtin(builtin) => ctx
-            .builtin_consts
-            .get(builtin.as_str())
-            .map(|v| RuntimeValue::Scalar(*v))
-            .ok_or_else(|| {
+        ConstRef::Builtin(builtin) => {
+            let value = ctx.builtin_consts.get(builtin.as_str()).ok_or_else(|| {
                 ctx.eval_error(
                     format!("undefined constant `{}`", builtin.as_str()),
                     target.span,
                 )
-            }),
+            })?;
+            checked_finite_scalar(*value, "built-in constant", target.span, ctx)
+        }
         ConstRef::TimeScale(scale) => Err(ctx.eval_error(
             format!("unexpected time scale `{scale}` outside epoch()"),
             target.span,
@@ -632,20 +633,7 @@ fn eval_hir_conversion_fn(
             let f = arg
                 .expect_scalar("to_int argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            if !f.is_finite() {
-                return Err(
-                    ctx.eval_error(format!("to_int() requires a finite value, got {f}"), span)
-                );
-            }
-            #[expect(clippy::cast_precision_loss, reason = "range check for Int conversion")]
-            if f < (i64::MIN as f64) || f > (i64::MAX as f64) {
-                return Err(ctx.eval_error(
-                    "to_int() argument is outside the representable integer range",
-                    span,
-                ));
-            }
-            #[expect(clippy::cast_possible_truncation, reason = "range-checked truncation")]
-            Ok(RuntimeValue::Int(f as i64))
+            super::conversions::checked_f64_to_i64(f, span, ctx).map(RuntimeValue::Int)
         }
     }
 }
@@ -1037,6 +1025,12 @@ fn eval_hir_for_comp(
         ),
         hir::expr::ForBindingIndex::Range { arg, span } => {
             let size = eval_hir_nat_expr(arg, local_values, ctx)?;
+            if size == 0 {
+                return Err(ctx.eval_error(
+                    "range(0) is not allowed; indexes must contain at least one element",
+                    *span,
+                ));
+            }
             (
                 IndexTypeRef::from_resolved(
                     graphcal_compiler::registry::types::nat_range_resolved_index_size(size),
@@ -1051,9 +1045,21 @@ fn eval_hir_for_comp(
     let idx_def = if let Some(def) = index_def_for_ref(&idx_name, ctx) {
         def
     } else if let Some(size) = dynamic_nat_size {
+        if size == 0 {
+            return Err(ctx.eval_error(
+                "range(0) is not allowed; indexes must contain at least one element",
+                error_span,
+            ));
+        }
         let size = usize::try_from(size).map_err(|_| {
             ctx.eval_error(
                 format!("nat range size {size} does not fit in usize on this target"),
+                error_span,
+            )
+        })?;
+        let size = NonZeroUsize::new(size).ok_or_else(|| {
+            ctx.eval_error(
+                "range(0) is not allowed; indexes must contain at least one element",
                 error_span,
             )
         })?;

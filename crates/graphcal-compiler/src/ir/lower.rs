@@ -6,6 +6,7 @@
 //! back to the raw AST.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -25,7 +26,9 @@ use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr;
 use crate::registry::prelude::load_prelude;
 use crate::registry::runtime_value::RuntimeValue;
-use crate::registry::types::{self, Registry, RegistryBuilder, UnitScale};
+use crate::registry::types::{
+    self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
+};
 use crate::syntax::dimension::Rational;
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, IndexName, NameAtom, ScopedName, StructTypeName,
@@ -2155,6 +2158,43 @@ fn register_required_dimension_decl(
     registry.register_base_dimension(d.name.value.clone(), dim_id);
 }
 
+fn eval_error(
+    message: impl Into<String>,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    GraphcalError::EvalError {
+        message: message.into(),
+        src: src.clone(),
+        span: span.into(),
+    }
+}
+
+fn validate_positive_finite_scale(
+    value: f64,
+    context: &str,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<PositiveFiniteScale, GraphcalError> {
+    PositiveFiniteScale::new(value).map_err(|err| {
+        let reason = match err {
+            PositiveFiniteScaleError::NonFinite => "must be finite",
+            PositiveFiniteScaleError::NonPositive => "must be greater than zero",
+        };
+        eval_error(format!("{context} {reason}, got {value}"), src, span)
+    })
+}
+
+fn multiply_positive_scales(
+    lhs: PositiveFiniteScale,
+    rhs: PositiveFiniteScale,
+    context: &str,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<PositiveFiniteScale, GraphcalError> {
+    validate_positive_finite_scale(lhs.get() * rhs.get(), context, src, span)
+}
+
 fn register_unit_decl(
     u: &crate::desugar::resolved_ast::UnitDecl,
     registry: &mut RegistryBuilder,
@@ -2193,10 +2233,29 @@ fn register_unit_decl(
                     src: src.clone(),
                     span: def.span.into(),
                 })?;
-            UnitScale::Static(eval_scale_expr(&def.scale_expr, src)? * base_scale)
+            let scale_expr = validate_positive_finite_scale(
+                eval_scale_expr(&def.scale_expr, src)?,
+                "unit scale expression",
+                src,
+                def.scale_expr.span,
+            )?;
+            let base_scale = validate_positive_finite_scale(
+                base_scale,
+                "base unit scale",
+                src,
+                def.unit_expr.span,
+            )?;
+            let scale =
+                multiply_positive_scales(scale_expr, base_scale, "unit scale", src, def.span)?;
+            UnitScale::Static(scale)
         }
     } else {
-        UnitScale::Static(1.0)
+        UnitScale::Static(validate_positive_finite_scale(
+            1.0,
+            "base unit scale",
+            src,
+            u.name.span,
+        )?)
     };
     // If this is a base unit (scale=1, no definition) for a single
     // base dimension, record the unit name as the SI symbol for
@@ -2224,7 +2283,7 @@ fn resolve_base_unit_static_scale(
     registry: &RegistryBuilder,
     unit_expr: &crate::desugar::resolved_ast::UnitExpr,
     src: &NamedSource<Arc<String>>,
-) -> Result<f64, GraphcalError> {
+) -> Result<PositiveFiniteScale, GraphcalError> {
     let (_dim, base_scale) = registry
         .resolve_unit_expr(unit_expr)
         .map_err(|_| GraphcalError::DimensionOverflow {
@@ -2236,7 +2295,7 @@ fn resolve_base_unit_static_scale(
             src: src.clone(),
             span: unit_expr.span.into(),
         })?;
-    Ok(base_scale)
+    validate_positive_finite_scale(base_scale, "base unit scale", src, unit_expr.span)
 }
 
 /// Check if an expression contains any `@`-references (graph refs).
@@ -2362,11 +2421,25 @@ fn nat_size_to_usize(
     n: u64,
     span: Span,
     src: &NamedSource<Arc<String>>,
-) -> Result<usize, GraphcalError> {
-    usize::try_from(n).map_err(|_| GraphcalError::EvalError {
+) -> Result<NonZeroUsize, GraphcalError> {
+    if n == 0 {
+        return Err(eval_error(
+            "range(0) is not allowed; indexes must contain at least one element",
+            src,
+            span,
+        ));
+    }
+    let size = usize::try_from(n).map_err(|_| GraphcalError::EvalError {
         message: format!("nat range size {n} does not fit in usize on this target"),
         src: src.clone(),
         span: span.into(),
+    })?;
+    NonZeroUsize::new(size).ok_or_else(|| {
+        eval_error(
+            "range(0) is not allowed; indexes must contain at least one element",
+            src,
+            span,
+        )
     })
 }
 
@@ -2638,8 +2711,20 @@ fn eval_range_expr(
 ) -> Result<(f64, crate::syntax::dimension::Dimension), GraphcalError> {
     use crate::syntax::dimension::Dimension;
 
+    let ensure_finite = |value: f64, span: Span| {
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(eval_error(
+                format!("range expression must be finite, got {value}"),
+                src,
+                span,
+            ))
+        }
+    };
+
     match &expr.kind {
-        ExprKind::Number(n) => Ok((*n, Dimension::dimensionless())),
+        ExprKind::Number(n) => Ok((ensure_finite(*n, expr.span)?, Dimension::dimensionless())),
         ExprKind::UnitLiteral { value, unit } => {
             let (dim, scale) = registry
                 .resolve_unit_expr(unit)
@@ -2652,14 +2737,15 @@ fn eval_range_expr(
                     src: src.clone(),
                     span: unit.span.into(),
                 })?;
-            Ok((*value * scale, dim))
+            let scale = validate_positive_finite_scale(scale, "range unit scale", src, unit.span)?;
+            Ok((ensure_finite(*value * scale.get(), expr.span)?, dim))
         }
         ExprKind::UnaryOp {
             op: crate::desugar::resolved_ast::UnaryOp::Neg,
             operand,
         } => {
             let (val, dim) = eval_range_expr(operand, registry, src)?;
-            Ok((-val, dim))
+            Ok((ensure_finite(-val, expr.span)?, dim))
         }
         _ => Err(GraphcalError::EvalError {
             message: "range expression must be a numeric or unit literal".to_string(),
@@ -2667,6 +2753,69 @@ fn eval_range_expr(
             span: expr.span.into(),
         }),
     }
+}
+
+fn checked_range_step_count(
+    name: &IndexName,
+    start: f64,
+    end: f64,
+    step: f64,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<NonZeroUsize, GraphcalError> {
+    let raw_steps = (end - start) / step;
+    if !raw_steps.is_finite() {
+        return Err(GraphcalError::RangeIndexInvalid {
+            name: name.clone(),
+            message: "range cardinality is not finite".to_string(),
+            src: src.clone(),
+            span: span.into(),
+        });
+    }
+
+    let nearest = raw_steps.round();
+    let tolerance = f64::EPSILON.mul_add(raw_steps.abs().max(1.0) * 16.0, 1e-12);
+    let whole_steps = if (raw_steps - nearest).abs() <= tolerance {
+        nearest
+    } else {
+        raw_steps.floor()
+    };
+    if whole_steps < 0.0 {
+        return Err(GraphcalError::RangeIndexInvalid {
+            name: name.clone(),
+            message: "range cardinality is negative".to_string(),
+            src: src.clone(),
+            span: span.into(),
+        });
+    }
+
+    let count = whole_steps + 1.0;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "usize upper bound check for f64 range count"
+    )]
+    let max_count = usize::MAX as f64;
+    if count >= max_count {
+        return Err(GraphcalError::RangeIndexInvalid {
+            name: name.clone(),
+            message: format!("range has too many steps ({count})"),
+            src: src.clone(),
+            span: span.into(),
+        });
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "range count is finite, non-negative, and bounded by usize::MAX"
+    )]
+    let count = count as usize;
+    NonZeroUsize::new(count).ok_or_else(|| GraphcalError::RangeIndexInvalid {
+        name: name.clone(),
+        message: "range must contain at least one step".to_string(),
+        src: src.clone(),
+        span: span.into(),
+    })
 }
 
 /// Lower a range index declaration, evaluating start/end/step and validating dimensions.
@@ -2695,6 +2844,17 @@ fn lower_range_index(
         });
     }
 
+    for (label, value) in [("start", start_val), ("end", end_val), ("step", step_val)] {
+        if !value.is_finite() {
+            return Err(GraphcalError::RangeIndexInvalid {
+                name: name.clone(),
+                message: format!("{label} ({value}) must be finite"),
+                src: src.clone(),
+                span: decl_span.into(),
+            });
+        }
+    }
+
     // Validate: start <= end
     if start_val > end_val {
         return Err(GraphcalError::RangeIndexInvalid {
@@ -2715,6 +2875,8 @@ fn lower_range_index(
         });
     }
 
+    let step_count = checked_range_step_count(name, start_val, end_val, step_val, src, decl_span)?;
+
     // Extract display unit from the start expression's unit annotation.
     let (display_label, display_scale) = match &start_expr.kind {
         ExprKind::UnitLiteral { unit, .. } => {
@@ -2724,7 +2886,15 @@ fn lower_range_index(
                     span: unit.span.into(),
                 }
             })? {
-                Some((_dim, scale)) => (Some(format_unit_expr(unit)), scale),
+                Some((_dim, scale)) => {
+                    let scale = validate_positive_finite_scale(
+                        scale,
+                        "range display unit scale",
+                        src,
+                        unit.span,
+                    )?;
+                    (Some(format_unit_expr(unit)), scale.get())
+                }
                 None => (None, 1.0),
             }
         }
@@ -2735,6 +2905,7 @@ fn lower_range_index(
         start: start_val,
         end: end_val,
         step: step_val,
+        step_count,
         dimension: start_dim,
         display_label,
         display_scale,

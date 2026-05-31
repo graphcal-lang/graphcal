@@ -76,7 +76,7 @@ This page lists all dimensions, units, constants, and functions provided by the 
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `to_float(x)` | `Int -> Dimensionless` | Convert integer to float |
-| `to_int(x)` | `Dimensionless -> Int` | Convert float to integer (truncates toward zero) |
+| `to_int(x)` | `Dimensionless -> Int` | Convert a finite float to integer (truncates toward zero; rejects values outside `i64` range) |
 
 ### Datetime Functions
 

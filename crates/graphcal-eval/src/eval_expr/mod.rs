@@ -1,6 +1,7 @@
 mod arithmetic;
 mod collections;
 mod control;
+mod conversions;
 mod functions;
 mod hir_eval;
 
@@ -293,6 +294,46 @@ impl EvalContext<'_> {
     }
 }
 
+fn checked_finite_scalar(
+    value: f64,
+    context: &str,
+    span: graphcal_compiler::syntax::span::Span,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    if value.is_finite() {
+        Ok(RuntimeValue::Scalar(value))
+    } else {
+        Err(ctx.eval_error(format!("{context} must be finite, got {value}"), span))
+    }
+}
+
+fn checked_positive_finite_unit_scale(
+    value: f64,
+    context: &str,
+    span: graphcal_compiler::syntax::span::Span,
+    ctx: &EvalContext<'_>,
+) -> Result<f64, GraphcalError> {
+    if !value.is_finite() {
+        Err(ctx.eval_error(format!("{context} must be finite, got {value}"), span))
+    } else if value <= 0.0 {
+        Err(ctx.eval_error(
+            format!("{context} must be greater than zero, got {value}"),
+            span,
+        ))
+    } else {
+        Ok(value)
+    }
+}
+
+fn checked_unit_scaled_value(
+    value: f64,
+    scale: f64,
+    span: graphcal_compiler::syntax::span::Span,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    checked_finite_scalar(value * scale, "unit literal value", span, ctx)
+}
+
 /// Evaluate an expression given a set of resolved values and built-in functions.
 /// Returns a `RuntimeValue` (scalar or struct).
 ///
@@ -308,7 +349,7 @@ pub fn eval_expr(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match &expr.kind {
-        ExprKind::Number(n) => Ok(RuntimeValue::Scalar(*n)),
+        ExprKind::Number(n) => checked_finite_scalar(*n, "numeric literal", expr.span, ctx),
         ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
         ExprKind::StringLiteral(_) => {
             Err(ctx.eval_error("unexpected string literal in evaluation context", expr.span))
@@ -322,7 +363,7 @@ pub fn eval_expr(
         )),
         ExprKind::UnitLiteral { value, unit } => {
             let scale = resolve_unit_scale(unit, values, local_values, ctx)?;
-            Ok(RuntimeValue::Scalar(*value * scale))
+            checked_unit_scaled_value(*value, scale, expr.span, ctx)
         }
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
         ExprKind::VariantLiteral { index, variant } => {
@@ -358,22 +399,20 @@ pub fn eval_expr(
                 return Ok(value.clone());
             }
 
-            ctx.builtin_consts
-                .get(ident.value.member())
-                .map(|v| RuntimeValue::Scalar(*v))
-                .or_else(|| {
-                    // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
-                    // and may be referenced in expression position as ConstRef (uppercase).
-                    // Locals are always bare names (no module qualification).
-                    if ident.value.is_qualified() {
-                        None
-                    } else {
-                        local_values.get(ident.value.member()).cloned()
-                    }
-                })
-                .ok_or_else(|| {
-                    ctx.eval_error(format!("undefined constant `{}`", ident.value), expr.span)
-                })
+            if let Some(value) = ctx.builtin_consts.get(ident.value.member()) {
+                return checked_finite_scalar(*value, "built-in constant", expr.span, ctx);
+            }
+
+            // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
+            // and may be referenced in expression position as ConstRef (uppercase).
+            // Locals are always bare names (no module qualification).
+            if !ident.value.is_qualified()
+                && let Some(value) = local_values.get(ident.value.member())
+            {
+                return Ok(value.clone());
+            }
+
+            Err(ctx.eval_error(format!("undefined constant `{}`", ident.value), expr.span))
         }
         ExprKind::LocalRef(ident) => {
             local_values
@@ -900,7 +939,9 @@ pub fn resolve_unit_scale(
                 )
             })?;
         let unit_scale = match &info.scale {
-            UnitScale::Static(s) => *s,
+            UnitScale::Static(s) => {
+                checked_positive_finite_unit_scale(s.get(), "unit scale", item.name.span, ctx)?
+            }
             UnitScale::Dynamic {
                 scale_expr,
                 base_unit_scale,
@@ -912,15 +953,43 @@ pub fn resolve_unit_scale(
                         scale_expr.span,
                     ));
                 };
-                scale_f64 * base_unit_scale
+                let dynamic_scale = checked_positive_finite_unit_scale(
+                    scale_f64,
+                    "dynamic unit scale",
+                    scale_expr.span,
+                    ctx,
+                )?;
+                let base_scale = checked_positive_finite_unit_scale(
+                    base_unit_scale.get(),
+                    "base unit scale",
+                    item.name.span,
+                    ctx,
+                )?;
+                checked_positive_finite_unit_scale(
+                    dynamic_scale * base_scale,
+                    "dynamic unit scale",
+                    scale_expr.span,
+                    ctx,
+                )?
             }
         };
         let exp = item.power.unwrap_or(1);
-        let powered_scale = unit_scale.powi(exp);
-        match item.op {
-            MulDivOp::Mul => compound_scale *= powered_scale,
-            MulDivOp::Div => compound_scale /= powered_scale,
-        }
+        let powered_scale = checked_positive_finite_unit_scale(
+            unit_scale.powi(exp),
+            "unit scale exponentiation",
+            item.name.span,
+            ctx,
+        )?;
+        compound_scale = match item.op {
+            MulDivOp::Mul => compound_scale * powered_scale,
+            MulDivOp::Div => compound_scale / powered_scale,
+        };
+        compound_scale = checked_positive_finite_unit_scale(
+            compound_scale,
+            "compound unit scale",
+            unit.span,
+            ctx,
+        )?;
     }
     Ok(compound_scale)
 }

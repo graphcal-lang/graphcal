@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 
 use indexmap::IndexMap;
 
@@ -594,6 +595,12 @@ pub(super) fn eval_for_comp(
         }
         ForBindingIndex::Range { arg, span } => {
             let size = eval_nat_expr(arg, local_values, ctx)?;
+            if size == 0 {
+                return Err(ctx.eval_error(
+                    "range(0) is not allowed; indexes must contain at least one element",
+                    *span,
+                ));
+            }
             let idx_name = graphcal_compiler::syntax::names::IndexName::new(
                 graphcal_compiler::registry::types::nat_range_index_name(size),
             );
@@ -626,9 +633,21 @@ pub(super) fn eval_for_comp(
     } else if let Some(def) = ctx.registry.indexes.get_index(idx_name.as_str()) {
         def
     } else if let Some(size) = dynamic_nat_size {
+        if size == 0 {
+            return Err(ctx.eval_error(
+                "range(0) is not allowed; indexes must contain at least one element",
+                error_span,
+            ));
+        }
         let size = usize::try_from(size).map_err(|_| {
             ctx.eval_error(
                 format!("nat range size {size} does not fit in usize on this target"),
+                error_span,
+            )
+        })?;
+        let size = NonZeroUsize::new(size).ok_or_else(|| {
+            ctx.eval_error(
+                "range(0) is not allowed; indexes must contain at least one element",
                 error_span,
             )
         })?;

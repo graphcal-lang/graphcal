@@ -519,13 +519,7 @@ impl Parser<'_> {
             Ok(Expr::new(ExprKind::Integer(value), span))
         } else {
             // Float literal: has decimal point or scientific notation
-            let value: f64 =
-                text.parse()
-                    .map_err(|e: std::num::ParseFloatError| ParseError::InvalidNumber {
-                        reason: e.to_string(),
-                        src: self.named_source(),
-                        span: span.into(),
-                    })?;
+            let value = self.parse_finite_f64_literal(&text, span)?;
 
             // Check if followed by an identifier (unit literal): `400.0 km`
             if self.lexer.peek() == Some(&Token::Ident) {

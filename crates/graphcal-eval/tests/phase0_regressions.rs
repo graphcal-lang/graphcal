@@ -1,8 +1,8 @@
 //! Phase 0 regression tests from `.local/2026-05-31_code-review-report.md`.
 //!
-//! These tests assert the desired safety behavior. They are intentionally marked
-//! `#[should_panic]` while the current implementation still accepts the invalid
-//! programs, so each panic message names the bug to fix next.
+//! These tests assert the desired safety behavior. Regressions that are not fixed
+//! yet remain marked `#[should_panic]`; active fixes should remove that attribute
+//! and make the assertion pass normally.
 #![cfg(test)]
 
 use std::collections::HashMap;
@@ -38,7 +38,6 @@ fn assert_rejected_or_decl_error(source: &str, decl_name: &str, bug: &str) {
 }
 
 #[test]
-#[should_panic(expected = "BUG: non-finite numeric literal accepted")]
 fn non_finite_numeric_literal_is_rejected() {
     assert_rejected_or_decl_error(
         "node x: Dimensionless = 1e999;",
@@ -48,7 +47,6 @@ fn non_finite_numeric_literal_is_rejected() {
 }
 
 #[test]
-#[should_panic(expected = "BUG: overflowing unit literal accepted")]
 fn overflowing_unit_literal_is_rejected() {
     assert_rejected_or_decl_error(
         "node x: Length = 1e308 km;",
@@ -58,7 +56,6 @@ fn overflowing_unit_literal_is_rejected() {
 }
 
 #[test]
-#[should_panic(expected = "BUG: zero static unit scale accepted")]
 fn zero_static_unit_scale_is_rejected() {
     assert_rejected_or_decl_error(
         "unit z: Length = 0.0 m;\nnode x: Length = 1.0 z;",
@@ -68,7 +65,6 @@ fn zero_static_unit_scale_is_rejected() {
 }
 
 #[test]
-#[should_panic(expected = "BUG: negative static unit scale accepted")]
 fn negative_static_unit_scale_is_rejected() {
     assert_rejected_or_decl_error(
         "unit neg_m: Length = (-1.0) m;\nnode x: Length = 1.0 neg_m;",
@@ -78,7 +74,6 @@ fn negative_static_unit_scale_is_rejected() {
 }
 
 #[test]
-#[should_panic(expected = "BUG: non-finite static unit scale accepted")]
 fn non_finite_static_unit_scale_is_rejected() {
     assert_rejected_or_decl_error(
         "unit huge_m: Length = 1e999 m;\nnode x: Length = 1.0 huge_m;",
@@ -88,7 +83,6 @@ fn non_finite_static_unit_scale_is_rejected() {
 }
 
 #[test]
-#[should_panic(expected = "BUG: zero dynamic unit scale accepted")]
 fn zero_dynamic_unit_scale_is_rejected() {
     assert_rejected_or_decl_error(
         r"
@@ -104,7 +98,6 @@ node price: Money = 1.0 EUR;
 }
 
 #[test]
-#[should_panic(expected = "BUG: negative dynamic unit scale accepted")]
 fn negative_dynamic_unit_scale_is_rejected() {
     assert_rejected_or_decl_error(
         r"
@@ -120,7 +113,6 @@ node price: Money = 1.0 EUR;
 }
 
 #[test]
-#[should_panic(expected = "BUG: non-finite dynamic unit scale accepted")]
 fn non_finite_dynamic_unit_scale_is_rejected() {
     assert_rejected_or_decl_error(
         r"
@@ -136,7 +128,6 @@ node price: Money = 1.0 EUR;
 }
 
 #[test]
-#[should_panic(expected = "BUG: linspace step count produced entries beyond end")]
 fn linspace_step_count_does_not_overshoot_end() {
     let source = r"
 pub index T = linspace(0.0 s, 1.0 s, step: 0.6 s);
@@ -158,9 +149,6 @@ node x: Dimensionless[T] = for t: T { t / 1.0 s };
 }
 
 #[test]
-#[should_panic(
-    expected = "BUG: infinite range bounds must produce a diagnostic instead of panicking"
-)]
 fn infinite_range_bounds_are_diagnostic_not_panic() {
     let source = r"
 index T = linspace(0.0, 1e999, step: 1.0);
@@ -180,7 +168,6 @@ node x: Dimensionless[T] = for t: T { 1.0 };
 }
 
 #[test]
-#[should_panic(expected = "BUG: range(0) accepted despite the no-empty-index invariant")]
 fn range_zero_is_rejected() {
     let source = r"
 node s: Dimensionless = sum(for i: range(0) { 1.0 });
@@ -243,7 +230,6 @@ pub type Bar { Bar(inner: Foo) }
 }
 
 #[test]
-#[should_panic(expected = "BUG: to_int accepted the upper out-of-range boundary")]
 fn to_int_rejects_upper_out_of_range_boundary() {
     let source = "node x: Int = to_int(9.223372036854776e18);";
     assert_rejected_or_decl_error(

@@ -256,36 +256,7 @@ fn eval_conversion_fn(
             let f = arg
                 .expect_scalar("to_int argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
-            if !f.is_finite() {
-                return Err(ctx.eval_error(
-                    format!("to_int() requires a finite value, got {f}"),
-                    expr.span,
-                ));
-            }
-            // i64 range: -9_223_372_036_854_775_808 ..= 9_223_372_036_854_775_807
-            // The casts below round to the nearest f64: i64::MIN rounds exactly,
-            // i64::MAX rounds up to 9.223372036854776e18. This makes the check
-            // slightly conservative (rejects a few borderline values), which is
-            // the safe direction for engineering use.
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "intentional: boundary rounds to safe side, rejecting borderline values"
-            )]
-            if f < (i64::MIN as f64) || f > (i64::MAX as f64) {
-                return Err(ctx.eval_error(
-                    format!(
-                        "to_int() argument {f} is outside the representable integer range ({}..={})",
-                        i64::MIN,
-                        i64::MAX,
-                    ),
-                    expr.span,
-                ));
-            }
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "range-checked truncating conversion from float to Int"
-            )]
-            Ok(RuntimeValue::Int(f as i64))
+            super::conversions::checked_f64_to_i64(f, expr.span, ctx).map(RuntimeValue::Int)
         }
     }
 }
