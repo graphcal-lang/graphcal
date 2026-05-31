@@ -172,57 +172,11 @@ fn eval_aggregation_fn(
     expr: &Expr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let type_err = |e: graphcal_compiler::registry::runtime_value::RuntimeValueError| {
+    super::aggregations::aggregate_indexed_scalars(kind, entries).map_err(|err| {
         GraphcalError::EvalError {
-            message: e.to_string(),
+            message: err.to_string(),
             src: src.clone(),
             span: expr.span.into(),
-        }
-    };
-    Ok(match kind {
-        AggregationFn::Sum => {
-            let total = entries.values().try_fold(0.0_f64, |acc, v| {
-                Ok(acc + v.expect_scalar("sum element").map_err(&type_err)?)
-            })?;
-            RuntimeValue::Scalar(total)
-        }
-        AggregationFn::Min => {
-            let min = entries.values().try_fold(f64::INFINITY, |acc, v| {
-                Ok(acc.min(v.expect_scalar("min element").map_err(&type_err)?))
-            })?;
-            RuntimeValue::Scalar(min)
-        }
-        AggregationFn::Max => {
-            let max = entries.values().try_fold(f64::NEG_INFINITY, |acc, v| {
-                Ok(acc.max(v.expect_scalar("max element").map_err(&type_err)?))
-            })?;
-            RuntimeValue::Scalar(max)
-        }
-        AggregationFn::Mean => {
-            if entries.is_empty() {
-                return Err(GraphcalError::EvalError {
-                    message: "mean() over an empty Indexed value is undefined".to_string(),
-                    src: src.clone(),
-                    span: expr.span.into(),
-                });
-            }
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "indexed collection length fits in f64"
-            )]
-            let n = entries.len() as f64;
-            let total = entries.values().try_fold(0.0_f64, |acc, v| {
-                Ok(acc + v.expect_scalar("mean element").map_err(&type_err)?)
-            })?;
-            RuntimeValue::Scalar(total / n)
-        }
-        AggregationFn::Count => {
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "indexed collection length fits in f64"
-            )]
-            let n = entries.len() as f64;
-            RuntimeValue::Scalar(n)
         }
     })
 }
@@ -256,7 +210,9 @@ fn eval_conversion_fn(
             let f = arg
                 .expect_scalar("to_int argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
-            super::conversions::checked_f64_to_i64(f, expr.span, ctx).map(RuntimeValue::Int)
+            super::conversions::checked_f64_to_i64(f)
+                .map(RuntimeValue::Int)
+                .map_err(|err| ctx.eval_error(err.to_string(), expr.span))
         }
     }
 }

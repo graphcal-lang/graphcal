@@ -279,16 +279,8 @@ pub(super) fn check_finite(
     ctx: &EvalContext<'_>,
     span: Span,
 ) -> Result<f64, GraphcalError> {
-    if value.is_nan() {
-        Err(ctx.eval_error(
-            format!("invalid argument for {context} (result is NaN)"),
-            span,
-        ))
-    } else if value.is_infinite() {
-        Err(ctx.eval_error(format!("{context} produced infinite result"), span))
-    } else {
-        Ok(value)
-    }
+    super::numeric::computed_finite_scalar(value, context)
+        .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
 /// Restriction of [`BinOp`] to the four ordering comparison operators.
