@@ -47,11 +47,11 @@ fn resolved_match_label_variant<'a>(
 fn index_def_for_label_index<'a>(
     index: &InferredIndex,
     dag: Option<&'a crate::tir::typed::DagTIR>,
-    registry: &'a Registry,
+    _registry: &'a Registry,
 ) -> Option<&'a IndexDef> {
+    let resolved = index.declared_resolved()?;
     dag.map(|dag| &dag.semantic.collection_refs)
-        .and_then(|refs| refs.index_defs.get(index.resolved()))
-        .or_else(|| registry.indexes.get_index(index.name().as_str()))
+        .and_then(|refs| refs.index_defs.get(resolved))
 }
 
 /// Infer the type of an if/else expression.
@@ -370,7 +370,7 @@ pub(super) fn infer_match(
                     return Err(GraphcalError::EvalError {
                         message: format!(
                             "non-exhaustive match: variant `{}` not covered",
-                            variant.qualified_by(index_name)
+                            variant.qualified_by(&index_name)
                         ),
                         src: src.clone(),
                         span: expr.span.into(),

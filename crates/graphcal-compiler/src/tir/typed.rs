@@ -14,9 +14,11 @@ use crate::desugar::resolved_ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::hir;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, NameAtom,
-    NameNamespace, NamePath, StructTypeName,
+    ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, ModuleAliasName,
+    NameAtom, NameNamespace, NamePath, StructTypeName,
 };
+use crate::syntax::nat::Monomial;
+pub use crate::syntax::nat::{NatLinearForm, NatPolyForm};
 use crate::syntax::span::{Span, Spanned};
 
 use crate::ir::lower::IR;
@@ -178,333 +180,70 @@ impl ResolvedDimTerm {
     }
 }
 
-/// A monomial: product of variables raised to natural number exponents.
+/// Typed identity for a Nat-range index used by type inference.
 ///
-/// Represented as a sorted map from variable name to exponent.
-/// The empty map represents the constant monomial (= 1).
-///
-/// Examples:
-/// - `{}` represents the constant 1 (used for the constant term in a polynomial)
-/// - `{N: 1}` represents `N`
-/// - `{M: 1, N: 1}` represents `M * N`
-/// - `{N: 2}` represents `N^2`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Monomial(BTreeMap<GenericParamName, u64>);
-
-impl Monomial {
-    /// The constant monomial (empty product = 1).
-    #[must_use]
-    const fn constant() -> Self {
-        Self(BTreeMap::new())
-    }
-
-    /// A single-variable monomial with exponent 1.
-    #[must_use]
-    fn var(name: GenericParamName) -> Self {
-        let mut m = BTreeMap::new();
-        m.insert(name, 1);
-        Self(m)
-    }
-
-    /// Returns `true` if this is the constant monomial (no variables).
-    #[must_use]
-    fn is_constant(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Multiply two monomials: add exponents of each variable.
-    #[must_use]
-    fn mul(&self, other: &Self) -> Self {
-        let mut result = self.0.clone();
-        for (var, exp) in &other.0 {
-            *result.entry(var.clone()).or_insert(0) += exp;
-        }
-        Self(result)
-    }
-
-    /// Evaluate the monomial given variable bindings.
-    /// Returns `None` if any variable is unbound.
-    #[must_use]
-    fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
-        let mut result: u64 = 1;
-        for (var, exp) in &self.0 {
-            let val = bindings.get(var)?;
-            result = result.checked_mul(val.checked_pow(u32::try_from(*exp).ok()?)?)?;
-        }
-        Some(result)
-    }
-
-    /// Substitute bound variables, returning a new monomial (with only unbound vars)
-    /// and a multiplicative factor from the bound variables.
-    /// Returns `None` if arithmetic overflows.
-    #[must_use]
-    fn substitute(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<(Self, u64)> {
-        let mut remaining = BTreeMap::new();
-        let mut factor: u64 = 1;
-        for (var, exp) in &self.0 {
-            if let Some(val) = bindings.get(var) {
-                factor = factor.checked_mul(val.checked_pow(u32::try_from(*exp).ok()?)?)?;
-            } else {
-                remaining.insert(var.clone(), *exp);
-            }
-        }
-        Some((Self(remaining), factor))
-    }
-
-    /// Format as a human-readable string, e.g. `""` (empty/constant), `"N"`, `"M * N"`, `"N^2"`.
-    #[must_use]
-    fn format(&self) -> String {
-        let mut parts = Vec::new();
-        for (var, exp) in &self.0 {
-            if *exp == 1 {
-                parts.push(var.to_string());
-            } else {
-                parts.push(format!("{var}^{exp}"));
-            }
-        }
-        parts.join(" * ")
-    }
-}
-
-impl PartialOrd for Monomial {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Monomial {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Compare by iterating entries in sorted order (BTreeMap guarantees this).
-        let a: Vec<_> = self.0.iter().collect();
-        let b: Vec<_> = other.0.iter().collect();
-        a.cmp(&b)
-    }
-}
-
-/// A normalized polynomial form for Nat expressions.
-///
-/// This is the canonical representation for Nat arithmetic (Level 1 addition + Level 2
-/// multiplication). Each term is a monomial (product of variables with exponents) mapped
-/// to its coefficient. Two `NatPolyForm`s are equal iff their normalized terms match.
-///
-/// Examples:
-/// - `3` → `{ {} => 3 }`
-/// - `N` → `{ {N:1} => 1 }`
-/// - `N + 1` → `{ {N:1} => 1, {} => 1 }`
-/// - `M * N` → `{ {M:1, N:1} => 1 }`
-/// - `M * N + 3` → `{ {M:1, N:1} => 1, {} => 3 }`
-/// - `2 * N^2 + N + 1` → `{ {N:2} => 2, {N:1} => 1, {} => 1 }`
+/// Generic forms such as `range(N + 1)` are carried as normalized
+/// [`NatPolyForm`] values. They are rendered to `range(...)` only for
+/// diagnostics or display adapters; semantic comparisons use the typed form.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NatPolyForm {
-    /// Monomial → coefficient mapping (only non-zero coefficients).
-    terms: BTreeMap<Monomial, u64>,
+pub struct NatRangeIndexIdentity {
+    form: NatPolyForm,
 }
 
-/// Backward-compatible alias.
-pub type NatLinearForm = NatPolyForm;
+impl NatRangeIndexIdentity {
+    /// Create a Nat-range identity from a normalized Nat polynomial form.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the form is a concrete `0` or cannot be
+    /// represented as a non-empty in-memory Nat range on this target.
+    pub fn try_from_form(
+        form: NatPolyForm,
+    ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
+        if form.is_constant() {
+            crate::registry::types::NatRangeIndex::try_from_u64(form.constant())?;
+        }
+        Ok(Self { form })
+    }
+
+    /// Borrow the normalized Nat form (`N`, `N + 1`, `3`, ...).
+    #[must_use]
+    pub const fn form(&self) -> &NatPolyForm {
+        &self.form
+    }
+
+    /// Consume and return the normalized Nat form.
+    #[must_use]
+    pub fn into_form(self) -> NatPolyForm {
+        self.form
+    }
+
+    /// Convert to an index type reference without serializing the Nat form
+    /// into a recoverable string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the identity invariant was violated before this
+    /// conversion (for example, a concrete zero-sized range).
+    pub fn to_index_type_ref(
+        &self,
+    ) -> Result<IndexTypeRef, crate::registry::types::NatRangeIndexError> {
+        IndexTypeRef::from_nat_range_form(self.form.clone())
+    }
+}
 
 impl NatPolyForm {
-    /// Create a polynomial from a constant.
-    #[must_use]
-    pub fn from_constant(c: u64) -> Self {
-        let mut terms = BTreeMap::new();
-        if c != 0 {
-            terms.insert(Monomial::constant(), c);
-        }
-        Self { terms }
-    }
-
-    /// Create a polynomial from a single variable with coefficient 1.
-    #[must_use]
-    pub fn from_var(name: GenericParamName) -> Self {
-        let mut terms = BTreeMap::new();
-        terms.insert(Monomial::var(name), 1);
-        Self { terms }
-    }
-
-    /// Add two polynomials.
-    #[must_use]
-    pub fn add(&self, other: &Self) -> Self {
-        let mut terms = self.terms.clone();
-        for (mono, coeff) in &other.terms {
-            let entry = terms.entry(mono.clone()).or_insert(0);
-            *entry += coeff;
-        }
-        // Remove zero-coefficient terms
-        terms.retain(|_, c| *c != 0);
-        Self { terms }
-    }
-
-    /// Multiply two polynomials (distributive law).
-    #[must_use]
-    pub fn mul(&self, other: &Self) -> Self {
-        let mut terms = BTreeMap::new();
-        for (m1, c1) in &self.terms {
-            for (m2, c2) in &other.terms {
-                let mono = m1.mul(m2);
-                *terms.entry(mono).or_insert(0) += c1 * c2;
-            }
-        }
-        // Remove zero-coefficient terms
-        terms.retain(|_, c| *c != 0);
-        Self { terms }
-    }
-
-    /// Returns the constant term (coefficient of the empty monomial).
-    #[must_use]
-    pub fn constant(&self) -> u64 {
-        self.terms.get(&Monomial::constant()).copied().unwrap_or(0)
-    }
-
-    /// Returns `true` if this form has no variables (is a constant).
-    #[must_use]
-    pub fn is_constant(&self) -> bool {
-        self.terms.iter().all(|(m, _)| m.is_constant())
-    }
-
-    /// Evaluate to a concrete value given variable bindings.
-    /// Returns `None` if any variable is unbound.
-    #[must_use]
-    pub fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
-        let mut result: u64 = 0;
-        for (mono, coeff) in &self.terms {
-            result = result.checked_add(coeff.checked_mul(mono.evaluate(bindings)?)?)?;
-        }
-        Some(result)
-    }
-
-    /// Format as a human-readable string.
+    /// Wrap this normalized Nat form as a typed Nat-range index identity.
     ///
-    /// Examples: `"3"`, `"N"`, `"N + 1"`, `"M * N"`, `"M * N + 3"`, `"2 * N^2 + N + 1"`.
-    #[must_use]
-    pub fn format(&self) -> String {
-        if self.terms.is_empty() {
-            return "0".to_string();
-        }
-        let mut parts = Vec::new();
-        // Non-constant terms first (sorted by monomial), then constant.
-        for (mono, coeff) in &self.terms {
-            if mono.is_constant() {
-                continue;
-            }
-            let mono_str = mono.format();
-            if *coeff == 1 {
-                parts.push(mono_str);
-            } else {
-                parts.push(format!("{coeff} * {mono_str}"));
-            }
-        }
-        if let Some(&c) = self.terms.get(&Monomial::constant())
-            && (c > 0 || parts.is_empty())
-        {
-            parts.push(c.to_string());
-        }
-        if parts.is_empty() {
-            "0".to_string()
-        } else {
-            parts.join(" + ")
-        }
-    }
-
-    /// Generate a canonical synthetic index name for this nat form.
+    /// # Errors
     ///
-    /// For constants, produces `__nat_range_3`.
-    /// For symbolic forms, produces `__nat_range_N + 1`, `__nat_range_M * N`, etc.
-    #[must_use]
-    pub fn to_index_name_str(&self) -> String {
-        if self.is_constant() {
-            crate::registry::types::nat_range_index_name(self.constant())
-        } else {
-            format!("__nat_range_{}", self.format())
-        }
-    }
-
-    /// Check if `self <= other` for all non-negative variable assignments.
-    ///
-    /// Returns `true` iff for every monomial, the coefficient in `self` is <=
-    /// the coefficient in `other`. This is sound because all `Nat` variables
-    /// are non-negative, so each monomial evaluates to a non-negative value.
-    #[must_use]
-    pub fn is_leq(&self, other: &Self) -> bool {
-        // Check that every monomial in `self` has coefficient <= in `other`
-        for (mono, &coeff) in &self.terms {
-            let other_coeff = other.terms.get(mono).copied().unwrap_or(0);
-            if coeff > other_coeff {
-                return false;
-            }
-        }
-        // Monomials only in `other` have coefficient 0 in self → always <=.
-        true
-    }
-
-    /// Parse a `NatPolyForm` from a nat-range index name suffix.
-    ///
-    /// Given an index name like `__nat_range_3` or `__nat_range_N + 1`,
-    /// strips the prefix and parses the suffix into a `NatPolyForm`.
-    /// Returns `None` if the name doesn't have the expected prefix or
-    /// the suffix cannot be parsed.
-    #[must_use]
-    pub fn from_index_name(name: &str) -> Option<Self> {
-        let suffix = name.strip_prefix("__nat_range_")?;
-        Self::parse_poly_form(suffix)
-    }
-
-    /// Parse a string like `"3"`, `"N"`, `"N + 1"`, `"M * N"`, `"2 * N^2 + 1"`
-    /// into a `NatPolyForm`.
-    #[must_use]
-    fn parse_poly_form(s: &str) -> Option<Self> {
-        let mut terms = BTreeMap::new();
-        for part in s.split(" + ") {
-            let part = part.trim();
-            if part.is_empty() {
-                return None;
-            }
-            // Split on " * " to get factors of this term
-            let factors: Vec<&str> = part.split(" * ").collect();
-            let mut coeff: u64 = 1;
-            let mut mono_vars = BTreeMap::new();
-            for factor in &factors {
-                let factor = factor.trim();
-                if let Ok(n) = factor.parse::<u64>() {
-                    // Numeric factor → coefficient
-                    coeff *= n;
-                } else if let Some((var_name, exp_str)) = factor.split_once('^') {
-                    // Variable with exponent: "N^2"
-                    let exp: u64 = exp_str.parse().ok()?;
-                    *mono_vars
-                        .entry(GenericParamName::new(var_name.trim()))
-                        .or_insert(0) += exp;
-                } else {
-                    // Plain variable name
-                    *mono_vars.entry(GenericParamName::new(factor)).or_insert(0) += 1;
-                }
-            }
-            let mono = Monomial(mono_vars);
-            *terms.entry(mono).or_insert(0) += coeff;
-        }
-        terms.retain(|_, c| *c != 0);
-        Some(Self { terms })
-    }
-
-    /// Collect all variable names that appear in any monomial of this polynomial.
-    #[must_use]
-    pub fn variables(&self) -> std::collections::BTreeSet<GenericParamName> {
-        let mut vars = std::collections::BTreeSet::new();
-        for mono in self.terms.keys() {
-            for var in mono.0.keys() {
-                vars.insert(var.clone());
-            }
-        }
-        vars
+    /// Returns an error when the form is a concrete invalid Nat range size.
+    pub fn to_nat_range_identity(
+        &self,
+    ) -> Result<NatRangeIndexIdentity, crate::registry::types::NatRangeIndexError> {
+        NatRangeIndexIdentity::try_from_form(self.clone())
     }
 }
-
-impl std::fmt::Display for NatPolyForm {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.format())
-    }
-}
-
 /// Normalize an AST `NatExpr` into a `NatPolyForm`.
 ///
 /// All variables referenced must be Nat generic parameters in scope.
@@ -926,7 +665,7 @@ pub struct TIR {
     /// to translate user-typed `@alias.dag(args)` references into the
     /// canonical key under which the dep's DAGs were inserted by
     /// `merge_dep_dag_tirs`.
-    pub module_aliases: HashMap<String, crate::dag_id::DagId>,
+    pub module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
 }
 
 impl TIR {
@@ -2435,7 +2174,7 @@ fn resolve_expected_fail_keys(
                                     }
                                     let index_path =
                                         part.source_index_path.clone().unwrap_or_else(|| {
-                                            NamePath::from(part.index.name().clone())
+                                            NamePath::from(part.index.display_name())
                                         });
                                     let resolved = ctx
                                         .resolver
@@ -2621,13 +2360,16 @@ pub fn resolved_to_declared_type(
                                 span: (*span).into(),
                             });
                         }
+                        let nat_range =
+                            crate::registry::types::NatRangeIndex::try_from_u64(form.constant())
+                                .map_err(|err| GraphcalError::EvalError {
+                                    message: err.to_string(),
+                                    src: src.clone(),
+                                    span: (*span).into(),
+                                })?;
                         result = DeclaredType::Indexed {
                             element: Box::new(result),
-                            index: IndexTypeRef::from_resolved(
-                                crate::registry::types::nat_range_resolved_index_size(
-                                    form.constant(),
-                                ),
-                            ),
+                            index: IndexTypeRef::from_nat_range(nat_range),
                         };
                     }
                     ResolvedIndex::GenericParam(name, span) => {
@@ -2693,10 +2435,18 @@ fn unify_nat_poly_form(
     if reduced_terms.is_empty() {
         // All variables bound — check equality
         if reduced_constant != target {
+            let expected = match form.evaluate(nat_sub) {
+                Some(n) => crate::registry::types::NatRangeIndex::try_from_u64(n)
+                    .map_err(|err| GraphcalError::EvalError {
+                        message: err.to_string(),
+                        src: src.clone(),
+                        span: span.into(),
+                    })?
+                    .display_name(),
+                None => IndexName::new(format!("range({})", form.format())),
+            };
             return Err(GraphcalError::IndexMismatch {
-                expected: IndexName::new(crate::registry::types::nat_range_index_name(
-                    form.evaluate(nat_sub).unwrap_or(0),
-                )),
+                expected,
                 found: actual_idx.clone(),
                 src: src.clone(),
                 span: span.into(),
@@ -2742,11 +2492,18 @@ fn unify_nat_poly_form(
             }
             let value = remainder / total_coeff;
             bind_or_check(nat_sub, var, value, |prev, _| {
-                GraphcalError::IndexMismatch {
-                    expected: IndexName::new(crate::registry::types::nat_range_index_name(*prev)),
-                    found: actual_idx.clone(),
-                    src: src.clone(),
-                    span: span.into(),
+                match crate::registry::types::NatRangeIndex::try_from_u64(*prev) {
+                    Ok(index) => GraphcalError::IndexMismatch {
+                        expected: index.display_name(),
+                        found: actual_idx.clone(),
+                        src: src.clone(),
+                        span: span.into(),
+                    },
+                    Err(err) => GraphcalError::EvalError {
+                        message: err.to_string(),
+                        src: src.clone(),
+                        span: span.into(),
+                    },
                 }
             })?;
             return Ok(());
@@ -2854,35 +2611,45 @@ pub fn unify_resolved_type(
                             gp.clone(),
                             actual_idx.type_ref().clone(),
                             |prev, _| GraphcalError::IndexMismatch {
-                                expected: prev.name().clone(),
-                                found: actual_idx.name().clone(),
+                                expected: prev.display_name(),
+                                found: actual_idx.name(),
                                 src: src.clone(),
                                 span: span.into(),
                             },
                         )?;
                     }
                     ResolvedIndex::Concrete(name, _) => {
-                        if actual_idx.resolved() != name {
+                        if !actual_idx.matches_resolved(name) {
                             return Err(GraphcalError::IndexMismatch {
                                 expected: name.to_unowned_def_name(),
-                                found: actual_idx.name().clone(),
+                                found: actual_idx.name(),
                                 src: src.clone(),
                                 span: span.into(),
                             });
                         }
                     }
                     ResolvedIndex::NatExpr(form, _) => {
-                        // Extract the concrete nat value from the actual index name
-                        let actual_nat =
-                            crate::registry::types::parse_nat_range_index_name(actual_idx.as_str())
-                                .ok_or_else(|| GraphcalError::IndexMismatch {
-                                    expected: IndexName::new(format!("range({})", form.format())),
-                                    found: actual_idx.name().clone(),
-                                    src: src.clone(),
-                                    span: span.into(),
-                                })?;
+                        // Extract the concrete nat value from the typed actual Nat-range identity.
+                        let actual_nat = actual_idx
+                            .nat_range_form()
+                            .filter(NatPolyForm::is_constant)
+                            .map(|actual_form| actual_form.constant())
+                            .ok_or_else(|| GraphcalError::IndexMismatch {
+                                expected: IndexName::new(format!("range({})", form.format())),
+                                found: actual_idx.name(),
+                                src: src.clone(),
+                                span: span.into(),
+                            })?;
                         // Solve the polynomial equation: form = actual_nat
-                        unify_nat_poly_form(form, actual_nat, nat_sub, actual_idx, src, span)?;
+                        let actual_idx_name = actual_idx.name();
+                        unify_nat_poly_form(
+                            form,
+                            actual_nat,
+                            nat_sub,
+                            &actual_idx_name,
+                            src,
+                            span,
+                        )?;
                     }
                 }
                 current = element;
@@ -2946,10 +2713,10 @@ pub fn unify_resolved_type(
                     span: span.into(),
                 });
             };
-            if actual_index.resolved() != expected_index {
+            if !actual_index.matches_resolved(expected_index) {
                 return Err(GraphcalError::IndexMismatch {
                     expected: expected_index.to_unowned_def_name(),
-                    found: actual_index.name().clone(),
+                    found: actual_index.name(),
                     src: src.clone(),
                     span: span.into(),
                 });
@@ -3276,9 +3043,14 @@ pub fn substitute_resolved_type(
                                 span: (*span).into(),
                             }
                         })?;
-                        crate::tir::dim_check::InferredIndex::from_resolved(
-                            crate::registry::types::nat_range_resolved_index_size(n),
+                        crate::tir::dim_check::InferredIndex::from_nat_range_form(
+                            NatPolyForm::from_constant(n),
                         )
+                        .map_err(|err| GraphcalError::EvalError {
+                            message: err.to_string(),
+                            src: src.clone(),
+                            span: (*span).into(),
+                        })?
                     }
                 };
                 result = InferredType::Indexed {
@@ -5124,14 +4896,17 @@ mod tests {
             Span::new(0, 0),
         )
         .unwrap();
-        assert_eq!(index_sub[&generic].resolved(), &resolved_index);
+        assert_eq!(
+            index_sub[&generic].declared_resolved(),
+            Some(&resolved_index)
+        );
 
         let substituted =
             substitute_resolved_type(&resolved_type, &dim_sub, &index_sub, &nat_sub, &src).unwrap();
         let InferredType::Indexed { index, .. } = substituted else {
             panic!("expected indexed type after substitution");
         };
-        assert_eq!(index.resolved(), &resolved_index);
+        assert_eq!(index.declared_resolved(), Some(&resolved_index));
     }
 
     #[test]
@@ -5362,41 +5137,34 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // NatPolyForm::from_index_name tests
+    // NatRangeIndexIdentity typed-reference tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn parse_index_name_constant() {
-        let form = NatPolyForm::from_index_name("__nat_range_3").unwrap();
-        assert_eq!(form, NatPolyForm::from_constant(3));
+    fn nat_range_identity_concrete_to_index_type_ref() -> Result<(), Box<dyn std::error::Error>> {
+        let reference = NatPolyForm::from_constant(3)
+            .to_nat_range_identity()?
+            .to_index_type_ref()?;
+        assert_eq!(
+            reference
+                .nat_range()
+                .map(crate::registry::types::NatRangeIndex::size_u64),
+            Some(3)
+        );
+        assert_eq!(reference.display_name().as_str(), "range(3)");
+        Ok(())
     }
 
     #[test]
-    fn parse_index_name_variable() {
-        let form = NatPolyForm::from_index_name("__nat_range_N").unwrap();
-        assert_eq!(form, NatPolyForm::from_var(GenericParamName::new("N")));
-    }
-
-    #[test]
-    fn parse_index_name_var_plus_constant() {
-        let form = NatPolyForm::from_index_name("__nat_range_N + 1").unwrap();
-        let expected =
-            NatPolyForm::from_var(GenericParamName::new("N")).add(&NatPolyForm::from_constant(1));
-        assert_eq!(form, expected);
-    }
-
-    #[test]
-    fn parse_index_name_two_vars() {
-        let form = NatPolyForm::from_index_name("__nat_range_M + N + 2").unwrap();
-        let expected = NatPolyForm::from_var(GenericParamName::new("M"))
-            .add(&NatPolyForm::from_var(GenericParamName::new("N")))
-            .add(&NatPolyForm::from_constant(2));
-        assert_eq!(form, expected);
-    }
-
-    #[test]
-    fn parse_index_name_no_prefix() {
-        assert!(NatPolyForm::from_index_name("Phase").is_none());
+    fn nat_range_identity_symbolic_to_display_only_index_type_ref()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let reference = NatPolyForm::from_var(GenericParamName::new("N"))
+            .add(&NatPolyForm::from_constant(1))
+            .to_nat_range_identity()?
+            .to_index_type_ref()?;
+        assert_eq!(reference.nat_range(), None);
+        assert_eq!(reference.display_name().as_str(), "range(N + 1)");
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -5491,22 +5259,5 @@ mod tests {
     fn nat_poly_format_zero() {
         let z = NatPolyForm::from_constant(0);
         assert_eq!(z.format(), "0");
-    }
-
-    #[test]
-    fn parse_index_name_mul() {
-        let form = NatPolyForm::from_index_name("__nat_range_M * N").unwrap();
-        let expected = NatPolyForm::from_var(GenericParamName::new("M"))
-            .mul(&NatPolyForm::from_var(GenericParamName::new("N")));
-        assert_eq!(form, expected);
-    }
-
-    #[test]
-    fn parse_index_name_mul_plus_const() {
-        let form = NatPolyForm::from_index_name("__nat_range_M * N + 1").unwrap();
-        let expected = NatPolyForm::from_var(GenericParamName::new("M"))
-            .mul(&NatPolyForm::from_var(GenericParamName::new("N")))
-            .add(&NatPolyForm::from_constant(1));
-        assert_eq!(form, expected);
     }
 }

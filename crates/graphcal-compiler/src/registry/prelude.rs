@@ -2,7 +2,7 @@ use crate::dag_id::DagId;
 use crate::syntax::dimension::{Dimension, RationalError};
 use crate::syntax::names::{DimName, UnitName};
 
-use crate::registry::types::RegistryBuilder;
+use crate::registry::types::{PositiveFiniteScale, RegistryBuilder};
 
 /// Canonical synthetic owner for Graphcal prelude type-system symbols.
 ///
@@ -143,15 +143,31 @@ fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<
     Ok(())
 }
 
+const fn prelude_scale(value: f64) -> PositiveFiniteScale {
+    PositiveFiniteScale::new_unchecked(value)
+}
+
 fn load_base_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
-    r.register_unit(UnitName::new("m"), ids.length.clone(), 1.0);
-    r.register_unit(UnitName::new("s"), ids.time.clone(), 1.0);
-    r.register_unit(UnitName::new("kg"), ids.mass.clone(), 1.0);
-    r.register_unit(UnitName::new("K"), ids.temperature.clone(), 1.0);
-    r.register_unit(UnitName::new("A"), ids.electric_current.clone(), 1.0);
-    r.register_unit(UnitName::new("mol"), ids.amount.clone(), 1.0);
-    r.register_unit(UnitName::new("cd"), ids.luminous_intensity.clone(), 1.0);
-    r.register_unit(UnitName::new("rad"), ids.angle.clone(), 1.0);
+    r.register_unit(UnitName::new("m"), ids.length.clone(), prelude_scale(1.0));
+    r.register_unit(UnitName::new("s"), ids.time.clone(), prelude_scale(1.0));
+    r.register_unit(UnitName::new("kg"), ids.mass.clone(), prelude_scale(1.0));
+    r.register_unit(
+        UnitName::new("K"),
+        ids.temperature.clone(),
+        prelude_scale(1.0),
+    );
+    r.register_unit(
+        UnitName::new("A"),
+        ids.electric_current.clone(),
+        prelude_scale(1.0),
+    );
+    r.register_unit(UnitName::new("mol"), ids.amount.clone(), prelude_scale(1.0));
+    r.register_unit(
+        UnitName::new("cd"),
+        ids.luminous_intensity.clone(),
+        prelude_scale(1.0),
+    );
+    r.register_unit(UnitName::new("rad"), ids.angle.clone(), prelude_scale(1.0));
 }
 
 fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RationalError> {
@@ -165,43 +181,59 @@ fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), R
     let frequency = (Dimension::dimensionless() / ids.time.clone())?;
 
     // Length
-    r.register_unit(UnitName::new("km"), ids.length.clone(), 1000.0);
-    r.register_unit(UnitName::new("cm"), ids.length.clone(), 0.01);
-    r.register_unit(UnitName::new("mm"), ids.length.clone(), 0.001);
+    r.register_unit(
+        UnitName::new("km"),
+        ids.length.clone(),
+        prelude_scale(1000.0),
+    );
+    r.register_unit(UnitName::new("cm"), ids.length.clone(), prelude_scale(0.01));
+    r.register_unit(
+        UnitName::new("mm"),
+        ids.length.clone(),
+        prelude_scale(0.001),
+    );
 
     // Time
-    r.register_unit(UnitName::new("hour"), ids.time.clone(), 3600.0);
-    r.register_unit(UnitName::new("min"), ids.time.clone(), 60.0);
+    r.register_unit(
+        UnitName::new("hour"),
+        ids.time.clone(),
+        prelude_scale(3600.0),
+    );
+    r.register_unit(UnitName::new("min"), ids.time.clone(), prelude_scale(60.0));
 
     // Angle
     r.register_unit(
         UnitName::new("deg"),
         ids.angle.clone(),
-        std::f64::consts::PI / 180.0,
+        prelude_scale(std::f64::consts::PI / 180.0),
     );
 
     // Mass
-    r.register_unit(UnitName::new("g"), ids.mass.clone(), 0.001);
+    r.register_unit(UnitName::new("g"), ids.mass.clone(), prelude_scale(0.001));
 
     // Force
-    r.register_unit(UnitName::new("N"), force.clone(), 1.0);
-    r.register_unit(UnitName::new("kN"), force, 1000.0);
+    r.register_unit(UnitName::new("N"), force.clone(), prelude_scale(1.0));
+    r.register_unit(UnitName::new("kN"), force, prelude_scale(1000.0));
 
     // Energy
-    r.register_unit(UnitName::new("J"), energy.clone(), 1.0);
-    r.register_unit(UnitName::new("kJ"), energy, 1000.0);
+    r.register_unit(UnitName::new("J"), energy.clone(), prelude_scale(1.0));
+    r.register_unit(UnitName::new("kJ"), energy, prelude_scale(1000.0));
 
     // Power
-    r.register_unit(UnitName::new("W"), power.clone(), 1.0);
-    r.register_unit(UnitName::new("kW"), power, 1000.0);
+    r.register_unit(UnitName::new("W"), power.clone(), prelude_scale(1.0));
+    r.register_unit(UnitName::new("kW"), power, prelude_scale(1000.0));
 
     // Pressure
-    r.register_unit(UnitName::new("Pa"), pressure.clone(), 1.0);
-    r.register_unit(UnitName::new("kPa"), pressure.clone(), 1000.0);
-    r.register_unit(UnitName::new("MPa"), pressure, 1_000_000.0);
+    r.register_unit(UnitName::new("Pa"), pressure.clone(), prelude_scale(1.0));
+    r.register_unit(
+        UnitName::new("kPa"),
+        pressure.clone(),
+        prelude_scale(1000.0),
+    );
+    r.register_unit(UnitName::new("MPa"), pressure, prelude_scale(1_000_000.0));
 
     // Frequency
-    r.register_unit(UnitName::new("Hz"), frequency, 1.0);
+    r.register_unit(UnitName::new("Hz"), frequency, prelude_scale(1.0));
     Ok(())
 }
 

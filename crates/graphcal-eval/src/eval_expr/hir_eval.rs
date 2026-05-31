@@ -17,9 +17,10 @@ use miette::NamedSource;
 use crate::decl_key::RuntimeDeclKey;
 
 use super::{
-    EvalContext, RuntimeValueMap, constructor_fields_for_runtime_struct,
-    find_struct_field_constraint, imported_value_source_value, index_ref_matches_resolved_or_leaf,
-    resolve_unit_scale, runtime_struct_type_def, topo_order_for_dag_body,
+    EvalContext, RuntimeValueMap, checked_finite_scalar, checked_unit_scaled_value,
+    constructor_fields_for_runtime_struct, find_struct_field_constraint,
+    imported_value_source_value, index_ref_matches_resolved, resolve_unit_scale,
+    runtime_struct_type_def, topo_order_for_dag_body,
 };
 
 pub type HirLocalValueMap = HashMap<hir::LocalId, RuntimeValue>;
@@ -39,7 +40,7 @@ pub fn eval_hir_expr(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match &expr.kind {
-        hir::ExprKind::Number(n) => Ok(RuntimeValue::Scalar(*n)),
+        hir::ExprKind::Number(n) => checked_finite_scalar(*n, "numeric literal", expr.span, ctx),
         hir::ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
         hir::ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
         hir::ExprKind::StringLiteral(_) => {
@@ -55,7 +56,7 @@ pub fn eval_hir_expr(
         hir::ExprKind::UnitLiteral { value, unit } => {
             let empty_syntax_locals = HashMap::new();
             let scale = resolve_unit_scale(unit, values, &empty_syntax_locals, ctx)?;
-            Ok(RuntimeValue::Scalar(*value * scale))
+            checked_unit_scaled_value(*value, scale, expr.span, ctx)
         }
         hir::ExprKind::GraphRef(target) => values
             .get(&RuntimeDeclKey::resolved(target.value.clone()))
@@ -154,16 +155,15 @@ fn eval_hir_const_ref(
             eval_hir_nullary_constructor(constructor, target.span, ctx)
         }
         ConstRef::IndexVariant(variant) => Ok(RuntimeValue::resolved_label(variant)),
-        ConstRef::Builtin(builtin) => ctx
-            .builtin_consts
-            .get(builtin.as_str())
-            .map(|v| RuntimeValue::Scalar(*v))
-            .ok_or_else(|| {
+        ConstRef::Builtin(builtin) => {
+            let value = ctx.builtin_consts.get(builtin.as_str()).ok_or_else(|| {
                 ctx.eval_error(
                     format!("undefined constant `{}`", builtin.as_str()),
                     target.span,
                 )
-            }),
+            })?;
+            checked_finite_scalar(*value, "built-in constant", target.span, ctx)
+        }
         ConstRef::TimeScale(scale) => Err(ctx.eval_error(
             format!("unexpected time scale `{scale}` outside epoch()"),
             target.span,
@@ -559,48 +559,11 @@ fn eval_hir_aggregation_fn(
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let type_err = |e: graphcal_compiler::registry::runtime_value::RuntimeValueError| {
+    super::aggregations::aggregate_indexed_scalars(kind, entries).map_err(|err| {
         GraphcalError::EvalError {
-            message: e.to_string(),
+            message: err.to_string(),
             src: src.clone(),
             span: span.into(),
-        }
-    };
-    Ok(match kind {
-        graphcal_compiler::registry::resolve_types::AggregationFn::Sum => {
-            RuntimeValue::Scalar(entries.values().try_fold(0.0_f64, |acc, v| {
-                Ok(acc + v.expect_scalar("sum element").map_err(&type_err)?)
-            })?)
-        }
-        graphcal_compiler::registry::resolve_types::AggregationFn::Min => {
-            RuntimeValue::Scalar(entries.values().try_fold(f64::INFINITY, |acc, v| {
-                Ok(acc.min(v.expect_scalar("min element").map_err(&type_err)?))
-            })?)
-        }
-        graphcal_compiler::registry::resolve_types::AggregationFn::Max => {
-            RuntimeValue::Scalar(entries.values().try_fold(f64::NEG_INFINITY, |acc, v| {
-                Ok(acc.max(v.expect_scalar("max element").map_err(&type_err)?))
-            })?)
-        }
-        graphcal_compiler::registry::resolve_types::AggregationFn::Mean => {
-            if entries.is_empty() {
-                return Err(GraphcalError::EvalError {
-                    message: "mean() over an empty Indexed value is undefined".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            }
-            #[expect(clippy::cast_precision_loss, reason = "collection length fits f64")]
-            let n = entries.len() as f64;
-            let total = entries.values().try_fold(0.0_f64, |acc, v| {
-                Ok(acc + v.expect_scalar("mean element").map_err(&type_err)?)
-            })?;
-            RuntimeValue::Scalar(total / n)
-        }
-        graphcal_compiler::registry::resolve_types::AggregationFn::Count =>
-        {
-            #[expect(clippy::cast_precision_loss, reason = "collection length fits f64")]
-            RuntimeValue::Scalar(entries.len() as f64)
         }
     })
 }
@@ -632,20 +595,9 @@ fn eval_hir_conversion_fn(
             let f = arg
                 .expect_scalar("to_int argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            if !f.is_finite() {
-                return Err(
-                    ctx.eval_error(format!("to_int() requires a finite value, got {f}"), span)
-                );
-            }
-            #[expect(clippy::cast_precision_loss, reason = "range check for Int conversion")]
-            if f < (i64::MIN as f64) || f > (i64::MAX as f64) {
-                return Err(ctx.eval_error(
-                    "to_int() argument is outside the representable integer range",
-                    span,
-                ));
-            }
-            #[expect(clippy::cast_possible_truncation, reason = "range-checked truncation")]
-            Ok(RuntimeValue::Int(f as i64))
+            super::conversions::checked_f64_to_i64(f)
+                .map(RuntimeValue::Int)
+                .map_err(|err| ctx.eval_error(err.to_string(), span))
         }
     }
 }
@@ -860,10 +812,12 @@ fn index_def_for_ref<'a>(
     index_ref: &IndexTypeRef,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a IndexDef> {
+    if let Some(nat_range) = index_ref.nat_range() {
+        return ctx.registry.indexes.get_nat_range(nat_range);
+    }
     ctx.current_dag
         .map(|dag| &dag.semantic.collection_refs)
-        .and_then(|refs| refs.index_defs.get(index_ref.resolved()))
-        .or_else(|| ctx.registry.indexes.get_index(index_ref.as_str()))
+        .and_then(|refs| refs.index_defs.get(index_ref.declared_resolved()?))
 }
 
 fn ensure_index_ref_matches_resolved(
@@ -872,27 +826,32 @@ fn ensure_index_ref_matches_resolved(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
-    if index_ref_matches_resolved_or_leaf(actual, expected) {
+    if index_ref_matches_resolved(actual, expected) {
         return Ok(());
     }
     Err(ctx.eval_error(
         format!(
             "index argument belongs to `{}`, but value is indexed by `{}`",
             expected.as_str(),
-            actual.name()
+            actual.display_name()
         ),
         span,
     ))
 }
 
-fn map_entry_index_ref(key: &hir::expr::MapEntryKey) -> IndexTypeRef {
+fn map_entry_index_ref(
+    key: &hir::expr::MapEntryKey,
+    ctx: &EvalContext<'_>,
+) -> Result<IndexTypeRef, GraphcalError> {
     match key {
         hir::expr::MapEntryKey::IndexVariant(variant) => {
-            IndexTypeRef::from_resolved(variant.value.index().clone())
+            Ok(IndexTypeRef::from_resolved(variant.value.index().clone()))
         }
-        hir::expr::MapEntryKey::NatRangeVariant { size, .. } => IndexTypeRef::from_resolved(
-            graphcal_compiler::registry::types::nat_range_resolved_index_size(*size),
-        ),
+        hir::expr::MapEntryKey::NatRangeVariant { size, variant } => {
+            let nat_range = graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(*size)
+                .map_err(|err| ctx.eval_error(err.to_string(), variant.span))?;
+            Ok(IndexTypeRef::from_nat_range(nat_range))
+        }
     }
 }
 
@@ -935,7 +894,7 @@ fn eval_hir_map_literal(
         .ok_or_else(|| ctx.internal_error("empty map literal", Span::new(0, 0)))?;
     let first_key = first.keys.first();
     let arity = first.keys.len();
-    let idx_name = map_entry_index_ref(first_key);
+    let idx_name = map_entry_index_ref(first_key, ctx)?;
 
     if arity == 1 {
         let mut result = IndexMap::new();
@@ -1037,12 +996,18 @@ fn eval_hir_for_comp(
         ),
         hir::expr::ForBindingIndex::Range { arg, span } => {
             let size = eval_hir_nat_expr(arg, local_values, ctx)?;
+            if size == 0 {
+                return Err(ctx.eval_error(
+                    "range(0) is not allowed; indexes must contain at least one element",
+                    *span,
+                ));
+            }
+            let nat_range = graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(size)
+                .map_err(|err| ctx.eval_error(err.to_string(), *span))?;
             (
-                IndexTypeRef::from_resolved(
-                    graphcal_compiler::registry::types::nat_range_resolved_index_size(size),
-                ),
+                IndexTypeRef::from_nat_range(nat_range),
                 *span,
-                Some(size),
+                Some(nat_range),
             )
         }
     };
@@ -1050,16 +1015,12 @@ fn eval_hir_for_comp(
     let dynamic_nat_def;
     let idx_def = if let Some(def) = index_def_for_ref(&idx_name, ctx) {
         def
-    } else if let Some(size) = dynamic_nat_size {
-        let size = usize::try_from(size).map_err(|_| {
-            ctx.eval_error(
-                format!("nat range size {size} does not fit in usize on this target"),
-                error_span,
-            )
-        })?;
+    } else if let Some(nat_range) = dynamic_nat_size {
         dynamic_nat_def = IndexDef {
-            name: idx_name.to_unowned_name(),
-            kind: IndexKind::NatRange { size },
+            name: nat_range.display_name(),
+            kind: IndexKind::NatRange {
+                size: nat_range.size(),
+            },
         };
         &dynamic_nat_def
     } else {
@@ -1348,7 +1309,7 @@ fn eval_hir_match(
                 .iter()
                 .find(|arm| match &arm.pattern {
                     hir::expr::MatchPattern::IndexLabel { variant: pat, .. } => {
-                        index_ref_matches_resolved_or_leaf(index_name, pat.value.index())
+                        index_ref_matches_resolved(index_name, pat.value.index())
                             && pat.value.variant() == variant
                     }
                     hir::expr::MatchPattern::Constructor { .. } => false,

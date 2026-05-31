@@ -730,17 +730,15 @@ pub enum MapEntryIndex {
 }
 
 impl MapEntryIndex {
-    /// Convert to the registry key used for index table lookup.
+    /// Return the leaf registry name for declared named indexes only.
+    ///
+    /// Nat ranges are not declared registry indexes; callers must pattern-match
+    /// and use a typed Nat-range identity instead of fabricating an `IndexName`.
     #[must_use]
-    pub fn registry_name(&self) -> IndexName {
+    pub fn named_registry_name(&self) -> Option<IndexName> {
         match self {
-            // Local registries are still keyed by leaf index names. A
-            // module-aware resolver should replace this boundary with a
-            // resolved index identity instead of inspecting the path leaf.
-            Self::Named(name) => IndexName::from(name.leaf().clone()),
-            Self::NatRange(size) => {
-                IndexName::new(crate::registry::types::nat_range_index_name(*size))
-            }
+            Self::Named(name) => Some(IndexName::from(name.leaf().clone())),
+            Self::NatRange(_) => None,
         }
     }
 }

@@ -17,7 +17,7 @@ index Maneuver = { Departure, Correction, Insertion };
 Labels conventionally use `PascalCase` and are namespaced by the index: `Maneuver.Departure`.
 
 !!! note "No empty indexes"
-    A finite index must declare **at least one variant** — `index Empty = {};` is rejected by the parser. The same goes for `linspace` ranges: `start > end` and `step <= 0` are invalid. This is a deliberate design choice (issue #580): with no empty case ever reachable, aggregation builtins never face the "what is `mean` of nothing?" question, indexed values always have at least one element, and there are no NaN traps to remember. Model the absence at the boundary (e.g., guard with a separate `Bool` flag or split the dag) rather than collapsing the index to zero variants.
+    A finite index must declare **at least one variant** — `index Empty = {};` is rejected by the parser. The same goes for `linspace` ranges (`start > end`, `step <= 0`, non-finite bounds, and zero-step cardinalities are invalid) and nat ranges (`range(0)` is invalid). This is a deliberate design choice (issue #580): with no empty case ever reachable, aggregation builtins never face the "what is `mean` of nothing?" question, indexed values always have at least one element, and there are no NaN traps to remember. Model the absence at the boundary (e.g., guard with a separate `Bool` flag or split the dag) rather than collapsing the index to zero variants.
 
 ## Indexed Values
 
@@ -367,6 +367,8 @@ index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
 
 This creates an index with elements at `0.0 s`, `0.5 s`, and `1.0 s`.
 
+If `step` does not land exactly on `end`, Graphcal includes only values that do not overshoot the end. For example, `linspace(0.0 s, 1.0 s, step: 0.6 s)` has labels `0.0 s` and `0.6 s`, not `1.2 s`.
+
 ## Nat Range Indexes
 
 Integer literals in index position create anonymous **nat range** indexes. These are useful for vectors, matrices, and other fixed-size numeric arrays:
@@ -379,7 +381,7 @@ param v: Dimensionless[3] = for i: range(3) { 1.0 };
 param m: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
 ```
 
-The integer `3` in `Dimensionless[3]` internally creates an anonymous index `range(3)` with elements `{0, 1, 2}`.
+The integer `3` in `Dimensionless[3]` internally creates an anonymous index `range(3)` with elements `{0, 1, 2}`. Nat range sizes must be at least 1.
 
 ### Iterating over Nat Ranges
 

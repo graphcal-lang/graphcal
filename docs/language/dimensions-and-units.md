@@ -107,6 +107,8 @@ unit kB: Information = 1000.0 byte;
 
 A `base unit` declaration (`base unit bit: Information;` with no `= ...`) defines the canonical unit for a user-defined base dimension. Non-base units must always carry an `= ...` body.
 
+Unit scale factors must be **positive and finite**. Static unit definitions such as `unit z: Length = 0.0 m;`, negative scales, and overflowing scales are rejected. Dynamic unit scales are checked at evaluation time with the same rule.
+
 ### Dynamic Units
 
 A unit's scale factor can depend on runtime values (params or nodes) by using a parenthesized expression with `@`-references:
@@ -138,6 +140,8 @@ Compound unit expressions are supported:
 ```
 const node gm: GravParam = 3.986e5 km^3/s^2;
 ```
+
+The SI value produced by a unit literal must remain finite. For example, a literal whose numeric value times its unit scale overflows is an error rather than `inf`.
 
 ## Unit Conversion
 

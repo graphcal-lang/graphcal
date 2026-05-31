@@ -529,11 +529,10 @@ fn to_float_large_integer_precision() {
 }
 
 // ============================================================================
-// BUG 9: Aggregation functions on NaN-containing collections
+// BUG 9: Aggregation functions on non-finite collections/results
 //
-// If one entry in an indexed collection somehow has a special value,
-// aggregation functions (sum, min, max, mean) might produce unexpected results.
-// NaN should propagate correctly.
+// Aggregation functions (sum, min, max, mean) should reject non-finite
+// elements or results instead of silently producing NaN/inf.
 // ============================================================================
 
 #[test]
@@ -571,6 +570,23 @@ node avg: Dimensionless = mean(@x);
     assert!(
         (avg - 2.0).abs() < f64::EPSILON,
         "mean(1, 2, 3) = {avg}, expected 2.0"
+    );
+}
+
+#[test]
+fn sum_of_indexed_values_that_overflows_errors() {
+    let source = r#"
+pub index Maneuver = { Alpha, Beta };
+param x: Dimensionless[Maneuver] = {
+    Maneuver.Alpha: 1e308,
+    Maneuver.Beta: 1e308,
+};
+node total: Dimensionless = sum(@x);
+"#;
+    let result = compile_and_eval(source).unwrap();
+    assert!(
+        has_node_error(&result, "total"),
+        "sum producing infinity should be reported as a node error: {result:?}"
     );
 }
 

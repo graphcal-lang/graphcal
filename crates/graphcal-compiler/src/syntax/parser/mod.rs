@@ -306,6 +306,30 @@ impl<'src> Parser<'src> {
             .ok_or_else(|| self.unexpected_eof("token"))
     }
 
+    /// Parse a finite `f64` literal from already-normalized token text.
+    pub(super) fn parse_finite_f64_literal(
+        &self,
+        text: &str,
+        span: Span,
+    ) -> Result<f64, ParseError> {
+        let value: f64 =
+            text.parse()
+                .map_err(|e: std::num::ParseFloatError| ParseError::InvalidNumber {
+                    reason: e.to_string(),
+                    src: self.named_source(),
+                    span: span.into(),
+                })?;
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(ParseError::InvalidNumber {
+                reason: "floating-point literal must be finite".to_string(),
+                src: self.named_source(),
+                span: span.into(),
+            })
+        }
+    }
+
     /// Parse a single expression from the source string.
     ///
     /// Expects the entire input to be consumed; returns an error if there

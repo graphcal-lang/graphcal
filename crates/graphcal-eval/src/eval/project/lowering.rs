@@ -224,7 +224,7 @@ fn module_resolve_compile_error(
 /// resolves under the local alias at inline-call eval time.
 pub(in crate::eval::project) fn merge_dep_dag_tirs(
     tir: &mut graphcal_compiler::tir::typed::TIR,
-    module_map: &HashMap<String, (graphcal_compiler::dag_id::DagId, Span)>,
+    module_map: &HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
 ) {
     for (alias, (dep_dag_id, _)) in module_map {
@@ -380,9 +380,9 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                     };
 
                     // For cross-file includes (parent != importer), fetch the
-                    // parent's already-evaluated values and declared types
-                    // for each self-imported name. Same-file includes leave
-                    // these empty — the parent isn't in `evaluated_files`
+                    // parent's artifact values and declared types for each
+                    // self-imported name. Same-file includes leave these
+                    // empty — the parent isn't in `evaluated_files`
                     // yet, and the merged refs land on names already present
                     // in the importer's own decls.
                     let mut imported_values: HashMap<
@@ -508,7 +508,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
         // ---- 5. Merge dep IR into importer's IR ---------------------------
         unfrozen.merge_dependency(
             dep_unfrozen,
-            &deferred.prefix,
+            deferred.prefix.as_str(),
             &deferred.bindings,
             &dep_names,
             &deferred.index_bindings,
@@ -557,7 +557,7 @@ pub(in crate::eval::project) struct AliasSubstitutions<'a> {
 fn add_selective_aliases_inner(
     decls: &[graphcal_compiler::desugar::resolved_ast::Declaration],
     selective: &[ImportAlias],
-    prefix: &str,
+    prefix: &ModuleAliasName,
     subs: &AliasSubstitutions<'_>,
     import_span: Span,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
@@ -568,7 +568,7 @@ fn add_selective_aliases_inner(
         // The alias points at the dep's prefixed declaration: a typed
         // qualified `ScopedName`. No flat `prefix::orig_name` strings are
         // built — the qualification stays structural through the IR.
-        let target = ScopedName::qualified(prefix, orig_name);
+        let target = ScopedName::qualified(prefix.as_str(), orig_name);
 
         let type_ann = decls.iter().find_map(|d| match &d.kind {
             DeclKind::Param(p) if p.name.value.as_str() == orig_name => Some(p.type_ann.clone()),
@@ -706,7 +706,14 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
     }
 
     // Import indexes — skip bound indexes (they are replaced by the importer's index).
+    // Module imports use `pub_names` filtering and keep required indexes in the
+    // dependency's module registry only; pulling an unbound `pub(bind)` index
+    // into the importer would incorrectly make the importer a library even if
+    // it only needs a qualified type from the dependency.
     for idx_def in dep_registry.indexes.all_indexes() {
+        if pub_names.is_some() && idx_def.is_required() {
+            continue;
+        }
         if !index_bindings.contains_key(idx_def.name.as_str()) {
             if pub_names.is_some_and(|visible| !visible.contains(idx_def.name.as_str())) {
                 continue;
@@ -805,8 +812,8 @@ pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
 /// Build imported value names and values for a dependency file from its own transitive imports.
 ///
 /// This mirrors the import-processing logic in `compile_single_file_in_project` but
-/// only for non-instantiated imports (the dependency's own transitive deps are already
-/// evaluated and stored in `evaluated_files`).
+/// only for non-instantiated imports (the dependency's own transitive deps already
+/// have compiled artifacts in `evaluated_files`).
 pub(in crate::eval::project) fn build_dep_imported_values(
     project: &crate::loader::LoadedProject,
     dep_dag_id: &graphcal_compiler::dag_id::DagId,
@@ -823,7 +830,7 @@ pub(in crate::eval::project) fn build_dep_imported_values(
         let trans_dep = evaluated_files.get(trans_canonical).ok_or_else(|| {
             CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
-                    "internal: transitive dependency {trans_canonical} not yet evaluated",
+                    "transitive dependency `{trans_canonical}` is not available for imports",
                 ),
                 src: dep_src.clone(),
                 span: import_decl.path.span().into(),
@@ -855,7 +862,7 @@ pub(in crate::eval::project) fn build_dep_imported_values(
         let trans_dep = evaluated_files.get(trans_canonical).ok_or_else(|| {
             CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
-                    "internal: transitive dependency {trans_canonical} not yet evaluated",
+                    "transitive dependency `{trans_canonical}` is not available for imports",
                 ),
                 src: dep_src.clone(),
                 span: include_decl.path.span().into(),
@@ -917,7 +924,7 @@ pub(in crate::eval::project) fn build_dep_import_values_for_kind(
         graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
             let module_name = alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(import_path),
-                |alias_ident| alias_ident.value.to_string(),
+                |alias_ident| alias_ident.value.clone(),
             );
             let import_span = import_path.span();
             imports::import_module_values(

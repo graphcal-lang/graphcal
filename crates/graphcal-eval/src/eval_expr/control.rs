@@ -14,7 +14,7 @@ use super::EvalContext;
 use super::RuntimeValueMap;
 use super::eval_expr;
 use super::index_ref_from_path;
-use super::index_ref_matches_resolved_or_leaf;
+use super::index_ref_matches_resolved;
 
 fn resolved_match_label_variant<'a>(
     ctx: &'a EvalContext<'_>,
@@ -39,7 +39,7 @@ fn label_pattern_matches(
     scrutinee_variant: &graphcal_compiler::syntax::names::IndexVariantName,
 ) -> bool {
     if let Some(resolved) = resolved_match_label_variant(ctx, pattern) {
-        return index_ref_matches_resolved_or_leaf(scrutinee_index, resolved.index())
+        return index_ref_matches_resolved(scrutinee_index, resolved.index())
             && resolved.variant() == scrutinee_variant;
     }
 

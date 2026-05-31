@@ -9,6 +9,7 @@ pub mod lexer;
 pub mod module_resolve;
 pub mod name_resolve;
 pub mod names;
+pub mod nat;
 pub mod non_empty;
 pub mod parser;
 pub mod phase;

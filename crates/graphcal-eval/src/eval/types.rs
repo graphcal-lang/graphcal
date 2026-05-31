@@ -248,7 +248,7 @@ impl Value {
             Self::Label {
                 index_name,
                 variant,
-            } => variant.qualified_by(index_name.name()).to_string(),
+            } => variant.qualified_by(&index_name.display_name()).to_string(),
             Self::Struct { type_name, .. } => format!("struct `{type_name}`"),
             Self::Indexed { index_name, .. } => format!("indexed `{index_name}[...]`"),
             Self::Datetime { .. } => "Datetime".to_string(),
@@ -341,7 +341,7 @@ impl Value {
             Self::Label {
                 index_name,
                 variant,
-            } => variant.qualified_by(index_name.name()).to_string(),
+            } => variant.qualified_by(&index_name.display_name()).to_string(),
             Self::Struct { type_name, .. } => type_name.as_str().to_string(),
             Self::Datetime {
                 epoch, display_tz, ..

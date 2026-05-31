@@ -49,7 +49,7 @@ graphcal eval [OPTIONS] <FILE>
 | `--format <FORMAT>` | Output format: `text` (default) or `json` |
 | `--set <SET>` | Override or provide a param value: `--set 'name=expr'` (repeatable) |
 | `--input <INPUT>` | JSON input file for param values |
-| `--plot <MODE>` | Plot output mode: `browser` (open in browser) or `json` (print Vega-Lite JSON) |
+| `--plot <MODE>` | Plot output mode: `browser` (open in browser) or `json` (print only plot JSON to stdout) |
 
 When both `--set` and `--input` are provided, `--set` takes precedence.
 
@@ -186,15 +186,17 @@ When a file contains `plot`, `figure`, or `layer` declarations, use the
 
 **Browser mode** generates a self-contained HTML file with all figures
 (rendered via [Vega-Embed](https://github.com/vega/vega-embed)) and opens
-it in the default browser:
+it in the default browser. Normal evaluation output is still printed according
+to `--format`:
 
 ```bash
 graphcal eval analysis.gcl --plot browser
 ```
 
-**JSON mode** prints a JSON array of figure objects to stdout, useful for
+**JSON mode** prints only a JSON array of figure objects to stdout, useful for
 piping to other tools or pasting into the
-[Vega-Lite Editor](https://vega.github.io/editor/):
+[Vega-Lite Editor](https://vega.github.io/editor/). Normal evaluation output is
+suppressed in this mode, and `--format` does not add eval values to stdout:
 
 ```bash
 graphcal eval analysis.gcl --plot json
@@ -215,8 +217,9 @@ declaration produces a chart using Vega-Lite `layer`. Non-`pub` plots are
 suppressed from standalone output but still appear in any `figure` or `layer`
 that references them.
 
-If no `plot`, `figure`, or `layer` declarations are found, a warning is
-printed to stderr.
+If no `plot`, `figure`, or `layer` declarations are found, JSON mode prints
+`[]` to stdout and a warning to stderr. Browser mode prints the warning and
+opens nothing.
 
 See the [Plot Declarations](language/plots.md) reference for the language
 syntax.
@@ -225,7 +228,10 @@ syntax.
 
 ## `graphcal format`
 
-Format `.gcl` files. When given a directory, recursively formats all `.gcl` files within.
+Format `.gcl` files. When given a directory, recursively formats regular
+`.gcl` files within. Symlinked entries found during directory traversal are
+skipped; an explicitly named symlinked file path is treated like any other
+file argument and may write through to its target.
 
 ```bash
 graphcal format [OPTIONS] [PATHS]...

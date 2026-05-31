@@ -42,6 +42,9 @@ left.
 !!! note "Exponent restriction"
     The exponent in `^` must be **compile-time-known** so the resulting dimension can be resolved before evaluation. In practice that means a numeric literal (integer or float, optionally with a leading unary `-`); for `Int ^ Int`, any expression that constant-folds to a non-negative integer is also accepted (e.g., `2 ^ 3 ^ 2` parses as `2 ^ (3 ^ 2)` and folds to `2 ^ 9 = 512`). Variable exponents whose value would only be known at runtime are not allowed.
 
+!!! note "Finite scalars"
+    Floating-point literals must be finite. Scalar operations that would create `NaN` or `inf` are surfaced as errors instead of producing a runtime value.
+
 ## Comparison Operators
 
 | Operator | Description | Operand Requirement |

@@ -15,7 +15,7 @@ use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::Registry;
-use crate::tir::typed::NatLinearForm;
+use crate::tir::typed::{NatLinearForm, NatRangeIndexIdentity};
 
 pub(crate) use helpers::format_inferred_type;
 use helpers::{
@@ -41,8 +41,9 @@ pub use crate::registry::declared_type::DeclaredType;
 
 /// Index identity carried by inferred collection/label types.
 ///
-/// Equality is owner-sensitive; leaf-only names must be resolved before they
-/// become inferred semantic types.
+/// Declared indexes compare by owner-qualified [`IndexTypeRef`]. Nat-range
+/// indexes additionally carry their normalized Nat form so generic ranges such
+/// as `range(N + 1)` are not encoded in or compared through synthetic strings.
 #[derive(Debug, Clone, Eq)]
 pub struct InferredIndex {
     reference: IndexTypeRef,
@@ -51,9 +52,7 @@ pub struct InferredIndex {
 impl InferredIndex {
     #[must_use]
     pub fn with_owner(owner: crate::dag_id::DagId, name: IndexName) -> Self {
-        Self {
-            reference: IndexTypeRef::with_owner(owner, name),
-        }
+        Self::from_ref(IndexTypeRef::with_owner(owner, name))
     }
 
     #[must_use]
@@ -68,24 +67,58 @@ impl InferredIndex {
         Self { reference }
     }
 
+    /// Create an inferred Nat range index from a validated Nat-range identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the identity cannot be converted to an index type reference.
+    pub fn from_nat_range_identity(
+        identity: &NatRangeIndexIdentity,
+    ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
+        Ok(Self {
+            reference: identity.to_index_type_ref()?,
+        })
+    }
+
+    /// Create an inferred Nat range index from a normalized Nat form.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the form is a concrete invalid Nat range size.
+    pub fn from_nat_range_form(
+        form: NatLinearForm,
+    ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
+        Self::from_nat_range_identity(&NatRangeIndexIdentity::try_from_form(form)?)
+    }
+
     #[must_use]
     pub const fn type_ref(&self) -> &IndexTypeRef {
         &self.reference
     }
 
     #[must_use]
-    pub const fn name(&self) -> &IndexName {
-        self.reference.name()
+    pub fn name(&self) -> IndexName {
+        self.reference.display_name()
     }
 
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedName<namespace::Index> {
-        self.reference.resolved()
+    pub const fn declared_resolved(&self) -> Option<&ResolvedName<namespace::Index>> {
+        self.reference.declared_resolved()
+    }
+
+    #[must_use]
+    pub const fn concrete_nat_range(&self) -> Option<crate::registry::types::NatRangeIndex> {
+        self.reference.nat_range()
+    }
+
+    #[must_use]
+    pub fn nat_range_form(&self) -> Option<NatLinearForm> {
+        self.reference.nat_range_form()
     }
 
     #[must_use]
     pub fn matches_resolved(&self, expected: &ResolvedName<namespace::Index>) -> bool {
-        self.resolved() == expected
+        self.declared_resolved() == Some(expected)
     }
 
     #[must_use]
@@ -103,14 +136,6 @@ impl PartialEq for InferredIndex {
 impl std::fmt::Display for InferredIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.reference.fmt(f)
-    }
-}
-
-impl std::ops::Deref for InferredIndex {
-    type Target = IndexName;
-
-    fn deref(&self) -> &Self::Target {
-        self.name()
     }
 }
 
@@ -472,8 +497,8 @@ fn validate_expected_fail_key(
     for (part, expected_axis) in key.iter().zip(&shape.axes) {
         if !part.index.matches_ref(expected_axis.type_ref()) {
             return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
-                expected: expected_axis.resolved().to_string(),
-                found: part.index.resolved().to_string(),
+                expected: expected_axis.name().to_string(),
+                found: part.index.display_name().to_string(),
                 src: src.clone(),
                 span: part.span.into(),
             });

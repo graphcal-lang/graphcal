@@ -1,4 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
+use std::num::NonZeroUsize;
+
+use thiserror::Error;
 
 use crate::desugar::resolved_ast::{
     DagDecl, DimExpr, Expr, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
@@ -12,11 +15,62 @@ use crate::syntax::names::{
 // Data types
 // ---------------------------------------------------------------------------
 
+/// Error returned when a unit scale is not a positive finite scalar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PositiveFiniteScaleError {
+    #[error("scale must be finite")]
+    NonFinite,
+    #[error("scale must be greater than zero")]
+    NonPositive,
+}
+
+/// A unit scale factor that is guaranteed to be positive and finite.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct PositiveFiniteScale(f64);
+
+impl PositiveFiniteScale {
+    /// Validate a raw scale factor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `value` is `NaN`, infinite, zero, or negative.
+    pub fn new(value: f64) -> Result<Self, PositiveFiniteScaleError> {
+        if !value.is_finite() {
+            Err(PositiveFiniteScaleError::NonFinite)
+        } else if value <= 0.0 {
+            Err(PositiveFiniteScaleError::NonPositive)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    /// Construct a scale from trusted internal constants.
+    ///
+    /// Callers must ensure `value` is positive and finite. This is restricted
+    /// to the compiler crate so external code must use [`Self::new`].
+    #[must_use]
+    pub(crate) const fn new_unchecked(value: f64) -> Self {
+        Self(value)
+    }
+
+    /// Return the wrapped raw scale factor.
+    #[must_use]
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for PositiveFiniteScale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// How a unit's scale factor is determined.
 #[derive(Debug, Clone)]
 pub enum UnitScale {
     /// Scale factor known at compile time (e.g., `unit km: Length = 1000 m;`).
-    Static(f64),
+    Static(PositiveFiniteScale),
     /// Scale factor depends on runtime values (e.g., `unit EUR: Money = (@rate) USD;`).
     ///
     /// The final SI scale = `eval(scale_expr) * base_unit_scale`.
@@ -25,7 +79,7 @@ pub enum UnitScale {
         scale_expr: Expr,
         /// The scale factor of the base unit in the definition (resolved at compile time).
         /// For `(@rate) USD` where USD has scale 1.0, this is 1.0.
-        base_unit_scale: f64,
+        base_unit_scale: PositiveFiniteScale,
     },
 }
 
@@ -34,7 +88,7 @@ impl UnitScale {
     #[must_use]
     pub const fn as_static(&self) -> Option<f64> {
         match self {
-            Self::Static(s) => Some(*s),
+            Self::Static(s) => Some(s.get()),
             Self::Dynamic { .. } => None,
         }
     }
@@ -204,6 +258,8 @@ pub struct RangeIndexData {
     pub start: f64,
     pub end: f64,
     pub step: f64,
+    /// Validated number of inclusive range steps.
+    pub step_count: NonZeroUsize,
     pub dimension: Dimension,
     /// Display unit label (e.g., `"s"`) for formatting step values.
     pub display_label: Option<String>,
@@ -224,16 +280,8 @@ impl RangeIndexData {
 
     /// Returns the number of steps in this range.
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "range is validated: start <= end, step > 0, so n >= 0"
-    )]
-    pub fn step_count(&self) -> usize {
-        let n = (self.end - self.start) / self.step;
-        // Use round() to avoid off-by-one from floating-point imprecision
-        // (e.g., 0.3 / 0.1 = 2.9999... should give 3, not 2).
-        n.round() as usize + 1
+    pub const fn step_count(&self) -> usize {
+        self.step_count.get()
     }
 }
 
@@ -252,10 +300,10 @@ pub enum IndexKind {
     ///
     /// Created synthetically for integer literals in index position (e.g., `D[3]`).
     NatRange {
-        /// The size of the range (number of elements). Stored as `usize`
-        /// because it bounds in-memory variant tables; AST-level Nat
+        /// The non-zero size of the range (number of elements). Stored as
+        /// `usize` because it bounds in-memory variant tables; AST-level Nat
         /// literals are converted at the registry boundary.
-        size: usize,
+        size: NonZeroUsize,
     },
 }
 
@@ -281,7 +329,9 @@ impl IndexDef {
                 let count = data.step_count();
                 (0..count).map(IndexVariantName::range_step).collect()
             }
-            IndexKind::NatRange { size } => (0..*size).map(IndexVariantName::range_step).collect(),
+            IndexKind::NatRange { size } => {
+                (0..size.get()).map(IndexVariantName::range_step).collect()
+            }
             IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => vec![],
         }
     }
@@ -290,11 +340,11 @@ impl IndexDef {
     ///
     /// Returns 0 for required indexes (no variants until bound).
     #[must_use]
-    pub fn step_count(&self) -> usize {
+    pub const fn step_count(&self) -> usize {
         match &self.kind {
             IndexKind::Named { variants } => variants.len(),
             IndexKind::Range(data) => data.step_count(),
-            IndexKind::NatRange { size } => *size,
+            IndexKind::NatRange { size } => size.get(),
             IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => 0,
         }
     }
@@ -336,7 +386,7 @@ impl IndexDef {
     #[must_use]
     pub const fn nat_range_size(&self) -> Option<u64> {
         match &self.kind {
-            IndexKind::NatRange { size } => Some(*size as u64),
+            IndexKind::NatRange { size } => Some(size.get() as u64),
             _ => None,
         }
     }
@@ -355,43 +405,69 @@ impl IndexDef {
 // Nat range helpers
 // ---------------------------------------------------------------------------
 
-/// Generate the synthetic index name for a nat range of given size.
+/// Error returned when an AST/runtime Nat range size cannot become a concrete index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum NatRangeIndexError {
+    /// Empty Nat ranges are deliberately not representable.
+    #[error("range(0) is not allowed; indexes must contain at least one element")]
+    Empty,
+    /// The source-level `u64` size does not fit in this target's in-memory index size.
+    #[error("nat range size {size} does not fit in usize on this target")]
+    DoesNotFitUsize { size: u64 },
+}
+
+/// Typed identity for a concrete compiler-generated Nat range index.
 ///
-/// E.g., `nat_range_index_name(3)` → `"__nat_range_3"`.
-#[must_use]
-pub fn nat_range_index_name(size: u64) -> String {
-    format!("__nat_range_{size}")
+/// The core carries this non-zero size directly; display names are derived only
+/// for diagnostics and compatibility with APIs that still need an [`IndexName`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NatRangeIndex {
+    size: NonZeroUsize,
 }
 
-/// Canonical owner for compiler-generated Nat range indexes.
-#[must_use]
-pub fn nat_range_synthetic_owner() -> crate::dag_id::DagId {
-    crate::dag_id::DagId::root("<graphcal-synthetic>").child("nat-range")
-}
+impl NatRangeIndex {
+    /// Create an identity for a non-empty Nat range index.
+    #[must_use]
+    pub const fn new(size: NonZeroUsize) -> Self {
+        Self { size }
+    }
 
-/// Resolve a compiler-generated Nat range index name under its synthetic owner.
-#[must_use]
-pub fn nat_range_resolved_index_name(
-    name: crate::syntax::names::IndexName,
-) -> crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Index> {
-    crate::syntax::names::ResolvedName::from_def(nat_range_synthetic_owner(), name)
-}
+    /// Try to create an identity from an AST/runtime `u64` size.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `size` is zero or cannot fit in `usize` on this target.
+    pub fn try_from_u64(size: u64) -> Result<Self, NatRangeIndexError> {
+        if size == 0 {
+            return Err(NatRangeIndexError::Empty);
+        }
+        let size =
+            usize::try_from(size).map_err(|_| NatRangeIndexError::DoesNotFitUsize { size })?;
+        let size = NonZeroUsize::new(size).ok_or(NatRangeIndexError::Empty)?;
+        Ok(Self::new(size))
+    }
 
-/// Resolve a compiler-generated Nat range index of the given size.
-#[must_use]
-pub fn nat_range_resolved_index_size(
-    size: u64,
-) -> crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Index> {
-    nat_range_resolved_index_name(crate::syntax::names::IndexName::new(nat_range_index_name(
-        size,
-    )))
-}
+    /// Return the non-zero in-memory size.
+    #[must_use]
+    pub const fn size(self) -> NonZeroUsize {
+        self.size
+    }
 
-/// Check if an index name is a synthetic nat range index and extract its size.
-#[must_use]
-pub fn parse_nat_range_index_name(name: &str) -> Option<u64> {
-    name.strip_prefix("__nat_range_")
-        .and_then(|s| s.parse().ok())
+    /// Return the size as a `u64` for Nat-expression comparisons and display.
+    #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "Graphcal currently supports targets where usize fits in u64"
+    )]
+    pub fn size_u64(self) -> u64 {
+        u64::try_from(self.size.get()).expect("usize fits in u64 on supported targets")
+    }
+
+    /// Render this identity for diagnostics as source-level `range(N)` syntax.
+    #[must_use]
+    pub fn display_name(self) -> IndexName {
+        IndexName::new(format!("range({})", self.size_u64()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -652,22 +728,29 @@ impl TypeRegistry {
     }
 }
 
-/// Index registry: maps index names to `IndexDef`.
+/// Index registry: maps declared index names and typed Nat-range identities to `IndexDef`.
 #[derive(Debug, Clone)]
 pub struct IndexRegistry {
     indexes: HashMap<IndexName, IndexDef>,
+    nat_ranges: HashMap<NatRangeIndex, IndexDef>,
 }
 
 impl IndexRegistry {
-    /// Look up an index definition by name.
+    /// Look up a declared index definition by name.
     #[must_use]
     pub fn get_index(&self, name: &str) -> Option<&IndexDef> {
         self.indexes.get(name)
     }
 
+    /// Look up a compiler-generated Nat range index by typed identity.
+    #[must_use]
+    pub fn get_nat_range(&self, index: NatRangeIndex) -> Option<&IndexDef> {
+        self.nat_ranges.get(&index)
+    }
+
     /// Iterate over all index definitions.
     pub fn all_indexes(&self) -> impl Iterator<Item = &IndexDef> {
-        self.indexes.values()
+        self.indexes.values().chain(self.nat_ranges.values())
     }
 }
 
@@ -730,6 +813,7 @@ pub struct RegistryBuilder {
     types: HashMap<StructTypeName, TypeDef>,
     ctors: HashMap<ConstructorName, StructTypeName>,
     indexes: HashMap<IndexName, IndexDef>,
+    nat_ranges: HashMap<NatRangeIndex, IndexDef>,
     dags: HashMap<String, DagDecl>,
 }
 
@@ -755,6 +839,7 @@ impl RegistryBuilder {
             },
             indexes: IndexRegistry {
                 indexes: self.indexes,
+                nat_ranges: self.nat_ranges,
             },
             dags: DagRegistry { dags: self.dags },
         }
@@ -811,6 +896,9 @@ impl RegistryBuilder {
                 .entry(name.clone())
                 .or_insert_with(|| def.clone());
         }
+        for (index, def) in &parent.indexes.nat_ranges {
+            self.nat_ranges.entry(*index).or_insert_with(|| def.clone());
+        }
         for (name, decl) in &parent.dags.dags {
             self.dags
                 .entry(name.clone())
@@ -860,7 +948,12 @@ impl RegistryBuilder {
     }
 
     /// Register a named unit with its dimension and SI scale factor.
-    pub fn register_unit(&mut self, name: UnitName, dimension: Dimension, scale: f64) {
+    pub fn register_unit(
+        &mut self,
+        name: UnitName,
+        dimension: Dimension,
+        scale: PositiveFiniteScale,
+    ) {
         self.units.insert(
             name,
             UnitInfo {
@@ -905,23 +998,22 @@ impl RegistryBuilder {
         self.indexes.insert(def.name.clone(), def);
     }
 
-    /// Ensure a synthetic nat range index of the given size is registered.
+    /// Ensure a typed Nat range index of the given size is registered.
     ///
-    /// Returns the synthetic index name (e.g., `__nat_range_3`).
     /// If the index already exists, this is a no-op.
     ///
-    /// `size` is `usize` because the registry stores variant tables in
-    /// memory; AST-level `u64` literals must be checked at the boundary
-    /// before reaching this entry point.
-    pub fn ensure_nat_range_index(&mut self, size: usize) -> IndexName {
-        let name = IndexName::new(nat_range_index_name(size as u64));
-        self.indexes
-            .entry(name.clone())
+    /// `size` is `NonZeroUsize` because empty indexes are not representable.
+    /// AST-level `u64` literals must be checked at the boundary before
+    /// reaching this entry point.
+    pub fn ensure_nat_range_index(&mut self, size: NonZeroUsize) -> NatRangeIndex {
+        let nat_range = NatRangeIndex::new(size);
+        self.nat_ranges
+            .entry(nat_range)
             .or_insert_with(|| IndexDef {
-                name: name.clone(),
+                name: nat_range.display_name(),
                 kind: IndexKind::NatRange { size },
             });
-        name
+        nat_range
     }
 
     // -- Read methods (needed during mid-build reads in ir.rs) --
@@ -951,10 +1043,16 @@ impl RegistryBuilder {
         self.types.get(name)
     }
 
-    /// Look up an index definition by name.
+    /// Look up a declared index definition by name.
     #[must_use]
     pub fn get_index(&self, name: &str) -> Option<&IndexDef> {
         self.indexes.get(name)
+    }
+
+    /// Look up a compiler-generated Nat range index by typed identity.
+    #[must_use]
+    pub fn get_nat_range(&self, index: NatRangeIndex) -> Option<&IndexDef> {
+        self.nat_ranges.get(&index)
     }
 
     /// Get the base dimension names map (for display purposes).

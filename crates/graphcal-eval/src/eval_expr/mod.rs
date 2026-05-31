@@ -1,8 +1,12 @@
+mod aggregations;
 mod arithmetic;
 mod collections;
 mod control;
+mod conversions;
 mod functions;
 mod hir_eval;
+mod numeric;
+mod unit_scale;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,7 +14,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::resolved_ast::{Expr, ExprKind, MulDivOp, UnitExpr};
+use graphcal_compiler::desugar::resolved_ast::{Expr, ExprKind};
 use graphcal_compiler::syntax::names::{
     ConstructorName, FieldName, IndexName, NamePath, ResolvedIndexVariant, ResolvedName,
     ScopedName, namespace,
@@ -19,7 +23,7 @@ use graphcal_compiler::syntax::names::{
 use graphcal_compiler::registry::builtins::BuiltinFunction;
 use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::{Registry, TypeDef, UnitScale};
+use graphcal_compiler::registry::types::{Registry, TypeDef};
 use graphcal_compiler::tir::typed::{
     DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint, ResolvedInlineDagCall,
     StructFieldConstraintKey,
@@ -29,6 +33,8 @@ use crate::decl_key::RuntimeDeclKey;
 
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
 pub use hir_eval::{HirLocalValueMap, eval_hir_expr};
+pub use unit_scale::resolve_unit_scale;
+pub(in crate::eval_expr) use unit_scale::{checked_finite_scalar, checked_unit_scaled_value};
 pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 
 /// Immutable evaluation environment shared across all expression evaluations.
@@ -88,13 +94,7 @@ fn eval_owner(ctx: &EvalContext<'_>) -> graphcal_compiler::dag_id::DagId {
 }
 
 fn index_ref_with_eval_owner(ctx: &EvalContext<'_>, name: IndexName) -> IndexTypeRef {
-    if name.as_str().starts_with("__nat_range_") {
-        IndexTypeRef::from_resolved(
-            graphcal_compiler::registry::types::nat_range_resolved_index_name(name),
-        )
-    } else {
-        IndexTypeRef::with_owner(eval_owner(ctx), name)
-    }
+    IndexTypeRef::with_owner(eval_owner(ctx), name)
 }
 
 fn index_ref_from_path(ctx: &EvalContext<'_>, path: &NamePath) -> IndexTypeRef {
@@ -209,11 +209,11 @@ fn scoped_visible_runtime_key(
         .flatten()
 }
 
-pub fn index_ref_matches_resolved_or_leaf(
+pub fn index_ref_matches_resolved(
     actual: &IndexTypeRef,
     expected: &ResolvedName<namespace::Index>,
 ) -> bool {
-    actual.resolved() == expected
+    actual.declared_resolved() == Some(expected)
 }
 
 fn constructor_call_target<'a>(
@@ -308,7 +308,7 @@ pub fn eval_expr(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match &expr.kind {
-        ExprKind::Number(n) => Ok(RuntimeValue::Scalar(*n)),
+        ExprKind::Number(n) => checked_finite_scalar(*n, "numeric literal", expr.span, ctx),
         ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
         ExprKind::StringLiteral(_) => {
             Err(ctx.eval_error("unexpected string literal in evaluation context", expr.span))
@@ -322,7 +322,7 @@ pub fn eval_expr(
         )),
         ExprKind::UnitLiteral { value, unit } => {
             let scale = resolve_unit_scale(unit, values, local_values, ctx)?;
-            Ok(RuntimeValue::Scalar(*value * scale))
+            checked_unit_scaled_value(*value, scale, expr.span, ctx)
         }
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
         ExprKind::VariantLiteral { index, variant } => {
@@ -358,22 +358,20 @@ pub fn eval_expr(
                 return Ok(value.clone());
             }
 
-            ctx.builtin_consts
-                .get(ident.value.member())
-                .map(|v| RuntimeValue::Scalar(*v))
-                .or_else(|| {
-                    // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
-                    // and may be referenced in expression position as ConstRef (uppercase).
-                    // Locals are always bare names (no module qualification).
-                    if ident.value.is_qualified() {
-                        None
-                    } else {
-                        local_values.get(ident.value.member()).cloned()
-                    }
-                })
-                .ok_or_else(|| {
-                    ctx.eval_error(format!("undefined constant `{}`", ident.value), expr.span)
-                })
+            if let Some(value) = ctx.builtin_consts.get(ident.value.member()) {
+                return checked_finite_scalar(*value, "built-in constant", expr.span, ctx);
+            }
+
+            // Nat generic params are stored as local values (e.g., `N` from `N: Nat`)
+            // and may be referenced in expression position as ConstRef (uppercase).
+            // Locals are always bare names (no module qualification).
+            if !ident.value.is_qualified()
+                && let Some(value) = local_values.get(ident.value.member())
+            {
+                return Ok(value.clone());
+            }
+
+            Err(ctx.eval_error(format!("undefined constant `{}`", ident.value), expr.span))
         }
         ExprKind::LocalRef(ident) => {
             local_values
@@ -869,58 +867,4 @@ fn topo_order_for_dag_body_resolved(
         }
     }
     order
-}
-
-/// Resolve a `UnitExpr` to its compound scale factor at runtime.
-///
-/// For static units, this is equivalent to `registry.units.resolve_unit_expr()`.
-/// For dynamic units, the scale expression is evaluated using the current `values`
-/// and `local_values` maps, then multiplied by the base unit's static scale.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if a unit is unknown or a dynamic scale expression
-/// fails to evaluate to a scalar.
-pub fn resolve_unit_scale(
-    unit: &UnitExpr,
-    values: &RuntimeValueMap,
-    local_values: &HashMap<String, RuntimeValue>,
-    ctx: &EvalContext<'_>,
-) -> Result<f64, GraphcalError> {
-    let mut compound_scale = 1.0;
-    for item in &unit.terms {
-        let info = ctx
-            .registry
-            .units
-            .get_unit(item.name.value.as_str())
-            .ok_or_else(|| {
-                ctx.eval_error(
-                    format!("unknown unit `{}`", item.name.value),
-                    item.name.span,
-                )
-            })?;
-        let unit_scale = match &info.scale {
-            UnitScale::Static(s) => *s,
-            UnitScale::Dynamic {
-                scale_expr,
-                base_unit_scale,
-            } => {
-                let scale_val = eval_expr(scale_expr, values, local_values, ctx)?;
-                let RuntimeValue::Scalar(scale_f64) = scale_val else {
-                    return Err(ctx.eval_error(
-                        "dynamic unit scale expression must evaluate to a scalar",
-                        scale_expr.span,
-                    ));
-                };
-                scale_f64 * base_unit_scale
-            }
-        };
-        let exp = item.power.unwrap_or(1);
-        let powered_scale = unit_scale.powi(exp);
-        match item.op {
-            MulDivOp::Mul => compound_scale *= powered_scale,
-            MulDivOp::Div => compound_scale /= powered_scale,
-        }
-    }
-    Ok(compound_scale)
 }
