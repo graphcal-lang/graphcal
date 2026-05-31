@@ -78,7 +78,7 @@ pub enum ExprLowerError {
         first: Span,
         duplicate: Span,
     },
-    /// A function call could not be resolved to a built-in or user function.
+    /// A function call could not be resolved to a built-in function.
     #[error("unknown function `{path}`")]
     UnknownFunction { path: String, span: Span },
     /// A path-pattern could not be resolved to a constructor or index label.
@@ -158,6 +158,33 @@ impl<'a> ExprLoweringContext<'a> {
 /// resolved to a canonical module identity or lexical local binding.
 pub fn lower_expr(expr: &ast::Expr, ctx: ExprLoweringContext<'_>) -> Result<Expr, ExprLowerError> {
     ExprLowerer::new(ctx).lower_expr(expr)
+}
+
+/// Lower a syntax assertion body into HIR.
+///
+/// Each assertion body owns an independent lexical local-id space. Assertion
+/// expressions cannot share locals across the `actual`/`expected`/`tolerance`
+/// slots of a tolerance assertion, so each slot is lowered with a fresh lowerer.
+pub fn lower_assert_body(
+    body: &crate::desugar::resolved_ast::AssertBody,
+    ctx: ExprLoweringContext<'_>,
+) -> Result<AssertBody, ExprLowerError> {
+    match body {
+        crate::desugar::resolved_ast::AssertBody::Expr(expr) => {
+            lower_expr(expr, ctx).map(AssertBody::Expr)
+        }
+        crate::desugar::resolved_ast::AssertBody::Tolerance {
+            actual,
+            expected,
+            tolerance,
+            is_relative,
+        } => Ok(AssertBody::Tolerance {
+            actual: Box::new(lower_expr(actual, ctx)?),
+            expected: Box::new(lower_expr(expected, ctx)?),
+            tolerance: Box::new(lower_expr(tolerance, ctx)?),
+            is_relative: *is_relative,
+        }),
+    }
 }
 
 /// Stable lexical identity for a local expression binding.
@@ -577,11 +604,11 @@ pub struct ExprDependencies {
     pub graph_refs: BTreeSet<ResolvedName<namespace::Decl>>,
     /// Compile-time const dependencies reached through const-like value refs.
     pub const_refs: BTreeSet<ResolvedName<namespace::Decl>>,
-    /// Source-span keyed graph references used by the current syntax-AST eval
-    /// compatibility path to route values by canonical declaration identity.
+    /// Source-span keyed graph references for syntax-AST boundary consumers
+    /// that still need to route references by canonical declaration identity.
     pub graph_ref_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
-    /// Source-span keyed const references used by the current syntax-AST eval
-    /// compatibility path to route values by canonical declaration identity.
+    /// Source-span keyed const references for syntax-AST boundary consumers
+    /// that still need to route references by canonical declaration identity.
     pub const_ref_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
 }
 
@@ -703,10 +730,21 @@ pub enum ConstRef {
 }
 
 /// Function call target.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FunctionRef {
     Builtin(BuiltinFnName),
-    User(ResolvedName<namespace::Fn>),
+}
+
+/// A lowered assertion body.
+#[derive(Debug, Clone)]
+pub enum AssertBody {
+    Expr(Expr),
+    Tolerance {
+        actual: Box<Expr>,
+        expected: Box<Expr>,
+        tolerance: Box<Expr>,
+        is_relative: bool,
+    },
 }
 
 /// Generic argument at an expression call site.

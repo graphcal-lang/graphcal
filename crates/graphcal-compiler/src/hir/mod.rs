@@ -19,19 +19,19 @@
 //!   string dispatch;
 //! - no HIR reference field stores a dotted source alias string.
 //!
-//! This module currently defines and lowers the first boundary slice: type-level
-//! references. Module-aware TIR type resolution consumes this HIR slice before
-//! converting back to its runtime-facing type representation. Remaining
-//! expression/value consumers should move to HIR rather than adding more
-//! compatibility lookups to the syntax AST.
+//! This module defines and lowers the semantic boundary for type expressions,
+//! value expressions, and assertion bodies. Module-aware TIR and runtime
+//! evaluation consume this HIR slice for declaration/assertion semantics rather
+//! than re-resolving source-shaped syntax AST references.
 
 pub mod expr;
 pub mod lower;
 pub mod types;
 
 pub use expr::{
-    BuiltinConst, BuiltinFnName, ConstRef, Expr, ExprDependencies, ExprKind, ExprLowerError,
-    ExprLoweringContext, FunctionRef, LocalDef, LocalId, collect_expr_dependencies, lower_expr,
+    AssertBody, BuiltinConst, BuiltinFnName, ConstRef, Expr, ExprDependencies, ExprKind,
+    ExprLowerError, ExprLoweringContext, FunctionRef, LocalDef, LocalId, collect_expr_dependencies,
+    lower_assert_body, lower_expr,
 };
 pub use lower::{
     GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope, TypeLoweringContext,

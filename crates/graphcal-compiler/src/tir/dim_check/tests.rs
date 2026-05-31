@@ -208,6 +208,20 @@ fn hir_dim_check_uses_lexical_local_ids_not_mutated_syntax_names() {
 }
 
 #[test]
+fn hir_dim_check_uses_lowered_assert_body_not_mutated_syntax_body() {
+    let (mut tir, src) = module_aware_tir("assert ok = sqrt(4.0) == 2.0;");
+    assert!(!tir.root().semantic.expressions.asserts.is_empty());
+    let span = tir.root().asserts[0].span;
+    tir.root_mut().asserts[0].body =
+        crate::desugar::resolved_ast::AssertBody::Expr(crate::desugar::resolved_ast::Expr::new(
+            crate::desugar::resolved_ast::ExprKind::StringLiteral("not the HIR".to_string()),
+            span,
+        ));
+
+    check_dimensions_tir(&tir, &src).unwrap();
+}
+
+#[test]
 fn check_dimensionless_const() {
     let types = check("const node g0: Dimensionless = 9.80665;").unwrap();
     assert_eq!(
@@ -849,6 +863,44 @@ node o: Orbit = Orbit(altitude: 400.0 km, speed: 7.6 km / s, bonus: 1.0);";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::ExtraFields { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_struct_duplicate_field_initializers() {
+    let source = "\
+type Orbit { Orbit(altitude: Length, speed: Velocity) }
+node o: Orbit = Orbit(altitude: 400.0 km, altitude: 401.0 km, speed: 7.6 km / s);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::EvalError { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_match_wildcard_binding_validates_field_name() {
+    let source = "\
+pub type Maybe { Some(value: Length), None }
+param x: Maybe = Some(value: 1.0 m);
+node y: Length = match @x { Some(nope: _) => 1.0 m, None => 0.0 m };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownField { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_match_rejects_duplicate_field_bindings() {
+    let source = "\
+pub type Pair { Pair(a: Length, b: Length) }
+param x: Pair = Pair(a: 1.0 m, b: 2.0 m);
+node y: Length = match @x { Pair(a: left, a: right) => left + right };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::EvalError { .. }),
         "got: {err:?}"
     );
 }

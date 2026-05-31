@@ -517,6 +517,8 @@ pub struct ResolvedExpressions {
     pub param_defaults: HashMap<ResolvedName<namespace::Decl>, hir::Expr>,
     /// Node expression keyed by its canonical declaration identity.
     pub nodes: HashMap<ResolvedName<namespace::Decl>, hir::Expr>,
+    /// Assert body keyed by its canonical declaration identity.
+    pub asserts: HashMap<ResolvedName<namespace::Decl>, hir::AssertBody>,
 }
 
 impl ResolvedExpressions {
@@ -567,11 +569,27 @@ pub struct ResolvedInlineDagRefs {
     pub calls: HashMap<Span, ResolvedInlineDagCall>,
 }
 
+/// Canonical field type identity inside a resolved struct/tagged-union type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResolvedStructFieldTypeKey {
+    /// Canonical owner/name of the type that owns the constructor.
+    pub owning_type: ResolvedName<namespace::StructType>,
+    /// Constructor/union-member leaf inside the owning type.
+    pub constructor: ConstructorName,
+    /// Field leaf inside the constructor payload.
+    pub field: FieldName,
+}
+
 /// Canonical type definitions referenced by module-aware TIR.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
     /// Struct/tagged-union definitions keyed by canonical owner/name.
     pub struct_types: HashMap<ResolvedName<namespace::StructType>, TypeDef>,
+    /// Field type annotations resolved in the owning type's generic scope.
+    pub field_types: HashMap<ResolvedStructFieldTypeKey, ResolvedTypeExpr>,
+    /// Generic parameter defaults resolved in the owning type's generic scope.
+    pub generic_defaults:
+        HashMap<(ResolvedName<namespace::StructType>, GenericParamName), ResolvedTypeExpr>,
 }
 
 /// Authoritative semantic body facts for a checked DAG.
@@ -997,10 +1015,12 @@ fn type_resolve_impl(
     let runtime_deps_for_hir = ir.runtime_deps.clone();
     let const_deps_for_hir = ir.const_deps.clone();
     let imported_value_sources_for_hir = ir.imported_value_sources.clone();
+    let asserts_for_hir = ir.asserts.clone();
     let root_dag = type_resolve_dag(
         ir.consts,
         ir.params,
         ir.nodes,
+        &asserts_for_hir,
         &ir.registry,
         src,
         &root_dag_id,
@@ -1058,10 +1078,12 @@ fn type_resolve_single_impl(
     let runtime_deps_for_hir = ir.runtime_deps.clone();
     let const_deps_for_hir = ir.const_deps.clone();
     let imported_value_sources_for_hir = ir.imported_value_sources.clone();
+    let asserts_for_hir = ir.asserts.clone();
     type_resolve_dag(
         ir.consts,
         ir.params,
         ir.nodes,
+        &asserts_for_hir,
         &ir.registry,
         src,
         dag_id,
@@ -1099,6 +1121,7 @@ fn type_resolve_dag(
     consts: Vec<crate::ir::lower::ConstEntry>,
     params: Vec<crate::ir::lower::ParamEntry>,
     nodes: Vec<crate::ir::lower::NodeEntry>,
+    asserts: &[crate::ir::lower::AssertEntry],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
@@ -1154,6 +1177,7 @@ fn type_resolve_dag(
         &consts,
         &params,
         &nodes,
+        asserts,
         module_ctx,
         runtime_deps,
         const_deps,
@@ -1166,7 +1190,13 @@ fn type_resolve_dag(
         collect_resolved_collection_refs(&expressions, &resolved_decl_types, module_ctx, src)?;
     let constructor_refs = collect_resolved_constructor_refs(&expressions, module_ctx, src)?;
     let inline_dag_refs = collect_resolved_inline_dag_refs(&expressions);
-    let type_defs = collect_resolved_type_defs(&resolved_decl_types, &constructor_refs, module_ctx);
+    let type_defs = collect_resolved_type_defs(
+        &resolved_decl_types,
+        &constructor_refs,
+        module_ctx,
+        registry,
+        src,
+    )?;
 
     let semantic = DagSemanticBody {
         expressions,
@@ -1192,43 +1222,45 @@ fn collect_resolved_type_defs(
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
     constructor_refs: &ResolvedConstructorRefs,
     ctx: ModuleTypeContext<'_>,
-) -> ResolvedTypeDefs {
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedTypeDefs, GraphcalError> {
     let mut defs = ResolvedTypeDefs::default();
     if let Some(symbols) = ctx.resolver.modules().get(ctx.owner) {
         for symbol in symbols.struct_types().values() {
-            record_resolved_struct_type_def(symbol.resolved(), ctx, &mut defs);
+            record_resolved_struct_type_def(symbol.resolved(), ctx, registry, src, &mut defs)?;
         }
     }
     for resolved in resolved_decl_types.values() {
-        collect_struct_type_defs_from_resolved_type(resolved, ctx, &mut defs);
+        collect_struct_type_defs_from_resolved_type(resolved, ctx, registry, src, &mut defs)?;
     }
     for target in constructor_refs.constructor_defs.values() {
-        defs.struct_types
-            .entry(target.owning_type.clone())
-            .or_insert_with(|| target.type_def.clone());
+        record_resolved_struct_type_def(&target.owning_type, ctx, registry, src, &mut defs)?;
     }
-    defs
+    Ok(defs)
 }
 
 fn collect_struct_type_defs_from_resolved_type(
     resolved: &ResolvedTypeExpr,
     ctx: ModuleTypeContext<'_>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
     defs: &mut ResolvedTypeDefs,
-) {
+) -> Result<(), GraphcalError> {
     match resolved {
         ResolvedTypeExpr::Struct(name, _) => {
-            record_resolved_struct_type_def(name, ctx, defs);
+            record_resolved_struct_type_def(name, ctx, registry, src, defs)?;
         }
         ResolvedTypeExpr::GenericStruct {
             name, type_args, ..
         } => {
-            record_resolved_struct_type_def(name, ctx, defs);
+            record_resolved_struct_type_def(name, ctx, registry, src, defs)?;
             for arg in type_args {
-                collect_struct_type_defs_from_resolved_type(arg, ctx, defs);
+                collect_struct_type_defs_from_resolved_type(arg, ctx, registry, src, defs)?;
             }
         }
         ResolvedTypeExpr::Indexed { base, indexes: _ } => {
-            collect_struct_type_defs_from_resolved_type(base, ctx, defs);
+            collect_struct_type_defs_from_resolved_type(base, ctx, registry, src, defs)?;
         }
         ResolvedTypeExpr::Dimensionless
         | ResolvedTypeExpr::Bool
@@ -1240,19 +1272,77 @@ fn collect_struct_type_defs_from_resolved_type(
         | ResolvedTypeExpr::GenericTypeParam(_, _)
         | ResolvedTypeExpr::GenericDimExpr { .. } => {}
     }
+    Ok(())
 }
 
 fn record_resolved_struct_type_def(
     name: &ResolvedName<namespace::StructType>,
     ctx: ModuleTypeContext<'_>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
     defs: &mut ResolvedTypeDefs,
-) {
+) -> Result<(), GraphcalError> {
     if defs.struct_types.contains_key(name) {
-        return;
+        return Ok(());
     }
-    if let Some(type_def) = ctx.types.get_struct_type(name) {
-        defs.struct_types.insert(name.clone(), type_def.clone());
+    let Some(type_def) = ctx.types.get_struct_type(name) else {
+        return Ok(());
+    };
+
+    for param in &type_def.generic_params {
+        if let Some(default) = &param.default {
+            let resolved =
+                resolve_type_expr_in_struct_scope(default, name, type_def, ctx, registry, src)?;
+            defs.generic_defaults
+                .insert((name.clone(), param.name.clone()), resolved);
+        }
     }
+
+    if let Some(members) = type_def.union_members() {
+        for member in members {
+            for field in &member.fields {
+                let resolved = resolve_type_expr_in_struct_scope(
+                    &field.type_ann,
+                    name,
+                    type_def,
+                    ctx,
+                    registry,
+                    src,
+                )?;
+                defs.field_types.insert(
+                    ResolvedStructFieldTypeKey {
+                        owning_type: name.clone(),
+                        constructor: member.name.clone(),
+                        field: field.name.clone(),
+                    },
+                    resolved,
+                );
+            }
+        }
+    }
+
+    defs.struct_types.insert(name.clone(), type_def.clone());
+    Ok(())
+}
+
+fn resolve_type_expr_in_struct_scope(
+    type_expr: &TypeExpr,
+    type_owner: &ResolvedName<namespace::StructType>,
+    type_def: &TypeDef,
+    ctx: ModuleTypeContext<'_>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let prelude = hir::PreludeTypeScope::graphcal();
+    let resolve_ctx = HirTypeResolutionContext {
+        src,
+        resolver: ctx.resolver,
+        module_types: ctx.types,
+        registry: Some(registry),
+        prelude: &prelude,
+    };
+    let hir_type = lower_type_generic_default(type_expr, type_owner, type_def, resolve_ctx)?;
+    resolve_hir_type_expr_inner(&hir_type, resolve_ctx)
 }
 
 #[expect(
@@ -1263,6 +1353,7 @@ fn lower_resolved_expressions(
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
+    asserts: &[crate::ir::lower::AssertEntry],
     ctx: ModuleTypeContext<'_>,
     runtime_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
     const_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
@@ -1341,6 +1432,21 @@ fn lower_resolved_expressions(
             src,
         )?;
         exprs.nodes.insert(key, hir_expr);
+    }
+    for entry in asserts {
+        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
+            internal_error(
+                format!(
+                    "could not build canonical assertion key for `{}`",
+                    entry.name
+                ),
+                src,
+                entry.span,
+            )
+        })?;
+        let hir_body = hir::lower_assert_body(&entry.body, expr_ctx)
+            .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
+        exprs.asserts.insert(key, hir_body);
     }
 
     Ok(exprs)
@@ -1513,6 +1619,9 @@ fn collect_resolved_collection_refs(
         .chain(exprs.nodes.values())
     {
         collect_resolved_collection_refs_from_expr(hir_expr, ctx, src, &mut refs)?;
+    }
+    for body in exprs.asserts.values() {
+        collect_resolved_collection_refs_from_assert_body(body, ctx, src, &mut refs)?;
     }
 
     Ok(refs)
@@ -1739,6 +1848,29 @@ fn collect_resolved_collection_refs_from_expr(
     }
 }
 
+fn collect_resolved_collection_refs_from_assert_body(
+    body: &hir::AssertBody,
+    ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+    refs: &mut ResolvedCollectionRefs,
+) -> Result<(), GraphcalError> {
+    match body {
+        hir::AssertBody::Expr(expr) => {
+            collect_resolved_collection_refs_from_expr(expr, ctx, src, refs)
+        }
+        hir::AssertBody::Tolerance {
+            actual,
+            expected,
+            tolerance,
+            is_relative: _,
+        } => {
+            collect_resolved_collection_refs_from_expr(actual, ctx, src, refs)?;
+            collect_resolved_collection_refs_from_expr(expected, ctx, src, refs)?;
+            collect_resolved_collection_refs_from_expr(tolerance, ctx, src, refs)
+        }
+    }
+}
+
 fn collect_resolved_constructor_refs(
     exprs: &ResolvedExpressions,
     ctx: ModuleTypeContext<'_>,
@@ -1753,6 +1885,9 @@ fn collect_resolved_constructor_refs(
         .chain(exprs.nodes.values())
     {
         collect_resolved_constructor_refs_from_expr(hir_expr, ctx, src, &mut refs)?;
+    }
+    for body in exprs.asserts.values() {
+        collect_resolved_constructor_refs_from_assert_body(body, ctx, src, &mut refs)?;
     }
 
     Ok(refs)
@@ -1804,10 +1939,15 @@ fn collect_resolved_constructor_refs_from_expr(
         | hir::ExprKind::StringLiteral(_)
         | hir::ExprKind::TypeSystemRef(_)
         | hir::ExprKind::GraphRef(_)
-        | hir::ExprKind::ConstRef(_)
         | hir::ExprKind::LocalRef(_)
         | hir::ExprKind::UnitLiteral { .. }
         | hir::ExprKind::VariantLiteral(_) => Ok(()),
+        hir::ExprKind::ConstRef(target) => {
+            if let hir::ConstRef::Constructor(constructor) = &target.value {
+                record_resolved_constructor_target(constructor, ctx, src, target.span, refs)?;
+            }
+            Ok(())
+        }
         hir::ExprKind::BinOp { lhs, rhs, .. } => {
             collect_resolved_constructor_refs_from_expr(lhs, ctx, src, refs)?;
             collect_resolved_constructor_refs_from_expr(rhs, ctx, src, refs)
@@ -1909,6 +2049,29 @@ fn collect_resolved_constructor_refs_from_expr(
     }
 }
 
+fn collect_resolved_constructor_refs_from_assert_body(
+    body: &hir::AssertBody,
+    ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+    refs: &mut ResolvedConstructorRefs,
+) -> Result<(), GraphcalError> {
+    match body {
+        hir::AssertBody::Expr(expr) => {
+            collect_resolved_constructor_refs_from_expr(expr, ctx, src, refs)
+        }
+        hir::AssertBody::Tolerance {
+            actual,
+            expected,
+            tolerance,
+            is_relative: _,
+        } => {
+            collect_resolved_constructor_refs_from_expr(actual, ctx, src, refs)?;
+            collect_resolved_constructor_refs_from_expr(expected, ctx, src, refs)?;
+            collect_resolved_constructor_refs_from_expr(tolerance, ctx, src, refs)
+        }
+    }
+}
+
 fn collect_resolved_inline_dag_refs(exprs: &ResolvedExpressions) -> ResolvedInlineDagRefs {
     let mut refs = ResolvedInlineDagRefs::default();
 
@@ -1919,6 +2082,9 @@ fn collect_resolved_inline_dag_refs(exprs: &ResolvedExpressions) -> ResolvedInli
         .chain(exprs.nodes.values())
     {
         collect_resolved_inline_dag_refs_from_expr(hir_expr, &mut refs);
+    }
+    for body in exprs.asserts.values() {
+        collect_resolved_inline_dag_refs_from_assert_body(body, &mut refs);
     }
 
     refs
@@ -2018,6 +2184,25 @@ fn collect_resolved_inline_dag_refs_from_expr(expr: &hir::Expr, refs: &mut Resol
             for arg in args {
                 collect_resolved_inline_dag_refs_from_expr(&arg.value, refs);
             }
+        }
+    }
+}
+
+fn collect_resolved_inline_dag_refs_from_assert_body(
+    body: &hir::AssertBody,
+    refs: &mut ResolvedInlineDagRefs,
+) {
+    match body {
+        hir::AssertBody::Expr(expr) => collect_resolved_inline_dag_refs_from_expr(expr, refs),
+        hir::AssertBody::Tolerance {
+            actual,
+            expected,
+            tolerance,
+            is_relative: _,
+        } => {
+            collect_resolved_inline_dag_refs_from_expr(actual, refs);
+            collect_resolved_inline_dag_refs_from_expr(expected, refs);
+            collect_resolved_inline_dag_refs_from_expr(tolerance, refs);
         }
     }
 }

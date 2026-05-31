@@ -21,7 +21,7 @@ pub(crate) use helpers::format_inferred_type;
 use helpers::{
     expect_scalar, format_declared_type, is_bool_type, resolved_type_matches_inferred, types_match,
 };
-use infer::{infer_type, infer_type_with_owner};
+use infer::infer_type;
 
 mod builtins;
 mod helpers;
@@ -256,7 +256,6 @@ impl InferredType {
 /// six positional arguments.
 struct DimCheckContext<'a> {
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
-    empty_locals: &'a HashMap<String, InferredType>,
     dag: Option<&'a crate::tir::typed::DagTIR>,
     tir: &'a crate::tir::typed::TIR,
     registry: &'a Registry,
@@ -265,20 +264,6 @@ struct DimCheckContext<'a> {
 }
 
 impl DimCheckContext<'_> {
-    /// Infer the type of `expr` using this context's bindings.
-    fn infer(&self, expr: &Expr) -> Result<InferredType, GraphcalError> {
-        infer_type(
-            expr,
-            self.declared_types,
-            self.empty_locals,
-            self.dag,
-            self.tir,
-            self.registry,
-            self.builtin_fns,
-            self.src,
-        )
-    }
-
     /// Look up the module-aware HIR expression for a local declaration.
     fn hir_expr_for_decl(
         &self,
@@ -292,12 +277,59 @@ impl DimCheckContext<'_> {
             .get(&key)
             .or_else(|| dag.semantic.expressions.runtime_expr(&key))
     }
+
+    /// Look up the module-aware HIR assertion body for a local assertion.
+    fn hir_assert_body(
+        &self,
+        name: &crate::syntax::names::ScopedName,
+        span: crate::syntax::span::Span,
+    ) -> Result<&crate::hir::AssertBody, GraphcalError> {
+        let dag = self.dag.ok_or_else(|| GraphcalError::InternalError {
+            message: "HIR assertion lookup requires semantic DAG context".to_string(),
+            src: self.src.clone(),
+            span: span.into(),
+        })?;
+        let key =
+            dag.resolved_decl_key_for_local(name)
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: format!("semantic declaration key missing for assertion `{name}`"),
+                    src: self.src.clone(),
+                    span: span.into(),
+                })?;
+        dag.semantic
+            .expressions
+            .asserts
+            .get(&key)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("semantic HIR body missing for assertion `{name}`"),
+                src: self.src.clone(),
+                span: span.into(),
+            })
+    }
+
+    /// Infer the type of a module-aware HIR expression using this context's bindings.
+    fn infer_hir(&self, expr: &crate::hir::Expr) -> Result<InferredType, GraphcalError> {
+        let dag = self.dag.ok_or_else(|| GraphcalError::InternalError {
+            message: "HIR assertion inference requires semantic DAG context".to_string(),
+            src: self.src.clone(),
+            span: expr.span.into(),
+        })?;
+        infer::hir::infer_hir_type_with_owner(
+            expr,
+            None,
+            self.declared_types,
+            dag,
+            self.tir,
+            self.registry,
+            self.builtin_fns,
+            self.src,
+        )
+    }
 }
 
 /// Check that a declaration's expression type matches its declared type annotation.
 fn check_decl_expr_type(
     ctx: &DimCheckContext<'_>,
-    expr: &Expr,
     name: &crate::syntax::names::ScopedName,
     type_ann_span: &crate::syntax::span::Span,
 ) -> Result<(), GraphcalError> {
@@ -309,36 +341,28 @@ fn check_decl_expr_type(
             src: ctx.src.clone(),
             span: (*type_ann_span).into(),
         })?;
-    let infer_from_source = || {
-        infer_type_with_owner(
-            expr,
-            Some(name.member()),
-            ctx.declared_types,
-            ctx.empty_locals,
-            ctx.dag,
-            ctx.tir,
-            ctx.registry,
-            ctx.builtin_fns,
-            ctx.src,
-        )
-    };
-    let inferred = match (ctx.dag, ctx.hir_expr_for_decl(name)) {
-        (Some(dag), Some(hir_expr)) => match infer::hir::infer_hir_type_with_owner(
-            hir_expr,
-            Some(name.member()),
-            ctx.declared_types,
-            dag,
-            ctx.tir,
-            ctx.registry,
-            ctx.builtin_fns,
-            ctx.src,
-        ) {
-            Ok(Some(inferred)) => inferred,
-            Ok(None) => infer_from_source()?,
-            Err(err) => return Err(err),
-        },
-        _ => infer_from_source()?,
-    };
+    let dag = ctx.dag.ok_or_else(|| GraphcalError::InternalError {
+        message: format!("semantic DAG missing while checking `{name}`"),
+        src: ctx.src.clone(),
+        span: (*type_ann_span).into(),
+    })?;
+    let hir_expr = ctx
+        .hir_expr_for_decl(name)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("semantic HIR expression missing for declaration `{name}`"),
+            src: ctx.src.clone(),
+            span: (*type_ann_span).into(),
+        })?;
+    let inferred = infer::hir::infer_hir_type_with_owner(
+        hir_expr,
+        Some(name.member()),
+        ctx.declared_types,
+        dag,
+        ctx.tir,
+        ctx.registry,
+        ctx.builtin_fns,
+        ctx.src,
+    )?;
     let matches = ctx
         .dag
         .and_then(|dag| dag.resolved_decl_types.get(name))
@@ -386,20 +410,17 @@ impl AssertionIndexShape {
     }
 }
 
-/// Check dimension consistency of an assert body.
-///
-/// For expression asserts, verifies the body is boolean. For tolerance asserts,
-/// verifies actual/expected have matching dimensions and tolerance is compatible.
-fn check_assert_body(
+/// Check dimensions for a lowered HIR assertion body.
+fn check_hir_assert_body(
     ctx: &DimCheckContext<'_>,
-    body: &crate::desugar::resolved_ast::AssertBody,
+    body: &crate::hir::AssertBody,
     span: crate::syntax::span::Span,
 ) -> Result<AssertionIndexShape, GraphcalError> {
     let registry = ctx.registry;
     let src = ctx.src;
     match body {
-        crate::desugar::resolved_ast::AssertBody::Expr(body_expr) => {
-            let inferred = ctx.infer(body_expr)?;
+        crate::hir::AssertBody::Expr(body_expr) => {
+            let inferred = ctx.infer_hir(body_expr)?;
             if !is_bool_type(&inferred) {
                 return Err(GraphcalError::AssertBodyNotBool {
                     found: format_inferred_type(&inferred, registry),
@@ -409,17 +430,16 @@ fn check_assert_body(
             }
             Ok(AssertionIndexShape::from_bool_type(&inferred))
         }
-        crate::desugar::resolved_ast::AssertBody::Tolerance {
+        crate::hir::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
             is_relative,
         } => {
-            let actual_type = ctx.infer(actual)?;
-            let expected_type = ctx.infer(expected)?;
-            let tolerance_type = ctx.infer(tolerance)?;
+            let actual_type = ctx.infer_hir(actual)?;
+            let expected_type = ctx.infer_hir(expected)?;
+            let tolerance_type = ctx.infer_hir(tolerance)?;
 
-            // actual and expected must have the same dimension
             let actual_dim = expect_scalar(&actual_type, registry, src, actual.span)?;
             let expected_dim = expect_scalar(&expected_type, registry, src, expected.span)?;
             if actual_dim != expected_dim {
@@ -433,7 +453,6 @@ fn check_assert_body(
                 });
             }
 
-            // tolerance: same dimension (absolute) or dimensionless/Int (relative %)
             let tolerance_ok = if *is_relative {
                 tolerance_type.is_int_like()
                     || matches!(&tolerance_type, InferredType::Scalar(d) if d.is_dimensionless())
@@ -609,7 +628,6 @@ fn check_dimensions_dag(
     let empty_locals: HashMap<String, InferredType> = HashMap::new();
     let ctx = DimCheckContext {
         declared_types: &declared_types,
-        empty_locals: &empty_locals,
         dag: Some(dag),
         tir,
         registry,
@@ -618,20 +636,21 @@ fn check_dimensions_dag(
     };
 
     for entry in &dag.consts {
-        check_decl_expr_type(&ctx, &entry.expr, &entry.name, &entry.type_ann.span)?;
+        check_decl_expr_type(&ctx, &entry.name, &entry.type_ann.span)?;
     }
     for entry in &dag.nodes {
-        check_decl_expr_type(&ctx, &entry.expr, &entry.name, &entry.type_ann.span)?;
+        check_decl_expr_type(&ctx, &entry.name, &entry.type_ann.span)?;
     }
     for entry in &dag.params {
-        let Some(ref value_expr) = entry.default_expr else {
+        let Some(_value_expr) = entry.default_expr.as_ref() else {
             continue;
         };
-        check_decl_expr_type(&ctx, value_expr, &entry.name, &entry.type_ann.span)?;
+        check_decl_expr_type(&ctx, &entry.name, &entry.type_ann.span)?;
     }
 
     for entry in &dag.asserts {
-        let shape = check_assert_body(&ctx, &entry.body, entry.span)?;
+        let body = ctx.hir_assert_body(&entry.name, entry.span)?;
+        let shape = check_hir_assert_body(&ctx, body, entry.span)?;
         if let Some(expected_fail) = dag.expected_fail.get(&entry.name) {
             validate_expected_fail(expected_fail, &shape, src, entry.span)?;
         }

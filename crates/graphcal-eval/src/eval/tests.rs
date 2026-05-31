@@ -149,6 +149,32 @@ fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
 }
 
 #[test]
+fn eval_assertions_use_hir_body_after_syntax_mutation() {
+    let source = "assert ok = sqrt(4.0) == 2.0;";
+    let mut tir = compile_to_tir(source, "test.gcl").unwrap();
+    assert!(!tir.root().semantic.expressions.asserts.is_empty());
+    let span = tir.root().asserts[0].span;
+    tir.root_mut().asserts[0].body = graphcal_compiler::desugar::resolved_ast::AssertBody::Expr(
+        graphcal_compiler::desugar::resolved_ast::Expr::new(
+            graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(
+                "mutated syntax".to_string(),
+            ),
+            span,
+        ),
+    );
+
+    let src = miette::NamedSource::new("test.gcl", std::sync::Arc::new(source.to_string()));
+    let plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    let declared_types = tir.build_declared_types(&src).unwrap();
+    let result = super::runtime::evaluate_plan(&tir, &plan, &declared_types, &src);
+
+    assert!(matches!(
+        result.assertions.as_slice(),
+        [(_, super::types::AssertResult::Pass, _)]
+    ));
+}
+
+#[test]
 fn eval_if_else_true_branch() {
     let result = compile_and_eval(
         "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x > 0.0 { @x } else { 0.0 };",

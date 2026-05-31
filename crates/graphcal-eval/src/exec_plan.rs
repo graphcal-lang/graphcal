@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::resolved_ast::{AssertBody, FigureDecl, LayerDecl, PlotDecl};
+use graphcal_compiler::desugar::resolved_ast::{FigureDecl, LayerDecl, PlotDecl};
+use graphcal_compiler::hir::AssertBody;
 use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::syntax::names::{
     ConstructorName, FieldName, ResolvedName, ScopedName, namespace,
@@ -108,16 +109,39 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
     let const_values = eval_consts_from_tir(tir, src)?;
     let topo_order = build_runtime_dag(tir, src)?;
 
-    let assert_bodies: Vec<AssertBodyEntry> = tir
-        .root()
+    let root = tir.root();
+    let assert_bodies: Vec<AssertBodyEntry> = root
         .asserts
         .iter()
-        .map(|entry| AssertBodyEntry {
-            name: entry.name.clone(),
-            body: entry.body.clone(),
-            span: entry.span,
+        .map(|entry| {
+            let key = root
+                .resolved_decl_key_for_local(&entry.name)
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: format!(
+                        "semantic declaration key missing for assertion `{}`",
+                        entry.name
+                    ),
+                    src: src.clone(),
+                    span: entry.span.into(),
+                })?;
+            let body = root
+                .semantic
+                .expressions
+                .asserts
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: format!("semantic HIR body missing for assertion `{}`", entry.name),
+                    src: src.clone(),
+                    span: entry.span.into(),
+                })?;
+            Ok(AssertBodyEntry {
+                name: entry.name.clone(),
+                body,
+                span: entry.span,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
 
     let plot_bodies: Vec<PlotBodyEntry> = tir
         .root()
