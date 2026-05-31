@@ -1,0 +1,254 @@
+//! Phase 0 regression tests from `.local/2026-05-31_code-review-report.md`.
+//!
+//! These tests assert the desired safety behavior. They are intentionally marked
+//! `#[should_panic]` while the current implementation still accepts the invalid
+//! programs, so each panic message names the bug to fix next.
+#![cfg(test)]
+
+use std::collections::HashMap;
+use std::panic;
+
+use graphcal_eval::eval::{EvalResult, Value, compile_and_eval, compile_and_eval_project};
+use graphcal_io::RealFileSystem;
+
+fn has_decl_error(result: &EvalResult, name: &str) -> bool {
+    result
+        .all
+        .iter()
+        .any(|(decl_name, value, _)| decl_name.as_str() == name && value.is_err())
+}
+
+fn value_for<'a>(result: &'a EvalResult, name: &str) -> &'a Value {
+    result
+        .all
+        .iter()
+        .find(|(decl_name, _, _)| decl_name.as_str() == name)
+        .unwrap_or_else(|| panic!("declaration `{name}` not found"))
+        .1
+        .as_ref()
+        .unwrap_or_else(|err| panic!("declaration `{name}` has error: {err}"))
+}
+
+fn assert_rejected_or_decl_error(source: &str, decl_name: &str, bug: &str) {
+    match compile_and_eval(source) {
+        Err(_) => {}
+        Ok(result) if has_decl_error(&result, decl_name) => {}
+        Ok(result) => panic!("{bug}: accepted invalid program successfully: {result:?}"),
+    }
+}
+
+#[test]
+#[should_panic(expected = "BUG: non-finite numeric literal accepted")]
+fn non_finite_numeric_literal_is_rejected() {
+    assert_rejected_or_decl_error(
+        "node x: Dimensionless = 1e999;",
+        "x",
+        "BUG: non-finite numeric literal accepted",
+    );
+}
+
+#[test]
+#[should_panic(expected = "BUG: overflowing unit literal accepted")]
+fn overflowing_unit_literal_is_rejected() {
+    assert_rejected_or_decl_error(
+        "node x: Length = 1e308 km;",
+        "x",
+        "BUG: overflowing unit literal accepted",
+    );
+}
+
+#[test]
+#[should_panic(expected = "BUG: zero static unit scale accepted")]
+fn zero_static_unit_scale_is_rejected() {
+    assert_rejected_or_decl_error(
+        "unit z: Length = 0.0 m;\nnode x: Length = 1.0 z;",
+        "x",
+        "BUG: zero static unit scale accepted",
+    );
+}
+
+#[test]
+#[should_panic(expected = "BUG: negative static unit scale accepted")]
+fn negative_static_unit_scale_is_rejected() {
+    assert_rejected_or_decl_error(
+        "unit neg_m: Length = (-1.0) m;\nnode x: Length = 1.0 neg_m;",
+        "x",
+        "BUG: negative static unit scale accepted",
+    );
+}
+
+#[test]
+#[should_panic(expected = "BUG: non-finite static unit scale accepted")]
+fn non_finite_static_unit_scale_is_rejected() {
+    assert_rejected_or_decl_error(
+        "unit huge_m: Length = 1e999 m;\nnode x: Length = 1.0 huge_m;",
+        "x",
+        "BUG: non-finite static unit scale accepted",
+    );
+}
+
+#[test]
+#[should_panic(expected = "BUG: zero dynamic unit scale accepted")]
+fn zero_dynamic_unit_scale_is_rejected() {
+    assert_rejected_or_decl_error(
+        r"
+base dim Money;
+base unit USD: Money;
+param usd_per_eur: Dimensionless = 0.0;
+unit EUR: Money = (@usd_per_eur) USD;
+node price: Money = 1.0 EUR;
+",
+        "price",
+        "BUG: zero dynamic unit scale accepted",
+    );
+}
+
+#[test]
+#[should_panic(expected = "BUG: negative dynamic unit scale accepted")]
+fn negative_dynamic_unit_scale_is_rejected() {
+    assert_rejected_or_decl_error(
+        r"
+base dim Money;
+base unit USD: Money;
+param usd_per_eur: Dimensionless = -1.0;
+unit EUR: Money = (@usd_per_eur) USD;
+node price: Money = 1.0 EUR;
+",
+        "price",
+        "BUG: negative dynamic unit scale accepted",
+    );
+}
+
+#[test]
+#[should_panic(expected = "BUG: non-finite dynamic unit scale accepted")]
+fn non_finite_dynamic_unit_scale_is_rejected() {
+    assert_rejected_or_decl_error(
+        r"
+base dim Money;
+base unit USD: Money;
+param usd_per_eur: Dimensionless = 1e999;
+unit EUR: Money = (@usd_per_eur) USD;
+node price: Money = 1.0 EUR;
+",
+        "price",
+        "BUG: non-finite dynamic unit scale accepted",
+    );
+}
+
+#[test]
+#[should_panic(expected = "BUG: linspace step count produced entries beyond end")]
+fn linspace_step_count_does_not_overshoot_end() {
+    let source = r"
+pub index T = linspace(0.0 s, 1.0 s, step: 0.6 s);
+node x: Dimensionless[T] = for t: T { t / 1.0 s };
+";
+    let result = compile_and_eval(source).unwrap_or_else(|err| {
+        panic!("BUG: linspace step count produced entries beyond end: unexpected error: {err}")
+    });
+    match value_for(&result, "x") {
+        Value::Indexed { entries, .. } => assert_eq!(
+            entries.len(),
+            2,
+            "BUG: linspace step count produced entries beyond end: expected 0.0 and 0.6 only, got {entries:?}",
+        ),
+        other => panic!(
+            "BUG: linspace step count produced entries beyond end: expected indexed value, got {other:?}"
+        ),
+    }
+}
+
+#[test]
+#[should_panic(
+    expected = "BUG: infinite range bounds must produce a diagnostic instead of panicking"
+)]
+fn infinite_range_bounds_are_diagnostic_not_panic() {
+    let source = r"
+index T = linspace(0.0, 1e999, step: 1.0);
+node x: Dimensionless[T] = for t: T { 1.0 };
+";
+    let result = panic::catch_unwind(|| compile_and_eval(source).is_err());
+    match result {
+        Err(payload) => {
+            drop(payload);
+            panic!("BUG: infinite range bounds must produce a diagnostic instead of panicking")
+        }
+        Ok(true) => {}
+        Ok(false) => panic!(
+            "BUG: infinite range bounds must produce a diagnostic instead of panicking: accepted invalid range",
+        ),
+    }
+}
+
+#[test]
+#[should_panic(expected = "BUG: range(0) accepted despite the no-empty-index invariant")]
+fn range_zero_is_rejected() {
+    let source = r"
+node s: Dimensionless = sum(for i: range(0) { 1.0 });
+node m: Dimensionless = min(for i: range(0) { 1.0 });
+";
+    let result = compile_and_eval(source);
+    assert!(
+        result.is_err(),
+        "BUG: range(0) accepted despite the no-empty-index invariant: {result:?}",
+    );
+}
+
+#[test]
+#[should_panic(expected = "BUG: type-only import required an evaluated dependency")]
+fn type_only_import_from_library_with_required_runtime_inputs_compiles() {
+    let dir = tempfile::tempdir().unwrap_or_else(|err| {
+        panic!("BUG: type-only import required an evaluated dependency: tempdir failed: {err}")
+    });
+    let package_dir = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&package_dir).unwrap_or_else(|err| {
+        panic!("BUG: type-only import required an evaluated dependency: mkdir failed: {err}")
+    });
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap_or_else(|err| {
+        panic!(
+            "BUG: type-only import required an evaluated dependency: manifest write failed: {err}"
+        )
+    });
+    std::fs::write(
+        package_dir.join("lib.gcl"),
+        r"
+pub type Foo { Foo(x: Dimensionless) }
+pub(bind) index Phase;
+param cost: Dimensionless[Phase];
+",
+    )
+    .unwrap_or_else(|err| {
+        panic!("BUG: type-only import required an evaluated dependency: lib write failed: {err}")
+    });
+    let root = package_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        r"
+import pkg.lib.{ type Foo };
+pub type Bar { Bar(inner: Foo) }
+",
+    )
+    .unwrap_or_else(|err| {
+        panic!("BUG: type-only import required an evaluated dependency: root write failed: {err}")
+    });
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
+    assert!(
+        result.is_ok(),
+        "BUG: type-only import required an evaluated dependency: {result:?}",
+    );
+}
+
+#[test]
+#[should_panic(expected = "BUG: to_int accepted the upper out-of-range boundary")]
+fn to_int_rejects_upper_out_of_range_boundary() {
+    let source = "node x: Int = to_int(9.223372036854776e18);";
+    assert_rejected_or_decl_error(
+        source,
+        "x",
+        "BUG: to_int accepted the upper out-of-range boundary",
+    );
+}

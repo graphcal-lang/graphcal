@@ -1846,6 +1846,36 @@ fn format_check_recursive_directory() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+#[should_panic(expected = "BUG: directory formatter must skip symlinked .gcl files")]
+fn format_directory_skips_symlinked_gcl_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("outside.gcl");
+    let tree = dir.path().join("tree");
+    std::fs::create_dir_all(&tree).unwrap();
+
+    let original = "param   x:Dimensionless=1.0;";
+    std::fs::write(&outside, original).unwrap();
+    std::os::unix::fs::symlink(&outside, tree.join("link.gcl")).unwrap();
+
+    let output = graphcal_bin()
+        .args(["format", tree.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "BUG: directory formatter must skip symlinked .gcl files: format failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let after = std::fs::read_to_string(&outside).unwrap();
+    assert_eq!(
+        after, original,
+        "BUG: directory formatter must skip symlinked .gcl files: symlink target outside the formatted tree was modified",
+    );
+}
+
 #[test]
 fn eval_datetime_basic() {
     let output = graphcal_bin()
