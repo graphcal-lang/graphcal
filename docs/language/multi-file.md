@@ -335,6 +335,12 @@ The path `orbit_analysis.analyze.deeper` reads: package
 `orbit_analysis`, sub-module `analyze`, sub-module `deeper`. Identical
 addressing rule as cross-package `nasa.rocket.compute_thrust`.
 
+`import` and `include` declarations inside an inline DAG are real
+project dependency edges. They load dependencies, import values and
+compile-time names with the same visibility checks as file-root
+imports, and are honored whether the DAG is consumed with
+`include dag(args)` or as `@dag(args).out`.
+
 Sibling top-level DAGs are addressed the same way:
 
 ```graphcal

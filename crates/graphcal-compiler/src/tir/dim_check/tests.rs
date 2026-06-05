@@ -124,6 +124,22 @@ fn compile_inline_dag_bodies_test(
                 span: Span::new(0, 0).into(),
             })?;
     }
+    for (name, body) in &dag_bodies {
+        let owner = parent_dag_id.child(name.as_str());
+        for decl in body {
+            if let crate::desugar::resolved_ast::DeclKind::Import(import) = &decl.kind {
+                resolver
+                    .register_import(&owner, &import.path, &import.kind, parent_dag_id)
+                    .map_err(|err| GraphcalError::InternalError {
+                        message: format!(
+                            "test module resolver failed to register inline dag import: {err}"
+                        ),
+                        src: src.clone(),
+                        span: Span::new(0, 0).into(),
+                    })?;
+            }
+        }
+    }
     let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
     module_types
         .insert_graphcal_prelude()
@@ -1598,6 +1614,8 @@ fn inline_dag_indexed_output_type_flows_through() {
 pub index Region = { A, B };
 
 dag doubler {
+    import test.{ Region };
+
     param v: Length[Region];
     pub node result: Length[Region] = for r: Region { @v[r] * 2.0 };
 }

@@ -1895,6 +1895,7 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
          import collide.a as a;\n\
          import collide.b as b;\n\
          dag pick_a {\n\
+             import collide.a.{ Phase };\n\
              param series: Dimensionless[Phase];\n\
              pub node burn: Dimensionless = @series[Phase.Burn];\n\
              pub node echoed: Dimensionless[Phase] = for p: Phase { @series[p] };\n\
@@ -3236,6 +3237,8 @@ fn eval_inline_dag_call_indexed_output_projection() {
 pub index Region = { A, B };
 
 dag doubler {
+    import input.{ Region };
+
     param v: Length[Region];
     pub node result: Length[Region] = for r: Region { @v[r] * 2.0 };
 }

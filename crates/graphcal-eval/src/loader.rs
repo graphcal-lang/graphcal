@@ -633,6 +633,9 @@ fn load_file_dfs<F: FileSystemReader>(
                 span: path.span().into(),
             }));
         }
+        if import_canonical == canonical_path {
+            continue;
+        }
         load_file_dfs(
             &import_canonical,
             project_root,
