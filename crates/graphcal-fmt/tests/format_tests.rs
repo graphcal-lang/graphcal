@@ -293,7 +293,7 @@ fn trailing_newline() {
 }
 
 #[test]
-fn removes_trailing_whitespace_on_blank_lines_in_dag() {
+fn does_not_insert_blank_lines_between_dag_declarations() {
     let source = "dag sample {\n    param x: Dimensionless;\n    param y: Dimensionless;\n}\n";
     let formatted = format_source(source).unwrap();
 
@@ -304,8 +304,23 @@ fn removes_trailing_whitespace_on_blank_lines_in_dag() {
         );
     }
     assert!(
+        formatted.contains(";\n    param y"),
+        "formatter should not insert a blank line between DAG declarations: {formatted}"
+    );
+    assert!(
+        !formatted.contains(";\n\n    param y"),
+        "formatter inserted a blank line between DAG declarations: {formatted}"
+    );
+}
+
+#[test]
+fn preserves_existing_blank_lines_between_dag_declarations() {
+    let source = "dag sample {\n    param x: Dimensionless;\n\n    param y: Dimensionless;\n}\n";
+    let formatted = format_source(source).unwrap();
+
+    assert!(
         formatted.contains(";\n\n    param y"),
-        "formatter should keep the blank line, but without indentation-only whitespace: {formatted}"
+        "formatter should preserve an existing blank line between DAG declarations: {formatted}"
     );
 }
 

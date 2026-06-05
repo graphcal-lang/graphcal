@@ -24,19 +24,12 @@ dag hohmann_transfer {
     param target_alt: Length;
 
     node r1: Length = @r_earth + @parking_alt;
-
     node r2: Length = @r_earth + @target_alt;
-
     node a: Length = (@r1 + @r2) / 2.0;
-
     node v1: Velocity = sqrt(@gm_earth / @r1);
-
     node v2: Velocity = sqrt(@gm_earth / @r2);
-
     node dv1: Velocity = sqrt(2.0 * @gm_earth * @r2 / (@r1 * (@r1 + @r2))) - @v1;
-
     node dv2: Velocity = @v2 - sqrt(2.0 * @gm_earth * @r1 / (@r2 * (@r1 + @r2)));
-
     node result: TransferResult = TransferResult(
         dv1: @dv1,
         dv2: @dv2,
