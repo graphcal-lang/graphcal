@@ -6,6 +6,7 @@
     reason = "submodule of project/ uses parent types extensively"
 )]
 use super::*;
+use graphcal_compiler::desugar::resolved_ast::ImportItemNamespace;
 
 /// What kind of "other declaration" a binding name resolves to in the dep file
 /// when it is not a param / type / dim / index.

@@ -120,6 +120,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
         &mut tir,
         file_src,
         file_dag_id,
+        &importer_loaded.ast,
         &parent_pub_names,
         &importer_loaded.inline_dags,
         &module_resolver,
@@ -343,9 +344,6 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                     dag_name,
                 } => {
                     let parent_loaded = &project.files[parent_dag_id];
-                    let parent_pub_names = super::extract_pub_names(&parent_loaded.ast);
-                    let parent_type_system_names =
-                        graphcal_compiler::ir::lower::collect_type_system_names(&parent_loaded.ast);
                     let parent_values =
                         crate::inline_dag::classify_value_decls_in_ast(&parent_loaded.ast);
                     let parent_resolved_imports = parent_loaded
@@ -356,9 +354,8 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                     let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
                         &dag_body.declarations,
                         parent_dag_id,
-                        &parent_type_system_names,
+                        &parent_loaded.ast,
                         &parent_values,
-                        &parent_pub_names,
                         parent_resolved_imports,
                         importer_src,
                     )?;

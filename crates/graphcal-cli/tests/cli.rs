@@ -825,6 +825,27 @@ fn eval_import_name_not_found() {
     );
 }
 
+#[test]
+fn check_rejects_type_only_import_for_constructor() {
+    let output = graphcal_bin()
+        .args([
+            "check",
+            &fixture("invalid/inline_dag_type_import_without_constructor.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        !output.status.success(),
+        "type-only import must not bring the constructor into scope"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("TransferResult"),
+        "expected error mentioning TransferResult: {stderr}"
+    );
+}
+
 // --- --input JSON file tests ---
 
 #[test]
