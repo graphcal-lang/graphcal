@@ -293,6 +293,23 @@ fn trailing_newline() {
 }
 
 #[test]
+fn removes_trailing_whitespace_on_blank_lines_in_dag() {
+    let source = "dag sample {\n    param x: Dimensionless;\n    param y: Dimensionless;\n}\n";
+    let formatted = format_source(source).unwrap();
+
+    for line in formatted.lines() {
+        assert!(
+            !line.ends_with([' ', '\t']),
+            "formatted line has trailing whitespace: {line:?}\n{formatted}"
+        );
+    }
+    assert!(
+        formatted.contains(";\n\n    param y"),
+        "formatter should keep the blank line, but without indentation-only whitespace: {formatted}"
+    );
+}
+
+#[test]
 fn parse_error_returns_err() {
     let source = "this is not valid gcl }{}{";
     let err = format_source(source).expect_err("expected parse error");

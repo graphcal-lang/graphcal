@@ -35,32 +35,32 @@ const node r_earth: Length = 6371.0 km;
 // DAG with long signature (replaces block-body function)
 dag compute_transfer_velocity {
     param gm: GravParam;
-    
+
     param r_departure: Length;
-    
+
     param r_arrival: Length;
-    
+
     param inclination_change: Dimensionless;
-    
+
     node v1: Velocity = sqrt(@gm / @r_departure);
-    
+
     node v2: Velocity = sqrt(@gm / @r_arrival);
-    
+
     node dv_hohmann: Velocity = sqrt(2.0 * @gm * @r_arrival / (@r_departure * (@r_departure + @r_arrival))) - @v1;
-    
+
     node dv_plane: Velocity = 2.0 * @v1 * sin(@inclination_change / 2.0);
-    
+
     node result: Velocity = sqrt(@dv_hohmann ^ 2.0 + @dv_plane ^ 2.0);
 }
 
 // DAG with short expression body (replaces expression-body function)
 dag clamp_dag {
     param x: Dimensionless;
-    
+
     param lo: Dimensionless;
-    
+
     param hi: Dimensionless;
-    
+
     node result: Dimensionless = if @x < @lo { @lo } else { if @x > @hi { @hi } else { @x } };
 }
 
@@ -138,25 +138,25 @@ node decay: Dimensionless[Step] = unfold(100.0, |prev_t, t| @decay[prev_t] * (1.
 // DAG for complex result computation
 dag compute_complex_result {
     import format_edge_cases.{ gm_earth, r_earth };
-    
+
     node r1: Length = @r_earth + 200.0 km;
-    
+
     node r2: Length = @r_earth + 35786.0 km;
-    
+
     node v1: Velocity = sqrt(@gm_earth / @r1);
-    
+
     node v2: Velocity = sqrt(@gm_earth / @r2);
-    
+
     node a_transfer: Length = (@r1 + @r2) / 2.0;
-    
+
     node v_transfer_at_r1: Velocity = sqrt(@gm_earth * (2.0 / @r1 - 1.0 / @a_transfer));
-    
+
     node dv1: Velocity = @v_transfer_at_r1 - @v1;
-    
+
     node v_transfer_at_r2: Velocity = sqrt(@gm_earth * (2.0 / @r2 - 1.0 / @a_transfer));
-    
+
     node dv2: Velocity = @v2 - @v_transfer_at_r2;
-    
+
     node result: Velocity = @dv1 + @dv2;
 }
 
