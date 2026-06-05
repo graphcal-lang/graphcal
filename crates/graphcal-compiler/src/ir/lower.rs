@@ -841,6 +841,24 @@ impl UnfrozenIR {
             }
         }
 
+        let mut all_dep_names = dep_names.clone();
+        all_dep_names.extend(
+            dep.imported_values
+                .keys()
+                .map(|name| name.member().to_string()),
+        );
+        all_dep_names.extend(
+            dep.imported_decl_types
+                .keys()
+                .map(|name| name.member().to_string()),
+        );
+        all_dep_names.extend(
+            dep.imported_value_sources
+                .keys()
+                .map(|name| name.member().to_string()),
+        );
+        let dep_names = &all_dep_names;
+
         // Merge consts
         for mut entry in dep.consts {
             substitute_index_names(&mut entry.expr, index_bindings);
@@ -1105,22 +1123,24 @@ impl UnfrozenIR {
             }
         }
 
-        // Propagate the dep's imported-value metadata. An inline DAG body
-        // whose `import <self>.{...}` resolves to a different file leaves
-        // its parent-file value bindings on `dep.imported_values` /
-        // `dep.imported_value_sources`; merging the dag into the importer
-        // requires those entries to ride along so eval can resolve the
-        // local alias (e.g., `radius` in `prefix.result = @radius * ...`).
-        // Keys keep their original `ScopedName` (they were not in
-        // `dep_names` and therefore not prefixed in expressions).
+        // Propagate the dep's imported-value metadata. Hidden imports used by
+        // the dep's expressions are instance-scoped together with the merged
+        // expressions, preventing two DAG include instances from sharing an
+        // unqualified synthetic name.
         for (name, value) in dep.imported_values {
-            self.imported_values.entry(name).or_insert(value);
+            self.imported_values
+                .entry(prefix_dep(&name, prefix, dep_names))
+                .or_insert(value);
         }
         for (name, dt) in dep.imported_decl_types {
-            self.imported_decl_types.entry(name).or_insert(dt);
+            self.imported_decl_types
+                .entry(prefix_dep(&name, prefix, dep_names))
+                .or_insert(dt);
         }
         for (name, source) in dep.imported_value_sources {
-            self.imported_value_sources.entry(name).or_insert(source);
+            self.imported_value_sources
+                .entry(prefix_dep(&name, prefix, dep_names))
+                .or_insert(source);
         }
         Ok(())
     }
