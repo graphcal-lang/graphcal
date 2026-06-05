@@ -629,7 +629,7 @@ fn load_file_dfs<F: FileSystemReader>(
         if !import_canonical.starts_with(project_root) {
             return Err(CompileError::Eval(GraphcalError::ImportOutsideRoot {
                 path: path.display_path(),
-                src: named_source.clone(),
+                src: named_source,
                 span: path.span().into(),
             }));
         }

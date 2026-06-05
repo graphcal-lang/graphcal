@@ -245,10 +245,6 @@ fn compile_inline_dag_modules<'a>(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "DAG module IR compilation mirrors the file-root import/include pipeline"
-)]
 fn compile_loaded_dag_module_ir<'a>(
     tir: &graphcal_compiler::tir::typed::TIR,
     project: &'a crate::loader::LoadedProject,

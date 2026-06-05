@@ -231,7 +231,7 @@ pub fn classify_value_decls_in_ast(
 ///
 /// Returns a [`GraphcalError`] if any resolved const type cannot be lowered
 /// back to a [`DeclaredType`].
-pub(crate) fn classify_value_decls_in_tir(
+pub fn classify_value_decls_in_tir(
     tir: &TIR,
     parent_pub_names: &HashSet<DeclName>,
     src: &NamedSource<Arc<String>>,
