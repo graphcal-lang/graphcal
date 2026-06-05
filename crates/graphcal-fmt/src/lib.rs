@@ -43,10 +43,26 @@ pub fn format_source(source: &str) -> Result<String, FormatError> {
     doc.render(LINE_WIDTH, &mut output)?;
     let mut result = String::from_utf8(output)?;
 
+    strip_trailing_horizontal_whitespace(&mut result);
+
     // Ensure trailing newline
     if !result.ends_with('\n') {
         result.push('\n');
     }
 
     Ok(result)
+}
+
+fn strip_trailing_horizontal_whitespace(s: &mut String) {
+    let mut stripped = String::with_capacity(s.len());
+    for line in s.split_inclusive('\n') {
+        match line.strip_suffix('\n') {
+            Some(without_newline) => {
+                stripped.push_str(without_newline.trim_end_matches([' ', '\t']));
+                stripped.push('\n');
+            }
+            None => stripped.push_str(line.trim_end_matches([' ', '\t'])),
+        }
+    }
+    *s = stripped;
 }

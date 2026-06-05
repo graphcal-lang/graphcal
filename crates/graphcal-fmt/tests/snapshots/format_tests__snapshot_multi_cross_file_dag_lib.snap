@@ -9,10 +9,10 @@ const node speed_of_sound: Velocity = 343.0 m/s;
 
 pub dag double_speed {
     import lib.lib.{ speed_of_sound };
-    
+
     param v: Velocity;
-    
+
     pub node result: Velocity = @v * 2.0;
-    
+
     pub node mach: Dimensionless = @v / @speed_of_sound;
 }
