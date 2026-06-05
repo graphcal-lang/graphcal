@@ -391,6 +391,40 @@ pub fn lower_to_builder_with_imported_value_decls(
 )]
 #[expect(
     clippy::too_many_arguments,
+    reason = "dag-module lowering threads pre-processed import metadata + optional parent registry"
+)]
+pub fn lower_dag_module_to_builder_with_imported_value_decls(
+    dag_body: &File,
+    parent_registry: Option<&Registry>,
+    imported_names: &ImportedValueNames,
+    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_decl_types: HashMap<ScopedName, DeclaredType>,
+    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    src: &NamedSource<Arc<String>>,
+    dag_id: &crate::dag_id::DagId,
+) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+    let resolved = resolve_with_imported_values(dag_body, src, imported_names)?;
+    let type_anns = extract_type_annotations(dag_body);
+
+    build_ir_from_resolved(
+        dag_body,
+        src,
+        resolved,
+        type_anns,
+        imported_values,
+        imported_decl_types,
+        imported_value_sources,
+        dag_id,
+        parent_registry,
+    )
+}
+
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
+#[expect(
+    clippy::too_many_arguments,
     reason = "dag-body lowering threads pre-processed import metadata + parent registry"
 )]
 pub fn lower_dag_body_to_ir(
@@ -407,20 +441,15 @@ pub fn lower_dag_body_to_ir(
         declarations: stripped_body.to_vec(),
     };
     let dag_dag_id = parent_dag_id.child(dag_name);
-
-    let resolved = resolve_with_imported_values(&virtual_file, src, imported_names)?;
-    let type_anns = extract_type_annotations(&virtual_file);
-
-    let (builder, unfrozen) = build_ir_from_resolved(
+    let (builder, unfrozen) = lower_dag_module_to_builder_with_imported_value_decls(
         &virtual_file,
-        src,
-        resolved,
-        type_anns,
+        Some(parent_registry),
+        imported_names,
         HashMap::new(),
         imported_decl_types,
         imported_value_sources,
+        src,
         &dag_dag_id,
-        Some(parent_registry),
     )?;
     Ok(unfrozen.freeze(builder.build()))
 }

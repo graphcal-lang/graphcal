@@ -57,6 +57,7 @@ impl IncludeVisibilityBoundary {
 
 pub(in crate::eval::project) struct InlineDagIncludeTarget<'a> {
     pub(in crate::eval::project) dag_def: &'a graphcal_compiler::desugar::resolved_ast::DagDecl,
+    pub(in crate::eval::project) dag_id: &'a graphcal_compiler::dag_id::DagId,
     pub(in crate::eval::project) dag_name: &'a str,
     pub(in crate::eval::project) parent_dag_id: &'a graphcal_compiler::dag_id::DagId,
     pub(in crate::eval::project) boundary: IncludeVisibilityBoundary,
@@ -594,6 +595,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
 
     let dag_def = target.dag_def;
     let dag_name = target.dag_name;
+    let dag_id = target.dag_id;
     let parent_dag_id = target.parent_dag_id;
     let boundary = target.boundary;
 
@@ -736,8 +738,8 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         source: DeferredDagSource::InlineDag {
             dag_body,
             dag_imported_names,
+            dag_id: dag_id.clone(),
             parent_dag_id: parent_dag_id.clone(),
-            dag_name: dag_name.to_string(),
         },
         prefix,
         bindings,

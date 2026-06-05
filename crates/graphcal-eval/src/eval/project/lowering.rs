@@ -62,9 +62,9 @@ pub(in crate::eval::project) fn lower_and_finalize(
     // Process every deferred DAG include (file-level instantiated, inline
     // DAG, qualified inline DAG) through one path: compile each source's
     // body to IR and merge into the importer.
-    let importer_loaded = &project.files[file_dag_id];
     process_deferred_dag_includes(
         project,
+        file_dag_id,
         file_dag_id,
         &ctx.deferred_dag_includes,
         evaluated_files,
@@ -116,15 +116,13 @@ pub(in crate::eval::project) fn lower_and_finalize(
         &module_resolver,
         &module_types,
     )?;
-    crate::inline_dag::compile_inline_dag_bodies(
+    compile_inline_dag_modules(
         &mut tir,
+        project,
+        file_dag_id,
         file_src,
-        crate::inline_dag::ParentDagContext {
-            dag_id: file_dag_id,
-            ast: &importer_loaded.ast,
-            pub_names: &parent_pub_names,
-        },
-        &importer_loaded.inline_dags,
+        &parent_pub_names,
+        evaluated_files,
         &module_resolver,
         &module_types,
     )?;
@@ -204,6 +202,282 @@ fn module_resolve_compile_error(
             span: Span::new(0, 0).into(),
         }),
     }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "inline DAG module compilation threads project, dependency artifacts, and module typing context"
+)]
+fn compile_inline_dag_modules<'a>(
+    tir: &mut graphcal_compiler::tir::typed::TIR,
+    project: &'a crate::loader::LoadedProject,
+    file_dag_id: &graphcal_compiler::dag_id::DagId,
+    file_src: &NamedSource<Arc<String>>,
+    parent_pub_names: &HashSet<DeclName>,
+    evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_types: &graphcal_compiler::tir::typed::ModuleTypeRegistry,
+) -> Result<(), CompileError> {
+    let loaded_file = &project.files[file_dag_id];
+    let parent_values =
+        crate::inline_dag::classify_value_decls_in_tir(tir, parent_pub_names, file_src)?;
+
+    for loaded_dag in &loaded_file.inline_dags {
+        let dag_ir = compile_loaded_dag_module_ir(
+            tir,
+            project,
+            loaded_dag,
+            file_src,
+            &parent_values,
+            evaluated_files,
+        )?;
+        let mut compiled_dag = graphcal_compiler::tir::typed::type_resolve_single_with_modules(
+            dag_ir,
+            &loaded_dag.dag_id,
+            file_src,
+            module_resolver,
+            module_types,
+        )?;
+        compiled_dag.populate_pub_nodes(&loaded_dag.body);
+        tir.dags.insert(loaded_dag.dag_id.clone(), compiled_dag);
+    }
+
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "DAG module IR compilation mirrors the file-root import/include pipeline"
+)]
+fn compile_loaded_dag_module_ir<'a>(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    project: &'a crate::loader::LoadedProject,
+    loaded_dag: &crate::loader::LoadedDag,
+    file_src: &NamedSource<Arc<String>>,
+    parent_values: &crate::inline_dag::ParentValueDecls,
+    evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
+    let parent_loaded = &project.files[&loaded_dag.parent_dag_id];
+    let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
+        &loaded_dag.body,
+        &loaded_dag.parent_dag_id,
+        &parent_loaded.ast,
+        parent_values,
+        &loaded_dag.resolved_imports,
+        file_src,
+    )?;
+
+    let mut ctx = ImportContext {
+        imported_names: ImportedValueNames::default(),
+        imported_values: HashMap::new(),
+        imported_source_order: Vec::new(),
+        imported_type_system_names: HashMap::new(),
+        module_map: HashMap::new(),
+        extra_registry_builders: Vec::new(),
+        deferred_dag_includes: Vec::new(),
+    };
+
+    process_dag_body_import_declarations(project, loaded_dag, file_src, evaluated_files, &mut ctx)?;
+    process_dag_body_include_declarations(
+        project,
+        loaded_dag,
+        file_src,
+        evaluated_files,
+        &mut ctx,
+    )?;
+
+    extend_imported_value_names(&mut ctx.imported_names, self_imports.names);
+    let mut imported_decl_types: HashMap<ScopedName, DeclaredType> = ctx
+        .imported_values
+        .iter()
+        .map(|(name, (_value, ty))| (name.clone(), ty.clone()))
+        .collect();
+    imported_decl_types.extend(self_imports.decl_types);
+
+    let dag_ast = graphcal_compiler::desugar::resolved_ast::File {
+        declarations: self_imports.stripped_body,
+    };
+    let dag_ast = rewrite_qualified_refs_in_ast(&dag_ast, &ctx.module_map, &ctx.imported_names);
+    let (mut builder, mut unfrozen) =
+        graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_value_decls(
+            dag_ast.as_ref(),
+            Some(&tir.registry),
+            &ctx.imported_names,
+            ctx.imported_values,
+            imported_decl_types,
+            self_imports.value_sources,
+            file_src,
+            &loaded_dag.dag_id,
+        )?;
+
+    for (dep_dag_id, names) in &ctx.imported_type_system_names {
+        let dep_loaded = &project.files[dep_dag_id];
+        graphcal_compiler::ir::lower::register_selected_declarations(
+            &dep_loaded.ast,
+            &mut builder,
+            &dep_loaded.named_source,
+            names,
+            dep_dag_id,
+        )?;
+    }
+    for (dep_registry, pub_names) in &ctx.extra_registry_builders {
+        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names);
+    }
+
+    process_deferred_dag_includes(
+        project,
+        &loaded_dag.dag_id,
+        &loaded_dag.parent_dag_id,
+        &ctx.deferred_dag_includes,
+        evaluated_files,
+        file_src,
+        dag_ast.as_ref(),
+        &mut builder,
+        &mut unfrozen,
+    )?;
+
+    Ok(unfrozen.freeze(builder.build()))
+}
+
+fn extend_imported_value_names(target: &mut ImportedValueNames, source: ImportedValueNames) {
+    target.const_names.extend(source.const_names);
+    target.param_names.extend(source.param_names);
+    target.node_names.extend(source.node_names);
+    target.assert_names.extend(source.assert_names);
+}
+
+fn process_dag_body_import_declarations<'a>(
+    project: &crate::loader::LoadedProject,
+    loaded_dag: &crate::loader::LoadedDag,
+    file_src: &NamedSource<Arc<String>>,
+    evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    ctx: &mut ImportContext<'a>,
+) -> Result<(), CompileError> {
+    for decl in &loaded_dag.body {
+        let DeclKind::Import(import_decl) = &decl.kind else {
+            continue;
+        };
+        let Some(crate::loader::InlineBodyImportResolution::Resolved(import_dag_id)) = loaded_dag
+            .resolved_imports
+            .get(&crate::loader::ModulePathKey::from_path(&import_decl.path))
+        else {
+            continue;
+        };
+        if import_dag_id == &loaded_dag.parent_dag_id {
+            continue;
+        }
+        imports::process_non_instantiated_import(
+            project,
+            import_dag_id,
+            &import_decl.path,
+            &import_decl.kind,
+            file_src,
+            evaluated_files,
+            ctx,
+            true,
+        )?;
+    }
+    Ok(())
+}
+
+fn process_dag_body_include_declarations<'a>(
+    project: &'a crate::loader::LoadedProject,
+    loaded_dag: &crate::loader::LoadedDag,
+    file_src: &NamedSource<Arc<String>>,
+    evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    ctx: &mut ImportContext<'a>,
+) -> Result<(), CompileError> {
+    for decl in &loaded_dag.body {
+        let DeclKind::Include(include_decl) = &decl.kind else {
+            continue;
+        };
+        let Some(crate::loader::InlineBodyImportResolution::Resolved(target_dag_id)) = loaded_dag
+            .resolved_imports
+            .get(&crate::loader::ModulePathKey::from_path(&include_decl.path))
+        else {
+            continue;
+        };
+        if project.files.contains_key(target_dag_id) {
+            if include_decl.param_bindings.is_empty() {
+                imports::process_non_instantiated_import(
+                    project,
+                    target_dag_id,
+                    &include_decl.path,
+                    &include_decl.kind,
+                    file_src,
+                    evaluated_files,
+                    ctx,
+                    false,
+                )?;
+            } else {
+                imports::process_instantiated_include(
+                    project,
+                    &loaded_dag.parent_dag_id,
+                    target_dag_id,
+                    include_decl,
+                    decl,
+                    file_src,
+                    evaluated_files,
+                    ctx,
+                )?;
+            }
+            continue;
+        }
+
+        let Some((target_file_id, target_dag_decl)) = find_inline_dag_decl(project, target_dag_id)
+        else {
+            continue;
+        };
+        let boundary = if target_file_id == &loaded_dag.parent_dag_id {
+            imports::IncludeVisibilityBoundary::Local
+        } else {
+            imports::IncludeVisibilityBoundary::CrossModule
+        };
+        imports::process_inline_dag_include(
+            &imports::InlineDagIncludeTarget {
+                dag_def: target_dag_decl,
+                dag_id: target_dag_id,
+                dag_name: target_dag_id.name(),
+                parent_dag_id: target_file_id,
+                boundary,
+            },
+            include_decl,
+            decl,
+            file_src,
+            ctx,
+        )?;
+    }
+    Ok(())
+}
+
+fn find_inline_dag_decl<'a>(
+    project: &'a crate::loader::LoadedProject,
+    target: &graphcal_compiler::dag_id::DagId,
+) -> Option<(
+    &'a graphcal_compiler::dag_id::DagId,
+    &'a graphcal_compiler::desugar::resolved_ast::DagDecl,
+)> {
+    project.files.iter().find_map(|(file_id, loaded)| {
+        find_inline_dag_decl_in_declarations(&loaded.ast.declarations, file_id, target)
+            .map(|dag_decl| (file_id, dag_decl))
+    })
+}
+
+fn find_inline_dag_decl_in_declarations<'a>(
+    declarations: &'a [graphcal_compiler::desugar::resolved_ast::Declaration],
+    lexical_parent_id: &graphcal_compiler::dag_id::DagId,
+    target: &graphcal_compiler::dag_id::DagId,
+) -> Option<&'a graphcal_compiler::desugar::resolved_ast::DagDecl> {
+    declarations.iter().find_map(|decl| {
+        let DeclKind::Dag(dag) = &decl.kind else {
+            return None;
+        };
+        let dag_id = lexical_parent_id.child(dag.name.value.as_str());
+        if &dag_id == target {
+            return Some(dag);
+        }
+        find_inline_dag_decl_in_declarations(&dag.body, &dag_id, target)
+    })
 }
 
 /// Merge compiled per-DAG TIRs from each module-imported dependency into
@@ -299,6 +573,7 @@ pub(in crate::eval::project) fn merge_dep_dag_tirs(
 pub(in crate::eval::project) fn process_deferred_dag_includes(
     project: &crate::loader::LoadedProject,
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
+    importer_file_dag_id: &graphcal_compiler::dag_id::DagId,
     deferred_dag_includes: &[DeferredDagInclude],
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     importer_src: &NamedSource<Arc<String>>,
@@ -342,8 +617,8 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                 DeferredDagSource::InlineDag {
                     dag_body,
                     dag_imported_names,
+                    dag_id,
                     parent_dag_id,
-                    dag_name,
                 } => {
                     let parent_loaded = &project.files[parent_dag_id];
                     let parent_values =
@@ -351,7 +626,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                     let parent_resolved_imports = parent_loaded
                         .inline_dags
                         .iter()
-                        .find(|d| &d.name == dag_name)
+                        .find(|d| &d.dag_id == dag_id)
                         .map_or(&empty_resolved, |d| &d.resolved_imports);
                     let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
                         &dag_body.declarations,
@@ -389,7 +664,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                         (RuntimeValue, DeclaredType),
                     > = HashMap::new();
                     let mut imported_decl_types = self_imports.decl_types;
-                    if parent_dag_id != importer_dag_id
+                    if parent_dag_id != importer_file_dag_id
                         && let Some(parent_eval) = evaluated_files.get(parent_dag_id)
                     {
                         for (local_name, source) in &self_imports.value_sources {

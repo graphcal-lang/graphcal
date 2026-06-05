@@ -1,17 +1,8 @@
-//! Inline-DAG preprocessing and per-file dag-body compilation.
+//! Inline-DAG preprocessing helpers.
 //!
-//! This module owns the orchestration logic that turns a file's inline
-//! `dag X { ... }` blocks into compiled per-dag `TIR`s and inserts them into
-//! the parent file's `tir.dags`. The lowering and type-resolution primitives
-//! still live in the compiler crate; this module wires them together with
-//! the loader-level information (canonical `DagId`, self-import path
-//! resolution) that the project pipeline supplies.
-//!
-//! Tracks toward unifying file and inline DAGs (#536): self-import handling
-//! lives at the layer that knows about the project, not at the IR-lowering
-//! primitive. The compiler-side `lower_dag_body_to_ir` is now a clean
-//! lowering primitive — give it pre-processed inputs and it builds the
-//! dag-body IR.
+//! Project-level compilation treats file roots and inline DAGs as DAG modules;
+//! this module keeps the self-import classification logic that needs access to
+//! parent-file visibility and values.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -20,18 +11,14 @@ use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::resolved_ast::{DeclKind, Declaration, File, ImportItemNamespace};
-use graphcal_compiler::ir::lower::{DagBodySelfImports, ImportedValueSource, lower_dag_body_to_ir};
+use graphcal_compiler::ir::lower::{DagBodySelfImports, ImportedValueSource};
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::module_resolve::ModuleResolver;
 use graphcal_compiler::syntax::names::DeclName;
-use graphcal_compiler::tir::typed::{
-    ModuleTypeRegistry, TIR, resolved_to_declared_type, type_resolve_single_with_modules,
-};
+use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type};
 
 use crate::import_surface::{ImportItemPresence, file_import_item_presence};
-use crate::loader::LoadedDag;
 
 /// Public parent-file value declarations visible to an inline DAG self-import
 /// classifier.
@@ -49,80 +36,6 @@ impl ParentValueDecls {
     fn is_public_runtime(&self, name: &str) -> bool {
         self.runtime.contains(name)
     }
-}
-
-/// Parent-file context needed while compiling its inline DAG bodies.
-#[derive(Clone, Copy)]
-pub struct ParentDagContext<'a> {
-    pub dag_id: &'a DagId,
-    pub ast: &'a File,
-    pub pub_names: &'a HashSet<DeclName>,
-}
-
-/// Compile each inline `dag { ... }` body lifted by the loader into a
-/// `DagTIR` and insert it into `tir.dags`, keyed by the loader-supplied
-/// canonical [`DagId`](DagId).
-///
-/// `parent.pub_names` is captured from the IR before module-aware TIR
-/// construction consumes it. Each [`LoadedDag`] supplies the body in source order plus its
-/// pre-resolved imports map (path display → [`DagId`]), letting
-/// [`preprocess_dag_body_self_imports`] detect self-imports by structured
-/// equality against `parent.dag_id` rather than a file-level path-set.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if compiling any dag body fails (typically a
-/// self-import naming an unknown name, runtime declaration, or private
-/// declaration in the parent file).
-pub fn compile_inline_dag_bodies(
-    tir: &mut TIR,
-    src: &NamedSource<Arc<String>>,
-    parent: ParentDagContext<'_>,
-    inline_dags: &[LoadedDag],
-    module_resolver: &ModuleResolver,
-    module_types: &ModuleTypeRegistry,
-) -> Result<(), GraphcalError> {
-    // Read parent's value decls directly from the (already type-resolved)
-    // root DagTIR. With the flat registry, `tir.root()` IS the parent
-    // file's body — no separate `ParentValueKind` table needed.
-    let parent_values = classify_value_decls_in_tir(tir, parent.pub_names, src)?;
-
-    for loaded_dag in inline_dags {
-        let DagBodySelfImports {
-            names: imported_names,
-            decl_types: imported_decl_types,
-            value_sources: imported_value_sources,
-            stripped_body,
-        } = preprocess_dag_body_self_imports(
-            &loaded_dag.body,
-            parent.dag_id,
-            parent.ast,
-            &parent_values,
-            &loaded_dag.resolved_imports,
-            src,
-        )?;
-        let dag_body_ir = lower_dag_body_to_ir(
-            &loaded_dag.name,
-            &stripped_body,
-            &tir.registry,
-            &imported_names,
-            imported_decl_types,
-            imported_value_sources,
-            src,
-            parent.dag_id,
-        )?;
-        let mut compiled_dag = type_resolve_single_with_modules(
-            dag_body_ir,
-            &loaded_dag.dag_id,
-            src,
-            module_resolver,
-            module_types,
-        )?;
-        compiled_dag.populate_pub_nodes(&loaded_dag.body);
-        tir.dags.insert(loaded_dag.dag_id.clone(), compiled_dag);
-    }
-
-    Ok(())
 }
 
 /// Pre-process `import <self>.{...}` declarations inside a dag body.
@@ -318,7 +231,7 @@ pub fn classify_value_decls_in_ast(
 ///
 /// Returns a [`GraphcalError`] if any resolved const type cannot be lowered
 /// back to a [`DeclaredType`].
-fn classify_value_decls_in_tir(
+pub(crate) fn classify_value_decls_in_tir(
     tir: &TIR,
     parent_pub_names: &HashSet<DeclName>,
     src: &NamedSource<Arc<String>>,
