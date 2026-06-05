@@ -19,10 +19,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::desugar::resolved_ast::{DeclKind, Declaration};
-use graphcal_compiler::ir::lower::{
-    DagBodySelfImports, ImportedValueSource, lower_dag_body_to_ir, type_system_names_from_registry,
-};
+use graphcal_compiler::desugar::resolved_ast::{DeclKind, Declaration, File, ImportItemNamespace};
+use graphcal_compiler::ir::lower::{DagBodySelfImports, ImportedValueSource, lower_dag_body_to_ir};
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
@@ -32,9 +30,10 @@ use graphcal_compiler::tir::typed::{
     ModuleTypeRegistry, TIR, resolved_to_declared_type, type_resolve_single_with_modules,
 };
 
+use crate::import_surface::{ImportItemPresence, file_import_item_presence};
 use crate::loader::LoadedDag;
 
-/// Parent-file value declarations visible to an inline DAG self-import
+/// Public parent-file value declarations visible to an inline DAG self-import
 /// classifier.
 #[derive(Debug, Clone, Default)]
 pub struct ParentValueDecls {
@@ -43,28 +42,32 @@ pub struct ParentValueDecls {
 }
 
 impl ParentValueDecls {
-    fn const_type(&self, name: &str) -> Option<&DeclaredType> {
+    fn public_const_type(&self, name: &str) -> Option<&DeclaredType> {
         self.consts.get(name)
     }
 
-    fn is_runtime(&self, name: &str) -> bool {
+    fn is_public_runtime(&self, name: &str) -> bool {
         self.runtime.contains(name)
     }
+}
 
-    fn contains(&self, name: &str) -> bool {
-        self.const_type(name).is_some() || self.is_runtime(name)
-    }
+/// Parent-file context needed while compiling its inline DAG bodies.
+#[derive(Clone, Copy)]
+pub struct ParentDagContext<'a> {
+    pub dag_id: &'a DagId,
+    pub ast: &'a File,
+    pub pub_names: &'a HashSet<DeclName>,
 }
 
 /// Compile each inline `dag { ... }` body lifted by the loader into a
 /// `DagTIR` and insert it into `tir.dags`, keyed by the loader-supplied
 /// canonical [`DagId`](DagId).
 ///
-/// `parent_pub_names` is captured from the IR before module-aware TIR
+/// `parent.pub_names` is captured from the IR before module-aware TIR
 /// construction consumes it. Each [`LoadedDag`] supplies the body in source order plus its
 /// pre-resolved imports map (path display → [`DagId`]), letting
 /// [`preprocess_dag_body_self_imports`] detect self-imports by structured
-/// equality against `parent_dag_id` rather than a file-level path-set.
+/// equality against `parent.dag_id` rather than a file-level path-set.
 ///
 /// # Errors
 ///
@@ -74,8 +77,7 @@ impl ParentValueDecls {
 pub fn compile_inline_dag_bodies(
     tir: &mut TIR,
     src: &NamedSource<Arc<String>>,
-    parent_dag_id: &DagId,
-    parent_pub_names: &HashSet<DeclName>,
+    parent: ParentDagContext<'_>,
     inline_dags: &[LoadedDag],
     module_resolver: &ModuleResolver,
     module_types: &ModuleTypeRegistry,
@@ -83,8 +85,7 @@ pub fn compile_inline_dag_bodies(
     // Read parent's value decls directly from the (already type-resolved)
     // root DagTIR. With the flat registry, `tir.root()` IS the parent
     // file's body — no separate `ParentValueKind` table needed.
-    let parent_values = classify_value_decls_in_tir(tir, src)?;
-    let parent_type_system_names = type_system_names_from_registry(&tir.registry);
+    let parent_values = classify_value_decls_in_tir(tir, parent.pub_names, src)?;
 
     for loaded_dag in inline_dags {
         let DagBodySelfImports {
@@ -94,10 +95,9 @@ pub fn compile_inline_dag_bodies(
             stripped_body,
         } = preprocess_dag_body_self_imports(
             &loaded_dag.body,
-            parent_dag_id,
-            &parent_type_system_names,
+            parent.dag_id,
+            parent.ast,
             &parent_values,
-            parent_pub_names,
             &loaded_dag.resolved_imports,
             src,
         )?;
@@ -109,7 +109,7 @@ pub fn compile_inline_dag_bodies(
             imported_decl_types,
             imported_value_sources,
             src,
-            parent_dag_id,
+            parent.dag_id,
         )?;
         let mut compiled_dag = type_resolve_single_with_modules(
             dag_body_ir,
@@ -130,21 +130,24 @@ pub fn compile_inline_dag_bodies(
 /// A self-import is one whose `ModulePath` display string is keyed in
 /// `body_resolved_imports` to `parent_dag_id` — i.e. the loader resolved
 /// the path back to the dag's own enclosing parent DAG. For each
-/// self-import, every brace-list item is classified against
-/// `parent_type_system_names`, `parent_value_decls`, and `parent_pub_names`.
+/// self-import, every brace-list item is classified in the namespace it
+/// requested (`type` or default) against the parent AST.
 ///
-/// - Type-system items (dim/unit/type/union/index/dag): elided when
-///   `pub`-marked. They are already accessible through the parent-registry
-///   merge once visibility is satisfied.
-/// - `const` items: added to `ImportedValueNames::const_names`, to
+/// - `type` items are visibility-checked as struct/tagged-union type names
+///   only. They do not import same-named constructors.
+/// - Default `const` items are added to `ImportedValueNames::const_names`, to
 ///   `imported_decl_types` with the parent's declared type, and to
 ///   `imported_value_sources` so evaluation can copy the concrete value
 ///   from the caller or the owning dependency.
-/// - `param` / `node` items: rejected with `ImportRuntimeItem` — runtime
-///   values must be passed via the dag's own params, regardless of pub.
-/// - Items that exist in the parent but are not `pub`: rejected with
-///   `ImportPrivateItem`, identical to the cross-file path.
-/// - Names not found in the parent at all: rejected with
+/// - Default `param` / non-const `node` items are rejected with
+///   `ImportRuntimeItem` — runtime values must be passed via the dag's own
+///   params.
+/// - Other default compile-time items (dim/unit/index/constructor/dag/assert)
+///   require no value resolver registration here; module-aware lowering uses
+///   the loader-built import scope for those namespaces.
+/// - Items that exist in the requested namespace but are not `pub` are
+///   rejected with `ImportPrivateItem`, identical to the cross-file path.
+/// - Names not found in the requested namespace are rejected with
 ///   `ImportNameNotFound`.
 ///
 /// Non-self imports are left in the body untouched. They are handled by
@@ -158,9 +161,8 @@ pub fn compile_inline_dag_bodies(
 pub fn preprocess_dag_body_self_imports(
     body: &[Declaration],
     parent_dag_id: &DagId,
-    parent_type_system_names: &HashSet<String>,
+    parent_ast: &File,
     parent_values: &ParentValueDecls,
-    parent_pub_names: &HashSet<DeclName>,
     body_resolved_imports: &HashMap<
         crate::loader::ModulePathKey,
         crate::loader::InlineBodyImportResolution,
@@ -198,50 +200,58 @@ pub fn preprocess_dag_body_self_imports(
                     let orig_name = &item.name.name;
                     let local_name = item.local_name().to_string();
                     let span = item.name.span;
-                    let exists_as_type_system =
-                        parent_type_system_names.contains(orig_name.as_str());
-                    let const_dt = parent_values.const_type(orig_name.as_str());
-                    let is_runtime = parent_values.is_runtime(orig_name.as_str());
 
-                    if !exists_as_type_system && !parent_values.contains(orig_name.as_str()) {
-                        return Err(GraphcalError::ImportNameNotFound {
-                            name: orig_name.to_string(),
-                            file_path: import_decl.path.display_path(),
-                            src: src.clone(),
-                            span: span.into(),
-                        });
+                    match file_import_item_presence(parent_ast, orig_name.as_str(), item.namespace)
+                    {
+                        ImportItemPresence::Missing => {
+                            return Err(GraphcalError::ImportNameNotFound {
+                                name: orig_name.to_string(),
+                                file_path: import_decl.path.display_path(),
+                                src: src.clone(),
+                                span: span.into(),
+                            });
+                        }
+                        ImportItemPresence::Private => {
+                            return Err(GraphcalError::ImportPrivateItem {
+                                name: orig_name.to_string(),
+                                file_path: import_decl.path.display_path(),
+                                src: src.clone(),
+                                span: span.into(),
+                            });
+                        }
+                        ImportItemPresence::Public => {}
                     }
 
-                    if !parent_pub_names.contains(orig_name.as_str()) {
-                        return Err(GraphcalError::ImportPrivateItem {
-                            name: orig_name.to_string(),
-                            file_path: import_decl.path.display_path(),
-                            src: src.clone(),
-                            span: span.into(),
-                        });
-                    }
-
-                    if let Some(dt) = const_dt {
-                        let scoped = ScopedName::local(local_name);
-                        names.const_names.push((scoped.clone(), span));
-                        decl_types.insert(scoped.clone(), dt.clone());
-                        value_sources.insert(
-                            scoped,
-                            ImportedValueSource {
-                                dag_id: parent_dag_id.clone(),
-                                source_name: DeclName::new(orig_name),
-                            },
-                        );
-                    } else if is_runtime {
-                        return Err(GraphcalError::ImportRuntimeItem {
-                            name: orig_name.to_string(),
-                            src: src.clone(),
-                            span: span.into(),
-                        });
-                    } else {
-                        // Type-system items: no resolver registration
-                        // needed — they're already accessible through the
-                        // parent-registry merge once visibility is satisfied.
+                    match item.namespace {
+                        ImportItemNamespace::Type => {
+                            // Type imports affect only the type namespace. A
+                            // same-named constructor must be imported as a
+                            // separate default item.
+                        }
+                        ImportItemNamespace::Default => {
+                            match parent_values.public_const_type(orig_name.as_str()) {
+                                Some(dt) => {
+                                    let scoped = ScopedName::local(local_name);
+                                    names.const_names.push((scoped.clone(), span));
+                                    decl_types.insert(scoped.clone(), dt.clone());
+                                    value_sources.insert(
+                                        scoped,
+                                        ImportedValueSource {
+                                            dag_id: parent_dag_id.clone(),
+                                            source_name: DeclName::new(orig_name),
+                                        },
+                                    );
+                                }
+                                None if parent_values.is_public_runtime(orig_name.as_str()) => {
+                                    return Err(GraphcalError::ImportRuntimeItem {
+                                        name: orig_name.to_string(),
+                                        src: src.clone(),
+                                        span: span.into(),
+                                    });
+                                }
+                                None => {}
+                            }
+                        }
                     }
                 }
             }
@@ -279,13 +289,16 @@ pub fn classify_value_decls_in_ast(
     let mut values = ParentValueDecls::default();
     for decl in &ast.declarations {
         match &decl.kind {
-            DeclKind::ConstNode(c) => {
+            DeclKind::ConstNode(c) if c.visibility.is_public() => {
                 values.consts.insert(c.name.value.clone(), placeholder());
             }
             DeclKind::Param(p) => {
+                // Params are always visible/bindable across import/include
+                // boundaries, but they are runtime values and cannot be
+                // imported into an inline DAG body.
                 values.runtime.insert(p.name.value.clone());
             }
-            DeclKind::Node(n) => {
+            DeclKind::Node(n) if n.visibility.is_public() => {
                 values.runtime.insert(n.name.value.clone());
             }
             _ => {}
@@ -307,24 +320,31 @@ pub fn classify_value_decls_in_ast(
 /// back to a [`DeclaredType`].
 fn classify_value_decls_in_tir(
     tir: &TIR,
+    parent_pub_names: &HashSet<DeclName>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ParentValueDecls, GraphcalError> {
     let root = tir.root();
     let mut values = ParentValueDecls::default();
     for entry in &root.consts {
+        let name = DeclName::new(entry.name.member());
+        if !parent_pub_names.contains(&name) {
+            continue;
+        }
         let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
             continue;
         };
-        values.consts.insert(
-            DeclName::new(entry.name.member()),
-            resolved_to_declared_type(resolved, src)?,
-        );
+        values
+            .consts
+            .insert(name, resolved_to_declared_type(resolved, src)?);
     }
     for entry in &root.params {
         values.runtime.insert(DeclName::new(entry.name.member()));
     }
     for entry in &root.nodes {
-        values.runtime.insert(DeclName::new(entry.name.member()));
+        let name = DeclName::new(entry.name.member());
+        if parent_pub_names.contains(&name) {
+            values.runtime.insert(name);
+        }
     }
     Ok(values)
 }

@@ -959,7 +959,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedName<namespace::Constructor>, ModuleResolveError> {
-        self.resolve_type_symbol_path(owner, path, ModuleSymbols::constructors, |scope| {
+        self.resolve_symbol_path(owner, path, ModuleSymbols::constructors, |scope| {
             &scope.selected_constructors
         })
     }
@@ -2083,6 +2083,54 @@ mod tests {
 
         assert_eq!(resolved_name.owner(), &lib_id);
         assert_eq!(resolved_name.as_str(), "Vec3");
+    }
+
+    #[test]
+    fn type_import_in_child_dag_does_not_import_same_named_constructor() {
+        let main_id = DagId::root("main");
+        let child_id = main_id.child("build_transfer");
+        let main = resolved_source(
+            "pub type TransferResult { TransferResult }
+             dag build_transfer {
+                 import main.{ type TransferResult };
+             }",
+        );
+        let dag = first_dag(&main);
+        let import = dag
+            .body
+            .iter()
+            .find_map(|decl| match &decl.kind {
+                ast::DeclKind::Import(import) => Some((&import.path, &import.kind)),
+                _ => None,
+            })
+            .expect("dag body should contain an import");
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver.add_module(child_id.clone(), &dag.body).unwrap();
+        resolver
+            .register_import(&child_id, import.0, import.1, &main_id)
+            .unwrap();
+
+        let resolved_type = resolver
+            .resolve_struct_type_path(&child_id, &path(&["TransferResult"]))
+            .unwrap();
+        assert_eq!(resolved_type.owner(), &main_id);
+        assert_eq!(resolved_type.as_str(), "TransferResult");
+
+        let err = resolver
+            .resolve_constructor_path(&child_id, &path(&["TransferResult"]))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ModuleResolveError::UnknownName {
+                owner,
+                namespace: "ConstructorName",
+                name,
+            } if owner == child_id && name == "TransferResult"
+        ));
     }
 
     #[test]
