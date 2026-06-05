@@ -260,7 +260,7 @@ impl LoadedProject {
                 &self.files,
             )?;
             for inline in &loaded.inline_dags {
-                add_inline_instantiated_include_modules(
+                add_instantiated_include_modules(
                     &mut resolver,
                     &inline.dag_id,
                     &inline.body,
@@ -272,7 +272,7 @@ impl LoadedProject {
 
         for dag_id in &self.load_order {
             let loaded = &self.files[dag_id];
-            register_file_module_imports(
+            register_module_imports(
                 &mut resolver,
                 &loaded.dag_id,
                 &loaded.ast.declarations,
@@ -280,7 +280,7 @@ impl LoadedProject {
                 &self.files,
             )?;
             for inline in &loaded.inline_dags {
-                register_inline_module_imports(
+                register_module_imports(
                     &mut resolver,
                     &inline.dag_id,
                     &inline.body,
@@ -294,11 +294,30 @@ impl LoadedProject {
     }
 }
 
+trait ResolvedModuleLookup {
+    fn resolved_target(&self, key: &ModulePathKey) -> Option<&DagId>;
+}
+
+impl ResolvedModuleLookup for HashMap<ModulePathKey, DagId> {
+    fn resolved_target(&self, key: &ModulePathKey) -> Option<&DagId> {
+        self.get(key)
+    }
+}
+
+impl ResolvedModuleLookup for HashMap<ModulePathKey, InlineBodyImportResolution> {
+    fn resolved_target(&self, key: &ModulePathKey) -> Option<&DagId> {
+        match self.get(key) {
+            Some(InlineBodyImportResolution::Resolved(target)) => Some(target),
+            Some(InlineBodyImportResolution::Unresolved) | None => None,
+        }
+    }
+}
+
 fn add_instantiated_include_modules(
     resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
     owner: &DagId,
     declarations: &[Declaration],
-    resolved_imports: &HashMap<ModulePathKey, DagId>,
+    resolved_imports: &impl ResolvedModuleLookup,
     files: &HashMap<DagId, LoadedFile>,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
     for decl in declarations {
@@ -308,35 +327,8 @@ fn add_instantiated_include_modules(
         let Some(prefix) = instantiated_include_prefix(include) else {
             continue;
         };
-        let Some(file_target) = resolved_imports.get(&ModulePathKey::from_path(&include.path))
-        else {
-            continue;
-        };
-        let target = module_resolver_target_for_path(&include.path, file_target, files);
-        let Some(target_decls) = module_declarations(&target, files) else {
-            continue;
-        };
-        resolver.add_module(owner.child(prefix.as_str()), target_decls)?;
-    }
-    Ok(())
-}
-
-fn add_inline_instantiated_include_modules(
-    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
-    owner: &DagId,
-    declarations: &[Declaration],
-    resolved_imports: &HashMap<ModulePathKey, InlineBodyImportResolution>,
-    files: &HashMap<DagId, LoadedFile>,
-) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
-    for decl in declarations {
-        let DeclKind::Include(include) = &decl.kind else {
-            continue;
-        };
-        let Some(prefix) = instantiated_include_prefix(include) else {
-            continue;
-        };
-        let Some(InlineBodyImportResolution::Resolved(file_target)) =
-            resolved_imports.get(&ModulePathKey::from_path(&include.path))
+        let Some(file_target) =
+            resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
         else {
             continue;
         };
@@ -374,17 +366,18 @@ fn module_declarations<'a>(
     })
 }
 
-fn register_file_module_imports(
+fn register_module_imports(
     resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
     owner: &DagId,
     declarations: &[Declaration],
-    resolved_imports: &HashMap<ModulePathKey, DagId>,
+    resolved_imports: &impl ResolvedModuleLookup,
     files: &HashMap<DagId, LoadedFile>,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
     for decl in declarations {
         match &decl.kind {
             DeclKind::Import(import) => {
-                if let Some(target) = resolved_imports.get(&ModulePathKey::from_path(&import.path))
+                if let Some(target) =
+                    resolved_imports.resolved_target(&ModulePathKey::from_path(&import.path))
                 {
                     resolver.register_import(
                         owner,
@@ -395,7 +388,8 @@ fn register_file_module_imports(
                 }
             }
             DeclKind::Include(include) => {
-                if let Some(target) = resolved_imports.get(&ModulePathKey::from_path(&include.path))
+                if let Some(target) =
+                    resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
                 {
                     let synthetic_owner = instantiated_include_prefix(include)
                         .map(|prefix| owner.child(prefix.as_str()));
@@ -406,31 +400,6 @@ fn register_file_module_imports(
                 }
             }
             _ => {}
-        }
-    }
-    Ok(())
-}
-
-fn register_inline_module_imports(
-    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
-    owner: &DagId,
-    declarations: &[Declaration],
-    resolved_imports: &HashMap<ModulePathKey, InlineBodyImportResolution>,
-    files: &HashMap<DagId, LoadedFile>,
-) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
-    for decl in declarations {
-        let DeclKind::Import(import) = &decl.kind else {
-            continue;
-        };
-        if let Some(InlineBodyImportResolution::Resolved(target)) =
-            resolved_imports.get(&ModulePathKey::from_path(&import.path))
-        {
-            resolver.register_import(
-                owner,
-                &import.path,
-                &import.kind,
-                &module_resolver_target_for_path(&import.path, target, files),
-            )?;
         }
     }
     Ok(())
@@ -754,6 +723,24 @@ fn collect_inline_dag_names(declarations: &[Declaration]) -> HashSet<String> {
         .collect()
 }
 
+fn collect_inline_dag_ids(
+    declarations: &[Declaration],
+    lexical_parent_id: &DagId,
+) -> HashSet<DagId> {
+    declarations
+        .iter()
+        .flat_map(|decl| match &decl.kind {
+            DeclKind::Dag(dag) => {
+                let dag_id = lexical_parent_id.child(dag.name.value.as_str());
+                let mut ids = collect_inline_dag_ids(&dag.body, &dag_id);
+                ids.insert(dag_id);
+                ids
+            }
+            _ => HashSet::new(),
+        })
+        .collect()
+}
+
 fn inline_dag_dependency_paths(declarations: &[Declaration]) -> Vec<&ModulePath> {
     declarations
         .iter()
@@ -807,8 +794,10 @@ fn lift_inline_dags<F: FileSystemReader>(
         .and_then(|s| s.to_str())
         .unwrap_or("");
     let mut out = Vec::new();
+    let same_file_dag_ids = collect_inline_dag_ids(&ast.declarations, self_dag_id);
     let context = InlineLiftContext {
         file_dag_id: self_dag_id,
+        same_file_dag_ids: &same_file_dag_ids,
         canonical_path,
         parent_dir,
         project_root,
@@ -824,6 +813,7 @@ fn lift_inline_dags<F: FileSystemReader>(
 
 struct InlineLiftContext<'a, F: FileSystemReader> {
     file_dag_id: &'a DagId,
+    same_file_dag_ids: &'a HashSet<DagId>,
     canonical_path: &'a Path,
     parent_dir: &'a Path,
     project_root: &'a Path,
@@ -846,7 +836,7 @@ fn lift_inline_dags_from_declarations<F: FileSystemReader>(
         };
         let name = dag.name.value.to_string();
         let dag_id = lexical_parent_id.child(name.as_str());
-        let resolved_imports = resolve_inline_body_imports(&dag.body, context);
+        let resolved_imports = resolve_inline_body_imports(&dag.body, &dag_id, context);
         out.push(LoadedDag {
             dag_id: dag_id.clone(),
             parent_dag_id: context.file_dag_id.clone(),
@@ -860,25 +850,51 @@ fn lift_inline_dags_from_declarations<F: FileSystemReader>(
 
 fn resolve_inline_body_imports<F: FileSystemReader>(
     body: &[Declaration],
+    lexical_parent_id: &DagId,
     context: &InlineLiftContext<'_, F>,
 ) -> HashMap<ModulePathKey, InlineBodyImportResolution> {
     body.iter()
         .filter_map(|body_decl| match &body_decl.kind {
             DeclKind::Import(import_decl) => Some(&import_decl.path),
+            DeclKind::Include(include_decl) => Some(&include_decl.path),
             _ => None,
         })
         .map(|path| {
             let key = ModulePathKey::from_path(path);
-            let resolution = resolve_inline_body_import(path, context);
+            let resolution = resolve_inline_body_import(path, lexical_parent_id, context);
             (key, resolution)
         })
         .collect()
 }
 
+fn resolve_same_file_inline_dag_path(
+    path: &ModulePath,
+    lexical_parent_id: &DagId,
+    same_file_dag_ids: &HashSet<DagId>,
+) -> Option<DagId> {
+    let [leaf] = path.segments() else {
+        return None;
+    };
+    let child = lexical_parent_id.child(leaf.name.as_str());
+    if same_file_dag_ids.contains(&child) {
+        return Some(child);
+    }
+    lexical_parent_id.parent().and_then(|parent| {
+        let sibling = parent.child(leaf.name.as_str());
+        same_file_dag_ids.contains(&sibling).then_some(sibling)
+    })
+}
+
 fn resolve_inline_body_import<F: FileSystemReader>(
     path: &ModulePath,
+    lexical_parent_id: &DagId,
     context: &InlineLiftContext<'_, F>,
 ) -> InlineBodyImportResolution {
+    if let Some(target) =
+        resolve_same_file_inline_dag_path(path, lexical_parent_id, context.same_file_dag_ids)
+    {
+        return InlineBodyImportResolution::Resolved(target);
+    }
     // Single-segment file-stem reference — Concept 7 self-import.
     if path.segments.len() == 1 && path.segments[0].name == context.file_stem {
         return InlineBodyImportResolution::Resolved(context.file_dag_id.clone());
@@ -912,12 +928,14 @@ fn resolve_inline_body_import<F: FileSystemReader>(
 /// (Concept 7) can be detected.
 fn lift_inline_dags_by_stem(ast: &File, path: &Path, self_dag_id: &DagId) -> Vec<LoadedDag> {
     let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let same_file_dag_ids = collect_inline_dag_ids(&ast.declarations, self_dag_id);
     let mut out = Vec::new();
     lift_inline_dags_by_stem_from_declarations(
         &ast.declarations,
         self_dag_id,
         self_dag_id,
         file_stem,
+        &same_file_dag_ids,
         &mut out,
     );
     out
@@ -928,6 +946,7 @@ fn lift_inline_dags_by_stem_from_declarations(
     file_dag_id: &DagId,
     lexical_parent_id: &DagId,
     file_stem: &str,
+    same_file_dag_ids: &HashSet<DagId>,
     out: &mut Vec<LoadedDag>,
 ) {
     for decl in declarations {
@@ -941,17 +960,25 @@ fn lift_inline_dags_by_stem_from_declarations(
             .iter()
             .filter_map(|body_decl| match &body_decl.kind {
                 DeclKind::Import(import_decl) => Some(&import_decl.path),
+                DeclKind::Include(include_decl) => Some(&include_decl.path),
                 _ => None,
             })
             .map(|import_path| {
                 let key = ModulePathKey::from_path(import_path);
-                let resolution = if import_path.segments.len() == 1
-                    && import_path.segments[0].name == file_stem
-                {
-                    InlineBodyImportResolution::Resolved(file_dag_id.clone())
-                } else {
-                    InlineBodyImportResolution::Unresolved
-                };
+                let resolution =
+                    resolve_same_file_inline_dag_path(import_path, &dag_id, same_file_dag_ids)
+                        .map_or_else(
+                            || {
+                                if import_path.segments.len() == 1
+                                    && import_path.segments[0].name == file_stem
+                                {
+                                    InlineBodyImportResolution::Resolved(file_dag_id.clone())
+                                } else {
+                                    InlineBodyImportResolution::Unresolved
+                                }
+                            },
+                            InlineBodyImportResolution::Resolved,
+                        );
                 (key, resolution)
             })
             .collect();
@@ -962,7 +989,14 @@ fn lift_inline_dags_by_stem_from_declarations(
             body: dag.body.clone(),
             resolved_imports,
         });
-        lift_inline_dags_by_stem_from_declarations(&dag.body, file_dag_id, &dag_id, file_stem, out);
+        lift_inline_dags_by_stem_from_declarations(
+            &dag.body,
+            file_dag_id,
+            &dag_id,
+            file_stem,
+            same_file_dag_ids,
+            out,
+        );
     }
 }
 
