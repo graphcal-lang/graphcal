@@ -51,15 +51,23 @@ impl ParentValueDecls {
     }
 }
 
+/// Parent-file context needed while compiling its inline DAG bodies.
+#[derive(Clone, Copy)]
+pub struct ParentDagContext<'a> {
+    pub dag_id: &'a DagId,
+    pub ast: &'a File,
+    pub pub_names: &'a HashSet<DeclName>,
+}
+
 /// Compile each inline `dag { ... }` body lifted by the loader into a
 /// `DagTIR` and insert it into `tir.dags`, keyed by the loader-supplied
 /// canonical [`DagId`](DagId).
 ///
-/// `parent_pub_names` is captured from the IR before module-aware TIR
+/// `parent.pub_names` is captured from the IR before module-aware TIR
 /// construction consumes it. Each [`LoadedDag`] supplies the body in source order plus its
 /// pre-resolved imports map (path display → [`DagId`]), letting
 /// [`preprocess_dag_body_self_imports`] detect self-imports by structured
-/// equality against `parent_dag_id` rather than a file-level path-set.
+/// equality against `parent.dag_id` rather than a file-level path-set.
 ///
 /// # Errors
 ///
@@ -69,9 +77,7 @@ impl ParentValueDecls {
 pub fn compile_inline_dag_bodies(
     tir: &mut TIR,
     src: &NamedSource<Arc<String>>,
-    parent_dag_id: &DagId,
-    parent_ast: &File,
-    parent_pub_names: &HashSet<DeclName>,
+    parent: ParentDagContext<'_>,
     inline_dags: &[LoadedDag],
     module_resolver: &ModuleResolver,
     module_types: &ModuleTypeRegistry,
@@ -79,7 +85,7 @@ pub fn compile_inline_dag_bodies(
     // Read parent's value decls directly from the (already type-resolved)
     // root DagTIR. With the flat registry, `tir.root()` IS the parent
     // file's body — no separate `ParentValueKind` table needed.
-    let parent_values = classify_value_decls_in_tir(tir, parent_pub_names, src)?;
+    let parent_values = classify_value_decls_in_tir(tir, parent.pub_names, src)?;
 
     for loaded_dag in inline_dags {
         let DagBodySelfImports {
@@ -89,8 +95,8 @@ pub fn compile_inline_dag_bodies(
             stripped_body,
         } = preprocess_dag_body_self_imports(
             &loaded_dag.body,
-            parent_dag_id,
-            parent_ast,
+            parent.dag_id,
+            parent.ast,
             &parent_values,
             &loaded_dag.resolved_imports,
             src,
@@ -103,7 +109,7 @@ pub fn compile_inline_dag_bodies(
             imported_decl_types,
             imported_value_sources,
             src,
-            parent_dag_id,
+            parent.dag_id,
         )?;
         let mut compiled_dag = type_resolve_single_with_modules(
             dag_body_ir,
@@ -223,23 +229,27 @@ pub fn preprocess_dag_body_self_imports(
                             // separate default item.
                         }
                         ImportItemNamespace::Default => {
-                            if let Some(dt) = parent_values.public_const_type(orig_name.as_str()) {
-                                let scoped = ScopedName::local(local_name);
-                                names.const_names.push((scoped.clone(), span));
-                                decl_types.insert(scoped.clone(), dt.clone());
-                                value_sources.insert(
-                                    scoped,
-                                    ImportedValueSource {
-                                        dag_id: parent_dag_id.clone(),
-                                        source_name: DeclName::new(orig_name),
-                                    },
-                                );
-                            } else if parent_values.is_public_runtime(orig_name.as_str()) {
-                                return Err(GraphcalError::ImportRuntimeItem {
-                                    name: orig_name.to_string(),
-                                    src: src.clone(),
-                                    span: span.into(),
-                                });
+                            match parent_values.public_const_type(orig_name.as_str()) {
+                                Some(dt) => {
+                                    let scoped = ScopedName::local(local_name);
+                                    names.const_names.push((scoped.clone(), span));
+                                    decl_types.insert(scoped.clone(), dt.clone());
+                                    value_sources.insert(
+                                        scoped,
+                                        ImportedValueSource {
+                                            dag_id: parent_dag_id.clone(),
+                                            source_name: DeclName::new(orig_name),
+                                        },
+                                    );
+                                }
+                                None if parent_values.is_public_runtime(orig_name.as_str()) => {
+                                    return Err(GraphcalError::ImportRuntimeItem {
+                                        name: orig_name.to_string(),
+                                        src: src.clone(),
+                                        span: span.into(),
+                                    });
+                                }
+                                None => {}
                             }
                         }
                     }

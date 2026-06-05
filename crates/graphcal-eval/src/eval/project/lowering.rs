@@ -119,9 +119,11 @@ pub(in crate::eval::project) fn lower_and_finalize(
     crate::inline_dag::compile_inline_dag_bodies(
         &mut tir,
         file_src,
-        file_dag_id,
-        &importer_loaded.ast,
-        &parent_pub_names,
+        crate::inline_dag::ParentDagContext {
+            dag_id: file_dag_id,
+            ast: &importer_loaded.ast,
+            pub_names: &parent_pub_names,
+        },
         &importer_loaded.inline_dags,
         &module_resolver,
         &module_types,

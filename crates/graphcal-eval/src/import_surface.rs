@@ -13,7 +13,7 @@ use graphcal_compiler::desugar::resolved_ast::{
 use graphcal_compiler::syntax::names::DeclName;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProjectDeclKind {
+pub enum ProjectDeclKind {
     Param,
     Node,
     Const,
@@ -29,12 +29,12 @@ pub(crate) enum ProjectDeclKind {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ProjectDeclIdentity<'a> {
-    pub(crate) name: &'a str,
-    pub(crate) kind: ProjectDeclKind,
+pub struct ProjectDeclIdentity<'a> {
+    pub name: &'a str,
+    pub kind: ProjectDeclKind,
 }
 
-pub(crate) fn decl_identity(decl: &Declaration) -> Option<ProjectDeclIdentity<'_>> {
+pub fn decl_identity(decl: &Declaration) -> Option<ProjectDeclIdentity<'_>> {
     let (name, kind) = match &decl.kind {
         DeclKind::Param(p) => (p.name.value.as_str(), ProjectDeclKind::Param),
         DeclKind::Node(n) => (n.name.value.as_str(), ProjectDeclKind::Node),
@@ -55,7 +55,7 @@ pub(crate) fn decl_identity(decl: &Declaration) -> Option<ProjectDeclIdentity<'_
     Some(ProjectDeclIdentity { name, kind })
 }
 
-pub(crate) fn decl_is_public(decl: &Declaration) -> bool {
+pub fn decl_is_public(decl: &Declaration) -> bool {
     match &decl.kind {
         DeclKind::Param(_) => true,
         DeclKind::Node(d) => d.visibility.is_public(),
@@ -89,7 +89,7 @@ pub(crate) fn decl_is_public(decl: &Declaration) -> bool {
 /// from X; that form is resolved transitively during import processing
 /// (the enumeration requires X's own `pub_names`, which this pure AST
 /// walk does not have), so it is not expanded here.
-pub(crate) fn extract_pub_names(file: &File) -> HashSet<DeclName> {
+pub fn extract_pub_names(file: &File) -> HashSet<DeclName> {
     let mut pub_names = HashSet::new();
     for decl in &file.declarations {
         if !decl_is_public(decl) {
@@ -129,23 +129,23 @@ pub(crate) fn extract_pub_names(file: &File) -> HashSet<DeclName> {
 
 /// Visibility-aware result of looking up an importable item in a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ImportItemPresence {
+pub enum ImportItemPresence {
     Missing,
     Private,
     Public,
 }
 
 impl ImportItemPresence {
-    pub(crate) const fn is_present(self) -> bool {
+    pub const fn is_present(self) -> bool {
         matches!(self, Self::Private | Self::Public)
     }
 
-    pub(crate) const fn is_public(self) -> bool {
+    pub const fn is_public(self) -> bool {
         matches!(self, Self::Public)
     }
 }
 
-pub(crate) fn file_import_item_presence(
+pub fn file_import_item_presence(
     file: &File,
     name: &str,
     namespace: ImportItemNamespace,
@@ -252,19 +252,11 @@ fn selective_include_reexport_matches(
     )
 }
 
-pub(crate) fn file_has_import_item(
-    file: &File,
-    name: &str,
-    namespace: ImportItemNamespace,
-) -> bool {
+pub fn file_has_import_item(file: &File, name: &str, namespace: ImportItemNamespace) -> bool {
     file_import_item_presence(file, name, namespace).is_present()
 }
 
-pub(crate) fn file_exports_import_item(
-    file: &File,
-    name: &str,
-    namespace: ImportItemNamespace,
-) -> bool {
+pub fn file_exports_import_item(file: &File, name: &str, namespace: ImportItemNamespace) -> bool {
     file_import_item_presence(file, name, namespace).is_public()
 }
 
