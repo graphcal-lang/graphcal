@@ -117,9 +117,11 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
             None => continue, // Not an inline DAG — already handled by file-based includes
         };
 
+        let dag_id = file_dag_id.child(dag_name.as_str());
         imports::process_inline_dag_include(
             &imports::InlineDagIncludeTarget {
                 dag_def,
+                dag_id: &dag_id,
                 dag_name,
                 parent_dag_id: file_dag_id,
                 boundary: imports::IncludeVisibilityBoundary::Local,
@@ -184,9 +186,11 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
         // Inline DAGs are strictly isolated, so same-file and cross-file
         // share the same processing. The dag's `parent` is the file where it
         // was *defined* (target_loaded), not the importing file.
+        let target_dag_id = target_loaded.dag_id.child(dag_name.as_str());
         imports::process_inline_dag_include(
             &imports::InlineDagIncludeTarget {
                 dag_def: target_dag_def,
+                dag_id: &target_dag_id,
                 dag_name,
                 parent_dag_id: &target_loaded.dag_id,
                 boundary: imports::IncludeVisibilityBoundary::CrossModule,

@@ -989,21 +989,6 @@ impl ModuleResolver {
             if let Some(imported) = scope.selected_indexes.get(atom.as_str()) {
                 return Ok(imported.resolved().clone());
             }
-            if let Some(resolved) =
-                self.resolve_parent_type_symbol(owner, atom, ModuleSymbols::indexes, |scope| {
-                    &scope.selected_indexes
-                })
-            {
-                return Ok(resolved);
-            }
-            if let Some(resolved) = self.resolve_unique_module_alias_type_symbol(
-                owner,
-                atom,
-                ModuleSymbols::indexes,
-                |scope| &scope.selected_indexes,
-            )? {
-                return Ok(resolved);
-            }
             return Err(ModuleResolveError::UnknownName {
                 owner: owner.clone(),
                 namespace: namespace::Index::DISPLAY_NAME,
@@ -1127,33 +1112,6 @@ impl ModuleResolver {
                 candidates.push(resolved.clone());
             }
         }
-        if let Some(parent) = owner.parent()
-            && self.modules.contains_key(&parent)
-        {
-            let parent_symbols = self.module_symbols(&parent)?;
-            let parent_scope = self.module_scope(&parent)?;
-            for symbol in parent_symbols.indexes.values() {
-                if symbol.variants().contains_key(variant.as_str()) {
-                    candidates.push(symbol.resolved().clone());
-                }
-            }
-            for imported in parent_scope.selected_indexes.values() {
-                let resolved = imported.resolved();
-                let index_owner = resolved.owner().clone();
-                let index_name = IndexName::from_atom(resolved.atom().clone());
-                let Some(symbol) = self
-                    .module_symbols(&index_owner)?
-                    .indexes
-                    .get(index_name.as_str())
-                else {
-                    continue;
-                };
-                if symbol.variants().contains_key(variant.as_str()) {
-                    candidates.push(resolved.clone());
-                }
-            }
-        }
-
         match candidates.as_slice() {
             [] => Err(ModuleResolveError::UnknownName {
                 owner: owner.clone(),
@@ -1497,101 +1455,7 @@ impl ModuleResolver {
         Ns: NameNamespace,
         S: ModuleSymbolLookup<Ns>,
     {
-        match self.resolve_symbol_path(owner, path, local_symbols, selected_symbols) {
-            Ok(resolved) => Ok(resolved),
-            Err(err) => {
-                if let Some(atom) = path.as_bare() {
-                    if let Some(resolved) = self.resolve_parent_type_symbol(
-                        owner,
-                        atom,
-                        local_symbols,
-                        selected_symbols,
-                    ) {
-                        return Ok(resolved);
-                    }
-                    if let Some(resolved) = self.resolve_unique_module_alias_type_symbol(
-                        owner,
-                        atom,
-                        local_symbols,
-                        selected_symbols,
-                    )? {
-                        return Ok(resolved);
-                    }
-                }
-                Err(err)
-            }
-        }
-    }
-
-    fn resolve_parent_type_symbol<Ns, S>(
-        &self,
-        owner: &DagId,
-        atom: &NameAtom,
-        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
-        selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
-    ) -> Option<ResolvedName<Ns>>
-    where
-        Ns: NameNamespace,
-        S: ModuleSymbolLookup<Ns>,
-    {
-        let parent = owner.parent()?;
-        let local = self.modules.get(&parent)?;
-        if let Some(symbol) = local_symbols(local).get(atom.as_str()) {
-            return Some(symbol.resolved().clone());
-        }
-        let scope = self.scopes.get(&parent)?;
-        selected_symbols(scope)
-            .get(atom.as_str())
-            .map(|imported| imported.resolved().clone())
-    }
-
-    fn resolve_unique_module_alias_type_symbol<Ns, S>(
-        &self,
-        owner: &DagId,
-        atom: &NameAtom,
-        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
-        selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
-    ) -> Result<Option<ResolvedName<Ns>>, ModuleResolveError>
-    where
-        Ns: NameNamespace,
-        S: ModuleSymbolLookup<Ns>,
-    {
-        let scope = self.module_scope(owner)?;
-        let mut found = None;
-        for alias in scope.module_aliases.values() {
-            let target_symbols = self.module_symbols(alias.target())?;
-            let candidate = local_symbols(target_symbols)
-                .get(atom.as_str())
-                .and_then(|symbol| {
-                    (!alias.access().requires_public() || symbol.visibility().is_public())
-                        .then(|| symbol.resolved().clone())
-                })
-                .or_else(|| {
-                    self.module_scope(alias.target())
-                        .ok()
-                        .and_then(|target_scope| {
-                            selected_symbols(target_scope)
-                                .get(atom.as_str())
-                                .and_then(|imported| {
-                                    (!alias.access().requires_public()
-                                        || imported.visibility().is_public())
-                                    .then(|| imported.resolved().clone())
-                                })
-                        })
-                });
-
-            let Some(candidate) = candidate else {
-                continue;
-            };
-            if found
-                .as_ref()
-                .is_some_and(|existing| existing != &candidate)
-            {
-                return Ok(None);
-            }
-            found = Some(candidate);
-        }
-        Ok(found)
+        self.resolve_symbol_path(owner, path, local_symbols, selected_symbols)
     }
 
     fn resolve_module_qualifier(

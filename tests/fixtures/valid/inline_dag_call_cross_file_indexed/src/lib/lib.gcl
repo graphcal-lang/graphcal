@@ -1,6 +1,8 @@
 pub index Region = { A, B };
 
 pub dag doubler {
+    import lib.lib.{ Region };
+
     param v: Length[Region];
 
     pub node result: Length[Region] = for r: Region { @v[r] * 2.0 };

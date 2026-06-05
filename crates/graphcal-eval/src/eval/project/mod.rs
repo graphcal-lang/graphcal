@@ -254,15 +254,13 @@ pub(in crate::eval::project) enum DeferredDagSource {
         dag_body: graphcal_compiler::desugar::resolved_ast::File,
         /// Imported names collected from `import ..` inside the DAG body.
         dag_imported_names: ImportedValueNames,
+        /// Canonical identity of the included DAG module.
+        dag_id: graphcal_compiler::dag_id::DagId,
         /// [`DagId`](graphcal_compiler::dag_id::DagId) of the file
         /// where this DAG was *defined*. For same-file includes this is
         /// the importer; for cross-file qualified includes it's the target
         /// file.
         parent_dag_id: graphcal_compiler::dag_id::DagId,
-        /// The DAG's bare name (matches the parent file's
-        /// `LoadedDag.name`). May differ from `prefix` when the include
-        /// uses an alias.
-        dag_name: String,
     },
 }
 

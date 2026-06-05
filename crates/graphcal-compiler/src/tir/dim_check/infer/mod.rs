@@ -565,11 +565,15 @@ fn infer_inline_dag_ref(
             span: path.span.into(),
         })?;
 
+    let mut required_param_keys = std::collections::HashSet::new();
     let mut param_decl_types_by_key: HashMap<ResolvedDeclKey, DeclaredType> = HashMap::new();
     for p in &dag_tir.params {
         if let Some(resolved) = dag_tir.resolved_decl_types.get(&p.name) {
             let dt = crate::tir::typed::resolved_to_declared_type(resolved, src)?;
             if let Some(key) = dag_tir.resolved_decl_key_for_local(&p.name) {
+                if p.default_expr.is_none() {
+                    required_param_keys.insert(key.clone());
+                }
                 param_decl_types_by_key.insert(key, dt);
             }
         }
@@ -628,8 +632,8 @@ fn infer_inline_dag_ref(
         }
     }
 
-    let mut missing: Vec<String> = param_decl_types_by_key
-        .keys()
+    let mut missing: Vec<String> = required_param_keys
+        .iter()
         .filter(|p| !bound_resolved_names.contains(*p))
         .map(|p| p.as_str().to_string())
         .collect();

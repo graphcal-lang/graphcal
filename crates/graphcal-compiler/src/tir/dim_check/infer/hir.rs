@@ -3490,6 +3490,7 @@ fn infer_hir_inline_dag_ref(
             span: target.span.into(),
         })?;
 
+    let mut required_param_keys = std::collections::HashSet::new();
     let param_decl_types_by_key: HashMap<ResolvedDeclKey, &crate::tir::typed::ResolvedTypeExpr> =
         dag_tir
             .params
@@ -3505,6 +3506,9 @@ fn infer_hir_inline_dag_ref(
                         src: src.clone(),
                         span: param.span.into(),
                     })?;
+                if param.default_expr.is_none() {
+                    required_param_keys.insert(key.clone());
+                }
                 let resolved = dag_tir
                     .resolved_decl_types
                     .get(&param.name)
@@ -3593,8 +3597,8 @@ fn infer_hir_inline_dag_ref(
         }
     }
 
-    let mut missing: Vec<String> = param_decl_types_by_key
-        .keys()
+    let mut missing: Vec<String> = required_param_keys
+        .iter()
         .filter(|param| !bound_resolved_names.contains(*param))
         .map(|param| param.as_str().to_string())
         .collect();

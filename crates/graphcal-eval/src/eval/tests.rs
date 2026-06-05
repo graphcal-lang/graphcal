@@ -1895,6 +1895,7 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
          import collide.a as a;\n\
          import collide.b as b;\n\
          dag pick_a {\n\
+             import collide.a.{ Phase };\n\
              param series: Dimensionless[Phase];\n\
              pub node burn: Dimensionless = @series[Phase.Burn];\n\
              pub node echoed: Dimensionless[Phase] = for p: Phase { @series[p] };\n\
@@ -2409,6 +2410,185 @@ fn project_injectable_index_expected_fail() {
 }
 
 // ---- Inline DAG tests (Phase 5) ----
+
+fn setup_inline_semantics_project(
+    files: &[(&str, &str)],
+    root_rel: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"sem\"\n",
+    )
+    .expect("write manifest");
+    for (rel, source) in files {
+        let path = dir.path().join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create fixture parent");
+        }
+        std::fs::write(path, source).expect("write fixture source");
+    }
+    let root = dir.path().join(root_rel);
+    (dir, root)
+}
+
+#[test]
+fn inline_dag_rejects_parent_type_without_import() {
+    let source = "\
+pub dim Speed = Length / Time;
+
+// `Speed` is deliberately not imported by the DAG body.
+dag analyze {
+    param v: Speed;
+    pub node out: Speed = @v;
+}
+
+param input: Speed = 1.0 m/s;
+node result: Speed = @analyze(v: @input).out;
+";
+
+    let result = compile_and_eval_named(source, "test.gcl");
+    assert!(
+        result.is_err(),
+        "inline DAG body should not inherit parent type-system names: {result:?}"
+    );
+}
+
+#[test]
+fn inline_dag_body_import_drives_dependency_loading() {
+    let (_dir, root) = setup_inline_semantics_project(
+        &[
+            (
+                "src/sem/lib.gcl",
+                "pub const node scale: Dimensionless = 3.0;\n",
+            ),
+            (
+                "src/sem/main.gcl",
+                "\
+dag scaled {
+    import sem.lib.{ scale };
+    param x: Dimensionless;
+    pub node out: Dimensionless = @x * @scale;
+}
+node result: Dimensionless = @scaled(x: 2.0).out;
+",
+            ),
+        ],
+        "src/sem/main.gcl",
+    );
+
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    assert_eq!(
+        project.files.len(),
+        2,
+        "inline DAG body import should load its dependency"
+    );
+}
+
+#[test]
+fn inline_dag_body_value_import_is_available_to_call() {
+    let (_dir, root) = setup_inline_semantics_project(
+        &[
+            (
+                "src/sem/lib.gcl",
+                "pub const node scale: Dimensionless = 3.0;\n",
+            ),
+            (
+                "src/sem/main.gcl",
+                "\
+import sem.lib as lib;
+
+dag scaled {
+    import sem.lib.{ scale };
+    param x: Dimensionless;
+    pub node out: Dimensionless = @x * @scale;
+}
+node result: Dimensionless = @scaled(x: 2.0).out;
+",
+            ),
+        ],
+        "src/sem/main.gcl",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let value = find_value(&result, "result");
+    assert!((value - 6.0).abs() < 1e-10, "result = {value}");
+}
+
+#[test]
+fn include_inside_inline_dag_body_is_available_to_call() {
+    let source = "\
+dag inner {
+    param x: Dimensionless;
+    pub node y: Dimensionless = @x + 1.0;
+}
+
+dag outer {
+    param z: Dimensionless;
+    include inner(x: @z).{ y };
+    pub node out: Dimensionless = @y + 1.0;
+}
+
+node result: Dimensionless = @outer(z: 2.0).out;
+";
+
+    let result = compile_and_eval(source).unwrap();
+    let value = find_value(&result, "result");
+    assert!((value - 4.0).abs() < 1e-10, "result = {value}");
+}
+
+#[test]
+fn nested_inline_dag_is_compilable_from_parent_body() {
+    let source = "\
+dag outer {
+    dag inner {
+        pub node result: Dimensionless = 4.0;
+    }
+    pub node out: Dimensionless = @inner().result + 1.0;
+}
+
+node result: Dimensionless = @outer().out;
+";
+
+    let result = compile_and_eval(source).unwrap();
+    let value = find_value(&result, "result");
+    assert!((value - 5.0).abs() < 1e-10, "result = {value}");
+}
+
+#[test]
+fn inline_dag_include_and_call_share_body_import_semantics() {
+    let (_dir, root) = setup_inline_semantics_project(
+        &[
+            (
+                "src/sem/lib.gcl",
+                "pub const node scale: Dimensionless = 2.0;\n",
+            ),
+            (
+                "src/sem/main.gcl",
+                "\
+dag scaled {
+    import sem.lib.{ scale };
+    param x: Dimensionless;
+    pub node out: Dimensionless = @x * @scale;
+}
+
+include scaled(x: 3.0).{ out as included };
+node called: Dimensionless = @scaled(x: 3.0).out;
+node difference: Dimensionless = @included - @called;
+",
+            ),
+        ],
+        "src/sem/main.gcl",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let included = find_value(&result, "included");
+    let called = find_value(&result, "called");
+    let difference = find_value(&result, "difference");
+    assert!((included - 6.0).abs() < 1e-10, "included = {included}");
+    assert!((called - 6.0).abs() < 1e-10, "called = {called}");
+    assert!(difference.abs() < 1e-10, "difference = {difference}");
+}
 
 #[test]
 fn inline_dag_basic_selective() {
@@ -3057,6 +3237,8 @@ fn eval_inline_dag_call_indexed_output_projection() {
 pub index Region = { A, B };
 
 dag doubler {
+    import input.{ Region };
+
     param v: Length[Region];
     pub node result: Length[Region] = for r: Region { @v[r] * 2.0 };
 }

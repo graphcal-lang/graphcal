@@ -2314,10 +2314,26 @@ fn collect_resolved_decl_bindings(
                 Span::new(0, 0),
             )
         })?;
-        let resolved = ctx
-            .resolver
-            .resolve_decl_path(ctx.owner, &path)
-            .map_err(|err| module_resolve_error(&err, src, Span::new(0, 0)))?;
+        let resolved = match ctx.resolver.resolve_decl_path(ctx.owner, &path) {
+            Ok(resolved) => resolved,
+            Err(_err)
+                if imported_values.contains_key(name) || imported_decl_types.contains_key(name) =>
+            {
+                // Instantiated inline-DAG includes can carry hidden imported
+                // values from the included DAG body into the importer. Those
+                // aliases are not import declarations in the importer's module
+                // scope, but they are explicit IR inputs, so bind them as
+                // synthetic declarations owned by the current DAG.
+                let synthetic_owner = name
+                    .qualifier()
+                    .iter()
+                    .fold(ctx.owner.clone(), |owner, segment| {
+                        owner.child(segment.as_ref())
+                    });
+                ResolvedName::from_def(synthetic_owner, DeclName::new(name.member()))
+            }
+            Err(err) => return Err(module_resolve_error(&err, src, Span::new(0, 0))),
+        };
         bindings.insert(name.clone(), resolved);
     }
 

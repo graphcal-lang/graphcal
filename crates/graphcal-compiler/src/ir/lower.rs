@@ -391,6 +391,40 @@ pub fn lower_to_builder_with_imported_value_decls(
 )]
 #[expect(
     clippy::too_many_arguments,
+    reason = "dag-module lowering threads pre-processed import metadata + optional parent registry"
+)]
+pub fn lower_dag_module_to_builder_with_imported_value_decls(
+    dag_body: &File,
+    parent_registry: Option<&Registry>,
+    imported_names: &ImportedValueNames,
+    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_decl_types: HashMap<ScopedName, DeclaredType>,
+    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    src: &NamedSource<Arc<String>>,
+    dag_id: &crate::dag_id::DagId,
+) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+    let resolved = resolve_with_imported_values(dag_body, src, imported_names)?;
+    let type_anns = extract_type_annotations(dag_body);
+
+    build_ir_from_resolved(
+        dag_body,
+        src,
+        resolved,
+        type_anns,
+        imported_values,
+        imported_decl_types,
+        imported_value_sources,
+        dag_id,
+        parent_registry,
+    )
+}
+
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
+#[expect(
+    clippy::too_many_arguments,
     reason = "dag-body lowering threads pre-processed import metadata + parent registry"
 )]
 pub fn lower_dag_body_to_ir(
@@ -407,20 +441,15 @@ pub fn lower_dag_body_to_ir(
         declarations: stripped_body.to_vec(),
     };
     let dag_dag_id = parent_dag_id.child(dag_name);
-
-    let resolved = resolve_with_imported_values(&virtual_file, src, imported_names)?;
-    let type_anns = extract_type_annotations(&virtual_file);
-
-    let (builder, unfrozen) = build_ir_from_resolved(
+    let (builder, unfrozen) = lower_dag_module_to_builder_with_imported_value_decls(
         &virtual_file,
-        src,
-        resolved,
-        type_anns,
+        Some(parent_registry),
+        imported_names,
         HashMap::new(),
         imported_decl_types,
         imported_value_sources,
+        src,
         &dag_dag_id,
-        Some(parent_registry),
     )?;
     Ok(unfrozen.freeze(builder.build()))
 }
@@ -812,6 +841,24 @@ impl UnfrozenIR {
             }
         }
 
+        let mut all_dep_names = dep_names.clone();
+        all_dep_names.extend(
+            dep.imported_values
+                .keys()
+                .map(|name| name.member().to_string()),
+        );
+        all_dep_names.extend(
+            dep.imported_decl_types
+                .keys()
+                .map(|name| name.member().to_string()),
+        );
+        all_dep_names.extend(
+            dep.imported_value_sources
+                .keys()
+                .map(|name| name.member().to_string()),
+        );
+        let dep_names = &all_dep_names;
+
         // Merge consts
         for mut entry in dep.consts {
             substitute_index_names(&mut entry.expr, index_bindings);
@@ -1076,22 +1123,24 @@ impl UnfrozenIR {
             }
         }
 
-        // Propagate the dep's imported-value metadata. An inline DAG body
-        // whose `import <self>.{...}` resolves to a different file leaves
-        // its parent-file value bindings on `dep.imported_values` /
-        // `dep.imported_value_sources`; merging the dag into the importer
-        // requires those entries to ride along so eval can resolve the
-        // local alias (e.g., `radius` in `prefix.result = @radius * ...`).
-        // Keys keep their original `ScopedName` (they were not in
-        // `dep_names` and therefore not prefixed in expressions).
+        // Propagate the dep's imported-value metadata. Hidden imports used by
+        // the dep's expressions are instance-scoped together with the merged
+        // expressions, preventing two DAG include instances from sharing an
+        // unqualified synthetic name.
         for (name, value) in dep.imported_values {
-            self.imported_values.entry(name).or_insert(value);
+            self.imported_values
+                .entry(prefix_dep(&name, prefix, dep_names))
+                .or_insert(value);
         }
         for (name, dt) in dep.imported_decl_types {
-            self.imported_decl_types.entry(name).or_insert(dt);
+            self.imported_decl_types
+                .entry(prefix_dep(&name, prefix, dep_names))
+                .or_insert(dt);
         }
         for (name, source) in dep.imported_value_sources {
-            self.imported_value_sources.entry(name).or_insert(source);
+            self.imported_value_sources
+                .entry(prefix_dep(&name, prefix, dep_names))
+                .or_insert(source);
         }
         Ok(())
     }
