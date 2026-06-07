@@ -1,0 +1,8 @@
+Cargo.lock
+*.snap
+
+# Ignoring test files for now
+/tests
+
+# Ignoring docs for now
+/docs
