@@ -1524,16 +1524,30 @@ fn infer_hir_binop(
     }
 }
 
-fn hir_nat_to_linear_form(expr: &hir::NatExpr) -> NatLinearForm {
+fn hir_nat_to_linear_form(
+    expr: &hir::NatExpr,
+) -> Result<NatLinearForm, crate::syntax::nat::NatOverflowError> {
     match expr {
-        hir::NatExpr::Literal(n, _) => NatLinearForm::from_constant(*n),
-        hir::NatExpr::Param(param) => NatLinearForm::from_var(param.value.name.clone()),
+        hir::NatExpr::Literal(n, _) => Ok(NatLinearForm::from_constant(*n)),
+        hir::NatExpr::Param(param) => Ok(NatLinearForm::from_var(param.value.name.clone())),
         hir::NatExpr::Add(lhs, rhs, _) => {
-            hir_nat_to_linear_form(lhs).add(&hir_nat_to_linear_form(rhs))
+            hir_nat_to_linear_form(lhs)?.add(&hir_nat_to_linear_form(rhs)?)
         }
         hir::NatExpr::Mul(lhs, rhs, _) => {
-            hir_nat_to_linear_form(lhs).mul(&hir_nat_to_linear_form(rhs))
+            hir_nat_to_linear_form(lhs)?.mul(&hir_nat_to_linear_form(rhs)?)
         }
+    }
+}
+
+fn nat_overflow_error(
+    err: crate::syntax::nat::NatOverflowError,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    GraphcalError::EvalError {
+        message: err.to_string(),
+        src: src.clone(),
+        span: span.into(),
     }
 }
 
@@ -1578,36 +1592,37 @@ fn infer_hir_for_comp(
 ) -> Result<InferredType, GraphcalError> {
     let mut inner_locals = local_types.clone();
     for binding in bindings {
-        let var_type =
-            match &binding.index {
-                hir::expr::ForBindingIndex::Named(index) => {
-                    let index_identity = InferredIndex::from_resolved(index.value.clone());
-                    let idx_def = index_def_for_inferred(&index_identity, dag, registry)
-                        .ok_or_else(|| GraphcalError::UnknownIndex {
+        let var_type = match &binding.index {
+            hir::expr::ForBindingIndex::Named(index) => {
+                let index_identity = InferredIndex::from_resolved(index.value.clone());
+                let idx_def =
+                    index_def_for_inferred(&index_identity, dag, registry).ok_or_else(|| {
+                        GraphcalError::UnknownIndex {
                             name: index_identity.name(),
                             src: src.clone(),
                             span: index.span.into(),
-                        })?;
-                    match &idx_def.kind {
-                        crate::registry::types::IndexKind::Named { .. }
-                        | crate::registry::types::IndexKind::RequiredNamed => {
-                            InferredType::Label(index_identity)
                         }
-                        crate::registry::types::IndexKind::Range(data) => {
-                            InferredType::Scalar(data.dimension.clone())
-                        }
-                        crate::registry::types::IndexKind::RequiredRange { dimension } => {
-                            InferredType::Scalar(dimension.clone())
-                        }
-                        crate::registry::types::IndexKind::NatRange { size } => {
-                            InferredType::Fin(NatLinearForm::from_constant(size.get() as u64))
-                        }
+                    })?;
+                match &idx_def.kind {
+                    crate::registry::types::IndexKind::Named { .. }
+                    | crate::registry::types::IndexKind::RequiredNamed => {
+                        InferredType::Label(index_identity)
+                    }
+                    crate::registry::types::IndexKind::Range(data) => {
+                        InferredType::Scalar(data.dimension.clone())
+                    }
+                    crate::registry::types::IndexKind::RequiredRange { dimension } => {
+                        InferredType::Scalar(dimension.clone())
+                    }
+                    crate::registry::types::IndexKind::NatRange { size } => {
+                        InferredType::Fin(NatLinearForm::from_constant(size.get() as u64))
                     }
                 }
-                hir::expr::ForBindingIndex::Range { arg, .. } => {
-                    InferredType::Fin(hir_nat_to_linear_form(arg))
-                }
-            };
+            }
+            hir::expr::ForBindingIndex::Range { arg, span } => InferredType::Fin(
+                hir_nat_to_linear_form(arg).map_err(|err| nat_overflow_error(err, src, *span))?,
+            ),
+        };
         inner_locals.insert(binding.local.id, var_type);
     }
     let mut result = infer_hir_type(
@@ -1627,7 +1642,9 @@ fn infer_hir_for_comp(
                 InferredIndex::from_resolved(index.value.clone())
             }
             hir::expr::ForBindingIndex::Range { arg, span } => {
-                InferredIndex::from_nat_range_form(hir_nat_to_linear_form(arg))
+                let form = hir_nat_to_linear_form(arg)
+                    .map_err(|err| nat_overflow_error(err, src, *span))?;
+                InferredIndex::from_nat_range_form(form)
                     .map_err(|err| nat_range_error(err, src, *span))?
             }
         };
@@ -2330,7 +2347,9 @@ fn infer_hir_generic_type_arg(
                         });
                     }
                     hir::IndexRef::NatExpr(nat) => {
-                        InferredIndex::from_nat_range_form(hir_nat_to_linear_form(nat))
+                        let form = hir_nat_to_linear_form(nat)
+                            .map_err(|err| nat_overflow_error(err, src, nat.span()))?;
+                        InferredIndex::from_nat_range_form(form)
                             .map_err(|err| nat_range_error(err, src, nat.span()))?
                     }
                 };
@@ -2593,7 +2612,10 @@ fn resolve_constructor_generic_args(
                 return Err(GraphcalError::EvalError {
                     message: format!(
                         "constructor generic argument `{}` for Nat parameter `{}` cannot be used in constructor value types",
-                        hir_nat_to_linear_form(nat_expr).format(),
+                        // The argument is rejected either way; render a
+                        // placeholder if its Nat arithmetic overflows.
+                        hir_nat_to_linear_form(nat_expr)
+                            .map_or_else(|_| "<overflow>".to_string(), |f| f.format()),
                         param.name
                     ),
                     src: src.clone(),
@@ -2615,7 +2637,10 @@ fn resolve_constructor_generic_args(
                     message: format!(
                         "generic parameter `{}` expects a type argument, got Nat argument `{}`",
                         param.name,
-                        hir_nat_to_linear_form(nat_expr).format()
+                        // The argument is rejected either way; render a
+                        // placeholder if its Nat arithmetic overflows.
+                        hir_nat_to_linear_form(nat_expr)
+                            .map_or_else(|_| "<overflow>".to_string(), |f| f.format())
                     ),
                     src: src.clone(),
                     span: nat_expr.span().into(),
