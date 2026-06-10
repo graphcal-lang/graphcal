@@ -294,3 +294,21 @@ fn long_operator_chain_compiles_and_evaluates() {
     let expected = terms as f64;
     assert!((x.si_value().unwrap() - expected).abs() < 1e-9);
 }
+
+#[test]
+fn dynamic_unit_dep_augmentation_orders_late_param_before_unit_use() {
+    // Exercises the typed dynamic-unit dependency map (unit name → scoped
+    // refs): the param backing the dynamic unit is declared *after* the
+    // node using the unit, so evaluation order relies on the augmented
+    // runtime deps extracted from the scale expression.
+    let source = r"
+base dim Money;
+base unit USD: Money;
+unit EUR: Money = (@usd_per_eur) USD;
+node price: Money = 3.0 EUR;
+param usd_per_eur: Dimensionless = 2.0;
+";
+    let result = compile_and_eval(source).unwrap();
+    let price = value_for(&result, "price");
+    assert!((price.si_value().unwrap() - 6.0).abs() < 1e-9);
+}
