@@ -3,25 +3,12 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::resolved_ast::Expr;
 use crate::registry::builtins::{DimSignature, ParamDim, ResultDim};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::DimVarName;
 use crate::syntax::span::Span;
-
-pub(super) fn infer_fn_dim(
-    fn_name: &str,
-    sig: &DimSignature,
-    arg_dims: &[Dimension],
-    args: &[Expr],
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Dimension, GraphcalError> {
-    let arg_spans: Vec<Span> = args.iter().map(|arg| arg.span).collect();
-    infer_fn_dim_from_spans(fn_name, sig, arg_dims, &arg_spans, registry, src)
-}
 
 pub(super) fn infer_fn_dim_from_spans(
     fn_name: &str,

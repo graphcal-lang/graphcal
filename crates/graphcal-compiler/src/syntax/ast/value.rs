@@ -346,6 +346,24 @@ pub struct TypeExpr<P: Phase = Raw> {
     pub span: Span,
 }
 
+impl<P: Phase> TypeExpr<P> {
+    /// The domain bounds attached to this type expression.
+    ///
+    /// Bounds on an indexed type (`Velocity[Maneuver](min: 0.0 m/s)`) are
+    /// parsed onto the base type expression, so this looks through one
+    /// `Indexed` wrapper when the outer expression carries none.
+    #[must_use]
+    pub fn domain_bounds(&self) -> &[DomainBound<P>] {
+        if !self.constraints.is_empty() {
+            return &self.constraints;
+        }
+        match &self.kind {
+            TypeExprKind::Indexed { base, .. } => &base.constraints,
+            _ => &[],
+        }
+    }
+}
+
 /// The kind of a type expression.
 #[derive(Debug, Clone)]
 pub enum TypeExprKind<P: Phase = Raw> {

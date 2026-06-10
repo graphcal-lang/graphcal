@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::resolved_ast::Expr;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey};
 use crate::syntax::dimension::Dimension;
@@ -20,15 +19,12 @@ use crate::tir::typed::{NatLinearForm, NatRangeIndexIdentity};
 pub(crate) use helpers::{expect_scalar, format_inferred_type};
 
 use helpers::{format_declared_type, is_bool_type, resolved_type_matches_inferred, types_match};
-use infer::infer_type;
 
 mod builtins;
 mod helpers;
 #[expect(
     clippy::too_many_arguments,
     clippy::too_many_lines,
-    clippy::trivially_copy_pass_by_ref,
-    clippy::doc_markdown,
     reason = "inference functions pass compilation context through many parameters; \
               large match on ExprKind variants is inherently long"
 )]
@@ -599,13 +595,11 @@ pub fn check_dimensions_tir(
     // dep imports were already validated in their defining file's pipeline,
     // so the redundant pass is idempotent. (#450 Position 1+2.)
     let declared_types = tir.build_declared_types(src)?;
-    let empty_locals: HashMap<String, InferredType> = HashMap::new();
     check_no_constraints_on_generic_type_args(tir, src)?;
     check_field_domain_constraint_targets(tir, src)?;
     check_field_domain_constraint_dimensions(
         tir,
         &declared_types,
-        &empty_locals,
         &tir.registry,
         builtin_fns,
         src,
@@ -624,7 +618,6 @@ fn check_dimensions_dag(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let declared_types = dag.build_declared_types(src)?;
-    let empty_locals: HashMap<String, InferredType> = HashMap::new();
     let ctx = DimCheckContext {
         declared_types: &declared_types,
         dag: Some(dag),
@@ -656,15 +649,7 @@ fn check_dimensions_dag(
     }
 
     check_domain_constraint_targets_dag(dag, src)?;
-    check_domain_constraint_dimensions_dag(
-        dag,
-        &declared_types,
-        &empty_locals,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-    )?;
+    check_domain_constraint_dimensions_dag(dag, &declared_types, tir, registry, builtin_fns, src)?;
 
     Ok(())
 }
@@ -691,7 +676,6 @@ enum ExpectedBound {
 fn check_domain_constraint_dimensions_dag(
     dag: &crate::tir::typed::DagTIR,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    empty_locals: &HashMap<String, InferredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
@@ -700,15 +684,17 @@ fn check_domain_constraint_dimensions_dag(
     let decl_iter = dag
         .consts
         .iter()
-        .map(|e| (&e.name, &e.type_ann))
-        .chain(dag.params.iter().map(|e| (&e.name, &e.type_ann)))
-        .chain(dag.nodes.iter().map(|e| (&e.name, &e.type_ann)));
+        .map(|e| &e.name)
+        .chain(dag.params.iter().map(|e| &e.name))
+        .chain(dag.nodes.iter().map(|e| &e.name));
 
-    for (name, type_ann) in decl_iter {
-        let bounds = extract_domain_bounds(type_ann);
-        if bounds.is_empty() {
+    for name in decl_iter {
+        let bounds = dag
+            .resolved_decl_key_for_local(name)
+            .and_then(|key| dag.semantic.domain_bounds.get(&key));
+        let Some(bounds) = bounds else {
             continue;
-        }
+        };
 
         let resolved = dag.resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);
@@ -724,11 +710,11 @@ fn check_domain_constraint_dimensions_dag(
         };
 
         for bound in bounds {
-            let inferred = infer_type(
+            let inferred = infer::hir::infer_hir_type_with_owner(
                 &bound.value,
+                None,
                 declared_types,
-                empty_locals,
-                Some(dag),
+                dag,
                 tir,
                 registry,
                 builtin_fns,
@@ -743,7 +729,7 @@ fn check_domain_constraint_dimensions_dag(
 
 fn check_one_bound(
     name: &crate::syntax::names::ScopedName,
-    bound: &crate::desugar::resolved_ast::DomainBound,
+    bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
     registry: &Registry,
@@ -960,25 +946,38 @@ fn field_constraint_target_kind(
 /// Check that domain bound expressions on struct/union fields have the
 /// correct type. Mirrors [`check_domain_constraint_dimensions_dag`] for
 /// top-level decls.
+///
+/// Field bounds live in each DAG's semantic type defs (lowered to HIR at
+/// type-resolution time); the same owner-qualified field can be referenced
+/// from several DAGs, so a seen-set dedupes the checks.
 fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    empty_locals: &HashMap<String, InferredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    for type_def in tir.registry.types.all_types() {
-        let members: &[crate::registry::types::UnionMemberDef] =
-            type_def.union_members().unwrap_or(&[]);
-        for (variant, field) in members
-            .iter()
-            .flat_map(|m| m.fields.iter().map(move |f| (m, f)))
-        {
-            let bounds = extract_domain_bounds(&field.type_ann);
-            if bounds.is_empty() {
+    let mut seen: std::collections::HashSet<&crate::tir::typed::ResolvedStructFieldTypeKey> =
+        std::collections::HashSet::new();
+    for (id, dag) in &tir.dags {
+        if id != &tir.root_dag_id && id.parent().as_ref() != Some(&tir.root_dag_id) {
+            continue;
+        }
+        for (key, bounds) in &dag.semantic.type_defs.field_bounds {
+            if !seen.insert(key) {
                 continue;
             }
+            let Some(type_def) = dag.semantic.type_defs.struct_types.get(&key.owning_type) else {
+                continue;
+            };
+            let Some((variant, field)) = type_def.union_members().and_then(|members| {
+                members
+                    .iter()
+                    .flat_map(|m| m.fields.iter().map(move |f| (m, f)))
+                    .find(|(m, f)| m.name == key.constructor && f.name == key.field)
+            }) else {
+                continue;
+            };
             let Some(expected) = field_expected_bound(&field.type_ann, registry, src)? else {
                 continue;
             };
@@ -992,11 +991,11 @@ fn check_field_domain_constraint_dimensions(
                 format!("{}.{}.{}", type_def.name, variant.name, field.name)
             };
             for bound in bounds {
-                let inferred = infer_type(
+                let inferred = infer::hir::infer_hir_type_with_owner(
                     &bound.value,
-                    declared_types,
-                    empty_locals,
                     None,
+                    declared_types,
+                    dag,
                     tir,
                     registry,
                     builtin_fns,
@@ -1051,7 +1050,7 @@ fn field_expected_bound(
 /// helper can serve both top-level decls and struct fields.
 fn check_one_bound_with_display_name(
     display_name: &str,
-    bound: &crate::desugar::resolved_ast::DomainBound,
+    bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
     registry: &Registry,
@@ -1184,18 +1183,22 @@ fn strip_indexed(
     }
 }
 
-/// Check that an override expression has the correct dimension for the given param.
+/// Check that an applied override has the correct dimension for the given param.
+///
+/// Overrides are spliced into the IR as the target param's default expression
+/// before type resolution, so the override's HIR already lives in the root
+/// DAG's semantic expressions; this checks that stored HIR against the param's
+/// declared type.
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError::DimensionMismatch`] if the expression's inferred
+/// Returns a [`GraphcalError::DimensionMismatch`] if the override's inferred
 /// dimension does not match the declared type of the param.
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
 pub fn check_override_dimension(
-    expr: &Expr,
     param_name: &str,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     tir: &crate::tir::typed::TIR,
@@ -1203,7 +1206,6 @@ pub fn check_override_dimension(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let builtin_fns = builtin_functions();
-    let empty_locals: HashMap<String, InferredType> = HashMap::new();
 
     // Override targets are addressed by their bare param name, which is always
     // a top-level local in the file being overridden.
@@ -1214,11 +1216,20 @@ pub fn check_override_dimension(
             .ok_or_else(|| GraphcalError::OverrideUnknownParam {
                 name: crate::syntax::names::DeclName::new(param_name.to_string()),
             })?;
-    let inferred = infer_type(
-        expr,
+    let dag = tir.root();
+    let hir_expr = dag
+        .resolved_decl_key_for_local(&param_key)
+        .and_then(|key| dag.semantic.expressions.param_defaults.get(&key))
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("override for `{param_name}` was not applied to the root DAG"),
+            src: src.clone(),
+            span: crate::syntax::span::Span::new(0, 0).into(),
+        })?;
+    let inferred = infer::hir::infer_hir_type_with_owner(
+        hir_expr,
+        Some(param_name),
         declared_types,
-        &empty_locals,
-        Some(tir.root()),
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -1234,7 +1245,7 @@ pub fn check_override_dimension(
                 format_declared_type(declared, registry)
             ),
             src: src.clone(),
-            span: expr.span.into(),
+            span: hir_expr.span.into(),
         });
     }
     Ok(())

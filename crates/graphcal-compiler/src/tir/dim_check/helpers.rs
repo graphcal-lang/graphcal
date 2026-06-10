@@ -1,14 +1,10 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::resolved_ast::Expr;
-use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeDef};
 use crate::syntax::dimension::Dimension;
-use crate::syntax::names::GenericParamName;
 
 use super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
 use crate::tir::typed::{ResolvedIndex, ResolvedTypeExpr};
@@ -124,11 +120,14 @@ fn resolved_index_matches_inferred(index: &ResolvedIndex, actual: &InferredIndex
         ResolvedIndex::NatExpr(form, _) => actual
             .nat_range_form()
             .is_some_and(|actual_form| actual_form == *form),
-        // Cross-namespace boundary: an unbound generic index parameter has
-        // no typed InferredIndex form, so the display name is the only
-        // shared identity. Adding a GenericParam variant to InferredIndex
-        // would type this; until then keep the comparison fenced here.
-        ResolvedIndex::GenericParam(expected, _) => actual.name().as_str() == expected.as_str(),
+        // An unbound generic index parameter never reaches this comparison:
+        // DAG declaration types and inline-DAG param types resolve with no
+        // generic params in scope, and HIR inference only constructs
+        // `InferredIndex` from concrete (resolved or Nat-range) identities —
+        // the syntax engine's leaf-name fallback that could fabricate a
+        // generic-named index is gone (#765). No display-name comparison can
+        // therefore be meaningful here.
+        ResolvedIndex::GenericParam(_, _) => false,
     }
 }
 
@@ -197,139 +196,6 @@ impl From<&DeclaredType> for InferredType {
             },
         }
     }
-}
-
-/// Resolve a field's `TypeExpr` to an `InferredType`, substituting generic type params.
-///
-/// For non-generic types (empty `type_args`), the field's `type_ann` is resolved directly
-/// using the registry. For generic types, generic params in the field type are substituted
-/// with the corresponding concrete type args.
-pub(super) fn resolve_field_type(
-    field_type_ann: &crate::desugar::resolved_ast::TypeExpr,
-    type_def: &crate::registry::types::TypeDef,
-    type_args: &[InferredType],
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    use crate::registry::types::TypeGenericConstraint;
-
-    if type_def.generic_params.is_empty() {
-        // Non-generic type: resolve the field type_ann using the registry
-        let dim = registry
-            .dimensions
-            .resolve_type_expr(field_type_ann)
-            .map_err(|_| GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: field_type_ann.span.into(),
-            })?
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: "cannot resolve field type expression".to_string(),
-                src: src.clone(),
-                span: field_type_ann.span.into(),
-            })?;
-        return Ok(InferredType::Scalar(dim));
-    }
-
-    // Generic type: build substitution maps from generic params + type args
-    let mut dim_sub: HashMap<GenericParamName, Dimension> = HashMap::new();
-    let mut index_sub: HashMap<GenericParamName, IndexTypeRef> = HashMap::new();
-    // Track unconstrained (Type) params separately — they map to InferredType
-    let mut type_sub: HashMap<GenericParamName, InferredType> = HashMap::new();
-
-    for (param, arg) in type_def.generic_params.iter().zip(type_args.iter()) {
-        match param.constraint {
-            TypeGenericConstraint::Dim => match arg {
-                InferredType::Scalar(dim) => {
-                    dim_sub.insert(param.name.clone(), dim.clone());
-                }
-                other => {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "generic parameter `{}` expects a scalar dimension, but got {}",
-                            param.name.as_str(),
-                            format_inferred_type(other, registry),
-                        ),
-                        src: src.clone(),
-                        span: field_type_ann.span.into(),
-                    });
-                }
-            },
-            TypeGenericConstraint::Index => match arg {
-                InferredType::Label(index) => {
-                    index_sub.insert(param.name.clone(), index.type_ref().clone());
-                }
-                other => {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "generic parameter `{}` expects an index type, but got {}",
-                            param.name.as_str(),
-                            format_inferred_type(other, registry),
-                        ),
-                        src: src.clone(),
-                        span: field_type_ann.span.into(),
-                    });
-                }
-            },
-            TypeGenericConstraint::Nat => {
-                // Nat generics on type definitions are not yet used
-            }
-            TypeGenericConstraint::Unconstrained => {
-                type_sub.insert(param.name.clone(), arg.clone());
-            }
-        }
-    }
-
-    // Collect dim param and index param name lists for resolve_type_expr
-    let dim_params: Vec<GenericParamName> = type_def
-        .generic_params
-        .iter()
-        .filter(|p| p.constraint == TypeGenericConstraint::Dim)
-        .map(|p| p.name.clone())
-        .collect();
-    let index_params: Vec<GenericParamName> = type_def
-        .generic_params
-        .iter()
-        .filter(|p| p.constraint == TypeGenericConstraint::Index)
-        .map(|p| p.name.clone())
-        .collect();
-
-    // Check if the field type references an unconstrained (Type) param directly
-    if let crate::desugar::resolved_ast::TypeExprKind::DimExpr(dim_expr) = &field_type_ann.kind
-        && dim_expr.terms.len() == 1
-        && dim_expr.terms[0].term.power.is_none()
-        && let Some(name) = dim_expr.terms[0]
-            .term
-            .name
-            .value
-            .as_bare()
-            .map(crate::syntax::names::NameAtom::as_str)
-        && let Some(inferred) = type_sub.get(name)
-    {
-        return Ok(inferred.clone());
-    }
-
-    // Resolve using TIR type resolution with generic params in scope, then substitute
-    let resolved = crate::tir::typed::resolve_type_expr(
-        field_type_ann,
-        registry,
-        &dim_params,
-        &index_params,
-        &[],
-        src,
-    )?;
-    let no_nat_sub = std::collections::HashMap::new();
-    crate::tir::typed::substitute_resolved_type(&resolved, &dim_sub, &index_sub, &no_nat_sub, src)
-}
-
-/// Check that all match arm types are identical, returning the common type.
-pub(super) fn check_arm_types_match(
-    arm_types: &[InferredType],
-    arms: &[crate::desugar::resolved_ast::MatchArm],
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-    expr: &Expr,
-) -> Result<InferredType, GraphcalError> {
-    super::infer::match_arms_rule(arm_types, |i| arms[i].body.span, expr.span, registry, src)
 }
 
 pub fn expect_scalar(
