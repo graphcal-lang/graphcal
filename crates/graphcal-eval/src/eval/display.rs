@@ -1,7 +1,8 @@
 //! Display unit resolution: attaching human-readable unit labels to computed values,
 //! formatting range steps, and converting unit expressions to strings.
 
-use graphcal_compiler::desugar::resolved_ast::{ExprKind, MapEntryKey};
+use graphcal_compiler::hir::ExprKind;
+use graphcal_compiler::hir::expr::MapEntryKey;
 use graphcal_compiler::syntax::names::IndexVariantName;
 use indexmap::IndexMap;
 
@@ -12,7 +13,7 @@ use graphcal_compiler::registry::format::{format_number, format_unit_expr_canoni
 
 pub(super) fn attach_display_units(
     value: &mut Value,
-    expr: &graphcal_compiler::desugar::resolved_ast::Expr,
+    expr: &graphcal_compiler::hir::Expr,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
 ) {
@@ -92,7 +93,7 @@ pub(super) fn resolve_unit_to_display(
 /// Used for indexed collections (for comprehensions, scan) where all entries
 /// share the same display unit.
 pub(super) fn extract_flat_display_unit(
-    expr: &graphcal_compiler::desugar::resolved_ast::Expr,
+    expr: &graphcal_compiler::hir::Expr,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
 ) -> Option<DisplayUnit> {
@@ -120,8 +121,7 @@ fn resolve_display_unit_scale(
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
 ) -> Option<f64> {
-    let empty_locals = std::collections::HashMap::new();
-    crate::eval_expr::resolve_unit_scale(unit, values, &empty_locals, ctx).ok()
+    crate::eval_expr::resolve_unit_scale(unit, values, ctx).ok()
 }
 
 /// Format a range index step value for display, e.g. `"0 s"`, `"0.25 s"`.
@@ -159,7 +159,11 @@ fn walk_indexed_keys<'a>(
     keys: &[MapEntryKey],
 ) -> Option<&'a mut Value> {
     let (first, rest) = keys.split_first()?;
-    let value = entries.get_mut(&first.variant.value)?;
+    let variant = match first {
+        MapEntryKey::IndexVariant(resolved) => resolved.value.variant(),
+        MapEntryKey::NatRangeVariant { variant, .. } => &variant.value,
+    };
+    let value = entries.get_mut(variant)?;
     if rest.is_empty() {
         Some(value)
     } else if let Value::Indexed { entries: inner, .. } = value {

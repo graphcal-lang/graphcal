@@ -20,7 +20,7 @@ use petgraph::graph::DiGraph;
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::eval_expr::{
-    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_expr, eval_hir_expr,
+    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_hir_expr,
 };
 use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
 use graphcal_compiler::registry::error::GraphcalError;
@@ -487,10 +487,6 @@ fn runtime_eval_order_resolved(
 /// For const declarations, the resolved constraint is also checked against the
 /// already-evaluated const value at compile time, raising `DomainViolation`
 /// if the value is out of bounds.
-#[expect(
-    clippy::too_many_lines,
-    reason = "linear iteration over domain bounds with bound eval, range, and const-value checks"
-)]
 pub fn resolve_domain_constraints(
     tir: &TIR,
     const_values: &RuntimeValueMap,
@@ -498,7 +494,6 @@ pub fn resolve_domain_constraints(
 ) -> Result<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>, GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
-    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
     let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let ctx = EvalContext {
@@ -515,34 +510,26 @@ pub fn resolve_domain_constraints(
 
     let mut constraints = HashMap::new();
 
-    // Iterate over consts, params, and nodes with non-empty constraints in
-    // their type annotations. The `is_const` flag selects whether an immediate
-    // compile-time value-vs-constraint check runs below; params/nodes defer
-    // that check to `eval/runtime.rs`.
+    // Iterate over consts, params, and nodes with stored HIR domain bounds.
+    // The `is_const` flag selects whether an immediate compile-time
+    // value-vs-constraint check runs below; params/nodes defer that check to
+    // `eval/runtime.rs`.
     let decl_iter = tir
         .root()
         .consts
         .iter()
-        .map(|e| (&e.name, &e.type_ann, e.span, true))
-        .chain(
-            tir.root()
-                .params
-                .iter()
-                .map(|e| (&e.name, &e.type_ann, e.span, false)),
-        )
-        .chain(
-            tir.root()
-                .nodes
-                .iter()
-                .map(|e| (&e.name, &e.type_ann, e.span, false)),
-        );
+        .map(|e| (&e.name, e.span, true))
+        .chain(tir.root().params.iter().map(|e| (&e.name, e.span, false)))
+        .chain(tir.root().nodes.iter().map(|e| (&e.name, e.span, false)));
 
-    for (name, type_ann, decl_span, is_const) in decl_iter {
-        // Get constraints from the type annotation (could be on base type if indexed).
-        let domain_bounds = extract_domain_bounds(type_ann);
-        if domain_bounds.is_empty() {
+    for (name, decl_span, is_const) in decl_iter {
+        let domain_bounds = tir
+            .root()
+            .resolved_decl_key_for_local(name)
+            .and_then(|key| tir.root().semantic.domain_bounds.get(&key));
+        let Some(domain_bounds) = domain_bounds else {
             continue;
-        }
+        };
 
         // Validate that the base type supports constraints.
         // (Bound dimensions are validated in `dim_check::check_dimensions_tir`.)
@@ -550,72 +537,14 @@ pub fn resolve_domain_constraints(
         let base_resolved = resolved.map(strip_indexed);
         validate_constraint_target(&name.to_string(), base_resolved, decl_span, src)?;
 
-        let mut min_val: Option<f64> = None;
-        let mut max_val: Option<f64> = None;
-        let mut min_display: Option<String> = None;
-        let mut max_display: Option<String> = None;
-        let mut constraint_span = domain_bounds[0].span;
-
-        for bound in domain_bounds {
-            // Evaluate the bound expression.
-            let rv = eval_expr(&bound.value, &visible_const_values, &empty_locals, &ctx)?;
-
-            let si_value = match &rv {
-                RuntimeValue::Scalar(v) => *v,
-                #[expect(
-                    clippy::cast_precision_loss,
-                    reason = "domain bound integers are small"
-                )]
-                RuntimeValue::Int(i) => *i as f64,
-                _ => {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "domain constraint `{}` must evaluate to a scalar value",
-                            bound.kind,
-                        ),
-                        src: src.clone(),
-                        span: bound.value.span.into(),
-                    });
-                }
-            };
-
-            // Format display text from the expression and pre-evaluated value.
-            let display_text = format_bound_display(&bound.value, si_value);
-
-            constraint_span = constraint_span.merge(bound.span);
-
-            match bound.kind {
-                graphcal_compiler::desugar::resolved_ast::DomainBoundKind::Min => {
-                    min_val = Some(si_value);
-                    min_display = Some(display_text);
-                }
-                graphcal_compiler::desugar::resolved_ast::DomainBoundKind::Max => {
-                    max_val = Some(si_value);
-                    max_display = Some(display_text);
-                }
-            }
-        }
-
-        // Validate min <= max.
-        if let (Some(min), Some(max)) = (min_val, max_val)
-            && min > max
-        {
-            return Err(GraphcalError::DomainMinExceedsMax {
-                name: name.to_string(),
-                min: min_display.unwrap_or_else(|| format!("{min}")),
-                max: max_display.unwrap_or_else(|| format!("{max}")),
-                src: src.clone(),
-                span: constraint_span.into(),
-            });
-        }
-
-        let resolved_constraint = ResolvedDomainConstraint {
-            min: min_val,
-            max: max_val,
-            min_display,
-            max_display,
-            span: constraint_span,
-        };
+        let resolved_constraint = resolve_constraint_from_bounds(
+            domain_bounds,
+            &name.to_string(),
+            &visible_const_values,
+            &ctx,
+            src,
+            |kind| format!("domain constraint `{kind}` must evaluate to a scalar value"),
+        )?;
 
         // For const declarations, validate the (already-known) value at compile time.
         let key = RuntimeDeclKey::for_local_decl(tir.root(), name);
@@ -639,21 +568,89 @@ pub fn resolve_domain_constraints(
     Ok(constraints)
 }
 
+/// Evaluate a declaration's or field's stored HIR domain bounds to a
+/// [`ResolvedDomainConstraint`], validating `min <= max`.
+fn resolve_constraint_from_bounds(
+    bounds: &[graphcal_compiler::tir::typed::ResolvedDomainBound],
+    display_name: &str,
+    values: &RuntimeValueMap,
+    ctx: &EvalContext<'_>,
+    src: &NamedSource<Arc<String>>,
+    scalar_err_msg: impl Fn(graphcal_compiler::syntax::ast::DomainBoundKind) -> String,
+) -> Result<ResolvedDomainConstraint, GraphcalError> {
+    let empty_locals = HirLocalValueMap::new();
+    let mut min_val: Option<f64> = None;
+    let mut max_val: Option<f64> = None;
+    let mut min_display: Option<String> = None;
+    let mut max_display: Option<String> = None;
+    let mut constraint_span = bounds[0].span;
+
+    for bound in bounds {
+        let rv = eval_hir_expr(&bound.value, values, &empty_locals, ctx)?;
+        let si_value = match &rv {
+            RuntimeValue::Scalar(v) => *v,
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "domain bound integers are small"
+            )]
+            RuntimeValue::Int(i) => *i as f64,
+            _ => {
+                return Err(GraphcalError::EvalError {
+                    message: scalar_err_msg(bound.kind),
+                    src: src.clone(),
+                    span: bound.value.span.into(),
+                });
+            }
+        };
+
+        let display_text = format_bound_display(&bound.value, si_value);
+        constraint_span = constraint_span.merge(bound.span);
+
+        match bound.kind {
+            graphcal_compiler::syntax::ast::DomainBoundKind::Min => {
+                min_val = Some(si_value);
+                min_display = Some(display_text);
+            }
+            graphcal_compiler::syntax::ast::DomainBoundKind::Max => {
+                max_val = Some(si_value);
+                max_display = Some(display_text);
+            }
+        }
+    }
+
+    if let (Some(min), Some(max)) = (min_val, max_val)
+        && min > max
+    {
+        return Err(GraphcalError::DomainMinExceedsMax {
+            name: display_name.to_string(),
+            min: min_display.unwrap_or_else(|| format!("{min}")),
+            max: max_display.unwrap_or_else(|| format!("{max}")),
+            src: src.clone(),
+            span: constraint_span.into(),
+        });
+    }
+
+    Ok(ResolvedDomainConstraint {
+        min: min_val,
+        max: max_val,
+        min_display,
+        max_display,
+        span: constraint_span,
+    })
+}
+
 /// Resolve domain constraints declared on struct/union member fields.
 ///
-/// For every `TypeDef` in the registry and every owner-qualified type
-/// definition recorded in module-aware TIR semantic metadata, evaluates each constrained
-/// field's `min`/`max` bound expressions to SI scalars, validates `min ≤ max`,
-/// and stores the result keyed by the owning struct type, constructor, and
-/// field name.
+/// Field bounds are stored as HIR in each DAG's semantic type defs
+/// (`ResolvedTypeDefs.field_bounds`); this evaluates each constrained field's
+/// `min`/`max` bounds to SI scalars, validates `min ≤ max`, and stores the
+/// result keyed by the owning struct type, constructor, and field name —
+/// under both the owner-qualified identity and the root-owned display leaf so
+/// runtime lookups for boundary-created synthetic owners still hit.
 ///
 /// Bound dimensions and target compatibility are validated earlier in
 /// `dim_check::check_field_domain_constraint_*`. This pass focuses on the
 /// runtime-relevant pieces: bound evaluation, `min ≤ max`, and storage.
-#[expect(
-    clippy::too_many_lines,
-    reason = "linear field-constraint resolution over type definitions with bound eval and range checks"
-)]
 pub fn resolve_struct_field_constraints(
     tir: &TIR,
     const_values: &RuntimeValueMap,
@@ -661,7 +658,6 @@ pub fn resolve_struct_field_constraints(
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
-    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
     let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let ctx = EvalContext {
@@ -677,114 +673,56 @@ pub fn resolve_struct_field_constraints(
     };
 
     let mut constraints = HashMap::new();
+    let mut seen: std::collections::HashSet<
+        &graphcal_compiler::tir::typed::ResolvedStructFieldTypeKey,
+    > = std::collections::HashSet::new();
 
-    let resolve_for_type = |owning_type: StructTypeRef,
-                            type_def: &graphcal_compiler::registry::types::TypeDef,
-                            constraints: &mut HashMap<
-        StructFieldConstraintKey,
-        ResolvedDomainConstraint,
-    >|
-     -> Result<(), GraphcalError> {
-        let Some(members) = type_def.union_members() else {
-            return Ok(());
-        };
-        for (variant, field) in members
-            .iter()
-            .flat_map(|m| m.fields.iter().map(move |f| (m, f)))
-        {
-            let domain_bounds = extract_domain_bounds(&field.type_ann);
-            if domain_bounds.is_empty() {
+    for (id, dag) in &tir.dags {
+        if id != &tir.root_dag_id && id.parent().as_ref() != Some(&tir.root_dag_id) {
+            continue;
+        }
+        for (key, bounds) in &dag.semantic.type_defs.field_bounds {
+            if !seen.insert(key) {
                 continue;
             }
-
-            let mut min_val: Option<f64> = None;
-            let mut max_val: Option<f64> = None;
-            let mut min_display: Option<String> = None;
-            let mut max_display: Option<String> = None;
-            let mut constraint_span = domain_bounds[0].span;
             // Display name uses the constructor's leaf while semantic identity
             // remains the owning union type.
-            let display_name = format!("{}.{}", variant.name, field.name);
-
-            for bound in domain_bounds {
-                let rv = eval_expr(&bound.value, &visible_const_values, &empty_locals, &ctx)?;
-                let si_value = match &rv {
-                    RuntimeValue::Scalar(v) => *v,
-                    #[expect(
-                        clippy::cast_precision_loss,
-                        reason = "domain bound integers are small"
-                    )]
-                    RuntimeValue::Int(i) => *i as f64,
-                    _ => {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
-                                "domain constraint `{}` on field `{display_name}` must evaluate to a scalar value",
-                                bound.kind,
-                            ),
-                            src: src.clone(),
-                            span: bound.value.span.into(),
-                        });
-                    }
-                };
-
-                let display_text = format_bound_display(&bound.value, si_value);
-                constraint_span = constraint_span.merge(bound.span);
-
-                match bound.kind {
-                    graphcal_compiler::desugar::resolved_ast::DomainBoundKind::Min => {
-                        min_val = Some(si_value);
-                        min_display = Some(display_text);
-                    }
-                    graphcal_compiler::desugar::resolved_ast::DomainBoundKind::Max => {
-                        max_val = Some(si_value);
-                        max_display = Some(display_text);
-                    }
-                }
-            }
-
-            if let (Some(min), Some(max)) = (min_val, max_val)
-                && min > max
-            {
-                return Err(GraphcalError::DomainMinExceedsMax {
-                    name: display_name,
-                    min: min_display.unwrap_or_else(|| format!("{min}")),
-                    max: max_display.unwrap_or_else(|| format!("{max}")),
-                    src: src.clone(),
-                    span: constraint_span.into(),
-                });
-            }
-
+            let display_name = format!("{}.{}", key.constructor, key.field);
+            let constraint = resolve_constraint_from_bounds(
+                bounds,
+                &display_name,
+                &visible_const_values,
+                &ctx,
+                src,
+                |kind| {
+                    format!(
+                        "domain constraint `{kind}` on field `{display_name}` must evaluate to a scalar value"
+                    )
+                },
+            )?;
+            // Store under both the owner-qualified identity and the
+            // root-owned display leaf so runtime lookups for
+            // boundary-created synthetic owners still hit.
             constraints.insert(
                 StructFieldConstraintKey::new(
-                    owning_type.clone(),
-                    variant.name.clone(),
-                    field.name.clone(),
+                    StructTypeRef::from_resolved(key.owning_type.clone()),
+                    key.constructor.clone(),
+                    key.field.clone(),
                 ),
-                ResolvedDomainConstraint {
-                    min: min_val,
-                    max: max_val,
-                    min_display,
-                    max_display,
-                    span: constraint_span,
-                },
+                constraint.clone(),
+            );
+            constraints.insert(
+                StructFieldConstraintKey::new(
+                    StructTypeRef::with_owner(
+                        tir.root_dag_id.clone(),
+                        key.owning_type.to_unowned_def_name(),
+                    ),
+                    key.constructor.clone(),
+                    key.field.clone(),
+                ),
+                constraint,
             );
         }
-        Ok(())
-    };
-
-    for (resolved_owner, type_def) in &tir.root().semantic.type_defs.struct_types {
-        resolve_for_type(
-            StructTypeRef::from_resolved(resolved_owner.clone()),
-            type_def,
-            &mut constraints,
-        )?;
-    }
-    for type_def in tir.registry.types.all_types() {
-        resolve_for_type(
-            StructTypeRef::with_owner(tir.root_dag_id.clone(), type_def.name.clone()),
-            type_def,
-            &mut constraints,
-        )?;
     }
 
     Ok(constraints)
@@ -938,25 +876,6 @@ fn format_runtime_value(rv: &RuntimeValue) -> String {
     }
 }
 
-/// Extract `DomainBound`s from a `TypeExpr`, handling indexed types.
-///
-/// For `Velocity(min: 0)[Maneuver]`, the constraints are on the base `Velocity`,
-/// not on the outer `Indexed` wrapper.
-fn extract_domain_bounds(
-    type_ann: &graphcal_compiler::desugar::resolved_ast::TypeExpr,
-) -> &[graphcal_compiler::desugar::resolved_ast::DomainBound] {
-    if !type_ann.constraints.is_empty() {
-        return &type_ann.constraints;
-    }
-    // For indexed types, check the base type's constraints.
-    if let graphcal_compiler::desugar::resolved_ast::TypeExprKind::Indexed { base, .. } =
-        &type_ann.kind
-    {
-        return &base.constraints;
-    }
-    &[]
-}
-
 /// Strip `Indexed` wrapper to get the base resolved type.
 fn strip_indexed(
     resolved: &graphcal_compiler::tir::typed::ResolvedTypeExpr,
@@ -1030,11 +949,8 @@ fn validate_constraint_target(
 /// For simple expressions (numbers, unit literals, unary negation), the
 /// original syntactic form is preserved. For complex expressions, the
 /// pre-evaluated SI value is displayed as a fallback — no re-evaluation needed.
-fn format_bound_display(
-    expr: &graphcal_compiler::desugar::resolved_ast::Expr,
-    si_value: f64,
-) -> String {
-    use graphcal_compiler::desugar::resolved_ast::ExprKind;
+fn format_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> String {
+    use graphcal_compiler::hir::ExprKind;
     match &expr.kind {
         ExprKind::Number(n) => graphcal_compiler::registry::format::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),

@@ -594,67 +594,6 @@ impl std::fmt::Display for ResolvedIndexVariant {
     }
 }
 
-/// The source-written identity of an `Index.Variant` occurrence.
-///
-/// Covers occurrences whose index path and variant leaf appear as separate
-/// syntax slots: map-literal keys, index-access arguments, value-position
-/// variant literals, and index-label match patterns.
-///
-/// Within one DAG body, name resolution is a pure function of the written
-/// path, so this written form addresses semantic metadata without depending on
-/// source spans. That keeps the metadata addressable for synthetic expressions
-/// (CLI `--set` strings, JSON input) that have no real source locations.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct WrittenIndexVariant {
-    index: NamePath,
-    variant: IndexVariantName,
-}
-
-impl WrittenIndexVariant {
-    /// Create a written index-variant identity from its written index path and
-    /// variant leaf.
-    #[must_use]
-    pub const fn new(index: NamePath, variant: IndexVariantName) -> Self {
-        Self { index, variant }
-    }
-
-    /// The index path exactly as written.
-    #[must_use]
-    pub const fn index(&self) -> &NamePath {
-        &self.index
-    }
-
-    /// The variant leaf exactly as written.
-    #[must_use]
-    pub const fn variant(&self) -> &IndexVariantName {
-        &self.variant
-    }
-}
-
-impl std::fmt::Display for WrittenIndexVariant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.index, self.variant)
-    }
-}
-
-/// The source-written identity of a reference that name resolution proved is
-/// an index variant.
-///
-/// The same dotted text reaches resolution through different syntactic shapes
-/// (an explicit `Index.Variant` literal, a const-like scoped name, a match
-/// pattern path). Resolution order differs per shape, so the shapes stay
-/// distinct in the key instead of being collapsed to one flat path.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum WrittenVariantRef {
-    /// Explicit `Index.Variant` form with separate index/variant slots.
-    IndexVariant(WrittenIndexVariant),
-    /// A const-like scoped name (e.g. `Phase.Burn` parsed as a const ref)
-    /// that lowering resolved to an index variant.
-    ConstPath(ScopedName),
-    /// A match-pattern path that lowering resolved to an index label.
-    PatternPath(NamePath),
-}
-
 /// Name of a built-in datetime time scale (e.g., `"UTC"`, `"TAI"`, `"TDB"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TimeScaleName(crate::registry::time_scale::TimeScale);
