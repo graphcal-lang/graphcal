@@ -1416,11 +1416,19 @@ impl ModuleResolver {
                 alias,
             }
         })?;
-        let target = rest
-            .iter()
-            .fold(alias_target.target.clone(), |owner, segment| {
-                owner.child(segment.as_str())
-            });
+        // Descend segment by segment, enforcing dag visibility at every
+        // step: `lib.helper.symbol` must be rejected when `helper` is a
+        // private dag, exactly like `resolve_module_path` rejects
+        // `lib.helper` — previously only the symbol's own visibility was
+        // checked, never the modules on the path.
+        let mut target = alias_target.target.clone();
+        for segment in rest {
+            target = target.child(segment.as_str());
+            if !self.modules.contains_key(&target) {
+                return Err(ModuleResolveError::UnknownModule { owner: target });
+            }
+            self.ensure_module_visible(&target, alias_target.access)?;
+        }
         if self.modules.contains_key(&target) {
             Ok(ResolvedModuleQualifier {
                 owner: target,
@@ -2007,6 +2015,53 @@ mod tests {
                 name,
             } if owner == lib_id && name == "helper"
         ));
+    }
+
+    #[test]
+    fn qualified_symbol_path_through_private_dag_is_rejected() {
+        // Regression: `resolve_symbol_path` resolved the qualifier without
+        // the dag-visibility check that `resolve_module_path` enforces, so
+        // `lib.helper.shown` resolved even though `helper` is a private dag.
+        let lib_id = DagId::root("lib");
+        let helper_id = lib_id.child("helper");
+        let main_id = DagId::root("main");
+        let lib = resolved_source(
+            "dag helper {
+                pub node shown: Dimensionless = 1.0;
+            }",
+        );
+        let main = resolved_source("import lib as lib;");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(helper_id, &first_dag(&lib).body)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, import_path, import_kind, &lib_id)
+            .unwrap();
+
+        let err = resolver
+            .resolve_decl_path(&main_id, &path(&["lib", "helper", "shown"]))
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                ModuleResolveError::PrivateName {
+                    ref owner,
+                    namespace: "dag",
+                    ref name,
+                } if *owner == lib_id && name == "helper"
+            ),
+            "expected PrivateName for dag `helper`, got: {err:?}"
+        );
     }
 
     #[test]
