@@ -474,6 +474,27 @@ impl NatRangeIndex {
 // Private helper functions for resolution logic
 // ---------------------------------------------------------------------------
 
+/// Why a unit expression could not be resolved.
+///
+/// Carries the failing unit name so callers can produce a precise
+/// diagnostic instead of re-scanning the expression to find it (the old
+/// `Ok(None)` return conflated unknown names with dynamic scales).
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnitResolveError {
+    /// A unit name in the expression is not registered.
+    UnknownUnit(UnitName),
+    /// A unit in the expression has a runtime-dependent scale.
+    DynamicScale(UnitName),
+    /// Dimension exponent arithmetic overflowed.
+    Overflow(RationalError),
+}
+
+impl From<RationalError> for UnitResolveError {
+    fn from(err: RationalError) -> Self {
+        Self::Overflow(err)
+    }
+}
+
 /// Shared implementation for resolving a `DimExpr` to a concrete `Dimension`.
 fn resolve_dim_expr_impl(
     dimensions: &HashMap<DimName, Dimension>,
@@ -519,23 +540,20 @@ fn resolve_type_expr_impl(
 }
 
 /// Shared implementation for resolving a `UnitExpr` to its dimension and static scale factor.
-///
-/// Returns `Ok(None)` if any unit name is unknown or if any unit has a dynamic
-/// scale, and `Err` if dimension arithmetic overflows.
 fn resolve_unit_expr_impl(
     units: &HashMap<UnitName, UnitInfo>,
     expr: &UnitExpr,
-) -> Result<Option<(Dimension, f64)>, RationalError> {
+) -> Result<(Dimension, f64), UnitResolveError> {
     let mut dim = Dimension::dimensionless();
     let mut scale = 1.0_f64;
     for item in &expr.terms {
         let Some(info) = units.get(item.name.value.as_str()) else {
-            return Ok(None);
+            return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
         };
         let exp = item.power.unwrap_or(1);
         let powered_dim = info.dimension.pow(Rational::from_int(exp))?;
         let Some(static_scale) = info.scale.as_static() else {
-            return Ok(None);
+            return Err(UnitResolveError::DynamicScale(item.name.value.clone()));
         };
         let powered_scale = static_scale.powi(exp);
         match item.op {
@@ -549,21 +567,20 @@ fn resolve_unit_expr_impl(
             }
         }
     }
-    Ok(Some((dim, scale)))
+    Ok((dim, scale))
 }
 
 /// Shared implementation for resolving a `UnitExpr` to its dimension only (ignoring scales).
 ///
-/// Works for both static and dynamic units. Returns `Ok(None)` if any unit
-/// name is unknown, and `Err` if dimension arithmetic overflows.
+/// Works for both static and dynamic units.
 fn resolve_unit_dimension_impl(
     units: &HashMap<UnitName, UnitInfo>,
     expr: &UnitExpr,
-) -> Result<Option<Dimension>, RationalError> {
+) -> Result<Dimension, UnitResolveError> {
     let mut dim = Dimension::dimensionless();
     for item in &expr.terms {
         let Some(info) = units.get(item.name.value.as_str()) else {
-            return Ok(None);
+            return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
         };
         let exp = item.power.unwrap_or(1);
         let powered_dim = info.dimension.pow(Rational::from_int(exp))?;
@@ -572,7 +589,7 @@ fn resolve_unit_dimension_impl(
             MulDivOp::Div => (dim / powered_dim)?,
         };
     }
-    Ok(Some(dim))
+    Ok(dim)
 }
 
 // ---------------------------------------------------------------------------
@@ -664,24 +681,23 @@ impl UnitRegistry {
 
     /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
     ///
-    /// Returns `Ok(None)` if any unit name is unknown or has a dynamic scale,
-    /// and `Err` if dimension exponent arithmetic overflows `i32`.
-    pub fn resolve_unit_expr(
-        &self,
-        expr: &UnitExpr,
-    ) -> Result<Option<(Dimension, f64)>, RationalError> {
+    /// # Errors
+    ///
+    /// Returns a [`UnitResolveError`] naming the unknown or dynamic-scale
+    /// unit, or the exponent overflow.
+    pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Result<(Dimension, f64), UnitResolveError> {
         resolve_unit_expr_impl(&self.units, expr)
     }
 
     /// Resolve a `UnitExpr` to its dimension only (ignoring scales).
     ///
-    /// Works for both static and dynamic units. Returns `Ok(None)` if any
-    /// unit name is unknown, and `Err` if dimension exponent arithmetic
-    /// overflows `i32`.
-    pub fn resolve_unit_dimension(
-        &self,
-        expr: &UnitExpr,
-    ) -> Result<Option<Dimension>, RationalError> {
+    /// Works for both static and dynamic units.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UnitResolveError`] naming the unknown unit, or the
+    /// exponent overflow.
+    pub fn resolve_unit_dimension(&self, expr: &UnitExpr) -> Result<Dimension, UnitResolveError> {
         resolve_unit_dimension_impl(&self.units, expr)
     }
 }
@@ -699,7 +715,9 @@ pub struct TypeRegistry {
     types: HashMap<StructTypeName, TypeDef>,
     /// Constructor namespace: each constructor name resolves to the
     /// union it belongs to. With no module system, the namespace is
-    /// flat; collisions are rejected at registry construction time.
+    /// flat. Duplicate names are rejected upstream during name
+    /// resolution; like every `register_*` entry point, insertion here
+    /// is last-wins defense-in-depth, not a validation layer.
     ctors: HashMap<ConstructorName, StructTypeName>,
 }
 
@@ -985,9 +1003,9 @@ impl RegistryBuilder {
     pub fn register_type(&mut self, def: TypeDef) {
         if let TypeDefKind::Union { ref members } = def.kind {
             for member in members {
-                self.ctors
-                    .entry(member.name.clone())
-                    .or_insert_with(|| def.name.clone());
+                // Last-wins, like every other register_* entry point —
+                // duplicates are rejected upstream during name resolution.
+                self.ctors.insert(member.name.clone(), def.name.clone());
             }
         }
         self.types.insert(def.name.clone(), def);
@@ -1094,24 +1112,23 @@ impl RegistryBuilder {
 
     /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
     ///
-    /// Returns `Ok(None)` if any unit name is unknown or has a dynamic scale,
-    /// and `Err` if dimension exponent arithmetic overflows `i32`.
-    pub fn resolve_unit_expr(
-        &self,
-        expr: &UnitExpr,
-    ) -> Result<Option<(Dimension, f64)>, RationalError> {
+    /// # Errors
+    ///
+    /// Returns a [`UnitResolveError`] naming the unknown or dynamic-scale
+    /// unit, or the exponent overflow.
+    pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Result<(Dimension, f64), UnitResolveError> {
         resolve_unit_expr_impl(&self.units, expr)
     }
 
     /// Resolve a `UnitExpr` to its dimension only (ignoring scales).
     ///
-    /// Works for both static and dynamic units. Returns `Ok(None)` if any
-    /// unit name is unknown, and `Err` if dimension exponent arithmetic
-    /// overflows `i32`.
-    pub fn resolve_unit_dimension(
-        &self,
-        expr: &UnitExpr,
-    ) -> Result<Option<Dimension>, RationalError> {
+    /// Works for both static and dynamic units.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UnitResolveError`] naming the unknown unit, or the
+    /// exponent overflow.
+    pub fn resolve_unit_dimension(&self, expr: &UnitExpr) -> Result<Dimension, UnitResolveError> {
         resolve_unit_dimension_impl(&self.units, expr)
     }
 }
@@ -1261,7 +1278,7 @@ mod tests {
             ],
             span: Span::new(0, 0),
         };
-        let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap().unwrap();
+        let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap();
         let expected_dim = (Dimension::base(length_id())
             / Dimension::base(time_id()).pow_int(2).unwrap())
         .unwrap();
@@ -1288,7 +1305,7 @@ mod tests {
             ],
             span: Span::new(0, 0),
         };
-        let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap().unwrap();
+        let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap();
         let expected_dim = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         assert_eq!(dim, expected_dim);
         // km/hour = 1000 m / 3600 s ≈ 0.2778 m/s
