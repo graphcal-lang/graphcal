@@ -190,7 +190,7 @@ pub(super) fn run_eval_loop(
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, BuiltinFunction>,
 ) -> EvalLoopResult {
-    let empty_hir_locals = HirLocalValueMap::new();
+    let empty_hir_locals = HirLocalValueMap::root();
 
     let mut values: RuntimeValueMap = HashMap::new();
     let mut errors: HashMap<RuntimeDeclKey, NodeError> = HashMap::new();
@@ -331,7 +331,7 @@ pub(super) fn evaluate_plan_with_values(
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let _empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
-    let empty_hir_locals: HirLocalValueMap = HashMap::new();
+    let empty_hir_locals = HirLocalValueMap::root();
 
     let EvalLoopResult { values, errors } =
         run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
@@ -552,7 +552,7 @@ fn evaluate_assert_with_expected_fail(
     body: &graphcal_compiler::hir::AssertBody,
     ef: Option<&ExpectedFail>,
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
     match ef {
@@ -848,7 +848,7 @@ fn collect_failing_paths(
 pub(super) fn evaluate_assert_body(
     body: &graphcal_compiler::hir::AssertBody,
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
     match body {
@@ -959,7 +959,7 @@ fn eval_plot_property(
     if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &expr.kind {
         return Some(PlotFieldValue::String(s.clone()));
     }
-    let empty_locals = HirLocalValueMap::new();
+    let empty_locals = HirLocalValueMap::root();
     let rv = eval_hir_expr(expr, values, &empty_locals, ctx).ok()?;
     Some(runtime_to_plot_field_value(&rv))
 }
@@ -1104,7 +1104,7 @@ fn eval_composition_fields(
     Vec<(super::types::CompositionProperty, PlotFieldValue)>,
     Vec<ScopedName>,
 ) {
-    let empty_locals = HirLocalValueMap::new();
+    let empty_locals = HirLocalValueMap::root();
     let mut properties = Vec::new();
     for field in fields {
         let Some(comp_prop) = super::types::CompositionProperty::from_name(field.name.as_str())

@@ -207,6 +207,80 @@ pub struct LocalDef {
     pub span: Span,
 }
 
+/// A layered lexical environment for HIR locals.
+///
+/// Each binder (for-comp, scan, unfold, match arm) layers a child frame
+/// holding its few bindings over the enclosing environment instead of cloning
+/// the full local map; lookup walks the parent chain. [`LocalId`]s are unique
+/// within one lowered body, so frames never shadow one another — the chain is
+/// purely an ownership layering, and nested binders cost O(own bindings)
+/// instead of O(visible locals).
+#[derive(Debug)]
+pub struct LocalEnv<'a, V> {
+    parent: Option<&'a Self>,
+    bindings: Vec<(LocalId, V)>,
+}
+
+impl<'a, V> LocalEnv<'a, V> {
+    /// Create an empty root environment.
+    #[must_use]
+    pub const fn root() -> Self {
+        Self {
+            parent: None,
+            bindings: Vec::new(),
+        }
+    }
+
+    /// Create a root environment holding the given bindings.
+    #[must_use]
+    pub const fn from_bindings(bindings: Vec<(LocalId, V)>) -> Self {
+        Self {
+            parent: None,
+            bindings,
+        }
+    }
+
+    /// Layer a child frame holding `bindings` over this environment.
+    #[must_use]
+    pub const fn child<'b>(&'b self, bindings: Vec<(LocalId, V)>) -> LocalEnv<'b, V>
+    where
+        'a: 'b,
+    {
+        LocalEnv {
+            parent: Some(self),
+            bindings,
+        }
+    }
+
+    /// Look up a local by its lexical identity, innermost frame first.
+    #[must_use]
+    pub fn get(&self, id: LocalId) -> Option<&V> {
+        self.bindings
+            .iter()
+            .rev()
+            .find(|(bound, _)| *bound == id)
+            .map(|(_, value)| value)
+            .or_else(|| self.parent.and_then(|parent| parent.get(id)))
+    }
+
+    /// Bind or update a local in this frame.
+    ///
+    /// Iterating binders (for-comp elements, scan/unfold steps) rebind the
+    /// same `LocalId` once per iteration without growing the frame.
+    pub fn bind(&mut self, id: LocalId, value: V) {
+        match self.bindings.iter_mut().find(|(bound, _)| *bound == id) {
+            Some((_, slot)) => *slot = value,
+            None => self.bindings.push((id, value)),
+        }
+    }
+}
+
+impl<V> Default for LocalEnv<'_, V> {
+    fn default() -> Self {
+        Self::root()
+    }
+}
+
 /// Define a closed set of built-in names: the enum, the `parse` boundary
 /// crossing, the canonical `as_str` rendering, and an `ALL` listing for
 /// cross-table consistency tests — all generated from a single table so the
@@ -1607,6 +1681,47 @@ mod tests {
         let raw = Parser::new(source).parse_file().unwrap();
         let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw);
         crate::syntax::name_resolve::resolve_name_refs(desugared)
+    }
+
+    #[test]
+    fn local_env_layers_frames_without_cloning() {
+        let a = LocalId(0);
+        let b = LocalId(1);
+        let c = LocalId(2);
+
+        let root: LocalEnv<'_, i32> = LocalEnv::root();
+        assert_eq!(root.get(a), None);
+
+        let outer = root.child(vec![(a, 1)]);
+        assert_eq!(outer.get(a), Some(&1));
+        assert_eq!(outer.get(b), None);
+
+        let inner = outer.child(vec![(b, 2)]);
+        assert_eq!(inner.get(a), Some(&1));
+        assert_eq!(inner.get(b), Some(&2));
+
+        // A child frame never leaks into its parent.
+        assert_eq!(outer.get(b), None);
+
+        let seeded = LocalEnv::from_bindings(vec![(c, 7)]);
+        assert_eq!(seeded.get(c), Some(&7));
+    }
+
+    #[test]
+    fn local_env_bind_rebinds_in_place() {
+        let a = LocalId(0);
+        let b = LocalId(1);
+        let root: LocalEnv<'_, i32> = LocalEnv::root();
+        let mut frame = root.child(Vec::new());
+
+        // Iterating binders rebind the same id once per element.
+        for value in 0..3 {
+            frame.bind(a, value);
+            assert_eq!(frame.get(a), Some(&value));
+        }
+        frame.bind(b, 10);
+        assert_eq!(frame.get(a), Some(&2));
+        assert_eq!(frame.get(b), Some(&10));
     }
 
     fn node_value<'a>(file: &'a ast::File, name: &str) -> &'a ast::Expr {

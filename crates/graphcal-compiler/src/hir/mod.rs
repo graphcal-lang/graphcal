@@ -30,8 +30,8 @@ pub mod types;
 
 pub use expr::{
     AssertBody, BuiltinConst, BuiltinFnName, ConstRef, Expr, ExprDependencies, ExprKind,
-    ExprLowerError, ExprLoweringContext, FunctionRef, LocalDef, LocalId, collect_expr_dependencies,
-    has_ref_outside_unfold, lower_assert_body, lower_expr,
+    ExprLowerError, ExprLoweringContext, FunctionRef, LocalDef, LocalEnv, LocalId,
+    collect_expr_dependencies, has_ref_outside_unfold, lower_assert_body, lower_expr,
 };
 pub use lower::{
     GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope, TypeLoweringContext,

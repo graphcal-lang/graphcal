@@ -30,7 +30,7 @@ use super::super::helpers::{
 };
 use super::super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
 
-type HirLocalTypes = HashMap<hir::LocalId, InferredType>;
+type HirLocalTypes<'a> = hir::LocalEnv<'a, InferredType>;
 
 type ResolvedDeclKey = ResolvedName<namespace::Decl>;
 
@@ -45,7 +45,7 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_owner(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let locals = HirLocalTypes::new();
+    let locals = HirLocalTypes::root();
     infer_hir_type(
         expr,
         owner_decl_name,
@@ -67,7 +67,7 @@ fn infer_hir_type(
     expr: &hir::Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -99,7 +99,7 @@ fn infer_hir_type_inner(
     expr: &hir::Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -140,13 +140,14 @@ fn infer_hir_type_inner(
             infer_hir_const_ref(target, declared_types, dag, registry, src)?
         }
         hir::ExprKind::LocalRef(local) => {
-            local_types.get(&local.value).cloned().ok_or_else(|| {
-                GraphcalError::UnknownLocalRef {
+            local_types
+                .get(local.value)
+                .cloned()
+                .ok_or_else(|| GraphcalError::UnknownLocalRef {
                     name: format!("#{}", local.value.index()),
                     src: src.clone(),
                     span: local.span.into(),
-                }
-            })?
+                })?
         }
         hir::ExprKind::FnCall { callee, args, .. } => infer_hir_fn_call(
             callee,
@@ -535,7 +536,7 @@ fn infer_hir_const_ref(
 fn infer_arg(
     arg: &hir::Expr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -560,7 +561,7 @@ fn infer_hir_fn_call(
     callee: &crate::syntax::span::Spanned<FunctionRef>,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -742,7 +743,7 @@ fn infer_hir_builtin_fn(
     callee_span: Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -799,7 +800,7 @@ fn infer_hir_type_conversion(
     span: crate::syntax::span::Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -862,7 +863,7 @@ fn infer_hir_timescale_conversion(
     span: crate::syntax::span::Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -906,7 +907,7 @@ fn infer_hir_datetime_constructor(
     span: crate::syntax::span::Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -1015,7 +1016,7 @@ fn infer_hir_datetime_unary(
     span: crate::syntax::span::Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -1061,7 +1062,7 @@ fn infer_hir_if(
     else_branch: &hir::Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -1108,7 +1109,7 @@ fn infer_hir_unary(
     operand: &hir::Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -1188,7 +1189,7 @@ fn infer_hir_binop(
     rhs: &hir::Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -1288,14 +1289,14 @@ fn infer_hir_for_comp(
     body: &hir::Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let mut inner_locals = local_types.clone();
+    let mut inner_locals = local_types.child(Vec::new());
     for binding in bindings {
         let var_type = match &binding.index {
             hir::expr::ForBindingIndex::Named(index) => {
@@ -1326,7 +1327,7 @@ fn infer_hir_for_comp(
                 hir_nat_to_linear_form(arg).map_err(|err| nat_overflow_error(err, src, *span))?,
             ),
         };
-        inner_locals.insert(binding.local.id, var_type);
+        inner_locals.bind(binding.local.id, var_type);
     }
     let mut result = infer_hir_type(
         body,
@@ -1366,7 +1367,7 @@ fn infer_hir_index_access(
     args: &[hir::expr::IndexArg],
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -1405,7 +1406,7 @@ fn infer_hir_index_access(
                 }
             }
             hir::expr::IndexArg::Var(local) => {
-                let Some(var_type) = local_types.get(&local.value) else {
+                let Some(var_type) = local_types.get(local.value) else {
                     return Err(GraphcalError::UnknownLocalRef {
                         name: format!("#{}", local.value.index()),
                         src: src.clone(),
@@ -1573,7 +1574,7 @@ fn infer_hir_convert(
     target: &crate::desugar::resolved_ast::UnitExpr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -1616,7 +1617,7 @@ fn infer_hir_display_timezone(
     timezone: &str,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -1783,7 +1784,7 @@ fn infer_hir_field_access(
     field: &crate::syntax::span::Spanned<FieldName>,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -1995,7 +1996,7 @@ fn infer_hir_constructor_call(
     constructor_generic_args: &[hir::expr::GenericArg],
     fields: &[hir::expr::FieldInit],
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -2321,7 +2322,7 @@ fn infer_hir_map_literal(
     expr: &hir::Expr,
     entries: &[hir::expr::MapEntry],
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -2581,7 +2582,7 @@ fn infer_hir_scan(
     body: &hir::Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -2626,9 +2627,8 @@ fn infer_hir_scan(
             span: init.span.into(),
         });
     }
-    let mut scan_locals = local_types.clone();
-    scan_locals.insert(acc.id, *element.clone());
-    scan_locals.insert(val.id, *element.clone());
+    let scan_locals =
+        local_types.child(vec![(acc.id, *element.clone()), (val.id, *element.clone())]);
     let body_type = infer_hir_type(
         body,
         owner_decl_name,
@@ -2660,7 +2660,7 @@ fn infer_hir_unfold(
     body: &hir::Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -2709,9 +2709,10 @@ fn infer_hir_unfold(
             });
         }
     };
-    let mut scan_locals = local_types.clone();
-    scan_locals.insert(prev.id, InferredType::Scalar(dimension.clone()));
-    scan_locals.insert(curr.id, InferredType::Scalar(dimension));
+    let scan_locals = local_types.child(vec![
+        (prev.id, InferredType::Scalar(dimension.clone())),
+        (curr.id, InferredType::Scalar(dimension)),
+    ]);
     let body_type = infer_hir_type(
         body,
         owner_decl_name,
@@ -2781,7 +2782,7 @@ fn infer_hir_match(
     arms: &[hir::expr::MatchArm],
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -2931,7 +2932,7 @@ fn infer_hir_match(
                         span: (*span).into(),
                     });
                 }
-                let mut arm_locals = local_types.clone();
+                let mut arm_locals = local_types.child(Vec::new());
                 let mut seen_pattern_fields = std::collections::HashSet::new();
                 for binding in bindings {
                     let field = match binding {
@@ -2960,7 +2961,7 @@ fn infer_hir_match(
                     )?;
                     match binding {
                         hir::expr::PatternBinding::Bind { local, .. } => {
-                            arm_locals.insert(local.id, field_type);
+                            arm_locals.bind(local.id, field_type);
                         }
                         hir::expr::PatternBinding::Wildcard { .. } => {}
                     }
@@ -3022,7 +3023,7 @@ fn infer_hir_inline_dag_ref(
     output: &crate::syntax::span::Spanned<ResolvedName<namespace::Decl>>,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes,
+    local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,

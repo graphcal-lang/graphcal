@@ -1409,7 +1409,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
             fields,
         },
     )]);
-    let empty_locals = crate::eval_expr::HirLocalValueMap::new();
+    let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
@@ -1474,7 +1474,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
             fields,
         },
     )]);
-    let empty_locals = crate::eval_expr::HirLocalValueMap::new();
+    let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
@@ -2049,7 +2049,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             entries,
         },
     )]);
-    let empty_locals = crate::eval_expr::HirLocalValueMap::new();
+    let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
@@ -2108,7 +2108,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             variant: graphcal_compiler::syntax::names::IndexVariantName::new("Burn"),
         },
     )]);
-    let empty_locals = crate::eval_expr::HirLocalValueMap::new();
+    let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;

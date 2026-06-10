@@ -95,7 +95,7 @@ pub fn resolve_unit_scale(
                             item.name.span,
                         )
                     })?;
-                let empty_locals = HirLocalValueMap::new();
+                let empty_locals = HirLocalValueMap::root();
                 let scale_val = eval_hir_expr(scale_hir, values, &empty_locals, ctx)?;
                 let RuntimeValue::Scalar(scale_f64) = scale_val else {
                     return Err(ctx.eval_error(

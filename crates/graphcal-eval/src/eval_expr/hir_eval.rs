@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::hir::{self, BuiltinFnName, ConstRef, FunctionRef};
@@ -23,7 +22,7 @@ use super::{
     runtime_struct_type_def, topo_order_for_dag_body,
 };
 
-pub type HirLocalValueMap = HashMap<hir::LocalId, RuntimeValue>;
+pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, RuntimeValue>;
 
 type ResolvedDeclKey = ResolvedName<namespace::Decl>;
 
@@ -36,7 +35,7 @@ type ResolvedDeclKey = ResolvedName<namespace::Decl>;
 pub fn eval_hir_expr(
     expr: &hir::Expr,
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     // Recursion choke point: evaluation recurses once per tree level
@@ -49,7 +48,7 @@ pub fn eval_hir_expr(
 fn eval_hir_expr_inner(
     expr: &hir::Expr,
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match &expr.kind {
@@ -81,7 +80,7 @@ fn eval_hir_expr_inner(
             }),
         hir::ExprKind::ConstRef(target) => eval_hir_const_ref(target, values, local_values, ctx),
         hir::ExprKind::LocalRef(local) => local_values
-            .get(&local.value)
+            .get(local.value)
             .cloned()
             .ok_or_else(|| ctx.eval_error("undefined local variable", local.span)),
         hir::ExprKind::BinOp { op, lhs, rhs } => {
@@ -155,7 +154,7 @@ fn eval_hir_expr_inner(
 fn eval_hir_const_ref(
     target: &graphcal_compiler::syntax::span::Spanned<ConstRef>,
     values: &RuntimeValueMap,
-    _local_values: &HirLocalValueMap,
+    _local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match &target.value {
@@ -209,7 +208,7 @@ fn eval_hir_binop(
     lhs: &hir::Expr,
     rhs: &hir::Expr,
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::desugar::resolved_ast::BinOp;
@@ -292,7 +291,7 @@ fn eval_hir_unary(
     op: graphcal_compiler::desugar::resolved_ast::UnaryOp,
     operand: &hir::Expr,
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match op {
@@ -347,7 +346,7 @@ fn eval_hir_fn_call(
     callee: &graphcal_compiler::syntax::span::Spanned<FunctionRef>,
     args: &[hir::Expr],
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let FunctionRef::Builtin(name) = callee.value;
@@ -508,7 +507,7 @@ fn eval_hir_conversion_fn(
     span: Span,
     args: &[hir::Expr],
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let name = match kind {
@@ -643,7 +642,7 @@ fn eval_hir_builtin_fn(
     name: BuiltinFnName,
     args: &[hir::Expr],
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let builtin = ctx.builtin_fns.get(name.as_str()).ok_or_else(|| {
@@ -730,7 +729,7 @@ fn eval_hir_constructor_call(
     callee: &graphcal_compiler::syntax::span::Spanned<ResolvedName<namespace::Constructor>>,
     fields: &[hir::expr::FieldInit],
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let target = constructor_target(ctx, &callee.value).ok_or_else(|| {
@@ -850,7 +849,7 @@ fn map_entry_index_def<'a>(
 fn eval_hir_map_literal(
     entries: &[hir::expr::MapEntry],
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let first = entries
@@ -949,7 +948,7 @@ fn eval_hir_for_comp(
     bindings: &[hir::expr::ForBinding],
     body: &hir::Expr,
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let binding = &bindings[0];
@@ -995,7 +994,7 @@ fn eval_hir_for_comp(
     let remaining = &bindings[1..];
     let variants = idx_def.variants();
     let mut entries = IndexMap::new();
-    let mut inner_locals = local_values.clone();
+    let mut inner_locals = local_values.child(Vec::new());
     for (step_index, variant) in variants.iter().enumerate() {
         let binding_value = match &idx_def.kind {
             IndexKind::Named { .. } | IndexKind::RequiredNamed => RuntimeValue::Label {
@@ -1018,7 +1017,7 @@ fn eval_hir_for_comp(
                 })?)
             }
         };
-        inner_locals.insert(binding.local.id, binding_value);
+        inner_locals.bind(binding.local.id, binding_value);
         let val = if remaining.is_empty() {
             eval_hir_expr(body, values, &inner_locals, ctx)?
         } else {
@@ -1037,7 +1036,7 @@ fn eval_hir_index_access(
     inner: &hir::Expr,
     args: &[hir::expr::IndexArg],
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let mut current = eval_hir_expr(inner, values, local_values, ctx)?;
@@ -1061,7 +1060,7 @@ fn eval_hir_index_access(
             }
             hir::expr::IndexArg::Var(local) => {
                 let var_val = local_values
-                    .get(&local.value)
+                    .get(local.value)
                     .ok_or_else(|| ctx.eval_error("undefined loop variable", local.span))?;
                 match var_val {
                     RuntimeValue::Label {
@@ -1122,7 +1121,7 @@ fn eval_hir_scan(
     val: &hir::LocalDef,
     body: &hir::Expr,
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let source_val = eval_hir_expr(source, values, local_values, ctx)?;
@@ -1135,10 +1134,10 @@ fn eval_hir_scan(
     };
     let mut acc_val = eval_hir_expr(init, values, local_values, ctx)?;
     let mut result_entries = IndexMap::new();
-    let mut scan_locals = local_values.clone();
+    let mut scan_locals = local_values.child(Vec::new());
     for (variant, item) in &source_entries {
-        scan_locals.insert(acc.id, acc_val);
-        scan_locals.insert(val.id, item.clone());
+        scan_locals.bind(acc.id, acc_val);
+        scan_locals.bind(val.id, item.clone());
         let body_val = eval_hir_expr(body, values, &scan_locals, ctx)?;
         result_entries.insert(variant.clone(), body_val.clone());
         acc_val = body_val;
@@ -1195,7 +1194,7 @@ fn eval_hir_unfold(
             Span::new(0, 0),
         )
     })?;
-    let empty_locals = HirLocalValueMap::new();
+    let empty_locals = HirLocalValueMap::root();
     let init_val = eval_hir_expr(init, values, &empty_locals, ctx)?;
     let mut result_entries = IndexMap::new();
     result_entries.insert(variants[0].clone(), init_val);
@@ -1213,7 +1212,7 @@ fn eval_hir_unfold(
             entries: IndexMap::new(),
         },
     );
-    let mut scan_locals = HirLocalValueMap::with_capacity(2);
+    let mut scan_locals = HirLocalValueMap::root();
     #[expect(
         clippy::needless_range_loop,
         reason = "step index addresses both variants and accumulated values"
@@ -1222,14 +1221,14 @@ fn eval_hir_unfold(
         if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(&self_key) {
             *entries = std::mem::take(&mut result_entries);
         }
-        scan_locals.insert(
+        scan_locals.bind(
             prev.id,
             RuntimeValue::RangeLabel {
                 step_index: i - 1,
                 value: range_data.step_value(i - 1),
             },
         );
-        scan_locals.insert(
+        scan_locals.bind(
             curr.id,
             RuntimeValue::RangeLabel {
                 step_index: i,
@@ -1261,7 +1260,7 @@ fn eval_hir_match(
     scrutinee: &hir::Expr,
     arms: &[hir::expr::MatchArm],
     values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let scrutinee_val = eval_hir_expr(scrutinee, values, local_values, ctx)?;
@@ -1301,7 +1300,7 @@ fn eval_hir_match(
                 .ok_or_else(|| {
                     ctx.eval_error(format!("no match arm for variant `{type_name}`"), span)
                 })?;
-            let mut arm_locals = local_values.clone();
+            let mut arm_locals = local_values.child(Vec::new());
             let hir::expr::MatchPattern::Constructor { bindings, .. } = &matched_arm.pattern else {
                 return Err(
                     ctx.internal_error("matched non-constructor arm for struct", matched_arm.span)
@@ -1317,7 +1316,7 @@ fn eval_hir_match(
                                     field.span,
                                 )
                             })?;
-                        arm_locals.insert(local.id, field_val.clone());
+                        arm_locals.bind(local.id, field_val.clone());
                     }
                     hir::expr::PatternBinding::Wildcard { .. } => {}
                 }
@@ -1411,7 +1410,7 @@ fn eval_hir_inline_dag_call(
         root_values: ctx.root_values,
         struct_field_constraints: ctx.struct_field_constraints,
     };
-    let empty_hir_locals = HirLocalValueMap::new();
+    let empty_hir_locals = HirLocalValueMap::root();
 
     let topo = topo_order_for_dag_body(dag_tir).map_err(|remaining| {
         ctx.internal_error(

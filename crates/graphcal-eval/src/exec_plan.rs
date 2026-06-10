@@ -261,7 +261,7 @@ pub fn eval_consts_from_tir(
 
     let sorted_names = const_eval_order(dag, src)?;
 
-    let empty_hir_locals = HirLocalValueMap::new();
+    let empty_hir_locals = HirLocalValueMap::root();
     let mut visible_values = visible_values_with_imports(dag, &HashMap::new());
     let mut local_const_values: RuntimeValueMap = HashMap::new();
 
@@ -578,7 +578,7 @@ fn resolve_constraint_from_bounds(
     src: &NamedSource<Arc<String>>,
     scalar_err_msg: impl Fn(graphcal_compiler::syntax::ast::DomainBoundKind) -> String,
 ) -> Result<ResolvedDomainConstraint, GraphcalError> {
-    let empty_locals = HirLocalValueMap::new();
+    let empty_locals = HirLocalValueMap::root();
     let mut min_val: Option<f64> = None;
     let mut max_val: Option<f64> = None;
     let mut min_display: Option<String> = None;
