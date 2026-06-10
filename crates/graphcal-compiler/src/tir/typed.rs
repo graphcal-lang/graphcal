@@ -15,7 +15,7 @@ use crate::hir;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, ModuleAliasName,
-    NameAtom, NameNamespace, NamePath, StructTypeName, WrittenIndexVariant, WrittenVariantRef,
+    NameAtom, NameNamespace, NamePath, StructTypeName,
 };
 use crate::syntax::nat::Monomial;
 pub use crate::syntax::nat::{NatLinearForm, NatPolyForm};
@@ -517,10 +517,6 @@ pub struct ResolvedDagDependencies {
         HashMap<ResolvedName<namespace::Decl>, BTreeSet<ResolvedName<namespace::Decl>>>,
     /// For each const declaration, the canonical const declarations it reads.
     pub const_deps: HashMap<ResolvedName<namespace::Decl>, BTreeSet<ResolvedName<namespace::Decl>>>,
-    /// Source-span keyed graph references routed through canonical declaration identities.
-    pub graph_ref_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
-    /// Source-span keyed const references routed through canonical declaration identities.
-    pub const_ref_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
 }
 
 /// HIR expressions for value declarations.
@@ -545,50 +541,21 @@ impl ResolvedExpressions {
 }
 
 /// Canonical HIR-derived index references used by collection/index inference.
-///
-/// Occurrence maps are keyed by the written form of each reference (see
-/// [`crate::hir::expr::WrittenRefs`]), not by source span, so they stay
-/// addressable for synthetic expressions (CLI/JSON overrides) that have no
-/// real source locations.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedCollectionRefs {
-    /// Canonical index definitions observed while collecting the refs below
+    /// Canonical index definitions observed while collecting the refs
     /// or owner-qualified declaration types that runtime collection semantics
     /// may need (for example `unfold` over a declared indexed node).
     pub index_defs: HashMap<ResolvedName<namespace::Index>, IndexDef>,
-    /// Written for-binding index path -> resolved index owner/name.
-    pub for_binding_indexes: HashMap<NamePath, ResolvedName<namespace::Index>>,
-    /// Written value-level variant reference -> resolved index variant.
-    ///
-    /// This covers parser-created `VariantLiteral` nodes and locally-resolved
-    /// const-like refs that HIR proves are index variants.
-    pub variant_literals: HashMap<WrittenVariantRef, crate::syntax::names::ResolvedIndexVariant>,
-    /// Written map/table `Index.Variant` key -> resolved index variant.
-    pub map_entry_variants:
-        HashMap<WrittenIndexVariant, crate::syntax::names::ResolvedIndexVariant>,
-    /// Written `Index.Variant` argument -> resolved index variant.
-    pub index_access_variants:
-        HashMap<WrittenIndexVariant, crate::syntax::names::ResolvedIndexVariant>,
-    /// Written index-label match pattern -> resolved index variant.
-    pub match_label_variants:
-        HashMap<WrittenVariantRef, crate::syntax::names::ResolvedIndexVariant>,
 }
 
 /// Canonical HIR-derived constructor references used by constructor and match inference.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedConstructorRefs {
-    /// Canonical constructor definitions observed while collecting the refs below.
+    /// Canonical constructor definitions observed while collecting constructor
+    /// calls, const-like constructor refs, and match patterns. HIR carries the
+    /// resolved constructor name inline; this map supplies the rich target.
     pub constructor_defs: HashMap<ResolvedName<namespace::Constructor>, ResolvedConstructorTarget>,
-    /// Written constructor-call callee path -> resolved constructor.
-    ///
-    /// The rich target lives in [`Self::constructor_defs`]; chain the two maps
-    /// to go from a written callee to its [`ResolvedConstructorTarget`].
-    pub constructor_calls: HashMap<NamePath, ResolvedName<namespace::Constructor>>,
-    /// Constructor match-pattern path/name span -> resolved constructor pattern.
-    // TODO(#766): this is the last span-keyed occurrence map; it dies with the
-    // syntax-AST walkers because per-occurrence pattern bindings have no
-    // span-free written identity short of including the bindings themselves.
-    pub match_pattern_constructors: HashMap<Span, ResolvedConstructorPattern>,
 }
 
 /// Canonical HIR-derived inline-DAG calls used by dim-check/eval routing.
@@ -652,6 +619,13 @@ pub struct DagSemanticBody {
     pub expressions: ResolvedExpressions,
     /// Domain bounds per declaration, lowered to HIR, in source order.
     pub domain_bounds: HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
+    /// Plot/figure/layer expressions lowered to HIR, keyed by declaration name.
+    pub plot_exprs: ResolvedPlotExprs,
+    /// Dynamic unit scale expressions lowered to HIR, keyed by unit name.
+    ///
+    /// Units are file-level declarations, so only the root DAG's semantic
+    /// body carries entries; evaluation looks them up through the TIR root.
+    pub dynamic_unit_scales: HashMap<crate::syntax::names::UnitName, hir::Expr>,
     /// Canonical dependency maps for this DAG.
     pub dependencies: ResolvedDagDependencies,
     /// Canonical HIR-derived collection/index references.
@@ -664,6 +638,39 @@ pub struct DagSemanticBody {
     pub type_defs: ResolvedTypeDefs,
     /// Canonical declaration identity for every value name visible in this DAG.
     pub decl_bindings: HashMap<ScopedName, ResolvedName<namespace::Decl>>,
+}
+
+/// Plot/figure/layer expressions lowered to HIR.
+///
+/// Evaluation walks these lowered bodies instead of the source-shaped
+/// declarations; the source entries on [`DagTIR`] keep spans and mark/plot
+/// metadata for diagnostics and output shaping.
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedPlotExprs {
+    /// Lowered plot bodies keyed by the plot's declaration name.
+    pub plots: HashMap<ScopedName, LoweredPlotBody>,
+    /// Lowered figure field expressions keyed by the figure's declaration name.
+    pub figures: HashMap<ScopedName, Vec<LoweredPlotField>>,
+    /// Lowered layer field expressions keyed by the layer's declaration name.
+    pub layers: HashMap<ScopedName, Vec<LoweredPlotField>>,
+}
+
+/// One plot declaration's expressions lowered to HIR, in source order.
+#[derive(Debug, Clone, Default)]
+pub struct LoweredPlotBody {
+    /// Encoding channel expressions (`x: ...`, `y: ...`).
+    pub encodings: Vec<(crate::syntax::ast::EncodingChannel, hir::Expr)>,
+    /// Mark property expressions (`stroke_width: ...`).
+    pub mark_properties: Vec<LoweredPlotField>,
+    /// Plot-level property expressions (`title: ...`).
+    pub properties: Vec<LoweredPlotField>,
+}
+
+/// A named plot/figure/layer field expression lowered to HIR.
+#[derive(Debug, Clone)]
+pub struct LoweredPlotField {
+    pub name: crate::syntax::names::PlotPropertyName,
+    pub value: hir::Expr,
 }
 
 /// A resolved inline-DAG invocation target, bindings, and projected output.
@@ -683,26 +690,6 @@ pub struct ResolvedConstructorTarget {
     pub owning_type: ResolvedName<namespace::StructType>,
     pub type_def: TypeDef,
     pub variant: UnionMemberDef,
-}
-
-/// A resolved constructor match pattern, including lexical HIR pattern bindings.
-#[derive(Debug, Clone)]
-pub struct ResolvedConstructorPattern {
-    pub target: ResolvedConstructorTarget,
-    pub bindings: Vec<ResolvedPatternBinding>,
-}
-
-/// A binding inside a resolved constructor match pattern.
-#[derive(Debug, Clone)]
-pub enum ResolvedPatternBinding {
-    Bind {
-        field: Spanned<crate::syntax::names::FieldName>,
-        local: hir::LocalDef,
-    },
-    Wildcard {
-        field: Spanned<crate::syntax::names::FieldName>,
-        span: Span,
-    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1067,7 +1054,7 @@ fn type_resolve_impl(
     let const_deps_for_hir = ir.const_deps.clone();
     let imported_value_sources_for_hir = ir.imported_value_sources.clone();
     let asserts_for_hir = ir.asserts.clone();
-    let root_dag = type_resolve_dag(
+    let mut root_dag = type_resolve_dag(
         ir.consts,
         ir.params,
         ir.nodes,
@@ -1095,6 +1082,7 @@ fn type_resolve_impl(
         module_ctx,
         src,
     )?;
+    lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut root_dag.semantic);
     let mut dags = DagRegistry::new();
     dags.insert(root_dag_id.clone(), root_dag);
     Ok(TIR {
@@ -1128,7 +1116,7 @@ fn type_resolve_single_impl(
     let const_deps_for_hir = ir.const_deps.clone();
     let imported_value_sources_for_hir = ir.imported_value_sources.clone();
     let asserts_for_hir = ir.asserts.clone();
-    type_resolve_dag(
+    let mut dag = type_resolve_dag(
         ir.consts,
         ir.params,
         ir.nodes,
@@ -1155,7 +1143,35 @@ fn type_resolve_single_impl(
         ir.imported_value_sources,
         module_ctx,
         src,
-    )
+    )?;
+    lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut dag.semantic);
+    Ok(dag)
+}
+
+/// Lower the registry's dynamic unit scale expressions to HIR into the DAG's
+/// semantic body.
+///
+/// A scale expression that fails to lower is omitted; evaluation reports a
+/// dynamic-scale resolution error if such a unit is actually used. This keeps
+/// the laziness of the previous evaluation-time path, where an unused broken
+/// dynamic unit never surfaced an error.
+fn lower_dynamic_unit_scales(
+    registry: &Registry,
+    ctx: ModuleTypeContext<'_>,
+    semantic: &mut DagSemanticBody,
+) {
+    let generic_scope = hir::GenericScope::new();
+    let prelude = hir::PreludeTypeScope::graphcal();
+    let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
+        .with_prelude(&prelude)
+        .with_decl_bindings(&semantic.decl_bindings);
+    for (name, _dim, scale) in registry.units.all_units() {
+        if let crate::registry::types::UnitScale::Dynamic { scale_expr, .. } = scale
+            && let Ok(lowered) = hir::lower_expr(scale_expr, expr_ctx)
+        {
+            semantic.dynamic_unit_scales.insert(name.clone(), lowered);
+        }
+    }
 }
 
 /// Internal helper: resolve type annotations for the const/param/node
@@ -1222,7 +1238,6 @@ fn type_resolve_dag(
 
     let LoweredDagExpressions {
         exprs: expressions,
-        written_refs,
         domain_bounds,
     } = lower_resolved_expressions(
         &consts,
@@ -1241,17 +1256,11 @@ fn type_resolve_dag(
         &expressions,
         &domain_bounds,
         &resolved_decl_types,
-        &written_refs,
         module_ctx,
         src,
     )?;
-    let constructor_refs = collect_resolved_constructor_refs(
-        &expressions,
-        &domain_bounds,
-        &written_refs,
-        module_ctx,
-        src,
-    )?;
+    let constructor_refs =
+        collect_resolved_constructor_refs(&expressions, &domain_bounds, module_ctx, src)?;
     let inline_dag_refs = collect_resolved_inline_dag_refs(&expressions);
     let type_defs = collect_resolved_type_defs(
         &resolved_decl_types,
@@ -1264,6 +1273,8 @@ fn type_resolve_dag(
     let semantic = DagSemanticBody {
         expressions,
         domain_bounds,
+        plot_exprs: ResolvedPlotExprs::default(),
+        dynamic_unit_scales: HashMap::new(),
         dependencies,
         collection_refs,
         constructor_refs,
@@ -1383,13 +1394,7 @@ fn record_resolved_struct_type_def(
                     registry,
                     src,
                 )?;
-                // Field-bound occurrences are not merged into the owning
-                // DAG's written refs: type defs are shared across DAGs and
-                // their bounds carry no map/match occurrences that the
-                // per-DAG metadata serves.
-                let mut scratch = hir::expr::WrittenRefs::default();
-                let bounds =
-                    lower_domain_bounds(&field.type_ann, bound_expr_ctx, src, &mut scratch)?;
+                let bounds = lower_domain_bounds(&field.type_ann, bound_expr_ctx, src)?;
                 if !bounds.is_empty() {
                     defs.field_bounds.insert(key.clone(), bounds);
                 }
@@ -1482,12 +1487,11 @@ fn lower_resolved_expressions(
         .with_prelude(&prelude)
         .with_decl_bindings(&decl_bindings);
     let mut exprs = ResolvedExpressions::default();
-    let mut written_refs = hir::expr::WrittenRefs::default();
     let mut domain_bounds = HashMap::new();
 
     for entry in consts {
         let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
-        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src, &mut written_refs)?;
+        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
@@ -1497,32 +1501,25 @@ fn lower_resolved_expressions(
             ctx,
             const_deps.get(&entry.name),
             src,
-            &mut written_refs,
         )?;
         exprs.consts.insert(key, hir_expr);
     }
     for entry in params {
         let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
-        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src, &mut written_refs)?;
+        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
         let Some(expr) = &entry.default_expr else {
             continue;
         };
-        let hir_expr = lower_expr_or_synthetic_alias(
-            expr,
-            expr_ctx,
-            ctx,
-            runtime_deps.get(&entry.name),
-            src,
-            &mut written_refs,
-        )?;
+        let hir_expr =
+            lower_expr_or_synthetic_alias(expr, expr_ctx, ctx, runtime_deps.get(&entry.name), src)?;
         exprs.param_defaults.insert(key, hir_expr);
     }
     for entry in nodes {
         let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
-        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src, &mut written_refs)?;
+        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
@@ -1532,23 +1529,132 @@ fn lower_resolved_expressions(
             ctx,
             runtime_deps.get(&entry.name),
             src,
-            &mut written_refs,
         )?;
         exprs.nodes.insert(key, hir_expr);
     }
     for entry in asserts {
         let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
-        let hir_body =
-            hir::expr::lower_assert_body_with_refs(&entry.body, expr_ctx, &mut written_refs)
-                .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
+        let hir_body = hir::lower_assert_body(&entry.body, expr_ctx)
+            .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
         exprs.asserts.insert(key, hir_body);
     }
 
     Ok(LoweredDagExpressions {
         exprs,
-        written_refs,
         domain_bounds,
     })
+}
+
+/// Lower plot/figure/layer expressions to HIR into the DAG's semantic body.
+///
+/// Plots are best-effort at evaluation time, so a body whose expressions fail
+/// to lower is omitted (the runtime then skips that plot) instead of failing
+/// the compile; figure/layer fields are omitted individually. Successfully
+/// lowered expressions feed the collect walks so index/constructor defs cover
+/// occurrences that appear only in plots.
+fn lower_plot_exprs(
+    plots: &[crate::ir::lower::PlotEntry],
+    figures: &[crate::ir::lower::FigureEntry],
+    layers: &[crate::ir::lower::LayerEntry],
+    ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+    semantic: &mut DagSemanticBody,
+) -> Result<(), GraphcalError> {
+    let generic_scope = hir::GenericScope::new();
+    let prelude = hir::PreludeTypeScope::graphcal();
+    let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
+        .with_prelude(&prelude)
+        .with_decl_bindings(&semantic.decl_bindings);
+
+    let mut plot_exprs = ResolvedPlotExprs::default();
+
+    let lower_one = |expr: &crate::desugar::resolved_ast::Expr,
+                     collection_refs: &mut ResolvedCollectionRefs,
+                     constructor_refs: &mut ResolvedConstructorRefs|
+     -> Result<Option<hir::Expr>, GraphcalError> {
+        let Ok(lowered) = hir::lower_expr(expr, expr_ctx) else {
+            return Ok(None);
+        };
+        collect_resolved_collection_refs_from_expr(&lowered, ctx, src, collection_refs)?;
+        collect_resolved_constructor_refs_from_expr(&lowered, ctx, src, constructor_refs)?;
+        Ok(Some(lowered))
+    };
+
+    for entry in plots {
+        let mut body = LoweredPlotBody::default();
+        let mut complete = true;
+        for encoding in &entry.decl.encodings {
+            match lower_one(
+                &encoding.value,
+                &mut semantic.collection_refs,
+                &mut semantic.constructor_refs,
+            )? {
+                Some(lowered) => body.encodings.push((encoding.channel, lowered)),
+                None => complete = false,
+            }
+        }
+        for field in &entry.decl.mark.properties {
+            match lower_one(
+                &field.value,
+                &mut semantic.collection_refs,
+                &mut semantic.constructor_refs,
+            )? {
+                Some(lowered) => body.mark_properties.push(LoweredPlotField {
+                    name: field.name.value.clone(),
+                    value: lowered,
+                }),
+                None => complete = false,
+            }
+        }
+        for field in &entry.decl.properties {
+            match lower_one(
+                &field.value,
+                &mut semantic.collection_refs,
+                &mut semantic.constructor_refs,
+            )? {
+                Some(lowered) => body.properties.push(LoweredPlotField {
+                    name: field.name.value.clone(),
+                    value: lowered,
+                }),
+                None => complete = false,
+            }
+        }
+        if complete {
+            plot_exprs.plots.insert(entry.name.clone(), body);
+        }
+    }
+
+    for (name, fields, target) in figures
+        .iter()
+        .map(|entry| (&entry.name, &entry.decl.fields, true))
+        .chain(
+            layers
+                .iter()
+                .map(|entry| (&entry.name, &entry.decl.fields, false)),
+        )
+    {
+        let mut lowered_fields = Vec::new();
+        for field in fields {
+            if let Some(lowered) = lower_one(
+                &field.value,
+                &mut semantic.collection_refs,
+                &mut semantic.constructor_refs,
+            )? {
+                lowered_fields.push(LoweredPlotField {
+                    name: field.name.value.clone(),
+                    value: lowered,
+                });
+            }
+        }
+        if target {
+            plot_exprs.figures.insert(name.clone(), lowered_fields);
+        } else {
+            plot_exprs.layers.insert(name.clone(), lowered_fields);
+        }
+    }
+
+    semantic.plot_exprs = plot_exprs;
+    Ok(())
 }
 
 /// Build the canonical declaration key for `name`, reporting an internal
@@ -1573,13 +1679,12 @@ fn lower_domain_bounds(
     type_ann: &crate::desugar::resolved_ast::TypeExpr,
     expr_ctx: hir::ExprLoweringContext<'_>,
     src: &NamedSource<Arc<String>>,
-    written_refs: &mut hir::expr::WrittenRefs,
 ) -> Result<Vec<ResolvedDomainBound>, GraphcalError> {
     type_ann
         .domain_bounds()
         .iter()
         .map(|bound| {
-            let value = hir::expr::lower_expr_with_refs(&bound.value, expr_ctx, written_refs)
+            let value = hir::lower_expr(&bound.value, expr_ctx)
                 .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
             Ok(ResolvedDomainBound {
                 kind: bound.kind,
@@ -1592,11 +1697,9 @@ fn lower_domain_bounds(
 }
 
 /// Output of [`lower_resolved_expressions`]: the lowered declaration bodies
-/// plus the written-form resolution metadata and HIR domain bounds collected
-/// while lowering them.
+/// plus the HIR domain bounds collected while lowering them.
 struct LoweredDagExpressions {
     exprs: ResolvedExpressions,
-    written_refs: hir::expr::WrittenRefs,
     domain_bounds: HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
 }
 
@@ -1606,17 +1709,9 @@ fn lower_expr_or_synthetic_alias(
     ctx: ModuleTypeContext<'_>,
     deps: Option<&BTreeSet<ScopedName>>,
     src: &NamedSource<Arc<String>>,
-    written_refs: &mut hir::expr::WrittenRefs,
 ) -> Result<hir::Expr, GraphcalError> {
-    // Collect into a scratch sink first: a failed lowering may have recorded
-    // occurrences before erroring, and the synthetic-alias fallback replaces
-    // the whole expression.
-    let mut scratch = hir::expr::WrittenRefs::default();
-    match hir::expr::lower_expr_with_refs(expr, expr_ctx, &mut scratch) {
-        Ok(expr) => {
-            written_refs.extend(scratch);
-            Ok(expr)
-        }
+    match hir::lower_expr(expr, expr_ctx) {
+        Ok(expr) => Ok(expr),
         Err(err) => lower_synthetic_alias_expr(expr, ctx, deps)
             .ok_or_else(|| expr_lower_error_to_graphcal(&err, src)),
     }
@@ -1698,8 +1793,6 @@ fn collect_resolved_dag_dependencies(
             }
             deps.const_refs.insert(graph_ref.clone());
         }
-        resolved.graph_ref_targets.extend(deps.graph_ref_targets);
-        resolved.const_ref_targets.extend(deps.const_ref_targets);
         resolved.const_deps.insert(key, deps.const_refs);
     }
 
@@ -1718,8 +1811,6 @@ fn collect_resolved_dag_dependencies(
             hir::ExprDependencies::default,
             hir::collect_expr_dependencies,
         );
-        resolved.graph_ref_targets.extend(deps.graph_ref_targets);
-        resolved.const_ref_targets.extend(deps.const_ref_targets);
         resolved.runtime_deps.insert(key, deps.graph_refs);
     }
 
@@ -1754,8 +1845,6 @@ fn collect_resolved_dag_dependencies(
         if !hir::has_ref_outside_unfold(hir_expr, &key) {
             deps.graph_refs.remove(&key);
         }
-        resolved.graph_ref_targets.extend(deps.graph_ref_targets);
-        resolved.const_ref_targets.extend(deps.const_ref_targets);
         resolved.runtime_deps.insert(key, deps.graph_refs);
     }
 
@@ -1766,18 +1855,10 @@ fn collect_resolved_collection_refs(
     exprs: &ResolvedExpressions,
     domain_bounds: &HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
-    written_refs: &hir::expr::WrittenRefs,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedCollectionRefs, GraphcalError> {
-    let mut refs = ResolvedCollectionRefs {
-        index_defs: HashMap::new(),
-        for_binding_indexes: written_refs.for_binding_indexes.clone(),
-        variant_literals: written_refs.variant_literals.clone(),
-        map_entry_variants: written_refs.map_entry_variants.clone(),
-        index_access_variants: written_refs.index_access_variants.clone(),
-        match_label_variants: written_refs.match_label_variants.clone(),
-    };
+    let mut refs = ResolvedCollectionRefs::default();
 
     for resolved_type in resolved_decl_types.values() {
         collect_resolved_collection_indexes_from_type(resolved_type, ctx, src, &mut refs)?;
@@ -2045,15 +2126,10 @@ fn collect_resolved_collection_refs_from_assert_body(
 fn collect_resolved_constructor_refs(
     exprs: &ResolvedExpressions,
     domain_bounds: &HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
-    written_refs: &hir::expr::WrittenRefs,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedConstructorRefs, GraphcalError> {
-    let mut refs = ResolvedConstructorRefs {
-        constructor_defs: HashMap::new(),
-        constructor_calls: written_refs.constructor_calls.clone(),
-        match_pattern_constructors: HashMap::new(),
-    };
+    let mut refs = ResolvedConstructorRefs::default();
 
     for hir_expr in exprs
         .consts
@@ -2205,25 +2281,14 @@ fn collect_resolved_constructor_refs_from_expr_inner(
         hir::ExprKind::Match { scrutinee, arms } => {
             collect_resolved_constructor_refs_from_expr(scrutinee, ctx, src, refs)?;
             for arm in arms {
-                if let hir::expr::MatchPattern::Constructor {
-                    constructor,
-                    bindings,
-                    ..
-                } = &arm.pattern
-                {
-                    let target = record_resolved_constructor_target(
+                if let hir::expr::MatchPattern::Constructor { constructor, .. } = &arm.pattern {
+                    record_resolved_constructor_target(
                         &constructor.value,
                         ctx,
                         src,
                         constructor.span,
                         refs,
                     )?;
-                    let pattern = ResolvedConstructorPattern {
-                        target,
-                        bindings: bindings.iter().map(resolved_pattern_binding).collect(),
-                    };
-                    refs.match_pattern_constructors
-                        .insert(constructor.span, pattern);
                 }
                 collect_resolved_constructor_refs_from_expr(&arm.body, ctx, src, refs)?;
             }
@@ -2404,19 +2469,6 @@ fn collect_resolved_inline_dag_refs_from_assert_body(
             collect_resolved_inline_dag_refs_from_expr(expected, refs);
             collect_resolved_inline_dag_refs_from_expr(tolerance, refs);
         }
-    }
-}
-
-fn resolved_pattern_binding(binding: &hir::expr::PatternBinding) -> ResolvedPatternBinding {
-    match binding {
-        hir::expr::PatternBinding::Bind { field, local } => ResolvedPatternBinding::Bind {
-            field: field.clone(),
-            local: local.clone(),
-        },
-        hir::expr::PatternBinding::Wildcard { field, span } => ResolvedPatternBinding::Wildcard {
-            field: field.clone(),
-            span: *span,
-        },
     }
 }
 
@@ -2649,6 +2701,7 @@ impl DagTIRSeed {
 
         let mut semantic = self.semantic;
         semantic.decl_bindings = decl_bindings;
+        lower_plot_exprs(&plots, &figures, &layers, module_ctx, src, &mut semantic)?;
 
         Ok(DagTIR {
             dag_id: self.dag_id,

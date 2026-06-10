@@ -1380,13 +1380,13 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let expr = &tir
+    let expr_key = tir
         .root()
-        .nodes
-        .iter()
-        .find(|entry| entry.name.member() == "distance")
-        .expect("distance node")
-        .expr;
+        .resolved_decl_key_for_local(&graphcal_compiler::syntax::names::ScopedName::local(
+            "distance",
+        ))
+        .expect("distance decl key");
+    let expr = &tir.root().semantic.expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::names::StructTypeName::new("Command"),
@@ -1409,7 +1409,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
             fields,
         },
     )]);
-    let empty_locals = HashMap::new();
+    let empty_locals = crate::eval_expr::HirLocalValueMap::new();
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
@@ -1425,7 +1425,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         struct_field_constraints: None,
     };
 
-    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("no match arm for variant"), "{message}");
@@ -1445,13 +1445,13 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let expr = &tir
+    let expr_key = tir
         .root()
-        .nodes
-        .iter()
-        .find(|entry| entry.name.member() == "distance")
-        .expect("distance node")
-        .expr;
+        .resolved_decl_key_for_local(&graphcal_compiler::syntax::names::ScopedName::local(
+            "distance",
+        ))
+        .expect("distance decl key");
+    let expr = &tir.root().semantic.expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::names::StructTypeName::new("Item"),
@@ -1474,7 +1474,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
             fields,
         },
     )]);
-    let empty_locals = HashMap::new();
+    let empty_locals = crate::eval_expr::HirLocalValueMap::new();
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
@@ -1490,7 +1490,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         struct_field_constraints: None,
     };
 
-    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("no field `distance`"), "{message}");
@@ -2019,13 +2019,11 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let expr = &tir
+    let expr_key = tir
         .root()
-        .nodes
-        .iter()
-        .find(|entry| entry.name.member() == "burn")
-        .expect("burn node")
-        .expr;
+        .resolved_decl_key_for_local(&graphcal_compiler::syntax::names::ScopedName::local("burn"))
+        .expect("burn decl key");
+    let expr = &tir.root().semantic.expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::names::IndexName::new("Phase"),
@@ -2051,7 +2049,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             entries,
         },
     )]);
-    let empty_locals = HashMap::new();
+    let empty_locals = crate::eval_expr::HirLocalValueMap::new();
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
@@ -2067,7 +2065,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         struct_field_constraints: None,
     };
 
-    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("index argument belongs to"), "{message}");
@@ -2089,13 +2087,11 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let expr = &tir
+    let expr_key = tir
         .root()
-        .nodes
-        .iter()
-        .find(|entry| entry.name.member() == "code")
-        .expect("code node")
-        .expr;
+        .resolved_decl_key_for_local(&graphcal_compiler::syntax::names::ScopedName::local("code"))
+        .expect("code decl key");
+    let expr = &tir.root().semantic.expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::names::IndexName::new("Phase"),
@@ -2112,7 +2108,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             variant: graphcal_compiler::syntax::names::IndexVariantName::new("Burn"),
         },
     )]);
-    let empty_locals = HashMap::new();
+    let empty_locals = crate::eval_expr::HirLocalValueMap::new();
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
@@ -2128,7 +2124,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         struct_field_constraints: None,
     };
 
-    let err = crate::eval_expr::eval_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("no match arm for label"), "{message}");

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use graphcal_compiler::desugar::resolved_ast::{MulDivOp, UnitExpr};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
@@ -7,7 +5,7 @@ use graphcal_compiler::registry::types::UnitScale;
 use graphcal_compiler::syntax::span::Span;
 
 use super::numeric;
-use super::{EvalContext, RuntimeValueMap, eval_expr};
+use super::{EvalContext, HirLocalValueMap, RuntimeValueMap, hir_eval::eval_hir_expr};
 
 /// Build a scalar runtime value after validating that it is finite.
 pub(in crate::eval_expr) fn checked_finite_scalar(
@@ -46,8 +44,11 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
 /// Resolve a `UnitExpr` to its compound scale factor at runtime.
 ///
 /// For static units, this is equivalent to `registry.units.resolve_unit_expr()`.
-/// For dynamic units, the scale expression is evaluated using the current `values`
-/// and `local_values` maps, then multiplied by the base unit's static scale.
+/// For dynamic units, the unit's HIR scale expression — lowered at
+/// type-resolution time into the root DAG's semantic body — is evaluated
+/// against the current `values`, then multiplied by the base unit's static
+/// scale. Dynamic scale expressions are standalone (graph/const references
+/// only), so no local environment is involved.
 ///
 /// # Errors
 ///
@@ -56,7 +57,6 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
 pub fn resolve_unit_scale(
     unit: &UnitExpr,
     values: &RuntimeValueMap,
-    local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<f64, GraphcalError> {
     let mut compound_scale = 1.0;
@@ -76,20 +76,37 @@ pub fn resolve_unit_scale(
                 checked_positive_finite_unit_scale(s.get(), "unit scale", item.name.span, ctx)?
             }
             UnitScale::Dynamic {
-                scale_expr,
-                base_unit_scale,
+                base_unit_scale, ..
             } => {
-                let scale_val = eval_expr(scale_expr, values, local_values, ctx)?;
+                let unit_name =
+                    graphcal_compiler::syntax::names::UnitName::new(item.name.value.as_str());
+                let scale_hir = ctx
+                    .tir
+                    .root()
+                    .semantic
+                    .dynamic_unit_scales
+                    .get(&unit_name)
+                    .ok_or_else(|| {
+                        ctx.eval_error(
+                            format!(
+                                "dynamic unit scale for `{}` could not be resolved",
+                                item.name.value
+                            ),
+                            item.name.span,
+                        )
+                    })?;
+                let empty_locals = HirLocalValueMap::new();
+                let scale_val = eval_hir_expr(scale_hir, values, &empty_locals, ctx)?;
                 let RuntimeValue::Scalar(scale_f64) = scale_val else {
                     return Err(ctx.eval_error(
                         "dynamic unit scale expression must evaluate to a scalar",
-                        scale_expr.span,
+                        scale_hir.span,
                     ));
                 };
                 let dynamic_scale = checked_positive_finite_unit_scale(
                     scale_f64,
                     "dynamic unit scale",
-                    scale_expr.span,
+                    scale_hir.span,
                     ctx,
                 )?;
                 let base_scale = checked_positive_finite_unit_scale(
@@ -101,7 +118,7 @@ pub fn resolve_unit_scale(
                 checked_positive_finite_unit_scale(
                     dynamic_scale * base_scale,
                     "dynamic unit scale",
-                    scale_expr.span,
+                    scale_hir.span,
                     ctx,
                 )?
             }

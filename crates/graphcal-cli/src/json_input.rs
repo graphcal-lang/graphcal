@@ -391,8 +391,8 @@ fn convert_indexed(
         .iter()
         .map(|(variant, value)| {
             let value_expr = convert_value(value, &format!("{param_name}[{variant}]"))?;
-            // TIR semantic metadata is keyed by the written form of each map
-            // key, so synthetic spans need no uniqueness tricks here.
+            // Overrides are lowered to HIR (which carries resolution inline),
+            // so synthetic spans need no uniqueness tricks here.
             Ok(MapEntry {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: Spanned::new(MapEntryIndex::Named(index_path.clone()), SYNTH_SPAN),

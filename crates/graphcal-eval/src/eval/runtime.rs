@@ -13,8 +13,7 @@ use graphcal_compiler::syntax::span::Span;
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::eval_expr::{
-    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, UnfoldContext, eval_expr,
-    eval_hir_expr,
+    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, UnfoldContext, eval_hir_expr,
 };
 use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail, ExpectedFailKey};
 use graphcal_compiler::registry::builtins::{
@@ -331,7 +330,7 @@ pub(super) fn evaluate_plan_with_values(
 ) -> (EvalResult, RuntimeValueMap) {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
-    let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
+    let _empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
     let empty_hir_locals: HirLocalValueMap = HashMap::new();
 
     let EvalLoopResult { values, errors } =
@@ -349,20 +348,21 @@ pub(super) fn evaluate_plan_with_values(
         struct_field_constraints: Some(&plan.struct_field_constraints),
     };
 
-    // Build a map from name -> expression for display unit extraction.
+    // Build a map from name -> HIR expression for display unit extraction.
     // Top-level decls are always `Local`-form names.
-    let expr_map: HashMap<ScopedName, &graphcal_compiler::desugar::resolved_ast::Expr> = tir
+    let hir_expr_for = |name: &ScopedName| -> Option<&graphcal_compiler::hir::Expr> {
+        let key = tir.root().resolved_decl_key_for_local(name)?;
+        let exprs = &tir.root().semantic.expressions;
+        exprs.consts.get(&key).or_else(|| exprs.runtime_expr(&key))
+    };
+    let expr_map: HashMap<ScopedName, &graphcal_compiler::hir::Expr> = tir
         .root()
         .consts
         .iter()
-        .map(|e| (e.name.clone(), &e.expr))
-        .chain(
-            tir.root()
-                .params
-                .iter()
-                .filter_map(|e| e.default_expr.as_ref().map(|ex| (e.name.clone(), ex))),
-        )
-        .chain(tir.root().nodes.iter().map(|e| (e.name.clone(), &e.expr)))
+        .map(|e| &e.name)
+        .chain(tir.root().params.iter().map(|e| &e.name))
+        .chain(tir.root().nodes.iter().map(|e| &e.name))
+        .filter_map(|name| hir_expr_for(name).map(|expr| (name.clone(), expr)))
         .collect();
 
     let local_key = |name: &ScopedName| RuntimeDeclKey::for_local_decl(tir.root(), name);
@@ -456,17 +456,21 @@ pub(super) fn evaluate_plan_with_values(
         })
         .collect();
 
-    // Evaluate plot declarations
+    // Evaluate plot declarations. A plot whose lowered HIR body is absent
+    // failed to lower and is skipped, matching the best-effort contract.
+    let plot_exprs = &tir.root().semantic.plot_exprs;
+    let no_fields: Vec<graphcal_compiler::tir::typed::LoweredPlotField> = Vec::new();
     let plots: Vec<PlotSpec> = plan
         .plot_bodies
         .iter()
         .filter_map(|entry| {
+            let lowered = plot_exprs.plots.get(&entry.name)?;
             evaluate_plot(
                 &entry.decl,
+                lowered,
                 &entry.name,
                 entry.is_pub,
                 &values,
-                &empty_locals,
                 &ctx,
                 declared_types,
             )
@@ -478,13 +482,9 @@ pub(super) fn evaluate_plan_with_values(
         .figure_bodies
         .iter()
         .map(|entry| {
-            let (properties, plot_names) = eval_composition_fields(
-                &entry.decl.fields,
-                &entry.decl.plot_names,
-                &values,
-                &empty_locals,
-                &ctx,
-            );
+            let fields = plot_exprs.figures.get(&entry.name).unwrap_or(&no_fields);
+            let (properties, plot_names) =
+                eval_composition_fields(fields, &entry.decl.plot_names, &values, &ctx);
             super::types::FigureSpec {
                 name: entry.name.clone(),
                 plot_names,
@@ -498,13 +498,9 @@ pub(super) fn evaluate_plan_with_values(
         .layer_bodies
         .iter()
         .map(|entry| {
-            let (properties, plot_names) = eval_composition_fields(
-                &entry.decl.fields,
-                &entry.decl.plot_names,
-                &values,
-                &empty_locals,
-                &ctx,
-            );
+            let fields = plot_exprs.layers.get(&entry.name).unwrap_or(&no_fields);
+            let (properties, plot_names) =
+                eval_composition_fields(fields, &entry.decl.plot_names, &values, &ctx);
             super::types::LayerSpec {
                 name: entry.name.clone(),
                 plot_names,
@@ -956,30 +952,30 @@ pub(super) fn evaluate_assert_body(
 /// `RuntimeValue`. Returns `None` on evaluation failure — plots are
 /// best-effort, so a single bad encoding/property aborts the plot.
 fn eval_plot_property(
-    expr: &graphcal_compiler::desugar::resolved_ast::Expr,
+    expr: &graphcal_compiler::hir::Expr,
     values: &RuntimeValueMap,
-    local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Option<PlotFieldValue> {
-    if let graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(s) = &expr.kind {
+    if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &expr.kind {
         return Some(PlotFieldValue::String(s.clone()));
     }
-    let rv = eval_expr(expr, values, local_values, ctx).ok()?;
+    let empty_locals = HirLocalValueMap::new();
+    let rv = eval_hir_expr(expr, values, &empty_locals, ctx).ok()?;
     Some(runtime_to_plot_field_value(&rv))
 }
 
 /// Evaluate a plot declaration, producing a `PlotSpec`.
 ///
-/// Encoding channel expressions and property expressions are evaluated and
-/// flattened into a single `fields` list. String literals are handled directly
-/// (they are not runtime values in Graphcal).
+/// The lowered HIR body carries the expressions; the source declaration
+/// supplies the mark type. String literals are handled directly (they are
+/// not runtime values in Graphcal).
 /// Returns `None` if any expression evaluation fails (plots are best-effort).
 fn evaluate_plot(
     decl: &graphcal_compiler::desugar::resolved_ast::PlotDecl,
+    lowered: &graphcal_compiler::tir::typed::LoweredPlotBody,
     name: &ScopedName,
     is_pub: bool,
     values: &RuntimeValueMap,
-    local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
 ) -> Option<PlotSpec> {
@@ -987,37 +983,35 @@ fn evaluate_plot(
     let mut encoding_meta = Vec::new();
 
     // Evaluate encoding channels
-    for encoding in &decl.encodings {
-        let field_value = eval_plot_property(&encoding.value, values, local_values, ctx)?;
+    for (channel, expr) in &lowered.encodings {
+        let field_value = eval_plot_property(expr, values, ctx)?;
 
         // Extract axis metadata: dimension from graph refs, display unit from expression
-        let meta = extract_encoding_axis_meta(&encoding.value, declared_types, ctx, values);
-        encoding_meta.push((encoding.channel, meta));
+        let meta = extract_encoding_axis_meta(expr, declared_types, ctx, values);
+        encoding_meta.push((*channel, meta));
 
-        encodings.push((encoding.channel, field_value));
+        encodings.push((*channel, field_value));
     }
 
     // Evaluate mark properties (e.g., stroke_width, opacity)
     let mut mark_properties = Vec::new();
-    for prop in &decl.mark.properties {
-        let Some(mark_prop) = super::types::MarkProperty::from_name(prop.name.value.as_str())
-        else {
+    for field in &lowered.mark_properties {
+        let Some(mark_prop) = super::types::MarkProperty::from_name(field.name.as_str()) else {
             // Unknown mark property — skip (could be reported as a warning in the future)
             continue;
         };
-        let field_value = eval_plot_property(&prop.value, values, local_values, ctx)?;
+        let field_value = eval_plot_property(&field.value, values, ctx)?;
         mark_properties.push((mark_prop, field_value));
     }
 
     // Evaluate top-level properties (e.g., title, width, height)
     let mut properties = Vec::new();
-    for prop in &decl.properties {
-        let Some(plot_prop) = super::types::PlotProperty::from_name(prop.name.value.as_str())
-        else {
+    for field in &lowered.properties {
+        let Some(plot_prop) = super::types::PlotProperty::from_name(field.name.as_str()) else {
             // Unknown plot property — skip
             continue;
         };
-        let field_value = eval_plot_property(&prop.value, values, local_values, ctx)?;
+        let field_value = eval_plot_property(&field.value, values, ctx)?;
         properties.push((plot_prop, field_value));
     }
 
@@ -1038,7 +1032,7 @@ fn evaluate_plot(
 /// their declared type for the dimension. Also extracts display unit info from
 /// unit literals and conversion targets.
 fn extract_encoding_axis_meta(
-    expr: &graphcal_compiler::desugar::resolved_ast::Expr,
+    expr: &graphcal_compiler::hir::Expr,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
@@ -1053,14 +1047,15 @@ fn extract_encoding_axis_meta(
 
 /// Walk an expression tree to find the first `@`-reference and extract its dimension name.
 fn extract_dimension_from_expr(
-    expr: &graphcal_compiler::desugar::resolved_ast::Expr,
+    expr: &graphcal_compiler::hir::Expr,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     registry: &Registry,
 ) -> Option<String> {
-    use graphcal_compiler::desugar::resolved_ast::ExprKind;
+    use graphcal_compiler::hir::ExprKind;
     match &expr.kind {
-        ExprKind::GraphRef(name) => {
-            let dt = declared_types.get(&name.value)?;
+        ExprKind::GraphRef(target) => {
+            // Top-level decls are always `Local`-form names in declared_types.
+            let dt = declared_types.get(&ScopedName::local(target.value.as_str()))?;
             dimension_label_from_declared_type(dt, registry)
         }
         ExprKind::ForComp { body, .. } => {
@@ -1101,29 +1096,26 @@ fn dimension_label_from_declared_type(
 
 /// Evaluate composition fields (properties and plot names) shared by figures and layers.
 fn eval_composition_fields(
-    fields: &[graphcal_compiler::desugar::resolved_ast::PlotField],
+    fields: &[graphcal_compiler::tir::typed::LoweredPlotField],
     plot_name_spans: &[graphcal_compiler::syntax::span::Spanned<ScopedName>],
     values: &RuntimeValueMap,
-    empty_locals: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> (
     Vec<(super::types::CompositionProperty, PlotFieldValue)>,
     Vec<ScopedName>,
 ) {
+    let empty_locals = HirLocalValueMap::new();
     let mut properties = Vec::new();
     for field in fields {
-        let Some(comp_prop) =
-            super::types::CompositionProperty::from_name(field.name.value.as_str())
+        let Some(comp_prop) = super::types::CompositionProperty::from_name(field.name.as_str())
         else {
             continue;
         };
-        if let graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(s) =
-            &field.value.kind
-        {
+        if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &field.value.kind {
             properties.push((comp_prop, PlotFieldValue::String(s.clone())));
             continue;
         }
-        if let Ok(rv) = eval_expr(&field.value, values, empty_locals, ctx) {
+        if let Ok(rv) = eval_hir_expr(&field.value, values, &empty_locals, ctx) {
             properties.push((comp_prop, runtime_to_plot_field_value(&rv)));
         }
     }

@@ -67,8 +67,7 @@ fn eval_hir_expr_inner(
             name.span,
         )),
         hir::ExprKind::UnitLiteral { value, unit } => {
-            let empty_syntax_locals = HashMap::new();
-            let scale = resolve_unit_scale(unit, values, &empty_syntax_locals, ctx)?;
+            let scale = resolve_unit_scale(unit, values, ctx)?;
             checked_unit_scaled_value(*value, scale, expr.span, ctx)
         }
         hir::ExprKind::GraphRef(target) => values
