@@ -1,0 +1,48 @@
+// multi_override_params.gcl -- several structured params for JSON override testing.
+//
+// Regression shape for #764: overriding more than one indexed/tagged-union
+// param from a single JSON input used to collide in span-keyed TIR semantic
+// metadata (every override callee span was synthetic), misresolving one
+// override against another's metadata.
+pub dim Velocity = Length / Time;
+pub dim Force = Mass * Length / Time^2;
+
+pub index Maneuver = { Departure, Insertion };
+
+pub index Phase = { Launch, Cruise };
+
+pub type ManeuverKind {
+    Impulsive(delta_v: Velocity),
+    LowThrust(thrust: Force, duration: Time),
+}
+
+pub type GuidanceMode {
+    Open(bias: Dimensionless),
+    Closed(gain: Dimensionless),
+}
+
+param delta_v: Velocity[Maneuver] = {
+    Maneuver.Departure: 1.0 km/s,
+    Maneuver.Insertion: 1.0 km/s,
+};
+
+param boost: Velocity[Phase] = {
+    Phase.Launch: 1.0 km/s,
+    Phase.Cruise: 1.0 km/s,
+};
+
+param maneuver: ManeuverKind = LowThrust(thrust: 0.5 N, duration: 3600.0 s);
+
+param guidance: GuidanceMode = Open(bias: 0.0);
+
+node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] }) + sum(for p: Phase { @boost[p] });
+
+node fuel_proxy: Force = match @maneuver {
+    Impulsive(delta_v: _) => 0.0 N,
+    LowThrust(thrust: thrust, duration: _) => thrust,
+};
+
+node gain_proxy: Dimensionless = match @guidance {
+    Open(bias: bias) => bias,
+    Closed(gain: gain) => gain,
+};

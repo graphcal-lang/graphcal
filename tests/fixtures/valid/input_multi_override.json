@@ -1,0 +1,28 @@
+{
+  "delta_v": {
+    "index": "Maneuver",
+    "entries": {
+      "Departure": "3.0 km/s",
+      "Insertion": "2.0 km/s"
+    }
+  },
+  "boost": {
+    "index": "Phase",
+    "entries": {
+      "Launch": "0.5 km/s",
+      "Cruise": "0.25 km/s"
+    }
+  },
+  "maneuver": {
+    "variant": "Impulsive",
+    "fields": {
+      "delta_v": "500.0 m/s"
+    }
+  },
+  "guidance": {
+    "variant": "Closed",
+    "fields": {
+      "gain": "2.0"
+    }
+  }
+}

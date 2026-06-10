@@ -15,7 +15,7 @@ use crate::hir;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, ModuleAliasName,
-    NameAtom, NameNamespace, NamePath, StructTypeName,
+    NameAtom, NameNamespace, NamePath, StructTypeName, WrittenIndexVariant, WrittenVariantRef,
 };
 use crate::syntax::nat::Monomial;
 pub use crate::syntax::nat::{NatLinearForm, NatPolyForm};
@@ -545,25 +545,33 @@ impl ResolvedExpressions {
 }
 
 /// Canonical HIR-derived index references used by collection/index inference.
+///
+/// Occurrence maps are keyed by the written form of each reference (see
+/// [`crate::hir::expr::WrittenRefs`]), not by source span, so they stay
+/// addressable for synthetic expressions (CLI/JSON overrides) that have no
+/// real source locations.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedCollectionRefs {
     /// Canonical index definitions observed while collecting the refs below
     /// or owner-qualified declaration types that runtime collection semantics
     /// may need (for example `unfold` over a declared indexed node).
     pub index_defs: HashMap<ResolvedName<namespace::Index>, IndexDef>,
-    /// `ForBindingIndex::Named` span -> resolved index owner/name.
-    pub for_binding_indexes: HashMap<Span, ResolvedName<namespace::Index>>,
-    /// Full value-level `Index.Variant` span -> resolved index variant.
+    /// Written for-binding index path -> resolved index owner/name.
+    pub for_binding_indexes: HashMap<NamePath, ResolvedName<namespace::Index>>,
+    /// Written value-level variant reference -> resolved index variant.
     ///
     /// This covers parser-created `VariantLiteral` nodes and locally-resolved
     /// const-like refs that HIR proves are index variants.
-    pub variant_literals: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
-    /// Full map/table `Index.Variant` key span -> resolved index variant.
-    pub map_entry_variants: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
-    /// Full `Index.Variant` argument span -> resolved index variant.
-    pub index_access_variants: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
-    /// Full index-label match-pattern span -> resolved index variant.
-    pub match_label_variants: HashMap<Span, crate::syntax::names::ResolvedIndexVariant>,
+    pub variant_literals: HashMap<WrittenVariantRef, crate::syntax::names::ResolvedIndexVariant>,
+    /// Written map/table `Index.Variant` key -> resolved index variant.
+    pub map_entry_variants:
+        HashMap<WrittenIndexVariant, crate::syntax::names::ResolvedIndexVariant>,
+    /// Written `Index.Variant` argument -> resolved index variant.
+    pub index_access_variants:
+        HashMap<WrittenIndexVariant, crate::syntax::names::ResolvedIndexVariant>,
+    /// Written index-label match pattern -> resolved index variant.
+    pub match_label_variants:
+        HashMap<WrittenVariantRef, crate::syntax::names::ResolvedIndexVariant>,
 }
 
 /// Canonical HIR-derived constructor references used by constructor and match inference.
@@ -571,9 +579,15 @@ pub struct ResolvedCollectionRefs {
 pub struct ResolvedConstructorRefs {
     /// Canonical constructor definitions observed while collecting the refs below.
     pub constructor_defs: HashMap<ResolvedName<namespace::Constructor>, ResolvedConstructorTarget>,
-    /// Constructor-call callee span -> resolved constructor target.
-    pub constructor_calls: HashMap<Span, ResolvedConstructorTarget>,
+    /// Written constructor-call callee path -> resolved constructor.
+    ///
+    /// The rich target lives in [`Self::constructor_defs`]; chain the two maps
+    /// to go from a written callee to its [`ResolvedConstructorTarget`].
+    pub constructor_calls: HashMap<NamePath, ResolvedName<namespace::Constructor>>,
     /// Constructor match-pattern path/name span -> resolved constructor pattern.
+    // TODO(#766): this is the last span-keyed occurrence map; it dies with the
+    // syntax-AST walkers because per-occurrence pattern bindings have no
+    // span-free written identity short of including the bindings themselves.
     pub match_pattern_constructors: HashMap<Span, ResolvedConstructorPattern>,
 }
 
@@ -1184,7 +1198,7 @@ fn type_resolve_dag(
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
 
-    let expressions = lower_resolved_expressions(
+    let (expressions, written_refs) = lower_resolved_expressions(
         &consts,
         &params,
         &nodes,
@@ -1197,9 +1211,15 @@ fn type_resolve_dag(
     )?;
     let dependencies =
         collect_resolved_dag_dependencies(&consts, &params, &nodes, &expressions, module_ctx, src)?;
-    let collection_refs =
-        collect_resolved_collection_refs(&expressions, &resolved_decl_types, module_ctx, src)?;
-    let constructor_refs = collect_resolved_constructor_refs(&expressions, module_ctx, src)?;
+    let collection_refs = collect_resolved_collection_refs(
+        &expressions,
+        &resolved_decl_types,
+        &written_refs,
+        module_ctx,
+        src,
+    )?;
+    let constructor_refs =
+        collect_resolved_constructor_refs(&expressions, &written_refs, module_ctx, src)?;
     let inline_dag_refs = collect_resolved_inline_dag_refs(&expressions);
     let type_defs = collect_resolved_type_defs(
         &resolved_decl_types,
@@ -1370,7 +1390,7 @@ fn lower_resolved_expressions(
     const_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
     src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedExpressions, GraphcalError> {
+) -> Result<(ResolvedExpressions, hir::expr::WrittenRefs), GraphcalError> {
     let generic_scope = hir::GenericScope::new();
     let prelude = hir::PreludeTypeScope::graphcal();
     let decl_bindings = collect_hir_decl_bindings(
@@ -1385,6 +1405,7 @@ fn lower_resolved_expressions(
         .with_prelude(&prelude)
         .with_decl_bindings(&decl_bindings);
     let mut exprs = ResolvedExpressions::default();
+    let mut written_refs = hir::expr::WrittenRefs::default();
 
     for entry in consts {
         let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
@@ -1403,6 +1424,7 @@ fn lower_resolved_expressions(
             ctx,
             const_deps.get(&entry.name),
             src,
+            &mut written_refs,
         )?;
         exprs.consts.insert(key, hir_expr);
     }
@@ -1420,8 +1442,14 @@ fn lower_resolved_expressions(
                 entry.span,
             )
         })?;
-        let hir_expr =
-            lower_expr_or_synthetic_alias(expr, expr_ctx, ctx, runtime_deps.get(&entry.name), src)?;
+        let hir_expr = lower_expr_or_synthetic_alias(
+            expr,
+            expr_ctx,
+            ctx,
+            runtime_deps.get(&entry.name),
+            src,
+            &mut written_refs,
+        )?;
         exprs.param_defaults.insert(key, hir_expr);
     }
     for entry in nodes {
@@ -1441,6 +1469,7 @@ fn lower_resolved_expressions(
             ctx,
             runtime_deps.get(&entry.name),
             src,
+            &mut written_refs,
         )?;
         exprs.nodes.insert(key, hir_expr);
     }
@@ -1455,12 +1484,13 @@ fn lower_resolved_expressions(
                 entry.span,
             )
         })?;
-        let hir_body = hir::lower_assert_body(&entry.body, expr_ctx)
-            .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
+        let hir_body =
+            hir::expr::lower_assert_body_with_refs(&entry.body, expr_ctx, &mut written_refs)
+                .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
         exprs.asserts.insert(key, hir_body);
     }
 
-    Ok(exprs)
+    Ok((exprs, written_refs))
 }
 
 fn lower_expr_or_synthetic_alias(
@@ -1469,9 +1499,17 @@ fn lower_expr_or_synthetic_alias(
     ctx: ModuleTypeContext<'_>,
     deps: Option<&BTreeSet<ScopedName>>,
     src: &NamedSource<Arc<String>>,
+    written_refs: &mut hir::expr::WrittenRefs,
 ) -> Result<hir::Expr, GraphcalError> {
-    match hir::lower_expr(expr, expr_ctx) {
-        Ok(expr) => Ok(expr),
+    // Collect into a scratch sink first: a failed lowering may have recorded
+    // occurrences before erroring, and the synthetic-alias fallback replaces
+    // the whole expression.
+    let mut scratch = hir::expr::WrittenRefs::default();
+    match hir::expr::lower_expr_with_refs(expr, expr_ctx, &mut scratch) {
+        Ok(expr) => {
+            written_refs.extend(scratch);
+            Ok(expr)
+        }
         Err(err) => lower_synthetic_alias_expr(expr, ctx, deps)
             .ok_or_else(|| expr_lower_error_to_graphcal(&err, src)),
     }
@@ -1620,10 +1658,18 @@ fn collect_resolved_dag_dependencies(
 fn collect_resolved_collection_refs(
     exprs: &ResolvedExpressions,
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
+    written_refs: &hir::expr::WrittenRefs,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedCollectionRefs, GraphcalError> {
-    let mut refs = ResolvedCollectionRefs::default();
+    let mut refs = ResolvedCollectionRefs {
+        index_defs: HashMap::new(),
+        for_binding_indexes: written_refs.for_binding_indexes.clone(),
+        variant_literals: written_refs.variant_literals.clone(),
+        map_entry_variants: written_refs.map_entry_variants.clone(),
+        index_access_variants: written_refs.index_access_variants.clone(),
+        match_label_variants: written_refs.match_label_variants.clone(),
+    };
 
     for resolved_type in resolved_decl_types.values() {
         collect_resolved_collection_indexes_from_type(resolved_type, ctx, src, &mut refs)?;
@@ -1737,15 +1783,11 @@ fn collect_resolved_collection_refs_from_expr_inner(
         hir::ExprKind::ConstRef(target) => {
             if let hir::ConstRef::IndexVariant(variant) = &target.value {
                 record_resolved_collection_index(variant.index(), ctx, src, target.span, refs)?;
-                refs.variant_literals.insert(target.span, variant.clone());
             }
             Ok(())
         }
         hir::ExprKind::VariantLiteral(variant) => {
-            record_resolved_collection_index(variant.value.index(), ctx, src, variant.span, refs)?;
-            refs.variant_literals
-                .insert(variant.span, variant.value.clone());
-            Ok(())
+            record_resolved_collection_index(variant.value.index(), ctx, src, variant.span, refs)
         }
         hir::ExprKind::BinOp { lhs, rhs, .. } => {
             collect_resolved_collection_refs_from_expr(lhs, ctx, src, refs)?;
@@ -1792,8 +1834,6 @@ fn collect_resolved_collection_refs_from_expr_inner(
                                 variant.span,
                                 refs,
                             )?;
-                            refs.map_entry_variants
-                                .insert(variant.span, variant.value.clone());
                         }
                         hir::expr::MapEntryKey::NatRangeVariant { .. } => {}
                     }
@@ -1807,8 +1847,6 @@ fn collect_resolved_collection_refs_from_expr_inner(
                 match &binding.index {
                     hir::expr::ForBindingIndex::Named(index) => {
                         record_resolved_collection_index(&index.value, ctx, src, index.span, refs)?;
-                        refs.for_binding_indexes
-                            .insert(index.span, index.value.clone());
                     }
                     hir::expr::ForBindingIndex::Range { .. } => {}
                 }
@@ -1827,8 +1865,6 @@ fn collect_resolved_collection_refs_from_expr_inner(
                             variant.span,
                             refs,
                         )?;
-                        refs.index_access_variants
-                            .insert(variant.span, variant.value.clone());
                     }
                     hir::expr::IndexArg::Expr(expr) => {
                         collect_resolved_collection_refs_from_expr(expr, ctx, src, refs)?;
@@ -1852,7 +1888,7 @@ fn collect_resolved_collection_refs_from_expr_inner(
         hir::ExprKind::Match { scrutinee, arms } => {
             collect_resolved_collection_refs_from_expr(scrutinee, ctx, src, refs)?;
             for arm in arms {
-                if let hir::expr::MatchPattern::IndexLabel { variant, span } = &arm.pattern {
+                if let hir::expr::MatchPattern::IndexLabel { variant, span: _ } = &arm.pattern {
                     record_resolved_collection_index(
                         variant.value.index(),
                         ctx,
@@ -1860,10 +1896,6 @@ fn collect_resolved_collection_refs_from_expr_inner(
                         variant.span,
                         refs,
                     )?;
-                    refs.match_label_variants
-                        .insert(variant.span, variant.value.clone());
-                    refs.match_label_variants
-                        .insert(*span, variant.value.clone());
                 }
                 collect_resolved_collection_refs_from_expr(&arm.body, ctx, src, refs)?;
             }
@@ -1903,10 +1935,15 @@ fn collect_resolved_collection_refs_from_assert_body(
 
 fn collect_resolved_constructor_refs(
     exprs: &ResolvedExpressions,
+    written_refs: &hir::expr::WrittenRefs,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedConstructorRefs, GraphcalError> {
-    let mut refs = ResolvedConstructorRefs::default();
+    let mut refs = ResolvedConstructorRefs {
+        constructor_defs: HashMap::new(),
+        constructor_calls: written_refs.constructor_calls.clone(),
+        match_pattern_constructors: HashMap::new(),
+    };
 
     for hir_expr in exprs
         .consts
@@ -2019,9 +2056,7 @@ fn collect_resolved_constructor_refs_from_expr_inner(
             collect_resolved_constructor_refs_from_expr(expr, ctx, src, refs)
         }
         hir::ExprKind::ConstructorCall { callee, fields, .. } => {
-            let target =
-                record_resolved_constructor_target(&callee.value, ctx, src, callee.span, refs)?;
-            refs.constructor_calls.insert(callee.span, target);
+            record_resolved_constructor_target(&callee.value, ctx, src, callee.span, refs)?;
             for field in fields {
                 collect_resolved_constructor_refs_from_expr(&field.value, ctx, src, refs)?;
             }

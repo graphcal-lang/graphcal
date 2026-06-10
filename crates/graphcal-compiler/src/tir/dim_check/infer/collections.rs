@@ -97,11 +97,10 @@ fn validate_index_path_module_scope(
 
 fn inferred_index_for_path(
     path: &NamePath,
-    span: Span,
     dag: Option<&crate::tir::typed::DagTIR>,
 ) -> InferredIndex {
     dag.map(|dag| &dag.semantic.collection_refs)
-        .and_then(|refs| refs.for_binding_indexes.get(&span))
+        .and_then(|refs| refs.for_binding_indexes.get(path))
         .cloned()
         .map_or_else(
             || inferred_index_for_leaf(standalone_index_name_from_path(path), dag),
@@ -109,14 +108,14 @@ fn inferred_index_for_path(
         )
 }
 
-fn resolved_index_variant_for_arg(
-    index_span: Span,
-    variant_span: Span,
-    dag: Option<&crate::tir::typed::DagTIR>,
-) -> Option<&crate::syntax::names::ResolvedIndexVariant> {
-    let span = index_span.merge(variant_span);
+fn resolved_index_variant_for_arg<'a>(
+    index: &NamePath,
+    variant: &crate::syntax::names::IndexVariantName,
+    dag: Option<&'a crate::tir::typed::DagTIR>,
+) -> Option<&'a crate::syntax::names::ResolvedIndexVariant> {
+    let written = crate::syntax::names::WrittenIndexVariant::new(index.clone(), variant.clone());
     dag.map(|dag| &dag.semantic.collection_refs)
-        .and_then(|refs| refs.index_access_variants.get(&span))
+        .and_then(|refs| refs.index_access_variants.get(&written))
 }
 
 pub(super) fn index_def_for_inferred<'a>(
@@ -136,9 +135,15 @@ fn resolved_map_entry_variant_for_key<'a>(
     key: &crate::desugar::resolved_ast::MapEntryKey,
     dag: Option<&'a crate::tir::typed::DagTIR>,
 ) -> Option<&'a ResolvedIndexVariant> {
-    let span = key.index.span.merge(key.variant.span);
+    let crate::syntax::ast::MapEntryIndex::Named(index_path) = &key.index.value else {
+        return None;
+    };
+    let written = crate::syntax::names::WrittenIndexVariant::new(
+        index_path.clone(),
+        key.variant.value.clone(),
+    );
     dag.map(|dag| &dag.semantic.collection_refs)
-        .and_then(|refs| refs.map_entry_variants.get(&span))
+        .and_then(|refs| refs.map_entry_variants.get(&written))
 }
 
 fn nat_range_error(
@@ -257,7 +262,7 @@ pub(super) fn infer_for_comp(
                 ForBindingIndex::Named(spanned_idx) => {
                     if dag
                         .map(|dag| &dag.semantic.collection_refs)
-                        .and_then(|refs| refs.for_binding_indexes.get(&spanned_idx.span))
+                        .and_then(|refs| refs.for_binding_indexes.get(&spanned_idx.value))
                         .is_none()
                     {
                         validate_index_path_module_scope(
@@ -267,8 +272,7 @@ pub(super) fn infer_for_comp(
                             spanned_idx.span,
                         )?;
                     }
-                    let index_identity =
-                        inferred_index_for_path(&spanned_idx.value, spanned_idx.span, dag);
+                    let index_identity = inferred_index_for_path(&spanned_idx.value, dag);
                     let idx_def = index_def_for_inferred(&index_identity, dag, registry)
                         .ok_or_else(|| GraphcalError::UnknownIndex {
                             name: index_identity.name(),
@@ -315,9 +319,7 @@ pub(super) fn infer_for_comp(
     let mut result = body_type;
     for binding in bindings.iter().rev() {
         let index = match &binding.index {
-            ForBindingIndex::Named(spanned_idx) => {
-                inferred_index_for_path(&spanned_idx.value, spanned_idx.span, dag)
-            }
+            ForBindingIndex::Named(spanned_idx) => inferred_index_for_path(&spanned_idx.value, dag),
             ForBindingIndex::Range { arg, span } => {
                 let form = normalize_nat_expr_lenient(arg)
                     .map_err(|err| nat_overflow_error(err, src, *span))?;
@@ -666,7 +668,7 @@ pub(super) fn infer_index_access(
         match arg {
             IndexArg::Variant { index, variant } => {
                 let resolved_variant =
-                    resolved_index_variant_for_arg(index.span, variant.span, dag);
+                    resolved_index_variant_for_arg(&index.value, &variant.value, dag);
                 if resolved_variant.is_none() {
                     validate_index_path_module_scope(&index.value, tir, src, index.span)?;
                 }
@@ -1377,7 +1379,10 @@ pub(super) fn infer_constructor_call(
 ) -> Result<InferredType, GraphcalError> {
     let resolved_target = dag
         .map(|dag| &dag.semantic.constructor_refs)
-        .and_then(|refs| refs.constructor_calls.get(&callee.span()));
+        .and_then(|refs| {
+            let constructor = refs.constructor_calls.get(&callee.to_name_path())?;
+            refs.constructor_defs.get(constructor)
+        });
 
     // Resolve through the constructor namespace. With every user-defined
     // `type` stored as an n-variant union, a constructor call names a

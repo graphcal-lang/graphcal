@@ -22,7 +22,7 @@ use crate::syntax::module_resolve::{DeclSymbolKind, ModuleResolveError, ModuleRe
 use crate::syntax::names::{
     DeclName, FieldName, GenericParamName, IndexName, IndexVariantName, LocalName, NameAtom,
     NameAtomError, NameNamespace, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName,
-    namespace,
+    WrittenIndexVariant, WrittenVariantRef, namespace,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
@@ -150,6 +150,44 @@ impl<'a> ExprLoweringContext<'a> {
     }
 }
 
+/// Source-written occurrences resolved while lowering expressions, keyed by
+/// their written form rather than by source span.
+///
+/// HIR consumes source paths at the lowering boundary, so the written form and
+/// its resolution coexist only here. These maps snapshot that link for
+/// consumers that still walk the resolved syntax AST and need module-aware
+/// resolution results. Within one DAG body every map is consistent: name
+/// resolution is a pure function of the written form, so two occurrences with
+/// the same key always resolve identically.
+#[derive(Debug, Clone, Default)]
+pub struct WrittenRefs {
+    /// Written for-binding index path -> resolved index.
+    pub for_binding_indexes: HashMap<NamePath, ResolvedName<namespace::Index>>,
+    /// Written value-position variant reference -> resolved index variant.
+    pub variant_literals: HashMap<WrittenVariantRef, ResolvedIndexVariant>,
+    /// Written map/table key -> resolved index variant.
+    pub map_entry_variants: HashMap<WrittenIndexVariant, ResolvedIndexVariant>,
+    /// Written index-access argument -> resolved index variant.
+    pub index_access_variants: HashMap<WrittenIndexVariant, ResolvedIndexVariant>,
+    /// Written index-label match pattern -> resolved index variant.
+    pub match_label_variants: HashMap<WrittenVariantRef, ResolvedIndexVariant>,
+    /// Written constructor-call callee path -> resolved constructor.
+    pub constructor_calls: HashMap<NamePath, ResolvedName<namespace::Constructor>>,
+}
+
+impl WrittenRefs {
+    /// Merge another set of written occurrences into this one.
+    pub fn extend(&mut self, other: Self) {
+        self.for_binding_indexes.extend(other.for_binding_indexes);
+        self.variant_literals.extend(other.variant_literals);
+        self.map_entry_variants.extend(other.map_entry_variants);
+        self.index_access_variants
+            .extend(other.index_access_variants);
+        self.match_label_variants.extend(other.match_label_variants);
+        self.constructor_calls.extend(other.constructor_calls);
+    }
+}
+
 /// Lower a syntax expression into HIR.
 ///
 /// # Errors
@@ -157,7 +195,23 @@ impl<'a> ExprLoweringContext<'a> {
 /// Returns [`ExprLowerError`] if any expression-level reference cannot be
 /// resolved to a canonical module identity or lexical local binding.
 pub fn lower_expr(expr: &ast::Expr, ctx: ExprLoweringContext<'_>) -> Result<Expr, ExprLowerError> {
-    ExprLowerer::new(ctx).lower_expr(expr)
+    let mut refs = WrittenRefs::default();
+    lower_expr_with_refs(expr, ctx, &mut refs)
+}
+
+/// Lower a syntax expression into HIR, recording written-form resolution
+/// metadata into `refs`.
+///
+/// # Errors
+///
+/// Returns [`ExprLowerError`] if any expression-level reference cannot be
+/// resolved to a canonical module identity or lexical local binding.
+pub fn lower_expr_with_refs(
+    expr: &ast::Expr,
+    ctx: ExprLoweringContext<'_>,
+    refs: &mut WrittenRefs,
+) -> Result<Expr, ExprLowerError> {
+    ExprLowerer::new(ctx, refs).lower_expr(expr)
 }
 
 /// Lower a syntax assertion body into HIR.
@@ -169,9 +223,20 @@ pub fn lower_assert_body(
     body: &crate::desugar::resolved_ast::AssertBody,
     ctx: ExprLoweringContext<'_>,
 ) -> Result<AssertBody, ExprLowerError> {
+    let mut refs = WrittenRefs::default();
+    lower_assert_body_with_refs(body, ctx, &mut refs)
+}
+
+/// Lower a syntax assertion body into HIR, recording written-form resolution
+/// metadata into `refs`. See [`lower_assert_body`] for the local-id contract.
+pub fn lower_assert_body_with_refs(
+    body: &crate::desugar::resolved_ast::AssertBody,
+    ctx: ExprLoweringContext<'_>,
+    refs: &mut WrittenRefs,
+) -> Result<AssertBody, ExprLowerError> {
     match body {
         crate::desugar::resolved_ast::AssertBody::Expr(expr) => {
-            lower_expr(expr, ctx).map(AssertBody::Expr)
+            lower_expr_with_refs(expr, ctx, refs).map(AssertBody::Expr)
         }
         crate::desugar::resolved_ast::AssertBody::Tolerance {
             actual,
@@ -179,9 +244,9 @@ pub fn lower_assert_body(
             tolerance,
             is_relative,
         } => Ok(AssertBody::Tolerance {
-            actual: Box::new(lower_expr(actual, ctx)?),
-            expected: Box::new(lower_expr(expected, ctx)?),
-            tolerance: Box::new(lower_expr(tolerance, ctx)?),
+            actual: Box::new(lower_expr_with_refs(actual, ctx, refs)?),
+            expected: Box::new(lower_expr_with_refs(expected, ctx, refs)?),
+            tolerance: Box::new(lower_expr_with_refs(tolerance, ctx, refs)?),
             is_relative: *is_relative,
         }),
     }
@@ -841,18 +906,20 @@ pub enum PatternBinding {
     },
 }
 
-struct ExprLowerer<'a> {
+struct ExprLowerer<'a, 'r> {
     ctx: ExprLoweringContext<'a>,
     local_scopes: Vec<HashMap<LocalName, LocalDef>>,
     next_local: u32,
+    refs: &'r mut WrittenRefs,
 }
 
-impl<'a> ExprLowerer<'a> {
-    const fn new(ctx: ExprLoweringContext<'a>) -> Self {
+impl<'a, 'r> ExprLowerer<'a, 'r> {
+    const fn new(ctx: ExprLoweringContext<'a>, refs: &'r mut WrittenRefs) -> Self {
         Self {
             ctx,
             local_scopes: Vec::new(),
             next_local: 0,
+            refs,
         }
     }
 
@@ -945,16 +1012,20 @@ impl<'a> ExprLowerer<'a> {
                 generic_args,
                 fields,
             } => ExprKind::ConstructorCall {
-                callee: Spanned::new(
-                    self.ctx
+                callee: {
+                    let resolved = self
+                        .ctx
                         .resolver
                         .resolve_constructor_ident_path(self.ctx.owner, callee)
                         .map_err(|source| ExprLowerError::ModuleResolve {
                             source,
                             span: callee.span(),
-                        })?,
-                    callee.span(),
-                ),
+                        })?;
+                    self.refs
+                        .constructor_calls
+                        .insert(callee.to_name_path(), resolved.clone());
+                    Spanned::new(resolved, callee.span())
+                },
                 generic_args: generic_args
                     .iter()
                     .map(|arg| self.lower_generic_arg(arg))
@@ -1040,15 +1111,20 @@ impl<'a> ExprLowerer<'a> {
                     .collect::<Result<Vec<_>, _>>()?,
             },
             ast::ExprKind::VariantLiteral { index, variant } => {
-                ExprKind::VariantLiteral(Spanned::new(
-                    self.resolve_index_variant_parts(
-                        &index.value,
-                        &variant.value,
-                        index.span,
-                        variant.span,
-                    )?,
-                    index.span.merge(variant.span),
-                ))
+                let resolved = self.resolve_index_variant_parts(
+                    &index.value,
+                    &variant.value,
+                    index.span,
+                    variant.span,
+                )?;
+                self.refs.variant_literals.insert(
+                    WrittenVariantRef::IndexVariant(WrittenIndexVariant::new(
+                        index.value.clone(),
+                        variant.value.clone(),
+                    )),
+                    resolved.clone(),
+                );
+                ExprKind::VariantLiteral(Spanned::new(resolved, index.span.merge(variant.span)))
             }
             ast::ExprKind::InlineDagRef { path, args, output } => {
                 let target = self
@@ -1161,7 +1237,11 @@ impl<'a> ExprLowerer<'a> {
         }
     }
 
-    fn lower_const_ref(&self, name: &ScopedName, span: Span) -> Result<ConstRef, ExprLowerError> {
+    fn lower_const_ref(
+        &mut self,
+        name: &ScopedName,
+        span: Span,
+    ) -> Result<ConstRef, ExprLowerError> {
         if !name.is_qualified() {
             if let Some(builtin) = BuiltinConst::parse(name.member()) {
                 return Ok(ConstRef::Builtin(builtin));
@@ -1219,7 +1299,12 @@ impl<'a> ExprLowerer<'a> {
             .resolver
             .resolve_index_variant_path(self.ctx.owner, &path)
         {
-            Ok(resolved) => return Ok(ConstRef::IndexVariant(resolved)),
+            Ok(resolved) => {
+                self.refs
+                    .variant_literals
+                    .insert(WrittenVariantRef::ConstPath(name.clone()), resolved.clone());
+                return Ok(ConstRef::IndexVariant(resolved));
+            }
             Err(err) => first_error.get_or_insert(err),
         };
 
@@ -1323,7 +1408,7 @@ impl<'a> ExprLowerer<'a> {
     }
 
     fn lower_map_entry_key(
-        &self,
+        &mut self,
         key: &ast::MapEntryKey,
         map_span: Span,
     ) -> Result<MapEntryKey, ExprLowerError> {
@@ -1347,6 +1432,10 @@ impl<'a> ExprLowerer<'a> {
                         },
                         err => err,
                     })?;
+                self.refs.map_entry_variants.insert(
+                    WrittenIndexVariant::new(index_path.clone(), key.variant.value.clone()),
+                    variant.clone(),
+                );
                 Ok(MapEntryKey::IndexVariant(Spanned::new(
                     variant,
                     key.index.span.merge(key.variant.span),
@@ -1365,16 +1454,20 @@ impl<'a> ExprLowerer<'a> {
     ) -> Result<ForBinding, ExprLowerError> {
         let local = self.allocate_local(binding.var.value.clone(), binding.var.span)?;
         let index = match &binding.index {
-            ast::ForBindingIndex::Named(index) => ForBindingIndex::Named(Spanned::new(
-                self.ctx
+            ast::ForBindingIndex::Named(index) => {
+                let resolved = self
+                    .ctx
                     .resolver
                     .resolve_index_path(self.ctx.owner, &index.value)
                     .map_err(|source| ExprLowerError::ModuleResolve {
                         source,
                         span: index.span,
-                    })?,
-                index.span,
-            )),
+                    })?;
+                self.refs
+                    .for_binding_indexes
+                    .insert(index.value.clone(), resolved.clone());
+                ForBindingIndex::Named(Spanned::new(resolved, index.span))
+            }
             ast::ForBindingIndex::Range { arg, span } => ForBindingIndex::Range {
                 arg: lower_nat_expr(arg, self.ctx.type_context())?,
                 span: *span,
@@ -1385,15 +1478,22 @@ impl<'a> ExprLowerer<'a> {
 
     fn lower_index_arg(&mut self, arg: &ast::IndexArg) -> Result<IndexArg, ExprLowerError> {
         match arg {
-            ast::IndexArg::Variant { index, variant } => Ok(IndexArg::Variant(Spanned::new(
-                self.resolve_index_variant_parts(
+            ast::IndexArg::Variant { index, variant } => {
+                let resolved = self.resolve_index_variant_parts(
                     &index.value,
                     &variant.value,
                     index.span,
                     variant.span,
-                )?,
-                index.span.merge(variant.span),
-            ))),
+                )?;
+                self.refs.index_access_variants.insert(
+                    WrittenIndexVariant::new(index.value.clone(), variant.value.clone()),
+                    resolved.clone(),
+                );
+                Ok(IndexArg::Variant(Spanned::new(
+                    resolved,
+                    index.span.merge(variant.span),
+                )))
+            }
             ast::IndexArg::Var(ident) => Ok(IndexArg::Var(Spanned::new(
                 self.lookup_local(&LocalName::from_atom(ident.name.clone()), ident.span)?,
                 ident.span,
@@ -1447,18 +1547,25 @@ impl<'a> ExprLowerer<'a> {
                 index,
                 variant,
                 span,
-            } => Ok(MatchPattern::IndexLabel {
-                variant: Spanned::new(
-                    self.resolve_index_variant_parts(
-                        &index.value,
-                        &variant.value,
-                        index.span,
-                        variant.span,
-                    )?,
-                    index.span.merge(variant.span),
-                ),
-                span: *span,
-            }),
+            } => {
+                let resolved = self.resolve_index_variant_parts(
+                    &index.value,
+                    &variant.value,
+                    index.span,
+                    variant.span,
+                )?;
+                self.refs.match_label_variants.insert(
+                    WrittenVariantRef::IndexVariant(WrittenIndexVariant::new(
+                        index.value.clone(),
+                        variant.value.clone(),
+                    )),
+                    resolved.clone(),
+                );
+                Ok(MatchPattern::IndexLabel {
+                    variant: Spanned::new(resolved, index.span.merge(variant.span)),
+                    span: *span,
+                })
+            }
             ast::MatchPattern::Path {
                 path,
                 bindings,
@@ -1473,13 +1580,16 @@ impl<'a> ExprLowerer<'a> {
         bindings: &[ast::PatternBinding],
         span: Span,
     ) -> Result<MatchPattern, ExprLowerError> {
-        let name_path = ident_path_to_name_path(path);
+        let name_path = path.to_name_path();
         if bindings.is_empty()
             && let Ok(variant) = self
                 .ctx
                 .resolver
                 .resolve_index_variant_path(self.ctx.owner, &name_path)
         {
+            self.refs
+                .match_label_variants
+                .insert(WrittenVariantRef::PatternPath(name_path), variant.clone());
             return Ok(MatchPattern::IndexLabel {
                 variant: Spanned::new(variant, span),
                 span,
@@ -1603,17 +1713,6 @@ fn parse_atom(segment: &str, span: Span) -> Result<NameAtom, ExprLowerError> {
         source,
         span,
     })
-}
-
-fn ident_path_to_name_path(path: &crate::syntax::ast::IdentPath) -> NamePath {
-    let segments = path.segments();
-    NamePath::new(NonEmpty::new(
-        segments[0].name.clone(),
-        segments[1..]
-            .iter()
-            .map(|segment| segment.name.clone())
-            .collect(),
-    ))
 }
 
 #[cfg(test)]

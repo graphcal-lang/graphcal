@@ -150,6 +150,15 @@ impl IdentPath {
         self.segments.first().span.merge(self.segments.last().span)
     }
 
+    /// The written path with per-segment spans dropped.
+    ///
+    /// Use this for span-independent written identity (semantic metadata
+    /// keys); keep the `IdentPath` itself when diagnostics need segment spans.
+    #[must_use]
+    pub fn to_name_path(&self) -> crate::syntax::names::NamePath {
+        crate::syntax::names::NamePath::new(self.segments.clone().map(|ident| ident.name))
+    }
+
     /// Returns the leaf segment of the path.
     #[must_use]
     pub fn leaf(&self) -> &Ident {

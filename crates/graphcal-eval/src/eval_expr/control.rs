@@ -20,16 +20,16 @@ fn resolved_match_label_variant<'a>(
     ctx: &'a EvalContext<'_>,
     pattern: &MatchPattern,
 ) -> Option<&'a ResolvedIndexVariant> {
+    use graphcal_compiler::syntax::names::{WrittenIndexVariant, WrittenVariantRef};
     let refs = ctx.current_dag.map(|dag| &dag.semantic.collection_refs)?;
-    refs.match_label_variants
-        .get(&pattern.span())
-        .or_else(|| match pattern {
-            MatchPattern::IndexLabel { index, variant, .. } => refs
-                .match_label_variants
-                .get(&index.span.merge(variant.span)),
-            MatchPattern::Path { path, .. } => refs.match_label_variants.get(&path.span()),
-            MatchPattern::Constructor { .. } => None,
-        })
+    let written = match pattern {
+        MatchPattern::IndexLabel { index, variant, .. } => WrittenVariantRef::IndexVariant(
+            WrittenIndexVariant::new(index.value.clone(), variant.value.clone()),
+        ),
+        MatchPattern::Path { path, .. } => WrittenVariantRef::PatternPath(path.to_name_path()),
+        MatchPattern::Constructor { .. } => return None,
+    };
+    refs.match_label_variants.get(&written)
 }
 
 fn label_pattern_matches(

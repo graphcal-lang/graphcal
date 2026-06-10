@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use graphcal_compiler::desugar::resolved_ast::{Expr, MapEntry, MapEntryKey};
 use graphcal_compiler::syntax::names::{
-    IndexVariantName, ResolvedIndexVariant, ResolvedName, ScopedName, namespace,
+    IndexVariantName, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName, namespace,
 };
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
@@ -68,17 +68,24 @@ fn resolved_map_entry_variant<'a>(
     ctx: &EvalContext<'a>,
     key: &MapEntryKey,
 ) -> Option<&'a ResolvedIndexVariant> {
-    let span = key.index.span.merge(key.variant.span);
-    resolved_collection_refs(ctx).and_then(|refs| refs.map_entry_variants.get(&span))
+    let graphcal_compiler::syntax::ast::MapEntryIndex::Named(index_path) = &key.index.value else {
+        return None;
+    };
+    let written = graphcal_compiler::syntax::names::WrittenIndexVariant::new(
+        index_path.clone(),
+        key.variant.value.clone(),
+    );
+    resolved_collection_refs(ctx).and_then(|refs| refs.map_entry_variants.get(&written))
 }
 
 fn resolved_index_access_variant<'a>(
     ctx: &EvalContext<'a>,
-    index_span: Span,
-    variant_span: Span,
+    index: &NamePath,
+    variant: &IndexVariantName,
 ) -> Option<&'a ResolvedIndexVariant> {
-    let span = index_span.merge(variant_span);
-    resolved_collection_refs(ctx).and_then(|refs| refs.index_access_variants.get(&span))
+    let written =
+        graphcal_compiler::syntax::names::WrittenIndexVariant::new(index.clone(), variant.clone());
+    resolved_collection_refs(ctx).and_then(|refs| refs.index_access_variants.get(&written))
 }
 
 fn index_owner_mismatch_message(actual: &IndexTypeRef, expected_leaf: &str) -> String {
@@ -187,9 +194,9 @@ fn map_entry_index_def<'a>(
 
 fn resolved_for_binding_index<'a>(
     ctx: &EvalContext<'a>,
-    span: graphcal_compiler::syntax::span::Span,
+    path: &NamePath,
 ) -> Option<&'a ResolvedName<namespace::Index>> {
-    resolved_collection_refs(ctx).and_then(|refs| refs.for_binding_indexes.get(&span))
+    resolved_collection_refs(ctx).and_then(|refs| refs.for_binding_indexes.get(path))
 }
 
 /// Evaluate an index access expression.
@@ -212,7 +219,8 @@ pub(super) fn eval_index_access(
         };
         let variant_name: IndexVariantName = match arg {
             graphcal_compiler::desugar::resolved_ast::IndexArg::Variant { index, variant } => {
-                if let Some(resolved) = resolved_index_access_variant(ctx, index.span, variant.span)
+                if let Some(resolved) =
+                    resolved_index_access_variant(ctx, &index.value, &variant.value)
                 {
                     ensure_index_ref_matches_resolved(
                         &index_name,
@@ -587,7 +595,7 @@ pub(super) fn eval_for_comp(
     // Resolve the index name and get the index definition
     let (idx_name, error_span, dynamic_nat_size, resolved_index) = match &binding.index {
         ForBindingIndex::Named(spanned) => {
-            let resolved = resolved_for_binding_index(ctx, spanned.span).cloned();
+            let resolved = resolved_for_binding_index(ctx, &spanned.value).cloned();
             (
                 resolved.as_ref().map_or_else(
                     || index_ref_from_path(ctx, &spanned.value),
