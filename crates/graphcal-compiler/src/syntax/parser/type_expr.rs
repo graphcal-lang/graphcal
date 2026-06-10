@@ -254,23 +254,28 @@ impl Parser<'_> {
             let outer_power = self.parse_outer_power()?;
 
             // Flatten: distribute the outer power to each inner term
-            let items = inner
+            inner
                 .terms
                 .into_iter()
                 .map(|item| {
                     let inner_power = item.term.power.unwrap_or(1);
-                    let combined = inner_power * outer_power;
-                    DimExprItem {
+                    let combined = inner_power.checked_mul(outer_power).ok_or_else(|| {
+                        ParseError::InvalidNumber {
+                            reason: "dimension exponent overflows `i32`".to_string(),
+                            src: self.named_source(),
+                            span: item.term.span.into(),
+                        }
+                    })?;
+                    Ok(DimExprItem {
                         op: item.op,
                         term: DimTerm {
                             name: item.term.name,
                             power: if combined == 1 { None } else { Some(combined) },
                             span: item.term.span,
                         },
-                    }
+                    })
                 })
-                .collect();
-            Ok(items)
+                .collect()
         } else {
             let term = self.parse_dim_term()?;
             Ok(vec![DimExprItem {
@@ -402,8 +407,16 @@ impl Parser<'_> {
                 .terms
                 .into_iter()
                 .map(|item| {
-                    let combined_power = item.power.unwrap_or(1) * outer_power;
-                    UnitExprItem {
+                    let combined_power = item
+                        .power
+                        .unwrap_or(1)
+                        .checked_mul(outer_power)
+                        .ok_or_else(|| ParseError::InvalidNumber {
+                            reason: "unit exponent overflows `i32`".to_string(),
+                            src: self.named_source(),
+                            span: item.name.span.into(),
+                        })?;
+                    Ok(UnitExprItem {
                         op: Self::combine_ops(outer_op, item.op),
                         name: item.name,
                         power: if combined_power == 1 {
@@ -411,9 +424,9 @@ impl Parser<'_> {
                         } else {
                             Some(combined_power)
                         },
-                    }
+                    })
                 })
-                .collect();
+                .collect::<Result<Vec<_>, ParseError>>()?;
             Ok((items, lparen_span, end_span))
         } else {
             let ident = self.parse_any_ident()?;
@@ -672,6 +685,23 @@ mod tests {
             }
             other => panic!("expected DimExpr, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn dim_power_flattening_overflow_errors() {
+        // Regression: distributing an outer power over a parenthesized
+        // dimension group used unchecked `i32` multiplication — panic in
+        // debug builds, silently wrong dimension in release builds.
+        let source = "param x: (Length^2000000000)^2000000000 = 1.0;";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        assert!(matches!(err, ParseError::InvalidNumber { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn unit_power_flattening_overflow_errors() {
+        let source = "param x: Length = 1.0 m/(s^2000000000)^2000000000;";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        assert!(matches!(err, ParseError::InvalidNumber { .. }), "{err:?}");
     }
 
     #[test]
