@@ -17,6 +17,7 @@ graphcal-fmt = { workspace = true }
 graphcal-io = { workspace = true }
 indexmap = { workspace = true }
 miette = { workspace = true }
+serde_json.workspace = true
 tokio = { workspace = true }
 tower-lsp = { workspace = true }
 

@@ -118,6 +118,7 @@ pub fn compile_error_to_diagnostics_grouped(
         CompileError::Parse(e) => e,
         CompileError::Eval(e) => e,
     };
+    let data = structured_data(error);
 
     // Source-less errors carry no labels either, so an empty source is safe
     // for the LineIndex (which is unused when there are no labels).
@@ -133,11 +134,35 @@ pub fn compile_error_to_diagnostics_grouped(
         },
     );
 
-    let diags = compile_error_to_diagnostics_in_source(diag, source, &uri);
+    let diags = compile_error_to_diagnostics_in_source(diag, source, &uri, data);
 
     let mut grouped: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
     grouped.insert(uri, diags);
     grouped
+}
+
+/// Structured payload for diagnostics whose quick fixes need typed fields.
+///
+/// The compiler error carries these fields as types; flattening them into
+/// the rendered message and re-parsing it in `code_actions` was exactly the
+/// string-convention round trip the project bans. `Diagnostic::data` rides
+/// along with the diagnostic to the `textDocument/codeAction` request.
+fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
+    use graphcal_compiler::registry::error::GraphcalError;
+    let CompileError::Eval(e) = error else {
+        return None;
+    };
+    match e {
+        // V003: the private item that needs `pub`.
+        GraphcalError::PrivateInPublic { ref_name, .. } => {
+            Some(serde_json::json!({ "referencedName": ref_name }))
+        }
+        // V006: the leaked private item that needs `pub`.
+        GraphcalError::GenericsLeakage { leaked_name, .. } => {
+            Some(serde_json::json!({ "referencedName": leaked_name }))
+        }
+        _ => None,
+    }
 }
 
 /// Build the LSP diagnostics for one error against a known (URI, source).
@@ -145,6 +170,7 @@ fn compile_error_to_diagnostics_in_source(
     diag: &dyn miette::Diagnostic,
     source: &str,
     uri: &Url,
+    data: Option<serde_json::Value>,
 ) -> Vec<Diagnostic> {
     let message = format!("{diag}");
     let code = diag.code().map(|c| NumberOrString::String(c.to_string()));
@@ -189,6 +215,7 @@ fn compile_error_to_diagnostics_in_source(
                 } else {
                     Some(related)
                 },
+                data: data.clone(),
                 ..Default::default()
             });
         }
@@ -201,6 +228,7 @@ fn compile_error_to_diagnostics_in_source(
             code,
             source: Some("graphcal".to_string()),
             message: format!("{message}{help_suffix}"),
+            data,
             ..Default::default()
         });
     }

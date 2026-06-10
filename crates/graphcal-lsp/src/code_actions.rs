@@ -12,6 +12,10 @@ use tower_lsp::lsp_types::{
     Diagnostic, NumberOrString, Position, Range, TextEdit, Url, WorkspaceEdit,
 };
 
+use crate::convert::LineIndex;
+use crate::server::AnalysisResult;
+use crate::symbol_table::SymbolKey;
+
 /// All declaration keywords that can be preceded by `pub`.
 ///
 /// Used by `find_keyword_position` to locate the insertion point for `pub `.
@@ -21,24 +25,12 @@ const ALL_DECL_KEYWORDS: &[&str] = &[
     "import", "include",
 ];
 
-/// Declaration keywords for name-based lookup.
-///
-/// Each entry includes a trailing space to match `keyword name...` patterns.
-/// Only includes keywords whose declarations can trigger V003 (items that
-/// appear in type annotations of `pub` declarations).
-const NAMED_DECL_KEYWORDS: &[&str] = &[
-    "dim ",
-    "type ",
-    "index ",
-    "base dim ",
-    "unit ",
-    "param ",
-    "node ",
-    "const ",
-];
-
 /// Produce code actions for the given diagnostics.
-pub fn code_actions(params: &CodeActionParams, source: &str) -> Option<CodeActionResponse> {
+pub fn code_actions(
+    params: &CodeActionParams,
+    analysis: &AnalysisResult,
+) -> Option<CodeActionResponse> {
+    let source = analysis.source.as_str();
     let mut actions = Vec::new();
 
     for diag in &params.context.diagnostics {
@@ -55,16 +47,10 @@ pub fn code_actions(params: &CodeActionParams, source: &str) -> Option<CodeActio
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
-            "graphcal::V003" => {
-                if let Some(action) =
-                    make_add_pub_action_v003(diag, source, &params.text_document.uri)
-                {
-                    actions.push(CodeActionOrCommand::CodeAction(action));
-                }
-            }
-            "graphcal::V006" => {
-                if let Some(action) =
-                    make_add_pub_action_v006(diag, source, &params.text_document.uri)
+            // V003 and V006 share a fix shape: add `pub` to the private
+            // item named in the diagnostic's structured data.
+            "graphcal::V003" | "graphcal::V006" => {
+                if let Some(action) = make_add_pub_action(diag, analysis, &params.text_document.uri)
                 {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
@@ -78,6 +64,51 @@ pub fn code_actions(params: &CodeActionParams, source: &str) -> Option<CodeActio
     } else {
         Some(actions)
     }
+}
+
+/// The referenced private name a V003/V006 diagnostic carries in its
+/// structured `data` payload (attached in `diagnostics.rs`). The name is
+/// typed end to end — no re-parsing of the rendered message.
+fn referenced_name_from_data(diag: &Diagnostic) -> Option<String> {
+    diag.data
+        .as_ref()?
+        .get("referencedName")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Line (0-based) of the declaration named `name`, resolved through the
+/// symbol table rather than by grepping source lines (which also matched
+/// declaration-shaped text inside comments and string literals).
+fn declaration_line(analysis: &AnalysisResult, name: &str) -> Option<u32> {
+    let def = analysis
+        .symbol_table
+        .definitions
+        .get(&SymbolKey::TopLevel(name.to_string()))?;
+    if def.name_span.is_empty() {
+        return None;
+    }
+    let lines = LineIndex::new(&analysis.source);
+    Some(lines.span_to_range(def.name_span).start.line)
+}
+
+/// For V003/V006: read the private name from the diagnostic data, find its
+/// declaration via the symbol table, and insert `pub ` before the keyword.
+fn make_add_pub_action(
+    diag: &Diagnostic,
+    analysis: &AnalysisResult,
+    uri: &Url,
+) -> Option<CodeAction> {
+    let ref_name = referenced_name_from_data(diag)?;
+    let decl_line = declaration_line(analysis, &ref_name)?;
+    make_add_visibility_action(
+        diag,
+        &analysis.source,
+        uri,
+        decl_line,
+        "pub ",
+        format!("Add `pub` to `{ref_name}`"),
+    )
 }
 
 /// Build a quick-fix code action that inserts `prefix` (e.g. `"pub "` or
@@ -128,37 +159,6 @@ fn make_add_pub_bind_action_v002(diag: &Diagnostic, source: &str, uri: &Url) -> 
     )
 }
 
-/// For V003: extract the private name referenced in the diagnostic message,
-/// find its declaration line, and insert `pub ` before the keyword.
-fn make_add_pub_action_v003(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
-    let ref_name = extract_referenced_private_name(&diag.message)?;
-    let decl_line = find_declaration_line(source, &ref_name)?;
-    make_add_visibility_action(
-        diag,
-        source,
-        uri,
-        decl_line,
-        "pub ",
-        format!("Add `pub` to `{ref_name}`"),
-    )
-}
-
-/// For V006: same shape as V003 — the diagnostic exposes a "leaked" private
-/// item that needs `pub ` at its declaration. The alternative fix (drop the
-/// re-export marker) depends on syntactic context not available here.
-fn make_add_pub_action_v006(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
-    let leaked_name = extract_referenced_private_name(&diag.message)?;
-    let decl_line = find_declaration_line(source, &leaked_name)?;
-    make_add_visibility_action(
-        diag,
-        source,
-        uri,
-        decl_line,
-        "pub ",
-        format!("Add `pub` to `{leaked_name}`"),
-    )
-}
-
 /// Find the position of the declaration keyword on a given line.
 ///
 /// Skips leading whitespace and returns the position at which a keyword
@@ -188,62 +188,51 @@ fn find_keyword_position(source: &str, line: u32) -> Option<Position> {
     })
 }
 
-/// Extract the backticked identifier that follows "references private" in a
-/// V003 or V006 diagnostic message.
-///
-/// V003 message shape: `` "`pub {kind}` `{pub_name}` references private `ref_kind` `{ref_name}` in ..." ``
-/// V006 message shape: `` "re-exported <kind> `<name>`'s signature references private <kind> `<leaked_name>`" ``
-fn extract_referenced_private_name(message: &str) -> Option<String> {
-    let marker = "references private ";
-    let after_marker = message.find(marker).map(|i| &message[i + marker.len()..])?;
-    let backtick_start = after_marker.find('`')? + 1;
-    let rest = &after_marker[backtick_start..];
-    let backtick_end = rest.find('`')?;
-    Some(rest[..backtick_end].to_string())
-}
-
-/// Find the 0-based line number where an item with the given name is declared.
-///
-/// Searches for lines containing a declaration keyword followed by the name.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "line index fits in u32 for typical source files"
-)]
-fn find_declaration_line(source: &str, name: &str) -> Option<u32> {
-    for (i, line) in source.lines().enumerate() {
-        let trimmed = line.trim_start();
-        for kw in NAMED_DECL_KEYWORDS {
-            if let Some(rest) = trimmed.strip_prefix(kw) {
-                // Check if the name matches (followed by space, '=', ':', ';', or end of line).
-                if rest.starts_with(name)
-                    && rest[name.len()..]
-                        .chars()
-                        .next()
-                        .is_none_or(|c| matches!(c, ' ' | '=' | ':' | ';' | '\t'))
-                {
-                    return Some(i as u32);
-                }
-            }
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap as StdHashMap;
+    use std::sync::Arc;
+
     use tower_lsp::lsp_types::{
         CodeActionContext, PartialResultParams, TextDocumentIdentifier, WorkDoneProgressParams,
     };
 
     use super::*;
+    use crate::server::build_fn_signatures;
+    use crate::symbol_table;
 
-    fn make_diag(code: &str, message: &str, range: Range) -> Diagnostic {
+    /// Build a minimal `AnalysisResult` from source text.
+    fn analysis_from_source(source: &str) -> AnalysisResult {
+        let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+            .parse_file()
+            .unwrap();
+        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+        let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
+        let symbol_table = symbol_table::build_from_ast(&ast, source);
+        AnalysisResult {
+            source: Arc::new(source.to_string()),
+            symbol_table,
+            imported_definitions: StdHashMap::new(),
+            diagnostics: Arc::new(StdHashMap::new()),
+            eval_values: StdHashMap::new(),
+            fn_signatures: build_fn_signatures(),
+            import_links: Vec::new(),
+        }
+    }
+
+    fn make_diag(
+        code: &str,
+        message: &str,
+        range: Range,
+        data: Option<serde_json::Value>,
+    ) -> Diagnostic {
         Diagnostic {
             range,
             severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
             code: Some(NumberOrString::String(code.to_string())),
             source: Some("graphcal".to_string()),
             message: message.to_string(),
+            data,
             ..Default::default()
         }
     }
@@ -264,7 +253,7 @@ mod tests {
 
     #[test]
     fn v002_adds_pub_bind_to_required_index() {
-        let source = "index Phase;";
+        let analysis = analysis_from_source("index Phase;");
         let uri = Url::parse("file:///test.gcl").unwrap();
         let diag = make_diag(
             "graphcal::V002",
@@ -279,10 +268,11 @@ mod tests {
                     character: 11,
                 },
             },
+            None,
         );
 
         let params = make_params(&uri, vec![diag]);
-        let actions = code_actions(&params, source).unwrap();
+        let actions = code_actions(&params, &analysis).unwrap();
         assert_eq!(actions.len(), 1);
 
         let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
@@ -308,7 +298,7 @@ mod tests {
 
     #[test]
     fn v002_adds_pub_bind_with_indentation() {
-        let source = "    index Phase;";
+        let analysis = analysis_from_source("    index Phase;");
         let uri = Url::parse("file:///test.gcl").unwrap();
         let diag = make_diag(
             "graphcal::V002",
@@ -323,10 +313,11 @@ mod tests {
                     character: 15,
                 },
             },
+            None,
         );
 
         let params = make_params(&uri, vec![diag]);
-        let actions = code_actions(&params, source).unwrap();
+        let actions = code_actions(&params, &analysis).unwrap();
         let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
             panic!("expected CodeAction");
         };
@@ -343,11 +334,13 @@ mod tests {
 
     #[test]
     fn v003_adds_pub_to_private_dim() {
-        let source = "dim Velocity = Length / Time;\npub node speed: Velocity = 10.0 m/s;";
+        let analysis = analysis_from_source(
+            "dim Velocity = Length / Time;\npub node speed: Velocity = 10.0 m/s;",
+        );
         let uri = Url::parse("file:///test.gcl").unwrap();
         let diag = make_diag(
             "graphcal::V003",
-            "`pub node` `speed` references private dim `Velocity` in its type annotation\n\nhint: add `pub` to `Velocity` or remove `pub` from `speed`",
+            "`pub node` `speed` references private dim `Velocity` in its signature",
             Range {
                 start: Position {
                     line: 1,
@@ -358,10 +351,11 @@ mod tests {
                     character: 24,
                 },
             },
+            Some(serde_json::json!({ "referencedName": "Velocity" })),
         );
 
         let params = make_params(&uri, vec![diag]);
-        let actions = code_actions(&params, source).unwrap();
+        let actions = code_actions(&params, &analysis).unwrap();
         assert_eq!(actions.len(), 1);
 
         let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
@@ -381,17 +375,36 @@ mod tests {
     }
 
     #[test]
-    fn extract_referenced_private_name_works() {
-        let msg = "`pub node` `speed` references private dim `Velocity` in its type annotation";
-        assert_eq!(
-            extract_referenced_private_name(msg),
-            Some("Velocity".to_string())
+    fn v003_declaration_in_comment_is_not_matched() {
+        // Regression: the declaration line used to be found by grepping
+        // source lines, which also matched declaration-shaped text inside
+        // comments. The symbol table only knows real declarations.
+        let analysis = analysis_from_source(
+            "// dim Velocity = old commented-out version\n\
+             dim Velocity = Length / Time;\n\
+             pub node speed: Velocity = 10.0 m/s;",
         );
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let diag = make_diag(
+            "graphcal::V003",
+            "`pub node` `speed` references private dim `Velocity` in its signature",
+            Range::default(),
+            Some(serde_json::json!({ "referencedName": "Velocity" })),
+        );
+
+        let params = make_params(&uri, vec![diag]);
+        let actions = code_actions(&params, &analysis).unwrap();
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected CodeAction");
+        };
+        let edits = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri];
+        // The real declaration is on line 1, not the comment on line 0.
+        assert_eq!(edits[0].range.start.line, 1);
     }
 
     #[test]
     fn v006_adds_pub_to_leaked_symbol() {
-        let source = "type Inner {}\npub include \"lib.gcl\"(Element: Inner) as c;\n";
+        let analysis = analysis_from_source("type Inner { Inner }\nnode x: Dimensionless = 1.0;\n");
         let uri = Url::parse("file:///test.gcl").unwrap();
         let diag = make_diag(
             "graphcal::V006",
@@ -406,10 +419,11 @@ mod tests {
                     character: 12,
                 },
             },
+            Some(serde_json::json!({ "referencedName": "Inner" })),
         );
 
         let params = make_params(&uri, vec![diag]);
-        let actions = code_actions(&params, source).unwrap();
+        let actions = code_actions(&params, &analysis).unwrap();
         assert_eq!(actions.len(), 1);
 
         let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
@@ -429,24 +443,32 @@ mod tests {
     }
 
     #[test]
-    fn extract_referenced_private_name_handles_v006_shape() {
-        let msg = "re-exported type `Widget`'s signature references private type `Inner`";
-        assert_eq!(
-            extract_referenced_private_name(msg),
-            Some("Inner".to_string())
+    fn v003_without_data_produces_no_action() {
+        // Diagnostics from older publishes (or other producers) without the
+        // structured payload yield no quick fix — never a wrong one.
+        let analysis = analysis_from_source("dim Velocity = Length / Time;");
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let diag = make_diag(
+            "graphcal::V003",
+            "`pub node` `speed` references private dim `Velocity` in its signature",
+            Range::default(),
+            None,
         );
+        let params = make_params(&uri, vec![diag]);
+        assert!(code_actions(&params, &analysis).is_none());
     }
 
     #[test]
     fn no_actions_for_unrelated_diagnostic() {
-        let source = "node x: Dimensionless = @nonexistent;";
+        let analysis = analysis_from_source("node x: Dimensionless = @nonexistent;");
         let uri = Url::parse("file:///test.gcl").unwrap();
         let diag = make_diag(
             "graphcal::N002",
             "unknown reference `nonexistent`",
             Range::default(),
+            None,
         );
         let params = make_params(&uri, vec![diag]);
-        assert!(code_actions(&params, source).is_none());
+        assert!(code_actions(&params, &analysis).is_none());
     }
 }
