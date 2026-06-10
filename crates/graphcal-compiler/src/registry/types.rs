@@ -8,7 +8,7 @@ use crate::desugar::resolved_ast::{
 };
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational, RationalError};
 use crate::syntax::names::{
-    ConstructorName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
+    ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
     StructTypeName, UnitName,
 };
 // ---------------------------------------------------------------------------
@@ -797,7 +797,10 @@ pub struct Registry {
 /// `pub node` signatures.
 #[derive(Debug, Default, Clone)]
 pub struct DagRegistry {
-    dags: HashMap<String, DagDecl>,
+    /// Dag bodies keyed by their declaration name. Dags live in the
+    /// declaration namespace, so the key is the typed [`DeclName`] like
+    /// every other registry — not a bare `String`.
+    dags: HashMap<DeclName, DagDecl>,
 }
 
 impl DagRegistry {
@@ -808,7 +811,7 @@ impl DagRegistry {
     }
 
     /// Iterate over all registered dags.
-    pub fn all_dags(&self) -> impl Iterator<Item = (&String, &DagDecl)> {
+    pub fn all_dags(&self) -> impl Iterator<Item = (&DeclName, &DagDecl)> {
         self.dags.iter()
     }
 }
@@ -832,7 +835,7 @@ pub struct RegistryBuilder {
     ctors: HashMap<ConstructorName, StructTypeName>,
     indexes: HashMap<IndexName, IndexDef>,
     nat_ranges: HashMap<NatRangeIndex, IndexDef>,
-    dags: HashMap<String, DagDecl>,
+    dags: HashMap<DeclName, DagDecl>,
 }
 
 impl RegistryBuilder {
@@ -867,7 +870,7 @@ impl RegistryBuilder {
     ///
     /// Accessed later during dim-checking of inline `@dag(args).out`
     /// expressions.
-    pub fn register_dag(&mut self, name: String, decl: DagDecl) {
+    pub fn register_dag(&mut self, name: DeclName, decl: DagDecl) {
         self.dags.insert(name, decl);
     }
 

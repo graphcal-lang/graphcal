@@ -291,7 +291,7 @@ pub struct ImportedValueNames {
     /// Imported node names.
     pub node_names: Vec<(ScopedName, Span)>,
     /// Imported assert names (for `#[assumes]` validation).
-    pub assert_names: Vec<(String, Span)>,
+    pub assert_names: Vec<(DeclName, Span)>,
 }
 
 /// The kind of a declaration (used for source-order tracking).

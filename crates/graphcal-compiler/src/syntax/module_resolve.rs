@@ -549,7 +549,7 @@ impl ModuleSymbols {
                     return Err(ModuleResolveError::DuplicateSymbol {
                         owner: self.owner.clone(),
                         namespace: namespace::IndexVariant::DISPLAY_NAME,
-                        name: format!("{}.{}", index.name.value, variant.value),
+                        name: variant.value.qualified_by(&index.name.value).to_string(),
                         first,
                         duplicate: variant.span,
                     });

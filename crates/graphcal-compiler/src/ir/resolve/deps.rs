@@ -9,12 +9,18 @@ use crate::syntax::visitor::ExprVisitor;
 use miette::NamedSource;
 
 /// What kind of reference collection to perform.
+///
+/// `All` carries the runtime name set so the variant is impossible to
+/// construct without it — the previous shape (`Option` field next to a
+/// bare enum) had an "internal invariant" comment over a silent fallback.
 #[derive(Clone, Copy)]
-enum RefKind {
+enum RefKind<'a> {
     /// Collect only const refs; reject any @name that is not a known const.
     ConstOnly,
     /// Collect both graph and const refs; reject any @name that is neither.
-    All,
+    All {
+        runtime_names: &'a HashSet<&'a ScopedName>,
+    },
 }
 
 /// Shared visitor that walks expressions collecting `@`-references and
@@ -26,8 +32,7 @@ enum RefKind {
 /// - `All`: accept `@name` for runtime OR const nodes; populate `graph_refs` and
 ///   `const_refs` respectively.
 struct RefCollector<'a> {
-    kind: RefKind,
-    all_runtime_names: Option<&'a HashSet<&'a ScopedName>>,
+    kind: RefKind<'a>,
     all_const_names: &'a HashSet<&'a ScopedName>,
     builtin_consts: &'a HashMap<&'a str, f64>,
     builtin_fns: &'a HashMap<&'a str, crate::registry::builtins::BuiltinFunction>,
@@ -58,11 +63,8 @@ impl RefCollector<'_> {
                     })
                 }
             }
-            RefKind::All => {
-                // Safety: the public `extract_all_refs` entry point always passes
-                // `Some(all_runtime_names)` for `RefKind::All`, so this unwrap is
-                // an internal invariant.
-                let runtime = self.all_runtime_names.unwrap_or(self.all_const_names);
+            RefKind::All { runtime_names } => {
+                let runtime = runtime_names;
                 if runtime.contains(scoped) {
                     self.graph_refs.insert(scoped.clone());
                     Ok(())
@@ -197,7 +199,6 @@ pub(super) fn extract_const_refs(
     let mut unused = HashSet::new();
     let mut collector = RefCollector {
         kind: RefKind::ConstOnly,
-        all_runtime_names: None,
         all_const_names,
         builtin_consts,
         builtin_fns,
@@ -228,8 +229,9 @@ pub(super) fn extract_all_refs(
     let mut const_refs = HashSet::new();
     {
         let mut collector = RefCollector {
-            kind: RefKind::All,
-            all_runtime_names: Some(all_runtime_names),
+            kind: RefKind::All {
+                runtime_names: all_runtime_names,
+            },
             all_const_names,
             builtin_consts,
             builtin_fns,

@@ -30,11 +30,6 @@ impl Parser<'_> {
             let path = self.parse_ident_path()?;
             let path_span = path.span();
             let bare_name = path.as_bare().map(|ident| ident.name.as_str().to_string());
-            let leaf_starts_upper = path
-                .leaf()
-                .name
-                .as_str()
-                .starts_with(|c: char| c.is_ascii_uppercase());
 
             match bare_name.as_deref() {
                 Some("Dimensionless") => TypeExpr {
@@ -73,8 +68,12 @@ impl Parser<'_> {
                         }
                     }
                 }
-                _ if leaf_starts_upper && self.lexer.peek() == Some(&Token::Lt) => {
+                _ if self.lexer.peek() == Some(&Token::Lt) => {
                     // Type application: Vec3<Length, ECI> or module.Vec3<Length>.
+                    // `<` cannot follow a complete dim expr in type position,
+                    // so no casing heuristic is needed — the previous
+                    // ASCII-uppercase check silently misparsed non-ASCII
+                    // type names into dim expressions.
                     let name = path.into_spanned_name_path();
                     let type_args = self.parse_type_arg_list()?;
                     let end_span = type_args.last().map_or(name.span, |a| a.span);

@@ -825,7 +825,7 @@ impl UnfrozenIR {
         dep: Self,
         prefix: &str,
         bindings: &HashMap<DeclName, Expr>,
-        dep_names: &HashSet<String>,
+        dep_names: &HashSet<DeclName>,
         index_bindings: &HashMap<IndexName, IndexName>,
         type_bindings: &HashMap<StructTypeName, StructTypeName>,
         dim_bindings: &HashMap<DimName, DimName>,
@@ -840,7 +840,7 @@ impl UnfrozenIR {
         /// namespace and must keep their qualifier — `with_prefix` would
         /// silently replace it, diverging from the merged expressions whose
         /// qualified refs are left untouched.
-        fn prefix_dep(d: &ScopedName, prefix: &str, dep_names: &HashSet<String>) -> ScopedName {
+        fn prefix_dep(d: &ScopedName, prefix: &str, dep_names: &HashSet<DeclName>) -> ScopedName {
             if !d.is_qualified() && dep_names.contains(d.member()) {
                 d.with_prefix(prefix)
             } else {
@@ -852,17 +852,17 @@ impl UnfrozenIR {
         all_dep_names.extend(
             dep.imported_values
                 .keys()
-                .map(|name| name.member().to_string()),
+                .map(|name| DeclName::new(name.member())),
         );
         all_dep_names.extend(
             dep.imported_decl_types
                 .keys()
-                .map(|name| name.member().to_string()),
+                .map(|name| DeclName::new(name.member())),
         );
         all_dep_names.extend(
             dep.imported_value_sources
                 .keys()
-                .map(|name| name.member().to_string()),
+                .map(|name| DeclName::new(name.member())),
         );
         let dep_names = &all_dep_names;
 
@@ -1370,7 +1370,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
 /// local/qualified distinction lives in the structured qualifier path.
 struct RefPrefixer<'a> {
     prefix: &'a str,
-    dep_names: &'a HashSet<String>,
+    dep_names: &'a HashSet<DeclName>,
 }
 
 impl RefPrefixer<'_> {
@@ -1421,7 +1421,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for RefPrefixer<'_> {
 /// `"dry_mass"` is in `dep_names` and `prefix` is `"r"`.
 ///
 /// Built-in names and names from the importer's scope are left unchanged.
-pub(crate) fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<String>) {
+pub(crate) fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<DeclName>) {
     let mut prefixer = RefPrefixer { prefix, dep_names };
     let _ = prefixer.visit_expr_mut(expr);
 }
@@ -1796,12 +1796,16 @@ pub(crate) fn register_file_declarations(
 }
 
 /// Names selected from a dependency's type-system registry.
+///
+/// The sets span several namespaces by design (dims, units, indexes, and
+/// types share the selective-import surface), so entries are kept as the
+/// namespace-agnostic [`NameAtom`] rather than coerced into one name type.
 #[derive(Debug, Default, Clone)]
 pub struct SelectedDeclarations {
     /// Names imported from the default compile-time namespace.
-    pub default: HashSet<String>,
+    pub default: HashSet<crate::syntax::names::NameAtom>,
     /// Names imported from the explicit `type` namespace.
-    pub types: HashSet<String>,
+    pub types: HashSet<crate::syntax::names::NameAtom>,
 }
 
 impl SelectedDeclarations {
@@ -1810,11 +1814,11 @@ impl SelectedDeclarations {
         self.default.is_empty() && self.types.is_empty()
     }
 
-    pub fn insert_default(&mut self, name: impl Into<String>) {
+    pub fn insert_default(&mut self, name: impl Into<crate::syntax::names::NameAtom>) {
         self.default.insert(name.into());
     }
 
-    pub fn insert_type(&mut self, name: impl Into<String>) {
+    pub fn insert_type(&mut self, name: impl Into<crate::syntax::names::NameAtom>) {
         self.types.insert(name.into());
     }
 }
@@ -1911,7 +1915,7 @@ fn register_declarations_impl(
                 register_type_decl(t, registry);
             }
             DeclKind::Dag(d) if should_register_default(d.name.value.as_str()) => {
-                registry.register_dag(d.name.value.to_string(), d.clone());
+                registry.register_dag(d.name.value.clone(), d.clone());
             }
             _ => {}
         }
@@ -3062,10 +3066,10 @@ mod tests {
         )
         .unwrap();
 
-        let dep_names: HashSet<String> = dep_unfrozen
+        let dep_names: HashSet<DeclName> = dep_unfrozen
             .source_order
             .iter()
-            .map(|(n, _)| n.member().to_string())
+            .map(|(n, _)| DeclName::new(n.member()))
             .collect();
         unfrozen
             .merge_dependency(

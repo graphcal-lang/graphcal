@@ -152,7 +152,7 @@ fn compile_inline_dag_bodies_test(
 
     for (name, body) in dag_bodies {
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
-            &name,
+            name.as_str(),
             &body,
             &tir.registry,
             &crate::ir::resolve::ImportedValueNames::default(),

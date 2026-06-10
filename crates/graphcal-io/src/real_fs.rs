@@ -29,15 +29,20 @@ pub struct RealFileSystem {
 impl RealFileSystem {
     /// Construct a sandboxed filesystem reader pinned to `project_root`.
     ///
-    /// `project_root` is stored verbatim; callers are expected to pass a
-    /// canonicalized path (e.g. from `loader::resolve_project_root`). Reads
-    /// for paths outside the root — including symlink escapes — return
-    /// `io::ErrorKind::NotFound`.
-    #[must_use]
-    pub const fn rooted(project_root: PathBuf) -> Self {
-        Self {
-            root: Some(project_root),
-        }
+    /// The root is canonicalized here rather than trusted from the caller:
+    /// the sandbox's `starts_with` check is only sound against a canonical
+    /// root, and a non-canonical one (e.g. macOS `/tmp` vs `/private/tmp`)
+    /// silently failed closed with a confusing `NotFound` for every read.
+    /// Reads for paths outside the root — including symlink escapes —
+    /// return `io::ErrorKind::NotFound`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the canonicalization error when `project_root` does not
+    /// exist or cannot be resolved.
+    pub fn rooted(project_root: &Path) -> Result<Self, io::Error> {
+        let root = project_root.canonicalize()?;
+        Ok(Self { root: Some(root) })
     }
 
     /// Return `Ok(canonical_path)` if `path` is allowed under the current
@@ -125,7 +130,7 @@ mod tests {
         let file = root.join("a.gcl");
         fs::write(&file, "hello").unwrap();
 
-        let fs_reader = RealFileSystem::rooted(root);
+        let fs_reader = RealFileSystem::rooted(&root).unwrap();
         assert_eq!(fs_reader.read_to_string(&file).unwrap(), "hello");
         assert!(fs_reader.is_file(&file));
         assert!(fs_reader.exists(&file));
@@ -142,7 +147,7 @@ mod tests {
         let secret = external.join("secret.gcl");
         fs::write(&secret, "secret content").unwrap();
 
-        let fs_reader = RealFileSystem::rooted(project.canonicalize().unwrap());
+        let fs_reader = RealFileSystem::rooted(&project).unwrap();
         // Outside the root — must be NotFound, not a successful read.
         let err = fs_reader.read_to_string(&secret).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
@@ -167,7 +172,7 @@ mod tests {
         let link = project.join("link.gcl");
         symlink(&target, &link).unwrap();
 
-        let fs_reader = RealFileSystem::rooted(project.canonicalize().unwrap());
+        let fs_reader = RealFileSystem::rooted(&project).unwrap();
         // The symlink points outside the root; reading it must fail.
         let err = fs_reader.read_to_string(&link).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);

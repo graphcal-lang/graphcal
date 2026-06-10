@@ -608,9 +608,9 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         ImportKind::Selective(_) => ModuleAliasName::new(dag_name),
     };
 
-    // Check for duplicate module names.
-    // We use a sentinel DagId for inline DAGs in the module_map.
-    let sentinel_dag_id = graphcal_compiler::dag_id::DagId::root(format!("<dag:{dag_name}>"));
+    // Check for duplicate module names. The map records the inline DAG's
+    // real canonical id — a fabricated `<dag:name>` sentinel here would
+    // silently mismatch any comparison against genuine DagIds.
     if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
         return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
             name: prefix.to_string(),
@@ -620,7 +620,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         }));
     }
     ctx.module_map
-        .insert(prefix.clone(), (sentinel_dag_id, include_decl.path.span()));
+        .insert(prefix.clone(), (dag_id.clone(), include_decl.path.span()));
 
     let dag_body = graphcal_compiler::desugar::resolved_ast::File {
         declarations: dag_def.body.clone(),
@@ -911,7 +911,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                         // We just need to make the name visible for #[assumes].
                         ctx.imported_names
                             .assert_names
-                            .push((local_name, import_item.name.span));
+                            .push((DeclName::new(&local_name), import_item.name.span));
                     }
                     SelectiveImportResult::NotFound => {
                         if is_default_namespace

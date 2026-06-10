@@ -821,15 +821,22 @@ fn validate_private_in_public(
     let emit = |pub_kind: &str,
                 pub_name: String,
                 pub_span: Span,
-                refs: &[(String, Span)]|
+                refs: &[(crate::syntax::names::NamePath, Span)]|
      -> Result<(), GraphcalError> {
-        for (ref_name, ref_span) in refs {
-            if local_type_names.contains_key(ref_name) && !pub_names.contains(ref_name.as_str()) {
+        for (ref_path, ref_span) in refs {
+            // Only a bare (single-segment) path can name a local type-system
+            // declaration; qualified refs belong to another module.
+            let Some(ref_name) = ref_path.as_bare() else {
+                continue;
+            };
+            if local_type_names.contains_key(ref_name.as_str())
+                && !pub_names.contains(ref_name.as_str())
+            {
                 return Err(GraphcalError::PrivateInPublic {
                     pub_kind: pub_kind.to_string(),
                     pub_name,
-                    ref_kind: ref_kind_for(file, ref_name).to_string(),
-                    ref_name: ref_name.clone(),
+                    ref_kind: ref_kind_for(file, ref_name.as_str()).to_string(),
+                    ref_name: ref_name.to_string(),
                     src: src.clone(),
                     ref_span: (*ref_span).into(),
                     pub_span: pub_span.into(),
@@ -864,7 +871,7 @@ fn validate_private_in_public(
             continue;
         }
 
-        let mut refs: Vec<(String, Span)> = Vec::new();
+        let mut refs: Vec<(crate::syntax::names::NamePath, Span)> = Vec::new();
         let (kind, name): (&str, String) = match &decl.kind {
             DeclKind::Param(p) => {
                 collect_type_refs(&p.type_ann, &mut refs);
@@ -920,19 +927,19 @@ fn validate_private_in_public(
 }
 
 /// Recursively collect type-system references from a [`TypeExpr`].
-fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(String, Span)>) {
+fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(crate::syntax::names::NamePath, Span)>) {
     match &type_expr.kind {
         TypeExprKind::DimExpr(dim_expr) => collect_dim_refs(dim_expr, refs),
         TypeExprKind::Indexed { base, indexes } => {
             collect_type_refs(base, refs);
             for idx in indexes {
                 if let IndexExpr::Name(path) = idx {
-                    refs.push((path.value.display_path(), path.span));
+                    refs.push((path.value.clone(), path.span));
                 }
             }
         }
         TypeExprKind::TypeApplication { name, type_args } => {
-            refs.push((name.value.display_path(), name.span));
+            refs.push((name.value.clone(), name.span));
             for arg in type_args {
                 collect_type_refs(arg, refs);
             }
@@ -953,9 +960,9 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(String, Span)>) {
 }
 
 /// Collect every term name in a [`DimExpr`] as a `(name, span)` reference.
-fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(String, Span)>) {
+fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(crate::syntax::names::NamePath, Span)>) {
     for item in &dim_expr.terms {
-        refs.push((item.term.name.value.display_path(), item.term.span));
+        refs.push((item.term.name.value.clone(), item.term.span));
     }
 }
 
@@ -1232,7 +1239,7 @@ pub(crate) fn resolve_with_imported_values(
     // Build assert names (imported + local) for attribute validation
     let mut all_assert_names: HashSet<DeclName> = HashSet::new();
     for (name, _) in &imported.assert_names {
-        all_assert_names.insert(DeclName::new(name.as_str()));
+        all_assert_names.insert(name.clone());
     }
     all_assert_names.extend(local.assert_names.iter().cloned());
 
