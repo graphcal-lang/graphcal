@@ -267,16 +267,31 @@ pub fn normalize_nat_expr(
                 })?;
             Ok(NatPolyForm::from_var(gp.clone()))
         }
-        NatExpr::Add(lhs, rhs, _) => {
+        NatExpr::Add(lhs, rhs, span) => {
             let l = normalize_nat_expr(lhs, nat_params, src)?;
             let r = normalize_nat_expr(rhs, nat_params, src)?;
-            Ok(l.add(&r))
+            l.add(&r).map_err(|err| nat_overflow_error(err, src, *span))
         }
-        NatExpr::Mul(lhs, rhs, _) => {
+        NatExpr::Mul(lhs, rhs, span) => {
             let l = normalize_nat_expr(lhs, nat_params, src)?;
             let r = normalize_nat_expr(rhs, nat_params, src)?;
-            Ok(l.mul(&r))
+            l.mul(&r).map_err(|err| nat_overflow_error(err, src, *span))
         }
+    }
+}
+
+/// Convert a [`NatOverflowError`](crate::syntax::nat::NatOverflowError)
+/// into a spanned [`GraphcalError`].
+#[must_use]
+pub fn nat_overflow_error(
+    err: crate::syntax::nat::NatOverflowError,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    GraphcalError::EvalError {
+        message: err.to_string(),
+        src: src.clone(),
+        span: span.into(),
     }
 }
 
@@ -2613,21 +2628,26 @@ fn unify_nat_poly_form(
     // (reduced_monomial, coefficient) pairs for terms with unbound variables
     let mut reduced_terms: BTreeMap<Monomial, u64> = BTreeMap::new();
 
+    // Shared "this form cannot match the actual index" error, used both for
+    // genuine mismatches and for arithmetic overflow during reduction (an
+    // overflowing form cannot match any concrete index size).
+    let form_mismatch = || GraphcalError::IndexMismatch {
+        expected: IndexName::new(format!("range({})", form.format())),
+        found: actual_idx.clone(),
+        src: src.clone(),
+        span: span.into(),
+    };
+
     for (mono, coeff) in &form.terms {
-        let Some((remaining_mono, factor)) = mono.substitute(nat_sub) else {
-            // Arithmetic overflow during substitution
-            return Err(GraphcalError::IndexMismatch {
-                expected: IndexName::new(format!("range({})", form.format())),
-                found: actual_idx.clone(),
-                src: src.clone(),
-                span: span.into(),
-            });
-        };
-        let term_value = coeff * factor;
+        let (remaining_mono, factor) = mono.substitute(nat_sub).ok_or_else(form_mismatch)?;
+        let term_value = coeff.checked_mul(factor).ok_or_else(form_mismatch)?;
         if remaining_mono.is_constant() {
-            reduced_constant += term_value;
+            reduced_constant = reduced_constant
+                .checked_add(term_value)
+                .ok_or_else(form_mismatch)?;
         } else {
-            *reduced_terms.entry(remaining_mono).or_insert(0) += term_value;
+            let entry = reduced_terms.entry(remaining_mono).or_insert(0);
+            *entry = entry.checked_add(term_value).ok_or_else(form_mismatch)?;
         }
     }
     // Remove zero terms
@@ -2673,23 +2693,16 @@ fn unify_nat_poly_form(
 
         if all_linear {
             // Solve: coeff * var + reduced_constant = target
-            let total_coeff: u64 = reduced_terms.values().sum();
+            let total_coeff = reduced_terms
+                .values()
+                .try_fold(0u64, |acc, c| acc.checked_add(*c))
+                .ok_or_else(form_mismatch)?;
             if target < reduced_constant {
-                return Err(GraphcalError::IndexMismatch {
-                    expected: IndexName::new(format!("range({})", form.format())),
-                    found: actual_idx.clone(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                return Err(form_mismatch());
             }
             let remainder = target - reduced_constant;
             if total_coeff == 0 || !remainder.is_multiple_of(total_coeff) {
-                return Err(GraphcalError::IndexMismatch {
-                    expected: IndexName::new(format!("range({})", form.format())),
-                    found: actual_idx.clone(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
+                return Err(form_mismatch());
             }
             let value = remainder / total_coeff;
             bind_or_check(nat_sub, var, value, |prev, _| {
@@ -3750,21 +3763,24 @@ fn resolve_hir_index_ref(
             param.span,
         )),
         hir::IndexRef::NatExpr(nat_expr) => Ok(ResolvedIndex::NatExpr(
-            normalize_hir_nat_expr(nat_expr),
+            normalize_hir_nat_expr(nat_expr)
+                .map_err(|err| nat_overflow_error(err, ctx.src, nat_expr.span()))?,
             nat_expr.span(),
         )),
     }
 }
 
-fn normalize_hir_nat_expr(expr: &hir::NatExpr) -> NatPolyForm {
+fn normalize_hir_nat_expr(
+    expr: &hir::NatExpr,
+) -> Result<NatPolyForm, crate::syntax::nat::NatOverflowError> {
     match expr {
-        hir::NatExpr::Literal(value, _) => NatPolyForm::from_constant(*value),
-        hir::NatExpr::Param(param) => NatPolyForm::from_var(param.value.name.clone()),
+        hir::NatExpr::Literal(value, _) => Ok(NatPolyForm::from_constant(*value)),
+        hir::NatExpr::Param(param) => Ok(NatPolyForm::from_var(param.value.name.clone())),
         hir::NatExpr::Add(lhs, rhs, _) => {
-            normalize_hir_nat_expr(lhs).add(&normalize_hir_nat_expr(rhs))
+            normalize_hir_nat_expr(lhs)?.add(&normalize_hir_nat_expr(rhs)?)
         }
         hir::NatExpr::Mul(lhs, rhs, _) => {
-            normalize_hir_nat_expr(lhs).mul(&normalize_hir_nat_expr(rhs))
+            normalize_hir_nat_expr(lhs)?.mul(&normalize_hir_nat_expr(rhs)?)
         }
     }
 }
@@ -5307,16 +5323,18 @@ mod tests {
     fn nat_leq_var_plus_constant() {
         // N <= N + 1
         let a = NatPolyForm::from_var(GenericParamName::new("N"));
-        let b =
-            NatPolyForm::from_var(GenericParamName::new("N")).add(&NatPolyForm::from_constant(1));
+        let b = NatPolyForm::from_var(GenericParamName::new("N"))
+            .add(&NatPolyForm::from_constant(1))
+            .unwrap();
         assert!(a.is_leq(&b));
     }
 
     #[test]
     fn nat_leq_var_plus_constant_reverse() {
         // N + 1 <= N → false
-        let a =
-            NatPolyForm::from_var(GenericParamName::new("N")).add(&NatPolyForm::from_constant(1));
+        let a = NatPolyForm::from_var(GenericParamName::new("N"))
+            .add(&NatPolyForm::from_constant(1))
+            .unwrap();
         let b = NatPolyForm::from_var(GenericParamName::new("N"));
         assert!(!a.is_leq(&b));
     }
@@ -5361,6 +5379,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let reference = NatPolyForm::from_var(GenericParamName::new("N"))
             .add(&NatPolyForm::from_constant(1))
+            .unwrap()
             .to_nat_range_identity()?
             .to_index_type_ref()?;
         assert_eq!(reference.nat_range(), None);
@@ -5376,7 +5395,7 @@ mod tests {
     fn nat_mul_constants() {
         let a = NatPolyForm::from_constant(3);
         let b = NatPolyForm::from_constant(4);
-        assert_eq!(a.mul(&b), NatPolyForm::from_constant(12));
+        assert_eq!(a.mul(&b).unwrap(), NatPolyForm::from_constant(12));
     }
 
     #[test]
@@ -5384,7 +5403,7 @@ mod tests {
         // N * 3
         let n = NatPolyForm::from_var(GenericParamName::new("N"));
         let three = NatPolyForm::from_constant(3);
-        let result = n.mul(&three);
+        let result = n.mul(&three).unwrap();
         // Should format as "3 * N"
         assert_eq!(result.format(), "3 * N");
         // Evaluate with N=5 → 15
@@ -5398,7 +5417,7 @@ mod tests {
         // M * N
         let m = NatPolyForm::from_var(GenericParamName::new("M"));
         let n = NatPolyForm::from_var(GenericParamName::new("N"));
-        let result = m.mul(&n);
+        let result = m.mul(&n).unwrap();
         assert_eq!(result.format(), "M * N");
         let mut bindings = HashMap::new();
         bindings.insert(GenericParamName::new("M"), 3);
@@ -5411,8 +5430,8 @@ mod tests {
         // (M + 1) * N = M * N + N
         let m = NatPolyForm::from_var(GenericParamName::new("M"));
         let n = NatPolyForm::from_var(GenericParamName::new("N"));
-        let m_plus_1 = m.add(&NatPolyForm::from_constant(1));
-        let result = m_plus_1.mul(&n);
+        let m_plus_1 = m.add(&NatPolyForm::from_constant(1)).unwrap();
+        let result = m_plus_1.mul(&n).unwrap();
         // Evaluate with M=2, N=3 → (2+1)*3 = 9
         let mut bindings = HashMap::new();
         bindings.insert(GenericParamName::new("M"), 2);
@@ -5425,7 +5444,11 @@ mod tests {
         // M * N + 1
         let m = NatPolyForm::from_var(GenericParamName::new("M"));
         let n = NatPolyForm::from_var(GenericParamName::new("N"));
-        let result = m.mul(&n).add(&NatPolyForm::from_constant(1));
+        let result = m
+            .mul(&n)
+            .unwrap()
+            .add(&NatPolyForm::from_constant(1))
+            .unwrap();
         assert_eq!(result.format(), "M * N + 1");
         let mut bindings = HashMap::new();
         bindings.insert(GenericParamName::new("M"), 2);
@@ -5442,7 +5465,8 @@ mod tests {
         assert!(!n.is_constant());
 
         let mn = NatPolyForm::from_var(GenericParamName::new("M"))
-            .mul(&NatPolyForm::from_var(GenericParamName::new("N")));
+            .mul(&NatPolyForm::from_var(GenericParamName::new("N")))
+            .unwrap();
         assert!(!mn.is_constant());
     }
 
@@ -5450,10 +5474,51 @@ mod tests {
     fn nat_poly_leq_with_mul() {
         // M * N <= M * N + 1
         let mn = NatPolyForm::from_var(GenericParamName::new("M"))
-            .mul(&NatPolyForm::from_var(GenericParamName::new("N")));
-        let mn_plus_1 = mn.add(&NatPolyForm::from_constant(1));
+            .mul(&NatPolyForm::from_var(GenericParamName::new("N")))
+            .unwrap();
+        let mn_plus_1 = mn.add(&NatPolyForm::from_constant(1)).unwrap();
         assert!(mn.is_leq(&mn_plus_1));
         assert!(!mn_plus_1.is_leq(&mn));
+    }
+
+    #[test]
+    fn nat_add_overflow_errors() {
+        // Regression: coefficient addition used to wrap silently, letting a
+        // wrapped form unify with an unrelated type.
+        let a = NatPolyForm::from_constant(u64::MAX);
+        let b = NatPolyForm::from_constant(1);
+        assert!(a.add(&b).is_err());
+    }
+
+    #[test]
+    fn nat_mul_overflow_errors() {
+        // Regression: coefficient multiplication used to wrap silently.
+        let a = NatPolyForm::from_constant(u64::MAX);
+        let b = NatPolyForm::from_constant(2);
+        assert!(a.mul(&b).is_err());
+    }
+
+    #[test]
+    fn nat_unify_substituted_term_overflow_errors() {
+        // Regression: `unify_nat_poly_form` multiplied a term coefficient by
+        // a substituted binding without overflow checking (debug panic,
+        // release wraparound). `2 * N` with N bound near u64::MAX must report
+        // a mismatch instead.
+        let form = NatPolyForm::from_constant(2)
+            .mul(&NatPolyForm::from_var(GenericParamName::new("N")))
+            .unwrap();
+        let mut nat_sub = HashMap::new();
+        nat_sub.insert(GenericParamName::new("N"), u64::MAX / 2 + 1);
+        let src = NamedSource::new("<test>", Arc::new(String::new()));
+        let result = unify_nat_poly_form(
+            &form,
+            4,
+            &mut nat_sub,
+            &IndexName::new("range(4)"),
+            &src,
+            Span::new(0, 0),
+        );
+        assert!(result.is_err());
     }
 
     #[test]

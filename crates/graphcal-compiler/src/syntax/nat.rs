@@ -9,6 +9,25 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::syntax::names::GenericParamName;
 
+/// Arithmetic overflow while combining type-level Nat forms.
+///
+/// Coefficients and exponents are stored as `u64`; combining forms whose
+/// values exceed that range must fail loudly instead of wrapping, since a
+/// wrapped form could spuriously unify with an unrelated type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NatOverflowError;
+
+impl std::fmt::Display for NatOverflowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "type-level Nat arithmetic overflow (values are stored as `u64`)"
+        )
+    }
+}
+
+impl std::error::Error for NatOverflowError {}
+
 /// A monomial: product of variables raised to natural number exponents.
 ///
 /// Represented as a sorted map from variable name to exponent. The empty map
@@ -38,13 +57,15 @@ impl Monomial {
     }
 
     /// Multiply two monomials: add exponents of each variable.
-    #[must_use]
-    pub(crate) fn mul(&self, other: &Self) -> Self {
+    ///
+    /// Returns an error if an exponent overflows.
+    pub(crate) fn mul(&self, other: &Self) -> Result<Self, NatOverflowError> {
         let mut result = self.0.clone();
         for (var, exp) in &other.0 {
-            *result.entry(var.clone()).or_insert(0) += exp;
+            let entry = result.entry(var.clone()).or_insert(0);
+            *entry = entry.checked_add(*exp).ok_or(NatOverflowError)?;
         }
-        Self(result)
+        Ok(Self(result))
     }
 
     /// Evaluate the monomial given variable bindings.
@@ -145,29 +166,33 @@ impl NatPolyForm {
     }
 
     /// Add two polynomials.
-    #[must_use]
-    pub fn add(&self, other: &Self) -> Self {
+    ///
+    /// Returns an error if a coefficient overflows.
+    pub fn add(&self, other: &Self) -> Result<Self, NatOverflowError> {
         let mut terms = self.terms.clone();
         for (mono, coeff) in &other.terms {
             let entry = terms.entry(mono.clone()).or_insert(0);
-            *entry += coeff;
+            *entry = entry.checked_add(*coeff).ok_or(NatOverflowError)?;
         }
         terms.retain(|_, c| *c != 0);
-        Self { terms }
+        Ok(Self { terms })
     }
 
     /// Multiply two polynomials (distributive law).
-    #[must_use]
-    pub fn mul(&self, other: &Self) -> Self {
-        let mut terms = BTreeMap::new();
+    ///
+    /// Returns an error if a coefficient or exponent overflows.
+    pub fn mul(&self, other: &Self) -> Result<Self, NatOverflowError> {
+        let mut terms: BTreeMap<Monomial, u64> = BTreeMap::new();
         for (m1, c1) in &self.terms {
             for (m2, c2) in &other.terms {
-                let mono = m1.mul(m2);
-                *terms.entry(mono).or_insert(0) += c1 * c2;
+                let mono = m1.mul(m2)?;
+                let term = c1.checked_mul(*c2).ok_or(NatOverflowError)?;
+                let entry = terms.entry(mono).or_insert(0);
+                *entry = entry.checked_add(term).ok_or(NatOverflowError)?;
             }
         }
         terms.retain(|_, c| *c != 0);
-        Self { terms }
+        Ok(Self { terms })
     }
 
     /// Returns the constant term (coefficient of the empty monomial).

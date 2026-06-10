@@ -55,15 +55,19 @@ fn inferred_index_for_leaf(
 ///
 /// This is a lenient version used during type inference where the nat params
 /// in scope are not directly available. Variable validation is done elsewhere.
-fn normalize_nat_expr_lenient(expr: &NatExpr) -> NatLinearForm {
+///
+/// Returns an error if the Nat arithmetic overflows.
+fn normalize_nat_expr_lenient(
+    expr: &NatExpr,
+) -> Result<NatLinearForm, crate::syntax::nat::NatOverflowError> {
     match expr {
-        NatExpr::Literal(n, _) => NatLinearForm::from_constant(*n),
-        NatExpr::Var(ident) => NatLinearForm::from_var(GenericParamName::new(&ident.name)),
+        NatExpr::Literal(n, _) => Ok(NatLinearForm::from_constant(*n)),
+        NatExpr::Var(ident) => Ok(NatLinearForm::from_var(GenericParamName::new(&ident.name))),
         NatExpr::Add(lhs, rhs, _) => {
-            normalize_nat_expr_lenient(lhs).add(&normalize_nat_expr_lenient(rhs))
+            normalize_nat_expr_lenient(lhs)?.add(&normalize_nat_expr_lenient(rhs)?)
         }
         NatExpr::Mul(lhs, rhs, _) => {
-            normalize_nat_expr_lenient(lhs).mul(&normalize_nat_expr_lenient(rhs))
+            normalize_nat_expr_lenient(lhs)?.mul(&normalize_nat_expr_lenient(rhs)?)
         }
     }
 }
@@ -139,6 +143,18 @@ fn resolved_map_entry_variant_for_key<'a>(
 
 fn nat_range_error(
     err: crate::registry::types::NatRangeIndexError,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    GraphcalError::EvalError {
+        message: err.to_string(),
+        src: src.clone(),
+        span: span.into(),
+    }
+}
+
+fn nat_overflow_error(
+    err: crate::syntax::nat::NatOverflowError,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> GraphcalError {
@@ -275,9 +291,12 @@ pub(super) fn infer_for_comp(
                         }
                     }
                 }
-                ForBindingIndex::Range { arg, .. } => {
+                ForBindingIndex::Range { arg, span } => {
                     // `for i: range(N)` — loop variable is Fin(N)
-                    InferredType::Fin(normalize_nat_expr_lenient(arg))
+                    InferredType::Fin(
+                        normalize_nat_expr_lenient(arg)
+                            .map_err(|err| nat_overflow_error(err, src, *span))?,
+                    )
                 }
             };
         inner_locals.insert(binding.var.value.as_str().to_owned(), var_type);
@@ -300,7 +319,9 @@ pub(super) fn infer_for_comp(
                 inferred_index_for_path(&spanned_idx.value, spanned_idx.span, dag)
             }
             ForBindingIndex::Range { arg, span } => {
-                InferredIndex::from_nat_range_form(normalize_nat_expr_lenient(arg))
+                let form = normalize_nat_expr_lenient(arg)
+                    .map_err(|err| nat_overflow_error(err, src, *span))?;
+                InferredIndex::from_nat_range_form(form)
                     .map_err(|err| nat_range_error(err, src, *span))?
             }
         };
@@ -919,7 +940,8 @@ fn fin_plus_literal(
         return None; // Negative offsets can't be statically bounded
     }
     #[expect(clippy::cast_sign_loss, reason = "checked non-negative above")]
-    Some(fin_bound.add(&NatLinearForm::from_constant(*k as u64)))
+    // Overflow means no statically representable bound — fall back to None.
+    fin_bound.add(&NatLinearForm::from_constant(*k as u64)).ok()
 }
 
 /// Infer the type of a scan expression.
