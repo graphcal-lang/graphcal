@@ -15,7 +15,6 @@ use crate::desugar::resolved_ast::{BinOp, UnaryOp, UnitExpr};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::{Dimension, Rational};
-use crate::syntax::names::UnitName;
 use crate::syntax::span::Span;
 
 use super::super::InferredType;
@@ -442,28 +441,33 @@ pub(super) fn resolve_unit_dimension_or_diagnose(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
+    use crate::registry::types::UnitResolveError;
     registry
         .units
         .resolve_unit_dimension(unit)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: unit.span.into(),
-        })?
-        .ok_or_else(|| {
-            for item in &unit.terms {
-                if registry.units.get_unit(item.name.value.as_str()).is_none() {
-                    return GraphcalError::UnknownUnit {
-                        name: item.name.value.clone(),
-                        src: src.clone(),
-                        span: item.name.span.into(),
-                    };
+        .map_err(|err| match err {
+            UnitResolveError::UnknownUnit(name) => {
+                // Point at the failing term's own span when we can find it.
+                let span = unit
+                    .terms
+                    .iter()
+                    .find(|item| item.name.value == name)
+                    .map_or(unit.span, |item| item.name.span);
+                GraphcalError::UnknownUnit {
+                    name,
+                    src: src.clone(),
+                    span: span.into(),
                 }
             }
-            GraphcalError::UnknownUnit {
-                name: UnitName::new("unknown"),
+            UnitResolveError::DynamicScale(name) => GraphcalError::EvalError {
+                message: format!("unit `{name}` has a dynamic scale"),
                 src: src.clone(),
                 span: unit.span.into(),
-            }
+            },
+            UnitResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
+                src: src.clone(),
+                span: unit.span.into(),
+            },
         })
 }
 

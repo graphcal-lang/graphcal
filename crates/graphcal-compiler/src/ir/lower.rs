@@ -2213,15 +2213,7 @@ fn register_unit_decl(
             // Static unit: scale is a compile-time constant.
             let (_unit_dim, base_scale) = registry
                 .resolve_unit_expr(&def.unit_expr)
-                .map_err(|_| GraphcalError::DimensionOverflow {
-                    src: src.clone(),
-                    span: def.span.into(),
-                })?
-                .ok_or_else(|| GraphcalError::UnknownUnit {
-                    name: u.name.value.clone(),
-                    src: src.clone(),
-                    span: def.span.into(),
-                })?;
+                .map_err(|err| unit_resolve_to_graphcal(err, src, def.span))?;
             let scale_expr = validate_positive_finite_scale(
                 eval_scale_expr(&def.scale_expr, src)?,
                 "unit scale expression",
@@ -2275,16 +2267,33 @@ fn resolve_base_unit_static_scale(
 ) -> Result<PositiveFiniteScale, GraphcalError> {
     let (_dim, base_scale) = registry
         .resolve_unit_expr(unit_expr)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: unit_expr.span.into(),
-        })?
-        .ok_or_else(|| GraphcalError::UnknownUnit {
-            name: format_unit_expr(unit_expr).into(),
-            src: src.clone(),
-            span: unit_expr.span.into(),
-        })?;
+        .map_err(|err| unit_resolve_to_graphcal(err, src, unit_expr.span))?;
     validate_positive_finite_scale(base_scale, "base unit scale", src, unit_expr.span)
+}
+
+/// Convert a typed unit-resolution failure into a spanned diagnostic.
+fn unit_resolve_to_graphcal(
+    err: crate::registry::types::UnitResolveError,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    use crate::registry::types::UnitResolveError;
+    match err {
+        UnitResolveError::UnknownUnit(name) => GraphcalError::UnknownUnit {
+            name,
+            src: src.clone(),
+            span: span.into(),
+        },
+        UnitResolveError::DynamicScale(name) => GraphcalError::EvalError {
+            message: format!("unit `{name}` has a dynamic scale and cannot be used here"),
+            src: src.clone(),
+            span: span.into(),
+        },
+        UnitResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
+            src: src.clone(),
+            span: span.into(),
+        },
+    }
 }
 
 /// Check if an expression contains any `@`-references (graph refs).
@@ -2717,15 +2726,7 @@ fn eval_range_expr(
         ExprKind::UnitLiteral { value, unit } => {
             let (dim, scale) = registry
                 .resolve_unit_expr(unit)
-                .map_err(|_| GraphcalError::DimensionOverflow {
-                    src: src.clone(),
-                    span: unit.span.into(),
-                })?
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: "unknown unit in range expression".to_string(),
-                    src: src.clone(),
-                    span: unit.span.into(),
-                })?;
+                .map_err(|err| unit_resolve_to_graphcal(err, src, unit.span))?;
             let scale = validate_positive_finite_scale(scale, "range unit scale", src, unit.span)?;
             Ok((ensure_finite(*value * scale.get(), expr.span)?, dim))
         }
@@ -2869,13 +2870,10 @@ fn lower_range_index(
     // Extract display unit from the start expression's unit annotation.
     let (display_label, display_scale) = match &start_expr.kind {
         ExprKind::UnitLiteral { unit, .. } => {
-            match registry.resolve_unit_expr(unit).map_err(|_| {
-                GraphcalError::DimensionOverflow {
-                    src: src.clone(),
-                    span: unit.span.into(),
-                }
-            })? {
-                Some((_dim, scale)) => {
+            // Unknown/dynamic units have no static display scale; the
+            // expression itself is validated elsewhere.
+            match registry.resolve_unit_expr(unit) {
+                Ok((_dim, scale)) => {
                     let scale = validate_positive_finite_scale(
                         scale,
                         "range display unit scale",
@@ -2884,7 +2882,13 @@ fn lower_range_index(
                     )?;
                     (Some(format_unit_expr(unit)), scale.get())
                 }
-                None => (None, 1.0),
+                Err(crate::registry::types::UnitResolveError::Overflow(_)) => {
+                    return Err(GraphcalError::DimensionOverflow {
+                        src: src.clone(),
+                        span: unit.span.into(),
+                    });
+                }
+                Err(_) => (None, 1.0),
             }
         }
         _ => (None, 1.0),
