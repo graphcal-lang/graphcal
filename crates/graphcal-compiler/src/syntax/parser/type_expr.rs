@@ -19,6 +19,10 @@ impl Parser<'_> {
 
     /// Parse a type expression: `Dimensionless` or a dimension expression.
     pub(super) fn parse_type_expr(&mut self) -> Result<TypeExpr, ParseError> {
+        self.with_depth(Self::parse_type_expr_inner)
+    }
+
+    fn parse_type_expr_inner(&mut self) -> Result<TypeExpr, ParseError> {
         // Parse the base type first. Identifier-shaped type references are
         // parsed as paths before any semantic categorization; bare built-ins
         // are recognized only when the path has exactly one segment.
@@ -349,6 +353,10 @@ impl Parser<'_> {
     /// Parenthesized groups are flattened into the term list (operator
     /// combination and power distribution), so the AST stays flat.
     pub(super) fn parse_unit_expr(&mut self) -> Result<UnitExpr, ParseError> {
+        self.with_depth(Self::parse_unit_expr_inner)
+    }
+
+    fn parse_unit_expr_inner(&mut self) -> Result<UnitExpr, ParseError> {
         let (first_terms, start_span, mut end_span) =
             self.parse_unit_term_or_group(MulDivOp::Mul)?;
 

@@ -196,7 +196,30 @@ pub enum ParseError {
         #[label("expected `.<out>` projection here")]
         span: SourceSpan,
     },
+
+    #[error("expression nesting is too deep")]
+    #[diagnostic(
+        code(graphcal::P015),
+        help("the parser limits nesting to {MAX_NESTING_DEPTH} levels; simplify the expression")
+    )]
+    TooDeeplyNested {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("nesting exceeds the limit here")]
+        span: SourceSpan,
+    },
 }
+
+/// Maximum nesting depth for recursive grammar productions (expressions,
+/// unary chains, type expressions).
+///
+/// The recursive-descent parser consumes one or more stack frames per
+/// nesting level; without a bound, pathological input like 100k nested
+/// parentheses overflows the stack and aborts the process (including the
+/// LSP server). The limit is far above any realistic engineering program —
+/// note that left-nested operator *chains* (`1.0 + 1.0 + …`) are parsed
+/// iteratively and are not limited by this bound.
+pub const MAX_NESTING_DEPTH: usize = 256;
 
 impl ParseError {
     /// Return the `NamedSource` embedded in this error.
@@ -221,7 +244,8 @@ impl ParseError {
             | Self::MultiDeclSingleSlot { src, .. }
             | Self::MultiDeclNoSharedAxis { src, .. }
             | Self::MultiDeclUnsupportedShape { src, .. }
-            | Self::InlineDagCallMissingProjection { src, .. } => src,
+            | Self::InlineDagCallMissingProjection { src, .. }
+            | Self::TooDeeplyNested { src, .. } => src,
         }
     }
 }
@@ -230,6 +254,9 @@ pub struct Parser<'src> {
     pub(super) lexer: Lexer<'src>,
     pub(super) source: Arc<String>,
     pub(super) source_name: String,
+    /// Current nesting depth of recursive grammar productions; bounded by
+    /// [`MAX_NESTING_DEPTH`] via [`Self::with_depth`].
+    depth: usize,
 }
 
 impl<'src> Parser<'src> {
@@ -239,6 +266,7 @@ impl<'src> Parser<'src> {
             lexer: Lexer::new(source),
             source: Arc::new(source.to_string()),
             source_name: "input".to_string(),
+            depth: 0,
         }
     }
 
@@ -248,7 +276,34 @@ impl<'src> Parser<'src> {
             lexer: Lexer::new(source),
             source: Arc::new(source.to_string()),
             source_name: name.to_string(),
+            depth: 0,
         }
+    }
+
+    /// Run `f` one nesting level deeper, erroring out once the depth budget
+    /// is exhausted instead of overflowing the stack.
+    ///
+    /// Within the budget, the stack is grown on demand (`stacker`): the
+    /// recursive-descent frames for [`MAX_NESTING_DEPTH`] levels exceed the
+    /// default stack of secondary threads (tests, LSP workers) in debug
+    /// builds, so the bound alone would not prevent an abort.
+    pub(super) fn with_depth<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            let span = self.lexer.peek_with_span().map(|(_, span)| span);
+            return Err(ParseError::TooDeeplyNested {
+                src: self.named_source(),
+                span: span
+                    .unwrap_or_else(|| Span::new(self.lexer.source_len(), 0))
+                    .into(),
+            });
+        }
+        self.depth += 1;
+        let result = stacker::maybe_grow(64 * 1024, 1024 * 1024, || f(self));
+        self.depth -= 1;
+        result
     }
 
     #[must_use]

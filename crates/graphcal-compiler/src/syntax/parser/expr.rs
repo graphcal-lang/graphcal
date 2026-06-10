@@ -33,7 +33,7 @@ impl Parser<'_> {
     //   9. atoms (including NUMBER UNIT_EXPR)
 
     pub(crate) fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        self.parse_convert()
+        self.with_depth(Self::parse_convert)
     }
 
     /// Parse a comma-separated argument list: `(expr1, expr2, ...)`
@@ -216,6 +216,10 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_unary(&mut self) -> Result<Expr, ParseError> {
+        self.with_depth(Self::parse_unary_inner)
+    }
+
+    fn parse_unary_inner(&mut self) -> Result<Expr, ParseError> {
         match self.lexer.peek() {
             Some(Token::Minus) => {
                 let (_, op_span) = self.advance()?;
@@ -914,6 +918,52 @@ mod tests {
             DeclKind::Node(n) => n.value,
             _ => panic!("expected node"),
         }
+    }
+
+    #[test]
+    fn deeply_nested_parens_error_instead_of_stack_overflow() {
+        // Regression: the recursive-descent parser had no depth bound, so
+        // pathological nesting overflowed the stack and aborted the process
+        // (including the LSP server hosting the parser).
+        let depth = 100_000;
+        let src = format!(
+            "node x: Dimensionless = {}1.0{};",
+            "(".repeat(depth),
+            ")".repeat(depth)
+        );
+        let err = Parser::new(&src).parse_file().unwrap_err();
+        assert!(matches!(err, ParseError::TooDeeplyNested { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn deeply_nested_unary_chain_errors_instead_of_stack_overflow() {
+        let src = format!("node x: Dimensionless = {}1.0;", "-".repeat(100_000));
+        let err = Parser::new(&src).parse_file().unwrap_err();
+        assert!(matches!(err, ParseError::TooDeeplyNested { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn reasonable_nesting_stays_below_the_depth_limit() {
+        // Realistic engineering formulas nest a few dozen levels at most;
+        // 60 nested parens must keep parsing fine.
+        let depth = 60;
+        let src = format!(
+            "node x: Dimensionless = {}1.0{};",
+            "(".repeat(depth),
+            ")".repeat(depth)
+        );
+        Parser::new(&src).parse_file().unwrap();
+    }
+
+    #[test]
+    fn long_operator_chains_are_not_depth_limited() {
+        // Left-nested chains are parsed iteratively; a 10k-term sum must not
+        // trip the nesting bound.
+        let src = format!(
+            "node x: Dimensionless = {};",
+            vec!["1.0"; 10_000].join(" + ")
+        );
+        Parser::new(&src).parse_file().unwrap();
     }
 
     #[test]
