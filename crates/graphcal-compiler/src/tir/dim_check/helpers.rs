@@ -325,26 +325,7 @@ pub(super) fn check_arm_types_match(
     src: &NamedSource<Arc<String>>,
     expr: &Expr,
 ) -> Result<InferredType, GraphcalError> {
-    if let Some(first) = arm_types.first() {
-        for (i, arm_type) in arm_types.iter().enumerate().skip(1) {
-            if arm_type != first {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: format_inferred_type(first, registry),
-                    found: format_inferred_type(arm_type, registry),
-                    help: "all match arms must return the same type".to_string(),
-                    src: src.clone(),
-                    span: arms[i].body.span.into(),
-                });
-            }
-        }
-        Ok(first.clone())
-    } else {
-        Err(GraphcalError::EvalError {
-            message: "match expression has no arms".to_string(),
-            src: src.clone(),
-            span: expr.span.into(),
-        })
-    }
+    super::infer::match_arms_rule(arm_types, |i| arms[i].body.span, expr.span, registry, src)
 }
 
 pub(super) fn expect_scalar(

@@ -7,8 +7,7 @@ use miette::NamedSource;
 
 use crate::desugar::resolved_ast::{BinOp, Expr, ExprKind};
 use crate::syntax::ast::UnaryOp;
-use crate::syntax::dimension::{Dimension, Rational};
-use crate::syntax::names::{ScopedName, UnitName};
+use crate::syntax::names::ScopedName;
 
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
@@ -23,10 +22,7 @@ use super::infer_type;
 /// applied to a literal (`-2`, `-2.0`) — the parser builds the negated form as
 /// `UnaryOp(Neg, IntLit/Number)`, but for D005 purposes both shapes denote
 /// the same compile-time constant.
-enum LiteralExponent {
-    Int(i64),
-    Float(f64),
-}
+use super::rules::{self, LiteralExponent, Operand};
 
 fn literal_exponent(expr: &Expr) -> Option<LiteralExponent> {
     match &expr.kind {
@@ -80,10 +76,10 @@ fn try_const_int(expr: &Expr) -> Option<i64> {
 }
 
 /// Infer the type of a binary operation expression.
-#[expect(
-    clippy::too_many_lines,
-    reason = "exhaustive match over all BinOp variants"
-)]
+///
+/// Operand types come from this engine's walker; the typing rule itself is
+/// shared with the HIR engine via [`rules::binop_rule`].
+#[expect(clippy::too_many_arguments, reason = "binary expression context")]
 pub(super) fn infer_binop(
     expr: &Expr,
     op: &BinOp,
@@ -117,321 +113,29 @@ pub(super) fn infer_binop(
         builtin_fns,
         src,
     )?;
-
-    match op {
-        // Logical operators: require Bool operands, return Bool
-        BinOp::And | BinOp::Or => {
-            if lhs_type != InferredType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Bool".to_string(),
-                    found: format_inferred_type(&lhs_type, registry),
-                    help: "boolean operators require Bool operands".to_string(),
-                    src: src.clone(),
-                    span: lhs.span.into(),
-                });
-            }
-            if rhs_type != InferredType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Bool".to_string(),
-                    found: format_inferred_type(&rhs_type, registry),
-                    help: "boolean operators require Bool operands".to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
-            }
-            Ok(InferredType::Bool)
-        }
-        // Equality: operands must have the same ValueType.
-        // Int and Fin(N) are compatible for equality comparison.
-        BinOp::Eq | BinOp::Ne => {
-            if lhs_type == rhs_type || (lhs_type.is_int_like() && rhs_type.is_int_like()) {
-                return Ok(InferredType::Bool);
-            }
-            Err(GraphcalError::DimensionMismatch {
-                expected: format_inferred_type(&lhs_type, registry),
-                found: format_inferred_type(&rhs_type, registry),
-                help: "equality operands must have the same type".to_string(),
-                src: src.clone(),
-                span: rhs.span.into(),
-            })
-        }
-        // Ordering comparisons: require same-type scalar or Int/Fin operands, return Bool
-        BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-            if lhs_type.is_int_like() || rhs_type.is_int_like() {
-                if !lhs_type.is_int_like() || !rhs_type.is_int_like() {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(&lhs_type, registry),
-                        found: format_inferred_type(&rhs_type, registry),
-                        help: "comparison operands must have the same type".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
-                }
-                return Ok(InferredType::Bool);
-            }
-            // Datetime comparisons: same time scale required
-            if let InferredType::Datetime(ls) = &lhs_type
-                && let InferredType::Datetime(rs) = &rhs_type
-            {
-                if ls != rs {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(&lhs_type, registry),
-                        found: format_inferred_type(&rhs_type, registry),
-                        help: "cannot compare datetimes with different time scales".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
-                }
-                return Ok(InferredType::Bool);
-            }
-            let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-            if lhs_dim != rhs_dim {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&lhs_dim),
-                    found: registry.dimensions.format_dimension(&rhs_dim),
-                    help: "comparison operands must have the same dimension".to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
-            }
-            Ok(InferredType::Bool)
-        }
-        // Arithmetic operators: require matching numeric operands (Int or Scalar)
-        BinOp::Add | BinOp::Sub => {
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
-                return Ok(InferredType::Int);
-            }
-            // Point-vs-vector rules for Datetime
-            if let InferredType::Datetime(ls) = &lhs_type {
-                let time_dim = Dimension::base(crate::syntax::dimension::BaseDimId::Prelude(
-                    "Time".to_string(),
-                ));
-                if let InferredType::Datetime(rs) = &rhs_type {
-                    // Datetime - Datetime -> Scalar(Time)
-                    if *op == BinOp::Sub {
-                        if ls != rs {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: format_inferred_type(&lhs_type, registry),
-                                found: format_inferred_type(&rhs_type, registry),
-                                help: "cannot subtract datetimes with different time scales"
-                                    .to_string(),
-                                src: src.clone(),
-                                span: rhs.span.into(),
-                            });
-                        }
-                        return Ok(InferredType::Scalar(time_dim));
-                    }
-                    // Datetime + Datetime -> error
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "Scalar(Time)".to_string(),
-                        found: format_inferred_type(&rhs_type, registry),
-                        help: "cannot add two datetimes; did you mean to subtract?".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
-                }
-                // Datetime +/- Scalar(Time) -> Datetime
-                let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-                if rhs_dim != time_dim {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "Time".to_string(),
-                        found: registry.dimensions.format_dimension(&rhs_dim),
-                        help: "can only add/subtract a Time duration to/from a Datetime"
-                            .to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
-                }
-                return Ok(InferredType::Datetime(*ls));
-            }
-            if let InferredType::Datetime(rs) = &rhs_type {
-                // Scalar(Time) + Datetime -> Datetime (only for Add)
-                if *op == BinOp::Add {
-                    let time_dim = Dimension::base(crate::syntax::dimension::BaseDimId::Prelude(
-                        "Time".to_string(),
-                    ));
-                    let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
-                    if lhs_dim != time_dim {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: "Time".to_string(),
-                            found: registry.dimensions.format_dimension(&lhs_dim),
-                            help: "can only add a Time duration to a Datetime".to_string(),
-                            src: src.clone(),
-                            span: lhs.span.into(),
-                        });
-                    }
-                    return Ok(InferredType::Datetime(*rs));
-                }
-                // Scalar - Datetime -> error
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: format_inferred_type(&lhs_type, registry),
-                    found: format_inferred_type(&rhs_type, registry),
-                    help: "cannot subtract a Datetime from a scalar".to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
-            }
-            let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-            if lhs_dim != rhs_dim {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&lhs_dim),
-                    found: registry.dimensions.format_dimension(&rhs_dim),
-                    help: "operands of addition and subtraction must have the same dimension"
-                        .to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
-            }
-            Ok(InferredType::Scalar(lhs_dim))
-        }
-        BinOp::Mul => {
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
-                return Ok(InferredType::Int);
-            }
-            let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-            let dim = (lhs_dim * rhs_dim).map_err(|_| GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: expr.span.into(),
-            })?;
-            Ok(InferredType::Scalar(dim))
-        }
-        BinOp::Div => {
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
-                return Ok(InferredType::Int);
-            }
-            let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-            let dim = (lhs_dim / rhs_dim).map_err(|_| GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: expr.span.into(),
-            })?;
-            Ok(InferredType::Scalar(dim))
-        }
-        BinOp::Mod => {
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
-                return Ok(InferredType::Int);
-            }
-            Err(GraphcalError::DimensionMismatch {
-                expected: "Int".to_string(),
-                found: format!(
-                    "{} % {}",
-                    format_inferred_type(&lhs_type, registry),
-                    format_inferred_type(&rhs_type, registry)
-                ),
-                help: "modulo operator requires Int operands".to_string(),
-                src: src.clone(),
-                span: expr.span.into(),
-            })
-        }
-        BinOp::Pow => {
-            // Accept a leading unary `-` on an integer/float literal as a
-            // signed literal exponent — `x ^ -2` is structurally
-            // `Unary(Neg, IntLit(2))`, which is still compile-time-known.
-            let rhs_lit = literal_exponent(rhs);
-            // Int/Fin ^ Int (literal or constant-foldable, non-negative) -> Int
-            if lhs_type.is_int_like() {
-                let int_exp = match rhs_lit {
-                    Some(LiteralExponent::Int(n)) => Some(n),
-                    // Constant-fold Int^Int chains so `2 ^ 3 ^ 2` symmetrizes
-                    // with the de facto Float behavior (issue #578).
-                    _ => try_const_int(rhs),
-                };
-                if let Some(n) = int_exp {
-                    if n >= 0 {
-                        return Ok(InferredType::Int);
-                    }
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "non-negative Int exponent".to_string(),
-                        found: format!("{n}"),
-                        help: "integer power requires a non-negative exponent".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
-                }
-                return Err(GraphcalError::NonLiteralExponent {
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
-            }
-            // Scalar ^ ... (existing logic)
-            let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-            match rhs_lit {
-                Some(LiteralExponent::Float(n)) => {
-                    if n.fract() == 0.0 {
-                        // `as i32` saturates for out-of-range floats, which
-                        // would silently produce a wrong dimension exponent;
-                        // reject instead.
-                        if n < f64::from(i32::MIN) || n > f64::from(i32::MAX) {
-                            return Err(GraphcalError::DimensionOverflow {
-                                src: src.clone(),
-                                span: expr.span.into(),
-                            });
-                        }
-                        #[expect(
-                            clippy::cast_possible_truncation,
-                            reason = "guarded by fract() == 0.0 and range checks"
-                        )]
-                        let exp = n as i32;
-                        let dim = lhs_dim.pow(Rational::from_int(exp)).map_err(|_| {
-                            GraphcalError::DimensionOverflow {
-                                src: src.clone(),
-                                span: expr.span.into(),
-                            }
-                        })?;
-                        Ok(InferredType::Scalar(dim))
-                    } else {
-                        #[expect(
-                            clippy::float_cmp,
-                            reason = "checking exact 0.5 literal for square-root exponent"
-                        )]
-                        if n == 0.5 {
-                            let dim = lhs_dim.pow(Rational::HALF).map_err(|_| {
-                                GraphcalError::DimensionOverflow {
-                                    src: src.clone(),
-                                    span: expr.span.into(),
-                                }
-                            })?;
-                            Ok(InferredType::Scalar(dim))
-                        } else {
-                            Err(GraphcalError::NonLiteralExponent {
-                                src: src.clone(),
-                                span: rhs.span.into(),
-                            })
-                        }
-                    }
-                }
-                Some(LiteralExponent::Int(n)) => {
-                    // `as i32` would wrap: `x ^ 4294967296` (2^32) used to
-                    // truncate to exponent 0 and silently infer Dimensionless.
-                    let exp = i32::try_from(n).map_err(|_| GraphcalError::DimensionOverflow {
-                        src: src.clone(),
-                        span: expr.span.into(),
-                    })?;
-                    let dim = lhs_dim.pow(Rational::from_int(exp)).map_err(|_| {
-                        GraphcalError::DimensionOverflow {
-                            src: src.clone(),
-                            span: expr.span.into(),
-                        }
-                    })?;
-                    Ok(InferredType::Scalar(dim))
-                }
-                None => {
-                    if rhs_dim.is_dimensionless() && lhs_dim.is_dimensionless() {
-                        Ok(InferredType::Scalar(Dimension::dimensionless()))
-                    } else {
-                        Err(GraphcalError::NonLiteralExponent {
-                            src: src.clone(),
-                            span: rhs.span.into(),
-                        })
-                    }
-                }
-            }
-        }
-    }
+    // Only the `^` rule reads the exponent shape; `x ^ -2` is structurally
+    // `Unary(Neg, IntLit(2))`, which is still compile-time-known.
+    let (rhs_lit, rhs_const_int) = if matches!(op, BinOp::Pow) {
+        (literal_exponent(rhs), try_const_int(rhs))
+    } else {
+        (None, None)
+    };
+    rules::binop_rule(
+        expr.span,
+        *op,
+        &Operand {
+            ty: lhs_type,
+            span: lhs.span,
+        },
+        &Operand {
+            ty: rhs_type,
+            span: rhs.span,
+        },
+        rhs_lit,
+        rhs_const_int,
+        registry,
+        src,
+    )
 }
 
 /// Infer the type of a unary operation expression.
@@ -456,35 +160,15 @@ pub(super) fn infer_unary(
         builtin_fns,
         src,
     )?;
-    match op {
-        crate::desugar::resolved_ast::UnaryOp::Not => {
-            if operand_type != InferredType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Bool".to_string(),
-                    found: format_inferred_type(&operand_type, registry),
-                    help: "logical NOT requires a Bool operand".to_string(),
-                    src: src.clone(),
-                    span: operand.span.into(),
-                });
-            }
-            Ok(InferredType::Bool)
-        }
-        crate::desugar::resolved_ast::UnaryOp::Neg => {
-            if operand_type == InferredType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "numeric type".to_string(),
-                    found: "Bool".to_string(),
-                    help: "negation requires a numeric operand,
-                               not Bool"
-                        .to_string(),
-                    src: src.clone(),
-                    span: operand.span.into(),
-                });
-            }
-            // Negation preserves the type (Scalar or Int)
-            Ok(operand_type)
-        }
-    }
+    rules::unary_rule(
+        *op,
+        &Operand {
+            ty: operand_type,
+            span: operand.span,
+        },
+        registry,
+        src,
+    )
 }
 
 /// Infer the type of a unit conversion expression.
@@ -510,29 +194,7 @@ pub(super) fn infer_convert(
         src,
     )?;
     let expr_dim = expect_scalar(&inner_type, registry, src, inner.span)?;
-    let target_dim = registry
-        .units
-        .resolve_unit_dimension(target)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: target.span.into(),
-        })?
-        .ok_or_else(|| {
-            for item in &target.terms {
-                if registry.units.get_unit(item.name.value.as_str()).is_none() {
-                    return GraphcalError::UnknownUnit {
-                        name: item.name.value.clone(),
-                        src: src.clone(),
-                        span: item.name.span.into(),
-                    };
-                }
-            }
-            GraphcalError::UnknownUnit {
-                name: UnitName::new("unknown"),
-                src: src.clone(),
-                span: target.span.into(),
-            }
-        })?;
+    let target_dim = rules::resolve_unit_dimension_or_diagnose(target, registry, src)?;
 
     if expr_dim != target_dim {
         return Err(GraphcalError::ConversionDimensionMismatch {
