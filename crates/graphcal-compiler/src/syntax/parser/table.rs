@@ -240,11 +240,10 @@ impl Parser<'_> {
                     self.expect(Token::Colon)?;
                     (label, span)
                 }
-                TableIndexSpec::NatRange(n, sp) => {
-                    if row_index_counter >= *n {
-                        // Too many rows — let the row-length mismatch logic below report.
-                        // We still parse this row but it will fail length check.
-                    }
+                TableIndexSpec::NatRange(_, sp) => {
+                    // A row index beyond the range size is reported by the
+                    // row-length mismatch logic below; the row is still
+                    // parsed here.
                     let label = Self::nat_range_variant_spanned(row_index_counter, *sp);
                     let span = self.lexer.peek_with_span().map_or(*sp, |(_, s)| s);
                     (label, span)

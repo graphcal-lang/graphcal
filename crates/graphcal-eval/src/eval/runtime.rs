@@ -30,62 +30,11 @@ use super::types::{
     AssertResult, AxisMeta, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
 };
 
-const fn declared_label_index_ref(declared_type: Option<&DeclaredType>) -> Option<&IndexTypeRef> {
-    match declared_type {
-        Some(DeclaredType::Label(index)) => Some(index),
-        _ => None,
-    }
-}
-
-const fn declared_indexed_index_ref(declared_type: Option<&DeclaredType>) -> Option<&IndexTypeRef> {
-    match declared_type {
-        Some(DeclaredType::Indexed { index, .. }) => Some(index),
-        _ => None,
-    }
-}
-
 const fn declared_struct_type_ref(declared_type: Option<&DeclaredType>) -> Option<&StructTypeRef> {
     match declared_type {
         Some(DeclaredType::Struct(type_name, _)) => Some(type_name),
         _ => None,
     }
-}
-
-fn merge_index_ref_owner(
-    runtime_ref: &IndexTypeRef,
-    declared_ref: Option<&IndexTypeRef>,
-) -> IndexTypeRef {
-    let _ = declared_ref;
-    runtime_ref.clone()
-}
-
-fn merge_struct_ref_owner(
-    runtime_ref: &StructTypeRef,
-    declared_ref: Option<&StructTypeRef>,
-) -> StructTypeRef {
-    let _ = declared_ref;
-    runtime_ref.clone()
-}
-
-fn public_label_index_ref(
-    runtime_ref: &IndexTypeRef,
-    declared_type: Option<&DeclaredType>,
-) -> IndexTypeRef {
-    merge_index_ref_owner(runtime_ref, declared_label_index_ref(declared_type))
-}
-
-fn public_indexed_index_ref(
-    runtime_ref: &IndexTypeRef,
-    declared_type: Option<&DeclaredType>,
-) -> IndexTypeRef {
-    merge_index_ref_owner(runtime_ref, declared_indexed_index_ref(declared_type))
-}
-
-fn public_struct_type_ref(
-    runtime_ref: &StructTypeRef,
-    declared_type: Option<&DeclaredType>,
-) -> StructTypeRef {
-    merge_struct_ref_owner(runtime_ref, declared_struct_type_ref(declared_type))
 }
 
 #[expect(
@@ -115,11 +64,11 @@ pub(super) fn runtime_to_value(
             index_name,
             variant,
         } => Value::Label {
-            index_name: public_label_index_ref(index_name, declared_type),
+            index_name: index_name.clone(),
             variant: variant.clone(),
         },
         RuntimeValue::Struct { type_name, fields } => {
-            let public_type_name = public_struct_type_ref(type_name, declared_type);
+            let public_type_name = type_name.clone();
             let registry_type_name = declared_struct_type_ref(declared_type).unwrap_or(type_name);
             let type_def = registry.types.get_type(registry_type_name.as_str());
 
@@ -186,7 +135,7 @@ pub(super) fn runtime_to_value(
                 })
                 .collect();
             Value::Indexed {
-                index_name: public_indexed_index_ref(index_name, declared_type),
+                index_name: index_name.clone(),
                 entries: converted_entries,
                 entry_display_names,
             }

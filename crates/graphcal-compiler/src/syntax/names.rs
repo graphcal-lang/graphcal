@@ -789,12 +789,6 @@ impl NamePath {
         self.segments.as_slice()
     }
 
-    /// Mutably borrow all path segments in source order.
-    #[must_use]
-    pub fn segments_mut(&mut self) -> &mut [NameAtom] {
-        self.segments.as_mut_slice()
-    }
-
     /// Consume and return all path segments.
     #[must_use]
     pub fn into_segments(self) -> crate::syntax::non_empty::NonEmpty<NameAtom> {

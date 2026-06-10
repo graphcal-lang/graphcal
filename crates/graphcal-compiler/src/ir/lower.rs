@@ -190,7 +190,7 @@ fn wrap_dep_map(
 /// Lower an AST into an [`IR`].
 ///
 /// This combines:
-/// 1. Name resolution (`resolve`) — checks duplicates, casing, extracts deps
+/// 1. Name resolution (`resolve`) — checks duplicates, extracts deps
 /// 2. Registry construction — registers dimensions, units, indexes, structs from declarations
 /// 3. Function registration — registers user-defined functions into the registry
 ///

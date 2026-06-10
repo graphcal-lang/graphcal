@@ -42,12 +42,16 @@ pub fn prepare_rename(analysis: &AnalysisResult, offset: usize) -> Option<Prepar
         return None;
     }
 
-    let key_str = resolved.key.to_string();
+    let SymbolLocation::Local(def) = &resolved.location else {
+        return None;
+    };
     let span = resolved.cursor_span;
+    // Fall back to the definition's name if span slicing ever fails — never
+    // a synthetic key rendering.
     let placeholder = analysis
         .source
         .get(span.offset()..span.offset() + span.len())
-        .unwrap_or(&key_str)
+        .unwrap_or(&def.name)
         .to_string();
 
     Some(PrepareRenameResponse::RangeWithPlaceholder {

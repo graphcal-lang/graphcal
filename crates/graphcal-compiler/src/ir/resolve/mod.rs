@@ -165,7 +165,7 @@ struct CollectedDeclarations {
     pub_names: HashSet<DeclName>,
 }
 
-/// Collect all local declarations, check for duplicates and casing violations.
+/// Collect all local declarations and check for duplicates.
 ///
 /// Returns the collected declarations and the names map for further processing.
 #[expect(
@@ -279,7 +279,7 @@ fn collect_local_declarations(
         })
         .collect();
 
-    // First pass: collect all declarations and check for duplicates + casing
+    // First pass: collect all declarations and check for duplicates
     for decl in &file.declarations {
         // Dimension and Unit declarations are handled by the registry, not the resolver
         let (name, name_span, is_const) = match &decl.kind {
@@ -991,12 +991,12 @@ pub(crate) struct ImportedNames {
     pub asserts: Vec<(String, AssertBody, Span)>,
 }
 
-/// Resolve names, check casing, detect duplicates, and extract dependencies.
+/// Resolve names, detect duplicates, and extract dependencies.
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if duplicate names, unknown references, casing
-/// violations, or arity mismatches are found.
+/// Returns a [`GraphcalError`] if duplicate names, unknown references, or
+/// arity mismatches are found.
 pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFile, GraphcalError> {
     resolve_with_imports(file, src, &ImportedNames::default())
 }
@@ -1009,8 +1009,8 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if duplicate names, unknown references, casing
-/// violations, or arity mismatches are found.
+/// Returns a [`GraphcalError`] if duplicate names, unknown references, or
+/// arity mismatches are found.
 #[expect(
     clippy::too_many_lines,
     reason = "complex resolution logic with multiple passes"
@@ -1194,8 +1194,8 @@ pub(crate) fn resolve_with_imports(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if duplicate names, unknown references, casing
-/// violations, or arity mismatches are found.
+/// Returns a [`GraphcalError`] if duplicate names, unknown references, or
+/// arity mismatches are found.
 pub(crate) fn resolve_with_imported_values(
     file: &File,
     src: &NamedSource<Arc<String>>,
