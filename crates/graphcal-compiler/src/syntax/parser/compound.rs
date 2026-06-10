@@ -128,17 +128,41 @@ impl Parser<'_> {
         // `for p: Phase, m: Maneuver { (p, m) => expr }`
         // Use raw-byte lookahead to disambiguate from `(expr)` grouping.
         if self.is_tuple_key_sugar() {
-            self.lexer.next_token(); // consume '('
+            let (_, lparen_span) = self.advance()?; // consume '('
+            let mut tuple_idents = Vec::new();
             loop {
-                self.parse_any_ident()?;
+                tuple_idents.push(self.parse_any_ident()?);
                 if self.lexer.peek() == Some(&Token::Comma) {
                     self.lexer.next_token();
                 } else {
                     break;
                 }
             }
-            self.expect(Token::RParen)?;
+            let (_, rparen_span) = self.expect(Token::RParen)?;
             self.expect(Token::FatArrow)?;
+            // The tuple names are pure sugar (they bind nothing new), but
+            // accepting names that don't match the `for` bindings would
+            // silently ignore user-written identifiers. Require an exact
+            // match, in order, one per binding.
+            if tuple_idents.len() != bindings.len() {
+                return Err(self.unexpected_token(
+                    &format!(
+                        "one tuple entry per `for` binding ({} expected)",
+                        bindings.len()
+                    ),
+                    &format!("{} entries", tuple_idents.len()),
+                    lparen_span.merge(rparen_span),
+                ));
+            }
+            for (ident, binding) in tuple_idents.iter().zip(&bindings) {
+                if ident.name.as_str() != binding.var.value.as_str() {
+                    return Err(self.unexpected_token(
+                        &format!("the `for` binding name `{}`", binding.var.value),
+                        ident.name.as_str(),
+                        ident.span,
+                    ));
+                }
+            }
         }
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RBrace)?;
@@ -662,6 +686,29 @@ mod tests {
     #[test]
     fn parse_tuple_match_rejected() {
         let source = "node x: Dimensionless = match (Phase.Launch, Mode.Nominal) { (Phase.Launch, Mode.Nominal) => 1.0, _ => 0.0 };";
+        assert!(Parser::new(source).parse_file().is_err());
+    }
+
+    #[test]
+    fn tuple_key_sugar_with_matching_names_parses() {
+        let source =
+            "node x: Dimensionless[Phase, Mode] = for p: Phase, m: Mode { (p, m) => 1.0 };";
+        Parser::new(source).parse_file().unwrap();
+    }
+
+    #[test]
+    fn tuple_key_sugar_with_wrong_names_is_rejected() {
+        // Regression: the parenthesized names were parsed and silently
+        // discarded — neither arity nor names were checked.
+        let source =
+            "node x: Dimensionless[Phase, Mode] = for p: Phase, m: Mode { (wrong, names) => 1.0 };";
+        assert!(Parser::new(source).parse_file().is_err());
+    }
+
+    #[test]
+    fn tuple_key_sugar_with_wrong_arity_is_rejected() {
+        let source =
+            "node x: Dimensionless[Phase, Mode] = for p: Phase, m: Mode { (p, m, extra) => 1.0 };";
         assert!(Parser::new(source).parse_file().is_err());
     }
 }
