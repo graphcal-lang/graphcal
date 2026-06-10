@@ -1283,20 +1283,6 @@ fn nat_range_error(
     }
 }
 
-fn index_def_for_inferred<'a>(
-    index: &InferredIndex,
-    dag: &'a crate::tir::typed::DagTIR,
-    registry: &'a Registry,
-) -> Option<&'a crate::registry::types::IndexDef> {
-    if let Some(nat_range) = index.concrete_nat_range() {
-        return registry.indexes.get_nat_range(nat_range);
-    }
-    dag.semantic
-        .collection_refs
-        .index_defs
-        .get(index.declared_resolved()?)
-}
-
 #[expect(clippy::too_many_arguments, reason = "for-comprehension context")]
 fn infer_hir_for_comp(
     bindings: &[hir::expr::ForBinding],
@@ -1315,14 +1301,16 @@ fn infer_hir_for_comp(
         let var_type = match &binding.index {
             hir::expr::ForBindingIndex::Named(index) => {
                 let index_identity = InferredIndex::from_resolved(index.value.clone());
-                let idx_def =
-                    index_def_for_inferred(&index_identity, dag, registry).ok_or_else(|| {
-                        GraphcalError::UnknownIndex {
-                            name: index_identity.name(),
-                            src: src.clone(),
-                            span: index.span.into(),
-                        }
-                    })?;
+                let idx_def = super::collections::index_def_for_inferred(
+                    &index_identity,
+                    Some(dag),
+                    registry,
+                )
+                .ok_or_else(|| GraphcalError::UnknownIndex {
+                    name: index_identity.name(),
+                    src: src.clone(),
+                    span: index.span.into(),
+                })?;
                 match &idx_def.kind {
                     crate::registry::types::IndexKind::Named { .. }
                     | crate::registry::types::IndexKind::RequiredNamed => {
@@ -1442,13 +1430,12 @@ fn infer_hir_index_access(
                     }
                     InferredType::Scalar(_) => {
                         let idx_def =
-                            index_def_for_inferred(&index, dag, registry).ok_or_else(|| {
-                                GraphcalError::UnknownIndex {
+                            super::collections::index_def_for_inferred(&index, Some(dag), registry)
+                                .ok_or_else(|| GraphcalError::UnknownIndex {
                                     name: index.name(),
                                     src: src.clone(),
                                     span: local.span.into(),
-                                }
-                            })?;
+                                })?;
                         if !idx_def.is_range() {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
@@ -1461,7 +1448,8 @@ fn infer_hir_index_access(
                         }
                     }
                     InferredType::Int => {
-                        if let Some(idx_def) = index_def_for_inferred(&index, dag, registry)
+                        if let Some(idx_def) =
+                            super::collections::index_def_for_inferred(&index, Some(dag), registry)
                             && !idx_def.is_nat_range()
                         {
                             return Err(GraphcalError::EvalError {
@@ -1475,15 +1463,17 @@ fn infer_hir_index_access(
                         }
                     }
                     InferredType::Fin(fin_bound) => {
-                        let index_form = index_def_for_inferred(&index, dag, registry).map_or_else(
-                            || index.nat_range_form(),
-                            |idx_def| {
-                                if !idx_def.is_nat_range() {
-                                    return None;
-                                }
-                                idx_def.nat_range_size().map(NatLinearForm::from_constant)
-                            },
-                        );
+                        let index_form =
+                            super::collections::index_def_for_inferred(&index, Some(dag), registry)
+                                .map_or_else(
+                                    || index.nat_range_form(),
+                                    |idx_def| {
+                                        if !idx_def.is_nat_range() {
+                                            return None;
+                                        }
+                                        idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                                    },
+                                );
                         let Some(index_form) = index_form else {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
@@ -1531,15 +1521,17 @@ fn infer_hir_index_access(
                     builtin_fns,
                     src,
                 )?;
-                let index_form = index_def_for_inferred(&index, dag, registry).map_or_else(
-                    || index.nat_range_form(),
-                    |idx_def| {
-                        if !idx_def.is_nat_range() {
-                            return None;
-                        }
-                        idx_def.nat_range_size().map(NatLinearForm::from_constant)
-                    },
-                );
+                let index_form =
+                    super::collections::index_def_for_inferred(&index, Some(dag), registry)
+                        .map_or_else(
+                            || index.nat_range_form(),
+                            |idx_def| {
+                                if !idx_def.is_nat_range() {
+                                    return None;
+                                }
+                                idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                            },
+                        );
                 let Some(index_form) = index_form else {
                     return Err(GraphcalError::EvalError {
                         message: format!(
@@ -1746,130 +1738,14 @@ fn substitute_resolved_type_with_type_params(
     subs: &GenericSubstitutions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    use crate::tir::typed::{ResolvedDimTerm, ResolvedIndex, ResolvedTypeExpr};
-    match resolved {
-        ResolvedTypeExpr::Dimensionless => Ok(InferredType::Scalar(Dimension::dimensionless())),
-        ResolvedTypeExpr::Bool => Ok(InferredType::Bool),
-        ResolvedTypeExpr::Int => Ok(InferredType::Int),
-        ResolvedTypeExpr::Datetime(scale) => Ok(InferredType::Datetime(*scale)),
-        ResolvedTypeExpr::Label(index, _) => Ok(InferredType::Label(InferredIndex::from_resolved(
-            index.clone(),
-        ))),
-        ResolvedTypeExpr::Scalar(dim) => Ok(InferredType::Scalar(dim.clone())),
-        ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(
-            InferredStructType::from_resolved(name.clone()),
-            vec![],
-        )),
-        ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
-        } => Ok(InferredType::Struct(
-            InferredStructType::from_resolved(name.clone()),
-            type_args
-                .iter()
-                .map(|arg| substitute_resolved_type_with_type_params(arg, subs, src))
-                .collect::<Result<Vec<_>, _>>()?,
-        )),
-        ResolvedTypeExpr::GenericDimParam(name, span) => subs.dims.get(name).map_or_else(
-            || {
-                Err(GraphcalError::EvalError {
-                    message: format!("generic `{name}` not bound during substitution"),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
-            },
-            |dim| Ok(InferredType::Scalar(dim.clone())),
-        ),
-        ResolvedTypeExpr::GenericTypeParam(name, span) => subs.types.get(name).map_or_else(
-            || {
-                Err(GraphcalError::EvalError {
-                    message: format!(
-                        "generic type parameter `{name}` not bound during substitution"
-                    ),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
-            },
-            |ty| Ok(ty.clone()),
-        ),
-        ResolvedTypeExpr::GenericDimExpr { terms, span } => {
-            let overflow_err = || GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: (*span).into(),
-            };
-            let mut result = Dimension::dimensionless();
-            for term in terms {
-                let term_dim = match term {
-                    ResolvedDimTerm::Concrete { dim, power, .. } => dim
-                        .pow(Rational::from_int(*power))
-                        .map_err(|_| overflow_err())?,
-                    ResolvedDimTerm::GenericParam {
-                        name,
-                        power,
-                        span: term_span,
-                        ..
-                    } => {
-                        let base = subs
-                            .dims
-                            .get(name)
-                            .ok_or_else(|| GraphcalError::EvalError {
-                                message: format!("generic `{name}` not bound during substitution"),
-                                src: src.clone(),
-                                span: (*term_span).into(),
-                            })?;
-                        base.pow(Rational::from_int(*power))
-                            .map_err(|_| overflow_err())?
-                    }
-                };
-                result = match term.op() {
-                    crate::desugar::resolved_ast::MulDivOp::Mul => {
-                        (result * term_dim).map_err(|_| overflow_err())?
-                    }
-                    crate::desugar::resolved_ast::MulDivOp::Div => {
-                        (result / term_dim).map_err(|_| overflow_err())?
-                    }
-                };
-            }
-            Ok(InferredType::Scalar(result))
-        }
-        ResolvedTypeExpr::Indexed { base, indexes } => {
-            let mut result = substitute_resolved_type_with_type_params(base, subs, src)?;
-            for index in indexes.iter().rev() {
-                let inferred_index = match index {
-                    ResolvedIndex::Concrete(name, _) => InferredIndex::from_resolved(name.clone()),
-                    ResolvedIndex::GenericParam(name, span) => {
-                        InferredIndex::from_ref(subs.indexes.get(name).cloned().ok_or_else(
-                            || GraphcalError::EvalError {
-                                message: format!(
-                                    "generic index `{name}` not bound during substitution"
-                                ),
-                                src: src.clone(),
-                                span: (*span).into(),
-                            },
-                        )?)
-                    }
-                    ResolvedIndex::NatExpr(form, span) => {
-                        let n =
-                            form.evaluate(&subs.nats)
-                                .ok_or_else(|| GraphcalError::EvalError {
-                                    message: format!(
-                                        "generic nat expression `{}` not bound during substitution",
-                                        form.format()
-                                    ),
-                                    src: src.clone(),
-                                    span: (*span).into(),
-                                })?;
-                        InferredIndex::from_nat_range_form(NatLinearForm::from_constant(n))
-                            .map_err(|err| nat_range_error(err, src, *span))?
-                    }
-                };
-                result = InferredType::Indexed {
-                    element: Box::new(result),
-                    index: inferred_index,
-                };
-            }
-            Ok(result)
-        }
-    }
+    crate::tir::typed::substitute_resolved_type_with_types(
+        resolved,
+        &subs.dims,
+        &subs.indexes,
+        &subs.nats,
+        &subs.types,
+        src,
+    )
 }
 
 fn resolved_field_type(
@@ -2484,13 +2360,12 @@ fn infer_hir_map_literal(
     let mut axes = Vec::with_capacity(arity);
     for key in &first_entry.keys {
         let index = inferred_index_for_hir_map_key(key, src)?;
-        let idx_def = index_def_for_inferred(&index, dag, registry).ok_or_else(|| {
-            GraphcalError::UnknownIndex {
+        let idx_def = super::collections::index_def_for_inferred(&index, Some(dag), registry)
+            .ok_or_else(|| GraphcalError::UnknownIndex {
                 name: index.name(),
                 src: src.clone(),
                 span: expr.span.into(),
-            }
-        })?;
+            })?;
         if idx_def.is_range() {
             return Err(GraphcalError::EvalError {
                 message: format!(
@@ -2662,8 +2537,8 @@ fn infer_hir_map_literal(
         src,
     )?;
     if let InferredType::Indexed { index, .. } = &first_type {
-        let inner_is_label =
-            index_def_for_inferred(index, dag, registry).is_some_and(|def| !def.is_range());
+        let inner_is_label = super::collections::index_def_for_inferred(index, Some(dag), registry)
+            .is_some_and(|def| !def.is_range());
         if inner_is_label {
             return Err(GraphcalError::EvalError {
                 message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
@@ -2933,13 +2808,12 @@ fn infer_hir_match(
     match &scrutinee_type {
         InferredType::Label(index_identity) => {
             let index_def =
-                index_def_for_inferred(index_identity, dag, registry).ok_or_else(|| {
-                    GraphcalError::UnknownIndex {
+                super::collections::index_def_for_inferred(index_identity, Some(dag), registry)
+                    .ok_or_else(|| GraphcalError::UnknownIndex {
                         name: index_identity.name(),
                         src: src.clone(),
                         span: scrutinee.span.into(),
-                    }
-                })?;
+                    })?;
             let variants = match &index_def.kind {
                 crate::registry::types::IndexKind::Named { variants } => variants.clone(),
                 crate::registry::types::IndexKind::RequiredNamed => vec![],

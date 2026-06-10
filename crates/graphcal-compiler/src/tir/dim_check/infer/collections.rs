@@ -119,7 +119,7 @@ fn resolved_index_variant_for_arg(
         .and_then(|refs| refs.index_access_variants.get(&span))
 }
 
-fn index_def_for_inferred<'a>(
+pub(super) fn index_def_for_inferred<'a>(
     index: &InferredIndex,
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,

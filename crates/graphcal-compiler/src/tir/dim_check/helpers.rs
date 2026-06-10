@@ -328,7 +328,7 @@ pub(super) fn check_arm_types_match(
     super::infer::match_arms_rule(arm_types, |i| arms[i].body.span, expr.span, registry, src)
 }
 
-pub(super) fn expect_scalar(
+pub fn expect_scalar(
     inferred: &InferredType,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
