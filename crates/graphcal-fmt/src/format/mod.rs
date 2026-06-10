@@ -2,7 +2,7 @@ mod decl;
 mod expr;
 mod type_expr;
 
-use graphcal_compiler::syntax::ast::{DeclKind, File};
+use graphcal_compiler::syntax::ast::File;
 use graphcal_compiler::syntax::comments::SourceMetadata;
 use graphcal_compiler::syntax::span::Span;
 use pretty::RcDoc;
@@ -95,18 +95,40 @@ impl<'src> Formatter<'src> {
             blank_line.span().offset() >= start && blank_line.span().offset() < end
         })
     }
+
+    /// Returns `true` if the next undrained comment starts before `offset`.
+    fn has_comment_before(&self, offset: usize) -> bool {
+        self.metadata
+            .comments()
+            .get(self.next_comment)
+            .is_some_and(|c| c.span.offset() < offset)
+    }
+
+    /// Advance past all comments that start before `offset` without
+    /// emitting them (used when the surrounding source is emitted verbatim,
+    /// so the comments are already part of the output).
+    fn skip_comments_before(&mut self, offset: usize) {
+        while self.has_comment_before(offset) {
+            self.next_comment += 1;
+        }
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
-
-pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDoc<'static> {
-    let mut fmt = Formatter::new(source, metadata);
+/// Format a declaration list (file body or `dag` body) into doc parts.
+///
+/// Handles leading comments, blank-line preservation, trailing comments, and
+/// the comment-preservation fallback: when a declaration contains comments
+/// in positions the formatter does not drain (multi-decl bodies, `if`
+/// branches, `scan`/`unfold` lambdas, …), reformatting would silently drop
+/// or relocate them. In that case the declaration's original source is
+/// emitted verbatim — a formatter must never lose user content.
+fn format_decl_sequence(
+    fmt: &mut Formatter<'_>,
+    declarations: &[graphcal_compiler::syntax::ast::Declaration],
+) -> Vec<RcDoc<'static>> {
     let mut docs: Vec<RcDoc<'static>> = Vec::new();
-
     let mut prev_end: usize = 0;
-    for (i, decl) in file.declarations.iter().enumerate() {
+    for (i, decl) in declarations.iter().enumerate() {
         let emit_start = decl.span.offset();
         let emit_end = emit_start + decl.span.len();
 
@@ -125,27 +147,36 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
             docs.push(leading);
         }
 
-        // Multi-decl (issue #481): consume comments that fall inside the
-        // surface span so they aren't re-emitted later; `format_multi_decl`
-        // doesn't interleave source comments inside the body.
-        if matches!(&decl.kind, DeclKind::Sugar(_)) {
-            while fmt.next_comment < fmt.metadata.comments().len() {
-                let c = &fmt.metadata.comments()[fmt.next_comment];
-                if c.span.offset() < emit_end {
-                    fmt.next_comment += 1;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        let decl_doc = format_decl(&mut fmt, decl);
+        // Format, then verify every comment inside the span was drained by
+        // some drain point. Leftovers would silently migrate to the next
+        // declaration (or vanish, for multi-decl sugar) — roll back and emit
+        // the original source verbatim instead. The only formatter state is
+        // the comment cursor, so the rollback is a cursor reset.
+        let comment_snapshot = fmt.next_comment;
+        let formatted = format_decl(fmt, decl);
+        let decl_doc = if fmt.has_comment_before(emit_end) {
+            fmt.next_comment = comment_snapshot;
+            fmt.skip_comments_before(emit_end);
+            RcDoc::text(fmt.slice(decl.span).to_string())
+        } else {
+            formatted
+        };
         let trailing = fmt
             .drain_trailing_comment(emit_end)
             .unwrap_or_else(RcDoc::nil);
         docs.push(decl_doc.append(trailing));
         prev_end = emit_end;
     }
+    docs
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDoc<'static> {
+    let mut fmt = Formatter::new(source, metadata);
+    let mut docs = format_decl_sequence(&mut fmt, &file.declarations);
 
     // Drain any remaining comments at end of file
     if let Some(remaining) = fmt.drain_comments_before(usize::MAX) {
