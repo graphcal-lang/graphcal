@@ -1333,3 +1333,16 @@ param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase,
         }
     }
 }
+
+#[test]
+fn long_operator_chain_formats_without_stack_overflow() {
+    // Regression: the pretty-printer document for a long operator chain is
+    // as deep as the chain, and dropping it recursed in `Rc` drop glue with
+    // no stack-growth guard — a few thousand terms aborted the process.
+    let source = format!(
+        "node x: Dimensionless = {};\n",
+        vec!["1.0"; 2_000].join(" + ")
+    );
+    let formatted = format_source(&source).unwrap();
+    assert!(formatted.contains("1.0 + 1.0"));
+}

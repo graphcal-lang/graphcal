@@ -301,7 +301,7 @@ impl<'src> Parser<'src> {
             });
         }
         self.depth += 1;
-        let result = stacker::maybe_grow(64 * 1024, 1024 * 1024, || f(self));
+        let result = crate::stack::with_stack_growth(|| f(self));
         self.depth -= 1;
         result
     }

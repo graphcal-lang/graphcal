@@ -1700,11 +1700,24 @@ fn collect_resolved_collection_indexes_from_type(
     }
 }
 
+fn collect_resolved_collection_refs_from_expr(
+    expr: &hir::Expr,
+    ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+    refs: &mut ResolvedCollectionRefs,
+) -> Result<(), GraphcalError> {
+    // Recursion choke point: recurses once per tree level (unbounded for
+    // left-nested operator chains).
+    crate::stack::with_stack_growth(|| {
+        collect_resolved_collection_refs_from_expr_inner(expr, ctx, src, refs)
+    })
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "expression traversal mirrors HIR variants"
 )]
-fn collect_resolved_collection_refs_from_expr(
+fn collect_resolved_collection_refs_from_expr_inner(
     expr: &hir::Expr,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
@@ -1937,11 +1950,24 @@ fn record_resolved_constructor_target(
     Ok(target)
 }
 
+fn collect_resolved_constructor_refs_from_expr(
+    expr: &hir::Expr,
+    ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+    refs: &mut ResolvedConstructorRefs,
+) -> Result<(), GraphcalError> {
+    // Recursion choke point: recurses once per tree level (unbounded for
+    // left-nested operator chains).
+    crate::stack::with_stack_growth(|| {
+        collect_resolved_constructor_refs_from_expr_inner(expr, ctx, src, refs)
+    })
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "expression traversal mirrors HIR variants"
 )]
-fn collect_resolved_constructor_refs_from_expr(
+fn collect_resolved_constructor_refs_from_expr_inner(
     expr: &hir::Expr,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
@@ -2106,6 +2132,17 @@ fn collect_resolved_inline_dag_refs(exprs: &ResolvedExpressions) -> ResolvedInli
 }
 
 fn collect_resolved_inline_dag_refs_from_expr(expr: &hir::Expr, refs: &mut ResolvedInlineDagRefs) {
+    // Recursion choke point: recurses once per tree level (unbounded for
+    // left-nested operator chains).
+    crate::stack::with_stack_growth(|| {
+        collect_resolved_inline_dag_refs_from_expr_inner(expr, refs);
+    });
+}
+
+fn collect_resolved_inline_dag_refs_from_expr_inner(
+    expr: &hir::Expr,
+    refs: &mut ResolvedInlineDagRefs,
+) {
     match &expr.kind {
         hir::ExprKind::Number(_)
         | hir::ExprKind::Integer(_)

@@ -110,6 +110,15 @@ enum PlotOutput {
     Json,
 }
 
+/// Stack segment size for running a command.
+///
+/// Recursive walkers over user expressions grow the stack on demand
+/// (`graphcal_compiler::stack::with_stack_growth`), but compiler-generated
+/// *drop glue* for deep expression trees recurses without any hook we can
+/// intercept. One large pre-grown segment covers teardown of trees from
+/// pathologically long operator chains.
+const COMMAND_STACK_SIZE: usize = 64 * 1024 * 1024;
+
 fn main() {
     // Install miette's fancy graphical error handler
     miette::set_hook(Box::new(|_| {
@@ -123,6 +132,10 @@ fn main() {
     .ok();
 
     let cli = Cli::parse();
+    stacker::grow(COMMAND_STACK_SIZE, || run_command(cli));
+}
+
+fn run_command(cli: Cli) {
     match cli.command {
         Commands::Check { paths, root } => {
             run_check(&paths, root.as_deref());
@@ -137,6 +150,9 @@ fn main() {
             )]
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
+                // Worker and blocking threads analyze user buffers; like
+                // `main`, they need headroom for deep-expression drop glue.
+                .thread_stack_size(COMMAND_STACK_SIZE)
                 .build()
                 .expect("failed to build tokio runtime")
                 .block_on(graphcal_lsp::run());

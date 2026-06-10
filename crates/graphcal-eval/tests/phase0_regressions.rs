@@ -277,3 +277,20 @@ fn to_int_rejects_upper_out_of_range_boundary() {
         "BUG: to_int accepted the upper out-of-range boundary",
     );
 }
+
+#[test]
+fn long_operator_chain_compiles_and_evaluates() {
+    // Regression: every recursive walker (lowering, dim-check, eval) used to
+    // recurse once per chain term with no stack-growth guard; a few hundred
+    // terms aborted the process with a stack overflow in debug builds.
+    let terms = 2_000;
+    let source = format!(
+        "node x: Dimensionless = {};",
+        vec!["1.0"; terms].join(" + ")
+    );
+    let result = compile_and_eval(&source).unwrap();
+    let x = value_for(&result, "x");
+    #[expect(clippy::cast_precision_loss, reason = "small test constant")]
+    let expected = terms as f64;
+    assert!((x.si_value().unwrap() - expected).abs() < 1e-9);
+}

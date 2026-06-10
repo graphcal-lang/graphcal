@@ -9,5 +9,6 @@ pub mod desugar;
 pub mod hir;
 pub mod ir;
 pub mod registry;
+pub mod stack;
 pub mod syntax;
 pub mod tir;
