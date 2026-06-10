@@ -107,6 +107,13 @@ pub struct Backend {
     /// Each change increments the counter; a delayed task only runs analysis
     /// if its generation matches the current counter (no newer change arrived).
     change_generations: Arc<RwLock<HashMap<Url, u64>>>,
+    /// Latest document text as typed in the editor, updated synchronously on
+    /// every `did_open`/`did_change`/`did_save`. May be newer than
+    /// `AnalysisResult::source` (analysis is debounced and can fail or time
+    /// out), so text-sensitive requests fired right after a keystroke —
+    /// trigger-character completion, signature help, formatting — must read
+    /// this instead of the analyzed snapshot.
+    latest_text: Arc<RwLock<HashMap<Url, Arc<String>>>>,
 }
 
 #[cfg(test)]
@@ -161,32 +168,47 @@ impl Backend {
         Ok(result)
     }
 
+    /// Record the latest editor text for `uri`, synchronously with the
+    /// notification that delivered it.
+    async fn record_latest_text(&self, uri: &Url, text: &str) {
+        self.latest_text
+            .write()
+            .await
+            .insert(uri.clone(), Arc::new(text.to_string()));
+    }
+
+    /// Latest editor text for `uri`, falling back to the analyzed snapshot.
+    async fn current_text(&self, uri: &Url) -> Option<Arc<String>> {
+        if let Some(text) = self.latest_text.read().await.get(uri) {
+            return Some(Arc::clone(text));
+        }
+        self.documents
+            .read()
+            .await
+            .get(uri)
+            .map(|analysis| Arc::clone(&analysis.source))
+    }
+
     async fn analyze_and_publish(&self, uri: Url, text: String) {
         if !Self::is_graphcal_file(&uri) {
             return;
         }
 
+        self.record_latest_text(&uri, &text).await;
+
         // Bump the generation so any in-flight debounced analysis for this URI
         // becomes stale and refuses to overwrite fresh results.
         let generation = self.bump_generation(&uri).await;
 
-        let uri_clone = uri.clone();
-        let task = tokio::task::spawn_blocking(move || run_analysis(&uri_clone, &text));
-        let analysis = match tokio::time::timeout(ANALYSIS_TIMEOUT, task).await {
-            Ok(Ok(a)) => a,
-            Ok(Err(e)) => {
-                self.client
-                    .log_message(MessageType::ERROR, format!("analysis task panicked: {e}"))
-                    .await;
-                return;
-            }
-            Err(_elapsed) => {
-                publish_analysis_timeout(&self.client, &uri).await;
-                return;
-            }
-        };
-
-        self.store_and_publish(uri, analysis, generation).await;
+        analyze_store_publish(
+            &self.client,
+            &self.documents,
+            &self.change_generations,
+            uri,
+            text,
+            generation,
+        )
+        .await;
     }
 
     /// Spawn a debounced analysis task for a `did_change` event.
@@ -207,42 +229,7 @@ impl Backend {
                 return;
             }
 
-            let uri_for_analysis = uri.clone();
-            let task = tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text));
-            let analysis = match tokio::time::timeout(ANALYSIS_TIMEOUT, task).await {
-                Ok(Ok(a)) => a,
-                Ok(Err(e)) => {
-                    client
-                        .log_message(MessageType::ERROR, format!("analysis task panicked: {e}"))
-                        .await;
-                    return;
-                }
-                Err(_elapsed) => {
-                    publish_analysis_timeout(&client, &uri).await;
-                    return;
-                }
-            };
-
-            // A `did_save` or a later `did_change` may have fired while analysis
-            // was running. Re-check before writing so stale results never clobber
-            // fresh ones.
-            if !is_generation_current(&generations, &uri, generation).await {
-                return;
-            }
-
-            let new_diags = Arc::clone(&analysis.diagnostics);
-            let stale_uris = collect_stale_uris(&documents, &uri, &new_diags).await;
-            documents.write().await.insert(uri.clone(), analysis);
-            for stale in stale_uris {
-                client.publish_diagnostics(stale, Vec::new(), None).await;
-            }
-            for (target_uri, diags) in new_diags.iter() {
-                client
-                    .publish_diagnostics(target_uri.clone(), diags.clone(), None)
-                    .await;
-            }
-            // Best-effort: the client may not support inlay-hint refresh.
-            let _ = client.inlay_hint_refresh().await;
+            analyze_store_publish(&client, &documents, &generations, uri, text, generation).await;
         });
     }
 
@@ -256,30 +243,67 @@ impl Backend {
             .and_modify(|v| *v += 1)
             .or_insert(1)
     }
+}
 
-    /// Write `analysis` into `documents` and publish diagnostics, but only if
-    /// `generation` is still the latest for `uri`. Otherwise the write is a
-    /// no-op — a newer change has superseded this analysis.
-    async fn store_and_publish(&self, uri: Url, analysis: AnalysisResult, generation: u64) {
-        if !is_generation_current(&self.change_generations, &uri, generation).await {
+/// Run the (blocking, timeout-guarded) analysis for `uri` and store/publish
+/// the result. Shared by the immediate (`did_open`/`did_save`) and debounced
+/// (`did_change`) paths so the panic/timeout/store sequence lives once.
+async fn analyze_store_publish(
+    client: &Client,
+    documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
+    generations: &Arc<RwLock<HashMap<Url, u64>>>,
+    uri: Url,
+    text: String,
+    generation: u64,
+) {
+    let uri_for_analysis = uri.clone();
+    let task = tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text));
+    let analysis = match tokio::time::timeout(ANALYSIS_TIMEOUT, task).await {
+        Ok(Ok(a)) => a,
+        Ok(Err(e)) => {
+            client
+                .log_message(MessageType::ERROR, format!("analysis task panicked: {e}"))
+                .await;
             return;
         }
-        let new_diags = Arc::clone(&analysis.diagnostics);
-        let stale_uris = collect_stale_uris(&self.documents, &uri, &new_diags).await;
-        self.documents.write().await.insert(uri.clone(), analysis);
-        for stale in stale_uris {
-            self.client
-                .publish_diagnostics(stale, Vec::new(), None)
-                .await;
+        Err(_elapsed) => {
+            publish_analysis_timeout(client, &uri).await;
+            return;
         }
-        for (target_uri, diags) in new_diags.iter() {
-            self.client
-                .publish_diagnostics(target_uri.clone(), diags.clone(), None)
-                .await;
+    };
+
+    let new_diags = Arc::clone(&analysis.diagnostics);
+    let stale_uris = {
+        // Hold the documents write lock across the generation re-check and
+        // the insert: a newer-generation analysis completing between a
+        // separate check and insert used to be clobbered by this older one.
+        let mut docs = documents.write().await;
+        if !is_generation_current(generations, &uri, generation).await {
+            return;
         }
-        // Best-effort: the client may not support inlay-hint refresh.
-        let _ = self.client.inlay_hint_refresh().await;
+        let stale_uris = docs
+            .get(&uri)
+            .map(|prev| {
+                prev.diagnostics
+                    .keys()
+                    .filter(|u| !new_diags.contains_key(*u))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        docs.insert(uri.clone(), analysis);
+        stale_uris
+    };
+    for stale in stale_uris {
+        client.publish_diagnostics(stale, Vec::new(), None).await;
     }
+    for (target_uri, diags) in new_diags.iter() {
+        client
+            .publish_diagnostics(target_uri.clone(), diags.clone(), None)
+            .await;
+    }
+    // Best-effort: the client may not support inlay-hint refresh.
+    let _ = client.inlay_hint_refresh().await;
 }
 
 /// Publish a single error diagnostic on `uri` indicating that the analysis
@@ -306,27 +330,6 @@ async fn publish_analysis_timeout(client: &Client, uri: &Url) {
     client
         .publish_diagnostics(uri.clone(), vec![diag], None)
         .await;
-}
-
-/// Compute the set of URIs that previously had diagnostics published from
-/// `active_uri`'s analysis but are absent from the new diagnostic map. The
-/// caller publishes empty Vecs to those URIs to clear stale markers.
-async fn collect_stale_uris(
-    documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
-    active_uri: &Url,
-    new_diags: &HashMap<Url, Vec<Diagnostic>>,
-) -> Vec<Url> {
-    let stale = {
-        let docs = documents.read().await;
-        docs.get(active_uri).map(|prev| {
-            prev.diagnostics
-                .keys()
-                .filter(|u| !new_diags.contains_key(*u))
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-    };
-    stale.unwrap_or_default()
 }
 
 /// Check whether `generation` is still the current generation stored for `uri`.
@@ -1064,6 +1067,10 @@ impl LanguageServer for Backend {
             return;
         }
 
+        // Record the new text synchronously: completion/signature-help fire
+        // on trigger characters milliseconds after this notification, long
+        // before the debounced analysis lands.
+        self.record_latest_text(&uri, &change.text).await;
         let generation = self.bump_generation(&uri).await;
         self.spawn_debounced_analysis(uri, change.text, generation);
     }
@@ -1088,6 +1095,7 @@ impl LanguageServer for Backend {
             .unwrap_or_default();
         self.documents.write().await.remove(&uri);
         self.change_generations.write().await.remove(&uri);
+        self.latest_text.write().await.remove(&uri);
         for stale in stale_uris {
             self.client
                 .publish_diagnostics(stale, Vec::new(), None)
@@ -1159,9 +1167,13 @@ impl LanguageServer for Backend {
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
+        // Signature help fires on `(`/`,` against the just-typed text,
+        // which is ahead of the debounced analysis snapshot.
+        let text = self.current_text(&uri).await;
         self.with_analysis(&uri, |analysis| {
-            let offset = position_to_byte_offset(&analysis.source, position);
-            crate::signature_help::signature_help(analysis, offset)
+            let source = text.as_deref().map_or(analysis.source.as_str(), |t| t);
+            let offset = position_to_byte_offset(source, position);
+            crate::signature_help::signature_help(analysis, source, offset)
         })
         .await
     }
@@ -1169,9 +1181,13 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
+        // Trigger-character completion runs against the just-typed text,
+        // which is ahead of the debounced analysis snapshot.
+        let text = self.current_text(&uri).await;
         self.with_analysis(&uri, |analysis| {
-            let offset = position_to_byte_offset(&analysis.source, position);
-            crate::completion::completion(analysis, offset).map(CompletionResponse::Array)
+            let source = text.as_deref().map_or(analysis.source.as_str(), |t| t);
+            let offset = position_to_byte_offset(source, position);
+            crate::completion::completion(analysis, source, offset).map(CompletionResponse::Array)
         })
         .await
     }
@@ -1218,8 +1234,12 @@ impl LanguageServer for Backend {
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let uri = params.text_document.uri;
+        // Formatting edits must be computed against the client's current
+        // buffer, not the (possibly older) analyzed snapshot.
+        let text = self.current_text(&uri).await;
         self.with_analysis(&uri, |analysis| {
-            crate::formatting::format_document(&analysis.source)
+            let source = text.as_deref().map_or(analysis.source.as_str(), |t| t);
+            crate::formatting::format_document(source)
         })
         .await
     }
@@ -1234,6 +1254,7 @@ pub async fn run() {
         client,
         documents: Arc::new(RwLock::new(HashMap::new())),
         change_generations: Arc::new(RwLock::new(HashMap::new())),
+        latest_text: Arc::new(RwLock::new(HashMap::new())),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }

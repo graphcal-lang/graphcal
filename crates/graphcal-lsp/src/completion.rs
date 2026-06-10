@@ -29,8 +29,16 @@ fn all_definitions(analysis: &AnalysisResult) -> impl Iterator<Item = &Definitio
 }
 
 /// Produce completion items for the given cursor position.
-pub fn completion(analysis: &AnalysisResult, offset: usize) -> Option<Vec<CompletionItem>> {
-    let context = determine_completion_context(&analysis.source, offset);
+///
+/// `source` is the latest editor text (which may be newer than
+/// `analysis.source`): the cursor context must reflect the just-typed
+/// trigger character, while the items come from the cached analysis.
+pub fn completion(
+    analysis: &AnalysisResult,
+    source: &str,
+    offset: usize,
+) -> Option<Vec<CompletionItem>> {
+    let context = determine_completion_context(source, offset);
 
     let items = match context {
         CompletionContext::GraphRef => complete_graph_refs(analysis),

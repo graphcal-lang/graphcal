@@ -15,8 +15,15 @@ use crate::server::AnalysisResult;
     clippy::cast_possible_truncation,
     reason = "active_param is a small index; truncation is harmless"
 )]
-pub fn signature_help(analysis: &AnalysisResult, offset: usize) -> Option<SignatureHelp> {
-    let ctx = find_fn_call_context(&analysis.source, offset)?;
+/// `source` is the latest editor text (which may be newer than
+/// `analysis.source`): the call context must reflect the just-typed `(`
+/// or `,`, while the signatures come from the cached analysis.
+pub fn signature_help(
+    analysis: &AnalysisResult,
+    source: &str,
+    offset: usize,
+) -> Option<SignatureHelp> {
+    let ctx = find_fn_call_context(source, offset)?;
     let sig_info = analysis.fn_signatures.get(&ctx.fn_name)?;
 
     let active_param = ctx.active_param as u32;
