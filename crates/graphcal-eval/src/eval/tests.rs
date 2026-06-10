@@ -2934,6 +2934,45 @@ fn eval_overrides_route_selective_same_leaf_params_by_owner() {
 }
 
 #[test]
+fn eval_include_dep_with_aliased_module_import() {
+    // End-to-end coverage for including a dep that itself imports another
+    // module under an alias (`import lib as mission;` + `@mission.C`).
+    // The merge must keep the dep's qualified imported-value keys intact
+    // (see `merge_dependency_keeps_qualified_imported_value_keys` in
+    // graphcal-compiler for the unit-level regression test).
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("lib.gcl"),
+        "pub const node C: Dimensionless = 7.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("dep.gcl"),
+        "import collide.lib as mission;\n\
+         pub node out: Dimensionless = @mission.C * 2.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include collide.dep().{ out as dep_out };\n\
+         node total: Dimensionless = @dep_out + 1.0;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let total = find_value(&result, "total");
+    assert!((total - 15.0).abs() < 1e-10, "total = {total}");
+}
+
+#[test]
 fn eval_inline_dag_include_cross_file_self_import() {
     // Cross-file `include` of a DAG whose body has `import <self>.{...}`
     // (resolved against the dag's parent file). The parent's value must
