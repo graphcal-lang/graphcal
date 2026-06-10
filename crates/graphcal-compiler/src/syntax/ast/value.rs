@@ -433,7 +433,7 @@ pub enum MulDivOp {
 ///
 /// Construct via [`Expr::new`] — direct struct literal syntax is blocked
 /// by the private phase marker.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Expr<P: Phase = Raw> {
     pub kind: ExprKind<P>,
     pub span: Span,
@@ -442,6 +442,24 @@ pub struct Expr<P: Phase = Raw> {
     // that contains `Expr<P>`. Private so callers must use `Expr::new` —
     // that keeps the phase marker out of their sight entirely.
     _phase: PhantomData<fn() -> P>,
+}
+
+// Manual impl instead of `#[derive(Clone)]`: derived clone glue recurses
+// once per tree level without any stack-growth guard, so cloning a long
+// left-nested operator chain overflows the stack. Routing each level
+// through `with_stack_growth` lets the stack grow on demand (the derived
+// `ExprKind` clone calls back into this impl through `Box<Expr<P>>`).
+impl<P: Phase> Clone for Expr<P>
+where
+    ExprKind<P>: Clone,
+{
+    fn clone(&self) -> Self {
+        crate::stack::with_stack_growth(|| Self {
+            kind: self.kind.clone(),
+            span: self.span,
+            _phase: PhantomData,
+        })
+    }
 }
 
 impl<P: Phase> Expr<P> {

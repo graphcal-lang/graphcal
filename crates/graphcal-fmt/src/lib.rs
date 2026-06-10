@@ -5,6 +5,16 @@ use graphcal_compiler::syntax::parser::{ParseError, Parser};
 /// Default line width for formatting.
 const LINE_WIDTH: usize = 100;
 
+/// Stack segment size for building, rendering, and dropping the pretty-print
+/// document.
+///
+/// The `RcDoc` tree is as deep as the deepest expression chain in the file,
+/// and dropping it recurses inside the `pretty` crate's `Rc` drop glue —
+/// third-party code that [`graphcal_compiler::stack::with_stack_growth`]
+/// cannot intercept per level. A single large pre-grown segment covers
+/// chains of several hundred thousand terms.
+const DOC_STACK_SIZE: usize = 64 * 1024 * 1024;
+
 /// Error returned when [`format_source`] cannot produce formatted output.
 ///
 /// Each variant reflects a distinct failure mode — callers can report them
@@ -37,10 +47,15 @@ pub fn format_source(source: &str) -> Result<String, FormatError> {
     let mut parser = Parser::new(source);
     let file = parser.parse_file()?;
     let metadata = parser.into_source_metadata();
-    let doc = format::format_file(&file, source, &metadata);
 
-    let mut output = Vec::new();
-    doc.render(LINE_WIDTH, &mut output)?;
+    // Build, render, AND drop the document inside the grown segment: the
+    // drop is the deepest recursion (see `DOC_STACK_SIZE`).
+    let output = stacker::grow(DOC_STACK_SIZE, || -> Result<Vec<u8>, std::io::Error> {
+        let doc = format::format_file(&file, source, &metadata);
+        let mut output = Vec::new();
+        doc.render(LINE_WIDTH, &mut output)?;
+        Ok(output)
+    })?;
     let mut result = String::from_utf8(output)?;
 
     strip_trailing_horizontal_whitespace(&mut result);

@@ -39,6 +39,19 @@ pub fn eval_hir_expr(
     local_values: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    // Recursion choke point: evaluation recurses once per tree level
+    // (unbounded for left-nested operator chains).
+    graphcal_compiler::stack::with_stack_growth(|| {
+        eval_hir_expr_inner(expr, values, local_values, ctx)
+    })
+}
+
+fn eval_hir_expr_inner(
+    expr: &hir::Expr,
+    values: &RuntimeValueMap,
+    local_values: &HirLocalValueMap,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
     match &expr.kind {
         hir::ExprKind::Number(n) => checked_finite_scalar(*n, "numeric literal", expr.span, ctx),
         hir::ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),

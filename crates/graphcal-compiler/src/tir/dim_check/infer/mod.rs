@@ -97,6 +97,38 @@ pub(super) fn infer_type_with_owner(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
+    // Recursion choke point: inference recurses once per tree level
+    // (unbounded for left-nested operator chains).
+    crate::stack::with_stack_growth(|| {
+        infer_type_with_owner_inner(
+            expr,
+            owner_decl_name,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        )
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors infer_type_with_owner's signature"
+)]
+fn infer_type_with_owner_inner(
+    expr: &Expr,
+    owner_decl_name: Option<&str>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    local_types: &HashMap<String, InferredType>,
+    dag: Option<&crate::tir::typed::DagTIR>,
+    tir: &crate::tir::typed::TIR,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
     match &expr.kind {
         ExprKind::Number(_) => Ok(InferredType::Scalar(Dimension::dimensionless())),
         ExprKind::Integer(_) => Ok(InferredType::Int),

@@ -501,6 +501,7 @@ dependencies = [
  "miette",
  "open",
  "serde_json",
+ "stacker",
  "tabled",
  "tempfile",
  "thiserror",
@@ -550,6 +551,7 @@ dependencies = [
  "graphcal-compiler",
  "insta",
  "pretty",
+ "stacker",
  "thiserror",
 ]
 

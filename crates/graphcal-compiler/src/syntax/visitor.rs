@@ -32,7 +32,16 @@ pub(crate) trait ExprVisitor<P: Phase> {
 
     /// Dispatches to the appropriate handler based on [`ExprKind`].
     /// Typically not overridden.
+    ///
+    /// Grows the stack on demand: visitors recurse once per expression-tree
+    /// level, and left-nested operator chains make that depth unbounded.
     fn dispatch(&mut self, expr: &Expr<P>) -> Result<(), Self::Error> {
+        crate::stack::with_stack_growth(|| self.dispatch_inner(expr))
+    }
+
+    /// Body of [`Self::dispatch`]. Not meant to be overridden or called
+    /// directly — call [`Self::dispatch`] so the stack-growth guard runs.
+    fn dispatch_inner(&mut self, expr: &Expr<P>) -> Result<(), Self::Error> {
         match &expr.kind {
             ExprKind::Number(_)
             | ExprKind::Integer(_)
@@ -238,7 +247,18 @@ pub trait ExprVisitorMut<P: Phase> {
         self.dispatch_mut(expr)
     }
 
+    /// Dispatches to the appropriate handler based on [`ExprKind`].
+    /// Typically not overridden.
+    ///
+    /// Grows the stack on demand: visitors recurse once per expression-tree
+    /// level, and left-nested operator chains make that depth unbounded.
     fn dispatch_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
+        crate::stack::with_stack_growth(|| self.dispatch_mut_inner(expr))
+    }
+
+    /// Body of [`Self::dispatch_mut`]. Not meant to be overridden or called
+    /// directly — call [`Self::dispatch_mut`] so the stack-growth guard runs.
+    fn dispatch_mut_inner(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
         match &mut expr.kind {
             ExprKind::Number(_)
             | ExprKind::Integer(_)

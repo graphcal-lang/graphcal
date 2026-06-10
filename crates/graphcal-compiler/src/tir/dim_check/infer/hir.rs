@@ -74,6 +74,38 @@ fn infer_hir_type(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
+    // Recursion choke point: inference recurses once per tree level
+    // (unbounded for left-nested operator chains).
+    crate::stack::with_stack_growth(|| {
+        infer_hir_type_inner(
+            expr,
+            owner_decl_name,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        )
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors infer_hir_type's signature"
+)]
+fn infer_hir_type_inner(
+    expr: &hir::Expr,
+    owner_decl_name: Option<&str>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    local_types: &HirLocalTypes,
+    dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
     let inferred = match &expr.kind {
         hir::ExprKind::Number(_) => InferredType::Scalar(Dimension::dimensionless()),
         hir::ExprKind::Integer(_) => InferredType::Int,

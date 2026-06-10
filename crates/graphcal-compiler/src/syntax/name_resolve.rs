@@ -631,8 +631,12 @@ fn lift_generic_arg(g: src_ast::GenericArg, ctx: &mut ResolveContext) -> dst_ast
 // ---------------------------------------------------------------------------
 
 fn lift_expr(e: src_ast::Expr, ctx: &mut ResolveContext) -> dst_ast::Expr {
-    let span = e.span;
-    dst_ast::Expr::new(lift_expr_kind(e.kind, ctx, span), span)
+    // Recursion choke point: lifting recurses once per tree level
+    // (unbounded for left-nested operator chains).
+    crate::stack::with_stack_growth(|| {
+        let span = e.span;
+        dst_ast::Expr::new(lift_expr_kind(e.kind, ctx, span), span)
+    })
 }
 
 #[expect(clippy::too_many_lines, reason = "exhaustive ExprKind match")]

@@ -1142,11 +1142,21 @@ fn register_local_var(
 }
 
 /// Collect references from an expression, tracking local scopes.
+fn collect_expr_refs(
+    expr: &graphcal_compiler::desugar::resolved_ast::Expr,
+    table: &mut SymbolTable,
+    scopes: &mut ScopeStack,
+) {
+    // Recursion choke point: recurses once per tree level (unbounded for
+    // left-nested operator chains).
+    graphcal_compiler::stack::with_stack_growth(|| collect_expr_refs_inner(expr, table, scopes));
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "expression walker needs to handle every ExprKind variant"
 )]
-fn collect_expr_refs(
+fn collect_expr_refs_inner(
     expr: &graphcal_compiler::desugar::resolved_ast::Expr,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,

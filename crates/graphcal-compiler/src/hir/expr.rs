@@ -497,10 +497,24 @@ impl BuiltinFnName {
 }
 
 /// HIR expression node.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
+}
+
+// Manual impl instead of `#[derive(Clone)]`: derived clone glue recurses
+// once per tree level without any stack-growth guard, so cloning a long
+// left-nested operator chain overflows the stack. Routing each level
+// through `with_stack_growth` lets the stack grow on demand (the derived
+// `ExprKind` clone calls back into this impl through `Box<Expr>`).
+impl Clone for Expr {
+    fn clone(&self) -> Self {
+        crate::stack::with_stack_growth(|| Self {
+            kind: self.kind.clone(),
+            span: self.span,
+        })
+    }
 }
 
 impl Expr {
@@ -621,6 +635,12 @@ pub fn collect_expr_dependencies(expr: &Expr) -> ExprDependencies {
 }
 
 fn collect_expr_dependencies_into(expr: &Expr, deps: &mut ExprDependencies) {
+    // Recursion choke point: recurses once per tree level (unbounded for
+    // left-nested operator chains).
+    crate::stack::with_stack_growth(|| collect_expr_dependencies_into_inner(expr, deps));
+}
+
+fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies) {
     match &expr.kind {
         ExprKind::Number(_)
         | ExprKind::Integer(_)
@@ -873,8 +893,14 @@ impl<'a> ExprLowerer<'a> {
         }
     }
 
-    #[expect(clippy::too_many_lines, reason = "exhaustive ExprKind lowering")]
     fn lower_expr(&mut self, expr: &ast::Expr) -> Result<Expr, ExprLowerError> {
+        // Recursion choke point: lowering recurses once per tree level
+        // (unbounded for left-nested operator chains).
+        crate::stack::with_stack_growth(|| self.lower_expr_inner(expr))
+    }
+
+    #[expect(clippy::too_many_lines, reason = "exhaustive ExprKind lowering")]
+    fn lower_expr_inner(&mut self, expr: &ast::Expr) -> Result<Expr, ExprLowerError> {
         let kind = match &expr.kind {
             ast::ExprKind::Number(value) => ExprKind::Number(*value),
             ast::ExprKind::Integer(value) => ExprKind::Integer(*value),

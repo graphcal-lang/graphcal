@@ -15,8 +15,14 @@ use super::{
 // Expressions
 // ---------------------------------------------------------------------------
 
-#[expect(clippy::too_many_lines, reason = "match on ExprKind variants")]
 pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
+    // Recursion choke point: formatting recurses once per tree level
+    // (unbounded for left-nested operator chains).
+    graphcal_compiler::stack::with_stack_growth(|| format_expr_inner(fmt, expr))
+}
+
+#[expect(clippy::too_many_lines, reason = "match on ExprKind variants")]
+fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
     match &expr.kind {
         ExprKind::Number(_) | ExprKind::Integer(_) => {
             // Recover original text from source to preserve formatting (e.g. 1_000, 3.98e5)

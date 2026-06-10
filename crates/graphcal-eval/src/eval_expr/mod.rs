@@ -300,8 +300,19 @@ impl EvalContext<'_> {
 ///
 /// Returns a [`GraphcalError`] if the expression references an undefined variable,
 /// constant, or function.
-#[expect(clippy::too_many_lines, reason = "large match on ExprKind variants")]
 pub fn eval_expr(
+    expr: &Expr,
+    values: &RuntimeValueMap,
+    local_values: &HashMap<String, RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    // Recursion choke point: evaluation recurses once per tree level
+    // (unbounded for left-nested operator chains).
+    graphcal_compiler::stack::with_stack_growth(|| eval_expr_inner(expr, values, local_values, ctx))
+}
+
+#[expect(clippy::too_many_lines, reason = "large match on ExprKind variants")]
+fn eval_expr_inner(
     expr: &Expr,
     values: &RuntimeValueMap,
     local_values: &HashMap<String, RuntimeValue>,
