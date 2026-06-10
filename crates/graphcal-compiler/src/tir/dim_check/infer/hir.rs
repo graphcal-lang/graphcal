@@ -1494,9 +1494,18 @@ fn infer_hir_binop(
             match rhs_lit {
                 Some(LiteralExponent::Float(n)) => {
                     if n.fract() == 0.0 {
+                        // `as i32` saturates for out-of-range floats, which
+                        // would silently produce a wrong dimension exponent;
+                        // reject instead.
+                        if n < f64::from(i32::MIN) || n > f64::from(i32::MAX) {
+                            return Err(GraphcalError::DimensionOverflow {
+                                src: src.clone(),
+                                span: span.into(),
+                            });
+                        }
                         #[expect(
                             clippy::cast_possible_truncation,
-                            reason = "guarded by fract() == 0.0 check"
+                            reason = "guarded by fract() == 0.0 and range checks"
                         )]
                         let exp = n as i32;
                         let dim = lhs_dim.pow(Rational::from_int(exp)).map_err(|_| {
@@ -1528,11 +1537,12 @@ fn infer_hir_binop(
                     }
                 }
                 Some(LiteralExponent::Int(n)) => {
-                    #[expect(
-                        clippy::cast_possible_truncation,
-                        reason = "exponent values are small integers"
-                    )]
-                    let exp = n as i32;
+                    // `as i32` would wrap: `x ^ 4294967296` (2^32) used to
+                    // truncate to exponent 0 and silently infer Dimensionless.
+                    let exp = i32::try_from(n).map_err(|_| GraphcalError::DimensionOverflow {
+                        src: src.clone(),
+                        span: span.into(),
+                    })?;
                     let dim = lhs_dim.pow(Rational::from_int(exp)).map_err(|_| {
                         GraphcalError::DimensionOverflow {
                             src: src.clone(),

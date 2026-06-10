@@ -1724,3 +1724,28 @@ node y: Length = @forward(v: @src).b;
     // Still, compile must accept this program (no dim errors).
     check(source).unwrap();
 }
+
+#[test]
+fn int_exponent_beyond_i32_is_rejected() {
+    // Scalar `^` requires a float-literal exponent, so an Int-typed
+    // exponent is rejected by the rhs scalar check before the exponent arm.
+    // The arm's former `as i32` wrap is additionally hardened to a
+    // DimensionOverflow error, so a huge exponent can never silently wrap
+    // even if that earlier check changes.
+    let source = "node x: Dimensionless = (2.0 m) ^ 4294967296;";
+    assert!(check(source).is_err());
+    let negative = "node x: Dimensionless = (2.0 m) ^ -4294967296;";
+    assert!(check(negative).is_err());
+}
+
+#[test]
+fn float_exponent_beyond_i32_errors_with_overflow() {
+    // The float-literal arm saturates at i32::MAX before `pow`, which must
+    // surface as DimensionOverflow rather than a wrong dimension.
+    let source = "node x: Dimensionless = (2.0 m) ^ 4294967296.0;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionOverflow { .. }),
+        "expected DimensionOverflow, got: {err:?}"
+    );
+}
