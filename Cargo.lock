@@ -572,6 +572,7 @@ dependencies = [
  "graphcal-io",
  "indexmap",
  "miette",
+ "serde_json",
  "tempfile",
  "tokio",
  "tower-lsp",

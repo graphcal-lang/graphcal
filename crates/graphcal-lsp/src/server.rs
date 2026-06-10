@@ -1224,7 +1224,7 @@ impl LanguageServer for Backend {
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri.clone();
         self.with_analysis(&uri, |analysis| {
-            crate::code_actions::code_actions(&params, &analysis.source)
+            crate::code_actions::code_actions(&params, analysis)
         })
         .await
     }
