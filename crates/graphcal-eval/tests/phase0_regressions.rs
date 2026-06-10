@@ -336,3 +336,45 @@ fn self_reference_outside_unfold_is_still_a_cycle() {
     let source = "node a: Dimensionless = @a + 1.0;";
     assert!(compile_and_eval(source).is_err());
 }
+
+#[test]
+fn fully_qualified_self_import_is_not_a_circular_import() {
+    // Regression: the top-level import loop lacked the self-path guard the
+    // inline-dag loop has, so `import nasa.main.velocity.{v};` inside
+    // main.gcl recursed into itself and reported the misleading
+    // `circular import detected: main.gcl -> main.gcl` (and, once guarded,
+    // panicked on the not-yet-registered self DagId). Self-file imports are
+    // not supported, but they must fail with a structured diagnostic, not a
+    // bogus cycle or a panic.
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/nasa");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"nasa\"\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "dag velocity {\n\
+             pub node v: Dimensionless = 2.0;\n\
+         }\n\
+         import nasa.main.velocity.{v};\n\
+         node out: Dimensionless = @v + 1.0;\n",
+    )
+    .unwrap();
+
+    let err = compile_and_eval_project(
+        &root,
+        &std::collections::HashMap::new(),
+        None,
+        &RealFileSystem::default(),
+    )
+    .unwrap_err();
+    let message = format!("{err:?}");
+    assert!(
+        !message.contains("circular import"),
+        "self-import must not be reported as a circular import: {message}"
+    );
+}
