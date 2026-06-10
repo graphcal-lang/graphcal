@@ -802,9 +802,9 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
         }
 
         // ---- 4. Validation checks -----------------------------------------
-        let mut dep_names: HashSet<String> = HashSet::new();
+        let mut dep_names: HashSet<DeclName> = HashSet::new();
         for (name, _) in &dep_unfrozen.source_order {
-            dep_names.insert(name.member().to_string());
+            dep_names.insert(DeclName::new(name.member()));
         }
         dep_unfrozen.check_include_reconciles_overrides(
             &deferred.bindings,

@@ -907,7 +907,7 @@ pub struct DagTIR {
     /// nodes (`@mod.dag(args).private_node` → `ImportPrivateItem`). The
     /// same-file case reads visibility from the AST; cross-file merges
     /// drop the AST, so this set is the compiled proxy.
-    pub pub_nodes: std::collections::HashSet<String>,
+    pub pub_nodes: std::collections::HashSet<DeclName>,
 }
 
 impl DagTIR {
@@ -958,7 +958,7 @@ impl DagTIR {
             if let DeclKind::Node(n) = &decl.kind
                 && n.visibility.is_public()
             {
-                self.pub_nodes.insert(n.name.value.to_string());
+                self.pub_nodes.insert(n.name.value.clone());
             }
         }
     }

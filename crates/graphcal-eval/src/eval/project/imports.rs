@@ -911,7 +911,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                         // We just need to make the name visible for #[assumes].
                         ctx.imported_names
                             .assert_names
-                            .push((local_name, import_item.name.span));
+                            .push((DeclName::new(&local_name), import_item.name.span));
                     }
                     SelectiveImportResult::NotFound => {
                         if is_default_namespace

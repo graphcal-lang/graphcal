@@ -1232,7 +1232,7 @@ pub(crate) fn resolve_with_imported_values(
     // Build assert names (imported + local) for attribute validation
     let mut all_assert_names: HashSet<DeclName> = HashSet::new();
     for (name, _) in &imported.assert_names {
-        all_assert_names.insert(DeclName::new(name.as_str()));
+        all_assert_names.insert(name.clone());
     }
     all_assert_names.extend(local.assert_names.iter().cloned());
 

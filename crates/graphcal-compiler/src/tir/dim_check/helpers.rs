@@ -124,6 +124,10 @@ fn resolved_index_matches_inferred(index: &ResolvedIndex, actual: &InferredIndex
         ResolvedIndex::NatExpr(form, _) => actual
             .nat_range_form()
             .is_some_and(|actual_form| actual_form == *form),
+        // Cross-namespace boundary: an unbound generic index parameter has
+        // no typed InferredIndex form, so the display name is the only
+        // shared identity. Adding a GenericParam variant to InferredIndex
+        // would type this; until then keep the comparison fenced here.
         ResolvedIndex::GenericParam(expected, _) => actual.name().as_str() == expected.as_str(),
     }
 }
