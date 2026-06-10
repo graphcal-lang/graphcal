@@ -403,7 +403,7 @@ impl<'src> Parser<'src> {
         let expr = self.parse_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
             let tok = *tok;
-            return Err(self.unexpected_token("end of input", &format!("{tok:?}"), span));
+            return Err(self.unexpected_token("end of input", &tok.to_string(), span));
         }
         Ok(expr)
     }
@@ -429,7 +429,7 @@ impl<'src> Parser<'src> {
         let expr = self.parse_unit_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
             let tok = *tok;
-            return Err(self.unexpected_token("end of input", &format!("{tok:?}"), span));
+            return Err(self.unexpected_token("end of input", &tok.to_string(), span));
         }
         Ok(expr)
     }
@@ -453,7 +453,7 @@ impl<'src> Parser<'src> {
         let expr = self.parse_dim_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
             let tok = *tok;
-            return Err(self.unexpected_token("end of input", &format!("{tok:?}"), span));
+            return Err(self.unexpected_token("end of input", &tok.to_string(), span));
         }
         Ok(expr)
     }
