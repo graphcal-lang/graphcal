@@ -17,10 +17,9 @@ use crate::registry::time_scale::TimeScale;
 use crate::registry::types::Registry;
 use crate::tir::typed::{NatLinearForm, NatRangeIndexIdentity};
 
-pub(crate) use helpers::format_inferred_type;
-use helpers::{
-    expect_scalar, format_declared_type, is_bool_type, resolved_type_matches_inferred, types_match,
-};
+pub(crate) use helpers::{expect_scalar, format_inferred_type};
+
+use helpers::{format_declared_type, is_bool_type, resolved_type_matches_inferred, types_match};
 use infer::infer_type;
 
 mod builtins;

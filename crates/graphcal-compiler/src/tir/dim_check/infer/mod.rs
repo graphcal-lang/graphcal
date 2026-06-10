@@ -8,7 +8,10 @@ mod collections;
 mod control;
 mod functions;
 pub(super) mod hir;
+mod rules;
 mod scalar;
+
+pub(super) use rules::match_arms_rule;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,7 +24,7 @@ use crate::registry::types::Registry;
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{
     GenericParamName, IndexName, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName,
-    UnitName, namespace,
+    namespace,
 };
 
 use super::{DeclaredType, InferredIndex, InferredType};
@@ -185,29 +188,7 @@ fn infer_type_with_owner_inner(
         }
 
         ExprKind::UnitLiteral { unit, .. } => {
-            let dim = registry
-                .units
-                .resolve_unit_dimension(unit)
-                .map_err(|_| GraphcalError::DimensionOverflow {
-                    src: src.clone(),
-                    span: unit.span.into(),
-                })?
-                .ok_or_else(|| {
-                    for item in &unit.terms {
-                        if registry.units.get_unit(item.name.value.as_str()).is_none() {
-                            return GraphcalError::UnknownUnit {
-                                name: item.name.value.clone(),
-                                src: src.clone(),
-                                span: item.name.span.into(),
-                            };
-                        }
-                    }
-                    GraphcalError::UnknownUnit {
-                        name: UnitName::new("unknown"),
-                        src: src.clone(),
-                        span: unit.span.into(),
-                    }
-                })?;
+            let dim = rules::resolve_unit_dimension_or_diagnose(unit, registry, src)?;
             Ok(InferredType::Scalar(dim))
         }
 

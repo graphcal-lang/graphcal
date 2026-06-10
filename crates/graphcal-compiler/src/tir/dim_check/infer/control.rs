@@ -67,58 +67,37 @@ pub(super) fn infer_if(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let cond_type = infer_type(
-        condition,
-        declared_types,
-        local_types,
-        dag,
-        tir,
+    let infer = |expr: &Expr| {
+        infer_type(
+            expr,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        )
+    };
+    let cond_type = infer(condition)?;
+    let then_type = infer(then_branch)?;
+    let else_type = infer(else_branch)?;
+    super::rules::if_rule(
+        &super::rules::Operand {
+            ty: cond_type,
+            span: condition.span,
+        },
+        &super::rules::Operand {
+            ty: then_type,
+            span: then_branch.span,
+        },
+        &super::rules::Operand {
+            ty: else_type,
+            span: else_branch.span,
+        },
         registry,
-        builtin_fns,
         src,
-    )?;
-    if cond_type != InferredType::Bool {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: "Bool".to_string(),
-            found: format_inferred_type(&cond_type, registry),
-            help: "if/else condition must be Bool".to_string(),
-            src: src.clone(),
-            span: condition.span.into(),
-        });
-    }
-
-    let then_type = infer_type(
-        then_branch,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-    )?;
-    let else_type = infer_type(
-        else_branch,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-    )?;
-
-    if then_type != else_type {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: format_inferred_type(&then_type, registry),
-            found: format_inferred_type(&else_type, registry),
-            help: "both branches of if/else must have the same dimension".to_string(),
-            src: src.clone(),
-            span: else_branch.span.into(),
-        });
-    }
-
-    Ok(then_type)
+    )
 }
 
 #[derive(Clone, Copy)]

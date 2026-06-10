@@ -18,7 +18,7 @@ use crate::syntax::ast::UnaryOp;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
     FieldName, GenericParamName, IndexName, IndexVariantName, ResolvedIndexVariant, ResolvedName,
-    ScopedName, UnitName, namespace,
+    ScopedName, namespace,
 };
 use crate::syntax::span::Span;
 use crate::tir::typed::NatLinearForm;
@@ -378,29 +378,7 @@ fn infer_hir_unit_literal(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let dim = registry
-        .units
-        .resolve_unit_dimension(unit)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: unit.span.into(),
-        })?
-        .ok_or_else(|| {
-            for item in &unit.terms {
-                if registry.units.get_unit(item.name.value.as_str()).is_none() {
-                    return GraphcalError::UnknownUnit {
-                        name: item.name.value.clone(),
-                        src: src.clone(),
-                        span: item.name.span.into(),
-                    };
-                }
-            }
-            GraphcalError::UnknownUnit {
-                name: UnitName::new("unknown"),
-                src: src.clone(),
-                span: unit.span.into(),
-            }
-        })?;
+    let dim = rules::resolve_unit_dimension_or_diagnose(unit, registry, src)?;
     Ok(InferredType::Scalar(dim))
 }
 
@@ -1091,58 +1069,38 @@ fn infer_hir_if(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let cond_type = infer_hir_type(
-        condition,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
+    let infer = |expr: &hir::Expr| {
+        infer_hir_type(
+            expr,
+            owner_decl_name,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        )
+    };
+    let cond_type = infer(condition)?;
+    let then_type = infer(then_branch)?;
+    let else_type = infer(else_branch)?;
+    rules::if_rule(
+        &Operand {
+            ty: cond_type,
+            span: condition.span,
+        },
+        &Operand {
+            ty: then_type,
+            span: then_branch.span,
+        },
+        &Operand {
+            ty: else_type,
+            span: else_branch.span,
+        },
         registry,
-        builtin_fns,
         src,
-    )?;
-    if cond_type != InferredType::Bool {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: "Bool".to_string(),
-            found: format_inferred_type(&cond_type, registry),
-            help: "if/else condition must be Bool".to_string(),
-            src: src.clone(),
-            span: condition.span.into(),
-        });
-    }
-    let then_type = infer_hir_type(
-        then_branch,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-    )?;
-    let else_type = infer_hir_type(
-        else_branch,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-    )?;
-    if then_type != else_type {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: format_inferred_type(&then_type, registry),
-            found: format_inferred_type(&else_type, registry),
-            help: "both branches of if/else must have the same dimension".to_string(),
-            src: src.clone(),
-            span: else_branch.span.into(),
-        });
-    }
-    Ok(then_type)
+    )
 }
 
 #[expect(clippy::too_many_arguments, reason = "unary expression context")]
@@ -1169,36 +1127,18 @@ fn infer_hir_unary(
         builtin_fns,
         src,
     )?;
-    match op {
-        crate::desugar::resolved_ast::UnaryOp::Not if operand_type == InferredType::Bool => {
-            Ok(InferredType::Bool)
-        }
-        crate::desugar::resolved_ast::UnaryOp::Not => Err(GraphcalError::DimensionMismatch {
-            expected: "Bool".to_string(),
-            found: format_inferred_type(&operand_type, registry),
-            help: "logical NOT requires a Bool operand".to_string(),
-            src: src.clone(),
-            span: operand.span.into(),
-        }),
-        // Mirror the syntax-AST engine: negating a Bool must be rejected
-        // (this arm used to accept it — a divergence between the engines).
-        crate::desugar::resolved_ast::UnaryOp::Neg if operand_type == InferredType::Bool => {
-            Err(GraphcalError::DimensionMismatch {
-                expected: "numeric type".to_string(),
-                found: "Bool".to_string(),
-                help: "negation requires a numeric operand, not Bool".to_string(),
-                src: src.clone(),
-                span: operand.span.into(),
-            })
-        }
-        crate::desugar::resolved_ast::UnaryOp::Neg => Ok(operand_type),
-    }
+    rules::unary_rule(
+        op,
+        &Operand {
+            ty: operand_type,
+            span: operand.span,
+        },
+        registry,
+        src,
+    )
 }
 
-enum LiteralExponent {
-    Int(i64),
-    Float(f64),
-}
+use super::rules::{self, LiteralExponent, Operand};
 
 fn hir_literal_exponent(expr: &hir::Expr) -> Option<LiteralExponent> {
     match &expr.kind {
@@ -1242,10 +1182,6 @@ fn try_const_int(expr: &hir::Expr) -> Option<i64> {
 }
 
 #[expect(clippy::too_many_arguments, reason = "binary expression context")]
-#[expect(
-    clippy::too_many_lines,
-    reason = "exhaustive match over all BinOp variants"
-)]
 fn infer_hir_binop(
     span: crate::syntax::span::Span,
     op: crate::desugar::resolved_ast::BinOp,
@@ -1283,298 +1219,29 @@ fn infer_hir_binop(
         builtin_fns,
         src,
     )?;
-    match op {
-        BinOp::And | BinOp::Or => {
-            if lhs_type != InferredType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Bool".to_string(),
-                    found: format_inferred_type(&lhs_type, registry),
-                    help: "boolean operators require Bool operands".to_string(),
-                    src: src.clone(),
-                    span: lhs.span.into(),
-                });
-            }
-            if rhs_type != InferredType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Bool".to_string(),
-                    found: format_inferred_type(&rhs_type, registry),
-                    help: "boolean operators require Bool operands".to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
-            }
-            Ok(InferredType::Bool)
-        }
-        BinOp::Eq | BinOp::Ne => {
-            if lhs_type == rhs_type || (lhs_type.is_int_like() && rhs_type.is_int_like()) {
-                return Ok(InferredType::Bool);
-            }
-            Err(GraphcalError::DimensionMismatch {
-                expected: format_inferred_type(&lhs_type, registry),
-                found: format_inferred_type(&rhs_type, registry),
-                help: "equality operands must have the same type".to_string(),
-                src: src.clone(),
-                span: rhs.span.into(),
-            })
-        }
-        BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-            if lhs_type.is_int_like() || rhs_type.is_int_like() {
-                if !lhs_type.is_int_like() || !rhs_type.is_int_like() {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(&lhs_type, registry),
-                        found: format_inferred_type(&rhs_type, registry),
-                        help: "comparison operands must have the same type".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
-                }
-                return Ok(InferredType::Bool);
-            }
-            if let InferredType::Datetime(ls) = &lhs_type
-                && let InferredType::Datetime(rs) = &rhs_type
-            {
-                if ls != rs {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(&lhs_type, registry),
-                        found: format_inferred_type(&rhs_type, registry),
-                        help: "cannot compare datetimes with different time scales".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
-                }
-                return Ok(InferredType::Bool);
-            }
-            let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-            if lhs_dim != rhs_dim {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&lhs_dim),
-                    found: registry.dimensions.format_dimension(&rhs_dim),
-                    help: "comparison operands must have the same dimension".to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
-            }
-            Ok(InferredType::Bool)
-        }
-        BinOp::Add | BinOp::Sub => {
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
-                return Ok(InferredType::Int);
-            }
-            let time_dim = Dimension::base(crate::syntax::dimension::BaseDimId::Prelude(
-                "Time".to_string(),
-            ));
-            if let InferredType::Datetime(ls) = &lhs_type {
-                if let InferredType::Datetime(rs) = &rhs_type {
-                    if op == BinOp::Sub {
-                        if ls != rs {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: format_inferred_type(&lhs_type, registry),
-                                found: format_inferred_type(&rhs_type, registry),
-                                help: "cannot subtract datetimes with different time scales"
-                                    .to_string(),
-                                src: src.clone(),
-                                span: rhs.span.into(),
-                            });
-                        }
-                        return Ok(InferredType::Scalar(time_dim));
-                    }
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "Scalar(Time)".to_string(),
-                        found: format_inferred_type(&rhs_type, registry),
-                        help: "cannot add two datetimes; did you mean to subtract?".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
-                }
-                let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-                if rhs_dim != time_dim {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "Time".to_string(),
-                        found: registry.dimensions.format_dimension(&rhs_dim),
-                        help: "can only add/subtract a Time duration to/from a Datetime"
-                            .to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
-                }
-                return Ok(InferredType::Datetime(*ls));
-            }
-            if let InferredType::Datetime(rs) = &rhs_type {
-                if op == BinOp::Add {
-                    let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
-                    if lhs_dim != time_dim {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: "Time".to_string(),
-                            found: registry.dimensions.format_dimension(&lhs_dim),
-                            help: "can only add a Time duration to a Datetime".to_string(),
-                            src: src.clone(),
-                            span: lhs.span.into(),
-                        });
-                    }
-                    return Ok(InferredType::Datetime(*rs));
-                }
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: format_inferred_type(&lhs_type, registry),
-                    found: format_inferred_type(&rhs_type, registry),
-                    help: "cannot subtract a Datetime from a scalar".to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
-            }
-            let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-            if lhs_dim != rhs_dim {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&lhs_dim),
-                    found: registry.dimensions.format_dimension(&rhs_dim),
-                    help: "operands of addition and subtraction must have the same dimension"
-                        .to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
-            }
-            Ok(InferredType::Scalar(lhs_dim))
-        }
-        BinOp::Mul => {
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
-                return Ok(InferredType::Int);
-            }
-            let dim = (expect_scalar(&lhs_type, registry, src, lhs.span)?
-                * expect_scalar(&rhs_type, registry, src, rhs.span)?)
-            .map_err(|_| GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: span.into(),
-            })?;
-            Ok(InferredType::Scalar(dim))
-        }
-        BinOp::Div => {
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
-                return Ok(InferredType::Int);
-            }
-            let dim = (expect_scalar(&lhs_type, registry, src, lhs.span)?
-                / expect_scalar(&rhs_type, registry, src, rhs.span)?)
-            .map_err(|_| GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: span.into(),
-            })?;
-            Ok(InferredType::Scalar(dim))
-        }
-        BinOp::Mod => {
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
-                return Ok(InferredType::Int);
-            }
-            Err(GraphcalError::DimensionMismatch {
-                expected: "Int".to_string(),
-                found: format!(
-                    "{} % {}",
-                    format_inferred_type(&lhs_type, registry),
-                    format_inferred_type(&rhs_type, registry)
-                ),
-                help: "modulo operator requires Int operands".to_string(),
-                src: src.clone(),
-                span: span.into(),
-            })
-        }
-        BinOp::Pow => {
-            let rhs_lit = hir_literal_exponent(rhs);
-            if lhs_type.is_int_like() {
-                let int_exp = match rhs_lit {
-                    Some(LiteralExponent::Int(n)) => Some(n),
-                    _ => try_const_int(rhs),
-                };
-                if let Some(n) = int_exp {
-                    if n >= 0 {
-                        return Ok(InferredType::Int);
-                    }
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "non-negative Int exponent".to_string(),
-                        found: format!("{n}"),
-                        help: "integer power requires a non-negative exponent".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
-                }
-                return Err(GraphcalError::NonLiteralExponent {
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
-            }
-            let lhs_dim = expect_scalar(&lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(&rhs_type, registry, src, rhs.span)?;
-            match rhs_lit {
-                Some(LiteralExponent::Float(n)) => {
-                    if n.fract() == 0.0 {
-                        // `as i32` saturates for out-of-range floats, which
-                        // would silently produce a wrong dimension exponent;
-                        // reject instead.
-                        if n < f64::from(i32::MIN) || n > f64::from(i32::MAX) {
-                            return Err(GraphcalError::DimensionOverflow {
-                                src: src.clone(),
-                                span: span.into(),
-                            });
-                        }
-                        #[expect(
-                            clippy::cast_possible_truncation,
-                            reason = "guarded by fract() == 0.0 and range checks"
-                        )]
-                        let exp = n as i32;
-                        let dim = lhs_dim.pow(Rational::from_int(exp)).map_err(|_| {
-                            GraphcalError::DimensionOverflow {
-                                src: src.clone(),
-                                span: span.into(),
-                            }
-                        })?;
-                        Ok(InferredType::Scalar(dim))
-                    } else {
-                        #[expect(
-                            clippy::float_cmp,
-                            reason = "checking exact 0.5 literal for square-root exponent"
-                        )]
-                        if n == 0.5 {
-                            let dim = lhs_dim.pow(Rational::HALF).map_err(|_| {
-                                GraphcalError::DimensionOverflow {
-                                    src: src.clone(),
-                                    span: span.into(),
-                                }
-                            })?;
-                            Ok(InferredType::Scalar(dim))
-                        } else {
-                            Err(GraphcalError::NonLiteralExponent {
-                                src: src.clone(),
-                                span: rhs.span.into(),
-                            })
-                        }
-                    }
-                }
-                Some(LiteralExponent::Int(n)) => {
-                    // `as i32` would wrap: `x ^ 4294967296` (2^32) used to
-                    // truncate to exponent 0 and silently infer Dimensionless.
-                    let exp = i32::try_from(n).map_err(|_| GraphcalError::DimensionOverflow {
-                        src: src.clone(),
-                        span: span.into(),
-                    })?;
-                    let dim = lhs_dim.pow(Rational::from_int(exp)).map_err(|_| {
-                        GraphcalError::DimensionOverflow {
-                            src: src.clone(),
-                            span: span.into(),
-                        }
-                    })?;
-                    Ok(InferredType::Scalar(dim))
-                }
-                None => {
-                    if rhs_dim.is_dimensionless() && lhs_dim.is_dimensionless() {
-                        Ok(InferredType::Scalar(Dimension::dimensionless()))
-                    } else {
-                        Err(GraphcalError::NonLiteralExponent {
-                            src: src.clone(),
-                            span: rhs.span.into(),
-                        })
-                    }
-                }
-            }
-        }
-    }
+    // Only the `^` rule reads the exponent shape; `x ^ -2` is structurally
+    // `Unary(Neg, IntLit(2))`, which is still compile-time-known.
+    let (rhs_lit, rhs_const_int) = if matches!(op, BinOp::Pow) {
+        (hir_literal_exponent(rhs), try_const_int(rhs))
+    } else {
+        (None, None)
+    };
+    rules::binop_rule(
+        span,
+        op,
+        &Operand {
+            ty: lhs_type,
+            span: lhs.span,
+        },
+        &Operand {
+            ty: rhs_type,
+            span: rhs.span,
+        },
+        rhs_lit,
+        rhs_const_int,
+        registry,
+        src,
+    )
 }
 
 fn hir_nat_to_linear_form(
@@ -1616,20 +1283,6 @@ fn nat_range_error(
     }
 }
 
-fn index_def_for_inferred<'a>(
-    index: &InferredIndex,
-    dag: &'a crate::tir::typed::DagTIR,
-    registry: &'a Registry,
-) -> Option<&'a crate::registry::types::IndexDef> {
-    if let Some(nat_range) = index.concrete_nat_range() {
-        return registry.indexes.get_nat_range(nat_range);
-    }
-    dag.semantic
-        .collection_refs
-        .index_defs
-        .get(index.declared_resolved()?)
-}
-
 #[expect(clippy::too_many_arguments, reason = "for-comprehension context")]
 fn infer_hir_for_comp(
     bindings: &[hir::expr::ForBinding],
@@ -1648,14 +1301,16 @@ fn infer_hir_for_comp(
         let var_type = match &binding.index {
             hir::expr::ForBindingIndex::Named(index) => {
                 let index_identity = InferredIndex::from_resolved(index.value.clone());
-                let idx_def =
-                    index_def_for_inferred(&index_identity, dag, registry).ok_or_else(|| {
-                        GraphcalError::UnknownIndex {
-                            name: index_identity.name(),
-                            src: src.clone(),
-                            span: index.span.into(),
-                        }
-                    })?;
+                let idx_def = super::collections::index_def_for_inferred(
+                    &index_identity,
+                    Some(dag),
+                    registry,
+                )
+                .ok_or_else(|| GraphcalError::UnknownIndex {
+                    name: index_identity.name(),
+                    src: src.clone(),
+                    span: index.span.into(),
+                })?;
                 match &idx_def.kind {
                     crate::registry::types::IndexKind::Named { .. }
                     | crate::registry::types::IndexKind::RequiredNamed => {
@@ -1775,13 +1430,12 @@ fn infer_hir_index_access(
                     }
                     InferredType::Scalar(_) => {
                         let idx_def =
-                            index_def_for_inferred(&index, dag, registry).ok_or_else(|| {
-                                GraphcalError::UnknownIndex {
+                            super::collections::index_def_for_inferred(&index, Some(dag), registry)
+                                .ok_or_else(|| GraphcalError::UnknownIndex {
                                     name: index.name(),
                                     src: src.clone(),
                                     span: local.span.into(),
-                                }
-                            })?;
+                                })?;
                         if !idx_def.is_range() {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
@@ -1794,7 +1448,8 @@ fn infer_hir_index_access(
                         }
                     }
                     InferredType::Int => {
-                        if let Some(idx_def) = index_def_for_inferred(&index, dag, registry)
+                        if let Some(idx_def) =
+                            super::collections::index_def_for_inferred(&index, Some(dag), registry)
                             && !idx_def.is_nat_range()
                         {
                             return Err(GraphcalError::EvalError {
@@ -1808,15 +1463,17 @@ fn infer_hir_index_access(
                         }
                     }
                     InferredType::Fin(fin_bound) => {
-                        let index_form = index_def_for_inferred(&index, dag, registry).map_or_else(
-                            || index.nat_range_form(),
-                            |idx_def| {
-                                if !idx_def.is_nat_range() {
-                                    return None;
-                                }
-                                idx_def.nat_range_size().map(NatLinearForm::from_constant)
-                            },
-                        );
+                        let index_form =
+                            super::collections::index_def_for_inferred(&index, Some(dag), registry)
+                                .map_or_else(
+                                    || index.nat_range_form(),
+                                    |idx_def| {
+                                        if !idx_def.is_nat_range() {
+                                            return None;
+                                        }
+                                        idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                                    },
+                                );
                         let Some(index_form) = index_form else {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
@@ -1864,15 +1521,17 @@ fn infer_hir_index_access(
                     builtin_fns,
                     src,
                 )?;
-                let index_form = index_def_for_inferred(&index, dag, registry).map_or_else(
-                    || index.nat_range_form(),
-                    |idx_def| {
-                        if !idx_def.is_nat_range() {
-                            return None;
-                        }
-                        idx_def.nat_range_size().map(NatLinearForm::from_constant)
-                    },
-                );
+                let index_form =
+                    super::collections::index_def_for_inferred(&index, Some(dag), registry)
+                        .map_or_else(
+                            || index.nat_range_form(),
+                            |idx_def| {
+                                if !idx_def.is_nat_range() {
+                                    return None;
+                                }
+                                idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                            },
+                        );
                 let Some(index_form) = index_form else {
                     return Err(GraphcalError::EvalError {
                         message: format!(
@@ -1941,29 +1600,7 @@ fn infer_hir_convert(
         src,
     )?;
     let expr_dim = expect_scalar(&inner_type, registry, src, inner.span)?;
-    let target_dim = registry
-        .units
-        .resolve_unit_dimension(target)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: target.span.into(),
-        })?
-        .ok_or_else(|| {
-            for item in &target.terms {
-                if registry.units.get_unit(item.name.value.as_str()).is_none() {
-                    return GraphcalError::UnknownUnit {
-                        name: item.name.value.clone(),
-                        src: src.clone(),
-                        span: item.name.span.into(),
-                    };
-                }
-            }
-            GraphcalError::UnknownUnit {
-                name: UnitName::new("unknown"),
-                src: src.clone(),
-                span: target.span.into(),
-            }
-        })?;
+    let target_dim = rules::resolve_unit_dimension_or_diagnose(target, registry, src)?;
 
     if expr_dim != target_dim {
         return Err(GraphcalError::ConversionDimensionMismatch {
@@ -2101,130 +1738,14 @@ fn substitute_resolved_type_with_type_params(
     subs: &GenericSubstitutions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    use crate::tir::typed::{ResolvedDimTerm, ResolvedIndex, ResolvedTypeExpr};
-    match resolved {
-        ResolvedTypeExpr::Dimensionless => Ok(InferredType::Scalar(Dimension::dimensionless())),
-        ResolvedTypeExpr::Bool => Ok(InferredType::Bool),
-        ResolvedTypeExpr::Int => Ok(InferredType::Int),
-        ResolvedTypeExpr::Datetime(scale) => Ok(InferredType::Datetime(*scale)),
-        ResolvedTypeExpr::Label(index, _) => Ok(InferredType::Label(InferredIndex::from_resolved(
-            index.clone(),
-        ))),
-        ResolvedTypeExpr::Scalar(dim) => Ok(InferredType::Scalar(dim.clone())),
-        ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(
-            InferredStructType::from_resolved(name.clone()),
-            vec![],
-        )),
-        ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
-        } => Ok(InferredType::Struct(
-            InferredStructType::from_resolved(name.clone()),
-            type_args
-                .iter()
-                .map(|arg| substitute_resolved_type_with_type_params(arg, subs, src))
-                .collect::<Result<Vec<_>, _>>()?,
-        )),
-        ResolvedTypeExpr::GenericDimParam(name, span) => subs.dims.get(name).map_or_else(
-            || {
-                Err(GraphcalError::EvalError {
-                    message: format!("generic `{name}` not bound during substitution"),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
-            },
-            |dim| Ok(InferredType::Scalar(dim.clone())),
-        ),
-        ResolvedTypeExpr::GenericTypeParam(name, span) => subs.types.get(name).map_or_else(
-            || {
-                Err(GraphcalError::EvalError {
-                    message: format!(
-                        "generic type parameter `{name}` not bound during substitution"
-                    ),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
-            },
-            |ty| Ok(ty.clone()),
-        ),
-        ResolvedTypeExpr::GenericDimExpr { terms, span } => {
-            let overflow_err = || GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: (*span).into(),
-            };
-            let mut result = Dimension::dimensionless();
-            for term in terms {
-                let term_dim = match term {
-                    ResolvedDimTerm::Concrete { dim, power, .. } => dim
-                        .pow(Rational::from_int(*power))
-                        .map_err(|_| overflow_err())?,
-                    ResolvedDimTerm::GenericParam {
-                        name,
-                        power,
-                        span: term_span,
-                        ..
-                    } => {
-                        let base = subs
-                            .dims
-                            .get(name)
-                            .ok_or_else(|| GraphcalError::EvalError {
-                                message: format!("generic `{name}` not bound during substitution"),
-                                src: src.clone(),
-                                span: (*term_span).into(),
-                            })?;
-                        base.pow(Rational::from_int(*power))
-                            .map_err(|_| overflow_err())?
-                    }
-                };
-                result = match term.op() {
-                    crate::desugar::resolved_ast::MulDivOp::Mul => {
-                        (result * term_dim).map_err(|_| overflow_err())?
-                    }
-                    crate::desugar::resolved_ast::MulDivOp::Div => {
-                        (result / term_dim).map_err(|_| overflow_err())?
-                    }
-                };
-            }
-            Ok(InferredType::Scalar(result))
-        }
-        ResolvedTypeExpr::Indexed { base, indexes } => {
-            let mut result = substitute_resolved_type_with_type_params(base, subs, src)?;
-            for index in indexes.iter().rev() {
-                let inferred_index = match index {
-                    ResolvedIndex::Concrete(name, _) => InferredIndex::from_resolved(name.clone()),
-                    ResolvedIndex::GenericParam(name, span) => {
-                        InferredIndex::from_ref(subs.indexes.get(name).cloned().ok_or_else(
-                            || GraphcalError::EvalError {
-                                message: format!(
-                                    "generic index `{name}` not bound during substitution"
-                                ),
-                                src: src.clone(),
-                                span: (*span).into(),
-                            },
-                        )?)
-                    }
-                    ResolvedIndex::NatExpr(form, span) => {
-                        let n =
-                            form.evaluate(&subs.nats)
-                                .ok_or_else(|| GraphcalError::EvalError {
-                                    message: format!(
-                                        "generic nat expression `{}` not bound during substitution",
-                                        form.format()
-                                    ),
-                                    src: src.clone(),
-                                    span: (*span).into(),
-                                })?;
-                        InferredIndex::from_nat_range_form(NatLinearForm::from_constant(n))
-                            .map_err(|err| nat_range_error(err, src, *span))?
-                    }
-                };
-                result = InferredType::Indexed {
-                    element: Box::new(result),
-                    index: inferred_index,
-                };
-            }
-            Ok(result)
-        }
-    }
+    crate::tir::typed::substitute_resolved_type_with_types(
+        resolved,
+        &subs.dims,
+        &subs.indexes,
+        &subs.nats,
+        &subs.types,
+        src,
+    )
 }
 
 fn resolved_field_type(
@@ -2839,13 +2360,12 @@ fn infer_hir_map_literal(
     let mut axes = Vec::with_capacity(arity);
     for key in &first_entry.keys {
         let index = inferred_index_for_hir_map_key(key, src)?;
-        let idx_def = index_def_for_inferred(&index, dag, registry).ok_or_else(|| {
-            GraphcalError::UnknownIndex {
+        let idx_def = super::collections::index_def_for_inferred(&index, Some(dag), registry)
+            .ok_or_else(|| GraphcalError::UnknownIndex {
                 name: index.name(),
                 src: src.clone(),
                 span: expr.span.into(),
-            }
-        })?;
+            })?;
         if idx_def.is_range() {
             return Err(GraphcalError::EvalError {
                 message: format!(
@@ -3017,8 +2537,8 @@ fn infer_hir_map_literal(
         src,
     )?;
     if let InferredType::Indexed { index, .. } = &first_type {
-        let inner_is_label =
-            index_def_for_inferred(index, dag, registry).is_some_and(|def| !def.is_range());
+        let inner_is_label = super::collections::index_def_for_inferred(index, Some(dag), registry)
+            .is_some_and(|def| !def.is_range());
         if inner_is_label {
             return Err(GraphcalError::EvalError {
                 message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
@@ -3288,13 +2808,12 @@ fn infer_hir_match(
     match &scrutinee_type {
         InferredType::Label(index_identity) => {
             let index_def =
-                index_def_for_inferred(index_identity, dag, registry).ok_or_else(|| {
-                    GraphcalError::UnknownIndex {
+                super::collections::index_def_for_inferred(index_identity, Some(dag), registry)
+                    .ok_or_else(|| GraphcalError::UnknownIndex {
                         name: index_identity.name(),
                         src: src.clone(),
                         span: scrutinee.span.into(),
-                    }
-                })?;
+                    })?;
             let variants = match &index_def.kind {
                 crate::registry::types::IndexKind::Named { variants } => variants.clone(),
                 crate::registry::types::IndexKind::RequiredNamed => vec![],
@@ -3502,25 +3021,7 @@ fn hir_arm_types_match(
     src: &NamedSource<Arc<String>>,
     expr: &hir::Expr,
 ) -> Result<InferredType, GraphcalError> {
-    let Some(first) = arm_types.first() else {
-        return Err(GraphcalError::EvalError {
-            message: "match expression has no arms".to_string(),
-            src: src.clone(),
-            span: expr.span.into(),
-        });
-    };
-    for (i, arm_type) in arm_types.iter().enumerate().skip(1) {
-        if arm_type != first {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: format_inferred_type(first, registry),
-                found: format_inferred_type(arm_type, registry),
-                help: "all match arms must return the same type".to_string(),
-                src: src.clone(),
-                span: arms[i].body.span.into(),
-            });
-        }
-    }
-    Ok(first.clone())
+    rules::match_arms_rule(arm_types, |i| arms[i].body.span, expr.span, registry, src)
 }
 
 #[expect(clippy::too_many_arguments, reason = "inline-DAG expression context")]

@@ -2976,7 +2976,7 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Dimensionless => {
-            let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
+            let actual_dim = crate::tir::dim_check::expect_scalar(actual, registry, src, span)?;
             if !actual_dim.is_dimensionless() {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Dimensionless".to_string(),
@@ -2990,7 +2990,7 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Scalar(expected_dim) => {
-            let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
+            let actual_dim = crate::tir::dim_check::expect_scalar(actual, registry, src, span)?;
             if *expected_dim != actual_dim {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(expected_dim),
@@ -3029,7 +3029,7 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::GenericDimParam(gp, _) => {
-            let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
+            let actual_dim = crate::tir::dim_check::expect_scalar(actual, registry, src, span)?;
             bind_or_check(dim_sub, gp.clone(), actual_dim, |prev, new| {
                 GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(prev),
@@ -3054,7 +3054,7 @@ pub fn unify_resolved_type(
         }),
 
         ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
-            let actual_dim = expect_scalar_from_inferred(actual, registry, src, span)?;
+            let actual_dim = crate::tir::dim_check::expect_scalar(actual, registry, src, span)?;
 
             // Single generic term with power: D^n means D = actual^(1/n)
             if terms.len() == 1
@@ -3158,15 +3158,36 @@ pub fn unify_resolved_type(
     clippy::implicit_hasher,
     reason = "always called with standard HashMap"
 )]
-#[expect(
-    clippy::too_many_lines,
-    reason = "single dispatch over ResolvedTypeExpr variants with per-variant generic-substitution + dimension-arithmetic overflow handling"
-)]
 pub fn substitute_resolved_type(
     resolved: &ResolvedTypeExpr,
     dim_sub: &HashMap<GenericParamName, Dimension>,
     index_sub: &HashMap<GenericParamName, IndexTypeRef>,
     nat_sub: &HashMap<GenericParamName, u64>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::tir::dim_check::InferredType, GraphcalError> {
+    let no_type_sub = HashMap::new();
+    substitute_resolved_type_with_types(resolved, dim_sub, index_sub, nat_sub, &no_type_sub, src)
+}
+
+/// Like [`substitute_resolved_type`], but with generic *type* parameters.
+///
+/// Unconstrained generic type parameters are substituted from `type_sub`
+/// (used by HIR constructor-call inference, which binds them from
+/// call-site arguments).
+#[expect(
+    clippy::implicit_hasher,
+    reason = "always called with standard HashMap"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "single dispatch over ResolvedTypeExpr variants with per-variant generic-substitution + dimension-arithmetic overflow handling"
+)]
+pub fn substitute_resolved_type_with_types(
+    resolved: &ResolvedTypeExpr,
+    dim_sub: &HashMap<GenericParamName, Dimension>,
+    index_sub: &HashMap<GenericParamName, IndexTypeRef>,
+    nat_sub: &HashMap<GenericParamName, u64>,
+    type_sub: &HashMap<GenericParamName, crate::tir::dim_check::InferredType>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::dim_check::InferredType, GraphcalError> {
     use crate::tir::dim_check::InferredType;
@@ -3189,8 +3210,8 @@ pub fn substitute_resolved_type(
         } => {
             let mut inferred_args = Vec::with_capacity(type_args.len());
             for arg in type_args {
-                inferred_args.push(substitute_resolved_type(
-                    arg, dim_sub, index_sub, nat_sub, src,
+                inferred_args.push(substitute_resolved_type_with_types(
+                    arg, dim_sub, index_sub, nat_sub, type_sub, src,
                 )?);
             }
             Ok(InferredType::Struct(
@@ -3210,11 +3231,16 @@ pub fn substitute_resolved_type(
             |dim| Ok(InferredType::Scalar(dim.clone())),
         ),
 
-        ResolvedTypeExpr::GenericTypeParam(gp, span) => Err(GraphcalError::EvalError {
-            message: format!("generic type parameter `{gp}` not bound during substitution"),
-            src: src.clone(),
-            span: (*span).into(),
-        }),
+        ResolvedTypeExpr::GenericTypeParam(gp, span) => type_sub.get(gp).map_or_else(
+            || {
+                Err(GraphcalError::EvalError {
+                    message: format!("generic type parameter `{gp}` not bound during substitution"),
+                    src: src.clone(),
+                    span: (*span).into(),
+                })
+            },
+            |ty| Ok(ty.clone()),
+        ),
 
         ResolvedTypeExpr::GenericDimExpr { terms, span } => {
             let overflow_err = || GraphcalError::DimensionOverflow {
@@ -3251,7 +3277,9 @@ pub fn substitute_resolved_type(
         }
 
         ResolvedTypeExpr::Indexed { base, indexes } => {
-            let mut result = substitute_resolved_type(base, dim_sub, index_sub, nat_sub, src)?;
+            let mut result = substitute_resolved_type_with_types(
+                base, dim_sub, index_sub, nat_sub, type_sub, src,
+            )?;
             for idx in indexes.iter().rev() {
                 let resolved_idx = match idx {
                     ResolvedIndex::Concrete(name, _) => {
@@ -3317,25 +3345,6 @@ pub fn substitute_resolved_type(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Extract scalar dimension from an `InferredType`.
-fn expect_scalar_from_inferred(
-    inferred: &crate::tir::dim_check::InferredType,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<Dimension, GraphcalError> {
-    match inferred {
-        crate::tir::dim_check::InferredType::Scalar(d) => Ok(d.clone()),
-        other => Err(GraphcalError::DimensionMismatch {
-            expected: "scalar dimension".to_string(),
-            found: crate::tir::dim_check::format_inferred_type(other, registry),
-            help: "expected a scalar value, not a struct or indexed type".to_string(),
-            src: src.clone(),
-            span: span.into(),
-        }),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Type resolution (single TypeExpr)
@@ -3822,6 +3831,37 @@ fn normalize_hir_nat_expr(
     }
 }
 
+/// Validate the generic-argument count for a type application: at least
+/// the number of non-defaulted parameters, at most the total count.
+/// Shared by the HIR and syntax type-application resolvers.
+fn check_type_application_arity(
+    type_name: &str,
+    type_def: &TypeDef,
+    arg_count: usize,
+    span: Span,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let total_params = type_def.generic_params.len();
+    let required_count = type_def
+        .generic_params
+        .iter()
+        .take_while(|p| p.default.is_none())
+        .count();
+    if arg_count < required_count || arg_count > total_params {
+        let hint = if required_count == total_params {
+            format!("{total_params}")
+        } else {
+            format!("{required_count}..{total_params}")
+        };
+        return Err(GraphcalError::EvalError {
+            message: format!("type `{type_name}` expects {hint} type argument(s), got {arg_count}"),
+            src: src.clone(),
+            span: span.into(),
+        });
+    }
+    Ok(())
+}
+
 fn resolve_hir_type_application(
     type_ann: &hir::TypeExpr,
     name: &crate::syntax::span::Spanned<ResolvedName<namespace::StructType>>,
@@ -3829,28 +3869,13 @@ fn resolve_hir_type_application(
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
     let type_def = hir_struct_type_def(&name.value, name.span, ctx)?;
-    let total_params = type_def.generic_params.len();
-    let required_count = type_def
-        .generic_params
-        .iter()
-        .take_while(|p| p.default.is_none())
-        .count();
-    if type_args.len() < required_count || type_args.len() > total_params {
-        let hint = if required_count == total_params {
-            format!("{total_params}")
-        } else {
-            format!("{required_count}..{total_params}")
-        };
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "type `{}` expects {hint} type argument(s), got {}",
-                name.value.as_str(),
-                type_args.len()
-            ),
-            src: ctx.src.clone(),
-            span: type_ann.span.into(),
-        });
-    }
+    check_type_application_arity(
+        name.value.as_str(),
+        type_def,
+        type_args.len(),
+        type_ann.span,
+        ctx.src,
+    )?;
 
     let mut resolved_args = type_args
         .iter()
@@ -4451,30 +4476,15 @@ fn resolve_type_application(
                 src: src.clone(),
                 span: name.span.into(),
             })?;
-    let total_params = type_def.generic_params.len();
-    let required_count = type_def
-        .generic_params
-        .iter()
-        .take_while(|p| p.default.is_none())
-        .count();
-    if type_args.len() < required_count || type_args.len() > total_params {
-        let hint = if required_count == total_params {
-            format!("{total_params}")
-        } else {
-            format!("{required_count}..{total_params}")
-        };
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "type `{}` expects {hint} type argument(s), got {}",
-                type_name.as_str(),
-                type_args.len()
-            ),
-            src: src.clone(),
-            span: type_ann.span.into(),
-        });
-    }
+    check_type_application_arity(
+        type_name.as_str(),
+        type_def,
+        type_args.len(),
+        type_ann.span,
+        src,
+    )?;
     // Resolve each explicit type argument, then fill in defaults
-    let mut resolved_args = Vec::with_capacity(total_params);
+    let mut resolved_args = Vec::with_capacity(type_def.generic_params.len());
     for arg in type_args {
         let resolved = resolve_type_expr_inner(
             arg,
