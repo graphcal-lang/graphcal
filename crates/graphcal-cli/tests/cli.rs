@@ -2991,7 +2991,7 @@ fn eval_idempotent_under_format() {
 }
 
 #[test]
-fn format_check_fails_on_unparseable_file() {
+fn format_check_fails_on_unparsable_file() {
     // Regression: `graphcal format --check` exited 0 when a file failed to
     // parse — CI passed silently on syntactically broken files while
     // `graphcal check` on the same file failed.
