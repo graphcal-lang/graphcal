@@ -86,13 +86,43 @@ pub fn desugar_multi_decls_in_file(file: File<Raw>) -> File<Desugared> {
     file.into()
 }
 
+/// A declaration produced by multi-decl expansion.
+///
+/// Expansion can only yield the three slot kinds, so this enum makes the
+/// "never `Sugar`" invariant a type instead of a convention the desugar
+/// pass had to re-assert with a panic.
+#[derive(Debug)]
+pub enum ExpandedSlotDecl {
+    Param(ParamDecl, crate::syntax::span::Span),
+    Node(NodeDecl, crate::syntax::span::Span),
+    ConstNode(ConstNodeDecl, crate::syntax::span::Span),
+}
+
+impl ExpandedSlotDecl {
+    /// Re-wrap as a generic [`Declaration`] (used by tests that inspect the
+    /// expansion through the ordinary AST surface).
+    #[must_use]
+    pub fn into_declaration(self) -> Declaration {
+        let (kind, span) = match self {
+            Self::Param(p, span) => (DeclKind::Param(p), span),
+            Self::Node(n, span) => (DeclKind::Node(n), span),
+            Self::ConstNode(c, span) => (DeclKind::ConstNode(c), span),
+        };
+        Declaration {
+            attributes: vec![],
+            kind,
+            span,
+        }
+    }
+}
+
 /// Expand a single `MultiDecl` into its N constituent declarations.
 #[must_use]
 #[expect(
     clippy::too_many_lines,
     reason = "single cohesive routine for multi-decl expansion"
 )]
-pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
+pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
     let row_index_spec = multi.shared_axes.row_axis().clone();
     let slice_axis_specs: &[TableIndexSpec] = multi.shared_axes.slice_axes();
 
@@ -101,7 +131,7 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
         TableIndexSpec::NatRange(n, sp) => Spanned::new(MapEntryIndex::NatRange(*n), *sp),
     };
 
-    let mut out: Vec<Declaration> = Vec::with_capacity(multi.slots.len());
+    let mut out: Vec<ExpandedSlotDecl> = Vec::with_capacity(multi.slots.len());
     for (slot_idx, slot) in multi.slots.iter().enumerate() {
         let mut slot_entries: Vec<MapEntry> = Vec::new();
         let mut slot_indexes: Vec<TableIndexSpec> = slice_axis_specs.to_vec();
@@ -183,34 +213,37 @@ pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration> {
             multi.table_expr_span,
         );
 
-        let kind = match slot.kind {
-            MultiSlotKind::Param => DeclKind::Param(ParamDecl {
-                name: slot.name.clone(),
-                type_ann: slot.type_ann.clone(),
-                value: Some(table_expr),
-            }),
-            MultiSlotKind::Node => DeclKind::Node(NodeDecl {
-                visibility: slot.visibility,
-                name: slot.name.clone(),
-                type_ann: slot.type_ann.clone(),
-                value: table_expr,
-            }),
-            MultiSlotKind::ConstNode => DeclKind::ConstNode(ConstNodeDecl {
-                visibility: slot.visibility,
-                name: slot.name.clone(),
-                type_ann: slot.type_ann.clone(),
-                value: table_expr,
-            }),
-        };
-
         // `span` covers the slot header through the closing `;` of the
         // whole multi-decl so diagnostics land on the source surface.
         let decl_span = slot.header_span.merge(multi.span);
 
-        out.push(Declaration {
-            attributes: vec![],
-            kind,
-            span: decl_span,
+        out.push(match slot.kind {
+            MultiSlotKind::Param => ExpandedSlotDecl::Param(
+                ParamDecl {
+                    name: slot.name.clone(),
+                    type_ann: slot.type_ann.clone(),
+                    value: Some(table_expr),
+                },
+                decl_span,
+            ),
+            MultiSlotKind::Node => ExpandedSlotDecl::Node(
+                NodeDecl {
+                    visibility: slot.visibility,
+                    name: slot.name.clone(),
+                    type_ann: slot.type_ann.clone(),
+                    value: table_expr,
+                },
+                decl_span,
+            ),
+            MultiSlotKind::ConstNode => ExpandedSlotDecl::ConstNode(
+                ConstNodeDecl {
+                    visibility: slot.visibility,
+                    name: slot.name.clone(),
+                    type_ann: slot.type_ann.clone(),
+                    value: table_expr,
+                },
+                decl_span,
+            ),
         });
     }
 

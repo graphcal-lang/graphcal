@@ -96,7 +96,8 @@ pub enum JsonInputError {
     },
     /// A GCL expression string could not be parsed.
     ///
-    /// Carries the typed [`ParseError`] (like the sibling `--set` path)
+    /// Carries the typed [`graphcal_compiler::syntax::parser::ParseError`]
+    /// (like the sibling `--set` path)
     /// instead of a pre-rendered message, so miette can render the span
     /// and source context.
     ParseFailed {

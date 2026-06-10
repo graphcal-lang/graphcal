@@ -708,7 +708,10 @@ param n_installed:       Int[Component]
 
         // The desugar pass expands this to two separate Param decls each
         // carrying a 1-D TableLiteral.
-        let desugared = expand_multi_decl(multi);
+        let desugared: Vec<_> = expand_multi_decl(multi)
+            .into_iter()
+            .map(crate::syntax::desugar::ExpandedSlotDecl::into_declaration)
+            .collect();
         assert_eq!(desugared.len(), 2);
         let DeclKind::Param(first) = &desugared[0].kind else {
             panic!("expected Param")
@@ -849,7 +852,10 @@ pub node a: Int[Component], node b: Int[Component]
         assert_eq!(multi.slots[0].visibility, Visibility::Public);
         assert_eq!(multi.slots[1].visibility, Visibility::Private);
 
-        let desugared = expand_multi_decl(multi);
+        let desugared: Vec<_> = expand_multi_decl(multi)
+            .into_iter()
+            .map(crate::syntax::desugar::ExpandedSlotDecl::into_declaration)
+            .collect();
         assert_eq!(node_visibility(&desugared[0]), Visibility::Public);
         assert_eq!(node_visibility(&desugared[1]), Visibility::Private);
     }
@@ -872,7 +878,10 @@ node a: Int[Component], pub node b: Int[Component]
         assert_eq!(multi.slots[0].visibility, Visibility::Private);
         assert_eq!(multi.slots[1].visibility, Visibility::Public);
 
-        let desugared = expand_multi_decl(multi);
+        let desugared: Vec<_> = expand_multi_decl(multi)
+            .into_iter()
+            .map(crate::syntax::desugar::ExpandedSlotDecl::into_declaration)
+            .collect();
         assert_eq!(node_visibility(&desugared[0]), Visibility::Private);
         assert_eq!(node_visibility(&desugared[1]), Visibility::Public);
     }
@@ -935,7 +944,10 @@ param      power_mode:        Bool[Component, OperationMode]
 
         // After desugar, the 4th slot (`power_mode`) becomes a Param with a
         // 2-D TableLiteral over Component × OperationMode.
-        let desugared = expand_multi_decl(multi);
+        let desugared: Vec<_> = expand_multi_decl(multi)
+            .into_iter()
+            .map(crate::syntax::desugar::ExpandedSlotDecl::into_declaration)
+            .collect();
         assert_eq!(desugared.len(), 4);
         match &desugared[3].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
@@ -1003,7 +1015,10 @@ param q: Int[Phase, Component]
 
         // Desugared: each slot becomes a Param with a 2-D TableLiteral
         // keyed by (Phase, Component).
-        let desugared = expand_multi_decl(multi);
+        let desugared: Vec<_> = expand_multi_decl(multi)
+            .into_iter()
+            .map(crate::syntax::desugar::ExpandedSlotDecl::into_declaration)
+            .collect();
         assert_eq!(desugared.len(), 2);
         match &desugared[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {

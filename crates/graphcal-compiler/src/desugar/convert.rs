@@ -71,7 +71,7 @@ fn convert_decl(d: Declaration<Raw>) -> Vec<Declaration<Desugared>> {
             // post-desugar type.
             crate::syntax::desugar::expand_multi_decl(&multi)
                 .into_iter()
-                .map(lift_non_sugar_decl)
+                .map(lift_slot_decl)
                 .collect()
         }
         other => vec![Declaration {
@@ -82,17 +82,21 @@ fn convert_decl(d: Declaration<Raw>) -> Vec<Declaration<Desugared>> {
     }
 }
 
-/// Lift a `Declaration<Raw>` known to be non-sugar to `Declaration<Desugared>`.
+/// Lift one multi-decl expansion slot to a `Declaration<Desugared>`.
 ///
-/// Used on the output of `expand_multi_decl`, which only produces
-/// `Param` / `Node` / `ConstNode` slots — never `Sugar`. Panics if a `Sugar`
-/// variant is encountered (would indicate `expand_multi_decl` invariant
-/// violation).
-fn lift_non_sugar_decl(d: Declaration<Raw>) -> Declaration<Desugared> {
+/// [`ExpandedSlotDecl`] can only hold `Param` / `Node` / `ConstNode`, so no
+/// unreachable `Sugar` arm (and no panic) is needed here.
+fn lift_slot_decl(d: crate::syntax::desugar::ExpandedSlotDecl) -> Declaration<Desugared> {
+    use crate::syntax::desugar::ExpandedSlotDecl;
+    let (kind, span) = match d {
+        ExpandedSlotDecl::Param(p, span) => (DeclKind::Param(p.into()), span),
+        ExpandedSlotDecl::Node(n, span) => (DeclKind::Node(n.into()), span),
+        ExpandedSlotDecl::ConstNode(c, span) => (DeclKind::ConstNode(c.into()), span),
+    };
     Declaration {
-        attributes: d.attributes,
-        kind: convert_decl_kind_non_sugar(d.kind),
-        span: d.span,
+        attributes: vec![],
+        kind,
+        span,
     }
 }
 
@@ -121,8 +125,10 @@ fn convert_decl_kind_non_sugar(k: DeclKind<Raw>) -> DeclKind<Desugared> {
         DeclKind::Plot(p) => DeclKind::Plot(p.into()),
         DeclKind::Figure(f) => DeclKind::Figure(f.into()),
         DeclKind::Layer(l) => DeclKind::Layer(l.into()),
+        // The only caller is the `other` arm of `convert_decl`'s match,
+        // which handles `Sugar` two lines above — visibly unreachable.
         DeclKind::Sugar(_) => {
-            panic!("convert_decl_kind_non_sugar called with Sugar — caller must dispatch first")
+            panic!("convert_decl dispatches Sugar before calling convert_decl_kind_non_sugar")
         }
     }
 }
