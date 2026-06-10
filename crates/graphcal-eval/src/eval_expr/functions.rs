@@ -80,6 +80,11 @@ impl FnDispatch<'_, '_> {
     /// Aggregation dispatch: if the single argument is `Indexed`, aggregate; otherwise fall
     /// through to builtins (e.g. 2-arg `min`/`max`).
     fn dispatch_aggregation(&self, kind: AggregationFn) -> Result<RuntimeValue, GraphcalError> {
+        if self.args.is_empty() {
+            // Zero-arg aggregation call: fall through to the builtin path,
+            // which reports the arity error instead of panicking here.
+            return self.dispatch_builtin();
+        }
         let arg_val = eval_expr(&self.args[0], self.values, self.local_values, self.ctx)?;
         if let RuntimeValue::Indexed { entries, .. } = arg_val {
             return eval_aggregation_fn(kind, &entries, self.expr, self.ctx.src);
@@ -181,6 +186,31 @@ fn eval_aggregation_fn(
     })
 }
 
+/// Defense-in-depth arity guard for special-function dispatch.
+///
+/// Dim-check validates arities for declaration bodies, but this path is
+/// also reached by domain-bound, plot, and display-unit evaluation —
+/// indexing `args[0]` without the guard panicked on a zero-arg call that
+/// slipped past dim-check. Mirrors `expect_hir_builtin_arity`.
+fn expect_args(
+    name: &str,
+    args: &[Expr],
+    expected: usize,
+    span: graphcal_compiler::syntax::span::Span,
+    ctx: &EvalContext<'_>,
+) -> Result<(), GraphcalError> {
+    if args.len() >= expected {
+        return Ok(());
+    }
+    Err(ctx.internal_error(
+        format!(
+            "{name}() received {} argument(s), expected {expected}",
+            args.len()
+        ),
+        span,
+    ))
+}
+
 /// Evaluate a type conversion function (`to_float`, `to_int`).
 fn eval_conversion_fn(
     kind: TypeConversionFn,
@@ -191,6 +221,7 @@ fn eval_conversion_fn(
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    expect_args("to_float/to_int", args, 1, expr.span, ctx)?;
     match kind {
         TypeConversionFn::ToFloat => {
             let arg = eval_expr(&args[0], values, local_values, ctx)?;
@@ -220,11 +251,29 @@ fn eval_conversion_fn(
 /// Evaluate a datetime constructor (`datetime`, `epoch`).
 fn eval_datetime_constructor(
     kind: ConstructorFn,
-    _expr: &Expr,
+    expr: &Expr,
     _name: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FnName>,
     args: &[Expr],
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    // Defense-in-depth arity guard: datetime() needs >= 1 argument and
+    // epoch() needs 2; indexing without the check panicked on calls that
+    // slipped past dim-check (this path also serves domain-bound, plot,
+    // and display-unit evaluation).
+    let required = match kind {
+        ConstructorFn::Datetime => 1,
+        ConstructorFn::Epoch => 2,
+    };
+    if args.len() < required {
+        return Err(GraphcalError::InternalError {
+            message: format!(
+                "datetime/epoch constructor received {} argument(s), expected {required}",
+                args.len()
+            ),
+            src: src.clone(),
+            span: expr.span.into(),
+        });
+    }
     match kind {
         ConstructorFn::Datetime => {
             let ExprKind::StringLiteral(s) = &args[0].kind else {
@@ -297,6 +346,7 @@ fn eval_timescale_fn(
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    expect_args(name.value.as_str(), args, 1, name.span, ctx)?;
     let arg = eval_expr(&args[0], values, local_values, ctx)?;
     let RuntimeValue::Datetime(epoch) = arg else {
         return Err(ctx.internal_error(
@@ -318,6 +368,7 @@ fn eval_datetime_extract_fn(
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    expect_args(name.value.as_str(), args, 1, name.span, ctx)?;
     let arg_val = eval_expr(&args[0], values, local_values, ctx)?;
     let RuntimeValue::Datetime(epoch) = arg_val else {
         return Err(ctx.internal_error(
@@ -368,6 +419,7 @@ fn eval_datetime_from_fn(
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    expect_args(name.value.as_str(), args, 1, name.span, ctx)?;
     let arg_val = eval_expr(&args[0], values, local_values, ctx)?;
     let num = match arg_val {
         RuntimeValue::Scalar(v) => v,
@@ -401,6 +453,7 @@ fn eval_datetime_to_fn(
     local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    expect_args(name.value.as_str(), args, 1, name.span, ctx)?;
     let arg_val = eval_expr(&args[0], values, local_values, ctx)?;
     let RuntimeValue::Datetime(epoch) = arg_val else {
         return Err(ctx.internal_error(
@@ -461,7 +514,7 @@ fn eval_builtin_fn(
 /// Parse a civil datetime string in a given IANA timezone and return a UTC `hifitime::Epoch`.
 ///
 /// Uses jiff to resolve the civil time to a UTC instant, then converts to hifitime.
-fn datetime_with_timezone(
+pub(super) fn datetime_with_timezone(
     datetime_str: &str,
     tz_name: &str,
 ) -> Result<hifitime::Epoch, Box<dyn std::error::Error>> {
