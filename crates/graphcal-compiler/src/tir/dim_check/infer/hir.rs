@@ -134,7 +134,7 @@ fn infer_hir_type_inner(
             InferredType::Label(InferredIndex::from_resolved(variant.value.index().clone()))
         }
         hir::ExprKind::GraphRef(target) => {
-            infer_resolved_decl_ref_type(&target.value, declared_types, dag, src)?
+            infer_resolved_decl_ref_type(&target.value, target.span, declared_types, dag, src)?
         }
         hir::ExprKind::ConstRef(target) => {
             infer_hir_const_ref(target, declared_types, dag, registry, src)?
@@ -406,6 +406,7 @@ fn infer_hir_unit_literal(
 
 fn infer_resolved_decl_ref_type(
     target: &ResolvedDeclKey,
+    span: Span,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
@@ -444,7 +445,7 @@ fn infer_resolved_decl_ref_type(
     Err(GraphcalError::UnknownGraphRef {
         name: local_name,
         src: src.clone(),
-        span: crate::syntax::span::Span::new(0, 0).into(),
+        span: span.into(),
     })
 }
 
@@ -488,7 +489,7 @@ fn infer_hir_const_ref(
 ) -> Result<InferredType, GraphcalError> {
     match &target.value {
         ConstRef::Decl(resolved) => {
-            infer_resolved_decl_ref_type(resolved, declared_types, dag, src)
+            infer_resolved_decl_ref_type(resolved, target.span, declared_types, dag, src)
         }
         ConstRef::IndexVariant(variant) => Ok(InferredType::Label(InferredIndex::from_resolved(
             variant.index().clone(),
@@ -616,6 +617,7 @@ fn infer_hir_fn_call(
             }
             infer_hir_builtin_fn(
                 name,
+                callee.span,
                 args,
                 declared_types,
                 local_types,
@@ -742,6 +744,7 @@ fn infer_hir_fn_call(
         None | Some(crate::registry::resolve_types::SpecialFnKind::Aggregation(_)) => {
             infer_hir_builtin_fn(
                 name,
+                callee.span,
                 args,
                 declared_types,
                 local_types,
@@ -758,6 +761,7 @@ fn infer_hir_fn_call(
 #[expect(clippy::too_many_arguments, reason = "function-call context")]
 fn infer_hir_builtin_fn(
     name: BuiltinFnName,
+    callee_span: Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes,
@@ -771,10 +775,7 @@ fn infer_hir_builtin_fn(
         return Err(GraphcalError::UnknownFunction {
             name: name.as_str().to_string(),
             src: src.clone(),
-            span: args.first().map_or_else(
-                || crate::syntax::span::Span::new(0, 0).into(),
-                |arg| arg.span.into(),
-            ),
+            span: callee_span.into(),
         });
     };
     if args.len() != func.dim_sig.params.len() {
@@ -783,9 +784,7 @@ fn infer_hir_builtin_fn(
             expected: func.dim_sig.params.len(),
             got: args.len(),
             src: src.clone(),
-            span: args
-                .first()
-                .map_or_else(|| Span::new(0, 0).into(), |arg| arg.span.into()),
+            span: callee_span.into(),
         });
     }
     let arg_dims: Vec<Dimension> = args

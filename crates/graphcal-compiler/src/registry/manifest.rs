@@ -18,6 +18,12 @@ pub enum ManifestError {
 
     #[error("invalid package name '{name}': must be lower_snake_case")]
     InvalidPackageName { name: String },
+
+    #[error(
+        "invalid source_dir '{dir}': must be a relative path inside the \
+         project root (no absolute paths or `..` components)"
+    )]
+    InvalidSourceDir { dir: String },
 }
 
 /// The parsed `graphcal.toml` manifest.
@@ -68,8 +74,24 @@ pub fn parse_manifest_str(content: &str) -> Result<Manifest, ManifestError> {
         });
     }
 
-    // Extract source_dir (optional, defaults to "src").
-    let source_dir = PathBuf::from(root["package"]["source_dir"].as_str().unwrap_or("src"));
+    // Extract source_dir (optional, defaults to "src"). The package name two
+    // lines above is strictly validated; the source dir gets the same
+    // treatment — a manifest must not be able to point module resolution
+    // outside the project root via an absolute path or `..` components.
+    let source_dir_str = root["package"]["source_dir"].as_str().unwrap_or("src");
+    let source_dir = PathBuf::from(source_dir_str);
+    let escapes_root = source_dir.is_absolute()
+        || source_dir.components().any(|c| {
+            !matches!(
+                c,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        });
+    if escapes_root {
+        return Err(ManifestError::InvalidSourceDir {
+            dir: source_dir_str.to_string(),
+        });
+    }
 
     Ok(Manifest {
         package_name: name.to_string(),
@@ -163,5 +185,28 @@ mod tests {
         // An empty file (current marker behavior) has no [package] section.
         let result = parse_manifest_str("");
         assert!(matches!(result, Err(ManifestError::MissingPackageName)));
+    }
+
+    #[test]
+    fn source_dir_escaping_the_root_is_rejected() {
+        // Regression: a malicious manifest could point module resolution
+        // outside the project root.
+        for dir in ["../elsewhere", "/etc", "a/../../b", "./../x"] {
+            let toml = format!("[package]\nname = \"pkg\"\nsource_dir = \"{dir}\"\n");
+            assert!(
+                matches!(
+                    parse_manifest_str(&toml),
+                    Err(ManifestError::InvalidSourceDir { .. })
+                ),
+                "source_dir `{dir}` must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_source_dir_is_accepted() {
+        let toml = "[package]\nname = \"pkg\"\nsource_dir = \"lib/nested\"\n";
+        let manifest = parse_manifest_str(toml).unwrap();
+        assert_eq!(manifest.source_dir, std::path::PathBuf::from("lib/nested"));
     }
 }
