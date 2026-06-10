@@ -729,7 +729,12 @@ impl Parser<'_> {
     /// Scan balanced `<…>` angle brackets from the current position and check
     /// whether the byte immediately after `>` (skipping whitespace) equals `expected`.
     ///
-    /// Returns `false` if the next token is not `<` or the brackets are unbalanced.
+    /// Returns `false` if the next token is not `<`, the brackets are
+    /// unbalanced, or a byte that can never occur inside a generic-argument
+    /// list shows up first — in that case the `<` is a comparison operator,
+    /// so an ordinary boolean expression like `a < b && c > (d)` is not
+    /// misparsed as turbofish. Comments are skipped so their contents affect
+    /// neither the bracket balance nor the operator bail-out.
     fn is_type_args_followed_by(&mut self, expected: u8) -> bool {
         let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
             return false;
@@ -750,6 +755,23 @@ impl Parser<'_> {
                         return p < bytes.len() && bytes[p] == expected;
                     }
                 }
+                b'/' if bytes.get(pos + 1) == Some(&b'/') => {
+                    while pos < bytes.len() && bytes[pos] != b'\n' {
+                        pos += 1;
+                    }
+                    continue;
+                }
+                b'/' if bytes.get(pos + 1) == Some(&b'*') => {
+                    pos += 2;
+                    while pos + 1 < bytes.len() && !(bytes[pos] == b'*' && bytes[pos + 1] == b'/') {
+                        pos += 1;
+                    }
+                    pos += 2;
+                    continue;
+                }
+                // Generic arguments are type expressions or Nat literals;
+                // none of these bytes can occur in them.
+                b'&' | b'|' | b';' | b'=' | b'{' | b'}' | b'"' | b'@' | b'!' => return false,
                 _ => {}
             }
             pos += 1;
@@ -1237,6 +1259,31 @@ mod tests {
         assert!(
             matches!(&expr.kind, ExprKind::BinOp { op: BinOp::Lt, .. }),
             "expected comparison, got {:?}",
+            expr.kind
+        );
+    }
+
+    #[test]
+    fn comparison_with_and_then_gt_paren_is_not_turbofish() {
+        // Regression: the raw-byte turbofish lookahead used to treat
+        // `limit < threshold && other > (1.0)` as `limit<…>(…)`, rejecting
+        // a perfectly ordinary boolean expression with a confusing error.
+        let expr = parse_node_expr("@limit < @threshold && @other > (1.0)");
+        assert!(
+            matches!(&expr.kind, ExprKind::BinOp { op: BinOp::And, .. }),
+            "expected `&&` at the top, got {:?}",
+            expr.kind
+        );
+    }
+
+    #[test]
+    fn comparison_with_comment_containing_gt_paren_is_not_turbofish() {
+        // Regression: the lookahead also scanned comment bytes, so a
+        // comment containing `> (` could fabricate a turbofish.
+        let expr = parse_node_expr("@a < @b // note: > (\n || @c");
+        assert!(
+            matches!(&expr.kind, ExprKind::BinOp { op: BinOp::Or, .. }),
+            "expected `||` at the top, got {:?}",
             expr.kind
         );
     }
