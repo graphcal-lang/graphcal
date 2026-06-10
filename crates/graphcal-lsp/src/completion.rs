@@ -124,7 +124,7 @@ fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
 
 #[cfg(test)]
 mod tests {
-    use super::TOP_LEVEL_KEYWORDS;
+    use super::{TOP_LEVEL_KEYWORDS, completion};
 
     #[test]
     fn top_level_keywords_do_not_include_removed_fn() {
@@ -145,5 +145,45 @@ mod tests {
                 "missing top-level keyword: {required}"
             );
         }
+    }
+
+    #[test]
+    fn imported_symbol_completion_uses_local_alias() {
+        // Regression: completion items for imported symbols used the
+        // defining file's spelling — `import helper.lib.{y as renamed};`
+        // offered `y`, which does not resolve in the importing file.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/helper")).unwrap();
+        std::fs::write(
+            dir.path().join("graphcal.toml"),
+            "[package]\nname = \"helper\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("src/helper/lib.gcl"),
+            "pub const node y: Dimensionless = 2.0;",
+        )
+        .unwrap();
+        let main_path = dir.path().join("src/helper/main.gcl");
+        let main_text =
+            "import helper.lib.{y as renamed};\nnode z: Dimensionless = @renamed + 1.0;\n";
+        std::fs::write(&main_path, main_text).unwrap();
+        let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
+        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+
+        // Cursor right after the `@` in `@renamed`.
+        let offset = main_text.find("@renamed").unwrap() + 1;
+        let items = completion(&analysis, main_text, offset).unwrap_or_default();
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels.contains(&"renamed"),
+            "completion must offer the local alias `renamed`: {labels:?}; \
+             imported keys: {:?}",
+            analysis.imported_definitions.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !labels.contains(&"y"),
+            "completion must not offer the original spelling `y`: {labels:?}"
+        );
     }
 }
