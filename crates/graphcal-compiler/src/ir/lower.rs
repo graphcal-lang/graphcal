@@ -31,7 +31,7 @@ use crate::registry::types::{
 };
 use crate::syntax::dimension::Rational;
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, IndexName, NameAtom, ScopedName, StructTypeName,
+    ConstructorName, DeclName, DimName, IndexName, NameAtom, ScopedName, StructTypeName, UnitName,
 };
 use crate::syntax::span::Span;
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
@@ -2301,19 +2301,21 @@ fn contains_graph_ref(expr: &Expr) -> bool {
     crate::ir::resolve::contains_graph_ref(expr)
 }
 
-/// Build a map of dynamic unit name → set of `@`-reference names from the registry.
+/// Build a map of dynamic unit name → set of `@`-references from the registry.
 ///
 /// For each dynamic unit, extracts the graph refs from its `scale_expr`.
-/// Returns an empty map if no dynamic units exist.
-fn build_dynamic_unit_deps(registry: &RegistryBuilder) -> HashMap<String, HashSet<String>> {
-    let mut dynamic_deps: HashMap<String, HashSet<String>> = HashMap::new();
+/// Returns an empty map if no dynamic units exist. The refs keep their
+/// structured [`ScopedName`] form — flattening them to strings used to
+/// corrupt qualified refs into local names containing a dot.
+fn build_dynamic_unit_deps(registry: &RegistryBuilder) -> HashMap<UnitName, BTreeSet<ScopedName>> {
+    let mut dynamic_deps: HashMap<UnitName, BTreeSet<ScopedName>> = HashMap::new();
 
     for (name, _dim, scale) in registry.all_units() {
         if let UnitScale::Dynamic { scale_expr, .. } = scale {
-            let mut refs = HashSet::new();
-            crate::ir::resolve::collect_graph_ref_names(scale_expr, &mut refs);
+            let mut refs = BTreeSet::new();
+            crate::ir::resolve::collect_scoped_graph_refs(scale_expr, &mut refs);
             if !refs.is_empty() {
-                dynamic_deps.insert(name.to_string(), refs);
+                dynamic_deps.insert(name.clone(), refs);
             }
         }
     }
@@ -2323,7 +2325,7 @@ fn build_dynamic_unit_deps(registry: &RegistryBuilder) -> HashMap<String, HashSe
 
 /// Visitor that collects all unit names referenced by `UnitLiteral` and `Convert` nodes.
 struct UnitNameCollector {
-    unit_names: HashSet<String>,
+    unit_names: HashSet<UnitName>,
 }
 
 impl ExprVisitor<crate::syntax::phase::Resolved> for UnitNameCollector {
@@ -2332,7 +2334,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for UnitNameCollector {
     fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::UnitLiteral { unit, .. } = &expr.kind {
             for term in &unit.terms {
-                self.unit_names.insert(term.name.value.to_string());
+                self.unit_names.insert(term.name.value.clone());
             }
         }
         Ok(())
@@ -2342,7 +2344,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for UnitNameCollector {
         // Collect unit names from Convert targets
         if let ExprKind::Convert { target, .. } = &expr.kind {
             for term in &target.terms {
-                self.unit_names.insert(term.name.value.to_string());
+                self.unit_names.insert(term.name.value.clone());
             }
         }
         // Continue recursion into the inner expression
@@ -2359,7 +2361,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for UnitNameCollector {
 /// node/param that uses the dynamic unit.
 fn augment_runtime_deps_for_dynamic_units(
     runtime_deps: &mut HashMap<ScopedName, HashSet<ScopedName>>,
-    dynamic_unit_deps: &HashMap<String, HashSet<String>>,
+    dynamic_unit_deps: &HashMap<UnitName, BTreeSet<ScopedName>>,
     params: &[crate::registry::resolve_types::ResolvedParamEntry],
     nodes: &[crate::registry::resolve_types::ResolvedNodeEntry],
 ) {
@@ -2376,7 +2378,7 @@ fn augment_runtime_deps_for_dynamic_units(
                 runtime_deps
                     .entry(ScopedName::local(param.name.as_str()))
                     .or_default()
-                    .extend(extra_deps.into_iter().map(ScopedName::local));
+                    .extend(extra_deps);
             }
         }
     }
@@ -2388,7 +2390,7 @@ fn augment_runtime_deps_for_dynamic_units(
             runtime_deps
                 .entry(ScopedName::local(node.name.as_str()))
                 .or_default()
-                .extend(extra_deps.into_iter().map(ScopedName::local));
+                .extend(extra_deps);
         }
     }
 }
@@ -2396,8 +2398,8 @@ fn augment_runtime_deps_for_dynamic_units(
 /// Collect transitive `@`-dependencies from dynamic units referenced in an expression.
 fn collect_dynamic_unit_deps_from_expr(
     expr: &Expr,
-    dynamic_unit_deps: &HashMap<String, HashSet<String>>,
-) -> HashSet<String> {
+    dynamic_unit_deps: &HashMap<UnitName, BTreeSet<ScopedName>>,
+) -> HashSet<ScopedName> {
     let mut collector = UnitNameCollector {
         unit_names: HashSet::new(),
     };
