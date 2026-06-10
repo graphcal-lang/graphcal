@@ -12,10 +12,6 @@ use super::eval_expr;
 /// Evaluate a `BinOp` expression.
 ///
 /// Dispatches to logical, equality, comparison, and arithmetic arms.
-#[expect(
-    clippy::too_many_lines,
-    reason = "single match over all BinOp variants"
-)]
 pub(super) fn eval_binop_expr(
     expr: &Expr,
     op: BinOp,
@@ -53,69 +49,16 @@ pub(super) fn eval_binop_expr(
         BinOp::Eq | BinOp::Ne => {
             let l = eval_expr(lhs, values, local_values, ctx)?;
             let r = eval_expr(rhs, values, local_values, ctx)?;
-            let is_eq = op == BinOp::Eq;
-            let eq = match (&l, &r) {
-                (RuntimeValue::Bool(lb), RuntimeValue::Bool(rb)) => lb == rb,
-                (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => li == ri,
-                (
-                    RuntimeValue::Label {
-                        index_name: li,
-                        variant: lv,
-                    },
-                    RuntimeValue::Label {
-                        index_name: ri,
-                        variant: rv,
-                    },
-                ) => li.matches_ref(ri) && lv == rv,
-                (RuntimeValue::Struct { .. }, RuntimeValue::Struct { .. }) => {
-                    runtime_value_equals(&l, &r)
-                }
-                (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => le == re,
-                _ => {
-                    let lv = l
-                        .expect_scalar("comparison operand")
-                        .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
-                    let rv = r
-                        .expect_scalar("comparison operand")
-                        .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
-                    return Ok(RuntimeValue::Bool(eval_comparison(
-                        op, lv, rv, ctx, expr.span,
-                    )?));
-                }
-            };
-            Ok(RuntimeValue::Bool(eq == is_eq))
+            eval_equality_values(op, &l, &r, ctx, expr.span)
         }
         // Ordering comparisons: Int, Datetime, or Scalar operands, Bool result.
         // Int/Int and Datetime/Datetime dispatch identically via `Ord`; anything
         // else falls through to the scalar path which handles Scalar/Int
         // mixing and dimension checks.
         BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
-            // `op` is statically one of the four ordering variants because of
-            // the match arm above; `OrderingOp::from_binop` makes that fact
-            // visible to the type system so `apply_ordering` cannot panic.
-            let ord_op = OrderingOp::from_binop(op)
-                .ok_or_else(|| ctx.internal_error(format!("non-ordering op {op:?}"), expr.span))?;
             let l = eval_expr(lhs, values, local_values, ctx)?;
             let r = eval_expr(rhs, values, local_values, ctx)?;
-            match (&l, &r) {
-                (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
-                    Ok(RuntimeValue::Bool(apply_ordering(ord_op, li, ri)))
-                }
-                (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
-                    Ok(RuntimeValue::Bool(apply_ordering(ord_op, le, re)))
-                }
-                _ => {
-                    let lv = l
-                        .expect_scalar("comparison operand")
-                        .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
-                    let rv = r
-                        .expect_scalar("comparison operand")
-                        .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
-                    Ok(RuntimeValue::Bool(eval_comparison(
-                        op, lv, rv, ctx, expr.span,
-                    )?))
-                }
-            }
+            eval_ordering_values(op, &l, &r, ctx, expr.span)
         }
         // Arithmetic operators: Int or Scalar operands
         _ => {
@@ -283,6 +226,77 @@ pub(super) fn check_finite(
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
+/// Equality kernel shared by both evaluators: same-typed value-level
+/// entities compare; mismatched operand types are an evaluation error.
+/// (The HIR evaluator previously returned `false` for mismatched types via
+/// a permissive structural comparison — the strict policy wins.)
+pub(super) fn eval_equality_values(
+    op: BinOp,
+    l: &RuntimeValue,
+    r: &RuntimeValue,
+    ctx: &EvalContext<'_>,
+    span: Span,
+) -> Result<RuntimeValue, GraphcalError> {
+    let is_eq = op == BinOp::Eq;
+    let eq = match (l, r) {
+        (RuntimeValue::Bool(lb), RuntimeValue::Bool(rb)) => lb == rb,
+        (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => li == ri,
+        (
+            RuntimeValue::Label {
+                index_name: li,
+                variant: lv,
+            },
+            RuntimeValue::Label {
+                index_name: ri,
+                variant: rv,
+            },
+        ) => li.matches_ref(ri) && lv == rv,
+        (RuntimeValue::Struct { .. }, RuntimeValue::Struct { .. }) => runtime_value_equals(l, r),
+        (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => le == re,
+        _ => {
+            let lv = l
+                .expect_scalar("comparison operand")
+                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
+            let rv = r
+                .expect_scalar("comparison operand")
+                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
+            return Ok(RuntimeValue::Bool(eval_comparison(op, lv, rv, ctx, span)?));
+        }
+    };
+    Ok(RuntimeValue::Bool(eq == is_eq))
+}
+
+/// Ordering kernel shared by both evaluators: Int, Datetime, or Scalar
+/// operands, dispatched through the typed [`OrderingOp`] subset so there is
+/// no "impossible operator" fallback.
+pub(super) fn eval_ordering_values(
+    op: BinOp,
+    l: &RuntimeValue,
+    r: &RuntimeValue,
+    ctx: &EvalContext<'_>,
+    span: Span,
+) -> Result<RuntimeValue, GraphcalError> {
+    let ord_op = OrderingOp::from_binop(op)
+        .ok_or_else(|| ctx.internal_error(format!("non-ordering op {op:?}"), span))?;
+    match (l, r) {
+        (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
+            Ok(RuntimeValue::Bool(apply_ordering(ord_op, li, ri)))
+        }
+        (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
+            Ok(RuntimeValue::Bool(apply_ordering(ord_op, le, re)))
+        }
+        _ => {
+            let lv = l
+                .expect_scalar("comparison operand")
+                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
+            let rv = r
+                .expect_scalar("comparison operand")
+                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
+            Ok(RuntimeValue::Bool(eval_comparison(op, lv, rv, ctx, span)?))
+        }
+    }
+}
+
 /// Restriction of [`BinOp`] to the four ordering comparison operators.
 ///
 /// Carrying this typed subset lets [`apply_ordering`] dispatch without an
@@ -341,7 +355,7 @@ fn eval_comparison(
 }
 
 /// Evaluate an arithmetic binary operator on two i64 values with checked arithmetic.
-fn eval_int_binop(
+pub(super) fn eval_int_binop(
     op: BinOp,
     l: i64,
     r: i64,
@@ -383,7 +397,12 @@ fn eval_int_binop(
 }
 
 /// Evaluate an arithmetic binary operator on two f64 values.
-fn eval_scalar_binop(
+///
+/// The result must be finite. (The evaluators previously diverged here:
+/// this path only rejected non-finite results when the *inputs* were
+/// finite, which could mask an upstream non-finite value — the strict
+/// policy wins, matching every value-construction site.)
+pub(super) fn eval_scalar_binop(
     op: BinOp,
     l: f64,
     r: f64,
@@ -407,15 +426,5 @@ fn eval_scalar_binop(
             );
         }
     };
-
-    // Post-check: if inputs were finite but result is not, report an error.
-    if l.is_finite() && r.is_finite() && !result.is_finite() {
-        if result.is_nan() {
-            Err(ctx.eval_error("invalid arithmetic operation (result is NaN)", span))
-        } else {
-            Err(ctx.eval_error("arithmetic overflow (result is infinite)", span))
-        }
-    } else {
-        Ok(result)
-    }
+    check_finite(result, "arithmetic operation", ctx, span)
 }

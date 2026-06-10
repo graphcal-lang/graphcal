@@ -204,7 +204,6 @@ fn eval_hir_nullary_constructor(
     })
 }
 
-#[expect(clippy::too_many_lines, reason = "exhaustive binary operator dispatch")]
 fn eval_hir_binop(
     span: Span,
     op: graphcal_compiler::desugar::resolved_ast::BinOp,
@@ -237,55 +236,19 @@ fn eval_hir_binop(
         BinOp::Eq | BinOp::Ne => {
             let l = eval_hir_expr(lhs, values, local_values, ctx)?;
             let r = eval_hir_expr(rhs, values, local_values, ctx)?;
-            let is_eq = op == BinOp::Eq;
-            Ok(RuntimeValue::Bool(
-                super::arithmetic::runtime_value_equals(&l, &r) == is_eq,
-            ))
+            super::arithmetic::eval_equality_values(op, &l, &r, ctx, span)
         }
         BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
             let l = eval_hir_expr(lhs, values, local_values, ctx)?;
             let r = eval_hir_expr(rhs, values, local_values, ctx)?;
-            match (&l, &r) {
-                (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
-                    Ok(RuntimeValue::Bool(match op {
-                        BinOp::Lt => li < ri,
-                        BinOp::Gt => li > ri,
-                        BinOp::Le => li <= ri,
-                        BinOp::Ge => li >= ri,
-                        _ => false,
-                    }))
-                }
-                (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
-                    Ok(RuntimeValue::Bool(match op {
-                        BinOp::Lt => le < re,
-                        BinOp::Gt => le > re,
-                        BinOp::Le => le <= re,
-                        BinOp::Ge => le >= re,
-                        _ => false,
-                    }))
-                }
-                _ => {
-                    let lv = l
-                        .expect_scalar("comparison operand")
-                        .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-                    let rv = r
-                        .expect_scalar("comparison operand")
-                        .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-                    Ok(RuntimeValue::Bool(match op {
-                        BinOp::Lt => lv < rv,
-                        BinOp::Gt => lv > rv,
-                        BinOp::Le => lv <= rv,
-                        BinOp::Ge => lv >= rv,
-                        _ => false,
-                    }))
-                }
-            }
+            super::arithmetic::eval_ordering_values(op, &l, &r, ctx, span)
         }
         _ => {
             let l = eval_hir_expr(lhs, values, local_values, ctx)?;
             let r = eval_hir_expr(rhs, values, local_values, ctx)?;
             if let (RuntimeValue::Int(li), RuntimeValue::Int(ri)) = (&l, &r) {
-                return eval_hir_int_binop(op, *li, *ri, ctx, span).map(RuntimeValue::Int);
+                return super::arithmetic::eval_int_binop(op, *li, *ri, ctx, span)
+                    .map(RuntimeValue::Int);
             }
             match (&l, &r) {
                 (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) if op == BinOp::Sub => {
@@ -320,7 +283,7 @@ fn eval_hir_binop(
             let rv = r
                 .expect_scalar("binary operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            eval_hir_scalar_binop(op, lv, rv, ctx, span).map(RuntimeValue::Scalar)
+            super::arithmetic::eval_scalar_binop(op, lv, rv, ctx, span).map(RuntimeValue::Scalar)
         }
     }
 }
@@ -354,67 +317,6 @@ fn eval_hir_unary(
             Ok(RuntimeValue::Bool(!v))
         }
     }
-}
-
-fn eval_hir_int_binop(
-    op: graphcal_compiler::desugar::resolved_ast::BinOp,
-    l: i64,
-    r: i64,
-    ctx: &EvalContext<'_>,
-    span: Span,
-) -> Result<i64, GraphcalError> {
-    use graphcal_compiler::desugar::resolved_ast::BinOp;
-    match op {
-        BinOp::Add => l.checked_add(r),
-        BinOp::Sub => l.checked_sub(r),
-        BinOp::Mul => l.checked_mul(r),
-        BinOp::Div => {
-            if r == 0 {
-                return Err(ctx.eval_error("integer division by zero", span));
-            }
-            l.checked_div(r)
-        }
-        BinOp::Mod => {
-            if r == 0 {
-                return Err(ctx.eval_error("integer modulo by zero", span));
-            }
-            l.checked_rem(r)
-        }
-        BinOp::Pow => {
-            if r < 0 {
-                return Err(ctx.eval_error("integer exponent must be non-negative", span));
-            }
-            let exp =
-                u32::try_from(r).map_err(|_| ctx.eval_error("integer exponent too large", span))?;
-            l.checked_pow(exp)
-        }
-        _ => return Err(ctx.internal_error(format!("unexpected operator {op:?}"), span)),
-    }
-    .ok_or_else(|| ctx.eval_error("integer arithmetic overflow", span))
-}
-
-fn eval_hir_scalar_binop(
-    op: graphcal_compiler::desugar::resolved_ast::BinOp,
-    l: f64,
-    r: f64,
-    ctx: &EvalContext<'_>,
-    span: Span,
-) -> Result<f64, GraphcalError> {
-    use graphcal_compiler::desugar::resolved_ast::BinOp;
-    let result = match op {
-        BinOp::Add => l + r,
-        BinOp::Sub => l - r,
-        BinOp::Mul => l * r,
-        BinOp::Div => {
-            if r == 0.0 {
-                return Err(ctx.eval_error("division by zero", span));
-            }
-            l / r
-        }
-        BinOp::Pow => l.powf(r),
-        _ => return Err(ctx.internal_error(format!("unexpected operator {op:?}"), span)),
-    };
-    super::arithmetic::check_finite(result, "arithmetic operation", ctx, span)
 }
 
 fn expect_hir_builtin_arity(
@@ -676,10 +578,12 @@ fn eval_hir_datetime_constructor(
                         span: args[1].span.into(),
                     });
                 };
-                datetime_with_timezone(s, tz_name).map_err(|e| GraphcalError::EvalError {
-                    message: format!("invalid datetime with timezone: {e}"),
-                    src: src.clone(),
-                    span: args[0].span.into(),
+                super::functions::datetime_with_timezone(s, tz_name).map_err(|e| {
+                    GraphcalError::EvalError {
+                        message: format!("invalid datetime with timezone: {e}"),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    }
                 })?
             } else {
                 hifitime::Epoch::from_gregorian_str(s).map_err(|e| GraphcalError::EvalError {
@@ -1541,22 +1445,4 @@ fn eval_hir_inline_dag_call(
             output.span,
         )
     })
-}
-
-/// Parse a civil datetime string in a given IANA timezone and return a UTC `hifitime::Epoch`.
-fn datetime_with_timezone(
-    datetime_str: &str,
-    tz_name: &str,
-) -> Result<hifitime::Epoch, Box<dyn std::error::Error>> {
-    let civil_dt: jiff::civil::DateTime = datetime_str.parse()?;
-    let tz = jiff::tz::TimeZone::get(tz_name)?;
-    let zdt = tz.to_zoned(civil_dt)?;
-    let ts = zdt.timestamp();
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "unix seconds for reasonable dates fit within f64 mantissa precision"
-    )]
-    let epoch = hifitime::Epoch::from_unix_seconds(ts.as_second() as f64)
-        + hifitime::Duration::from_nanoseconds(f64::from(ts.subsec_nanosecond()));
-    Ok(epoch)
 }
