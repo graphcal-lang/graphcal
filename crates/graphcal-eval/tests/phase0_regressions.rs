@@ -312,3 +312,27 @@ param usd_per_eur: Dimensionless = 2.0;
     let price = value_for(&result, "price");
     assert!((price.si_value().unwrap() - 6.0).abs() < 1e-9);
 }
+
+#[test]
+fn nested_unfold_self_reference_is_not_a_cycle() {
+    // Regression: the unfold self-edge was only removed when `unfold` was
+    // the top-level expression of the declaration; a nested form (e.g.
+    // inside `if`) was rejected with a spurious cyclic-dependency error.
+    let source = r"
+index Step = linspace(0.0 s, 2.0 s, step: 1.0 s);
+node y: Dimensionless[Step] =
+    if 1.0 > 0.0 { unfold(0.0, |p, t| @y[p] + 1.0) } else { unfold(0.0, |p, t| @y[p] + 2.0) };
+";
+    let result = compile_and_eval(source).unwrap();
+    let y = value_for(&result, "y");
+    match y {
+        Value::Indexed { entries, .. } => assert_eq!(entries.len(), 3),
+        other => panic!("expected indexed value, got {other:?}"),
+    }
+}
+
+#[test]
+fn self_reference_outside_unfold_is_still_a_cycle() {
+    let source = "node a: Dimensionless = @a + 1.0;";
+    assert!(compile_and_eval(source).is_err());
+}
