@@ -641,4 +641,57 @@ mod tests {
         assert!((consts["LN2"] - std::f64::consts::LN_2).abs() < f64::EPSILON);
         assert!((consts["LN10"] - std::f64::consts::LN_10).abs() < f64::EPSILON);
     }
+
+    #[test]
+    fn builtin_constant_tables_agree() {
+        // The typed BuiltinConst table and the registry constant map are
+        // maintained separately; this pins them together so adding a
+        // constant to one without the other fails loudly.
+        use crate::hir::BuiltinConst;
+        let map = builtin_constants();
+        for c in BuiltinConst::ALL {
+            let registry_value = map.get(c.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "BuiltinConst::{c:?} (`{}`) missing from builtin_constants()",
+                    c.as_str()
+                )
+            });
+            assert!(
+                (registry_value - c.value()).abs() < f64::EPSILON,
+                "value mismatch for `{}`",
+                c.as_str()
+            );
+        }
+        for name in map.keys() {
+            assert!(
+                BuiltinConst::parse(name).is_some(),
+                "builtin_constants() entry `{name}` missing from BuiltinConst"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_function_tables_agree() {
+        // Every name in the eval function map must be a typed BuiltinFnName,
+        // and every BuiltinFnName must be evaluable: either via the function
+        // map or via the special-function classification. A name added to
+        // only one table would resolve in one phase and fail in another.
+        use crate::hir::BuiltinFnName;
+        use crate::registry::resolve_types::classify_special_fn;
+        let map = builtin_functions();
+        for name in map.keys() {
+            assert!(
+                BuiltinFnName::parse(name).is_some(),
+                "builtin_functions() entry `{name}` missing from BuiltinFnName"
+            );
+        }
+        for f in BuiltinFnName::ALL {
+            let name = f.as_str();
+            assert!(
+                map.contains_key(name) || classify_special_fn(name).is_some(),
+                "BuiltinFnName::{f:?} (`{name}`) is neither in builtin_functions() \
+                 nor classified by classify_special_fn"
+            );
+        }
+    }
 }
