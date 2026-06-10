@@ -1180,6 +1180,17 @@ fn infer_hir_unary(
             src: src.clone(),
             span: operand.span.into(),
         }),
+        // Mirror the syntax-AST engine: negating a Bool must be rejected
+        // (this arm used to accept it — a divergence between the engines).
+        crate::desugar::resolved_ast::UnaryOp::Neg if operand_type == InferredType::Bool => {
+            Err(GraphcalError::DimensionMismatch {
+                expected: "numeric type".to_string(),
+                found: "Bool".to_string(),
+                help: "negation requires a numeric operand, not Bool".to_string(),
+                src: src.clone(),
+                span: operand.span.into(),
+            })
+        }
         crate::desugar::resolved_ast::UnaryOp::Neg => Ok(operand_type),
     }
 }

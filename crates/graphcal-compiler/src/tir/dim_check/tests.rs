@@ -1749,3 +1749,16 @@ fn float_exponent_beyond_i32_errors_with_overflow() {
         "expected DimensionOverflow, got: {err:?}"
     );
 }
+
+#[test]
+fn negating_a_bool_is_rejected() {
+    // Regression: the HIR inference engine accepted `-` on Bool while the
+    // syntax-AST engine rejected it — a live divergence between the two,
+    // and declaration bodies route through the HIR path.
+    let source = "node x: Bool = -(1.0 > 2.0);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "expected DimensionMismatch, got: {err:?}"
+    );
+}
