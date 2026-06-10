@@ -684,6 +684,16 @@ impl<Ns: NameNamespace> ImportedSymbol<Ns> {
     }
 }
 
+impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ImportedSymbol<Ns> {
+    fn resolved(&self) -> &ResolvedName<Ns> {
+        self.resolved()
+    }
+
+    fn visibility(&self) -> SymbolVisibility {
+        self.visibility()
+    }
+}
+
 /// Import scope for a single module.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ModuleScope {
@@ -926,7 +936,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedName<namespace::Dim>, ModuleResolveError> {
-        self.resolve_type_symbol_path(owner, path, ModuleSymbols::dimensions, |scope| {
+        self.resolve_symbol_path(owner, path, ModuleSymbols::dimensions, |scope| {
             &scope.selected_dimensions
         })
     }
@@ -937,7 +947,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedName<namespace::Unit>, ModuleResolveError> {
-        self.resolve_type_symbol_path(owner, path, ModuleSymbols::units, |scope| {
+        self.resolve_symbol_path(owner, path, ModuleSymbols::units, |scope| {
             &scope.selected_units
         })
     }
@@ -948,7 +958,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedName<namespace::StructType>, ModuleResolveError> {
-        self.resolve_type_symbol_path(owner, path, ModuleSymbols::struct_types, |scope| {
+        self.resolve_symbol_path(owner, path, ModuleSymbols::struct_types, |scope| {
             &scope.selected_struct_types
         })
     }
@@ -980,52 +990,8 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedName<namespace::Index>, ModuleResolveError> {
-        if let Some(atom) = path.as_bare() {
-            let local = self.module_symbols(owner)?;
-            if let Some(symbol) = local.indexes.get(atom.as_str()) {
-                return Ok(symbol.resolved().clone());
-            }
-            let scope = self.module_scope(owner)?;
-            if let Some(imported) = scope.selected_indexes.get(atom.as_str()) {
-                return Ok(imported.resolved().clone());
-            }
-            return Err(ModuleResolveError::UnknownName {
-                owner: owner.clone(),
-                namespace: namespace::Index::DISPLAY_NAME,
-                name: atom.to_string(),
-            });
-        }
-
-        let (qualifier, leaf) = path.split_last();
-        let target_ref = self.resolve_module_qualifier(owner, qualifier)?;
-        let target = self.module_symbols(&target_ref.owner)?;
-        if let Some(symbol) = target.indexes.get(leaf.as_str()) {
-            if target_ref.access.requires_public() && !symbol.visibility().is_public() {
-                return Err(ModuleResolveError::PrivateName {
-                    owner: target_ref.owner,
-                    namespace: namespace::Index::DISPLAY_NAME,
-                    name: leaf.to_string(),
-                });
-            }
-            return Ok(symbol.resolved().clone());
-        }
-
-        let target_scope = self.module_scope(&target_ref.owner)?;
-        if let Some(imported) = target_scope.selected_indexes.get(leaf.as_str()) {
-            if target_ref.access.requires_public() && !imported.visibility().is_public() {
-                return Err(ModuleResolveError::PrivateName {
-                    owner: target_ref.owner,
-                    namespace: namespace::Index::DISPLAY_NAME,
-                    name: leaf.to_string(),
-                });
-            }
-            return Ok(imported.resolved().clone());
-        }
-
-        Err(ModuleResolveError::UnknownName {
-            owner: target_ref.owner,
-            namespace: namespace::Index::DISPLAY_NAME,
-            name: leaf.to_string(),
+        self.resolve_symbol_path(owner, path, ModuleSymbols::indexes, |scope| {
+            &scope.selected_indexes
         })
     }
 
@@ -1292,7 +1258,13 @@ impl ModuleResolver {
                     ExportLookup::Private => saw_private = true,
                     ExportLookup::Missing => {}
                 }
-                match self.exported_index_for_import(target, source_atom, access)? {
+                match self.exported_symbol_for_import(
+                    target,
+                    source_atom,
+                    access,
+                    ModuleSymbols::indexes,
+                    |scope| &scope.selected_indexes,
+                )? {
                     ExportLookup::Public(target_name) => additions.push(ImportAddition::Index {
                         local: Spanned::new(IndexName::from_atom(local_atom.clone()), local_span),
                         target: target_name,
@@ -1357,28 +1329,8 @@ impl ModuleResolver {
         }
 
         let target_scope = self.module_scope(target)?;
-        Ok(exported_imported_symbol(
+        Ok(exported_symbol(
             selected_symbols(target_scope),
-            atom,
-            access,
-        ))
-    }
-
-    fn exported_index_for_import(
-        &self,
-        target: &DagId,
-        atom: &NameAtom,
-        access: ModuleAccess,
-    ) -> Result<ExportLookup<namespace::Index>, ModuleResolveError> {
-        let target_symbols = self.module_symbols(target)?;
-        match exported_index_symbol(target_symbols.indexes(), atom, access) {
-            ExportLookup::Missing => {}
-            found => return Ok(found),
-        }
-
-        let target_scope = self.module_scope(target)?;
-        Ok(exported_imported_symbol(
-            &target_scope.selected_indexes,
             atom,
             access,
         ))
@@ -1442,20 +1394,6 @@ impl ModuleResolver {
             namespace: Ns::DISPLAY_NAME,
             name: leaf.to_string(),
         })
-    }
-
-    fn resolve_type_symbol_path<Ns, S>(
-        &self,
-        owner: &DagId,
-        path: &NamePath,
-        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
-        selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
-    ) -> Result<ResolvedName<Ns>, ModuleResolveError>
-    where
-        Ns: NameNamespace,
-        S: ModuleSymbolLookup<Ns>,
-    {
-        self.resolve_symbol_path(owner, path, local_symbols, selected_symbols)
     }
 
     fn resolve_module_qualifier(
@@ -1700,36 +1638,6 @@ where
     Ns: NameNamespace,
     S: ModuleSymbolLookup<Ns>,
 {
-    map.get(atom.as_str())
-        .map_or(ExportLookup::Missing, |symbol| {
-            if !access.requires_public() || symbol.visibility().is_public() {
-                ExportLookup::Public(symbol.resolved().clone())
-            } else {
-                ExportLookup::Private
-            }
-        })
-}
-
-fn exported_imported_symbol<Ns: NameNamespace>(
-    map: &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
-    atom: &NameAtom,
-    access: ModuleAccess,
-) -> ExportLookup<Ns> {
-    map.get(atom.as_str())
-        .map_or(ExportLookup::Missing, |symbol| {
-            if !access.requires_public() || symbol.visibility().is_public() {
-                ExportLookup::Public(symbol.resolved().clone())
-            } else {
-                ExportLookup::Private
-            }
-        })
-}
-
-fn exported_index_symbol(
-    map: &HashMap<IndexName, ModuleIndexSymbol>,
-    atom: &NameAtom,
-    access: ModuleAccess,
-) -> ExportLookup<namespace::Index> {
     map.get(atom.as_str())
         .map_or(ExportLookup::Missing, |symbol| {
             if !access.requires_public() || symbol.visibility().is_public() {
