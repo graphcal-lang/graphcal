@@ -2426,13 +2426,6 @@ fn nat_size_to_usize(
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<NonZeroUsize, GraphcalError> {
-    if n == 0 {
-        return Err(eval_error(
-            "range(0) is not allowed; indexes must contain at least one element",
-            src,
-            span,
-        ));
-    }
     let size = usize::try_from(n).map_err(|_| GraphcalError::EvalError {
         message: format!("nat range size {n} does not fit in usize on this target"),
         src: src.clone(),

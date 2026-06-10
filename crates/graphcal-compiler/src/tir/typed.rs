@@ -2424,13 +2424,9 @@ fn resolve_expected_fail_keys(
                         .map(|key| {
                             key.into_iter()
                                 .map(|part| {
-                                    if part.source_index_path.is_none() {
+                                    let Some(index_path) = part.source_index_path.clone() else {
                                         return Ok(part);
-                                    }
-                                    let index_path =
-                                        part.source_index_path.clone().unwrap_or_else(|| {
-                                            NamePath::from(part.index.display_name())
-                                        });
+                                    };
                                     let resolved = ctx
                                         .resolver
                                         .resolve_index_variant_parts(
@@ -4552,13 +4548,8 @@ fn resolve_type_application(
                 src: src.clone(),
                 span: type_ann.span.into(),
             })?;
-        let default_ctx = module_ctx.map_or(module_ctx, |ctx| {
-            Some(ModuleTypeContext::new(
-                type_name.owner(),
-                ctx.resolver,
-                ctx.types,
-            ))
-        });
+        let default_ctx = module_ctx
+            .map(|ctx| ModuleTypeContext::new(type_name.owner(), ctx.resolver, ctx.types));
         let resolved = resolve_type_expr_inner(
             default_expr,
             registry,

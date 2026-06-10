@@ -953,15 +953,10 @@ fn rekey_module_import(key: &SymbolKey, module_name: &str) -> SymbolKey {
             module: vec![module_name.to_string()],
             name: name.clone(),
         },
-        SymbolKey::Qualified { module, name } => {
-            let mut nested = Vec::with_capacity(module.len() + 1);
-            nested.push(module_name.to_string());
-            nested.extend(module.iter().cloned());
-            SymbolKey::Qualified {
-                module: nested,
-                name: name.clone(),
-            }
-        }
+        SymbolKey::Qualified { module, name } => SymbolKey::Qualified {
+            module: crate::symbol_table::prepend_segment(module_name, module),
+            name: name.clone(),
+        },
         SymbolKey::Constructor(path) => SymbolKey::Constructor(path.prepend_module(module_name)),
         SymbolKey::Variant { parent, variant } => SymbolKey::Variant {
             parent: parent.prepend_module(module_name),

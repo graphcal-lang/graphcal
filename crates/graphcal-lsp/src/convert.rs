@@ -77,7 +77,13 @@ fn compute_line_starts(source: &str) -> Vec<usize> {
     reason = "char::len_utf16() returns 1 or 2, never truncates to u32; line count fits in u32 for any realistic source"
 )]
 fn byte_offset_to_position_cached(line_starts: &[usize], source: &str, offset: usize) -> Position {
-    let offset = offset.min(source.len());
+    let mut offset = offset.min(source.len());
+    // Snap down to a char boundary: compiler spans are always aligned, but
+    // this function already defends against out-of-range offsets and a
+    // mid-char offset would panic the slice below.
+    while !source.is_char_boundary(offset) {
+        offset -= 1;
+    }
     // Find the line whose start is <= offset. `partition_point` returns the
     // first index where the predicate is false, so we subtract 1.
     let line_idx = line_starts.partition_point(|&start| start <= offset).max(1) - 1;

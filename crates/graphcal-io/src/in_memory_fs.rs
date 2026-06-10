@@ -61,12 +61,25 @@ impl FileSystemReader for InMemoryFileSystem {
                 ),
             ));
         }
-        if self.files.contains_key(path) || self.is_dir(path) {
-            return Ok(path.to_path_buf());
+        // Lexically normalize `.`/`..` components so behavior matches
+        // `std::fs::canonicalize` (which resolves them on disk). Sound here
+        // because the in-memory tree has no symlinks.
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                other => normalized.push(other),
+            }
+        }
+        if self.files.contains_key(&normalized) || self.is_dir(&normalized) {
+            return Ok(normalized);
         }
         Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("{}", path.display()),
+            format!("{}", normalized.display()),
         ))
     }
 
