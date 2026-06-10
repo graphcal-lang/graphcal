@@ -86,13 +86,30 @@ fn build_single_spec(spec: &PlotSpec) -> JsonValue {
     vl
 }
 
+/// Resolve the plots referenced by a figure/layer, warning about unknown
+/// names instead of silently dropping them: a typo in `plots: [my_polt]`
+/// must not yield an empty figure without any diagnostic.
+fn referenced_plots<'a>(
+    owner_kind: &str,
+    owner_name: &graphcal_compiler::syntax::names::ScopedName,
+    plot_names: &[graphcal_compiler::syntax::names::ScopedName],
+    all_plots: &'a [PlotSpec],
+) -> Vec<&'a PlotSpec> {
+    plot_names
+        .iter()
+        .filter_map(|name| {
+            let found = all_plots.iter().find(|p| p.name == *name);
+            if found.is_none() {
+                eprintln!("warning: {owner_kind} `{owner_name}` references unknown plot `{name}`");
+            }
+            found
+        })
+        .collect()
+}
+
 /// Build a Vega-Lite `hconcat` spec from a `FigureSpec`.
 fn build_figure_spec(fig: &FigureSpec, all_plots: &[PlotSpec]) -> JsonValue {
-    let referenced: Vec<&PlotSpec> = fig
-        .plot_names
-        .iter()
-        .filter_map(|name| all_plots.iter().find(|p| p.name == *name))
-        .collect();
+    let referenced = referenced_plots("figure", &fig.name, &fig.plot_names, all_plots);
 
     let sub_specs: Vec<JsonValue> = referenced
         .iter()
@@ -113,11 +130,7 @@ fn build_figure_spec(fig: &FigureSpec, all_plots: &[PlotSpec]) -> JsonValue {
 
 /// Build a Vega-Lite `layer` spec from a `LayerSpec`.
 fn build_layer_spec(layer: &LayerSpec, all_plots: &[PlotSpec]) -> JsonValue {
-    let referenced: Vec<&PlotSpec> = layer
-        .plot_names
-        .iter()
-        .filter_map(|name| all_plots.iter().find(|p| p.name == *name))
-        .collect();
+    let referenced = referenced_plots("layer", &layer.name, &layer.plot_names, all_plots);
 
     // Each sub-spec is a layer entry: mark + encoding + data (no $schema).
     let sub_specs: Vec<JsonValue> = referenced

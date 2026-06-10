@@ -168,15 +168,7 @@ pub fn parse_overrides(
                 name: name.to_string(),
                 source: Box::new(e),
             })?;
-        // Override expressions are user-provided literals — they never carry
-        // sugar variants, so the `Raw → Desugared` lift is a structural
-        // rebind, and resolution happens with no file scope (only builtins
-        // and time-scale names visible).
-        let desugared: graphcal_compiler::desugar::desugared_ast::Expr = raw_expr.into();
-        overrides.insert(
-            override_name,
-            graphcal_compiler::syntax::name_resolve::resolve_standalone_expr(desugared),
-        );
+        overrides.insert(override_name, resolve_override_expr(raw_expr));
     }
 
     if let Some(input_path) = input {
@@ -210,14 +202,27 @@ pub fn parse_overrides(
             }
         })?;
         for (name, expr) in json_overrides {
-            overrides.entry(name).or_insert_with(|| {
-                let desugared: graphcal_compiler::desugar::desugared_ast::Expr = expr.into();
-                graphcal_compiler::syntax::name_resolve::resolve_standalone_expr(desugared)
-            });
+            overrides
+                .entry(name)
+                .or_insert_with(|| resolve_override_expr(expr));
         }
     }
 
     Ok(overrides)
+}
+
+/// Lift a raw override expression into the resolved AST.
+///
+/// Override expressions are user-provided literals — they never carry sugar
+/// variants, so the `Raw → Desugared` lift is a structural rebind, and
+/// resolution happens with no file scope (only builtins and time-scale names
+/// visible). Shared by the `--set` and `--input` paths so the
+/// standalone-resolution contract lives in one place.
+fn resolve_override_expr(
+    raw: graphcal_compiler::syntax::ast::Expr,
+) -> graphcal_compiler::desugar::resolved_ast::Expr {
+    let desugared: graphcal_compiler::desugar::desugared_ast::Expr = raw.into();
+    graphcal_compiler::syntax::name_resolve::resolve_standalone_expr(desugared)
 }
 
 #[cfg(test)]
