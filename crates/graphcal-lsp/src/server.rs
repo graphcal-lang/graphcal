@@ -978,6 +978,31 @@ fn rekey_module_import(key: &SymbolKey, module_name: &str) -> SymbolKey {
 /// Record a symbol from an imported file as visible in the current file under
 /// `key`. Both `ImportKind` branches use this so the insertion semantics stay
 /// identical — only the key derivation differs between them.
+/// Render the *local* spelling of an imported symbol from its re-keyed
+/// [`SymbolKey`], for completion labels and hover titles. The defining
+/// file's spelling (`def.name`) is wrong once the import renames
+/// (`import lib.{y as renamed};`) or module-qualifies (`import lib as m;`)
+/// the symbol — offering `y` instead of `renamed` produces an identifier
+/// that does not resolve in the importing file.
+fn local_display_name(key: &SymbolKey) -> Option<String> {
+    match key {
+        SymbolKey::TopLevel(name) => Some(name.clone()),
+        SymbolKey::Qualified { module, name } => {
+            let mut rendered = module.join(".");
+            rendered.push('.');
+            rendered.push_str(name);
+            Some(rendered)
+        }
+        // Constructors, variants, fields, and expression locals keep the
+        // definition's spelling: their display contexts render the parent
+        // path separately.
+        SymbolKey::Constructor(_)
+        | SymbolKey::Variant { .. }
+        | SymbolKey::Field { .. }
+        | SymbolKey::ExprScoped { .. } => None,
+    }
+}
+
 fn insert_imported_def(
     result: &mut HashMap<SymbolKey, ImportedDefinition>,
     key: SymbolKey,
@@ -985,12 +1010,16 @@ fn insert_imported_def(
     source: &Arc<String>,
     def: &DefinitionInfo,
 ) {
+    let mut definition = def.clone();
+    if let Some(local) = local_display_name(&key) {
+        definition.name = local;
+    }
     result.insert(
         key,
         ImportedDefinition {
             uri: uri.clone(),
             source: Arc::clone(source),
-            definition: def.clone(),
+            definition,
         },
     );
 }
