@@ -1911,7 +1911,7 @@ fn register_declarations_impl(
                 register_type_decl(t, registry);
             }
             DeclKind::Dag(d) if should_register_default(d.name.value.as_str()) => {
-                registry.register_dag(d.name.value.to_string(), d.clone());
+                registry.register_dag(d.name.value.clone(), d.clone());
             }
             _ => {}
         }

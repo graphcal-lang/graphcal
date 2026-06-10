@@ -1068,9 +1068,9 @@ pub fn discover_project_root<F: FileSystemReader>(start_dir: &Path, fs: &F) -> O
 #[must_use]
 pub fn build_rooted_filesystem(file: &Path, root_override: Option<&Path>) -> RealFileSystem {
     if let Some(explicit) = root_override
-        && let Ok(canonical) = explicit.canonicalize()
+        && let Ok(fs) = RealFileSystem::rooted(explicit)
     {
-        return RealFileSystem::rooted(canonical);
+        return fs;
     }
 
     let start_dir = file
@@ -1085,7 +1085,8 @@ pub fn build_rooted_filesystem(file: &Path, root_override: Option<&Path>) -> Rea
 
     let fs = RealFileSystem::default();
     discover_project_root(&start_dir, &fs)
-        .map_or_else(RealFileSystem::default, RealFileSystem::rooted)
+        .and_then(|root| RealFileSystem::rooted(&root).ok())
+        .unwrap_or_default()
 }
 
 /// Pick the project root directory for `root_file_dir`, falling back to

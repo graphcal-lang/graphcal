@@ -3003,10 +3003,51 @@ pub fn unify_resolved_type(
             Ok(())
         }
 
-        ResolvedTypeExpr::GenericStruct { name, .. } | ResolvedTypeExpr::Struct(name, _) => {
-            // Type args matching is not needed here since function generics
-            // don't use TypeApplication in their signatures (yet). When both
-            // sides carry canonical struct identities, compare owners as well.
+        ResolvedTypeExpr::GenericStruct {
+            name, type_args, ..
+        } => {
+            // Unify the struct identity AND its type arguments: skipping the
+            // args would let `Vec3<Length>` silently unify with `Vec3<Mass>`.
+            let InferredType::Struct(actual_name, actual_args) = actual else {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: name.as_str().to_string(),
+                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    help: format!("expected struct type `{}`", name.as_str()),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            };
+            if actual_name.resolved() != name {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: name.as_str().to_string(),
+                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    help: format!("expected struct type `{}`", name.as_str()),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+            // Recursively unify each declared type argument against the
+            // actual one when both sides carry them. (Inferred values may
+            // omit args for non-generic uses — only mismatched *pairs* are
+            // an error.)
+            for (declared_arg, actual_arg) in type_args.iter().zip(actual_args) {
+                unify_resolved_type(
+                    declared_arg,
+                    actual_arg,
+                    dim_sub,
+                    index_sub,
+                    nat_sub,
+                    registry,
+                    src,
+                    span,
+                )?;
+            }
+            Ok(())
+        }
+
+        ResolvedTypeExpr::Struct(name, _) => {
+            // When both sides carry canonical struct identities, compare
+            // owners as well.
             let InferredType::Struct(actual_name, _) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.as_str().to_string(),
@@ -4927,7 +4968,7 @@ mod tests {
 
         for (name, body) in dag_bodies {
             let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
-                &name,
+                name.as_str(),
                 &body,
                 &tir.registry,
                 &crate::ir::resolve::ImportedValueNames::default(),

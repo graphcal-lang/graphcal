@@ -95,7 +95,14 @@ pub enum JsonInputError {
         reason: NameAtomError,
     },
     /// A GCL expression string could not be parsed.
-    ParseFailed { param: String, message: String },
+    ///
+    /// Carries the typed [`ParseError`] (like the sibling `--set` path)
+    /// instead of a pre-rendered message, so miette can render the span
+    /// and source context.
+    ParseFailed {
+        param: String,
+        source: Box<graphcal_compiler::syntax::parser::ParseError>,
+    },
     /// A JSON number is neither i64 nor f64.
     InvalidNumber { param: String },
     /// An unsupported JSON type was encountered (null or array).
@@ -129,8 +136,8 @@ impl fmt::Display for JsonInputError {
             } => {
                 write!(f, "invalid {role} name `{value}` for `{param}`: {reason}")
             }
-            Self::ParseFailed { param, message } => {
-                write!(f, "failed to parse value for `{param}`: {message}")
+            Self::ParseFailed { param, source } => {
+                write!(f, "failed to parse value for `{param}`: {source}")
             }
             Self::InvalidNumber { param } => {
                 write!(f, "invalid number for `{param}`")
@@ -173,7 +180,14 @@ impl fmt::Display for JsonInputError {
     }
 }
 
-impl std::error::Error for JsonInputError {}
+impl std::error::Error for JsonInputError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ParseFailed { source, .. } => Some(source.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 impl From<serde_json::Error> for JsonInputError {
     fn from(e: serde_json::Error) -> Self {
@@ -236,7 +250,7 @@ fn convert_string(s: &str, param_name: &str) -> Result<Expr, JsonInputError> {
         .parse_single_expr()
         .map_err(|e| JsonInputError::ParseFailed {
             param: param_name.to_string(),
-            message: e.to_string(),
+            source: Box::new(e),
         })
 }
 
@@ -380,6 +394,8 @@ fn convert_indexed(
             // TIR semantic metadata keys resolved map-entry variants by source span.
             // JSON input has no real source locations, so give each synthetic
             // key part a distinct span instead of reusing `SYNTH_SPAN`.
+            // TODO(#764): replace span-keyed TIR metadata addressing with a
+            // typed entry identity so overrides need no synthetic spans.
             let index_span = Span::new(entry_index * 2 + 1, 0);
             let variant_span = Span::new(entry_index * 2 + 2, 0);
             Ok(MapEntry {
