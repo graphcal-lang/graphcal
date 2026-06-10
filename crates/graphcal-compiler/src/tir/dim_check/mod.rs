@@ -1259,7 +1259,6 @@ enum DagCycleFrame {
 
 /// Collect inline dag call targets from a compiled DAG's semantic body.
 fn collect_dag_call_targets_from_dag(
-    _tir: &crate::tir::typed::TIR,
     dag: &crate::tir::typed::DagTIR,
     out: &mut std::collections::BTreeSet<crate::dag_id::DagId>,
 ) {
@@ -1389,7 +1388,7 @@ fn detect_cross_dag_cycles(
     let mut spans: HashMap<DagId, crate::syntax::span::Span> = HashMap::new();
     for (key, dag_tir) in &tir.dags {
         let mut targets = BTreeSet::new();
-        collect_dag_call_targets_from_dag(tir, dag_tir, &mut targets);
+        collect_dag_call_targets_from_dag(dag_tir, &mut targets);
         edges.insert(key.clone(), targets);
         // Best-effort span: for inline children of this file the parent's
         // registry entry has the AST span; cross-file merged dags fall

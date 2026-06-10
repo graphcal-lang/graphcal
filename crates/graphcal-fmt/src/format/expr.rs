@@ -2,7 +2,7 @@ use graphcal_compiler::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, ForBinding, IndexArg, MapEntry, MatchArm, MatchPattern,
     ModulePath, ParamBinding, PatternBinding, TableIndexSpec, UnaryOp,
 };
-use graphcal_compiler::syntax::names::{LocalName, ScopedName};
+use graphcal_compiler::syntax::names::LocalName;
 use graphcal_compiler::syntax::span::Spanned;
 use pretty::RcDoc;
 
@@ -31,14 +31,14 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::Bool(b) => RcDoc::text(if *b { "true" } else { "false" }),
         ExprKind::StringLiteral(s) => RcDoc::text(format!("\"{s}\"")),
         ExprKind::TypeSystemRef(name) => RcDoc::text(name.value.as_str().to_string()),
-        ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", format_scoped_surface(&name.value))),
+        ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", &name.value.to_string())),
         ExprKind::InlineDagRef { path, args, output } => {
             format_inline_dag_ref(fmt, path, args, output.value.as_str())
         }
-        ExprKind::ConstRef(name) => RcDoc::text(format_scoped_surface(&name.value)),
+        ExprKind::ConstRef(name) => RcDoc::text(name.value.to_string()),
         ExprKind::LocalRef(ident) => RcDoc::text(ident.name.clone()),
         ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => {
-            RcDoc::text(format_ident_path(path))
+            RcDoc::text(path.display_path())
         }
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
@@ -127,11 +127,6 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             RcDoc::text(format!("{}.{}", index.value, variant.value))
         }
     }
-}
-
-/// Render a [`ScopedName`] in surface syntax.
-fn format_scoped_surface(scoped: &ScopedName) -> String {
-    scoped.to_string()
 }
 
 /// Operator precedence (higher = binds tighter).
@@ -243,10 +238,6 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
 }
 
 /// Format a `FnCall` expression with comment handling per argument.
-fn format_ident_path(path: &graphcal_compiler::syntax::ast::IdentPath) -> String {
-    path.display_path()
-}
-
 pub fn format_fn_call_expr(
     fmt: &mut Formatter<'_>,
     callee: &graphcal_compiler::syntax::ast::IdentPath,
@@ -267,7 +258,7 @@ pub fn format_fn_call_expr(
     }
     let sep = RcDoc::text(",").append(RcDoc::line());
     let inner = RcDoc::intersperse(arg_docs, sep);
-    let mut doc = RcDoc::text(format_ident_path(callee));
+    let mut doc = RcDoc::text(callee.display_path());
     if !type_args.is_empty() {
         doc = doc.append(format_generic_args(fmt, type_args));
     }
@@ -332,7 +323,7 @@ pub fn format_constructor_call(
     generic_args: &[graphcal_compiler::syntax::ast::GenericArg],
     fields: &[FieldInit],
 ) -> RcDoc<'static> {
-    let mut header = RcDoc::text(format_ident_path(callee));
+    let mut header = RcDoc::text(callee.display_path());
     if !generic_args.is_empty() {
         header = header.append(format_generic_args(fmt, generic_args));
     }

@@ -114,12 +114,6 @@ impl IdentPath {
         self.segments.as_slice()
     }
 
-    /// Mutably borrow all path segments in source order.
-    #[must_use]
-    pub fn segments_mut(&mut self) -> &mut [Ident] {
-        self.segments.as_mut_slice()
-    }
-
     /// Consume and return the non-empty segment sequence.
     #[must_use]
     pub fn into_segments(self) -> NonEmpty<Ident> {

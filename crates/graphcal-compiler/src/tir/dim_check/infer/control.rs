@@ -47,7 +47,6 @@ fn resolved_match_label_variant<'a>(
 fn index_def_for_label_index<'a>(
     index: &InferredIndex,
     dag: Option<&'a crate::tir::typed::DagTIR>,
-    _registry: &'a Registry,
 ) -> Option<&'a IndexDef> {
     let resolved = index.declared_resolved()?;
     dag.map(|dag| &dag.semantic.collection_refs)
@@ -265,14 +264,13 @@ pub(super) fn infer_match(
         InferredType::Label(index_identity) => {
             let index_name = index_identity.name();
             // Label scrutinee: match on index variants (fieldless, qualified syntax)
-            let index_def =
-                index_def_for_label_index(index_identity, dag, registry).ok_or_else(|| {
-                    GraphcalError::UnknownIndex {
-                        name: index_name.clone(),
-                        src: src.clone(),
-                        span: scrutinee.span.into(),
-                    }
-                })?;
+            let index_def = index_def_for_label_index(index_identity, dag).ok_or_else(|| {
+                GraphcalError::UnknownIndex {
+                    name: index_name.clone(),
+                    src: src.clone(),
+                    span: scrutinee.span.into(),
+                }
+            })?;
 
             let variants = match &index_def.kind {
                 crate::registry::types::IndexKind::Named { variants } => variants.clone(),

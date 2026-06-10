@@ -230,8 +230,7 @@ impl Parser<'_> {
         // `{ header; rows }`) or more (slice sections, `{ [slice] header; rows …}`).
         self.expect(Token::LBrace)?;
 
-        let row_index_spec = shared_axes[shared_axes.len() - 1].clone();
-        let slice_axis_specs: Vec<TableIndexSpec> = shared_axes[..shared_axes.len() - 1].to_vec();
+        let slice_axis_specs = &shared_axes[..shared_axes.len() - 1];
 
         // Collect: per slice, (slice_prefix_keys, header_cells, row_values).
         // For single-shared-axis multi-decls, there is exactly one slice with
@@ -246,7 +245,7 @@ impl Parser<'_> {
             // v3 shape: one or more `[slice_labels] header; rows;` sections.
             while self.lexer.peek() == Some(&Token::LBracket) {
                 self.lexer.next_token(); // consume `[`
-                let slice_prefix = self.parse_slice_labels(&slice_axis_specs)?;
+                let slice_prefix = self.parse_slice_labels(slice_axis_specs)?;
                 self.expect(Token::RBracket)?;
                 let slice = self.parse_multi_slice_body(&slice_prefix, &slot_axes, &slots)?;
                 slices.push(slice);
@@ -350,10 +349,6 @@ impl Parser<'_> {
                     .collect(),
             })
             .collect();
-
-        // Silence "used" lints: these locals were needed in the old
-        // expansion loop; they're preserved in the captured AST instead.
-        let _ = (&row_index_spec, &slice_axis_specs, table_total_span);
 
         let shared_axes =
             ast::MultiDeclSharedAxes::try_from_vec(shared_axes.clone()).map_err(|_| {

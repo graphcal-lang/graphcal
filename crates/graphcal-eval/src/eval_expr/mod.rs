@@ -595,16 +595,13 @@ fn resolved_inline_call<'a>(
         .and_then(|refs| refs.calls.get(&expr.span))
 }
 
-fn dag_decl_runtime_key(dag_tir: &DagTIR, name: &ResolvedName<namespace::Decl>) -> RuntimeDeclKey {
-    let _ = dag_tir;
+fn dag_decl_runtime_key(name: &ResolvedName<namespace::Decl>) -> RuntimeDeclKey {
     RuntimeDeclKey::resolved(name.clone())
 }
 
 fn imported_value_source_key(
     source: &graphcal_compiler::ir::lower::ImportedValueSource,
-    source_dag: &DagTIR,
 ) -> RuntimeDeclKey {
-    let _ = source_dag;
     RuntimeDeclKey::resolved(ResolvedName::from_def(
         source.dag_id.clone(),
         source.source_name.clone(),
@@ -618,13 +615,11 @@ fn imported_value_source_value<'a>(
 ) -> Option<&'a RuntimeValue> {
     match ctx.current_dag {
         Some(caller_dag) if source.dag_id.eq(&caller_dag.dag_id) => {
-            caller_values.get(&imported_value_source_key(source, caller_dag))
+            caller_values.get(&imported_value_source_key(source))
         }
-        _ if source.dag_id.eq(&ctx.tir.root_dag_id) => {
-            let root_dag = ctx.tir.dags.get(&ctx.tir.root_dag_id)?;
-            ctx.root_values
-                .and_then(|values| values.get(&imported_value_source_key(source, root_dag)))
-        }
+        _ if source.dag_id.eq(&ctx.tir.root_dag_id) => ctx
+            .root_values
+            .and_then(|values| values.get(&imported_value_source_key(source))),
         _ => None,
     }
 }
@@ -684,7 +679,7 @@ fn eval_inline_dag_call(
         let target_key = resolved_call
             .arg_targets
             .get(&binding.name.span)
-            .map(|target| dag_decl_runtime_key(dag_tir, target))
+            .map(dag_decl_runtime_key)
             .ok_or_else(|| {
                 ctx.internal_error(
                     format!(
@@ -785,7 +780,7 @@ fn eval_inline_dag_call(
         dag_values.insert(local_key, value);
     }
 
-    let output_key = dag_decl_runtime_key(dag_tir, &resolved_call.output.value);
+    let output_key = dag_decl_runtime_key(&resolved_call.output.value);
     dag_values.get(&output_key).cloned().ok_or_else(|| {
         ctx.internal_error(
             format!(

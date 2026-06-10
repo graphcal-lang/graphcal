@@ -195,39 +195,6 @@ fn name_path_from_ident_segments(
     .map(NamePath::new)
 }
 
-impl std::fmt::Display for SymbolKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TopLevel(name) => write!(f, "{name}"),
-            Self::Qualified { module, name } => {
-                for (i, seg) in module.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str(".")?;
-                    }
-                    f.write_str(seg)?;
-                }
-                write!(f, "::{name}")
-            }
-            Self::Constructor(path) => write!(f, "constructor::{path}"),
-            Self::Variant { parent, variant } => write!(f, "{parent}::{variant}"),
-            Self::Field { owner, field_name } => write!(f, "{owner}::{field_name}"),
-            Self::ExprScoped {
-                kind,
-                offset,
-                local,
-            } => {
-                let kind_str = match kind {
-                    ExprScopeKind::For => "for",
-                    ExprScopeKind::Scan => "scan",
-                    ExprScopeKind::Unfold => "unfold",
-                    ExprScopeKind::Match => "match",
-                };
-                write!(f, "{kind_str}@{offset}::{local}")
-            }
-        }
-    }
-}
-
 impl SymbolKey {
     /// Returns the top-level name if this is a `TopLevel` key.
     pub fn top_level_name(&self) -> Option<&str> {

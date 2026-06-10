@@ -1427,11 +1427,6 @@ fn eval_hir_match(
     }
 }
 
-fn dag_decl_runtime_key(dag_tir: &DagTIR, name: &ResolvedDeclKey) -> RuntimeDeclKey {
-    let _ = dag_tir;
-    RuntimeDeclKey::resolved(name.clone())
-}
-
 fn hir_expr_for_dag_body_name<'a>(dag_tir: &'a DagTIR, name: &ScopedName) -> Option<&'a hir::Expr> {
     let key = dag_tir.resolved_decl_key_for_local(name)?;
     dag_tir
@@ -1463,7 +1458,7 @@ fn eval_hir_inline_dag_call(
     let mut dag_values = RuntimeValueMap::new();
     for binding in args {
         let value = eval_hir_expr(&binding.value, caller_values, caller_locals, ctx)?;
-        dag_values.insert(dag_decl_runtime_key(dag_tir, &binding.target.value), value);
+        dag_values.insert(super::dag_decl_runtime_key(&binding.target.value), value);
     }
 
     let own_names: std::collections::HashSet<&str> = dag_tir
@@ -1530,7 +1525,7 @@ fn eval_hir_inline_dag_call(
         }
     }
 
-    let output_key = dag_decl_runtime_key(dag_tir, &output.value);
+    let output_key = super::dag_decl_runtime_key(&output.value);
     dag_values.get(&output_key).cloned().ok_or_else(|| {
         ctx.internal_error(
             format!(
