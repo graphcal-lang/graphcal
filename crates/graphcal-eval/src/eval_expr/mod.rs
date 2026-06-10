@@ -758,7 +758,19 @@ fn eval_inline_dag_call(
     // Evaluate consts and nodes in topological order derived from
     // `runtime_deps` ∪ `const_deps`. Params are leaves — they arrive via
     // `args` and never execute body code.
-    let topo = topo_order_for_dag_body(dag_tir);
+    let topo = topo_order_for_dag_body(dag_tir).map_err(|remaining| {
+        ctx.internal_error(
+            format!(
+                "dag body dependency cycle involving: {}",
+                remaining
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            call_expr.span,
+        )
+    })?;
     for name in topo {
         let local_key = RuntimeDeclKey::for_local_decl(dag_tir, &name);
         if dag_values.contains_key(&local_key) {
@@ -802,7 +814,12 @@ fn eval_inline_dag_call(
 /// Produces an order in which each const/param/node appears after every one
 /// of its runtime and const dependencies. Cycles are impossible in a
 /// well-typed dag body because compile-time dep collection rejects them.
-fn topo_order_for_dag_body(dag_tir: &DagTIR) -> Vec<ScopedName> {
+/// # Errors
+///
+/// Returns the names left unordered if the dependency graph contains a
+/// cycle — impossible for a well-typed dag body, but a silently truncated
+/// order would surface later as a misleading "dag has no node X" error.
+fn topo_order_for_dag_body(dag_tir: &DagTIR) -> Result<Vec<ScopedName>, Vec<ScopedName>> {
     topo_order_for_dag_body_resolved(dag_tir, &dag_tir.semantic.dependencies)
 }
 
@@ -811,7 +828,7 @@ type ResolvedDeclKey = ResolvedName<namespace::Decl>;
 fn topo_order_for_dag_body_resolved(
     dag_tir: &DagTIR,
     deps: &ResolvedDagDependencies,
-) -> Vec<ScopedName> {
+) -> Result<Vec<ScopedName>, Vec<ScopedName>> {
     use std::collections::BTreeSet;
 
     let mut names: Vec<ScopedName> = dag_tir
@@ -877,5 +894,17 @@ fn topo_order_for_dag_body_resolved(
             }
         }
     }
-    order
+    if order.len() == key_by_name.len() {
+        Ok(order)
+    } else {
+        // Nodes with nonzero in-degree remain: a cycle. Report the leftovers
+        // instead of silently truncating the evaluation order.
+        let ordered: std::collections::HashSet<&ScopedName> = order.iter().collect();
+        let remaining: Vec<ScopedName> = names
+            .iter()
+            .filter(|name| key_by_name.contains_key(*name) && !ordered.contains(name))
+            .cloned()
+            .collect();
+        Err(remaining)
+    }
 }

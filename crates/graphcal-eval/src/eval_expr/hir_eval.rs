@@ -1514,7 +1514,20 @@ fn eval_hir_inline_dag_call(
     };
     let empty_hir_locals = HirLocalValueMap::new();
 
-    for name in topo_order_for_dag_body(dag_tir) {
+    let topo = topo_order_for_dag_body(dag_tir).map_err(|remaining| {
+        ctx.internal_error(
+            format!(
+                "dag body dependency cycle involving: {}",
+                remaining
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            output.span,
+        )
+    })?;
+    for name in topo {
         let local_key = RuntimeDeclKey::for_local_decl(dag_tir, &name);
         if dag_values.contains_key(&local_key) {
             continue;

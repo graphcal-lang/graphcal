@@ -199,14 +199,23 @@ pub fn format_table_grid(value: &Value) -> String {
     let Some(first_row) = row_entries.values().next() else {
         return String::new();
     };
-    let Value::Indexed {
-        entries: col_entries,
-        ..
-    } = first_row
-    else {
+    if !matches!(first_row, Value::Indexed { .. }) {
         return String::new();
-    };
-    let col_variants: Vec<_> = col_entries.keys().cloned().collect();
+    }
+    // Union the column keys across all rows (preserving first-seen order):
+    // deriving columns from the first row alone silently hid cells of any
+    // row with extra columns and rendered phantom blanks for missing ones.
+    let mut col_variants: Vec<_> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for row_val in row_entries.values() {
+        if let Value::Indexed { entries: cells, .. } = row_val {
+            for variant in cells.keys() {
+                if seen.insert(variant.clone()) {
+                    col_variants.push(variant.clone());
+                }
+            }
+        }
+    }
 
     let mut builder = Builder::default();
 

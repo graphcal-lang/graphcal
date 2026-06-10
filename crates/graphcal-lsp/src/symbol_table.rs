@@ -85,10 +85,7 @@ impl SymbolPath {
         match self {
             Self::Local(name) => Self::qualified(vec![module_name.to_string()], name.clone()),
             Self::Qualified { module, name } => {
-                let mut nested = Vec::with_capacity(module.len() + 1);
-                nested.push(module_name.to_string());
-                nested.extend(module.iter().cloned());
-                Self::qualified(nested, name.clone())
+                Self::qualified(prepend_segment(module_name, module), name.clone())
             }
         }
     }
@@ -105,6 +102,15 @@ impl SymbolPath {
             _ => None,
         }
     }
+}
+
+/// Prepend a module segment to a qualifier path. Shared by
+/// [`SymbolPath::prepend_module`] and the key-rekeying in `server.rs`.
+pub fn prepend_segment(module_name: &str, module: &[String]) -> Vec<String> {
+    let mut nested = Vec::with_capacity(module.len() + 1);
+    nested.push(module_name.to_string());
+    nested.extend(module.iter().cloned());
+    nested
 }
 
 impl std::fmt::Display for SymbolPath {
