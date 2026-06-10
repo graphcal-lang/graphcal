@@ -1782,8 +1782,8 @@ fn format_check_unformatted_exits_nonzero() {
 }
 
 #[test]
-fn format_check_parse_error_skipped() {
-    // Files with parse errors should be skipped with a warning, not cause a failure
+fn format_check_parse_error_fails() {
+    // Files with parse errors are failures: CI must not pass on broken files.
     let dir = std::env::temp_dir().join("graphcal_fmt_test_err");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("bad.gcl");
@@ -1794,22 +1794,17 @@ fn format_check_parse_error_skipped() {
         .output()
         .expect("failed to run graphcal");
 
-    // Should succeed (parse errors are skipped, not counted as unformatted)
     assert!(
-        output.status.success(),
-        "expected success when skipping parse errors, stderr: {}",
+        !output.status.success(),
+        "expected failure on parse errors, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
     // The formatter surfaces the specific parse-error message from the
     // underlying `FormatError::Parse` variant.
     assert!(
-        stderr.contains("skipping"),
-        "expected skipping warning: {stderr}"
-    );
-    assert!(
-        stderr.contains("unexpected token"),
-        "expected parse-error detail in warning: {stderr}"
+        stderr.contains("unexpected token") || stderr.contains("stray character"),
+        "expected parse-error detail: {stderr}"
     );
 
     std::fs::remove_dir_all(&dir).ok();
@@ -2992,5 +2987,33 @@ fn eval_idempotent_under_format() {
          — formatter is not eval-idempotent:\n{}",
         failures.len(),
         failures.join("\n")
+    );
+}
+
+#[test]
+fn format_check_fails_on_unparseable_file() {
+    // Regression: `graphcal format --check` exited 0 when a file failed to
+    // parse — CI passed silently on syntactically broken files while
+    // `graphcal check` on the same file failed.
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_temp_file(dir.path(), "broken.gcl", "node x: = ;\n");
+
+    let output = graphcal_bin()
+        .args(["format", "--check", path.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "format --check must fail on a parse error"
+    );
+
+    // Plain `format` must also report failure.
+    let output = graphcal_bin()
+        .args(["format", path.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "format must fail on a parse error"
     );
 }

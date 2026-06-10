@@ -346,7 +346,11 @@ fn run_format(paths: &[PathBuf], check: bool) {
         let formatted = match graphcal_fmt::format_source(&source) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("warning: {}: {e}, skipping", file.display());
+                // A file that cannot be formatted (usually a parse error) is
+                // a failure, not a skip: `format --check` in CI must not
+                // pass on syntactically broken files.
+                eprintln!("error: {}: {e}", file.display());
+                error_count += 1;
                 continue;
             }
         };
@@ -372,7 +376,7 @@ fn run_format(paths: &[PathBuf], check: bool) {
         process::exit(1);
     }
     if error_count > 0 {
-        eprintln!("{error_count} file(s) could not be read");
+        eprintln!("{error_count} file(s) could not be read or formatted");
         process::exit(1);
     }
 }
