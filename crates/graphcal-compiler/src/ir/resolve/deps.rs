@@ -240,14 +240,50 @@ pub(super) fn extract_all_refs(
         collector.visit_expr(expr)?;
     }
     // Unfold self-references (@self[prev_i]) are not true cyclic dependencies —
-    // they access the previous step. Remove the self-edge so the DAG stays acyclic.
-    // Self-name is the bare local name of the owning declaration.
+    // they access the previous step. Remove the self-edge when every
+    // self-reference lies inside an `unfold` subtree, so the DAG stays
+    // acyclic for nested forms too (e.g. `unfold { … @self[prev] … } * 2.0`),
+    // not just when `unfold` is the top-level expression. A self-reference
+    // *outside* any unfold keeps the edge and is reported as a genuine cycle.
     if let Some(name) = self_name
-        && matches!(expr.kind, ExprKind::Unfold { .. })
+        && !has_self_ref_outside_unfold(expr, name)
     {
         graph_refs.remove(&ScopedName::local(name));
     }
     Ok((graph_refs, const_refs))
+}
+
+/// Returns `true` if `expr` contains a reference to the bare local `name`
+/// that is not dominated by an `Unfold` ancestor.
+fn has_self_ref_outside_unfold(expr: &Expr, name: &str) -> bool {
+    struct Probe<'a> {
+        name: &'a str,
+        found: bool,
+    }
+    impl ExprVisitor<crate::syntax::phase::Resolved> for Probe<'_> {
+        type Error = std::convert::Infallible;
+
+        fn visit_expr(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+            if self.found || matches!(expr.kind, ExprKind::Unfold { .. }) {
+                // Anything inside an unfold accesses the previous step.
+                return Ok(());
+            }
+            self.dispatch(expr)
+        }
+
+        fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+            if let ExprKind::GraphRef(ident) = &expr.kind
+                && !ident.value.is_qualified()
+                && ident.value.member() == self.name
+            {
+                self.found = true;
+            }
+            Ok(())
+        }
+    }
+    let mut probe = Probe { name, found: false };
+    let _ = probe.visit_expr(expr);
+    probe.found
 }
 
 /// Sink for graph-reference observations during an AST walk.

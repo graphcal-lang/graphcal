@@ -729,6 +729,81 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
     }
 }
 
+/// Returns `true` if `expr` contains a graph reference to `name` that is
+/// not dominated by an `Unfold` ancestor.
+///
+/// Unfold self-references access the previous step and are therefore not
+/// true cyclic dependencies; a self-reference *outside* any unfold subtree
+/// is a genuine cycle. Used to decide whether a declaration's self-edge can
+/// be dropped from the dependency graph.
+#[must_use]
+pub fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedName<namespace::Decl>) -> bool {
+    // Recursion choke point: recurses once per tree level (unbounded for
+    // left-nested operator chains).
+    crate::stack::with_stack_growth(|| match &expr.kind {
+        ExprKind::GraphRef(target) => target.value == *name,
+        // Unfold: anything inside accesses the previous step. The rest are
+        // leaves without graph references.
+        ExprKind::Unfold { .. }
+        | ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::TypeSystemRef(_)
+        | ExprKind::LocalRef(_)
+        | ExprKind::VariantLiteral(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::ConstRef(_) => false,
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            has_ref_outside_unfold(lhs, name) || has_ref_outside_unfold(rhs, name)
+        }
+        ExprKind::UnaryOp { operand, .. }
+        | ExprKind::Convert { expr: operand, .. }
+        | ExprKind::DisplayTimezone { expr: operand, .. }
+        | ExprKind::FieldAccess { expr: operand, .. } => has_ref_outside_unfold(operand, name),
+        ExprKind::FnCall { args, .. } => args.iter().any(|arg| has_ref_outside_unfold(arg, name)),
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            has_ref_outside_unfold(condition, name)
+                || has_ref_outside_unfold(then_branch, name)
+                || has_ref_outside_unfold(else_branch, name)
+        }
+        ExprKind::ConstructorCall { fields, .. } => fields
+            .iter()
+            .any(|field| has_ref_outside_unfold(&field.value, name)),
+        ExprKind::MapLiteral { entries } => entries
+            .iter()
+            .any(|entry| has_ref_outside_unfold(&entry.value, name)),
+        ExprKind::ForComp { body, .. } => has_ref_outside_unfold(body, name),
+        ExprKind::IndexAccess { expr, args } => {
+            has_ref_outside_unfold(expr, name)
+                || args.iter().any(|arg| match arg {
+                    IndexArg::Expr(expr) => has_ref_outside_unfold(expr, name),
+                    _ => false,
+                })
+        }
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            has_ref_outside_unfold(source, name)
+                || has_ref_outside_unfold(init, name)
+                || has_ref_outside_unfold(body, name)
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            has_ref_outside_unfold(scrutinee, name)
+                || arms
+                    .iter()
+                    .any(|arm| has_ref_outside_unfold(&arm.body, name))
+        }
+        ExprKind::InlineDagRef { args, .. } => args
+            .iter()
+            .any(|arg| has_ref_outside_unfold(&arg.value, name)),
+    })
+}
+
 /// Type-system identifier used as a value expression, usually in include bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeSystemRef {
