@@ -164,38 +164,20 @@ impl Parser<'_> {
                             visibility_span,
                         );
                     }
-                    Some(Token::Unit) => {
-                        // const unit: single decl only (no multi-decl sugar).
-                        let mut decl = self.parse_const_unit(const_span)?;
-                        if visibility == BindableVisibility::PublicBind
-                            && let Some(vis_span) = visibility_span
-                        {
-                            return Err(self.unexpected_token(
-                                "`pub` (`pub(bind)` is only valid on bindable declaration kinds: `dim`, `type`, and `index`)",
-                                "`pub(bind)`",
-                                vis_span,
-                            ));
-                        }
-                        set_decl_visibility(&mut decl, visibility);
-                        if let Some(ps) = visibility_span {
-                            decl.span = ps.merge(decl.span);
-                        }
-                        if let Some(first_attr) = attributes.first() {
-                            decl.span = first_attr.span.merge(decl.span);
-                        }
-                        decl.attributes = attributes;
-                        return Ok(decl);
-                    }
+                    // `const unit` was parsed identically to plain `unit`:
+                    // the AST had no constness and the formatter silently
+                    // rewrote the source. The form is removed; `unit` with a
+                    // static scale is already compile-time constant.
                     Some(_) => {
                         let (tok, span) = self.advance()?;
                         return Err(self.unexpected_token(
-                            "`node` or `unit` after `const`",
+                            "`node` after `const`",
                             &tok.to_string(),
                             span,
                         ));
                     }
                     None => {
-                        return Err(self.unexpected_eof("`node` or `unit` after `const`"));
+                        return Err(self.unexpected_eof("`node` after `const`"));
                     }
                 }
             }

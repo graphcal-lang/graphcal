@@ -495,8 +495,7 @@ pub struct DimDecl {
     pub definition: Option<DimExpr>,
 }
 
-/// Unit declaration: `unit km: Length = 1000 m;`, `const unit km: Length = 1000 m;`,
-/// or `base unit m: Length;`.
+/// Unit declaration: `unit km: Length = 1000 m;` or `base unit m: Length;`.
 #[derive(Debug, Clone)]
 pub struct UnitDecl<P: Phase = Raw> {
     pub visibility: Visibility,
