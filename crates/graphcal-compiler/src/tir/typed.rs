@@ -616,9 +616,29 @@ pub struct ResolvedTypeDefs {
     pub struct_types: HashMap<ResolvedName<namespace::StructType>, TypeDef>,
     /// Field type annotations resolved in the owning type's generic scope.
     pub field_types: HashMap<ResolvedStructFieldTypeKey, ResolvedTypeExpr>,
+    /// Field domain bounds lowered to HIR in the owning type's generic scope.
+    pub field_bounds: HashMap<ResolvedStructFieldTypeKey, Vec<ResolvedDomainBound>>,
     /// Generic parameter defaults resolved in the owning type's generic scope.
     pub generic_defaults:
         HashMap<(ResolvedName<namespace::StructType>, GenericParamName), ResolvedTypeExpr>,
+}
+
+/// A `min:`/`max:` domain bound with its expression lowered to HIR.
+///
+/// Domain bounds are full expressions, but the source-shaped declaration
+/// entries keep them as resolved syntax AST. Lowering them here at
+/// type-resolution time (the only stage that holds a `ModuleResolver`) lets
+/// dimension checking and evaluation run on HIR like every other expression.
+#[derive(Debug, Clone)]
+pub struct ResolvedDomainBound {
+    /// Whether this is a `min:` or `max:` bound.
+    pub kind: crate::syntax::ast::DomainBoundKind,
+    /// Span of the `min`/`max` keyword.
+    pub kind_span: Span,
+    /// The bound expression, lowered.
+    pub value: hir::Expr,
+    /// Span of the whole bound.
+    pub span: Span,
 }
 
 /// Authoritative semantic body facts for a checked DAG.
@@ -630,6 +650,8 @@ pub struct ResolvedTypeDefs {
 pub struct DagSemanticBody {
     /// HIR expressions for const/default/node expressions.
     pub expressions: ResolvedExpressions,
+    /// Domain bounds per declaration, lowered to HIR, in source order.
+    pub domain_bounds: HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
     /// Canonical dependency maps for this DAG.
     pub dependencies: ResolvedDagDependencies,
     /// Canonical HIR-derived collection/index references.
@@ -1198,7 +1220,11 @@ fn type_resolve_dag(
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
 
-    let (expressions, written_refs) = lower_resolved_expressions(
+    let LoweredDagExpressions {
+        exprs: expressions,
+        written_refs,
+        domain_bounds,
+    } = lower_resolved_expressions(
         &consts,
         &params,
         &nodes,
@@ -1213,13 +1239,19 @@ fn type_resolve_dag(
         collect_resolved_dag_dependencies(&consts, &params, &nodes, &expressions, module_ctx, src)?;
     let collection_refs = collect_resolved_collection_refs(
         &expressions,
+        &domain_bounds,
         &resolved_decl_types,
         &written_refs,
         module_ctx,
         src,
     )?;
-    let constructor_refs =
-        collect_resolved_constructor_refs(&expressions, &written_refs, module_ctx, src)?;
+    let constructor_refs = collect_resolved_constructor_refs(
+        &expressions,
+        &domain_bounds,
+        &written_refs,
+        module_ctx,
+        src,
+    )?;
     let inline_dag_refs = collect_resolved_inline_dag_refs(&expressions);
     let type_defs = collect_resolved_type_defs(
         &resolved_decl_types,
@@ -1231,6 +1263,7 @@ fn type_resolve_dag(
 
     let semantic = DagSemanticBody {
         expressions,
+        domain_bounds,
         dependencies,
         collection_refs,
         constructor_refs,
@@ -1330,8 +1363,18 @@ fn record_resolved_struct_type_def(
     }
 
     if let Some(members) = type_def.union_members() {
+        let generic_scope = generic_scope_for_type_def(name, type_def, src)?;
+        let prelude = hir::PreludeTypeScope::graphcal();
+        let bound_expr_ctx =
+            hir::ExprLoweringContext::new(name.owner(), ctx.resolver, &generic_scope)
+                .with_prelude(&prelude);
         for member in members {
             for field in &member.fields {
+                let key = ResolvedStructFieldTypeKey {
+                    owning_type: name.clone(),
+                    constructor: member.name.clone(),
+                    field: field.name.clone(),
+                };
                 let resolved = resolve_type_expr_in_struct_scope(
                     &field.type_ann,
                     name,
@@ -1340,20 +1383,54 @@ fn record_resolved_struct_type_def(
                     registry,
                     src,
                 )?;
-                defs.field_types.insert(
-                    ResolvedStructFieldTypeKey {
-                        owning_type: name.clone(),
-                        constructor: member.name.clone(),
-                        field: field.name.clone(),
-                    },
-                    resolved,
-                );
+                // Field-bound occurrences are not merged into the owning
+                // DAG's written refs: type defs are shared across DAGs and
+                // their bounds carry no map/match occurrences that the
+                // per-DAG metadata serves.
+                let mut scratch = hir::expr::WrittenRefs::default();
+                let bounds =
+                    lower_domain_bounds(&field.type_ann, bound_expr_ctx, src, &mut scratch)?;
+                if !bounds.is_empty() {
+                    defs.field_bounds.insert(key.clone(), bounds);
+                }
+                defs.field_types.insert(key, resolved);
             }
         }
     }
 
     defs.struct_types.insert(name.clone(), type_def.clone());
     Ok(())
+}
+
+/// Build the lexical generic scope of a type definition so field-bound
+/// expressions can lower references to the type's generic parameters.
+fn generic_scope_for_type_def(
+    name: &ResolvedName<namespace::StructType>,
+    type_def: &TypeDef,
+    src: &NamedSource<Arc<String>>,
+) -> Result<hir::GenericScope, GraphcalError> {
+    let owner = hir::GenericParamOwner::Type(name.clone());
+    let mut scope = hir::GenericScope::new();
+    for param in &type_def.generic_params {
+        let constraint = match param.constraint {
+            TypeGenericConstraint::Dim => crate::syntax::ast::GenericConstraint::Dim,
+            TypeGenericConstraint::Index => crate::syntax::ast::GenericConstraint::Index,
+            TypeGenericConstraint::Nat => crate::syntax::ast::GenericConstraint::Nat,
+            TypeGenericConstraint::Unconstrained => crate::syntax::ast::GenericConstraint::Type,
+        };
+        scope
+            .insert_binding(hir::GenericParamBinding::new(
+                hir::GenericParamId::new(owner.clone(), param.name.clone()),
+                constraint,
+                Span::new(0, 0),
+            ))
+            .map_err(|err| GraphcalError::InternalError {
+                message: format!("duplicate generic param while scoping `{name}`: {err}"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+    }
+    Ok(scope)
 }
 
 fn resolve_type_expr_in_struct_scope(
@@ -1390,7 +1467,7 @@ fn lower_resolved_expressions(
     const_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
     src: &NamedSource<Arc<String>>,
-) -> Result<(ResolvedExpressions, hir::expr::WrittenRefs), GraphcalError> {
+) -> Result<LoweredDagExpressions, GraphcalError> {
     let generic_scope = hir::GenericScope::new();
     let prelude = hir::PreludeTypeScope::graphcal();
     let decl_bindings = collect_hir_decl_bindings(
@@ -1406,18 +1483,14 @@ fn lower_resolved_expressions(
         .with_decl_bindings(&decl_bindings);
     let mut exprs = ResolvedExpressions::default();
     let mut written_refs = hir::expr::WrittenRefs::default();
+    let mut domain_bounds = HashMap::new();
 
     for entry in consts {
-        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
-            internal_error(
-                format!(
-                    "could not build canonical declaration key for `{}`",
-                    entry.name
-                ),
-                src,
-                entry.span,
-            )
-        })?;
+        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
+        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src, &mut written_refs)?;
+        if !bounds.is_empty() {
+            domain_bounds.insert(key.clone(), bounds);
+        }
         let hir_expr = lower_expr_or_synthetic_alias(
             &entry.expr,
             expr_ctx,
@@ -1429,19 +1502,14 @@ fn lower_resolved_expressions(
         exprs.consts.insert(key, hir_expr);
     }
     for entry in params {
+        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
+        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src, &mut written_refs)?;
+        if !bounds.is_empty() {
+            domain_bounds.insert(key.clone(), bounds);
+        }
         let Some(expr) = &entry.default_expr else {
             continue;
         };
-        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
-            internal_error(
-                format!(
-                    "could not build canonical declaration key for `{}`",
-                    entry.name
-                ),
-                src,
-                entry.span,
-            )
-        })?;
         let hir_expr = lower_expr_or_synthetic_alias(
             expr,
             expr_ctx,
@@ -1453,16 +1521,11 @@ fn lower_resolved_expressions(
         exprs.param_defaults.insert(key, hir_expr);
     }
     for entry in nodes {
-        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
-            internal_error(
-                format!(
-                    "could not build canonical declaration key for `{}`",
-                    entry.name
-                ),
-                src,
-                entry.span,
-            )
-        })?;
+        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
+        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src, &mut written_refs)?;
+        if !bounds.is_empty() {
+            domain_bounds.insert(key.clone(), bounds);
+        }
         let hir_expr = lower_expr_or_synthetic_alias(
             &entry.expr,
             expr_ctx,
@@ -1474,23 +1537,67 @@ fn lower_resolved_expressions(
         exprs.nodes.insert(key, hir_expr);
     }
     for entry in asserts {
-        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
-            internal_error(
-                format!(
-                    "could not build canonical assertion key for `{}`",
-                    entry.name
-                ),
-                src,
-                entry.span,
-            )
-        })?;
+        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
         let hir_body =
             hir::expr::lower_assert_body_with_refs(&entry.body, expr_ctx, &mut written_refs)
                 .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
         exprs.asserts.insert(key, hir_body);
     }
 
-    Ok((exprs, written_refs))
+    Ok(LoweredDagExpressions {
+        exprs,
+        written_refs,
+        domain_bounds,
+    })
+}
+
+/// Build the canonical declaration key for `name`, reporting an internal
+/// error when the name cannot form one.
+fn decl_key_or_internal_error(
+    owner: &crate::dag_id::DagId,
+    name: &ScopedName,
+    span: Span,
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedName<namespace::Decl>, GraphcalError> {
+    resolved_decl_key(owner, name).ok_or_else(|| {
+        internal_error(
+            format!("could not build canonical declaration key for `{name}`"),
+            src,
+            span,
+        )
+    })
+}
+
+/// Lower a declaration type annotation's domain bounds to HIR.
+fn lower_domain_bounds(
+    type_ann: &crate::desugar::resolved_ast::TypeExpr,
+    expr_ctx: hir::ExprLoweringContext<'_>,
+    src: &NamedSource<Arc<String>>,
+    written_refs: &mut hir::expr::WrittenRefs,
+) -> Result<Vec<ResolvedDomainBound>, GraphcalError> {
+    type_ann
+        .domain_bounds()
+        .iter()
+        .map(|bound| {
+            let value = hir::expr::lower_expr_with_refs(&bound.value, expr_ctx, written_refs)
+                .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
+            Ok(ResolvedDomainBound {
+                kind: bound.kind,
+                kind_span: bound.kind_span,
+                value,
+                span: bound.span,
+            })
+        })
+        .collect()
+}
+
+/// Output of [`lower_resolved_expressions`]: the lowered declaration bodies
+/// plus the written-form resolution metadata and HIR domain bounds collected
+/// while lowering them.
+struct LoweredDagExpressions {
+    exprs: ResolvedExpressions,
+    written_refs: hir::expr::WrittenRefs,
+    domain_bounds: HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
 }
 
 fn lower_expr_or_synthetic_alias(
@@ -1657,6 +1764,7 @@ fn collect_resolved_dag_dependencies(
 
 fn collect_resolved_collection_refs(
     exprs: &ResolvedExpressions,
+    domain_bounds: &HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
     written_refs: &hir::expr::WrittenRefs,
     ctx: ModuleTypeContext<'_>,
@@ -1680,6 +1788,7 @@ fn collect_resolved_collection_refs(
         .values()
         .chain(exprs.param_defaults.values())
         .chain(exprs.nodes.values())
+        .chain(domain_bounds.values().flatten().map(|bound| &bound.value))
     {
         collect_resolved_collection_refs_from_expr(hir_expr, ctx, src, &mut refs)?;
     }
@@ -1935,6 +2044,7 @@ fn collect_resolved_collection_refs_from_assert_body(
 
 fn collect_resolved_constructor_refs(
     exprs: &ResolvedExpressions,
+    domain_bounds: &HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
     written_refs: &hir::expr::WrittenRefs,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
@@ -1950,6 +2060,7 @@ fn collect_resolved_constructor_refs(
         .values()
         .chain(exprs.param_defaults.values())
         .chain(exprs.nodes.values())
+        .chain(domain_bounds.values().flatten().map(|bound| &bound.value))
     {
         collect_resolved_constructor_refs_from_expr(hir_expr, ctx, src, &mut refs)?;
     }

@@ -1300,12 +1300,8 @@ fn infer_hir_for_comp(
         let var_type = match &binding.index {
             hir::expr::ForBindingIndex::Named(index) => {
                 let index_identity = InferredIndex::from_resolved(index.value.clone());
-                let idx_def = super::collections::index_def_for_inferred(
-                    &index_identity,
-                    Some(dag),
-                    registry,
-                )
-                .ok_or_else(|| GraphcalError::UnknownIndex {
+                let idx_def = super::index_def_for_inferred(&index_identity, Some(dag), registry)
+                    .ok_or_else(|| GraphcalError::UnknownIndex {
                     name: index_identity.name(),
                     src: src.clone(),
                     span: index.span.into(),
@@ -1428,13 +1424,12 @@ fn infer_hir_index_access(
                         }
                     }
                     InferredType::Scalar(_) => {
-                        let idx_def =
-                            super::collections::index_def_for_inferred(&index, Some(dag), registry)
-                                .ok_or_else(|| GraphcalError::UnknownIndex {
-                                    name: index.name(),
-                                    src: src.clone(),
-                                    span: local.span.into(),
-                                })?;
+                        let idx_def = super::index_def_for_inferred(&index, Some(dag), registry)
+                            .ok_or_else(|| GraphcalError::UnknownIndex {
+                                name: index.name(),
+                                src: src.clone(),
+                                span: local.span.into(),
+                            })?;
                         if !idx_def.is_range() {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
@@ -1448,7 +1443,7 @@ fn infer_hir_index_access(
                     }
                     InferredType::Int => {
                         if let Some(idx_def) =
-                            super::collections::index_def_for_inferred(&index, Some(dag), registry)
+                            super::index_def_for_inferred(&index, Some(dag), registry)
                             && !idx_def.is_nat_range()
                         {
                             return Err(GraphcalError::EvalError {
@@ -1462,17 +1457,16 @@ fn infer_hir_index_access(
                         }
                     }
                     InferredType::Fin(fin_bound) => {
-                        let index_form =
-                            super::collections::index_def_for_inferred(&index, Some(dag), registry)
-                                .map_or_else(
-                                    || index.nat_range_form(),
-                                    |idx_def| {
-                                        if !idx_def.is_nat_range() {
-                                            return None;
-                                        }
-                                        idx_def.nat_range_size().map(NatLinearForm::from_constant)
-                                    },
-                                );
+                        let index_form = super::index_def_for_inferred(&index, Some(dag), registry)
+                            .map_or_else(
+                                || index.nat_range_form(),
+                                |idx_def| {
+                                    if !idx_def.is_nat_range() {
+                                        return None;
+                                    }
+                                    idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                                },
+                            );
                         let Some(index_form) = index_form else {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
@@ -1520,17 +1514,16 @@ fn infer_hir_index_access(
                     builtin_fns,
                     src,
                 )?;
-                let index_form =
-                    super::collections::index_def_for_inferred(&index, Some(dag), registry)
-                        .map_or_else(
-                            || index.nat_range_form(),
-                            |idx_def| {
-                                if !idx_def.is_nat_range() {
-                                    return None;
-                                }
-                                idx_def.nat_range_size().map(NatLinearForm::from_constant)
-                            },
-                        );
+                let index_form = super::index_def_for_inferred(&index, Some(dag), registry)
+                    .map_or_else(
+                        || index.nat_range_form(),
+                        |idx_def| {
+                            if !idx_def.is_nat_range() {
+                                return None;
+                            }
+                            idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                        },
+                    );
                 let Some(index_form) = index_form else {
                     return Err(GraphcalError::EvalError {
                         message: format!(
@@ -2359,11 +2352,13 @@ fn infer_hir_map_literal(
     let mut axes = Vec::with_capacity(arity);
     for key in &first_entry.keys {
         let index = inferred_index_for_hir_map_key(key, src)?;
-        let idx_def = super::collections::index_def_for_inferred(&index, Some(dag), registry)
-            .ok_or_else(|| GraphcalError::UnknownIndex {
-                name: index.name(),
-                src: src.clone(),
-                span: expr.span.into(),
+        let idx_def =
+            super::index_def_for_inferred(&index, Some(dag), registry).ok_or_else(|| {
+                GraphcalError::UnknownIndex {
+                    name: index.name(),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                }
             })?;
         if idx_def.is_range() {
             return Err(GraphcalError::EvalError {
@@ -2536,7 +2531,7 @@ fn infer_hir_map_literal(
         src,
     )?;
     if let InferredType::Indexed { index, .. } = &first_type {
-        let inner_is_label = super::collections::index_def_for_inferred(index, Some(dag), registry)
+        let inner_is_label = super::index_def_for_inferred(index, Some(dag), registry)
             .is_some_and(|def| !def.is_range());
         if inner_is_label {
             return Err(GraphcalError::EvalError {
@@ -2806,13 +2801,12 @@ fn infer_hir_match(
     )?;
     match &scrutinee_type {
         InferredType::Label(index_identity) => {
-            let index_def =
-                super::collections::index_def_for_inferred(index_identity, Some(dag), registry)
-                    .ok_or_else(|| GraphcalError::UnknownIndex {
-                        name: index_identity.name(),
-                        src: src.clone(),
-                        span: scrutinee.span.into(),
-                    })?;
+            let index_def = super::index_def_for_inferred(index_identity, Some(dag), registry)
+                .ok_or_else(|| GraphcalError::UnknownIndex {
+                    name: index_identity.name(),
+                    src: src.clone(),
+                    span: scrutinee.span.into(),
+                })?;
             let variants = match &index_def.kind {
                 crate::registry::types::IndexKind::Named { variants } => variants.clone(),
                 crate::registry::types::IndexKind::RequiredNamed => vec![],

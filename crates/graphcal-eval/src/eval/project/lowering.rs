@@ -150,9 +150,8 @@ pub(in crate::eval::project) fn lower_and_finalize(
 
     let declared_types = tir.build_declared_types(file_src)?;
 
-    for (override_name, override_expr) in &file_overrides {
+    for override_name in file_overrides.keys() {
         graphcal_compiler::tir::dim_check::check_override_dimension(
-            override_expr,
             override_name.as_str(),
             &declared_types,
             &tir,
