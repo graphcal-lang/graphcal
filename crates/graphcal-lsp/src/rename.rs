@@ -5,20 +5,24 @@ use std::collections::HashMap;
 use tower_lsp::lsp_types::{PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};
 
 use crate::convert::LineIndex;
-use crate::resolve::{ResolvedSymbol, SymbolLocation, resolve_symbol_at};
+use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, resolve_symbol_at};
 use crate::server::AnalysisResult;
 use crate::symbol_table::SymbolCategory;
 
 /// Check whether a name is a valid Graphcal identifier.
+///
+/// Asks the lexer instead of a hand-kept rule so reserved keywords
+/// (`node`, `param`, `true`, …) are rejected — renaming to a keyword would
+/// produce unparsable code.
 fn is_valid_identifier(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() && first != '_' {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    use graphcal_compiler::syntax::lexer::Lexer;
+    use graphcal_compiler::syntax::token::Token;
+    let mut lexer = Lexer::new(name);
+    let is_single_ident = matches!(
+        lexer.next_token(),
+        Some((Token::Ident, span)) if span.len() == name.len()
+    );
+    is_single_ident && lexer.next_token().is_none()
 }
 
 /// Check whether a resolved symbol is eligible for rename.
@@ -80,22 +84,27 @@ pub fn rename(
     };
 
     let lines = LineIndex::new(&analysis.source);
-    let mut current_file_edits: Vec<TextEdit> = analysis
-        .symbol_table
-        .find_all_references(&resolved.key)
+    // Expand the resolved key the same way `references` does: a reference
+    // can be recorded under an alias key (TopLevel↔Constructor,
+    // Qualified↔Variant) of the key the cursor resolved to. Editing only
+    // the single key used to leave some occurrences un-renamed — a broken
+    // program. Spans are deduplicated in case a reference is recorded under
+    // more than one alias.
+    let mut spans: Vec<_> = reference_lookup_keys(&resolved.key)
+        .iter()
+        .flat_map(|key| analysis.symbol_table.find_all_references(key))
+        .map(|r| r.span)
+        .chain((!def.name_span.is_empty()).then_some(def.name_span))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    spans.retain(|span| seen.insert((span.offset(), span.len())));
+    let current_file_edits: Vec<TextEdit> = spans
         .into_iter()
-        .map(|r| TextEdit {
-            range: lines.span_to_range(r.span),
+        .map(|span| TextEdit {
+            range: lines.span_to_range(span),
             new_text: new_name.to_string(),
         })
         .collect();
-
-    if !def.name_span.is_empty() {
-        current_file_edits.push(TextEdit {
-            range: lines.span_to_range(def.name_span),
-            new_text: new_name.to_string(),
-        });
-    }
 
     if current_file_edits.is_empty() {
         return None;
@@ -225,14 +234,65 @@ mod tests {
     }
 
     #[test]
+    fn rename_to_keyword_rejected() {
+        // Regression: keywords passed the [A-Za-z_]\w* shape check, so
+        // renaming a param to `node` produced unparsable code.
+        let source = "param x: Dimensionless = 1.0;";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+
+        let offset = source.find("x:").unwrap();
+        for keyword in ["node", "param", "index", "true", "unfold"] {
+            assert!(
+                rename(&analysis, &uri, offset, keyword).is_none(),
+                "renaming to keyword `{keyword}` must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rename_constructor_edits_all_occurrences() {
+        // Regression: rename collected references by the single resolved key
+        // while `references` expands alias keys (TopLevel↔Constructor), so
+        // some occurrences were silently left un-renamed.
+        let source = "\
+type Status { Idle, Active }
+param s: Status = Idle;
+node t: Dimensionless = match @s { Idle => 1.0, Active => 2.0 };
+";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+
+        let offset = source.find("Idle,").unwrap();
+        if let Some(result) = rename(&analysis, &uri, offset, "Standby") {
+            let edits = result.changes.unwrap();
+            let file_edits = edits.get(&uri).unwrap();
+            let lines = LineIndex::new(&analysis.source);
+            let _ = lines;
+            // Every textual occurrence of `Idle` must be covered: the
+            // definition, the initializer, and the match arm.
+            assert!(
+                file_edits.len() >= 3,
+                "expected all 3 occurrences renamed, got {}: {file_edits:?}",
+                file_edits.len()
+            );
+        }
+    }
+
+    #[test]
     fn is_valid_identifier_cases() {
         assert!(is_valid_identifier("x"));
         assert!(is_valid_identifier("velocity"));
-        assert!(is_valid_identifier("_private"));
         assert!(is_valid_identifier("my_var_2"));
         assert!(!is_valid_identifier(""));
         assert!(!is_valid_identifier("123"));
         assert!(!is_valid_identifier("has space"));
         assert!(!is_valid_identifier("a-b"));
+        // The lexer is the source of truth: `_`-prefixed names and keywords
+        // are not valid graphcal identifiers (`param _private: …` is a
+        // parse error), so renaming to them must be rejected.
+        assert!(!is_valid_identifier("_private"));
+        assert!(!is_valid_identifier("node"));
+        assert!(!is_valid_identifier("true"));
     }
 }
