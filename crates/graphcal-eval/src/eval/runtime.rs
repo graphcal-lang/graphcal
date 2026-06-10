@@ -358,16 +358,28 @@ fn failed_runtime_dependencies(
 ///
 /// Runtime errors are contained per-node: if a node fails, independent nodes
 /// still evaluate, and dependent nodes receive a `DependencyFailed` error.
-#[expect(
-    clippy::too_many_lines,
-    reason = "linear evaluation pipeline is clearest as a single function"
-)]
 pub(super) fn evaluate_plan(
     tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
 ) -> EvalResult {
+    evaluate_plan_with_values(tir, plan, declared_types, src).0
+}
+
+/// Like [`evaluate_plan`], but also returns the raw runtime-value map so
+/// callers that need both (per-file project evaluation exporting values to
+/// downstream imports) do not have to run the eval loop a second time.
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear evaluation pipeline is clearest as a single function"
+)]
+pub(super) fn evaluate_plan_with_values(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    plan: &crate::exec_plan::ExecPlan,
+    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
+    src: &NamedSource<Arc<String>>,
+) -> (EvalResult, RuntimeValueMap) {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
@@ -568,7 +580,7 @@ pub(super) fn evaluate_plan(
         })
         .collect();
 
-    EvalResult {
+    let result = EvalResult {
         consts,
         params,
         nodes,
@@ -580,7 +592,8 @@ pub(super) fn evaluate_plan(
         assumes_map,
         base_dim_symbols: tir.registry.dimensions.base_dim_symbols().clone(),
         domain_constraints,
-    }
+    };
+    (result, values)
 }
 
 /// Evaluate an assertion body with optional `#[expected_fail]` handling.
