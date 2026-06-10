@@ -335,9 +335,16 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
     evaluated_files: &mut HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
 ) -> Result<(), CompileError> {
     let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
-    let eval_result = evaluate_plan(&compiled.tir, &plan, &compiled.declared_types, file_src);
-    let file_runtime_values =
-        extract_runtime_values(&compiled.tir, &plan, &compiled.declared_types, file_src);
+    // One eval-loop run yields both the public result and the raw values
+    // exported to downstream imports (this used to evaluate the whole file
+    // twice).
+    let (eval_result, runtime_values) = super::super::runtime::evaluate_plan_with_values(
+        &compiled.tir,
+        &plan,
+        &compiled.declared_types,
+        file_src,
+    );
+    let file_runtime_values = filter_local_runtime_values(&compiled.tir, &runtime_values);
     let top_level_consts = top_level_const_values(&compiled.tir, &plan.const_values);
 
     // Capture dag TIRs so cross-file qualified inline calls can merge them
@@ -768,28 +775,16 @@ pub(in crate::eval::project) fn route_overrides_to_files(
     Ok(result)
 }
 
-/// Extract `RuntimeValue`s from a plan evaluation for passing to downstream files.
+/// Filter an evaluated runtime-value map to only locally-defined param/node
+/// values (not imported, not consts) for passing to downstream files.
 ///
-/// Delegates to the shared [`run_eval_loop`](super::super::runtime::run_eval_loop) and
-/// filters the result to only locally-defined param/node values.
-pub(super) fn extract_runtime_values(
+/// Pure filter over an already-evaluated map: the eval loop runs once in
+/// [`evaluate_plan_with_values`](super::super::runtime::evaluate_plan_with_values),
+/// not again here.
+pub(super) fn filter_local_runtime_values(
     tir: &graphcal_compiler::tir::typed::TIR,
-    plan: &crate::exec_plan::ExecPlan,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    src: &NamedSource<Arc<String>>,
+    values: &crate::eval_expr::RuntimeValueMap,
 ) -> HashMap<DeclName, RuntimeValue> {
-    let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
-    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
-    let result = super::super::runtime::run_eval_loop(
-        plan,
-        tir,
-        declared_types,
-        src,
-        builtin_consts,
-        builtin_fns,
-    );
-
-    // Return only locally-defined param/node values (not imported, not consts).
     tir.root()
         .params
         .iter()
@@ -797,8 +792,7 @@ pub(super) fn extract_runtime_values(
         .chain(tir.root().nodes.iter().map(|e| &e.name))
         .filter_map(|name| {
             let key = crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), name);
-            result
-                .values
+            values
                 .get(&key)
                 .cloned()
                 .map(|value| (DeclName::new(name.member()), value))
