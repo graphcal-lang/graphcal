@@ -591,6 +591,14 @@ fn load_file_dfs<F: FileSystemReader>(
 
         resolved_imports_paths.insert(ModulePathKey::from_path(path), import_canonical.clone());
 
+        // A fully-qualified import that resolves to this very file (e.g.
+        // `import pkg.main.inline_dag.{x};` inside main.gcl) is a
+        // self-reference, not a dependency — recursing would trip the
+        // circular-import check (mirrors the inline-dag loop below).
+        if import_canonical == canonical_path {
+            continue;
+        }
+
         load_file_dfs(
             &import_canonical,
             project_root,
@@ -663,11 +671,17 @@ fn load_file_dfs<F: FileSystemReader>(
         )
     })?;
 
-    // Convert resolved import paths to DagIds.
+    // Convert resolved import paths to DagIds. A self-import resolves to
+    // this file's own id, which is not in `path_to_dag_id` yet (it is
+    // inserted post-order, below).
     let resolved_imports: HashMap<ModulePathKey, DagId> = resolved_imports_paths
         .iter()
         .map(|(key, canonical)| {
-            let dep_dag_id = path_to_dag_id[canonical].clone();
+            let dep_dag_id = if canonical == canonical_path {
+                dag_id.clone()
+            } else {
+                path_to_dag_id[canonical].clone()
+            };
             (key.clone(), dep_dag_id)
         })
         .collect();
