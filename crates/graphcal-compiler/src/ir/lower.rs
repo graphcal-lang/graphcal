@@ -2651,18 +2651,25 @@ fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, G
         ExprKind::Number(n) => Ok(*n),
         #[expect(clippy::cast_precision_loss, reason = "unit scale constant expression")]
         ExprKind::Integer(n) => Ok(*n as f64),
-        ExprKind::ConstRef(ident) => match ident.value.member() {
-            "PI" if !ident.value.is_qualified() => Ok(std::f64::consts::PI),
-            "E" if !ident.value.is_qualified() => Ok(std::f64::consts::E),
-            _ => Err(GraphcalError::EvalError {
-                message: format!(
-                    "unknown constant `{}` in scale expression; only `PI` and `E` are supported",
-                    ident.value
-                ),
-                src: src.clone(),
-                span: ident.span.into(),
-            }),
-        },
+        ExprKind::ConstRef(ident) => {
+            // Route through the typed builtin-constant table instead of
+            // string-matching a hand-picked subset: all built-in constants
+            // (PI, E, TAU, SQRT2, LN2, LN10) are legal in scale expressions.
+            let builtin = (!ident.value.is_qualified())
+                .then(|| crate::hir::BuiltinConst::parse(ident.value.member()))
+                .flatten();
+            builtin
+                .map(crate::hir::BuiltinConst::value)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!(
+                        "unknown constant `{}` in scale expression; only built-in \
+                         constants (PI, E, TAU, SQRT2, LN2, LN10) are supported",
+                        ident.value
+                    ),
+                    src: src.clone(),
+                    span: ident.span.into(),
+                })
+        }
         ExprKind::BinOp { op, lhs, rhs } => {
             use crate::desugar::resolved_ast::BinOp;
             let l = eval_scale_expr(lhs, src)?;

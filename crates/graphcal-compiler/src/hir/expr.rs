@@ -207,253 +207,141 @@ pub struct LocalDef {
     pub span: Span,
 }
 
-/// Built-in constants with closed semantic meaning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BuiltinConst {
-    Pi,
-    E,
-    Tau,
-    Sqrt2,
-    Ln2,
-    Ln10,
+/// Define a closed set of built-in names: the enum, the `parse` boundary
+/// crossing, the canonical `as_str` rendering, and an `ALL` listing for
+/// cross-table consistency tests — all generated from a single table so the
+/// spellings can never drift apart.
+macro_rules! define_builtin_names {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident { $($variant:ident => $text:literal),+ $(,)? }
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        $vis enum $name { $($variant),+ }
+
+        impl $name {
+            /// Every variant, for cross-table consistency tests.
+            $vis const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// Parse a source name into the typed variant — the only place
+            /// these strings cross into the typed core.
+            #[must_use]
+            $vis fn parse(name: &str) -> Option<Self> {
+                match name {
+                    $($text => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            /// Canonical source spelling.
+            #[must_use]
+            $vis const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $text),+
+                }
+            }
+        }
+    };
+}
+
+define_builtin_names! {
+    /// Built-in constants with closed semantic meaning.
+    pub enum BuiltinConst {
+        Pi => "PI",
+        E => "E",
+        Tau => "TAU",
+        Sqrt2 => "SQRT2",
+        Ln2 => "LN2",
+        Ln10 => "LN10",
+    }
 }
 
 impl BuiltinConst {
-    /// Parse a source name into a built-in constant.
+    /// Numeric value of the constant. Must agree with
+    /// [`crate::registry::builtins::builtin_constants`] (enforced by test).
     #[must_use]
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "PI" => Some(Self::Pi),
-            "E" => Some(Self::E),
-            "TAU" => Some(Self::Tau),
-            "SQRT2" => Some(Self::Sqrt2),
-            "LN2" => Some(Self::Ln2),
-            "LN10" => Some(Self::Ln10),
-            _ => None,
-        }
-    }
-
-    /// Canonical source spelling of the constant.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    pub const fn value(self) -> f64 {
         match self {
-            Self::Pi => "PI",
-            Self::E => "E",
-            Self::Tau => "TAU",
-            Self::Sqrt2 => "SQRT2",
-            Self::Ln2 => "LN2",
-            Self::Ln10 => "LN10",
+            Self::Pi => std::f64::consts::PI,
+            Self::E => std::f64::consts::E,
+            Self::Tau => std::f64::consts::TAU,
+            Self::Sqrt2 => std::f64::consts::SQRT_2,
+            Self::Ln2 => std::f64::consts::LN_2,
+            Self::Ln10 => std::f64::consts::LN_10,
         }
     }
 }
 
-/// Built-in function names with closed semantic meaning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BuiltinFnName {
-    Sqrt,
-    Cbrt,
-    Exp,
-    Expm1,
-    Ln,
-    Log10,
-    Log2,
-    Log,
-    Log1p,
-    Sin,
-    Cos,
-    Tan,
-    Asin,
-    Acos,
-    Atan,
-    Atan2,
-    Sinh,
-    Cosh,
-    Tanh,
-    Asinh,
-    Acosh,
-    Atanh,
-    Abs,
-    Floor,
-    Ceil,
-    Round,
-    Trunc,
-    Sign,
-    Min,
-    Max,
-    Hypot,
-    Clamp,
-    Sum,
-    Mean,
-    Count,
-    ToFloat,
-    ToInt,
-    ToUtc,
-    ToTai,
-    ToTt,
-    ToTdb,
-    ToEt,
-    ToGpst,
-    ToGst,
-    ToBdt,
-    ToQzsst,
-    Datetime,
-    Epoch,
-    Year,
-    Month,
-    Day,
-    Hour,
-    Minute,
-    Second,
-    Weekday,
-    DayOfYear,
-    FromJd,
-    FromMjd,
-    FromUnix,
-    ToJd,
-    ToMjd,
-    ToUnix,
+define_builtin_names! {
+    /// Built-in function names with closed semantic meaning.
+    pub enum BuiltinFnName {
+        Sqrt => "sqrt",
+        Cbrt => "cbrt",
+        Exp => "exp",
+        Expm1 => "expm1",
+        Ln => "ln",
+        Log10 => "log10",
+        Log2 => "log2",
+        Log => "log",
+        Log1p => "log1p",
+        Sin => "sin",
+        Cos => "cos",
+        Tan => "tan",
+        Asin => "asin",
+        Acos => "acos",
+        Atan => "atan",
+        Atan2 => "atan2",
+        Sinh => "sinh",
+        Cosh => "cosh",
+        Tanh => "tanh",
+        Asinh => "asinh",
+        Acosh => "acosh",
+        Atanh => "atanh",
+        Abs => "abs",
+        Floor => "floor",
+        Ceil => "ceil",
+        Round => "round",
+        Trunc => "trunc",
+        Sign => "sign",
+        Min => "min",
+        Max => "max",
+        Hypot => "hypot",
+        Clamp => "clamp",
+        Sum => "sum",
+        Mean => "mean",
+        Count => "count",
+        ToFloat => "to_float",
+        ToInt => "to_int",
+        ToUtc => "to_utc",
+        ToTai => "to_tai",
+        ToTt => "to_tt",
+        ToTdb => "to_tdb",
+        ToEt => "to_et",
+        ToGpst => "to_gpst",
+        ToGst => "to_gst",
+        ToBdt => "to_bdt",
+        ToQzsst => "to_qzsst",
+        Datetime => "datetime",
+        Epoch => "epoch",
+        Year => "year",
+        Month => "month",
+        Day => "day",
+        Hour => "hour",
+        Minute => "minute",
+        Second => "second",
+        Weekday => "weekday",
+        DayOfYear => "day_of_year",
+        FromJd => "from_jd",
+        FromMjd => "from_mjd",
+        FromUnix => "from_unix",
+        ToJd => "to_jd",
+        ToMjd => "to_mjd",
+        ToUnix => "to_unix",
+    }
 }
 
 impl BuiltinFnName {
-    /// Parse a source name into a built-in function.
-    #[must_use]
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "sqrt" => Some(Self::Sqrt),
-            "cbrt" => Some(Self::Cbrt),
-            "exp" => Some(Self::Exp),
-            "expm1" => Some(Self::Expm1),
-            "ln" => Some(Self::Ln),
-            "log10" => Some(Self::Log10),
-            "log2" => Some(Self::Log2),
-            "log" => Some(Self::Log),
-            "log1p" => Some(Self::Log1p),
-            "sin" => Some(Self::Sin),
-            "cos" => Some(Self::Cos),
-            "tan" => Some(Self::Tan),
-            "asin" => Some(Self::Asin),
-            "acos" => Some(Self::Acos),
-            "atan" => Some(Self::Atan),
-            "atan2" => Some(Self::Atan2),
-            "sinh" => Some(Self::Sinh),
-            "cosh" => Some(Self::Cosh),
-            "tanh" => Some(Self::Tanh),
-            "asinh" => Some(Self::Asinh),
-            "acosh" => Some(Self::Acosh),
-            "atanh" => Some(Self::Atanh),
-            "abs" => Some(Self::Abs),
-            "floor" => Some(Self::Floor),
-            "ceil" => Some(Self::Ceil),
-            "round" => Some(Self::Round),
-            "trunc" => Some(Self::Trunc),
-            "sign" => Some(Self::Sign),
-            "min" => Some(Self::Min),
-            "max" => Some(Self::Max),
-            "hypot" => Some(Self::Hypot),
-            "clamp" => Some(Self::Clamp),
-            "sum" => Some(Self::Sum),
-            "mean" => Some(Self::Mean),
-            "count" => Some(Self::Count),
-            "to_float" => Some(Self::ToFloat),
-            "to_int" => Some(Self::ToInt),
-            "to_utc" => Some(Self::ToUtc),
-            "to_tai" => Some(Self::ToTai),
-            "to_tt" => Some(Self::ToTt),
-            "to_tdb" => Some(Self::ToTdb),
-            "to_et" => Some(Self::ToEt),
-            "to_gpst" => Some(Self::ToGpst),
-            "to_gst" => Some(Self::ToGst),
-            "to_bdt" => Some(Self::ToBdt),
-            "to_qzsst" => Some(Self::ToQzsst),
-            "datetime" => Some(Self::Datetime),
-            "epoch" => Some(Self::Epoch),
-            "year" => Some(Self::Year),
-            "month" => Some(Self::Month),
-            "day" => Some(Self::Day),
-            "hour" => Some(Self::Hour),
-            "minute" => Some(Self::Minute),
-            "second" => Some(Self::Second),
-            "weekday" => Some(Self::Weekday),
-            "day_of_year" => Some(Self::DayOfYear),
-            "from_jd" => Some(Self::FromJd),
-            "from_mjd" => Some(Self::FromMjd),
-            "from_unix" => Some(Self::FromUnix),
-            "to_jd" => Some(Self::ToJd),
-            "to_mjd" => Some(Self::ToMjd),
-            "to_unix" => Some(Self::ToUnix),
-            _ => None,
-        }
-    }
-
-    /// Canonical source spelling of the function.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Sqrt => "sqrt",
-            Self::Cbrt => "cbrt",
-            Self::Exp => "exp",
-            Self::Expm1 => "expm1",
-            Self::Ln => "ln",
-            Self::Log10 => "log10",
-            Self::Log2 => "log2",
-            Self::Log => "log",
-            Self::Log1p => "log1p",
-            Self::Sin => "sin",
-            Self::Cos => "cos",
-            Self::Tan => "tan",
-            Self::Asin => "asin",
-            Self::Acos => "acos",
-            Self::Atan => "atan",
-            Self::Atan2 => "atan2",
-            Self::Sinh => "sinh",
-            Self::Cosh => "cosh",
-            Self::Tanh => "tanh",
-            Self::Asinh => "asinh",
-            Self::Acosh => "acosh",
-            Self::Atanh => "atanh",
-            Self::Abs => "abs",
-            Self::Floor => "floor",
-            Self::Ceil => "ceil",
-            Self::Round => "round",
-            Self::Trunc => "trunc",
-            Self::Sign => "sign",
-            Self::Min => "min",
-            Self::Max => "max",
-            Self::Hypot => "hypot",
-            Self::Clamp => "clamp",
-            Self::Sum => "sum",
-            Self::Mean => "mean",
-            Self::Count => "count",
-            Self::ToFloat => "to_float",
-            Self::ToInt => "to_int",
-            Self::ToUtc => "to_utc",
-            Self::ToTai => "to_tai",
-            Self::ToTt => "to_tt",
-            Self::ToTdb => "to_tdb",
-            Self::ToEt => "to_et",
-            Self::ToGpst => "to_gpst",
-            Self::ToGst => "to_gst",
-            Self::ToBdt => "to_bdt",
-            Self::ToQzsst => "to_qzsst",
-            Self::Datetime => "datetime",
-            Self::Epoch => "epoch",
-            Self::Year => "year",
-            Self::Month => "month",
-            Self::Day => "day",
-            Self::Hour => "hour",
-            Self::Minute => "minute",
-            Self::Second => "second",
-            Self::Weekday => "weekday",
-            Self::DayOfYear => "day_of_year",
-            Self::FromJd => "from_jd",
-            Self::FromMjd => "from_mjd",
-            Self::FromUnix => "from_unix",
-            Self::ToJd => "to_jd",
-            Self::ToMjd => "to_mjd",
-            Self::ToUnix => "to_unix",
-        }
-    }
-
     /// Return the existing typed special-function classification when this
     /// built-in is one of the special categories.
     #[must_use]
