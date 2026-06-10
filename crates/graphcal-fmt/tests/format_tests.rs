@@ -1346,3 +1346,73 @@ fn long_operator_chain_formats_without_stack_overflow() {
     let formatted = format_source(&source).unwrap();
     assert!(formatted.contains("1.0 + 1.0"));
 }
+
+#[test]
+fn multi_decl_with_internal_comments_is_preserved_verbatim() {
+    // Regression: comments inside a multi-decl body were consumed without
+    // being emitted — `graphcal format` permanently destroyed user content.
+    // Declarations whose internal comments the formatter cannot anchor are
+    // now emitted verbatim instead.
+    let source = "\
+pub index Component = { A, B };
+
+param      power: Power[Component],
+param      duty:  Dimensionless[Component]
+    = table[Component, (_, _)] {
+         : _, _;
+        // explains row A
+        A: 10.0 W, 0.5;
+        B: 20.0 W, 0.9; // explains row B
+    };
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("// explains row A") && formatted.contains("// explains row B"),
+        "comments inside multi-decl bodies must survive formatting:\n{formatted}"
+    );
+}
+
+#[test]
+fn comment_inside_if_branch_does_not_migrate() {
+    // Regression: comments in undrained expression positions (e.g. inside
+    // an `if` branch) stayed queued and were emitted as the *next*
+    // declaration's leading comment, relocating them out of context.
+    let source = "\
+node x: Dimensionless = if 1.0 > 0.0 {
+    // chosen when positive
+    1.0
+} else {
+    2.0
+};
+node y: Dimensionless = 3.0;
+";
+    let formatted = format_source(source).unwrap();
+    let comment_pos = formatted.find("// chosen when positive").unwrap();
+    let y_pos = formatted.find("node y").unwrap();
+    assert!(
+        comment_pos < y_pos,
+        "comment must stay with `node x`, not migrate below:\n{formatted}"
+    );
+    let x_pos = formatted.find("node x").unwrap();
+    assert!(comment_pos > x_pos);
+}
+
+#[test]
+fn comment_count_is_preserved_across_formatting() {
+    let source = "\
+// file header
+node a: Dimensionless = 1.0; // trailing
+node b: Dimensionless = if 1.0 > 0.0 {
+    // branch comment
+    1.0
+} else { 2.0 };
+// footer
+";
+    let formatted = format_source(source).unwrap();
+    let count = |s: &str| s.matches("//").count();
+    assert_eq!(
+        count(source),
+        count(&formatted),
+        "comment count in == out:\n{formatted}"
+    );
+}

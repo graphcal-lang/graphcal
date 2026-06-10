@@ -379,48 +379,7 @@ fn format_dag_decl(fmt: &mut Formatter<'_>, d: &DagDecl) -> RcDoc<'static> {
     if d.body.is_empty() {
         return RcDoc::text(format!("dag {} {{}}", d.name.value.as_str()));
     }
-    let mut body_parts: Vec<RcDoc<'static>> = Vec::new();
-    let mut prev_end: usize = 0;
-    for (i, decl) in d.body.iter().enumerate() {
-        let emit_start = decl.span.offset();
-        let emit_end = emit_start + decl.span.len();
-
-        let leading = fmt.drain_comments_before(emit_start);
-        let has_leading_comments = leading.is_some();
-
-        if i > 0 {
-            body_parts.push(RcDoc::hardline());
-            if has_leading_comments || fmt.has_blank_line_between(prev_end, emit_start) {
-                body_parts.push(RcDoc::hardline());
-            }
-        }
-        if let Some(leading) = leading {
-            body_parts.push(leading);
-        }
-
-        // Multi-decl (issue #481): consume comments that fall inside the
-        // surface span so they aren't re-emitted later; `format_multi_decl`
-        // doesn't interleave source comments inside the body.
-        if matches!(&decl.kind, DeclKind::Sugar(_)) {
-            while fmt.next_comment < fmt.metadata.comments().len() {
-                let c = &fmt.metadata.comments()[fmt.next_comment];
-                if c.span.offset() < emit_end {
-                    fmt.next_comment += 1;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        let decl_doc = format_decl(fmt, decl);
-        let trailing = fmt
-            .drain_trailing_comment(emit_end)
-            .unwrap_or_else(RcDoc::nil);
-        body_parts.push(decl_doc.append(trailing));
-        prev_end = emit_end;
-    }
-
-    let body = RcDoc::concat(body_parts);
+    let body = RcDoc::concat(super::format_decl_sequence(fmt, &d.body));
     header
         .append(RcDoc::hardline().append(body).nest(INDENT))
         .append(RcDoc::hardline())
