@@ -13,7 +13,7 @@ use crate::symbol_table::SymbolCategory;
 ///
 /// Asks the lexer instead of a hand-kept rule so reserved keywords
 /// (`node`, `param`, `true`, …) are rejected — renaming to a keyword would
-/// produce unparseable code.
+/// produce unparsable code.
 fn is_valid_identifier(name: &str) -> bool {
     use graphcal_compiler::syntax::lexer::Lexer;
     use graphcal_compiler::syntax::token::Token;
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn rename_to_keyword_rejected() {
         // Regression: keywords passed the [A-Za-z_]\w* shape check, so
-        // renaming a param to `node` produced unparseable code.
+        // renaming a param to `node` produced unparsable code.
         let source = "param x: Dimensionless = 1.0;";
         let analysis = analysis_from_source(source);
         let uri = Url::parse("file:///test.gcl").unwrap();
