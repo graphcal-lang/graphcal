@@ -191,14 +191,21 @@ pub(super) fn runtime_to_value(
                 entry_display_names,
             }
         }
-        #[expect(
-            clippy::unreachable,
-            reason = "RangeLabel is an internal-only intermediate value"
-        )]
-        RuntimeValue::RangeLabel { .. } => {
-            // RangeLabel is an intermediate value used during unfold evaluation;
-            // it should never appear in final output.
-            unreachable!("RangeLabel should not appear in final values")
+        RuntimeValue::RangeLabel { value, .. } => {
+            // RangeLabel is an intermediate value used during range-index
+            // iteration, but it can surface in final output when a body
+            // returns its loop variable (e.g. `for i: Step { i }`). Expose it
+            // as a plain scalar, consistent with `expect_scalar` which
+            // already treats it as one.
+            let dimension = match declared_type {
+                Some(DeclaredType::Scalar(d)) => d.clone(),
+                _ => Dimension::dimensionless(),
+            };
+            Value::Scalar {
+                si_value: *value,
+                dimension,
+                display_unit: None,
+            }
         }
         RuntimeValue::Datetime(epoch) => {
             let time_scale = match declared_type {

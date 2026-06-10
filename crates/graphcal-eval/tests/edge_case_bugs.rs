@@ -248,6 +248,33 @@ node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
     }
 }
 
+#[test]
+fn for_comp_returning_range_loop_variable_yields_scalars() {
+    // Regression: the loop variable of a `for` over a range index is bound to
+    // an internal RangeLabel value. Returning it directly used to hit
+    // `unreachable!("RangeLabel should not appear in final values")` when
+    // converting the result to a public value. It must surface as a scalar.
+    let source = r#"
+index Step = linspace(0.0 s, 2.0 s, step: 1.0 s);
+node t: Time[Step] = for i: Step { i };
+"#;
+    let result = compile_and_eval(source).unwrap();
+    let t = find_entry(&result, "t");
+    match &t {
+        Value::Indexed { entries, .. } => {
+            let values: Vec<f64> = entries
+                .iter()
+                .map(|(_, v)| match v {
+                    Value::Scalar { si_value, .. } => *si_value,
+                    other => panic!("expected scalar entry, got {other:?}"),
+                })
+                .collect();
+            assert_eq!(values, vec![0.0, 1.0, 2.0]);
+        }
+        _ => panic!("expected indexed value"),
+    }
+}
+
 // ============================================================================
 // BUG 3: Float power edge cases
 //
