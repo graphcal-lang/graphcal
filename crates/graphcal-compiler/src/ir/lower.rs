@@ -832,9 +832,16 @@ impl UnfrozenIR {
         import_item_attributes: &HashMap<DeclName, Vec<crate::desugar::resolved_ast::Attribute>>,
         importer_src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
-        /// Prefix a `ScopedName` dep if its member is in `dep_names`.
+        /// Prefix a `ScopedName` dep if it is an unqualified member owned by
+        /// the dependency.
+        ///
+        /// Mirrors [`RefPrefixer::rewrite`]: already-qualified names (e.g. a
+        /// transitively-imported `module.x` inside the dep) belong to another
+        /// namespace and must keep their qualifier — `with_prefix` would
+        /// silently replace it, diverging from the merged expressions whose
+        /// qualified refs are left untouched.
         fn prefix_dep(d: &ScopedName, prefix: &str, dep_names: &HashSet<String>) -> ScopedName {
-            if dep_names.contains(d.member()) {
+            if !d.is_qualified() && dep_names.contains(d.member()) {
                 d.with_prefix(prefix)
             } else {
                 d.clone()
@@ -2984,6 +2991,93 @@ mod tests {
         .unwrap();
         let names: Vec<String> = ir.source_order.iter().map(|(n, _)| n.to_string()).collect();
         assert_eq!(names, vec!["b", "a", "z"]);
+    }
+
+    #[test]
+    fn merge_dependency_keeps_qualified_imported_value_keys() {
+        // Regression: `prefix_dep` used to re-key a dep's *qualified*
+        // imported value (e.g. `mission.C` from `import lib as mission;`)
+        // with the include-instance prefix, dropping the qualifier — while
+        // the merged expressions kept referencing `@mission.C` (RefPrefixer
+        // skips qualified refs), so the value map and the expressions
+        // diverged.
+        let dep_source = "node out: Dimensionless = 2.0;";
+        let dep_src = make_src(dep_source);
+        let raw_file = Parser::new(dep_source).parse_file().unwrap();
+        let dep_file = crate::syntax::name_resolve::resolve_name_refs(
+            crate::syntax::desugar::desugar_multi_decls_in_file(raw_file),
+        );
+        let (_dep_builder, mut dep_unfrozen) = lower_to_builder(
+            &dep_file,
+            &dep_src,
+            &ImportedNames {
+                consts: vec![],
+                params: vec![],
+                nodes: vec![],
+                asserts: vec![],
+            },
+            &crate::dag_id::DagId::root("dep"),
+        )
+        .unwrap();
+        // Simulate the loader having pre-evaluated `import lib as mission;`
+        // inside the dep: the imported value is keyed by a qualified name.
+        let qualified = ScopedName::qualified("mission", "C");
+        dep_unfrozen.imported_values.insert(
+            qualified.clone(),
+            (
+                RuntimeValue::Scalar(7.0),
+                DeclaredType::Scalar(crate::syntax::dimension::Dimension::dimensionless()),
+            ),
+        );
+
+        let importer_source = "node anchor: Dimensionless = 1.0;";
+        let importer_src = make_src(importer_source);
+        let raw_importer = Parser::new(importer_source).parse_file().unwrap();
+        let importer_file = crate::syntax::name_resolve::resolve_name_refs(
+            crate::syntax::desugar::desugar_multi_decls_in_file(raw_importer),
+        );
+        let (_importer_builder, mut unfrozen) = lower_to_builder(
+            &importer_file,
+            &importer_src,
+            &ImportedNames {
+                consts: vec![],
+                params: vec![],
+                nodes: vec![],
+                asserts: vec![],
+            },
+            &crate::dag_id::DagId::root("main"),
+        )
+        .unwrap();
+
+        let dep_names: HashSet<String> = dep_unfrozen
+            .source_order
+            .iter()
+            .map(|(n, _)| n.member().to_string())
+            .collect();
+        unfrozen
+            .merge_dependency(
+                dep_unfrozen,
+                "inst",
+                &HashMap::new(),
+                &dep_names,
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &importer_src,
+            )
+            .unwrap();
+
+        assert!(
+            unfrozen.imported_values.contains_key(&qualified),
+            "qualified imported value must keep its qualifier"
+        );
+        assert!(
+            !unfrozen
+                .imported_values
+                .contains_key(&ScopedName::qualified("inst", "C")),
+            "imported value must not be re-keyed with the instance prefix"
+        );
     }
 
     #[test]
