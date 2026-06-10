@@ -103,11 +103,11 @@ fn index_ref_from_path(ctx: &EvalContext<'_>, path: &NamePath) -> IndexTypeRef {
 
 fn resolved_value_index_variant<'a>(
     ctx: &'a EvalContext<'_>,
-    span: graphcal_compiler::syntax::span::Span,
+    written: &graphcal_compiler::syntax::names::WrittenVariantRef,
 ) -> Option<&'a ResolvedIndexVariant> {
     ctx.current_dag
         .map(|dag| &dag.semantic.collection_refs)
-        .and_then(|refs| refs.variant_literals.get(&span))
+        .and_then(|refs| refs.variant_literals.get(written))
 }
 
 fn runtime_label_from_resolved_variant(resolved: &ResolvedIndexVariant) -> RuntimeValue {
@@ -218,11 +218,14 @@ pub fn index_ref_matches_resolved(
 
 fn constructor_call_target<'a>(
     ctx: &'a EvalContext<'_>,
-    span: graphcal_compiler::syntax::span::Span,
+    callee: &graphcal_compiler::syntax::ast::IdentPath,
 ) -> Option<&'a graphcal_compiler::tir::typed::ResolvedConstructorTarget> {
     ctx.current_dag
         .map(|dag| &dag.semantic.constructor_refs)
-        .and_then(|refs| refs.constructor_calls.get(&span))
+        .and_then(|refs| {
+            let constructor = refs.constructor_calls.get(&callee.to_name_path())?;
+            refs.constructor_defs.get(constructor)
+        })
 }
 
 fn runtime_struct_type_def<'a>(
@@ -337,8 +340,13 @@ fn eval_expr_inner(
         }
         ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
         ExprKind::VariantLiteral { index, variant } => {
-            let full_span = index.span.merge(variant.span);
-            Ok(resolved_value_index_variant(ctx, full_span).map_or_else(
+            let written = graphcal_compiler::syntax::names::WrittenVariantRef::IndexVariant(
+                graphcal_compiler::syntax::names::WrittenIndexVariant::new(
+                    index.value.clone(),
+                    variant.value.clone(),
+                ),
+            );
+            Ok(resolved_value_index_variant(ctx, &written).map_or_else(
                 || {
                     RuntimeValue::label_with_owner(
                         eval_owner(ctx),
@@ -359,7 +367,9 @@ fn eval_expr_inner(
             })
         }
         ExprKind::ConstRef(ident) => {
-            if let Some(resolved_variant) = resolved_value_index_variant(ctx, ident.span) {
+            let written =
+                graphcal_compiler::syntax::names::WrittenVariantRef::ConstPath(ident.value.clone());
+            if let Some(resolved_variant) = resolved_value_index_variant(ctx, &written) {
                 return Ok(runtime_label_from_resolved_variant(resolved_variant));
             }
 
@@ -497,7 +507,7 @@ fn eval_expr_inner(
 
         // --- Constructor call ---
         ExprKind::ConstructorCall { callee, fields, .. } => {
-            let resolved_constructor = constructor_call_target(ctx, callee.span());
+            let resolved_constructor = constructor_call_target(ctx, callee);
             let (constructor_name, owning_type) = if let Some(target) = resolved_constructor {
                 (
                     target.variant.name.clone(),

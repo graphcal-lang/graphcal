@@ -389,19 +389,13 @@ fn convert_indexed(
 
     let entries = entries_obj
         .iter()
-        .enumerate()
-        .map(|(entry_index, (variant, value))| {
+        .map(|(variant, value)| {
             let value_expr = convert_value(value, &format!("{param_name}[{variant}]"))?;
-            // TIR semantic metadata keys resolved map-entry variants by source span.
-            // JSON input has no real source locations, so give each synthetic
-            // key part a distinct span instead of reusing `SYNTH_SPAN`.
-            // TODO(#764): replace span-keyed TIR metadata addressing with a
-            // typed entry identity so overrides need no synthetic spans.
-            let index_span = Span::new(entry_index * 2 + 1, 0);
-            let variant_span = Span::new(entry_index * 2 + 2, 0);
+            // TIR semantic metadata is keyed by the written form of each map
+            // key, so synthetic spans need no uniqueness tricks here.
             Ok(MapEntry {
                 keys: NonEmpty::singleton(MapEntryKey {
-                    index: Spanned::new(MapEntryIndex::Named(index_path.clone()), index_span),
+                    index: Spanned::new(MapEntryIndex::Named(index_path.clone()), SYNTH_SPAN),
                     variant: Spanned::new(
                         IndexVariantName::try_new(variant.clone()).map_err(|reason| {
                             JsonInputError::InvalidName {
@@ -411,7 +405,7 @@ fn convert_indexed(
                                 reason,
                             }
                         })?,
-                        variant_span,
+                        SYNTH_SPAN,
                     ),
                 }),
                 value: value_expr,

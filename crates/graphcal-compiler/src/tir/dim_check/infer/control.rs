@@ -33,15 +33,21 @@ fn resolved_match_label_variant<'a>(
     pattern: &MatchPattern,
 ) -> Option<&'a ResolvedIndexVariant> {
     let refs = dag.map(|dag| &dag.semantic.collection_refs)?;
-    refs.match_label_variants
-        .get(&pattern.span())
-        .or_else(|| match pattern {
-            MatchPattern::IndexLabel { index, variant, .. } => refs
-                .match_label_variants
-                .get(&index.span.merge(variant.span)),
-            MatchPattern::Path { path, .. } => refs.match_label_variants.get(&path.span()),
-            MatchPattern::Constructor { .. } => None,
-        })
+    let written = match pattern {
+        MatchPattern::IndexLabel { index, variant, .. } => {
+            crate::syntax::names::WrittenVariantRef::IndexVariant(
+                crate::syntax::names::WrittenIndexVariant::new(
+                    index.value.clone(),
+                    variant.value.clone(),
+                ),
+            )
+        }
+        MatchPattern::Path { path, .. } => {
+            crate::syntax::names::WrittenVariantRef::PatternPath(path.to_name_path())
+        }
+        MatchPattern::Constructor { .. } => return None,
+    };
+    refs.match_label_variants.get(&written)
 }
 
 fn index_def_for_label_index<'a>(

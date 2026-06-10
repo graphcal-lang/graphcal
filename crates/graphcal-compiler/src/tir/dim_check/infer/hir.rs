@@ -2012,8 +2012,8 @@ fn infer_hir_constructor_call(
     let target = dag
         .semantic
         .constructor_refs
-        .constructor_calls
-        .get(&callee.span)
+        .constructor_defs
+        .get(&callee.value)
         .ok_or_else(|| GraphcalError::InternalError {
             message: format!(
                 "semantic TIR missing constructor call target for `{}`",
@@ -2909,11 +2909,11 @@ fn infer_hir_match(
                         span: arm.span.into(),
                     });
                 };
-                let pattern = dag
+                let target = dag
                     .semantic
                     .constructor_refs
-                    .match_pattern_constructors
-                    .get(&constructor.span)
+                    .constructor_defs
+                    .get(&constructor.value)
                     .ok_or_else(|| GraphcalError::InternalError {
                         message: format!(
                             "semantic TIR missing constructor match target for `{}`",
@@ -2922,20 +2922,17 @@ fn infer_hir_match(
                         src: src.clone(),
                         span: constructor.span.into(),
                     })?;
-                if !type_name.matches_resolved(&pattern.target.owning_type) {
+                if !type_name.matches_resolved(&target.owning_type) {
                     return Err(GraphcalError::UnknownField {
                         type_name: type_name.name().clone(),
-                        field_name: FieldName::new(pattern.target.variant.name.as_str()),
+                        field_name: FieldName::new(target.variant.name.as_str()),
                         src: src.clone(),
                         span: constructor.span.into(),
                     });
                 }
-                if !covered.insert(pattern.target.variant.name.clone()) {
+                if !covered.insert(target.variant.name.clone()) {
                     return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "duplicate match arm for `{}`",
-                            pattern.target.variant.name
-                        ),
+                        message: format!("duplicate match arm for `{}`", target.variant.name),
                         src: src.clone(),
                         span: (*span).into(),
                     });
@@ -2951,7 +2948,7 @@ fn infer_hir_match(
                         return Err(GraphcalError::EvalError {
                             message: format!(
                                 "duplicate pattern binding for field `{}` in `{}`",
-                                field.value, pattern.target.variant.name
+                                field.value, target.variant.name
                             ),
                             src: src.clone(),
                             span: field.span.into(),
@@ -2959,9 +2956,9 @@ fn infer_hir_match(
                     }
                     let field_type = constructor_field_type(
                         field,
-                        &pattern.target.variant,
-                        &pattern.target.owning_type,
-                        &pattern.target.type_def,
+                        &target.variant,
+                        &target.owning_type,
+                        &target.type_def,
                         scrutinee_type_args,
                         dag,
                         registry,

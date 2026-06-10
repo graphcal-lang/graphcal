@@ -979,6 +979,51 @@ fn eval_input_json_tagged_union() {
 }
 
 #[test]
+fn eval_input_json_multiple_structured_overrides() {
+    // Regression for #764: several indexed/tagged-union overrides in one JSON
+    // file. Span-keyed TIR semantic metadata gave every synthetic override the
+    // same (or per-entry colliding) spans, so one override's map keys and
+    // constructor callees could resolve against another override's metadata.
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/multi_override_params.gcl"),
+            "--input",
+            &fixture("valid/input_multi_override.json"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // total_dv = (3.0 + 2.0) km/s from delta_v + (0.5 + 0.25) km/s from boost
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("total_dv") && l.contains("5750")),
+        "expected total_dv=5750 m/s in output: {stdout}"
+    );
+    // maneuver overridden to Impulsive -> fuel_proxy takes the 0 N branch
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("fuel_proxy") && l.contains('0')),
+        "expected fuel_proxy=0 in output: {stdout}"
+    );
+    // guidance overridden to Closed(gain: 2.0)
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("gain_proxy") && l.contains('2')),
+        "expected gain_proxy=2 in output: {stdout}"
+    );
+}
+
+#[test]
 fn eval_input_json_unknown_param() {
     let dir = std::env::temp_dir().join("graphcal_test_input");
     std::fs::create_dir_all(&dir).unwrap();

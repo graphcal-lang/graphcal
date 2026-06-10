@@ -44,12 +44,12 @@ fn inference_owner(dag: Option<&crate::tir::typed::DagTIR>) -> crate::dag_id::Da
     )
 }
 
-fn resolved_value_index_variant(
-    dag: Option<&crate::tir::typed::DagTIR>,
-    span: crate::syntax::span::Span,
-) -> Option<&ResolvedIndexVariant> {
+fn resolved_value_index_variant<'a>(
+    dag: Option<&'a crate::tir::typed::DagTIR>,
+    written: &crate::syntax::names::WrittenVariantRef,
+) -> Option<&'a ResolvedIndexVariant> {
     dag.map(|dag| &dag.semantic.collection_refs)
-        .and_then(|refs| refs.variant_literals.get(&span))
+        .and_then(|refs| refs.variant_literals.get(written))
 }
 
 fn infer_resolved_index_variant_label(resolved_variant: &ResolvedIndexVariant) -> InferredType {
@@ -153,8 +153,13 @@ fn infer_type_with_owner_inner(
         }),
 
         ExprKind::VariantLiteral { index, variant } => {
-            let full_span = index.span.merge(variant.span);
-            if let Some(resolved_variant) = resolved_value_index_variant(dag, full_span) {
+            let written = crate::syntax::names::WrittenVariantRef::IndexVariant(
+                crate::syntax::names::WrittenIndexVariant::new(
+                    index.value.clone(),
+                    variant.value.clone(),
+                ),
+            );
+            if let Some(resolved_variant) = resolved_value_index_variant(dag, &written) {
                 return Ok(infer_resolved_index_variant_label(resolved_variant));
             }
 
@@ -193,7 +198,8 @@ fn infer_type_with_owner_inner(
         }
 
         ExprKind::ConstRef(ident) => {
-            if let Some(resolved_variant) = resolved_value_index_variant(dag, ident.span) {
+            let written = crate::syntax::names::WrittenVariantRef::ConstPath(ident.value.clone());
+            if let Some(resolved_variant) = resolved_value_index_variant(dag, &written) {
                 return Ok(infer_resolved_index_variant_label(resolved_variant));
             }
 
