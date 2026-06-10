@@ -24,48 +24,34 @@ use super::index_ref_with_eval_owner;
 
 /// Evaluate a `NatExpr` to a concrete `u64` during runtime.
 ///
-/// Looks up nat parameter values from `local_values` (stored as `__nat_param_X`).
+/// Generic Nat parameters are substituted during TIR construction, so a
+/// `Var` reaching evaluation is an internal invariant violation. The old
+/// code looked up a `__nat_param_{name}` key in `local_values` that no code
+/// ever wrote — a dead flat-string convention masking the broken path.
 fn eval_nat_expr(
     expr: &graphcal_compiler::desugar::resolved_ast::NatExpr,
-    local_values: &HashMap<String, RuntimeValue>,
     ctx: &EvalContext<'_>,
 ) -> Result<u64, GraphcalError> {
     use graphcal_compiler::desugar::resolved_ast::NatExpr;
     match expr {
         NatExpr::Literal(n, _) => Ok(*n),
-        NatExpr::Var(ident) => {
-            let key = format!("__nat_param_{}", ident.name);
-            let nat_val = local_values.get(&key).ok_or_else(|| {
-                ctx.internal_error(
-                    format!(
-                        "unresolved nat parameter `{}` in for-range binding",
-                        ident.name
-                    ),
-                    ident.span,
-                )
-            })?;
-            let RuntimeValue::Int(n) = nat_val else {
-                return Err(ctx.internal_error(
-                    format!("nat parameter `{}` has non-integer value", ident.name),
-                    ident.span,
-                ));
-            };
-            u64::try_from(*n).map_err(|_| {
-                ctx.internal_error(
-                    format!("nat parameter `{}` has negative value {}", ident.name, n),
-                    ident.span,
-                )
-            })
-        }
+        NatExpr::Var(ident) => Err(ctx.internal_error(
+            format!(
+                "unbound generic Nat parameter `{}` — Nat parameters must be \
+                 substituted before evaluation",
+                ident.name
+            ),
+            ident.span,
+        )),
         NatExpr::Add(lhs, rhs, span) => {
-            let l = eval_nat_expr(lhs, local_values, ctx)?;
-            let r = eval_nat_expr(rhs, local_values, ctx)?;
+            let l = eval_nat_expr(lhs, ctx)?;
+            let r = eval_nat_expr(rhs, ctx)?;
             l.checked_add(r)
                 .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} + {r}"), *span))
         }
         NatExpr::Mul(lhs, rhs, span) => {
-            let l = eval_nat_expr(lhs, local_values, ctx)?;
-            let r = eval_nat_expr(rhs, local_values, ctx)?;
+            let l = eval_nat_expr(lhs, ctx)?;
+            let r = eval_nat_expr(rhs, ctx)?;
             l.checked_mul(r)
                 .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} * {r}"), *span))
         }
@@ -613,7 +599,7 @@ pub(super) fn eval_for_comp(
             )
         }
         ForBindingIndex::Range { arg, span } => {
-            let size = eval_nat_expr(arg, local_values, ctx)?;
+            let size = eval_nat_expr(arg, ctx)?;
             if size == 0 {
                 return Err(ctx.eval_error(
                     "range(0) is not allowed; indexes must contain at least one element",
