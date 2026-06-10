@@ -1014,27 +1014,28 @@ fn eval_hir_map_literal(
     })
 }
 
-fn eval_hir_nat_expr(
-    expr: &hir::NatExpr,
-    local_values: &HirLocalValueMap,
-    ctx: &EvalContext<'_>,
-) -> Result<u64, GraphcalError> {
-    let _ = local_values;
+/// Generic Nat parameters are substituted during TIR construction, so a
+/// `Param` reaching evaluation is an internal invariant violation.
+fn eval_hir_nat_expr(expr: &hir::NatExpr, ctx: &EvalContext<'_>) -> Result<u64, GraphcalError> {
     match expr {
         hir::NatExpr::Literal(n, _) => Ok(*n),
         hir::NatExpr::Param(param) => Err(ctx.internal_error(
-            format!("unbound generic Nat parameter `{}`", param.value.name),
+            format!(
+                "unbound generic Nat parameter `{}` — Nat parameters must be \
+                 substituted before evaluation",
+                param.value.name
+            ),
             param.span,
         )),
         hir::NatExpr::Add(lhs, rhs, span) => {
-            let l = eval_hir_nat_expr(lhs, local_values, ctx)?;
-            let r = eval_hir_nat_expr(rhs, local_values, ctx)?;
+            let l = eval_hir_nat_expr(lhs, ctx)?;
+            let r = eval_hir_nat_expr(rhs, ctx)?;
             l.checked_add(r)
                 .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} + {r}"), *span))
         }
         hir::NatExpr::Mul(lhs, rhs, span) => {
-            let l = eval_hir_nat_expr(lhs, local_values, ctx)?;
-            let r = eval_hir_nat_expr(rhs, local_values, ctx)?;
+            let l = eval_hir_nat_expr(lhs, ctx)?;
+            let r = eval_hir_nat_expr(rhs, ctx)?;
             l.checked_mul(r)
                 .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} * {r}"), *span))
         }
@@ -1056,7 +1057,7 @@ fn eval_hir_for_comp(
             None,
         ),
         hir::expr::ForBindingIndex::Range { arg, span } => {
-            let size = eval_hir_nat_expr(arg, local_values, ctx)?;
+            let size = eval_hir_nat_expr(arg, ctx)?;
             if size == 0 {
                 return Err(ctx.eval_error(
                     "range(0) is not allowed; indexes must contain at least one element",
