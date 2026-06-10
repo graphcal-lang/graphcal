@@ -1587,3 +1587,27 @@ fn parse_layer_without_trailing_comma_after_last_field() {
         other => panic!("expected Layer, got {other:?}"),
     }
 }
+
+#[test]
+fn const_unit_form_is_rejected() {
+    // `const unit` used to parse identically to plain `unit`: the AST had
+    // no constness marker, so the formatter silently rewrote user source.
+    // The form is removed from the grammar; spell it `unit`.
+    let err = Parser::new("const unit hr: Time = 3600.0 s;")
+        .parse_file()
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::syntax::parser::ParseError::UnexpectedToken { .. }
+        ),
+        "expected UnexpectedToken, got {err:?}"
+    );
+}
+
+#[test]
+fn plain_unit_decl_still_parses() {
+    Parser::new("unit hr: Time = 3600.0 s;")
+        .parse_file()
+        .unwrap();
+}

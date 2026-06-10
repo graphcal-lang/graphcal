@@ -65,15 +65,6 @@ impl Parser<'_> {
         self.parse_unit_decl_inner(start_span, /*require_definition=*/ true)
     }
 
-    /// Parse `const unit Name: Dim = scale unit_expr;`.
-    pub(super) fn parse_const_unit(
-        &mut self,
-        const_span: crate::syntax::span::Span,
-    ) -> Result<Declaration, ParseError> {
-        let (_, _unit_span) = self.expect(Token::Unit)?;
-        self.parse_unit_decl_inner(const_span, /*require_definition=*/ true)
-    }
-
     /// Parse `base unit Name: Dim;` — a base unit in its dimension.
     pub(super) fn parse_base_unit_decl(
         &mut self,

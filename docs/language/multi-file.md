@@ -14,7 +14,7 @@ is the externally-visible package name.
 Two declarations bring outside material into a DAG:
 
 - **`import`** brings *names* (compile-time references: `type`, `dim`,
-  `unit`, `const node`, `const unit`, `dag`, `index`) into the local
+  `unit`, `const node`, `dag`, `index`) into the local
   scope. Imports never instantiate anything.
 - **`include`** *instantiates* a DAG with parameter bindings and embeds
   it as a sub-graph, exposing its outputs as nodes.
@@ -138,7 +138,6 @@ Only compile-time names cross the `import` boundary:
 | Declaration kind     | Reference after import                 |
 |----------------------|----------------------------------------|
 | `const node`         | `@name`                                |
-| `const unit`         | `name`                                 |
 | `dim`                | `DimName`                              |
 | `unit`               | `unit_name`                            |
 | `type`               | `TypeName`                             |
