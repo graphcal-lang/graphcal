@@ -13,13 +13,11 @@ pub use value::*;
 impl Phase for Raw {
     type DeclSugar = RawDeclSugar;
     type ExprSugar = RawExprSugar;
-    type RefSugar = UnresolvedRef;
 }
 
 impl Phase for Desugared {
     type DeclSugar = Infallible;
     type ExprSugar = Infallible;
-    type RefSugar = UnresolvedRef;
 }
 
 #[cfg(test)]
