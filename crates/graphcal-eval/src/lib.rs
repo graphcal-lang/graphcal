@@ -10,6 +10,7 @@ pub(crate) mod domain_check;
 pub mod eval;
 pub(crate) mod eval_expr;
 pub(crate) mod exec_plan;
+pub mod graph_ir;
 pub(crate) mod import_surface;
 pub(crate) mod inline_dag;
 pub mod loader;

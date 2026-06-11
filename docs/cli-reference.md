@@ -24,6 +24,7 @@ graphcal [OPTIONS] <COMMAND>
 | [`eval`](#graphcal-eval) | Evaluate a `.gcl` file |
 | [`format`](#graphcal-format) | Format `.gcl` files |
 | [`check`](#graphcal-check) | Check `.gcl` files for errors without evaluation |
+| [`graph`](#graphcal-graph) | Export the dependency graph of a `.gcl` file |
 | [`lsp`](#graphcal-lsp) | Start the LSP server |
 
 ---
@@ -303,6 +304,67 @@ graphcal check my_project/
 |------|---------|
 | `0` | No errors found |
 | `1` | Errors detected |
+
+---
+
+## `graphcal graph`
+
+Export the dependency graph of a `.gcl` file as text for external rendering
+tools. The graph is a one-way projection of the compiled program: `param`,
+`const node`, and `node` declarations become vertices; every `@` reference
+becomes a directed edge from the value being read to the declaration reading
+it. Inline `dag` blocks render as nested clusters. Assertions, plots, figures,
+and layers are not part of the dataflow and are omitted.
+
+```bash
+graphcal graph [OPTIONS] <FILE>
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `<FILE>` | Path to the `.gcl` file (required) |
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--format <FORMAT>` | Output format: `dot` (default; currently the only format) |
+| `--root <ROOT>` | Project root directory (overrides automatic `graphcal.toml` detection) |
+
+The output is deterministic (declarations keep source order, edges are sorted),
+so exported graphs diff cleanly in version control.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Graph exported successfully |
+| `2` | Compile error (parse or type check) or I/O error |
+
+**Examples:**
+
+```bash
+# Print Graphviz DOT text to stdout
+$ graphcal graph rocket.gcl
+digraph graphcal {
+    rankdir=LR;
+    node [fontname="Helvetica,Arial,sans-serif"];
+    "rocket.dry_mass" [label="dry_mass\nMass", shape=ellipse];
+    ...
+    "rocket.v_exhaust" -> "rocket.delta_v";
+}
+
+# Render to SVG with Graphviz
+graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
+```
+
+Node styling encodes the declaration kind: `param` declarations are ellipses
+(the graph's inputs), `const node` declarations are rounded boxes, `node`
+declarations are plain boxes, and values imported from other files are dashed
+boxes labeled with their fully qualified name. Each vertex's label shows the
+declaration name and its resolved type.
 
 ---
 

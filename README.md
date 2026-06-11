@@ -65,9 +65,12 @@ graphcal eval rocket.gcl --set 'isp=450.0 s'
 # Override from JSON, emit JSON, or open an interactive plot
 graphcal eval analysis.gcl --input params.json --format json
 graphcal eval analysis.gcl --plot browser
+
+# Export the dependency graph as Graphviz DOT
+graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 ```
 
-See the [CLI reference](https://graphcal-lang.github.io/graphcal/cli-reference/) for the full surface, including `format`, `check`, and `lsp`.
+See the [CLI reference](https://graphcal-lang.github.io/graphcal/cli-reference/) for the full surface, including `format`, `check`, `graph`, and `lsp`.
 
 ## Editor Support
 
