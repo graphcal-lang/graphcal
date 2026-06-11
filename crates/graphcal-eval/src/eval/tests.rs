@@ -984,7 +984,7 @@ fn project_qualified_index_type_annotation_and_variant_arg() {
     std::fs::write(
         root_dir.join("lib.gcl"),
         "pub index Phase = { Burn, Coast };\n\
-         pub dim Acceleration = Length / Time^2;\n\
+         pub dim GravityAccel = Length / Time^2;\n\
          pub node thrust: Dimensionless[Phase] = { Phase.Burn: 3.0, Phase.Coast: 5.0 };\n",
     )
     .unwrap();
@@ -994,7 +994,7 @@ fn project_qualified_index_type_annotation_and_variant_arg() {
         "import mission.lib as lib;\n\
          node thrust: Dimensionless[lib.Phase] = { lib.Phase.Burn: 3.0, lib.Phase.Coast: 5.0 };\n\
          node burn: Dimensionless = @thrust[lib.Phase.Burn];\n\
-         node accel: lib.Acceleration = 9.80665 m/s^2;\n",
+         node accel: lib.GravityAccel = 9.80665 m/s^2;\n",
     )
     .unwrap();
 
@@ -2615,8 +2615,6 @@ include recursive(x: 1.0).{result};
 fn inline_dag_from_source() {
     // Test inline DAG from in-memory source.
     let source = "
-pub dim Velocity = Length / Time;
-
 dag add_velocities {
     param a: Velocity;
     param b: Velocity;
@@ -3341,7 +3339,6 @@ node SAT: Spec = Spec(mass: @x);
 #[test]
 fn union_member_field_violation() {
     let source = "
-pub dim Velocity = Length / Time;
 pub type Result {
     Burn(dv: Velocity(max: 10.0 km/s)),
     Coast,
@@ -3421,7 +3418,6 @@ param p: Vec3<Length(min: 0.0 m), Eci> = Vec3<Length, Eci>(x: 1.0 m, y: 2.0 m, z
 #[test]
 fn included_dag_param_constraint_runtime_violation() {
     let source = "
-pub dim Velocity = Length / Time;
 dag bumper {
     param v: Velocity(max: 100.0 m/s);
     pub node out: Velocity = @v * 2.0;
@@ -3441,7 +3437,6 @@ include bumper(v: @speed).{ out as doubled };
 #[test]
 fn included_dag_param_constraint_dim_mismatch() {
     let source = "
-pub dim Velocity = Length / Time;
 dag bumper {
     param v: Velocity(min: 1.0 kg);
     pub node out: Velocity = @v;

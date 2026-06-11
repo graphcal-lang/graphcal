@@ -1,12 +1,13 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 130
 expression: rendered
 ---
 unknown field `nonexistent` on struct `Transfer`
     Diagnostic severity: error
-Begin snippet for unknown_struct_field.gcl starting at line 9, column 1
+Begin snippet for unknown_struct_field.gcl starting at line 7, column 1
 
-snippet line 9: node transfer: Transfer = Transfer(dv1: @v, dv2: @v);
-snippet line 10: node bad: Velocity = @transfer.nonexistent;
-    label at line 10, columns 32 to 42: no such field
+snippet line 7: node transfer: Transfer = Transfer(dv1: @v, dv2: @v);
+snippet line 8: node bad: Velocity = @transfer.nonexistent;
+    label at line 8, columns 32 to 42: no such field
 diagnostic code: graphcal::S003

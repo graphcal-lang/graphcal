@@ -1,5 +1,3 @@
-pub dim Velocity = Length / Time;
-
 type Orbit {
     Orbit(altitude: Length, speed: Velocity),
 }

@@ -1,7 +1,4 @@
 // Required index declarations — bindable via parameterized import.
-dim Velocity = Length / Time;
-dim Acceleration = Length / Time^2;
-
 // Required named index (no variants specified)
 pub(bind) index Phase;
 

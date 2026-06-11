@@ -1,6 +1,4 @@
 // variant_comparison.gcl -- Comparing loop variables to index variant literals
-pub dim Velocity = Length / Time;
-
 pub index Maneuver = { Departure, Correction, Insertion };
 
 param delta_v: Velocity[Maneuver] = {

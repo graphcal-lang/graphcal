@@ -1,6 +1,4 @@
 // Module import with alias
 import constants.lib as c;
 
-dim Acceleration = Length / Time^2;
-
 node g: Acceleration = @c.g0;

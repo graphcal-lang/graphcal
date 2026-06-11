@@ -1,5 +1,4 @@
 // functions.gcl -- Phase 6 milestone: DAG blocks replace user-defined functions
-dim Velocity = Length / Time;
 dim GravParam = Length^3 / Time^2;
 
 type TransferResult {

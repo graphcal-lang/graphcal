@@ -1,6 +1,4 @@
 // domain_union_member_violation.gcl -- union variant field constraint violation
-pub dim Velocity = Length / Time;
-
 pub type ManeuverResult {
     Burn(dv: Velocity(min: 0.0 m/s, max: 10.0 km/s), duration: Time(min: 0.0 s)),
     Coast,

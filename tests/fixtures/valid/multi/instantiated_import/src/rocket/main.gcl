@@ -1,6 +1,4 @@
 // main.gcl -- instantiated import: override one param, selective import
-dim Velocity = Length / Time;
-
 include rocket.lib(dry_mass: 800.0 kg).{ delta_v };
 
 node result: Velocity = @delta_v;

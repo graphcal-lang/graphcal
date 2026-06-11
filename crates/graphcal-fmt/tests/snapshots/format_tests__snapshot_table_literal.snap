@@ -1,11 +1,9 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 618
 expression: formatted
 ---
 // table_literal.gcl -- Table literal syntax sugar tests
-pub dim Velocity = Length / Time;
-pub dim Mass = Mass;
-
 pub index Maneuver = { Departure, Correction, Insertion };
 pub index Phase = { Launch, Cruise, Arrival };
 

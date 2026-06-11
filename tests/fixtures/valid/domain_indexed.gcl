@@ -1,6 +1,4 @@
 // domain_indexed.gcl -- indexed param with constrained base type (element-wise)
-pub dim Velocity = Length / Time;
-
 pub index Maneuver = { Departure, Arrival };
 
 param delta_v: Velocity(min: 0.0 m/s, max: 10000.0 m/s)[Maneuver] = {

@@ -1,6 +1,4 @@
 // variant_match.gcl -- Match expressions on loop variables (index variants)
-pub dim Velocity = Length / Time;
-
 pub index Maneuver = { Departure, Correction, Insertion };
 
 param delta_v: Velocity[Maneuver] = {

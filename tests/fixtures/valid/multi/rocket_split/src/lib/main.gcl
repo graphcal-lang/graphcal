@@ -2,8 +2,6 @@
 import lib.constants.{ g0 };
 include lib.params().{ dry_mass, fuel_mass, isp };
 
-dim Velocity = Length / Time;
-
 node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);

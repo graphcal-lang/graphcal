@@ -1,7 +1,4 @@
 // assertions.gcl -- Assertion feature tests
-pub dim Velocity = Length / Time;
-pub dim Force = Mass * Length / Time^2;
-
 param mass: Mass = 100.0 kg;
 param velocity: Velocity = 50.0 m/s;
 param max_velocity: Velocity = 200.0 m/s;

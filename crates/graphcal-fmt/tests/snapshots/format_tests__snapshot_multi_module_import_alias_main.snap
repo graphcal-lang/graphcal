@@ -1,10 +1,9 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 782
 expression: formatted
 ---
 // Module import with alias
 import constants.lib as c;
-
-dim Acceleration = Length / Time^2;
 
 node g: Acceleration = @c.g0;

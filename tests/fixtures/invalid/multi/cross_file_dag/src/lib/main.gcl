@@ -1,6 +1,4 @@
 // main.gcl -- includes a DAG from another file
-pub dim Velocity = Length / Time;
-
 param speed: Velocity = 200.0 m/s;
 include lib.double_speed(v: @speed).{ result as doubled, mach as mach_number };
 node final_result: Velocity = @doubled;

@@ -4,9 +4,6 @@
 // param from a single JSON input used to collide in span-keyed TIR semantic
 // metadata (every override callee span was synthetic), misresolving one
 // override against another's metadata.
-pub dim Velocity = Length / Time;
-pub dim Force = Mass * Length / Time^2;
-
 pub index Maneuver = { Departure, Insertion };
 
 pub index Phase = { Launch, Cruise };

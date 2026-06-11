@@ -1,6 +1,4 @@
 // generics.gcl -- Generic structs with phantom type parameters
-pub dim Velocity = Length / Time;
-
 // Marker types for reference frames — single unit constructor.
 pub type Eci {
     Eci,

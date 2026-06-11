@@ -1,6 +1,4 @@
 // error: missing fields in struct construction
-pub dim Velocity = Length / Time;
-
 pub type Transfer {
     Transfer(dv1: Velocity, dv2: Velocity),
 }

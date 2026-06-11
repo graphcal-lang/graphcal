@@ -1,6 +1,4 @@
 // Error: field access on multi-variant type (should use match instead)
-pub dim Velocity = Length / Time;
-
 pub type ManeuverKind {
     Impulsive(delta_v: Velocity),
     Coasting,

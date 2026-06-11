@@ -1,6 +1,4 @@
 // error: field dim mismatch in struct construction
-dim Velocity = Length / Time;
-
 type Pair {
     Pair(a: Length, b: Velocity),
 }

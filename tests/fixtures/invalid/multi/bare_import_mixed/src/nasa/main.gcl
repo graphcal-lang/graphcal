@@ -2,7 +2,4 @@
 import nasa.constants.{ g0 };
 include local_params().{ isp };
 
-dim Velocity = Length / Time;
-dim Acceleration = Length / Time^2;
-
 node v_exhaust: Velocity = @isp * @g0;
