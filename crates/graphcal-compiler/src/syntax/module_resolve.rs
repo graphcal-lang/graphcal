@@ -1447,6 +1447,15 @@ impl ModuleResolver {
             })
     }
 
+    /// Import scope registered for a module, if any.
+    ///
+    /// IDE consumers use this to map canonical owners back to the module
+    /// aliases a file spelled in its imports.
+    #[must_use]
+    pub fn scope(&self, owner: &DagId) -> Option<&ModuleScope> {
+        self.scopes.get(owner)
+    }
+
     fn module_scope(&self, owner: &DagId) -> Result<&ModuleScope, ModuleResolveError> {
         self.scopes
             .get(owner)
