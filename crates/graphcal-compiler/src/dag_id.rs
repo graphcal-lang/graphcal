@@ -111,6 +111,18 @@ impl DagId {
         self.tail.last().map_or(&self.head, |s| s)
     }
 
+    /// True if `self` is a strict descendant of `ancestor` (an inline `dag`
+    /// block nested — at any depth — inside the DAG identified by `ancestor`).
+    #[must_use]
+    pub fn is_descendant_of(&self, ancestor: &Self) -> bool {
+        if self.segment_count() <= ancestor.segment_count() {
+            return false;
+        }
+        self.segments()
+            .zip(ancestor.segments())
+            .all(|(a, b)| a == b)
+    }
+
     /// Create a `DagId` from a relative file path, stripping the `.gcl` extension.
     ///
     /// This is the only place where filesystem paths are converted into `DagId`s.
@@ -197,6 +209,18 @@ mod tests {
     fn parent_of_root_is_none() {
         let id = DagId::root("main");
         assert!(id.parent().is_none());
+    }
+
+    #[test]
+    fn is_descendant_of_matches_nested_blocks_only() {
+        let file = DagId::new("helpers", ["math"]);
+        let child = file.child("double_speed");
+        let grandchild = child.child("inner");
+        assert!(child.is_descendant_of(&file));
+        assert!(grandchild.is_descendant_of(&file));
+        assert!(!file.is_descendant_of(&file));
+        assert!(!file.is_descendant_of(&child));
+        assert!(!DagId::new("helpers", ["other"]).is_descendant_of(&file));
     }
 
     #[test]

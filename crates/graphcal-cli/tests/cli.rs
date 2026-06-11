@@ -3040,3 +3040,116 @@ fn format_check_fails_on_unparsable_file() {
         "format must fail on a parse error"
     );
 }
+
+#[test]
+fn graph_rocket_dot_output() {
+    let output = graphcal_bin()
+        .args(["graph", &fixture("valid/rocket.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+
+    // The experimental notice goes to stderr; stdout must stay a clean pipe
+    // into `dot`.
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("`graphcal graph` is experimental"),
+        "expected experimental warning on stderr: {stderr}"
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        r#"digraph graphcal {
+    rankdir=LR;
+    node [fontname="Helvetica,Arial,sans-serif"];
+    "rocket.dry_mass" [label="dry_mass\nMass", shape=ellipse];
+    "rocket.fuel_mass" [label="fuel_mass\nMass", shape=ellipse];
+    "rocket.isp" [label="isp\nTime", shape=ellipse];
+    "rocket.g0" [label="g0\nLength / Time^2", shape=box, style=rounded];
+    "rocket.v_exhaust" [label="v_exhaust\nLength / Time", shape=box];
+    "rocket.mass_ratio" [label="mass_ratio\nDimensionless", shape=box];
+    "rocket.delta_v" [label="delta_v\nLength / Time", shape=box];
+    "rocket.dry_mass" -> "rocket.mass_ratio";
+    "rocket.fuel_mass" -> "rocket.mass_ratio";
+    "rocket.g0" -> "rocket.v_exhaust";
+    "rocket.isp" -> "rocket.v_exhaust";
+    "rocket.mass_ratio" -> "rocket.delta_v";
+    "rocket.v_exhaust" -> "rocket.delta_v";
+}
+"#
+    );
+}
+
+#[test]
+fn graph_explicit_dot_format_matches_default() {
+    let default_out = graphcal_bin()
+        .args(["graph", &fixture("valid/rocket.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+    let dot_out = graphcal_bin()
+        .args(["graph", &fixture("valid/rocket.gcl"), "--format", "dot"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(dot_out.status.success());
+    assert_eq!(default_out.stdout, dot_out.stdout);
+}
+
+#[test]
+fn graph_inline_dag_renders_cluster() {
+    let output = graphcal_bin()
+        .args(["graph", &fixture("valid/inline_dag_call_basic/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("subgraph \"cluster_main.scale\" {"),
+        "inline dag block should render as a cluster:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("label=\"dag scale\";"),
+        "cluster should carry the dag's name as its label:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("\"main.scale.v\" -> \"main.scale.result\";"),
+        "cluster-internal dataflow should be present:\n{stdout}"
+    );
+}
+
+#[test]
+fn graph_compile_error_exits_2() {
+    let output = graphcal_bin()
+        .args(["graph", &fixture("invalid/const_cycle.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn graph_imported_values_render_as_external_nodes() {
+    let output = graphcal_bin()
+        .args([
+            "graph",
+            &fixture("valid/multi/rocket_split/src/lib/main.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(
+            "\"src.lib.constants.g0\" [label=\"src.lib.constants.g0\", shape=box, style=dashed];"
+        ),
+        "imported value should render as a dashed external node:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("\"src.lib.constants.g0\" -> \"src.lib.main.v_exhaust\";"),
+        "cross-file dataflow edge should be present:\n{stdout}"
+    );
+}

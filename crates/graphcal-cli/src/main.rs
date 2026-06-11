@@ -94,8 +94,25 @@ enum Commands {
         #[arg(long)]
         root: Option<PathBuf>,
     },
+    /// Export the dependency graph of a .gcl file (experimental)
+    Graph {
+        /// Path to the .gcl file
+        file: PathBuf,
+        /// Output format
+        #[arg(long, value_enum, default_value = "dot")]
+        format: GraphFormat,
+        /// Project root directory (overrides automatic graphcal.toml detection)
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
     /// Start the Language Server Protocol (LSP) server
     Lsp,
+}
+
+#[derive(ValueEnum, Clone)]
+enum GraphFormat {
+    /// Graphviz DOT text (pipe to `dot -Tsvg` to render)
+    Dot,
 }
 
 #[derive(ValueEnum, Clone)]
@@ -144,6 +161,9 @@ fn run_command(cli: Cli) {
         }
         Commands::Format { paths, check } => {
             run_format(&paths, check);
+        }
+        Commands::Graph { file, format, root } => {
+            run_graph(&file, &format, root.as_deref());
         }
         Commands::Lsp => {
             #[expect(
@@ -337,6 +357,29 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
     if error_count > 0 {
         eprintln!("{error_count} file(s) had errors");
         process::exit(1);
+    }
+}
+
+/// `graphcal graph`: compile to TIR, project the dependency graph IR, and
+/// print it in the requested export format. The projection and rendering are
+/// pure (`graphcal_eval::graph_ir`); this shell only does I/O.
+fn run_graph(file: &Path, format: &GraphFormat, project_root: Option<&Path>) {
+    // On stderr so stdout stays a clean pipe into `dot`.
+    eprintln!(
+        "warning: `graphcal graph` is experimental; its output and CLI surface may change in any release"
+    );
+    let fs = build_rooted_filesystem(file, project_root);
+    match compile_to_tir_project(file, project_root, &fs) {
+        Ok((tir, _project)) => {
+            let ir = graphcal_eval::graph_ir::project_tir(&tir);
+            match format {
+                GraphFormat::Dot => print!("{}", graphcal_eval::graph_ir::dot::render(&ir)),
+            }
+        }
+        Err(e) => {
+            eprintln!("{:?}", miette::Report::new(e));
+            process::exit(2);
+        }
     }
 }
 
