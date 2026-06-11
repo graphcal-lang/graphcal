@@ -824,7 +824,7 @@ fn collect_imported_definitions(
             });
 
         match kind {
-            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) => {
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
                 for import_item in items {
                     let original_name = import_item.name.name.clone();
                     let local_name = import_item.local_name().to_string();
@@ -850,7 +850,7 @@ fn collect_imported_definitions(
                     }
                 }
             }
-            graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
                 let module_name = alias.as_ref().map_or_else(
                     || {
                         graphcal_eval::loader::derive_module_name(&path_display)
@@ -880,7 +880,7 @@ fn collect_imported_definitions(
 fn rekey_selective_import(
     key: &SymbolKey,
     category: SymbolCategory,
-    namespace: graphcal_compiler::desugar::resolved_ast::ImportItemNamespace,
+    namespace: graphcal_compiler::desugar::desugared_ast::ImportItemNamespace,
     original: &str,
     local: &str,
 ) -> Option<SymbolKey> {
@@ -925,14 +925,14 @@ fn rekey_selective_import(
 }
 
 const fn selective_import_allows_category(
-    namespace: graphcal_compiler::desugar::resolved_ast::ImportItemNamespace,
+    namespace: graphcal_compiler::desugar::desugared_ast::ImportItemNamespace,
     category: SymbolCategory,
 ) -> bool {
     match namespace {
-        graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Type => {
+        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Type => {
             matches!(category, SymbolCategory::StructType | SymbolCategory::Field)
         }
-        graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Default => {
+        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Default => {
             !matches!(category, SymbolCategory::StructType)
         }
     }

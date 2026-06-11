@@ -77,7 +77,7 @@ pub(super) fn attach_display_units(
 /// Handles both static and dynamic unit scales. For dynamic units, the scale
 /// expression is evaluated using the provided evaluation context and value map.
 pub(super) fn resolve_unit_to_display(
-    unit: &graphcal_compiler::desugar::resolved_ast::UnitExpr,
+    unit: &graphcal_compiler::desugar::desugared_ast::UnitExpr,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
 ) -> Option<DisplayUnit> {
@@ -117,7 +117,7 @@ pub(super) fn extract_flat_display_unit(
 /// module-aware runtime declaration keys so dynamic-unit graph refs are not
 /// reclassified through display leaf names.
 fn resolve_display_unit_scale(
-    unit: &graphcal_compiler::desugar::resolved_ast::UnitExpr,
+    unit: &graphcal_compiler::desugar::desugared_ast::UnitExpr,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
 ) -> Option<f64> {

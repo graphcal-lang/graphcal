@@ -2,8 +2,8 @@ use std::marker::PhantomData;
 
 use crate::syntax::ast::common::{Ident, ModulePath};
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, IndexName, IndexVariantName, LocalName,
-    NamePath, ScopedName, StructTypeName, UnitName,
+    ConstructorName, DeclName, FieldName, IndexName, IndexVariantName, LocalName, NamePath,
+    ScopedName, UnitName,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Phase, Raw};
@@ -36,9 +36,9 @@ pub enum RawExprSugar {
 ///
 /// Carried by `ExprKind::UnresolvedRef(P::RefSugar)`. The parser emits these
 /// when the meaning of an identifier path cannot be determined from syntax
-/// alone; the name-resolution pass rewrites them into concrete `ConstRef` /
-/// `LocalRef` / `VariantLiteral` / `ConstructorCall` variants and produces a
-/// [`crate::syntax::phase::Resolved`] AST in which `RefSugar = Infallible`.
+/// alone; HIR expression lowering ([`crate::hir::lower_expr`]) classifies and
+/// resolves them in a single pass against the lexical scope and the
+/// module-aware resolver.
 ///
 /// This indirection is necessary because the same token shape can mean
 /// different expression kinds depending on declarations and local scopes. For
@@ -57,9 +57,8 @@ pub enum RawExprSugar {
 /// ```
 ///
 /// Only after collecting names from the file can resolution know whether
-/// `Foo` is an index. In the first program `Foo.Bar` becomes a
-/// `VariantLiteral`; in the second it becomes a qualified `ConstRef` whose
-/// validity is checked later.
+/// `Foo` is an index. In the first program `Foo.Bar` becomes a HIR variant
+/// literal; in the second it becomes a qualified constant-like reference.
 ///
 /// Bare identifiers have the same issue. `PI` parses as the unresolved path
 /// `PI` both when it denotes the built-in constant:
@@ -75,8 +74,8 @@ pub enum RawExprSugar {
 /// node x: Dimensionless[I] = for PI: I { PI };
 /// ```
 ///
-/// Name resolution turns the first `PI` into a `ConstRef`, but the loop body
-/// `PI` in the second program into a `LocalRef`.
+/// Name resolution turns the first `PI` into a built-in constant reference,
+/// but the loop body `PI` in the second program into a local reference.
 ///
 /// The payload is a path rather than separate "bare" and "qualified" variants
 /// so the parser records the complete syntactic structure uniformly:
@@ -505,20 +504,11 @@ pub enum ExprKind<P: Phase = Raw> {
     Bool(bool),
     /// String literal: `"hello"` (used as arguments to `datetime()`, `epoch()`, etc.)
     StringLiteral(String),
-    /// A bare type-system name used where a value expression is required by
-    /// surface syntax, such as an include binding RHS.
-    TypeSystemRef(Spanned<TypeSystemRefKind>),
     /// Graph reference: `@name` or `@alias.member`. The payload encodes
     /// qualification structurally — `Local` for bare `@name`, `Qualified`
     /// for `@alias.member` (after the namespace-alias rewrite). Producers
     /// never invent or interpret a flat-string separator.
     GraphRef(Spanned<ScopedName>),
-    /// Built-in constant reference (`PI`, `E`, `TAU`) or module-qualified
-    /// constant (`module.CONST`). The payload encodes qualification
-    /// structurally — see [`GraphRef`].
-    ///
-    /// [`GraphRef`]: ExprKind::GraphRef
-    ConstRef(Spanned<ScopedName>),
     /// Binary operation: `a + b`, `a * b`, `a ^ b`, `a && b`, etc.
     BinOp {
         op: BinOp,
@@ -554,8 +544,6 @@ pub enum ExprKind<P: Phase = Raw> {
         expr: Box<Expr<P>>,
         timezone: String,
     },
-    /// Local variable reference (loop variable, function parameter, match binding, etc.)
-    LocalRef(Ident),
     /// Field access: `@transfer.dv1`, `@mission.transfer.dv1`
     FieldAccess {
         expr: Box<Expr<P>>,
@@ -607,15 +595,6 @@ pub enum ExprKind<P: Phase = Raw> {
     Match {
         scrutinee: Box<Expr<P>>,
         arms: Vec<MatchArm<P>>,
-    },
-    /// Standalone index variant reference after name resolution has proven a
-    /// local `Index.Variant` reference.
-    ///
-    /// Qualified module variants currently stay as syntactic paths until a
-    /// module-aware resolver can prove the target index.
-    VariantLiteral {
-        index: Spanned<NamePath>,
-        variant: Spanned<IndexVariantName>,
     },
     /// Inline DAG invocation: `@dag(args).out` or `@module.dag(args).out`.
     ///
@@ -800,34 +779,6 @@ impl std::fmt::Display for MapEntryIndex {
             Self::Named(name) => write!(f, "{name}"),
             Self::NatRange(size) => write!(f, "range({size})"),
         }
-    }
-}
-
-/// A bare type-system identifier after name resolution.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeSystemRefKind {
-    Type(StructTypeName),
-    Dimension(DimName),
-    Index(IndexName),
-    BareVariant(IndexVariantName),
-    Imported(StructTypeName),
-}
-
-impl TypeSystemRefKind {
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Type(name) | Self::Imported(name) => name.as_str(),
-            Self::Dimension(name) => name.as_str(),
-            Self::Index(name) => name.as_str(),
-            Self::BareVariant(name) => name.as_str(),
-        }
-    }
-}
-
-impl std::fmt::Display for TypeSystemRefKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
     }
 }
 

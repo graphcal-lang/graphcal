@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::resolved_ast::{DeclKind, Expr, ExprKind, ModulePath};
+use graphcal_compiler::desugar::desugared_ast::{DeclKind, Expr, ExprKind, ModulePath};
 use graphcal_compiler::syntax::names::{
     DeclName, DimName, IndexName, ModuleAliasName, StructTypeName,
 };
-use graphcal_compiler::syntax::phase::Resolved;
+use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
@@ -78,7 +78,7 @@ struct AliasFieldAccessRewriter<'a> {
     qualified_pairs: &'a HashSet<QualifiedMember>,
 }
 
-impl ExprVisitorMut<Resolved> for AliasFieldAccessRewriter<'_> {
+impl ExprVisitorMut<Desugared> for AliasFieldAccessRewriter<'_> {
     type Error = std::convert::Infallible;
 
     fn visit_expr_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
@@ -226,7 +226,7 @@ pub(in crate::eval::project) struct DeferredDagInclude {
     /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on
     /// included assertions). Key = original name in dep.
     pub(in crate::eval::project) import_item_attributes:
-        HashMap<DeclName, Vec<graphcal_compiler::desugar::resolved_ast::Attribute>>,
+        HashMap<DeclName, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
     /// Whether this include carries a leading `pub` (whole-module re-export).
     pub(in crate::eval::project) pub_reexport_whole: bool,
     /// Original names of selective items marked `pub` in the importer's
@@ -251,7 +251,7 @@ pub(in crate::eval::project) enum DeferredDagSource {
     /// performing the include).
     InlineDag {
         /// Virtual File AST constructed from the DAG body declarations.
-        dag_body: graphcal_compiler::desugar::resolved_ast::File,
+        dag_body: graphcal_compiler::desugar::desugared_ast::File,
         /// Imported names collected from `import ..` inside the DAG body.
         dag_imported_names: ImportedValueNames,
         /// Canonical identity of the included DAG module.
@@ -308,10 +308,10 @@ pub(in crate::eval::project) enum SelectiveImportResult {
 /// If there are no module imports and no qualified members, returns a
 /// borrowed reference to the original AST.
 pub(in crate::eval::project) fn rewrite_qualified_refs_in_ast<'a>(
-    ast: &'a graphcal_compiler::desugar::resolved_ast::File,
+    ast: &'a graphcal_compiler::desugar::desugared_ast::File,
     module_map: &HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
     imported_names: &ImportedValueNames,
-) -> std::borrow::Cow<'a, graphcal_compiler::desugar::resolved_ast::File> {
+) -> std::borrow::Cow<'a, graphcal_compiler::desugar::desugared_ast::File> {
     let alias_pairs = collect_qualified_pairs(imported_names);
     if module_map.is_empty() && alias_pairs.is_empty() {
         return std::borrow::Cow::Borrowed(ast);
@@ -350,7 +350,7 @@ fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<QualifiedMe
 
 /// Apply the alias-field-access rewrite to a single declaration's expressions.
 fn rewrite_decl_exprs(
-    decl: &mut graphcal_compiler::desugar::resolved_ast::Declaration,
+    decl: &mut graphcal_compiler::desugar::desugared_ast::Declaration,
     alias_pairs: &HashSet<QualifiedMember>,
 ) {
     let rewrite = |e: &mut Expr| {
@@ -365,8 +365,8 @@ fn rewrite_decl_exprs(
         DeclKind::Node(n) => rewrite(&mut n.value),
         DeclKind::ConstNode(c) => rewrite(&mut c.value),
         DeclKind::Assert(a) => match &mut a.body {
-            graphcal_compiler::desugar::resolved_ast::AssertBody::Expr(e) => rewrite(e),
-            graphcal_compiler::desugar::resolved_ast::AssertBody::Tolerance {
+            graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(e) => rewrite(e),
+            graphcal_compiler::desugar::desugared_ast::AssertBody::Tolerance {
                 actual,
                 expected,
                 tolerance,
@@ -397,7 +397,7 @@ pub(super) fn resolve_field_declared_type(
     registry: &Registry,
 ) -> Option<DeclaredType> {
     // Check if the field type is a bare generic param reference (e.g., `D`)
-    if let graphcal_compiler::desugar::resolved_ast::TypeExprKind::DimExpr(dim_expr) =
+    if let graphcal_compiler::desugar::desugared_ast::TypeExprKind::DimExpr(dim_expr) =
         &field.type_ann.kind
         && dim_expr.terms.len() == 1
         && dim_expr.terms[0].term.power.is_none()
@@ -426,7 +426,7 @@ pub(super) fn resolve_field_declared_type(
 /// Validate and apply parameter overrides to an IR.
 pub(in crate::eval::project) fn apply_overrides(
     ir: &mut graphcal_compiler::ir::lower::IR,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
 ) -> Result<(), CompileError> {
     for (override_name, override_expr) in overrides {
         let name_str = override_name.as_str();
@@ -449,23 +449,8 @@ pub(in crate::eval::project) fn apply_overrides(
         if let Some(entry) = ir.params.iter_mut().find(|e| e.name.member() == name_str) {
             entry.default_expr = Some(override_expr.clone());
         }
-
-        let all_runtime: std::collections::HashSet<&str> = ir
-            .params
-            .iter()
-            .map(|e| e.name.member())
-            .chain(ir.nodes.iter().map(|e| e.name.member()))
-            .collect();
-        let mut graph_refs = std::collections::HashSet::new();
-        graphcal_compiler::ir::resolve::collect_graph_refs(
-            override_expr,
-            &all_runtime,
-            &mut graph_refs,
-        );
-        ir.runtime_deps.insert(
-            ScopedName::local(name_str),
-            graph_refs.into_iter().map(ScopedName::local).collect(),
-        );
+        // Runtime dependencies are recomputed from the lowered HIR during
+        // type resolution, so the replaced default needs no dep bookkeeping.
     }
     Ok(())
 }
@@ -507,7 +492,7 @@ pub fn compile_to_tir_from_project(
 )]
 pub fn compile_and_eval_from_project(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
     pipeline::evaluate_project_perfile(project, overrides)
 }
@@ -528,7 +513,7 @@ pub fn compile_and_eval_from_project(
 )]
 pub fn compile_and_eval_project<F: graphcal_io::FileSystemReader>(
     root_path: &Path,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     project_root: Option<&Path>,
     fs: &F,
 ) -> Result<EvalResult, CompileError> {

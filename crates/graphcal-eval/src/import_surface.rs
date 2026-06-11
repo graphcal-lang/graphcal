@@ -7,9 +7,10 @@
 
 use std::collections::HashSet;
 
-use graphcal_compiler::desugar::resolved_ast::{
-    DeclKind, Declaration, File, ImportItemNamespace, TypeDecl, TypeDeclBody,
+use graphcal_compiler::desugar::desugared_ast::{
+    DeclKind, Declaration, File, TypeDecl, TypeDeclBody,
 };
+use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::names::DeclName;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +96,7 @@ pub fn extract_pub_names(file: &File) -> HashSet<DeclName> {
         if !decl_is_public(decl) {
             match &decl.kind {
                 DeclKind::Import(d) => {
-                    if let graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) =
+                    if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
                         &d.kind
                     {
                         for item in items {
@@ -106,7 +107,7 @@ pub fn extract_pub_names(file: &File) -> HashSet<DeclName> {
                     }
                 }
                 DeclKind::Include(d) => {
-                    if let graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) =
+                    if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
                         &d.kind
                     {
                         for item in items {
@@ -228,13 +229,13 @@ fn type_decl_import_item_matches(
 }
 
 fn selective_reexport_matches(
-    kind: &graphcal_compiler::desugar::resolved_ast::ImportKind,
+    kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
     name: &str,
     namespace: ImportItemNamespace,
 ) -> bool {
     matches!(
         kind,
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items)
             if items.iter().any(|it| {
                 it.is_pub && it.namespace == namespace && it.local_name() == name
             })
@@ -242,12 +243,12 @@ fn selective_reexport_matches(
 }
 
 fn selective_include_reexport_matches(
-    kind: &graphcal_compiler::desugar::resolved_ast::ImportKind,
+    kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
     name: &str,
 ) -> bool {
     matches!(
         kind,
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items)
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items)
             if items.iter().any(|it| it.is_pub && it.local_name() == name)
     )
 }

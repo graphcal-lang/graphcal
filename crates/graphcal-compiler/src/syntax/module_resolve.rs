@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::dag_id::DagId;
-use crate::desugar::resolved_ast as ast;
+use crate::desugar::desugared_ast as ast;
 use crate::syntax::ast::{IdentPath, ImportItem, ImportItemNamespace, ImportKind, ModulePath};
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, IndexName, IndexVariantName, ModuleAliasName, NameAtom,
@@ -1754,7 +1754,7 @@ mod tests {
     fn resolved_source(source: &str) -> ast::File {
         let raw = Parser::new(source).parse_file().unwrap();
         let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw);
-        crate::syntax::name_resolve::resolve_name_refs(desugared)
+        desugared
     }
 
     fn first_import(file: &ast::File) -> (&ModulePath, &ImportKind) {

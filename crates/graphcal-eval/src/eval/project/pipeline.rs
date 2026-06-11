@@ -20,7 +20,7 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     override_targets: &HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>,
 ) -> Result<CompiledFile, CompileError> {
     let loaded_file = &project.files[file_dag_id];
@@ -37,7 +37,7 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
     };
 
     // Collect inline DAG definitions from the file's AST.
-    let dag_definitions: HashMap<DeclName, &graphcal_compiler::desugar::resolved_ast::DagDecl> =
+    let dag_definitions: HashMap<DeclName, &graphcal_compiler::desugar::desugared_ast::DagDecl> =
         loaded_file
             .ast
             .declarations
@@ -239,7 +239,7 @@ fn tir_requires_runtime_inputs(tir: &graphcal_compiler::tir::typed::TIR) -> bool
 
 fn first_required_index_diagnostic(
     tir: &graphcal_compiler::tir::typed::TIR,
-    ast: &graphcal_compiler::desugar::resolved_ast::File,
+    ast: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> Option<(String, miette::SourceSpan)> {
     for idx_def in tir.registry.indexes.all_indexes() {
         if idx_def.is_required() {
@@ -385,7 +385,7 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
 )]
 pub(in crate::eval::project) fn evaluate_project_perfile(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
     // Pre-compute override routing: map each override name to the file that owns
     // the param. Walk root file's imports to find the owning file for each override.
@@ -675,7 +675,7 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
 /// The `original_param_name` may differ from `override_name` when an alias is used.
 pub(in crate::eval::project) fn route_overrides_to_files(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
 ) -> Result<HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>, CompileError> {
     if overrides.is_empty() {
         return Ok(HashMap::new());
@@ -714,7 +714,7 @@ pub(in crate::eval::project) fn route_overrides_to_files(
             )
             .collect();
         for (import_kind, import_canonical) in selective_decls {
-            if let graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(names) =
+            if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) =
                 import_kind
             {
                 for item in names {

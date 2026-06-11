@@ -971,7 +971,7 @@ fn eval_plot_property(
 /// not runtime values in Graphcal).
 /// Returns `None` if any expression evaluation fails (plots are best-effort).
 fn evaluate_plot(
-    decl: &graphcal_compiler::desugar::resolved_ast::PlotDecl,
+    decl: &graphcal_compiler::desugar::desugared_ast::PlotDecl,
     lowered: &graphcal_compiler::tir::typed::LoweredPlotBody,
     name: &ScopedName,
     is_pub: bool,

@@ -834,12 +834,12 @@ fn check_domain_constraint_targets_dag(
 /// For `Velocity(min: 0)[Maneuver]`, the constraints are on the base `Velocity`,
 /// not on the outer `Indexed` wrapper.
 fn extract_domain_bounds(
-    type_ann: &crate::desugar::resolved_ast::TypeExpr,
-) -> &[crate::desugar::resolved_ast::DomainBound] {
+    type_ann: &crate::desugar::desugared_ast::TypeExpr,
+) -> &[crate::desugar::desugared_ast::DomainBound] {
     if !type_ann.constraints.is_empty() {
         return &type_ann.constraints;
     }
-    if let crate::desugar::resolved_ast::TypeExprKind::Indexed { base, .. } = &type_ann.kind {
+    if let crate::desugar::desugared_ast::TypeExprKind::Indexed { base, .. } = &type_ann.kind {
         return &base.constraints;
     }
     &[]
@@ -884,10 +884,10 @@ fn check_field_domain_constraint_targets(
 /// classifying — a `Velocity(min: 0)[Maneuver]` field is constraint-
 /// compatible because the base `Velocity` is scalar.
 fn field_constraint_target_kind(
-    type_ann: &crate::desugar::resolved_ast::TypeExpr,
+    type_ann: &crate::desugar::desugared_ast::TypeExpr,
     registry: &Registry,
 ) -> Option<String> {
-    use crate::desugar::resolved_ast::TypeExprKind;
+    use crate::desugar::desugared_ast::TypeExprKind;
     let base = match &type_ann.kind {
         TypeExprKind::Indexed { base, .. } => base.as_ref(),
         _ => type_ann,
@@ -1021,11 +1021,11 @@ fn check_field_domain_constraint_dimensions(
 /// generic param to be checked at instantiation), and `Err` if dimension
 /// arithmetic overflows.
 fn field_expected_bound(
-    type_ann: &crate::desugar::resolved_ast::TypeExpr,
+    type_ann: &crate::desugar::desugared_ast::TypeExpr,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Option<ExpectedBound>, GraphcalError> {
-    use crate::desugar::resolved_ast::TypeExprKind;
+    use crate::desugar::desugared_ast::TypeExprKind;
     let base = match &type_ann.kind {
         TypeExprKind::Indexed { base, .. } => base.as_ref(),
         _ => type_ann,
@@ -1113,7 +1113,7 @@ fn check_no_constraints_on_generic_type_args(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let walk = |type_expr: &crate::desugar::resolved_ast::TypeExpr| -> Result<(), GraphcalError> {
+    let walk = |type_expr: &crate::desugar::desugared_ast::TypeExpr| -> Result<(), GraphcalError> {
         check_type_expr_for_generic_arg_constraints(type_expr, src)
     };
     for (id, dag) in &tir.dags {
@@ -1143,10 +1143,10 @@ fn check_no_constraints_on_generic_type_args(
 /// constraints (the legitimate placement); only constraints under a
 /// `TypeApplication.type_args` slot are rejected.
 fn check_type_expr_for_generic_arg_constraints(
-    type_expr: &crate::desugar::resolved_ast::TypeExpr,
+    type_expr: &crate::desugar::desugared_ast::TypeExpr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    use crate::desugar::resolved_ast::TypeExprKind;
+    use crate::desugar::desugared_ast::TypeExprKind;
     match &type_expr.kind {
         TypeExprKind::Indexed { base, .. } => {
             check_type_expr_for_generic_arg_constraints(base, src)

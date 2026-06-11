@@ -112,7 +112,7 @@ fn eval_uses_hir_builtin_dispatch_after_syntax_mutation() {
     let mut tir = compile_to_tir(source, "test.gcl").unwrap();
     assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
-        graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(
+        graphcal_compiler::desugar::desugared_ast::ExprKind::StringLiteral(
             "mutated syntax".to_string(),
         );
 
@@ -131,7 +131,7 @@ fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
     let mut tir = compile_to_tir(source, "test.gcl").unwrap();
     assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
-        graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(
+        graphcal_compiler::desugar::desugared_ast::ExprKind::StringLiteral(
             "mutated syntax".to_string(),
         );
 
@@ -154,9 +154,9 @@ fn eval_assertions_use_hir_body_after_syntax_mutation() {
     let mut tir = compile_to_tir(source, "test.gcl").unwrap();
     assert!(!tir.root().semantic.expressions.asserts.is_empty());
     let span = tir.root().asserts[0].span;
-    tir.root_mut().asserts[0].body = graphcal_compiler::desugar::resolved_ast::AssertBody::Expr(
-        graphcal_compiler::desugar::resolved_ast::Expr::new(
-            graphcal_compiler::desugar::resolved_ast::ExprKind::StringLiteral(
+    tir.root_mut().asserts[0].body = graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(
+        graphcal_compiler::desugar::desugared_ast::Expr::new(
+            graphcal_compiler::desugar::desugared_ast::ExprKind::StringLiteral(
                 "mutated syntax".to_string(),
             ),
             span,
@@ -602,12 +602,11 @@ fn eval_unary_neg_dimensioned() {
 
 // --- Override tests ---
 
-fn parse_expr(s: &str) -> graphcal_compiler::desugar::resolved_ast::Expr {
+fn parse_expr(s: &str) -> graphcal_compiler::desugar::desugared_ast::Expr {
     let raw = graphcal_compiler::syntax::parser::Parser::new(s)
         .parse_single_expr()
         .unwrap();
-    let desugared: graphcal_compiler::desugar::desugared_ast::Expr = raw.into();
-    graphcal_compiler::syntax::name_resolve::resolve_standalone_expr(desugared)
+    raw.into()
 }
 
 #[test]

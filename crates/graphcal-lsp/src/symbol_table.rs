@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphcal_compiler::desugar::resolved_ast::{
+use graphcal_compiler::desugar::desugared_ast::{
     AssertDecl, AttributeArg, BaseDimDecl, BindableVisibility, DagDecl, DeclKind, DimDecl, DimExpr,
     DomainBound, ExprKind, FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl,
     MatchPattern, NodeDecl, ParamDecl, PatternBinding, PlotDecl, TypeDecl, TypeDeclBody, TypeExpr,
@@ -497,12 +497,33 @@ impl SymbolTable {
 struct ScopeStack {
     /// Each scope maps local name -> definition key in the symbol table.
     scopes: Vec<HashMap<String, SymbolKey>>,
+    /// Index names declared in the file (including dag bodies), so the walk
+    /// can classify a two-segment reference path `Index.Variant` as a
+    /// variant literal rather than a module-qualified reference.
+    index_names: std::collections::HashSet<String>,
 }
 
 impl ScopeStack {
     fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            index_names: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Collect index names from a declaration list (recursing into dag bodies).
+    fn collect_index_names(
+        &mut self,
+        decls: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    ) {
+        for decl in decls {
+            match &decl.kind {
+                DeclKind::Index(idx) => {
+                    self.index_names.insert(idx.name.value.to_string());
+                }
+                DeclKind::Dag(dag) => self.collect_index_names(&dag.body),
+                _ => {}
+            }
         }
     }
 
@@ -540,11 +561,12 @@ impl ScopeStack {
 /// LSP `Position`s for inlay-hint candidates so the request path avoids
 /// O(source) scans.
 pub fn build_from_ast(
-    ast: &graphcal_compiler::desugar::resolved_ast::File,
+    ast: &graphcal_compiler::desugar::desugared_ast::File,
     source: &str,
 ) -> SymbolTable {
     let mut table = SymbolTable::default();
     let mut scopes = ScopeStack::new();
+    scopes.collect_index_names(&ast.declarations);
 
     register_builtins(&mut table);
 
@@ -642,7 +664,7 @@ fn register_builtins(table: &mut SymbolTable) {
 }
 
 fn collect_attribute_refs(
-    attributes: &[graphcal_compiler::desugar::resolved_ast::Attribute],
+    attributes: &[graphcal_compiler::desugar::desugared_ast::Attribute],
     table: &mut SymbolTable,
 ) {
     for attr in attributes {
@@ -706,7 +728,7 @@ fn collect_node_decl(
 }
 
 fn collect_const_node_decl(
-    c: &graphcal_compiler::desugar::resolved_ast::ConstNodeDecl,
+    c: &graphcal_compiler::desugar::desugared_ast::ConstNodeDecl,
     decl_span: Span,
     visibility: BindableVisibility,
     table: &mut SymbolTable,
@@ -905,10 +927,10 @@ fn collect_assert_decl(
         visibility,
     );
     match &a.body {
-        graphcal_compiler::desugar::resolved_ast::AssertBody::Expr(expr) => {
+        graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(expr) => {
             collect_expr_refs(expr, table, scopes);
         }
-        graphcal_compiler::desugar::resolved_ast::AssertBody::Tolerance {
+        graphcal_compiler::desugar::desugared_ast::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
@@ -1011,13 +1033,13 @@ fn collect_dag_decl(
     let dag_name = d.name.value.to_string();
     for body_decl in &d.body {
         let (member_name, member_span, category) = match &body_decl.kind {
-            graphcal_compiler::desugar::resolved_ast::DeclKind::Param(p) => {
+            graphcal_compiler::desugar::desugared_ast::DeclKind::Param(p) => {
                 (p.name.value.to_string(), p.name.span, SymbolCategory::Param)
             }
-            graphcal_compiler::desugar::resolved_ast::DeclKind::Node(n) => {
+            graphcal_compiler::desugar::desugared_ast::DeclKind::Node(n) => {
                 (n.name.value.to_string(), n.name.span, SymbolCategory::Node)
             }
-            graphcal_compiler::desugar::resolved_ast::DeclKind::ConstNode(c) => {
+            graphcal_compiler::desugar::desugared_ast::DeclKind::ConstNode(c) => {
                 (c.name.value.to_string(), c.name.span, SymbolCategory::Const)
             }
             _ => continue,
@@ -1035,10 +1057,10 @@ fn collect_dag_decl(
                 type_description: None,
                 detail: None,
                 visibility: Some(match &body_decl.kind {
-                    graphcal_compiler::desugar::resolved_ast::DeclKind::Node(n) => {
+                    graphcal_compiler::desugar::desugared_ast::DeclKind::Node(n) => {
                         n.visibility.into()
                     }
-                    graphcal_compiler::desugar::resolved_ast::DeclKind::ConstNode(c) => {
+                    graphcal_compiler::desugar::desugared_ast::DeclKind::ConstNode(c) => {
                         c.visibility.into()
                     }
                     _ => BindableVisibility::Private,
@@ -1055,17 +1077,17 @@ fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
 }
 
 fn collect_include_decl(
-    u: &graphcal_compiler::desugar::resolved_ast::IncludeDecl,
+    u: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     table: &mut SymbolTable,
 ) {
     collect_import_or_include_names(&u.kind, table);
 }
 
 fn collect_import_or_include_names(
-    kind: &graphcal_compiler::desugar::resolved_ast::ImportKind,
+    kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
     table: &mut SymbolTable,
 ) {
-    if let graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(names) = kind {
+    if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) = kind {
         for import_item in names {
             table.references.push(ReferenceInfo {
                 span: import_item.name.span,
@@ -1116,7 +1138,7 @@ fn register_local_var(
 
 /// Collect references from an expression, tracking local scopes.
 fn collect_expr_refs(
-    expr: &graphcal_compiler::desugar::resolved_ast::Expr,
+    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
@@ -1130,12 +1152,12 @@ fn collect_expr_refs(
     reason = "expression walker needs to handle every ExprKind variant"
 )]
 fn collect_expr_refs_inner(
-    expr: &graphcal_compiler::desugar::resolved_ast::Expr,
+    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
     table: &mut SymbolTable,
     scopes: &mut ScopeStack,
 ) {
     match &expr.kind {
-        ExprKind::GraphRef(name) | ExprKind::ConstRef(name) => {
+        ExprKind::GraphRef(name) => {
             let target = if name.value.is_qualified() {
                 SymbolKey::Qualified {
                     module: name
@@ -1202,21 +1224,48 @@ fn collect_expr_refs_inner(
                 collect_expr_refs(arg, table, scopes);
             }
         }
-        ExprKind::LocalRef(ident) => {
-            let target = scopes
-                .resolve(&ident.name)
-                .cloned()
-                .unwrap_or_else(|| SymbolKey::TopLevel(ident.name.to_string()));
-            table.references.push(ReferenceInfo {
-                span: ident.span,
-                target,
-            });
-        }
-        ExprKind::TypeSystemRef(name) => {
-            table.references.push(ReferenceInfo {
-                span: name.span,
-                target: SymbolKey::TopLevel(name.value.as_str().to_string()),
-            });
+        ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => {
+            match path.segments() {
+                // A bare name: a lexical local when one is in scope,
+                // otherwise a top-level symbol (const, type, index, ...).
+                [ident] => {
+                    let target = scopes
+                        .resolve(&ident.name)
+                        .cloned()
+                        .unwrap_or_else(|| SymbolKey::TopLevel(ident.name.to_string()));
+                    table.references.push(ReferenceInfo {
+                        span: ident.span,
+                        target,
+                    });
+                }
+                // `Index.Variant` literal: reference both the index and the
+                // qualified variant.
+                [index, variant] if scopes.index_names.contains(index.name.as_str()) => {
+                    table.references.push(ReferenceInfo {
+                        span: index.span,
+                        target: SymbolKey::TopLevel(index.name.to_string()),
+                    });
+                    table.references.push(ReferenceInfo {
+                        span: variant.span,
+                        target: SymbolKey::Variant {
+                            parent: SymbolPath::local(index.name.to_string()),
+                            variant: variant.name.to_string(),
+                        },
+                    });
+                }
+                // Module-qualified reference (`module.NAME`).
+                segments => {
+                    let (qualifier, leaf) = path.split_last();
+                    let _ = segments;
+                    table.references.push(ReferenceInfo {
+                        span: path.span(),
+                        target: SymbolKey::Qualified {
+                            module: qualifier.iter().map(|s| s.name.to_string()).collect(),
+                            name: leaf.name.to_string(),
+                        },
+                    });
+                }
+            }
         }
         ExprKind::BinOp { lhs, rhs, .. } => {
             collect_expr_refs(lhs, table, scopes);
@@ -1265,7 +1314,7 @@ fn collect_expr_refs_inner(
                 target: SymbolKey::Constructor(constructor_path.clone()),
             });
             for generic_arg in generic_args {
-                if let graphcal_compiler::desugar::resolved_ast::GenericArg::Type(type_arg) =
+                if let graphcal_compiler::desugar::desugared_ast::GenericArg::Type(type_arg) =
                     generic_arg
                 {
                     collect_type_expr_refs(type_arg, table);
@@ -1311,7 +1360,7 @@ fn collect_expr_refs_inner(
             scopes.push();
             for binding in bindings {
                 let (detail, ref_info) = match &binding.index {
-                    graphcal_compiler::desugar::resolved_ast::ForBindingIndex::Named(spanned) => {
+                    graphcal_compiler::desugar::desugared_ast::ForBindingIndex::Named(spanned) => {
                         let detail = format!("loop variable over {}", spanned.value);
                         let ref_info = Some(ReferenceInfo {
                             span: spanned.span,
@@ -1319,7 +1368,7 @@ fn collect_expr_refs_inner(
                         });
                         (detail, ref_info)
                     }
-                    graphcal_compiler::desugar::resolved_ast::ForBindingIndex::Range {
+                    graphcal_compiler::desugar::desugared_ast::ForBindingIndex::Range {
                         arg,
                         ..
                     } => {
@@ -1357,7 +1406,7 @@ fn collect_expr_refs_inner(
             collect_expr_refs(expr, table, scopes);
             for arg in args {
                 match arg {
-                    graphcal_compiler::desugar::resolved_ast::IndexArg::Variant {
+                    graphcal_compiler::desugar::desugared_ast::IndexArg::Variant {
                         index,
                         variant,
                     } => {
@@ -1370,7 +1419,7 @@ fn collect_expr_refs_inner(
                             target: variant_key_for_parts(&index.value, &variant.value),
                         });
                     }
-                    graphcal_compiler::desugar::resolved_ast::IndexArg::Var(ident) => {
+                    graphcal_compiler::desugar::desugared_ast::IndexArg::Var(ident) => {
                         let target = scopes
                             .resolve(&ident.name)
                             .cloned()
@@ -1380,7 +1429,7 @@ fn collect_expr_refs_inner(
                             target,
                         });
                     }
-                    graphcal_compiler::desugar::resolved_ast::IndexArg::Expr(e) => {
+                    graphcal_compiler::desugar::desugared_ast::IndexArg::Expr(e) => {
                         collect_expr_refs(e, table, scopes);
                     }
                 }
@@ -1443,18 +1492,6 @@ fn collect_expr_refs_inner(
             );
             collect_expr_refs(body, table, scopes);
             scopes.pop();
-        }
-        ExprKind::VariantLiteral { index, variant } => {
-            // Reference to the index name
-            table.references.push(ReferenceInfo {
-                span: index.span,
-                target: symbol_key_for_name_path(&index.value),
-            });
-            // Reference to the qualified variant: Index.Variant
-            table.references.push(ReferenceInfo {
-                span: variant.span,
-                target: variant_key_for_parts(&index.value, &variant.value),
-            });
         }
         ExprKind::Match { scrutinee, arms } => {
             collect_expr_refs(scrutinee, table, scopes);
@@ -1554,19 +1591,19 @@ fn collect_expr_refs_inner(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_) => {}
-        // `Sugar` and `UnresolvedRef` payloads are `Infallible` in `Resolved`
-        // — both arms are statically unreachable.
+        // `Sugar` payload is `Infallible` post-desugar — statically
+        // unreachable.
         #[expect(
             clippy::uninhabited_references,
-            reason = "Sugar/UnresolvedRef(Infallible) — proof of unreachability"
+            reason = "Sugar(Infallible) — proof of unreachability"
         )]
-        ExprKind::Sugar(s) | ExprKind::UnresolvedRef(s) => match *s {},
+        ExprKind::Sugar(s) => match *s {},
     }
 }
 
 /// Collect references from a type expression.
 fn collect_type_expr_refs(
-    type_expr: &graphcal_compiler::desugar::resolved_ast::TypeExpr,
+    type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
     table: &mut SymbolTable,
 ) {
     match &type_expr.kind {
@@ -1581,13 +1618,13 @@ fn collect_type_expr_refs(
             collect_type_expr_refs(base, table);
             for idx in indexes {
                 match idx {
-                    graphcal_compiler::desugar::resolved_ast::IndexExpr::Name(path) => {
+                    graphcal_compiler::desugar::desugared_ast::IndexExpr::Name(path) => {
                         table.references.push(ReferenceInfo {
                             span: path.span,
                             target: symbol_key_for_name_path(&path.value),
                         });
                     }
-                    graphcal_compiler::desugar::resolved_ast::IndexExpr::NatExpr(_) => {
+                    graphcal_compiler::desugar::desugared_ast::IndexExpr::NatExpr(_) => {
                         // No reference to resolve for nat expressions
                     }
                 }
@@ -1619,7 +1656,7 @@ fn collect_type_expr_refs(
 
 /// Collect references from a constraint bound expression (limited walk for unit names).
 fn collect_constraint_expr_refs(
-    expr: &graphcal_compiler::desugar::resolved_ast::Expr,
+    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
     table: &mut SymbolTable,
 ) {
     match &expr.kind {
@@ -1656,7 +1693,7 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
 /// Format a domain bound expression as a human-readable string.
 ///
 /// Handles the common cases: number literals, unit-annotated literals, and negated forms.
-fn format_bound_expr(expr: &graphcal_compiler::desugar::resolved_ast::Expr) -> String {
+fn format_bound_expr(expr: &graphcal_compiler::desugar::desugared_ast::Expr) -> String {
     match &expr.kind {
         ExprKind::Number(v) => format_number(*v),
         ExprKind::Integer(v) => v.to_string(),
@@ -1666,7 +1703,7 @@ fn format_bound_expr(expr: &graphcal_compiler::desugar::resolved_ast::Expr) -> S
             format!("{num} {unit_str}")
         }
         ExprKind::UnaryOp {
-            op: graphcal_compiler::desugar::resolved_ast::UnaryOp::Neg,
+            op: graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg,
             operand,
         } => {
             format!("-{}", format_bound_expr(operand))
@@ -1910,7 +1947,7 @@ mod tests {
             .parse_file()
             .unwrap();
         let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
+        let file = desugared;
         let table = build_from_ast(&file, source);
 
         let x_key = SymbolKey::TopLevel("x".to_string());
@@ -1947,7 +1984,7 @@ param q: Int[I]
             .parse_file()
             .unwrap();
         let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
+        let file = desugared;
         let table = build_from_ast(&file, source);
 
         let p_key = SymbolKey::TopLevel("p".to_string());
@@ -1982,7 +2019,7 @@ param q: Int[I]
             .parse_file()
             .unwrap();
         let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
+        let file = desugared;
         let table = build_from_ast(&file, source);
 
         // Find the @x reference -- it should be near the end of the source

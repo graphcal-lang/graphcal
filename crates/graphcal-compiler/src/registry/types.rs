@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 
 use thiserror::Error;
 
-use crate::desugar::resolved_ast::{
+use crate::desugar::desugared_ast::{
     DagDecl, DimExpr, Expr, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
 };
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational, RationalError};
@@ -186,7 +186,7 @@ pub struct TypeGenericParam {
     pub name: GenericParamName,
     pub constraint: TypeGenericConstraint,
     /// Optional default type expression, e.g. `F: Type = Unframed`.
-    pub default: Option<crate::desugar::resolved_ast::TypeExpr>,
+    pub default: Option<crate::desugar::desugared_ast::TypeExpr>,
 }
 
 /// A registered type definition: either a required type stub or a tagged union.

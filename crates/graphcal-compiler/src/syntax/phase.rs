@@ -4,7 +4,7 @@
 //! only at earlier stages of compilation are statically excluded from later
 //! stages.
 //!
-//! Three phases:
+//! Two phases:
 //!
 //! - [`Raw`] — produced by the parser. Carries every surface sugar via
 //!   [`crate::syntax::ast::RawDeclSugar`] /
@@ -13,16 +13,12 @@
 //!   tooling.
 //! - [`Desugared`] — produced by [`crate::desugar`]. Surface-sugar slots
 //!   are [`core::convert::Infallible`], so `match` arms over them are
-//!   unreachable. The unresolved-ref slot is still inhabited — name
-//!   resolution has not yet run.
-//! - [`Resolved`] — produced by
-//!   [`crate::syntax::name_resolve::resolve_name_refs`]. Every phase-varying
-//!   slot ([`Phase::DeclSugar`], [`Phase::ExprSugar`], [`Phase::RefSugar`]) is
-//!   [`Infallible`], so the AST is a strict subset of the desugared form
-//!   with no unresolved expression references remaining.
+//!   unreachable. Reference paths stay syntactic
+//!   ([`crate::syntax::ast::UnresolvedRef`]); HIR lowering is the single
+//!   stage that classifies and resolves them.
 //!
 //! ```text
-//! parser → File<Raw> → desugar → File<Desugared> → name_resolve → File<Resolved> → IR → TIR → eval
+//! parser → File<Raw> → desugar → File<Desugared> → HIR/IR → TIR → eval
 //!                   ↘ formatter
 //! ```
 
@@ -55,10 +51,9 @@ pub trait Phase: 'static + sealed::Sealed {
     /// Phase-specific unresolved-reference variants.
     ///
     /// Carried by `ExprKind::UnresolvedRef(_)`. For [`Raw`] and [`Desugared`]
-    /// this is [`crate::syntax::ast::UnresolvedRef`] (the parser produces
-    /// unresolved identifier paths); for [`Resolved`] it is [`Infallible`] so
-    /// the variant cannot be constructed and the name-resolution pass is
-    /// statically known to have eliminated every unresolved reference.
+    /// this is [`crate::syntax::ast::UnresolvedRef`] — the parser produces
+    /// unresolved identifier paths, and they stay syntactic until HIR
+    /// lowering resolves them.
     type RefSugar: Debug + Clone;
 }
 
@@ -74,21 +69,12 @@ impl sealed::Sealed for Raw {}
 /// Post-desugar phase: surface-sugar variants are statically impossible.
 ///
 /// Produced by [`crate::desugar`]. Unresolved identifier paths are still
-/// representable until the name-resolution pass runs.
+/// representable; HIR lowering resolves them. This is the final syntax-AST
+/// phase — every downstream consumer reads HIR, not a further AST phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Desugared {}
 
 impl sealed::Sealed for Desugared {}
-
-/// Post-name-resolution phase: every phase slot is [`Infallible`].
-///
-/// Produced by [`crate::syntax::name_resolve::resolve_name_refs`]. No
-/// unresolved references can appear in the AST; every consumer downstream
-/// of name resolution (IR lowering, TIR, evaluation) reads this phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Resolved {}
-
-impl sealed::Sealed for Resolved {}
 
 /// Helper for matching against `Sugar(Infallible)` arms.
 ///

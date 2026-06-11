@@ -30,13 +30,10 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         }
         ExprKind::Bool(b) => RcDoc::text(if *b { "true" } else { "false" }),
         ExprKind::StringLiteral(s) => RcDoc::text(format!("\"{s}\"")),
-        ExprKind::TypeSystemRef(name) => RcDoc::text(name.value.as_str().to_string()),
         ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", &name.value.to_string())),
         ExprKind::InlineDagRef { path, args, output } => {
             format_inline_dag_ref(fmt, path, args, output.value.as_str())
         }
-        ExprKind::ConstRef(name) => RcDoc::text(name.value.to_string()),
-        ExprKind::LocalRef(ident) => RcDoc::text(ident.name.clone()),
         ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => {
             RcDoc::text(path.display_path())
         }
@@ -123,9 +120,6 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             body,
         } => format_unfold(fmt, init, prev_name, curr_name, body),
         ExprKind::Match { scrutinee, arms } => format_match(fmt, scrutinee, arms),
-        ExprKind::VariantLiteral { index, variant } => {
-            RcDoc::text(format!("{}.{}", index.value, variant.value))
-        }
     }
 }
 

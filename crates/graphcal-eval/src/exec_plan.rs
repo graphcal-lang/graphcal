@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::resolved_ast::{FigureDecl, LayerDecl, PlotDecl};
+use graphcal_compiler::desugar::desugared_ast::{FigureDecl, LayerDecl, PlotDecl};
 use graphcal_compiler::hir::AssertBody;
 use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::syntax::names::{
@@ -960,7 +960,7 @@ fn format_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> S
             format!("{val_str} {unit_str}")
         }
         ExprKind::UnaryOp {
-            op: graphcal_compiler::desugar::resolved_ast::UnaryOp::Neg,
+            op: graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg,
             operand,
         } => {
             format!("-{}", format_bound_display(operand, -si_value))
@@ -995,7 +995,7 @@ mod tests {
     ) -> (graphcal_compiler::tir::typed::TIR, NamedSource<Arc<String>>) {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
+        let file = desugared;
         let src = make_src(source);
         let ir = lower(&file, &src).unwrap();
         let dag_id =

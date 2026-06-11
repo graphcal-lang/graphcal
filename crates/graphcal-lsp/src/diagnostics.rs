@@ -264,7 +264,7 @@ mod tests {
             .map(|raw_ast| {
                 let desugared =
                     graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
-                let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
+                let ast = desugared;
                 build_from_ast(&ast, source)
             })
             .unwrap_or_default()

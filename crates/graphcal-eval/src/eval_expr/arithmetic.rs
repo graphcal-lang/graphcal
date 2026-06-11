@@ -1,4 +1,4 @@
-use graphcal_compiler::desugar::resolved_ast::BinOp;
+use graphcal_compiler::desugar::desugared_ast::BinOp;
 use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::syntax::span::Span;
 

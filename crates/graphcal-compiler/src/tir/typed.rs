@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::resolved_ast::{MulDivOp, TypeExpr, TypeExprKind};
+use crate::desugar::desugared_ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::hir;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
@@ -249,11 +249,11 @@ impl NatPolyForm {
 /// All variables referenced must be Nat generic parameters in scope.
 /// Returns an error if a variable is not a known Nat param.
 pub fn normalize_nat_expr(
-    expr: &crate::desugar::resolved_ast::NatExpr,
+    expr: &crate::desugar::desugared_ast::NatExpr,
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<NatPolyForm, GraphcalError> {
-    use crate::desugar::resolved_ast::NatExpr;
+    use crate::desugar::desugared_ast::NatExpr;
     match expr {
         NatExpr::Literal(n, _) => Ok(NatPolyForm::from_constant(*n)),
         NatExpr::Var(ident) => {
@@ -974,8 +974,8 @@ impl DagTIR {
     }
 
     /// Populate this DAG's `pub_nodes` set from its source body.
-    pub fn populate_pub_nodes(&mut self, body: &[crate::desugar::resolved_ast::Declaration]) {
-        use crate::desugar::resolved_ast::DeclKind;
+    pub fn populate_pub_nodes(&mut self, body: &[crate::desugar::desugared_ast::Declaration]) {
+        use crate::desugar::desugared_ast::DeclKind;
 
         for decl in body {
             if let DeclKind::Node(n) = &decl.kind
@@ -1050,8 +1050,6 @@ fn type_resolve_impl(
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<TIR, GraphcalError> {
-    let runtime_deps_for_hir = ir.runtime_deps.clone();
-    let const_deps_for_hir = ir.const_deps.clone();
     let imported_value_sources_for_hir = ir.imported_value_sources.clone();
     let asserts_for_hir = ir.asserts.clone();
     let mut root_dag = type_resolve_dag(
@@ -1063,8 +1061,6 @@ fn type_resolve_impl(
         src,
         &root_dag_id,
         module_ctx,
-        &runtime_deps_for_hir,
-        &const_deps_for_hir,
         &imported_value_sources_for_hir,
     )?
     .with_body(
@@ -1083,6 +1079,8 @@ fn type_resolve_impl(
         src,
     )?;
     lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut root_dag.semantic);
+    augment_runtime_deps_for_dynamic_units(&mut root_dag.semantic);
+    check_hir_body_policies(&root_dag.semantic, &ir.pub_names, module_ctx, src)?;
     let mut dags = DagRegistry::new();
     dags.insert(root_dag_id.clone(), root_dag);
     Ok(TIR {
@@ -1112,8 +1110,6 @@ fn type_resolve_single_impl(
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<DagTIR, GraphcalError> {
-    let runtime_deps_for_hir = ir.runtime_deps.clone();
-    let const_deps_for_hir = ir.const_deps.clone();
     let imported_value_sources_for_hir = ir.imported_value_sources.clone();
     let asserts_for_hir = ir.asserts.clone();
     let mut dag = type_resolve_dag(
@@ -1125,8 +1121,6 @@ fn type_resolve_single_impl(
         src,
         dag_id,
         module_ctx,
-        &runtime_deps_for_hir,
-        &const_deps_for_hir,
         &imported_value_sources_for_hir,
     )?
     .with_body(
@@ -1145,6 +1139,8 @@ fn type_resolve_single_impl(
         src,
     )?;
     lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut dag.semantic);
+    augment_runtime_deps_for_dynamic_units(&mut dag.semantic);
+    check_hir_body_policies(&dag.semantic, &ir.pub_names, module_ctx, src)?;
     Ok(dag)
 }
 
@@ -1189,8 +1185,6 @@ fn type_resolve_dag(
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     module_ctx: ModuleTypeContext<'_>,
-    runtime_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
-    const_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
 ) -> Result<DagTIRSeed, GraphcalError> {
     let mut resolved_decl_types = HashMap::new();
@@ -1245,8 +1239,6 @@ fn type_resolve_dag(
         &nodes,
         asserts,
         module_ctx,
-        runtime_deps,
-        const_deps,
         imported_value_sources,
         src,
     )?;
@@ -1458,18 +1450,12 @@ fn resolve_type_expr_in_struct_scope(
     resolve_hir_type_expr_inner(&hir_type, resolve_ctx)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "HIR lowering needs declaration slices plus dependency maps from IR lowering"
-)]
 fn lower_resolved_expressions(
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
     asserts: &[crate::ir::lower::AssertEntry],
     ctx: ModuleTypeContext<'_>,
-    runtime_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
-    const_deps: &HashMap<ScopedName, BTreeSet<ScopedName>>,
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<LoweredDagExpressions, GraphcalError> {
@@ -1495,13 +1481,8 @@ fn lower_resolved_expressions(
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
-        let hir_expr = lower_expr_or_synthetic_alias(
-            &entry.expr,
-            expr_ctx,
-            ctx,
-            const_deps.get(&entry.name),
-            src,
-        )?;
+        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx)
+            .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
         exprs.consts.insert(key, hir_expr);
     }
     for entry in params {
@@ -1513,8 +1494,8 @@ fn lower_resolved_expressions(
         let Some(expr) = &entry.default_expr else {
             continue;
         };
-        let hir_expr =
-            lower_expr_or_synthetic_alias(expr, expr_ctx, ctx, runtime_deps.get(&entry.name), src)?;
+        let hir_expr = hir::lower_expr(expr, expr_ctx)
+            .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
         exprs.param_defaults.insert(key, hir_expr);
     }
     for entry in nodes {
@@ -1523,13 +1504,8 @@ fn lower_resolved_expressions(
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
-        let hir_expr = lower_expr_or_synthetic_alias(
-            &entry.expr,
-            expr_ctx,
-            ctx,
-            runtime_deps.get(&entry.name),
-            src,
-        )?;
+        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx)
+            .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
         exprs.nodes.insert(key, hir_expr);
     }
     for entry in asserts {
@@ -1568,7 +1544,7 @@ fn lower_plot_exprs(
 
     let mut plot_exprs = ResolvedPlotExprs::default();
 
-    let lower_one = |expr: &crate::desugar::resolved_ast::Expr,
+    let lower_one = |expr: &crate::desugar::desugared_ast::Expr,
                      collection_refs: &mut ResolvedCollectionRefs,
                      constructor_refs: &mut ResolvedConstructorRefs|
      -> Result<Option<hir::Expr>, GraphcalError> {
@@ -1676,7 +1652,7 @@ fn decl_key_or_internal_error(
 
 /// Lower a declaration type annotation's domain bounds to HIR.
 fn lower_domain_bounds(
-    type_ann: &crate::desugar::resolved_ast::TypeExpr,
+    type_ann: &crate::desugar::desugared_ast::TypeExpr,
     expr_ctx: hir::ExprLoweringContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<ResolvedDomainBound>, GraphcalError> {
@@ -1703,48 +1679,400 @@ struct LoweredDagExpressions {
     domain_bounds: HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
 }
 
-fn lower_expr_or_synthetic_alias(
-    expr: &crate::desugar::resolved_ast::Expr,
-    expr_ctx: hir::ExprLoweringContext<'_>,
+/// HIR-level body policies that replaced the retired syntax-AST scope checks.
+///
+/// Walks every lowered body of one DAG and enforces:
+/// - const bodies must not `@`-reference runtime declarations (E020-style
+///   [`GraphcalError::GraphRefInConst`]);
+/// - no body may `@`-reference an assert declaration
+///   ([`GraphcalError::GraphRefToAssert`]);
+/// - A10(c) / V004: bodies of non-bindable kinds owned by this module must
+///   not mention variant literals of the module's own `pub(bind)` indexes
+///   ([`GraphcalError::PubIndexVariantLiteral`]). Params are exempt (A10(a));
+///   sink kinds (assert/plot/figure/layer) are checked only when `pub`.
+fn check_hir_body_policies(
+    semantic: &DagSemanticBody,
+    pub_names: &std::collections::HashSet<DeclName>,
     ctx: ModuleTypeContext<'_>,
-    deps: Option<&BTreeSet<ScopedName>>,
     src: &NamedSource<Arc<String>>,
-) -> Result<hir::Expr, GraphcalError> {
-    match hir::lower_expr(expr, expr_ctx) {
-        Ok(expr) => Ok(expr),
-        Err(err) => lower_synthetic_alias_expr(expr, ctx, deps)
-            .ok_or_else(|| expr_lower_error_to_graphcal(&err, src)),
+) -> Result<(), GraphcalError> {
+    let checker = HirPolicyChecker { ctx, src };
+    let local = |key: &ResolvedName<namespace::Decl>| key.owner() == ctx.owner;
+    let is_pub = |leaf: &str| pub_names.contains(&DeclName::new(leaf));
+
+    for (key, expr) in &semantic.expressions.consts {
+        checker.check_expr(expr, true, local(key))?;
+    }
+    for (key, expr) in &semantic.expressions.nodes {
+        checker.check_expr(expr, false, local(key))?;
+    }
+    for expr in semantic.expressions.param_defaults.values() {
+        // Params are exempt from A10 (a rebinding importer is forced to
+        // rebind the param too — V005 at the include site).
+        checker.check_expr(expr, false, false)?;
+    }
+    for (key, body) in &semantic.expressions.asserts {
+        let check_literals = local(key) && is_pub(key.as_str());
+        match body {
+            hir::AssertBody::Expr(expr) => checker.check_expr(expr, false, check_literals)?,
+            hir::AssertBody::Tolerance {
+                actual,
+                expected,
+                tolerance,
+                ..
+            } => {
+                checker.check_expr(actual, false, check_literals)?;
+                checker.check_expr(expected, false, check_literals)?;
+                checker.check_expr(tolerance, false, check_literals)?;
+            }
+        }
+    }
+    for (name, body) in &semantic.plot_exprs.plots {
+        let check_literals = !name.is_qualified() && is_pub(name.member());
+        for (_, expr) in &body.encodings {
+            checker.check_expr(expr, false, check_literals)?;
+        }
+        for field in body.mark_properties.iter().chain(&body.properties) {
+            checker.check_expr(&field.value, false, check_literals)?;
+        }
+    }
+    for (name, fields) in semantic
+        .plot_exprs
+        .figures
+        .iter()
+        .chain(&semantic.plot_exprs.layers)
+    {
+        let check_literals = !name.is_qualified() && is_pub(name.member());
+        for field in fields {
+            checker.check_expr(&field.value, false, check_literals)?;
+        }
+    }
+    Ok(())
+}
+
+struct HirPolicyChecker<'a> {
+    ctx: ModuleTypeContext<'a>,
+    src: &'a NamedSource<Arc<String>>,
+}
+
+impl HirPolicyChecker<'_> {
+    fn check_expr(
+        &self,
+        expr: &hir::Expr,
+        const_body: bool,
+        check_pub_bind_literals: bool,
+    ) -> Result<(), GraphcalError> {
+        // Recursion choke point: recurses once per tree level.
+        crate::stack::with_stack_growth(|| {
+            self.check_expr_inner(expr, const_body, check_pub_bind_literals)
+        })
+    }
+
+    #[expect(clippy::too_many_lines, reason = "exhaustive HIR ExprKind walk")]
+    fn check_expr_inner(
+        &self,
+        expr: &hir::Expr,
+        const_body: bool,
+        check_pub_bind_literals: bool,
+    ) -> Result<(), GraphcalError> {
+        let recurse =
+            |inner: &hir::Expr| self.check_expr(inner, const_body, check_pub_bind_literals);
+        match &expr.kind {
+            hir::ExprKind::Error
+            | hir::ExprKind::Number(_)
+            | hir::ExprKind::Integer(_)
+            | hir::ExprKind::Bool(_)
+            | hir::ExprKind::StringLiteral(_)
+            | hir::ExprKind::TypeSystemRef(_)
+            | hir::ExprKind::ConstRef(_)
+            | hir::ExprKind::LocalRef(_)
+            | hir::ExprKind::UnitLiteral { .. } => Ok(()),
+            hir::ExprKind::GraphRef(target) => {
+                // Use the whole `@name` span (the reference Spanned covers
+                // only the name) so the label includes the sigil.
+                self.check_graph_ref(target, expr.span, const_body)
+            }
+            hir::ExprKind::VariantLiteral(variant) => {
+                self.check_variant_literal(variant, check_pub_bind_literals)
+            }
+            hir::ExprKind::BinOp { lhs, rhs, .. } => {
+                recurse(lhs)?;
+                recurse(rhs)
+            }
+            hir::ExprKind::UnaryOp { operand, .. }
+            | hir::ExprKind::Convert { expr: operand, .. }
+            | hir::ExprKind::DisplayTimezone { expr: operand, .. }
+            | hir::ExprKind::FieldAccess { expr: operand, .. } => recurse(operand),
+            hir::ExprKind::FnCall { args, .. } => args.iter().try_for_each(recurse),
+            hir::ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                recurse(condition)?;
+                recurse(then_branch)?;
+                recurse(else_branch)
+            }
+            hir::ExprKind::ConstructorCall { fields, .. } => {
+                fields.iter().try_for_each(|field| recurse(&field.value))
+            }
+            hir::ExprKind::MapLiteral { entries } => {
+                for entry in entries {
+                    for key in &entry.keys {
+                        if let hir::expr::MapEntryKey::IndexVariant(variant) = key {
+                            self.check_variant_literal(variant, check_pub_bind_literals)?;
+                        }
+                    }
+                    recurse(&entry.value)?;
+                }
+                Ok(())
+            }
+            hir::ExprKind::ForComp { body, .. } => recurse(body),
+            hir::ExprKind::IndexAccess { expr: inner, args } => {
+                recurse(inner)?;
+                for arg in args {
+                    match arg {
+                        hir::expr::IndexArg::Variant(variant) => {
+                            self.check_variant_literal(variant, check_pub_bind_literals)?;
+                        }
+                        hir::expr::IndexArg::Expr(arg_expr) => recurse(arg_expr)?,
+                        hir::expr::IndexArg::Var(_) => {}
+                    }
+                }
+                Ok(())
+            }
+            hir::ExprKind::Scan {
+                source, init, body, ..
+            } => {
+                recurse(source)?;
+                recurse(init)?;
+                recurse(body)
+            }
+            hir::ExprKind::Unfold { init, body, .. } => {
+                recurse(init)?;
+                recurse(body)
+            }
+            hir::ExprKind::Match { scrutinee, arms } => {
+                recurse(scrutinee)?;
+                for arm in arms {
+                    if let hir::expr::MatchPattern::IndexLabel { variant, .. } = &arm.pattern {
+                        self.check_variant_literal(variant, check_pub_bind_literals)?;
+                    }
+                    recurse(&arm.body)?;
+                }
+                Ok(())
+            }
+            hir::ExprKind::InlineDagRef { args, .. } => {
+                args.iter().try_for_each(|arg| recurse(&arg.value))
+            }
+        }
+    }
+
+    fn check_graph_ref(
+        &self,
+        target: &Spanned<ResolvedName<namespace::Decl>>,
+        ref_span: Span,
+        const_body: bool,
+    ) -> Result<(), GraphcalError> {
+        let Ok(kind) = self.ctx.resolver.decl_symbol_kind(&target.value) else {
+            // Unknown targets get their own diagnostic from dependency
+            // collection; the policy walk only classifies known ones.
+            return Ok(());
+        };
+        if matches!(kind, crate::syntax::module_resolve::DeclSymbolKind::Assert) {
+            return Err(GraphcalError::GraphRefToAssert {
+                name: DeclName::new(target.value.as_str()),
+                src: self.src.clone(),
+                span: ref_span.into(),
+            });
+        }
+        if const_body && !kind.is_const() {
+            return Err(GraphcalError::GraphRefInConst {
+                name: ScopedName::local(target.value.as_str()),
+                src: self.src.clone(),
+                span: ref_span.into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn check_variant_literal(
+        &self,
+        variant: &Spanned<crate::syntax::names::ResolvedIndexVariant>,
+        check_pub_bind_literals: bool,
+    ) -> Result<(), GraphcalError> {
+        if !check_pub_bind_literals {
+            return Ok(());
+        }
+        let index = variant.value.index();
+        if index.owner() != self.ctx.owner {
+            return Ok(());
+        }
+        let is_pub_bind = self
+            .ctx
+            .resolver
+            .modules()
+            .get(self.ctx.owner)
+            .and_then(|symbols| symbols.indexes().get(&IndexName::new(index.as_str())))
+            .is_some_and(|symbol| {
+                symbol.visibility().is_bindable() && !symbol.variants().is_empty()
+            });
+        if is_pub_bind {
+            return Err(GraphcalError::PubIndexVariantLiteral {
+                index: index.as_str().to_string(),
+                variant: variant.value.variant().as_str().to_string(),
+                src: self.src.clone(),
+                span: variant.span.into(),
+            });
+        }
+        Ok(())
     }
 }
 
-fn lower_synthetic_alias_expr(
-    expr: &crate::desugar::resolved_ast::Expr,
-    ctx: ModuleTypeContext<'_>,
-    deps: Option<&BTreeSet<ScopedName>>,
-) -> Option<hir::Expr> {
-    let target = single_dep(deps?)?;
-    let resolved = resolved_decl_key(ctx.owner, target)?;
-    match &expr.kind {
-        crate::desugar::resolved_ast::ExprKind::GraphRef(name) if &name.value == target => {
-            Some(hir::Expr::new(
-                hir::ExprKind::GraphRef(Spanned::new(resolved, name.span)),
-                expr.span,
-            ))
+/// Augment runtime deps with transitive dependencies through dynamic units.
+///
+/// When a param/node expression references a dynamic unit (via a unit
+/// literal or conversion), the `@`-references in that unit's scale
+/// expression become implicit dependencies of the param/node, so the scale's
+/// inputs are evaluated first.
+fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticBody) {
+    if semantic.dynamic_unit_scales.is_empty() {
+        return;
+    }
+    let scale_deps: HashMap<
+        crate::syntax::names::UnitName,
+        BTreeSet<ResolvedName<namespace::Decl>>,
+    > = semantic
+        .dynamic_unit_scales
+        .iter()
+        .map(|(name, expr)| {
+            (
+                name.clone(),
+                hir::collect_expr_dependencies(expr).graph_refs,
+            )
+        })
+        .collect();
+
+    let DagSemanticBody {
+        expressions,
+        dependencies,
+        ..
+    } = semantic;
+    for (key, expr) in expressions.param_defaults.iter().chain(&expressions.nodes) {
+        let mut unit_names = std::collections::HashSet::new();
+        collect_unit_names_from_hir(expr, &mut unit_names);
+        let extra: BTreeSet<ResolvedName<namespace::Decl>> = unit_names
+            .iter()
+            .filter_map(|unit| scale_deps.get(unit))
+            .flatten()
+            .cloned()
+            .collect();
+        if !extra.is_empty() {
+            dependencies
+                .runtime_deps
+                .entry(key.clone())
+                .or_default()
+                .extend(extra);
         }
-        crate::desugar::resolved_ast::ExprKind::ConstRef(name) if &name.value == target => {
-            Some(hir::Expr::new(
-                hir::ExprKind::ConstRef(Spanned::new(hir::ConstRef::Decl(resolved), name.span)),
-                expr.span,
-            ))
-        }
-        _ => None,
     }
 }
 
-fn single_dep(deps: &BTreeSet<ScopedName>) -> Option<&ScopedName> {
-    let mut iter = deps.iter();
-    let only = iter.next()?;
-    iter.next().is_none().then_some(only)
+/// Collect every unit name mentioned by `UnitLiteral` / `Convert` nodes.
+fn collect_unit_names_from_hir(
+    expr: &hir::Expr,
+    names: &mut std::collections::HashSet<crate::syntax::names::UnitName>,
+) {
+    // Recursion choke point: recurses once per tree level.
+    crate::stack::with_stack_growth(|| match &expr.kind {
+        hir::ExprKind::UnitLiteral { unit, .. } => {
+            for term in &unit.terms {
+                names.insert(term.name.value.clone());
+            }
+        }
+        hir::ExprKind::Convert {
+            expr: inner,
+            target,
+        } => {
+            for term in &target.terms {
+                names.insert(term.name.value.clone());
+            }
+            collect_unit_names_from_hir(inner, names);
+        }
+        hir::ExprKind::Error
+        | hir::ExprKind::Number(_)
+        | hir::ExprKind::Integer(_)
+        | hir::ExprKind::Bool(_)
+        | hir::ExprKind::StringLiteral(_)
+        | hir::ExprKind::TypeSystemRef(_)
+        | hir::ExprKind::GraphRef(_)
+        | hir::ExprKind::ConstRef(_)
+        | hir::ExprKind::LocalRef(_)
+        | hir::ExprKind::VariantLiteral(_) => {}
+        hir::ExprKind::BinOp { lhs, rhs, .. } => {
+            collect_unit_names_from_hir(lhs, names);
+            collect_unit_names_from_hir(rhs, names);
+        }
+        hir::ExprKind::UnaryOp { operand, .. }
+        | hir::ExprKind::DisplayTimezone { expr: operand, .. }
+        | hir::ExprKind::FieldAccess { expr: operand, .. } => {
+            collect_unit_names_from_hir(operand, names);
+        }
+        hir::ExprKind::FnCall { args, .. } => {
+            for arg in args {
+                collect_unit_names_from_hir(arg, names);
+            }
+        }
+        hir::ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_unit_names_from_hir(condition, names);
+            collect_unit_names_from_hir(then_branch, names);
+            collect_unit_names_from_hir(else_branch, names);
+        }
+        hir::ExprKind::ConstructorCall { fields, .. } => {
+            for field in fields {
+                collect_unit_names_from_hir(&field.value, names);
+            }
+        }
+        hir::ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                collect_unit_names_from_hir(&entry.value, names);
+            }
+        }
+        hir::ExprKind::ForComp { body, .. } => collect_unit_names_from_hir(body, names),
+        hir::ExprKind::IndexAccess { expr: inner, args } => {
+            collect_unit_names_from_hir(inner, names);
+            for arg in args {
+                if let hir::expr::IndexArg::Expr(arg_expr) = arg {
+                    collect_unit_names_from_hir(arg_expr, names);
+                }
+            }
+        }
+        hir::ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            collect_unit_names_from_hir(source, names);
+            collect_unit_names_from_hir(init, names);
+            collect_unit_names_from_hir(body, names);
+        }
+        hir::ExprKind::Unfold { init, body, .. } => {
+            collect_unit_names_from_hir(init, names);
+            collect_unit_names_from_hir(body, names);
+        }
+        hir::ExprKind::Match { scrutinee, arms } => {
+            collect_unit_names_from_hir(scrutinee, names);
+            for arm in arms {
+                collect_unit_names_from_hir(&arm.body, names);
+            }
+        }
+        hir::ExprKind::InlineDagRef { args, .. } => {
+            for arg in args {
+                collect_unit_names_from_hir(&arg.value, names);
+            }
+        }
+    });
 }
 
 fn collect_resolved_dag_dependencies(
@@ -1780,18 +2108,16 @@ fn collect_resolved_dag_dependencies(
         })?;
         let mut deps = hir::collect_expr_dependencies(hir_expr);
         for graph_ref in &deps.graph_refs {
+            // `@const_name` in a const body is a const dependency. Non-const
+            // `@` targets are rejected with a spanned diagnostic by
+            // `check_hir_body_policies`.
             let kind = ctx
                 .resolver
                 .decl_symbol_kind(graph_ref)
                 .map_err(|err| module_resolve_error(&err, src, entry.span))?;
-            if !kind.is_const() {
-                return Err(GraphcalError::UnknownConstRef {
-                    name: ScopedName::local(graph_ref.as_str()),
-                    src: src.clone(),
-                    span: entry.span.into(),
-                });
+            if kind.is_const() {
+                deps.const_refs.insert(graph_ref.clone());
             }
-            deps.const_refs.insert(graph_ref.clone());
         }
         resolved.const_deps.insert(key, deps.const_refs);
     }
@@ -1962,7 +2288,8 @@ fn collect_resolved_collection_refs_from_expr_inner(
     refs: &mut ResolvedCollectionRefs,
 ) -> Result<(), GraphcalError> {
     match &expr.kind {
-        hir::ExprKind::Number(_)
+        hir::ExprKind::Error
+        | hir::ExprKind::Number(_)
         | hir::ExprKind::Integer(_)
         | hir::ExprKind::Bool(_)
         | hir::ExprKind::StringLiteral(_)
@@ -2200,7 +2527,8 @@ fn collect_resolved_constructor_refs_from_expr_inner(
     refs: &mut ResolvedConstructorRefs,
 ) -> Result<(), GraphcalError> {
     match &expr.kind {
-        hir::ExprKind::Number(_)
+        hir::ExprKind::Error
+        | hir::ExprKind::Number(_)
         | hir::ExprKind::Integer(_)
         | hir::ExprKind::Bool(_)
         | hir::ExprKind::StringLiteral(_)
@@ -2357,7 +2685,8 @@ fn collect_resolved_inline_dag_refs_from_expr_inner(
     refs: &mut ResolvedInlineDagRefs,
 ) {
     match &expr.kind {
-        hir::ExprKind::Number(_)
+        hir::ExprKind::Error
+        | hir::ExprKind::Number(_)
         | hir::ExprKind::Integer(_)
         | hir::ExprKind::Bool(_)
         | hir::ExprKind::StringLiteral(_)
@@ -3631,9 +3960,37 @@ fn expr_lower_error_to_graphcal(
     src: &NamedSource<Arc<String>>,
 ) -> GraphcalError {
     match err {
+        hir::ExprLowerError::UnknownFunction { path, span } => {
+            return GraphcalError::UnknownFunction {
+                name: path.clone(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::WrongArity {
+            name,
+            expected,
+            got,
+            span,
+        } => {
+            return GraphcalError::WrongArity {
+                name: name.clone(),
+                expected: *expected,
+                got: *got,
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
         hir::ExprLowerError::UnknownLocalRef { name, span } => {
             return GraphcalError::UnknownLocalRef {
                 name: name.to_string(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::UnknownGraphRef { name, span } => {
+            return GraphcalError::UnknownGraphRef {
+                name: name.clone(),
                 src: src.clone(),
                 span: (*span).into(),
             };
@@ -3696,11 +4053,13 @@ fn expr_lower_error_to_graphcal(
         hir::ExprLowerError::ModuleResolve { span, .. }
         | hir::ExprLowerError::InvalidScopedNameSegment { span, .. }
         | hir::ExprLowerError::UnknownLocalRef { span, .. }
+        | hir::ExprLowerError::UnknownGraphRef { span, .. }
         | hir::ExprLowerError::TooManyLocals { span }
         | hir::ExprLowerError::EmptyMapEntry { span }
         | hir::ExprLowerError::ExtraMapVariant { span, .. }
+        | hir::ExprLowerError::UnknownPattern { span, .. }
         | hir::ExprLowerError::UnknownFunction { span, .. }
-        | hir::ExprLowerError::UnknownPattern { span, .. } => *span,
+        | hir::ExprLowerError::WrongArity { span, .. } => *span,
         hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. } => *duplicate,
     };
     GraphcalError::EvalError {
@@ -3743,8 +4102,8 @@ fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
         TypeExprKind::Indexed { base, indexes } => {
             type_expr_has_index_name_at_span(base, span)
                 || indexes.iter().any(|index| match index {
-                    crate::desugar::resolved_ast::IndexExpr::Name(name) => name.span == span,
-                    crate::desugar::resolved_ast::IndexExpr::NatExpr(_) => false,
+                    crate::desugar::desugared_ast::IndexExpr::Name(name) => name.span == span,
+                    crate::desugar::desugared_ast::IndexExpr::NatExpr(_) => false,
                 })
         }
         TypeExprKind::TypeApplication { type_args, .. }
@@ -4449,11 +4808,11 @@ fn resolve_type_expr_inner(
             let mut resolved_indexes = Vec::with_capacity(indexes.len());
             for idx in indexes {
                 match idx {
-                    crate::desugar::resolved_ast::IndexExpr::NatExpr(nat_expr) => {
+                    crate::desugar::desugared_ast::IndexExpr::NatExpr(nat_expr) => {
                         let form = normalize_nat_expr(nat_expr, nat_params, src)?;
                         resolved_indexes.push(ResolvedIndex::NatExpr(form, nat_expr.span()));
                     }
-                    crate::desugar::resolved_ast::IndexExpr::Name(path) => {
+                    crate::desugar::desugared_ast::IndexExpr::Name(path) => {
                         resolved_indexes.push(resolve_index_expr_name(
                             &path.value,
                             path.span,
@@ -4500,7 +4859,7 @@ fn resolve_type_expr_inner(
 /// struct types, and generic dimension parameters. Multi-term expressions with
 /// generic params become `GenericDimExpr`; fully concrete expressions become `Scalar`.
 fn resolve_dim_expr(
-    dim_expr: &crate::desugar::resolved_ast::DimExpr,
+    dim_expr: &crate::desugar::desugared_ast::DimExpr,
     registry: &Registry,
     owner: &crate::dag_id::DagId,
     dim_params: &[GenericParamName],
@@ -4582,7 +4941,7 @@ fn resolve_dim_expr(
 }
 
 fn resolve_dim_term_in_generic_expr(
-    item: &crate::desugar::resolved_ast::DimExprItem,
+    item: &crate::desugar::desugared_ast::DimExprItem,
     registry: &Registry,
     dim_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
@@ -4605,7 +4964,7 @@ fn resolve_dim_term_in_generic_expr(
 }
 
 fn concrete_dimension_for_term(
-    item: &crate::desugar::resolved_ast::DimExprItem,
+    item: &crate::desugar::desugared_ast::DimExprItem,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
@@ -4792,13 +5151,13 @@ mod tests {
     }
 
     /// Create a simple dimension `TypeExpr` from a name string like `"Velocity"`.
-    fn make_dim_type_expr(name: &str) -> crate::desugar::resolved_ast::TypeExpr {
-        crate::desugar::resolved_ast::TypeExpr {
-            kind: crate::desugar::resolved_ast::TypeExprKind::DimExpr(
-                crate::desugar::resolved_ast::DimExpr {
-                    terms: vec![crate::desugar::resolved_ast::DimExprItem {
-                        op: crate::desugar::resolved_ast::MulDivOp::Mul,
-                        term: crate::desugar::resolved_ast::DimTerm {
+    fn make_dim_type_expr(name: &str) -> crate::desugar::desugared_ast::TypeExpr {
+        crate::desugar::desugared_ast::TypeExpr {
+            kind: crate::desugar::desugared_ast::TypeExprKind::DimExpr(
+                crate::desugar::desugared_ast::DimExpr {
+                    terms: vec![crate::desugar::desugared_ast::DimExprItem {
+                        op: crate::desugar::desugared_ast::MulDivOp::Mul,
+                        term: crate::desugar::desugared_ast::DimTerm {
                             name: make_dim_term_name(name),
                             power: None,
                             span: Span::new(0, 0),
@@ -4862,9 +5221,9 @@ mod tests {
         let full = format!("param x: {source} = 0.0;");
         let raw_file = Parser::new(&full).parse_file().unwrap();
         let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
+        let file = desugared;
         match &file.declarations[0].kind {
-            crate::desugar::resolved_ast::DeclKind::Param(p) => p.type_ann.clone(),
+            crate::desugar::desugared_ast::DeclKind::Param(p) => p.type_ann.clone(),
             _ => panic!("expected param"),
         }
     }
@@ -5074,7 +5433,7 @@ mod tests {
     fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
+        let file = desugared;
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let ir = crate::ir::lower::lower(&file, &src)?;
         let parent_dag_id =
@@ -5090,7 +5449,7 @@ mod tests {
                 )
             })?;
         for decl in &file.declarations {
-            if let crate::desugar::resolved_ast::DeclKind::Dag(dag) = &decl.kind {
+            if let crate::desugar::desugared_ast::DeclKind::Dag(dag) = &decl.kind {
                 resolver
                     .add_module(parent_dag_id.child(dag.name.value.as_str()), &dag.body)
                     .map_err(|err| {
@@ -5127,7 +5486,7 @@ mod tests {
         tir: &mut TIR,
         src: &NamedSource<Arc<String>>,
         parent_dag_id: &crate::dag_id::DagId,
-        parent_declarations: &[crate::desugar::resolved_ast::Declaration],
+        parent_declarations: &[crate::desugar::desugared_ast::Declaration],
     ) -> Result<(), GraphcalError> {
         let dag_bodies = tir
             .registry
@@ -5199,7 +5558,7 @@ mod tests {
                       node x: Dimensionless = @p + D;";
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
+        let file = desugared;
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let dag_id =
             crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
@@ -5263,12 +5622,15 @@ mod tests {
         // accepts it (see the CLI tests), but single-file TIR resolution
         // rejects it: there's no project loader to resolve cross-DAG
         // references like `import hohmann.{...}`, and `@transfer` from the
-        // unexpanded include surfaces as an unknown graph reference. The
-        // resolver fails on the first unresolved name it encounters, which
-        // is enough to assert `UnknownGraphRef`.
+        // unexpanded include surfaces as an unresolved reference during HIR
+        // lowering. Resolution fails on the first unresolved name it
+        // encounters.
         let source = include_str!("../../../../tests/fixtures/valid/hohmann.gcl");
         let err = parse_and_type_resolve(source).unwrap_err();
-        assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
+        assert!(
+            err.to_string().contains("transfer"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

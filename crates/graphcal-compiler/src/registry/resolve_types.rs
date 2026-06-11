@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::dag_id::DagId;
-use crate::desugar::resolved_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
+use crate::desugar::desugared_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
 use crate::registry::declared_type::IndexTypeRef;
 use crate::syntax::names::{
     DeclName, IndexName, IndexVariantName, NamePath, ResolvedIndexVariant, ScopedName,
@@ -476,16 +476,6 @@ pub struct ResolvedFile {
     pub figures: Vec<ResolvedFigureEntry>,
     /// Layer declarations in source order.
     pub layers: Vec<ResolvedLayerEntry>,
-    /// For each node/param, the set of `@`-references (graph deps).
-    /// Keys are bare locals (the file's own decls); values may be qualified
-    /// when the ref targets an imported module member.
-    pub runtime_deps:
-        HashMap<crate::syntax::names::ScopedName, HashSet<crate::syntax::names::ScopedName>>,
-    /// For each const, the set of `CONST_REF` references (const deps).
-    /// Keys are bare locals (the file's own decls); values may be qualified
-    /// when the ref targets an imported module member.
-    pub const_deps:
-        HashMap<crate::syntax::names::ScopedName, HashSet<crate::syntax::names::ScopedName>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(DeclName, DeclCategory)>,
     /// Set of all assert names (for checking `@assert_name` errors).

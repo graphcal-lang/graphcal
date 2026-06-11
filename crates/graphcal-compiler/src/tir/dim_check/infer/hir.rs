@@ -107,6 +107,15 @@ fn infer_hir_type_inner(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let inferred = match &expr.kind {
+        // Error nodes exist only in tolerant lowering for IDE consumers; the
+        // batch pipeline rejects them before TIR, so inference never sees one.
+        hir::ExprKind::Error => {
+            return Err(GraphcalError::InternalError {
+                message: "unresolved reference reached type inference".to_string(),
+                src: src.clone(),
+                span: expr.span.into(),
+            });
+        }
         hir::ExprKind::Number(_) => InferredType::Scalar(Dimension::dimensionless()),
         hir::ExprKind::Integer(_) => InferredType::Int,
         hir::ExprKind::Bool(_) => InferredType::Bool,
@@ -375,7 +384,7 @@ fn infer_hir_type_inner(
 }
 
 fn infer_hir_unit_literal(
-    unit: &crate::desugar::resolved_ast::UnitExpr,
+    unit: &crate::desugar::desugared_ast::UnitExpr,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -1105,7 +1114,7 @@ fn infer_hir_if(
 
 #[expect(clippy::too_many_arguments, reason = "unary expression context")]
 fn infer_hir_unary(
-    op: crate::desugar::resolved_ast::UnaryOp,
+    op: crate::desugar::desugared_ast::UnaryOp,
     operand: &hir::Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -1157,7 +1166,7 @@ fn hir_literal_exponent(expr: &hir::Expr) -> Option<LiteralExponent> {
 }
 
 fn try_const_int(expr: &hir::Expr) -> Option<i64> {
-    use crate::desugar::resolved_ast::BinOp;
+    use crate::desugar::desugared_ast::BinOp;
     match &expr.kind {
         hir::ExprKind::Integer(n) => Some(*n),
         hir::ExprKind::UnaryOp {
@@ -1184,7 +1193,7 @@ fn try_const_int(expr: &hir::Expr) -> Option<i64> {
 #[expect(clippy::too_many_arguments, reason = "binary expression context")]
 fn infer_hir_binop(
     span: crate::syntax::span::Span,
-    op: crate::desugar::resolved_ast::BinOp,
+    op: crate::desugar::desugared_ast::BinOp,
     lhs: &hir::Expr,
     rhs: &hir::Expr,
     owner_decl_name: Option<&str>,
@@ -1196,7 +1205,7 @@ fn infer_hir_binop(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    use crate::desugar::resolved_ast::BinOp;
+    use crate::desugar::desugared_ast::BinOp;
     let lhs_type = infer_hir_type(
         lhs,
         owner_decl_name,
@@ -1571,7 +1580,7 @@ fn infer_hir_index_access(
 #[expect(clippy::too_many_arguments, reason = "conversion expression context")]
 fn infer_hir_convert(
     inner: &hir::Expr,
-    target: &crate::desugar::resolved_ast::UnitExpr,
+    target: &crate::desugar::desugared_ast::UnitExpr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
@@ -1970,13 +1979,13 @@ fn infer_hir_dim_expr_arg(
                 }
             })?;
             match item.op {
-                crate::desugar::resolved_ast::MulDivOp::Mul => {
+                crate::desugar::desugared_ast::MulDivOp::Mul => {
                     (acc * powered).map_err(|_| GraphcalError::DimensionOverflow {
                         src: src.clone(),
                         span: span.into(),
                     })
                 }
-                crate::desugar::resolved_ast::MulDivOp::Div => {
+                crate::desugar::desugared_ast::MulDivOp::Div => {
                     (acc / powered).map_err(|_| GraphcalError::DimensionOverflow {
                         src: src.clone(),
                         span: span.into(),

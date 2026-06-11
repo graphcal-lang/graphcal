@@ -1,6 +1,5 @@
 mod deps;
 pub(crate) mod names;
-mod scope;
 #[cfg(test)]
 mod tests;
 
@@ -9,11 +8,10 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::resolved_ast::{
+use crate::desugar::desugared_ast::{
     AssertBody, AttributeArg, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeDeclBody,
     TypeExpr, TypeExprKind,
 };
-use crate::registry::builtins::{builtin_constants, builtin_functions};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{
     ResolvedAssertEntry, ResolvedConstEntry, ResolvedFigureEntry, ResolvedLayerEntry,
@@ -31,24 +29,10 @@ pub use crate::registry::resolve_types::{
 pub use crate::syntax::names::ScopedName;
 
 // Re-export items from submodules (crate-internal only).
-pub(crate) use deps::collect_scoped_graph_refs;
 pub use deps::{collect_graph_ref_names, collect_graph_refs, contains_graph_ref};
 
 // Import helpers from submodules for use within this file.
-use deps::{extract_all_refs, extract_const_refs};
 use names::parse_expected_fail_args;
-use scope::{
-    check_no_assert_graph_refs, check_no_pub_index_variant_literals, check_no_runtime_graph_refs,
-};
-
-/// Classification of a name in the resolver's scope.
-///
-/// Used to partition names into const vs runtime sets without relying on casing heuristics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NameCategory {
-    Const,
-    Runtime,
-}
 
 fn register_value_namespace_name(
     value_names: &mut HashMap<ScopedName, Span>,
@@ -72,12 +56,9 @@ fn register_value_namespace_name(
 fn check_value_namespace_collisions(
     file: &File,
     src: &NamedSource<Arc<String>>,
-    names: &HashMap<ScopedName, (Span, NameCategory)>,
+    names: &HashMap<ScopedName, Span>,
 ) -> Result<(), GraphcalError> {
-    let mut value_names: HashMap<ScopedName, Span> = names
-        .iter()
-        .map(|(name, (span, _))| (name.clone(), *span))
-        .collect();
+    let mut value_names: HashMap<ScopedName, Span> = names.clone();
 
     for decl in &file.declarations {
         match &decl.kind {
@@ -158,8 +139,6 @@ struct CollectedDeclarations {
     plots: Vec<ResolvedPlotEntry>,
     figures: Vec<ResolvedFigureEntry>,
     layers: Vec<ResolvedLayerEntry>,
-    runtime_deps: HashMap<ScopedName, HashSet<ScopedName>>,
-    const_deps: HashMap<ScopedName, HashSet<ScopedName>>,
     source_order: Vec<(DeclName, DeclCategory)>,
     assert_names: HashSet<DeclName>,
     pub_names: HashSet<DeclName>,
@@ -175,9 +154,7 @@ struct CollectedDeclarations {
 fn collect_local_declarations(
     file: &File,
     src: &NamedSource<Arc<String>>,
-    names: &mut HashMap<ScopedName, (Span, NameCategory)>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    names: &mut HashMap<ScopedName, Span>,
 ) -> Result<CollectedDeclarations, GraphcalError> {
     let mut consts = Vec::new();
     let mut params = Vec::new();
@@ -186,8 +163,6 @@ fn collect_local_declarations(
     let mut plots = Vec::new();
     let mut figures = Vec::new();
     let mut layers = Vec::new();
-    let mut runtime_deps: HashMap<ScopedName, HashSet<ScopedName>> = HashMap::new();
-    let mut const_deps: HashMap<ScopedName, HashSet<ScopedName>> = HashMap::new();
     let mut source_order: Vec<(DeclName, DeclCategory)> = Vec::new();
     let mut assert_names: HashSet<DeclName> = HashSet::new();
 
@@ -263,33 +238,17 @@ fn collect_local_declarations(
         }
     }
 
-    // Collect `pub(bind)` index names with concrete variants (for V004 /
-    // A10(c) variant-literal restriction). Plain `pub` indexes are not
-    // bindable, so A10 never fires on their variant literals. Required
-    // `pub(bind)` indexes have no declared variants so they carry no
-    // variant literals either; the filter below excludes them.
-    let pub_bind_index_names: HashSet<crate::syntax::names::IndexName> = file
-        .declarations
-        .iter()
-        .filter_map(|decl| match &decl.kind {
-            DeclKind::Index(idx) if idx.visibility.is_bindable() && !idx.kind.is_required() => {
-                Some(idx.name.value.clone())
-            }
-            _ => None,
-        })
-        .collect();
-
     // First pass: collect all declarations and check for duplicates
     for decl in &file.declarations {
         // Dimension and Unit declarations are handled by the registry, not the resolver
-        let (name, name_span, is_const) = match &decl.kind {
-            DeclKind::Param(p) => (p.name.value.to_string(), p.name.span, false),
-            DeclKind::Node(n) => (n.name.value.to_string(), n.name.span, false),
-            DeclKind::ConstNode(c) => (c.name.value.to_string(), c.name.span, true),
-            DeclKind::Assert(a) => (a.name.value.to_string(), a.name.span, false),
-            DeclKind::Plot(p) => (p.name.value.to_string(), p.name.span, false),
-            DeclKind::Figure(f) => (f.name.value.to_string(), f.name.span, false),
-            DeclKind::Layer(l) => (l.name.value.to_string(), l.name.span, false),
+        let (name, name_span) = match &decl.kind {
+            DeclKind::Param(p) => (p.name.value.to_string(), p.name.span),
+            DeclKind::Node(n) => (n.name.value.to_string(), n.name.span),
+            DeclKind::ConstNode(c) => (c.name.value.to_string(), c.name.span),
+            DeclKind::Assert(a) => (a.name.value.to_string(), a.name.span),
+            DeclKind::Plot(p) => (p.name.value.to_string(), p.name.span),
+            DeclKind::Figure(f) => (f.name.value.to_string(), f.name.span),
+            DeclKind::Layer(l) => (l.name.value.to_string(), l.name.span),
             DeclKind::BaseDimension(_)
             | DeclKind::Dimension(_)
             | DeclKind::Unit(_)
@@ -304,12 +263,7 @@ fn collect_local_declarations(
         };
 
         let scoped_name = ScopedName::local(name.clone());
-        let name_cat = if is_const {
-            NameCategory::Const
-        } else {
-            NameCategory::Runtime
-        };
-        names.insert(scoped_name, (name_span, name_cat));
+        names.insert(scoped_name, name_span);
 
         // Track source order and assert names
         let category = match &decl.kind {
@@ -339,10 +293,9 @@ fn collect_local_declarations(
         source_order.push((DeclName::new(name.as_str()), category));
     }
 
-    // Build the set of all known names for reference checking.
-    let (all_const_names, all_runtime_names) = build_name_sets(names);
-
-    // Second pass: resolve references and extract dependencies
+    // Second pass: collect declaration entries. Reference validation and
+    // dependency extraction happen after HIR lowering — this pass only
+    // gathers declaration bodies in source order.
     for decl in &file.declarations {
         match &decl.kind {
             DeclKind::BaseDimension(_)
@@ -355,232 +308,50 @@ fn collect_local_declarations(
             | DeclKind::Dag(_) => {}
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
             DeclKind::Assert(a) => {
-                // Collect all expressions from the assert body for validation
-                let body_exprs: Vec<&Expr> = match &a.body {
-                    AssertBody::Expr(expr) => vec![expr],
-                    AssertBody::Tolerance {
-                        actual,
-                        expected,
-                        tolerance,
-                        ..
-                    } => vec![actual, expected, tolerance],
-                };
-                for body_expr in &body_exprs {
-                    // Validate references in assert body (asserts CAN use @)
-                    let (_graph_refs, _const_refs) = extract_all_refs(
-                        body_expr,
-                        &all_runtime_names,
-                        &all_const_names,
-                        builtin_consts,
-                        builtin_fns,
-                        src,
-                        None,
-                    )?;
-                    // Check that assert body doesn't reference other assert names via @
-                    check_no_assert_graph_refs(body_expr, &assert_names, src)?;
-                    // A10(b): public sink kinds travel with the include,
-                    // so their bodies must abstract over pub(bind)
-                    // indexes. Private sinks are pruned on include, so
-                    // their literal mentions cannot orphan anything.
-                    if a.visibility.is_public() {
-                        check_no_pub_index_variant_literals(body_expr, &pub_bind_index_names, src)?;
-                    }
-                }
-                let aname = a.name.value.to_string();
                 asserts.push(ResolvedAssertEntry {
-                    name: aname,
+                    name: a.name.value.to_string(),
                     body: a.body.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Plot(p) => {
-                // Validate references in plot encoding and property expressions (plots CAN use @).
-                // A10(b): public sinks must abstract over pub(bind) indexes.
-                let pub_sink = p.visibility.is_public();
-                for encoding in &p.encodings {
-                    let (_graph_refs, _const_refs) = extract_all_refs(
-                        &encoding.value,
-                        &all_runtime_names,
-                        &all_const_names,
-                        builtin_consts,
-                        builtin_fns,
-                        src,
-                        None,
-                    )?;
-                    check_no_assert_graph_refs(&encoding.value, &assert_names, src)?;
-                    if pub_sink {
-                        check_no_pub_index_variant_literals(
-                            &encoding.value,
-                            &pub_bind_index_names,
-                            src,
-                        )?;
-                    }
-                }
-                for prop in &p.mark.properties {
-                    let (_graph_refs, _const_refs) = extract_all_refs(
-                        &prop.value,
-                        &all_runtime_names,
-                        &all_const_names,
-                        builtin_consts,
-                        builtin_fns,
-                        src,
-                        None,
-                    )?;
-                    check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
-                    if pub_sink {
-                        check_no_pub_index_variant_literals(
-                            &prop.value,
-                            &pub_bind_index_names,
-                            src,
-                        )?;
-                    }
-                }
-                for prop in &p.properties {
-                    let (_graph_refs, _const_refs) = extract_all_refs(
-                        &prop.value,
-                        &all_runtime_names,
-                        &all_const_names,
-                        builtin_consts,
-                        builtin_fns,
-                        src,
-                        None,
-                    )?;
-                    check_no_assert_graph_refs(&prop.value, &assert_names, src)?;
-                    if pub_sink {
-                        check_no_pub_index_variant_literals(
-                            &prop.value,
-                            &pub_bind_index_names,
-                            src,
-                        )?;
-                    }
-                }
-                let pname = p.name.value.to_string();
                 plots.push(ResolvedPlotEntry {
-                    name: pname,
+                    name: p.name.value.to_string(),
                     decl: p.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Figure(f) => {
-                // Validate references in figure field expressions (figures CAN use @).
-                let pub_sink = f.visibility.is_public();
-                for field in &f.fields {
-                    let (_graph_refs, _const_refs) = extract_all_refs(
-                        &field.value,
-                        &all_runtime_names,
-                        &all_const_names,
-                        builtin_consts,
-                        builtin_fns,
-                        src,
-                        None,
-                    )?;
-                    check_no_assert_graph_refs(&field.value, &assert_names, src)?;
-                    if pub_sink {
-                        check_no_pub_index_variant_literals(
-                            &field.value,
-                            &pub_bind_index_names,
-                            src,
-                        )?;
-                    }
-                }
-                let fname = f.name.value.to_string();
                 figures.push(ResolvedFigureEntry {
-                    name: fname,
+                    name: f.name.value.to_string(),
                     decl: f.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Layer(l) => {
-                // Validate references in layer field expressions (layers CAN use @).
-                let pub_sink = l.visibility.is_public();
-                for field in &l.fields {
-                    let (_graph_refs, _const_refs) = extract_all_refs(
-                        &field.value,
-                        &all_runtime_names,
-                        &all_const_names,
-                        builtin_consts,
-                        builtin_fns,
-                        src,
-                        None,
-                    )?;
-                    check_no_assert_graph_refs(&field.value, &assert_names, src)?;
-                    if pub_sink {
-                        check_no_pub_index_variant_literals(
-                            &field.value,
-                            &pub_bind_index_names,
-                            src,
-                        )?;
-                    }
-                }
-                let lname = l.name.value.to_string();
                 layers.push(ResolvedLayerEntry {
-                    name: lname,
+                    name: l.name.value.to_string(),
                     decl: l.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Param(p) => {
-                let pname = p.name.value.to_string();
-                if let Some(ref value) = p.value {
-                    check_no_assert_graph_refs(value, &assert_names, src)?;
-                    // A10(a) + A5: `param` is implicitly bindable, so a
-                    // variant literal of a `pub(bind)` index in a param
-                    // default is always fine — the importer rebinding the
-                    // index will also be required to rebind the param
-                    // (V005, enforced at the include site).
-                    let (graph_refs, _const_refs) = extract_all_refs(
-                        value,
-                        &all_runtime_names,
-                        &all_const_names,
-                        builtin_consts,
-                        builtin_fns,
-                        src,
-                        None,
-                    )?;
-                    runtime_deps.insert(ScopedName::local(pname.as_str()), graph_refs);
-                } else {
-                    runtime_deps.insert(ScopedName::local(pname.as_str()), HashSet::new());
-                }
                 params.push(ResolvedParamEntry {
-                    name: pname,
+                    name: p.name.value.to_string(),
                     default_expr: p.value.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::ConstNode(c) => {
-                check_no_runtime_graph_refs(&c.value, &all_runtime_names, src)?;
-                check_no_pub_index_variant_literals(&c.value, &pub_bind_index_names, src)?;
-                let deps = extract_const_refs(
-                    &c.value,
-                    &all_const_names,
-                    builtin_consts,
-                    builtin_fns,
-                    src,
-                )?;
-                let cname = c.name.value.to_string();
-                const_deps.insert(ScopedName::local(cname.as_str()), deps);
                 consts.push(ResolvedConstEntry {
-                    name: cname,
+                    name: c.name.value.to_string(),
                     expr: c.value.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Node(n) => {
-                check_no_assert_graph_refs(&n.value, &assert_names, src)?;
-                check_no_pub_index_variant_literals(&n.value, &pub_bind_index_names, src)?;
-                let nname = n.name.value.to_string();
-                let (graph_refs, _const_refs) = extract_all_refs(
-                    &n.value,
-                    &all_runtime_names,
-                    &all_const_names,
-                    builtin_consts,
-                    builtin_fns,
-                    src,
-                    Some(&nname),
-                )?;
-                runtime_deps.insert(ScopedName::local(nname.as_str()), graph_refs);
                 nodes.push(ResolvedNodeEntry {
-                    name: nname,
+                    name: n.name.value.to_string(),
                     expr: n.value.clone(),
                     span: decl.span,
                 });
@@ -596,33 +367,10 @@ fn collect_local_declarations(
         plots,
         figures,
         layers,
-        runtime_deps,
-        const_deps,
         source_order,
         assert_names,
         pub_names,
     })
-}
-
-/// Build const and runtime name sets from the names map using stored categories.
-///
-/// The returned sets borrow keys from `names`; downstream resolver code uses
-/// them for typed `ScopedName` membership checks against AST `GraphRef` /
-/// `ConstRef` values directly.
-fn build_name_sets(
-    names: &HashMap<ScopedName, (Span, NameCategory)>,
-) -> (HashSet<&ScopedName>, HashSet<&ScopedName>) {
-    let all_const_names: HashSet<&ScopedName> = names
-        .iter()
-        .filter(|(_, (_, cat))| *cat == NameCategory::Const)
-        .map(|(name, _)| name)
-        .collect();
-    let all_runtime_names: HashSet<&ScopedName> = names
-        .iter()
-        .filter(|(_, (_, cat))| *cat == NameCategory::Runtime)
-        .map(|(name, _)| name)
-        .collect();
-    (all_const_names, all_runtime_names)
 }
 
 /// Result of attribute validation.
@@ -798,7 +546,7 @@ fn validate_private_in_public(
     src: &NamedSource<Arc<String>>,
     pub_names: &HashSet<DeclName>,
 ) -> Result<(), GraphcalError> {
-    use crate::desugar::resolved_ast::IndexDeclKind;
+    use crate::desugar::desugared_ast::IndexDeclKind;
 
     // Collect all locally-declared type-system names (dims, indexes, types) with their spans.
     let mut local_type_names: HashMap<String, Span> = HashMap::new();
@@ -998,12 +746,15 @@ pub(crate) struct ImportedNames {
     pub asserts: Vec<(String, AssertBody, Span)>,
 }
 
-/// Resolve names, detect duplicates, and extract dependencies.
+/// Collect declaration entries and validate declaration shells.
+///
+/// Reference resolution and dependency extraction happen in HIR lowering;
+/// this pass checks duplicates, visibility rules, and attributes.
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if duplicate names, unknown references, or
-/// arity mismatches are found.
+/// Returns a [`GraphcalError`] if duplicate names or invalid declaration
+/// shells are found.
 pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFile, GraphcalError> {
     resolve_with_imports(file, src, &ImportedNames::default())
 }
@@ -1027,45 +778,25 @@ pub(crate) fn resolve_with_imports(
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
 ) -> Result<ResolvedFile, GraphcalError> {
-    let builtin_consts = builtin_constants();
-    let builtin_fns = builtin_functions();
-
-    let mut names: HashMap<ScopedName, (Span, NameCategory)> = HashMap::new();
+    let mut names: HashMap<ScopedName, Span> = HashMap::new();
 
     // Pre-populate with imported names (they don't get duplicate-checked against
     // each other here because they were validated in their source files).
-    // The `imported.*` compatibility entries pass bare names; the at-rest dep map
-    // produced upstream already classifies them as locals.
     for (name, _, _, span) in &imported.consts {
-        names.insert(
-            ScopedName::local(name.as_str()),
-            (*span, NameCategory::Const),
-        );
+        names.insert(ScopedName::local(name.as_str()), *span);
     }
     for (name, _, _, span) in &imported.params {
-        names.insert(
-            ScopedName::local(name.as_str()),
-            (*span, NameCategory::Runtime),
-        );
+        names.insert(ScopedName::local(name.as_str()), *span);
     }
     for (name, _, _, span) in &imported.nodes {
-        names.insert(
-            ScopedName::local(name.as_str()),
-            (*span, NameCategory::Runtime),
-        );
+        names.insert(ScopedName::local(name.as_str()), *span);
     }
     for (name, _, span) in &imported.asserts {
-        names.insert(
-            ScopedName::local(name.as_str()),
-            (*span, NameCategory::Runtime),
-        );
+        names.insert(ScopedName::local(name.as_str()), *span);
     }
 
     // Collect local declarations
-    let local = collect_local_declarations(file, src, &mut names, builtin_consts, builtin_fns)?;
-
-    // Build name sets for dependency extraction
-    let (all_const_names, all_runtime_names) = build_name_sets(&names);
+    let local = collect_local_declarations(file, src, &mut names)?;
 
     // Build assert names (imported + local) for attribute validation
     let mut all_assert_names: HashSet<DeclName> = HashSet::new();
@@ -1073,41 +804,6 @@ pub(crate) fn resolve_with_imports(
         all_assert_names.insert(DeclName::new(name.as_str()));
     }
     all_assert_names.extend(local.assert_names.iter().cloned());
-
-    // Extract dependencies for imported declarations so the DAG is complete.
-    // Without this, imported nodes' @-references are invisible to the topological sort,
-    // causing evaluation-order errors (Bug 2).
-    let mut runtime_deps = local.runtime_deps;
-    let mut const_deps = local.const_deps;
-
-    for (name, _, expr, _) in &imported.consts {
-        let deps = extract_const_refs(expr, &all_const_names, builtin_consts, builtin_fns, src)?;
-        const_deps.insert(ScopedName::local(name.as_str()), deps);
-    }
-    for (name, _, expr, _) in &imported.params {
-        let (graph_refs, _const_refs) = extract_all_refs(
-            expr,
-            &all_runtime_names,
-            &all_const_names,
-            builtin_consts,
-            builtin_fns,
-            src,
-            None,
-        )?;
-        runtime_deps.insert(ScopedName::local(name.as_str()), graph_refs);
-    }
-    for (name, _, expr, _) in &imported.nodes {
-        let (graph_refs, _const_refs) = extract_all_refs(
-            expr,
-            &all_runtime_names,
-            &all_const_names,
-            builtin_consts,
-            builtin_fns,
-            src,
-            Some(name.as_str()),
-        )?;
-        runtime_deps.insert(ScopedName::local(name.as_str()), graph_refs);
-    }
 
     // Prepend imported declarations so they appear before local ones in eval order.
     // Strip TypeExpr from imported tuples and convert to entry types.
@@ -1182,8 +878,6 @@ pub(crate) fn resolve_with_imports(
         plots: local.plots,
         figures: local.figures,
         layers: local.layers,
-        runtime_deps,
-        const_deps,
         source_order: all_source_order,
         assert_names: all_assert_names,
         assumes_map: validated.assumes_map,
@@ -1208,33 +902,27 @@ pub(crate) fn resolve_with_imported_values(
     src: &NamedSource<Arc<String>>,
     imported: &ImportedValueNames,
 ) -> Result<ResolvedFile, GraphcalError> {
-    let builtin_consts = builtin_constants();
-    let builtin_fns = builtin_functions();
-
-    let mut names: HashMap<ScopedName, (Span, NameCategory)> = HashMap::new();
+    let mut names: HashMap<ScopedName, Span> = HashMap::new();
 
     // Pre-populate with imported names. The scope here mixes typed imported
     // `ScopedName`s (which may be `Qualified` for module aliases) with
-    // local declarations; both share the same key type so subsequent lookups
-    // pattern-match against AST `GraphRef`/`ConstRef` values directly.
+    // local declarations; both share the same key type so the value-namespace
+    // collision check sees the complete scope.
     for (name, span) in &imported.const_names {
-        names.insert(name.clone(), (*span, NameCategory::Const));
+        names.insert(name.clone(), *span);
     }
     for (name, span) in &imported.param_names {
-        names.insert(name.clone(), (*span, NameCategory::Runtime));
+        names.insert(name.clone(), *span);
     }
     for (name, span) in &imported.node_names {
-        names.insert(name.clone(), (*span, NameCategory::Runtime));
+        names.insert(name.clone(), *span);
     }
     for (name, span) in &imported.assert_names {
-        names.insert(
-            ScopedName::local(name.as_str()),
-            (*span, NameCategory::Runtime),
-        );
+        names.insert(ScopedName::local(name.as_str()), *span);
     }
 
     // Collect local declarations
-    let local = collect_local_declarations(file, src, &mut names, builtin_consts, builtin_fns)?;
+    let local = collect_local_declarations(file, src, &mut names)?;
 
     // Build assert names (imported + local) for attribute validation
     let mut all_assert_names: HashSet<DeclName> = HashSet::new();
@@ -1257,8 +945,6 @@ pub(crate) fn resolve_with_imported_values(
         plots: local.plots,
         figures: local.figures,
         layers: local.layers,
-        runtime_deps: local.runtime_deps,
-        const_deps: local.const_deps,
         source_order: local.source_order,
         assert_names: all_assert_names,
         assumes_map: validated.assumes_map,

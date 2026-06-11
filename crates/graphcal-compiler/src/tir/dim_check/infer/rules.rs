@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::resolved_ast::{BinOp, UnaryOp, UnitExpr};
+use crate::desugar::desugared_ast::{BinOp, UnaryOp, UnitExpr};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::{Dimension, Rational};

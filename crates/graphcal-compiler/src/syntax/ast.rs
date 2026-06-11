@@ -1,6 +1,6 @@
 use core::convert::Infallible;
 
-use crate::syntax::phase::{Desugared, Phase, Raw, Resolved};
+use crate::syntax::phase::{Desugared, Phase, Raw};
 
 mod common;
 mod decl;
@@ -20,12 +20,6 @@ impl Phase for Desugared {
     type DeclSugar = Infallible;
     type ExprSugar = Infallible;
     type RefSugar = UnresolvedRef;
-}
-
-impl Phase for Resolved {
-    type DeclSugar = Infallible;
-    type ExprSugar = Infallible;
-    type RefSugar = Infallible;
 }
 
 #[cfg(test)]

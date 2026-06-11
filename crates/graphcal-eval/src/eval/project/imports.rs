@@ -6,7 +6,7 @@
     reason = "submodule of project/ uses parent types extensively"
 )]
 use super::*;
-use graphcal_compiler::desugar::resolved_ast::ImportItemNamespace;
+use graphcal_compiler::syntax::ast::ImportItemNamespace;
 
 /// What kind of "other declaration" a binding name resolves to in the dep file
 /// when it is not a param / type / dim / index.
@@ -37,7 +37,7 @@ struct DepDeclIndex<'a> {
     dims: HashSet<DimName>,
     units: HashSet<graphcal_compiler::syntax::names::UnitName>,
     /// Maps index name to its declaration (needed for kind/required checks).
-    indexes: HashMap<IndexName, &'a graphcal_compiler::desugar::resolved_ast::IndexDecl>,
+    indexes: HashMap<IndexName, &'a graphcal_compiler::desugar::desugared_ast::IndexDecl>,
     /// "Other" declarations (const node / node / assert) that are invalid as
     /// binding targets; used to produce precise "is actually a …" diagnostics.
     other: HashMap<DeclName, OtherDeclKind>,
@@ -56,7 +56,7 @@ impl IncludeVisibilityBoundary {
 }
 
 pub(in crate::eval::project) struct InlineDagIncludeTarget<'a> {
-    pub(in crate::eval::project) dag_def: &'a graphcal_compiler::desugar::resolved_ast::DagDecl,
+    pub(in crate::eval::project) dag_def: &'a graphcal_compiler::desugar::desugared_ast::DagDecl,
     pub(in crate::eval::project) dag_id: &'a graphcal_compiler::dag_id::DagId,
     pub(in crate::eval::project) dag_name: &'a str,
     pub(in crate::eval::project) parent_dag_id: &'a graphcal_compiler::dag_id::DagId,
@@ -82,7 +82,7 @@ impl DepDeclIndex<'_> {
 }
 
 fn ensure_include_item_visible(
-    file: &graphcal_compiler::desugar::resolved_ast::File,
+    file: &graphcal_compiler::desugar::desugared_ast::File,
     name: &str,
     namespace: ImportItemNamespace,
     boundary: IncludeVisibilityBoundary,
@@ -128,7 +128,7 @@ fn runtime_artifact_unavailable_error(
 }
 
 fn include_value_decl(
-    decl: &graphcal_compiler::desugar::resolved_ast::Declaration,
+    decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     boundary: IncludeVisibilityBoundary,
 ) -> Option<(String, bool)> {
     match &decl.kind {
@@ -146,13 +146,13 @@ fn include_value_decl(
 }
 
 fn build_dep_decl_index(
-    decls: &[graphcal_compiler::desugar::resolved_ast::Declaration],
+    decls: &[graphcal_compiler::desugar::desugared_ast::Declaration],
 ) -> DepDeclIndex<'_> {
     let mut params = HashSet::new();
     let mut types = HashSet::new();
     let mut dims = HashSet::new();
     let mut units = HashSet::new();
-    let mut indexes: HashMap<IndexName, &graphcal_compiler::desugar::resolved_ast::IndexDecl> =
+    let mut indexes: HashMap<IndexName, &graphcal_compiler::desugar::desugared_ast::IndexDecl> =
         HashMap::new();
     let mut other: HashMap<DeclName, OtherDeclKind> = HashMap::new();
     for d in decls {
@@ -203,7 +203,7 @@ fn build_dep_decl_index(
 /// is the dep-side name and the value is the importer-side name it binds to.
 pub(in crate::eval::project) struct ClassifiedBindings {
     pub(in crate::eval::project) params:
-        HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
+        HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     pub(in crate::eval::project) indexes: DepToImporter<IndexName>,
     pub(in crate::eval::project) types: DepToImporter<StructTypeName>,
     pub(in crate::eval::project) dims: DepToImporter<DimName>,
@@ -217,7 +217,7 @@ pub(in crate::eval::project) struct ClassifiedBindings {
 /// already-compiled dependency artifacts) layers on top of this — this helper only
 /// answers "is `binding_name` a param/type/dim/index of the dep, or invalid?".
 fn classify_param_bindings(
-    param_bindings: &[graphcal_compiler::desugar::resolved_ast::ParamBinding],
+    param_bindings: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
     dep_index: &DepDeclIndex<'_>,
     file_src: &NamedSource<Arc<String>>,
     dep_path_for_error: &str,
@@ -299,8 +299,8 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
     project: &'a crate::loader::LoadedProject,
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
     import_dag_id: &graphcal_compiler::dag_id::DagId,
-    include_decl: &graphcal_compiler::desugar::resolved_ast::IncludeDecl,
-    decl: &graphcal_compiler::desugar::resolved_ast::Declaration,
+    include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
+    decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     file_src: &NamedSource<Arc<String>>,
     evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     ctx: &mut ImportContext<'a>,
@@ -311,13 +311,13 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
 
     // Determine the prefix (namespace) for the merged declarations.
     let prefix = match &include_decl.kind {
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
             alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(&include_decl.path),
                 |alias_ident| alias_ident.value.clone(),
             )
         }
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(_) => {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(_) => {
             // For selective instantiated includes, we still need a prefix for
             // the merged declarations. Derive from the path's leaf segment.
             derive_module_name_from_import_path(&include_decl.path)
@@ -410,8 +410,8 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         // Validate kind matching (named-to-named, range-to-range).
         let dep_is_named = matches!(
             dep_idx.kind,
-            graphcal_compiler::desugar::resolved_ast::IndexDeclKind::Named { .. }
-                | graphcal_compiler::desugar::resolved_ast::IndexDeclKind::RequiredNamed
+            graphcal_compiler::desugar::desugared_ast::IndexDeclKind::Named { .. }
+                | graphcal_compiler::desugar::desugared_ast::IndexDeclKind::RequiredNamed
         );
         let imp_is_named = importer_idx_ast.map_or_else(
             || {
@@ -421,8 +421,8 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
             |imp_idx| {
                 Some(matches!(
                     imp_idx.kind,
-                    graphcal_compiler::desugar::resolved_ast::IndexDeclKind::Named { .. }
-                        | graphcal_compiler::desugar::resolved_ast::IndexDeclKind::RequiredNamed
+                    graphcal_compiler::desugar::desugared_ast::IndexDeclKind::Named { .. }
+                        | graphcal_compiler::desugar::desugared_ast::IndexDeclKind::RequiredNamed
                 ))
             },
         );
@@ -446,10 +446,10 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
     // so that the resolver recognizes references to them.
     let mut import_item_attributes: HashMap<
         DeclName,
-        Vec<graphcal_compiler::desugar::resolved_ast::Attribute>,
+        Vec<graphcal_compiler::desugar::desugared_ast::Attribute>,
     > = HashMap::new();
     let selective_names = match &include_decl.kind {
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(names) => {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
             let mut selective = Vec::new();
             for import_item in names {
                 let orig_name = &import_item.name.name;
@@ -503,7 +503,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
             }
             Some(selective)
         }
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Module { .. } => {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => {
             // Register all dep names under the prefix for scope checking.
             let import_span = include_decl.path.span();
             for dep_decl in &dep_loaded.ast.declarations {
@@ -545,12 +545,12 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
 
     let pub_reexport_whole = include_decl.visibility.is_public();
     let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) => items
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
             .filter(|it| it.is_pub)
             .map(|it| DeclName::new(&it.name.name))
             .collect(),
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Module { .. } => HashSet::new(),
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
 
     ctx.deferred_dag_includes.push(DeferredDagInclude {
@@ -586,12 +586,12 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
 )]
 pub(in crate::eval::project) fn process_inline_dag_include(
     target: &InlineDagIncludeTarget<'_>,
-    include_decl: &graphcal_compiler::desugar::resolved_ast::IncludeDecl,
-    decl: &graphcal_compiler::desugar::resolved_ast::Declaration,
+    include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
+    decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     file_src: &NamedSource<Arc<String>>,
     ctx: &mut ImportContext<'_>,
 ) -> Result<(), CompileError> {
-    use graphcal_compiler::desugar::resolved_ast::ImportKind;
+    use graphcal_compiler::desugar::desugared_ast::ImportKind;
 
     let dag_def = target.dag_def;
     let dag_name = target.dag_name;
@@ -622,7 +622,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     ctx.module_map
         .insert(prefix.clone(), (dag_id.clone(), include_decl.path.span()));
 
-    let dag_body = graphcal_compiler::desugar::resolved_ast::File {
+    let dag_body = graphcal_compiler::desugar::desugared_ast::File {
         declarations: dag_def.body.clone(),
     };
     let dag_imported_names = ImportedValueNames::default();
@@ -642,7 +642,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     // Register imported names in the importer's scope.
     let mut import_item_attributes: HashMap<
         DeclName,
-        Vec<graphcal_compiler::desugar::resolved_ast::Attribute>,
+        Vec<graphcal_compiler::desugar::desugared_ast::Attribute>,
     > = HashMap::new();
     let selective_names = match &include_decl.kind {
         ImportKind::Selective(names) => {
@@ -726,12 +726,12 @@ pub(in crate::eval::project) fn process_inline_dag_include(
 
     let pub_reexport_whole = include_decl.visibility.is_public();
     let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) => items
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
             .filter(|it| it.is_pub)
             .map(|it| DeclName::new(&it.name.name))
             .collect(),
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Module { .. } => HashSet::new(),
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
 
     ctx.deferred_dag_includes.push(DeferredDagInclude {
@@ -802,8 +802,8 @@ pub(in crate::eval::project) fn is_bare_module_dag_ref(
 pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
     project: &crate::loader::LoadedProject,
     import_dag_id: &graphcal_compiler::dag_id::DagId,
-    import_path: &graphcal_compiler::desugar::resolved_ast::ModulePath,
-    import_kind: &graphcal_compiler::desugar::resolved_ast::ImportKind,
+    import_path: &graphcal_compiler::desugar::desugared_ast::ModulePath,
+    import_kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
     file_src: &NamedSource<Arc<String>>,
     evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     ctx: &mut ImportContext<'a>,
@@ -820,7 +820,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
     let dep_index = build_dep_decl_index(&dep_loaded.ast.declarations);
 
     match import_kind {
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(names) => {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
             for import_item in names {
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
@@ -846,7 +846,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                 }
 
                 if import_item.namespace
-                    == graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Type
+                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Type
                 {
                     ctx.imported_type_system_names
                         .entry(import_dag_id.clone())
@@ -856,7 +856,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                 }
 
                 let is_default_namespace = import_item.namespace
-                    == graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Default;
+                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Default;
                 if is_default_namespace && dep_index.is_runtime(orig_name) {
                     if is_import {
                         return Err(CompileError::Eval(GraphcalError::ImportRuntimeItem {
@@ -929,7 +929,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                         if file_has_import_item(
                             &dep_loaded.ast,
                             orig_name,
-                            graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Default,
+                            graphcal_compiler::syntax::ast::ImportItemNamespace::Default,
                         ) {
                             // Default type-system declaration (dim/unit/index/dag).
                             ctx.imported_type_system_names
@@ -948,7 +948,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                 }
             }
         }
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
             let module_name = alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(import_path),
                 |alias_ident| alias_ident.value.clone(),
@@ -999,7 +999,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
 /// Builds a dependency graph of inline DAGs and detects cycles.
 /// Returns an error if a DAG directly or indirectly includes itself.
 pub(in crate::eval::project) fn check_dag_recursion(
-    dag_definitions: &HashMap<DeclName, &graphcal_compiler::desugar::resolved_ast::DagDecl>,
+    dag_definitions: &HashMap<DeclName, &graphcal_compiler::desugar::desugared_ast::DagDecl>,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
     fn dfs<'a>(
@@ -1271,21 +1271,21 @@ mod tests {
             .insert(DeclName::new("runtime"), RuntimeValue::Scalar(1.0));
         dep.pub_names.insert(DeclName::new("runtime"));
 
-        let import_item = graphcal_compiler::desugar::resolved_ast::ImportItem {
-            name: graphcal_compiler::desugar::resolved_ast::Ident {
+        let import_item = graphcal_compiler::desugar::desugared_ast::ImportItem {
+            name: graphcal_compiler::desugar::desugared_ast::Ident {
                 name: graphcal_compiler::syntax::names::NameAtom::parse("runtime").unwrap(),
                 span: Span::new(0, 7),
             },
             alias: None,
             is_pub: false,
-            namespace: graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Default,
+            namespace: graphcal_compiler::syntax::ast::ImportItemNamespace::Default,
             attributes: Vec::new(),
         };
         let import_kind =
-            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(vec![import_item]);
-        let path = graphcal_compiler::desugar::resolved_ast::ModulePath {
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(vec![import_item]);
+        let path = graphcal_compiler::desugar::desugared_ast::ModulePath {
             segments: graphcal_compiler::syntax::non_empty::NonEmpty::singleton(
-                graphcal_compiler::desugar::resolved_ast::Ident {
+                graphcal_compiler::desugar::desugared_ast::Ident {
                     name: graphcal_compiler::syntax::names::NameAtom::parse("dep").unwrap(),
                     span: Span::new(0, 3),
                 },
