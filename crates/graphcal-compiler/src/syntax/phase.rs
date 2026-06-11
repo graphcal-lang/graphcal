@@ -31,21 +31,20 @@ pub(crate) mod sealed {
 
 /// Marker trait for AST phases.
 ///
-/// Sealed: only [`Raw`], [`Desugared`], and [`Resolved`] implement it.
+/// Sealed: only [`Raw`] and [`Desugared`] implement it.
 pub trait Phase: 'static + sealed::Sealed {
     /// Phase-specific declaration sugar variants.
     ///
     /// Carried by `DeclKind::Sugar(_)`. For [`Raw`] this is
-    /// [`crate::syntax::ast::RawDeclSugar`];
-    /// for [`Desugared`] and [`Resolved`] it is [`Infallible`] so the variant
-    /// cannot be constructed.
+    /// [`crate::syntax::ast::RawDeclSugar`]; for [`Desugared`] it is
+    /// [`Infallible`] so the variant cannot be constructed.
     type DeclSugar: Debug + Clone;
 
     /// Phase-specific expression sugar variants.
     ///
     /// Carried by `ExprKind::Sugar(_)`. For [`Raw`] this is
-    /// [`crate::syntax::ast::RawExprSugar`];
-    /// for [`Desugared`] and [`Resolved`] it is [`Infallible`].
+    /// [`crate::syntax::ast::RawExprSugar`]; for [`Desugared`] it is
+    /// [`Infallible`].
     type ExprSugar: Debug + Clone;
 
     /// Phase-specific unresolved-reference variants.

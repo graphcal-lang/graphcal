@@ -29,7 +29,7 @@ pub enum RawExprSugar {
 }
 
 // ---------------------------------------------------------------------------
-// Unresolved-ref variants (legal in `Raw` and `Desugared`, not in `Resolved`)
+// Unresolved-ref variants (the only reference form in the syntax AST)
 // ---------------------------------------------------------------------------
 
 /// Unresolved reference, produced by the parser before HIR lowering.
@@ -74,7 +74,7 @@ pub enum RawExprSugar {
 /// node x: Dimensionless[I] = for PI: I { PI };
 /// ```
 ///
-/// Name resolution turns the first `PI` into a built-in constant reference,
+/// HIR lowering turns the first `PI` into a built-in constant reference,
 /// but the loop body `PI` in the second program into a local reference.
 ///
 /// The payload is a path rather than separate "bare" and "qualified" variants
@@ -624,18 +624,17 @@ pub enum ExprKind<P: Phase = Raw> {
     },
     /// Unresolved reference produced by the parser.
     ///
-    /// Carries [`crate::syntax::ast::UnresolvedRef`] in [`Raw`] and
-    /// [`crate::syntax::phase::Desugared`], as an unresolved identifier path.
-    /// In [`crate::syntax::phase::Resolved`] the payload is
-    /// [`core::convert::Infallible`] — the variant is statically unreachable
-    /// after the name-resolution pass has run.
+    /// Carries [`crate::syntax::ast::UnresolvedRef`] in both [`Raw`] and
+    /// [`crate::syntax::phase::Desugared`], as an unresolved identifier
+    /// path. HIR expression lowering is the single stage that classifies
+    /// and resolves these paths.
     UnresolvedRef(P::RefSugar),
     /// Phase-specific expression sugar.
     ///
     /// In [`Raw`], this is [`crate::syntax::ast::RawExprSugar`] and carries
     /// surface forms like `TableLiteral` that are eliminated by the desugar
-    /// pass. In `Desugared` and `Resolved`, the payload is
-    /// [`core::convert::Infallible`] — the variant is statically unreachable.
+    /// pass. In `Desugared`, the payload is [`core::convert::Infallible`] —
+    /// the variant is statically unreachable.
     Sugar(P::ExprSugar),
 }
 
