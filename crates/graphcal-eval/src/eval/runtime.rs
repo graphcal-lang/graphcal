@@ -435,18 +435,26 @@ pub(super) fn evaluate_plan_with_values(
         })
         .collect();
 
-    // Evaluate assertions in source order, applying expected_fail inversion
+    // Evaluate assertions in source order, applying expected_fail inversion.
+    // An assertion whose body references a failed declaration reports the
+    // dependency failure (with its root cause) instead of evaluating over a
+    // value map where the failed name is simply absent (#814).
     let assertions: Vec<(DeclName, AssertResult, Span)> = plan
         .assert_bodies
         .iter()
         .map(|entry| {
-            let ef = plan.expected_fail.get(&entry.name);
-            let assert_result = evaluate_assert_with_expected_fail(
-                &entry.body,
-                ef,
-                &values,
-                &empty_hir_locals,
-                &ctx,
+            let assert_result = assert_dependency_failure(&entry.body, &errors).map_or_else(
+                || {
+                    let ef = plan.expected_fail.get(&entry.name);
+                    evaluate_assert_with_expected_fail(
+                        &entry.body,
+                        ef,
+                        &values,
+                        &empty_hir_locals,
+                        &ctx,
+                    )
+                },
+                |message| AssertResult::Error { message },
             );
             (
                 DeclName::new(entry.name.member()),
@@ -539,6 +547,55 @@ pub(super) fn evaluate_plan_with_values(
         domain_constraints,
     };
     (result, values)
+}
+
+/// If any declaration referenced by an assertion body failed to evaluate,
+/// render the dependency-failure message the assertion should report (#814).
+///
+/// Mirrors the node path's `DependencyFailed` contract: a reference to a
+/// failed declaration is not "undefined", it is unevaluable. Direct
+/// evaluation failures carry their root cause inline; transitive failures
+/// list only the dependency's name (its own failure is reported on that
+/// declaration).
+fn assert_dependency_failure(
+    body: &graphcal_compiler::hir::AssertBody,
+    errors: &HashMap<RuntimeDeclKey, NodeError>,
+) -> Option<String> {
+    if errors.is_empty() {
+        return None;
+    }
+    let body_exprs: Vec<&graphcal_compiler::hir::Expr> = match body {
+        graphcal_compiler::hir::AssertBody::Expr(expr) => vec![expr],
+        graphcal_compiler::hir::AssertBody::Tolerance {
+            actual,
+            expected,
+            tolerance,
+            ..
+        } => vec![actual, expected, tolerance],
+    };
+    let deps: std::collections::BTreeSet<_> = body_exprs
+        .into_iter()
+        .flat_map(|expr| {
+            graphcal_compiler::hir::collect_expr_dependencies(expr)
+                .graph_refs
+                .into_iter()
+        })
+        .collect();
+    let failed: Vec<String> = deps
+        .iter()
+        .filter_map(|dep| {
+            errors
+                .get(&RuntimeDeclKey::resolved(dep.clone()))
+                .map(|err| {
+                    let leaf = DeclName::from_atom(dep.atom().clone());
+                    match err {
+                        NodeError::EvalFailed { message } => format!("{leaf} ({message})"),
+                        NodeError::DependencyFailed { .. } => leaf.to_string(),
+                    }
+                })
+        })
+        .collect();
+    (!failed.is_empty()).then(|| format!("dependency failed: {}", failed.join(", ")))
 }
 
 /// Evaluate an assertion body with optional `#[expected_fail]` handling.

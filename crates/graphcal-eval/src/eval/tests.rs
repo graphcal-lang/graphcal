@@ -208,6 +208,56 @@ fn assert_negative_runtime_relative_tolerance_errors() {
 }
 
 #[test]
+fn assert_on_failed_dependency_reports_dependency_failure() {
+    // #814: an assertion referencing a failed node reports the dependency
+    // failure with its root cause and the source-level leaf name — not
+    // "undefined graph reference `@file.e`".
+    let result = compile_and_eval(
+        "param zero: Dimensionless = 0.0;\n\
+         node e: Dimensionless = 1.0 / @zero;\n\
+         node fine: Dimensionless = 2.0;\n\
+         assert uses_e = @e > 0.0;\n\
+         assert uses_fine = @fine > 0.0;",
+    )
+    .unwrap();
+    let assert_result = |name: &str| {
+        result
+            .assertions
+            .iter()
+            .find(|(assert_name, _, _)| assert_name.as_str() == name)
+            .unwrap_or_else(|| panic!("assertion `{name}` not found"))
+            .1
+            .clone()
+    };
+    assert_eq!(
+        assert_result("uses_e"),
+        super::types::AssertResult::Error {
+            message: "dependency failed: e (division by zero)".to_string()
+        }
+    );
+    assert_eq!(assert_result("uses_fine"), super::types::AssertResult::Pass);
+}
+
+#[test]
+fn assert_on_transitively_failed_dependency_reports_dependency_name() {
+    // A dependency that itself failed only because of an upstream failure is
+    // listed by name; the root cause is reported on the failing declaration.
+    let result = compile_and_eval(
+        "param zero: Dimensionless = 0.0;\n\
+         node e: Dimensionless = 1.0 / @zero;\n\
+         node f: Dimensionless = @e + 1.0;\n\
+         assert uses_f = @f > 0.0;",
+    )
+    .unwrap();
+    assert_eq!(
+        result.assertions[0].1,
+        super::types::AssertResult::Error {
+            message: "dependency failed: f".to_string()
+        }
+    );
+}
+
+#[test]
 fn assert_zero_tolerance_exact_match_passes() {
     // #815: zero tolerance stays legal — exact-match semantics.
     let result = compile_and_eval(
