@@ -255,14 +255,18 @@ test transfer_cases {
 }
 ```
 
-**Prerequisite found while writing this:** the docs define indexed
-*boolean* asserts (per-variant pass/fail reporting), but the tolerance
-form `actual ~= expected +/- tol` is not documented to broadcast over
-indexed operands. Element-wise tolerance asserts over `T[Index]`
-operands (reporting failing keys exactly like indexed boolean asserts,
-and composing with per-variant `#[expected_fail]`) are the single
-highest-leverage enabler for table-driven testing and are useful even
-without any other part of this proposal. Filed as
+**Prerequisite found while writing this:** indexed asserts currently
+broadcast *only* when the body is a `for` comprehension yielding
+`Bool[I]`. Direct comparison of indexed operands is rejected at check
+time (indexed vs scalar — including the example in
+`docs/language/assertions.md`) or errors at runtime (indexed `==`
+indexed, a static/runtime soundness disagreement, filed as
+[#810](https://github.com/graphcal-lang/graphcal/issues/810)), and the
+tolerance form `~= +/-` is statically scalar-only. Element-wise
+tolerance asserts over `T[Index]` operands (per-key reporting, composing
+with per-variant `#[expected_fail]`) are the single highest-leverage
+enabler for table-driven testing and are useful even without any other
+part of this proposal. Filed as
 [#809](https://github.com/graphcal-lang/graphcal/issues/809),
 independent of #656.
 
