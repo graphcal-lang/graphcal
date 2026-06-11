@@ -81,6 +81,18 @@ fn resolve_duplicate_name() {
 }
 
 #[test]
+fn resolve_rejects_builtin_dimension_shadowing() {
+    let err = parse_and_resolve("dim Velocity = Length / Time;").unwrap_err();
+    assert!(matches!(err, GraphcalError::BuiltinNameShadowed { name, .. } if name == "Velocity"));
+}
+
+#[test]
+fn resolve_rejects_builtin_unit_shadowing() {
+    let err = parse_and_resolve("unit m: Length = 1.0 m;").unwrap_err();
+    assert!(matches!(err, GraphcalError::BuiltinNameShadowed { name, .. } if name == "m"));
+}
+
+#[test]
 fn resolve_unknown_graph_ref() {
     // Unknown `@` targets are rejected by HIR lowering during type
     // resolution — the IR collection pass no longer classifies references.

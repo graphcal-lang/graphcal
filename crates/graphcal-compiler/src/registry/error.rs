@@ -23,6 +23,20 @@ pub enum GraphcalError {
         first: SourceSpan,
     },
 
+    #[error("{kind} `{name}` shadows a built-in name")]
+    #[diagnostic(
+        code(graphcal::N009),
+        help("choose a different name; built-in dimensions, types, and units cannot be redefined")
+    )]
+    BuiltinNameShadowed {
+        kind: &'static str,
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("shadows a built-in name")]
+        span: SourceSpan,
+    },
+
     #[error("unknown graph reference `@{name}`")]
     #[diagnostic(
         code(graphcal::N002),
@@ -1338,6 +1352,7 @@ impl GraphcalError {
             | Self::OverrideNotAParam { .. }
             | Self::OverrideUnknownParam { .. } => return None,
             Self::DuplicateName { src, .. }
+            | Self::BuiltinNameShadowed { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }
