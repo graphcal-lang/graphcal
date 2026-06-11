@@ -3036,46 +3036,58 @@ fn eval_idempotent_under_format() {
 }
 
 // ---------------------------------------------------------------------------
-// Global invariant: every parseable fixture is already canonically formatted.
+// Invariant: every fixture we intend to be well-formed is already canonically
+// formatted.
 //
 // The per-fixture `format_check_*` tests above only cover a hand-maintained
 // list, so a newly added fixture in unformatted shape slips through. This test
-// auto-discovers the whole tree using the same `format::collect_gcl_files`
-// walk and `format::format_status` decision the CLI uses, so there is nothing
-// to keep in sync — and no process to spawn.
+// auto-discovers the `valid`/`valid_library`/`runtime_error` trees using the
+// same `format::collect_gcl_files` walk and `format::format_status` decision
+// the CLI uses, so there is nothing to keep in sync — and no process to spawn.
 //
-// Deliberately-malformed `invalid/` fixtures surface as `FormatStatus::Error`
-// (and are guarded by `error_snapshots`/`check` tests), so only a `Changed`
-// outcome — a parseable file that is not in canonical form — is a violation.
+// `invalid/` is intentionally excluded: those fixtures exist to be rejected,
+// and keeping them canonically formatted is not an invariant we want (some
+// don't even parse). A `FormatStatus::Error` from this set would therefore be
+// a fixture in the wrong directory, so we treat it as a violation too.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn all_parseable_fixtures_are_formatted() {
+fn well_formed_fixtures_are_formatted() {
     use graphcal::format::{FormatStatus, collect_gcl_files, format_status};
 
     let root = fixtures_root();
-    let (files, _warnings) = collect_gcl_files(&root);
+    let mut files = Vec::new();
+    for category in ["valid", "valid_library", "runtime_error"] {
+        let (mut found, _warnings) = collect_gcl_files(&root.join(category));
+        files.append(&mut found);
+    }
     assert!(
         files.len() >= 100,
-        "expected to discover the fixture tree, found only {} files",
+        "expected to discover the well-formed fixture tree, found only {} files",
         files.len()
     );
 
-    let mut unformatted: Vec<String> = Vec::new();
+    let mut violations: Vec<String> = Vec::new();
     for file in &files {
         let source = std::fs::read_to_string(file).expect("read fixture");
-        if let FormatStatus::Changed(_) = format_status(&source) {
-            let rel = file.strip_prefix(&root).unwrap_or(file);
-            unformatted.push(rel.display().to_string());
+        let rel = file.strip_prefix(&root).unwrap_or(file).display();
+        match format_status(&source) {
+            FormatStatus::Unchanged => {}
+            FormatStatus::Changed(_) => {
+                violations.push(format!("{rel}: not canonically formatted"));
+            }
+            FormatStatus::Error(e) => {
+                violations.push(format!("{rel}: does not parse ({e}) — belongs in invalid/"));
+            }
         }
     }
 
     assert!(
-        unformatted.is_empty(),
-        "{} fixture(s) are not canonically formatted — run \
+        violations.is_empty(),
+        "{} well-formed fixture(s) failed the formatting invariant — run \
          `graphcal format tests/fixtures`:\n{}",
-        unformatted.len(),
-        unformatted.join("\n")
+        violations.len(),
+        violations.join("\n")
     );
 }
 
