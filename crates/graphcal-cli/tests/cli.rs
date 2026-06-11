@@ -1784,21 +1784,6 @@ fn eval_expected_fail_multi_indexed_partial() {
 // --- Format command tests ---
 
 #[test]
-fn format_check_already_formatted() {
-    // rocket.gcl is a formatter-tested fixture and should already be formatted.
-    let output = graphcal_bin()
-        .args(["format", "--check", &fixture("valid/rocket.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "expected success for already-formatted file, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
 fn format_check_unformatted_exits_nonzero() {
     // Create a temp file with valid but unformatted graphcal
     let dir = std::env::temp_dir().join("graphcal_fmt_test");
@@ -2065,50 +2050,6 @@ fn eval_datetime_conversion_non_datetime_error() {
     assert!(
         stderr.contains("dimension mismatch") || stderr.contains("requires a Datetime"),
         "error should mention dimension mismatch or Datetime requirement"
-    );
-}
-
-#[test]
-fn format_check_multiple_fixtures() {
-    // --check on multiple already-formatted fixtures
-    let output = graphcal_bin()
-        .args([
-            "format",
-            "--check",
-            &fixture("valid/rocket.gcl"),
-            &fixture("invalid/functions.gcl"),
-            &fixture("valid/generics.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "expected all fixtures to be formatted, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn format_check_multi_decl_fixtures_idempotent() {
-    // Multi-decl fixtures (issue #481) round-trip through the formatter —
-    // the surface form is emitted verbatim, not re-desugared into N
-    // single decls.
-    let output = graphcal_bin()
-        .args([
-            "format",
-            "--check",
-            &fixture("valid/multi_decl_1d.gcl"),
-            &fixture("valid/multi_decl_2d.gcl"),
-            &fixture("valid/multi_decl_sliced.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "expected multi-decl fixtures to be formatted idempotently, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -2599,25 +2540,6 @@ fn eval_plot_basic_standalone_figures() {
     assert_eq!(arr[1]["name"].as_str(), Some("my_bar"));
 }
 
-#[test]
-fn format_check_figure_fixtures() {
-    let output = graphcal_bin()
-        .args([
-            "format",
-            "--check",
-            &fixture("valid/figure_basic.gcl"),
-            &fixture("valid/figure_hidden.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "expected figure fixtures to be formatted, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 // --- Dynamic units ---
 
 #[test]
@@ -3032,6 +2954,62 @@ fn eval_idempotent_under_format() {
          — formatter is not eval-idempotent:\n{}",
         failures.len(),
         failures.join("\n")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Invariant: every fixture we intend to be well-formed is already canonically
+// formatted.
+//
+// The per-fixture `format_check_*` tests above only cover a hand-maintained
+// list, so a newly added fixture in unformatted shape slips through. This test
+// auto-discovers the `valid`/`valid_library`/`runtime_error` trees using the
+// same `format::collect_gcl_files` walk and `format::format_status` decision
+// the CLI uses, so there is nothing to keep in sync — and no process to spawn.
+//
+// `invalid/` is intentionally excluded: those fixtures exist to be rejected,
+// and keeping them canonically formatted is not an invariant we want (some
+// don't even parse). A `FormatStatus::Error` from this set would therefore be
+// a fixture in the wrong directory, so we treat it as a violation too.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn well_formed_fixtures_are_formatted() {
+    use graphcal::format::{FormatStatus, collect_gcl_files, format_status};
+
+    let root = fixtures_root();
+    let mut files = Vec::new();
+    for category in ["valid", "valid_library", "runtime_error"] {
+        let (mut found, _warnings) = collect_gcl_files(&root.join(category));
+        files.append(&mut found);
+    }
+    assert!(
+        files.len() >= 100,
+        "expected to discover the well-formed fixture tree, found only {} files",
+        files.len()
+    );
+
+    let mut violations: Vec<String> = Vec::new();
+    for file in &files {
+        let source = std::fs::read_to_string(file).expect("read fixture");
+        let rel = file.strip_prefix(&root).unwrap_or(file).display();
+        match format_status(&source) {
+            FormatStatus::Unchanged => {}
+            FormatStatus::Changed(_) => {
+                violations.push(format!("{rel}: not canonically formatted"));
+            }
+            FormatStatus::Error(e) => {
+                violations.push(format!("{rel}: does not parse ({e}) — belongs in invalid/"));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "{} well-formed fixture(s) failed the formatting invariant — run \
+         `graphcal format tests/fixtures`:\n{}",
+        violations.len(),
+        violations.join("\n")
     );
 }
 
