@@ -2,8 +2,9 @@
 //!
 //! `lower()` combines declaration collection (`resolve`), registry
 //! construction (dimensions, units, indexes, structs), and function
-//! registration into a single `IR` value. Reference resolution happens
-//! later, when type resolution lowers the collected bodies to HIR.
+//! registration into a single `IR` value. Reference resolution happens at
+//! [`UnfrozenIR::freeze`], which lowers every assembled declaration body to
+//! HIR — the frozen `IR` carries no syntax-AST expression.
 
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
