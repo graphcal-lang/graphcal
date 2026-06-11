@@ -1784,21 +1784,6 @@ fn eval_expected_fail_multi_indexed_partial() {
 // --- Format command tests ---
 
 #[test]
-fn format_check_already_formatted() {
-    // rocket.gcl is a formatter-tested fixture and should already be formatted.
-    let output = graphcal_bin()
-        .args(["format", "--check", &fixture("valid/rocket.gcl")])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "expected success for already-formatted file, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
 fn format_check_unformatted_exits_nonzero() {
     // Create a temp file with valid but unformatted graphcal
     let dir = std::env::temp_dir().join("graphcal_fmt_test");
@@ -2065,50 +2050,6 @@ fn eval_datetime_conversion_non_datetime_error() {
     assert!(
         stderr.contains("dimension mismatch") || stderr.contains("requires a Datetime"),
         "error should mention dimension mismatch or Datetime requirement"
-    );
-}
-
-#[test]
-fn format_check_multiple_fixtures() {
-    // --check on multiple already-formatted fixtures
-    let output = graphcal_bin()
-        .args([
-            "format",
-            "--check",
-            &fixture("valid/rocket.gcl"),
-            &fixture("invalid/functions.gcl"),
-            &fixture("valid/generics.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "expected all fixtures to be formatted, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn format_check_multi_decl_fixtures_idempotent() {
-    // Multi-decl fixtures (issue #481) round-trip through the formatter —
-    // the surface form is emitted verbatim, not re-desugared into N
-    // single decls.
-    let output = graphcal_bin()
-        .args([
-            "format",
-            "--check",
-            &fixture("valid/multi_decl_1d.gcl"),
-            &fixture("valid/multi_decl_2d.gcl"),
-            &fixture("valid/multi_decl_sliced.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "expected multi-decl fixtures to be formatted idempotently, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -2597,25 +2538,6 @@ fn eval_plot_basic_standalone_figures() {
     );
     assert_eq!(arr[0]["name"].as_str(), Some("my_line"));
     assert_eq!(arr[1]["name"].as_str(), Some("my_bar"));
-}
-
-#[test]
-fn format_check_figure_fixtures() {
-    let output = graphcal_bin()
-        .args([
-            "format",
-            "--check",
-            &fixture("valid/figure_basic.gcl"),
-            &fixture("valid/figure_hidden.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "expected figure fixtures to be formatted, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 // --- Dynamic units ---

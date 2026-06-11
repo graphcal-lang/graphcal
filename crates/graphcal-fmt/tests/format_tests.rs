@@ -2,6 +2,11 @@ use graphcal_fmt::format_source;
 
 // ---------------------------------------------------------------------------
 // Idempotency: format(format(x)) == format(x)
+//
+// Only `invalid/` (parseable-but-rejected) fixtures are exercised here. For
+// well-formed fixtures the stronger invariant `format(x) == x` is enforced by
+// `well_formed_fixtures_are_formatted` in the CLI test suite, which makes
+// idempotency on them trivially true.
 // ---------------------------------------------------------------------------
 
 macro_rules! idempotency_test {
@@ -21,105 +26,13 @@ macro_rules! idempotency_test {
     };
 }
 
-idempotency_test!(idempotent_constants, "valid/constants.gcl");
 idempotency_test!(idempotent_functions, "invalid/functions.gcl");
-idempotency_test!(idempotent_generics, "valid/generics.gcl");
-idempotency_test!(idempotent_hohmann, "valid/hohmann.gcl");
-idempotency_test!(idempotent_indexed, "valid/indexed.gcl");
-idempotency_test!(idempotent_integers, "valid/integers.gcl");
-idempotency_test!(idempotent_orbital, "valid/orbital.gcl");
-idempotency_test!(idempotent_range_index, "valid/range_index.gcl");
-idempotency_test!(idempotent_rocket, "valid/rocket.gcl");
-idempotency_test!(idempotent_tagged_union, "valid/tagged_union.gcl");
-idempotency_test!(
-    idempotent_tagged_union_param,
-    "valid/tagged_union_param.gcl"
-);
-idempotency_test!(idempotent_table_literal, "valid/table_literal.gcl");
-idempotency_test!(idempotent_time_scan, "valid/time_scan.gcl");
-idempotency_test!(idempotent_user_dimensions, "valid/user_dimensions.gcl");
-idempotency_test!(idempotent_assertions, "valid/assertions.gcl");
-idempotency_test!(
-    idempotent_assertions_fail,
-    "runtime_error/assertions_fail.gcl"
-);
-idempotency_test!(
-    idempotent_assertions_tolerance_fail,
-    "runtime_error/assertions_tolerance_fail.gcl"
-);
-idempotency_test!(
-    idempotent_assertions_assumes,
-    "runtime_error/assertions_assumes.gcl"
-);
-idempotency_test!(
-    idempotent_assertions_indexed,
-    "runtime_error/assertions_indexed.gcl"
-);
-idempotency_test!(idempotent_plot_basic, "valid/plot_basic.gcl");
-idempotency_test!(
-    idempotent_variant_comparison,
-    "valid/variant_comparison.gcl"
-);
-idempotency_test!(idempotent_variant_match, "valid/variant_match.gcl");
-idempotency_test!(idempotent_power_budget, "valid/power_budget.gcl");
-idempotency_test!(idempotent_thermal_analysis, "valid/thermal_analysis.gcl");
-idempotency_test!(
-    idempotent_parenthesized_exprs,
-    "valid/parenthesized_exprs.gcl"
-);
-idempotency_test!(
-    idempotent_expected_fail_pass,
-    "valid/expected_fail_pass.gcl"
-);
-idempotency_test!(
-    idempotent_expected_fail_unexpected_pass,
-    "runtime_error/expected_fail_unexpected_pass.gcl"
-);
-idempotency_test!(
-    idempotent_expected_fail_indexed,
-    "valid/expected_fail_indexed.gcl"
-);
-idempotency_test!(
-    idempotent_expected_fail_multi_indexed,
-    "valid/expected_fail_multi_indexed.gcl"
-);
-idempotency_test!(
-    idempotent_expected_fail_indexed_partial,
-    "runtime_error/expected_fail_indexed_partial.gcl"
-);
-idempotency_test!(
-    idempotent_expected_fail_indexed_unexpected_pass,
-    "runtime_error/expected_fail_indexed_unexpected_pass.gcl"
-);
-idempotency_test!(
-    idempotent_expected_fail_multi_indexed_partial,
-    "runtime_error/expected_fail_multi_indexed_partial.gcl"
-);
-idempotency_test!(
-    idempotent_required_indexes,
-    "valid_library/required_indexes.gcl"
-);
-idempotency_test!(idempotent_domain_scalar, "valid/domain_scalar.gcl");
-idempotency_test!(idempotent_domain_indexed, "valid/domain_indexed.gcl");
-
-// Issue #576: now that #575 preserves load-bearing parens, the operator
-// fixtures from PR #582 also format-idempotently.
-idempotency_test!(idempotent_logical_ops, "valid/logical_ops.gcl");
-idempotency_test!(
-    idempotent_integer_arithmetic,
-    "valid/integer_arithmetic.gcl"
-);
-idempotency_test!(
-    idempotent_operator_precedence,
-    "valid/operator_precedence.gcl"
-);
-idempotency_test!(
-    idempotent_format_paren_preservation,
-    "valid/format_paren_preservation.gcl"
-);
 
 // ---------------------------------------------------------------------------
-// Round-trip: parse(format(x)) succeeds for all fixtures
+// Round-trip: parse(format(x)) succeeds
+//
+// As with idempotency, only `invalid/` fixtures are exercised here; well-formed
+// fixtures parse-round-trip trivially under the `format(x) == x` invariant.
 // ---------------------------------------------------------------------------
 
 macro_rules! roundtrip_test {
@@ -140,87 +53,7 @@ macro_rules! roundtrip_test {
     };
 }
 
-roundtrip_test!(roundtrip_constants, "valid/constants.gcl");
 roundtrip_test!(roundtrip_functions, "invalid/functions.gcl");
-roundtrip_test!(roundtrip_generics, "valid/generics.gcl");
-roundtrip_test!(roundtrip_hohmann, "valid/hohmann.gcl");
-roundtrip_test!(roundtrip_indexed, "valid/indexed.gcl");
-roundtrip_test!(roundtrip_integers, "valid/integers.gcl");
-roundtrip_test!(roundtrip_orbital, "valid/orbital.gcl");
-roundtrip_test!(roundtrip_range_index, "valid/range_index.gcl");
-roundtrip_test!(roundtrip_rocket, "valid/rocket.gcl");
-roundtrip_test!(roundtrip_tagged_union, "valid/tagged_union.gcl");
-roundtrip_test!(roundtrip_tagged_union_param, "valid/tagged_union_param.gcl");
-roundtrip_test!(roundtrip_table_literal, "valid/table_literal.gcl");
-roundtrip_test!(roundtrip_time_scan, "valid/time_scan.gcl");
-roundtrip_test!(roundtrip_user_dimensions, "valid/user_dimensions.gcl");
-roundtrip_test!(roundtrip_assertions, "valid/assertions.gcl");
-roundtrip_test!(
-    roundtrip_assertions_fail,
-    "runtime_error/assertions_fail.gcl"
-);
-roundtrip_test!(
-    roundtrip_assertions_tolerance_fail,
-    "runtime_error/assertions_tolerance_fail.gcl"
-);
-roundtrip_test!(
-    roundtrip_assertions_assumes,
-    "runtime_error/assertions_assumes.gcl"
-);
-roundtrip_test!(
-    roundtrip_assertions_indexed,
-    "runtime_error/assertions_indexed.gcl"
-);
-roundtrip_test!(roundtrip_plot_basic, "valid/plot_basic.gcl");
-roundtrip_test!(roundtrip_variant_comparison, "valid/variant_comparison.gcl");
-roundtrip_test!(roundtrip_variant_match, "valid/variant_match.gcl");
-roundtrip_test!(roundtrip_power_budget, "valid/power_budget.gcl");
-roundtrip_test!(roundtrip_thermal_analysis, "valid/thermal_analysis.gcl");
-roundtrip_test!(
-    roundtrip_parenthesized_exprs,
-    "valid/parenthesized_exprs.gcl"
-);
-roundtrip_test!(roundtrip_expected_fail_pass, "valid/expected_fail_pass.gcl");
-roundtrip_test!(
-    roundtrip_expected_fail_unexpected_pass,
-    "runtime_error/expected_fail_unexpected_pass.gcl"
-);
-roundtrip_test!(
-    roundtrip_expected_fail_indexed,
-    "valid/expected_fail_indexed.gcl"
-);
-roundtrip_test!(
-    roundtrip_expected_fail_multi_indexed,
-    "valid/expected_fail_multi_indexed.gcl"
-);
-roundtrip_test!(
-    roundtrip_expected_fail_indexed_partial,
-    "runtime_error/expected_fail_indexed_partial.gcl"
-);
-roundtrip_test!(
-    roundtrip_expected_fail_indexed_unexpected_pass,
-    "runtime_error/expected_fail_indexed_unexpected_pass.gcl"
-);
-roundtrip_test!(
-    roundtrip_expected_fail_multi_indexed_partial,
-    "runtime_error/expected_fail_multi_indexed_partial.gcl"
-);
-roundtrip_test!(
-    roundtrip_required_indexes,
-    "valid_library/required_indexes.gcl"
-);
-roundtrip_test!(roundtrip_domain_scalar, "valid/domain_scalar.gcl");
-roundtrip_test!(roundtrip_domain_indexed, "valid/domain_indexed.gcl");
-roundtrip_test!(roundtrip_logical_ops, "valid/logical_ops.gcl");
-roundtrip_test!(roundtrip_integer_arithmetic, "valid/integer_arithmetic.gcl");
-roundtrip_test!(
-    roundtrip_operator_precedence,
-    "valid/operator_precedence.gcl"
-);
-roundtrip_test!(
-    roundtrip_format_paren_preservation,
-    "valid/format_paren_preservation.gcl"
-);
 
 // ---------------------------------------------------------------------------
 // Comment preservation
@@ -684,39 +517,10 @@ snapshot_test!(snapshot_domain_scalar, "valid/domain_scalar.gcl");
 snapshot_test!(snapshot_domain_indexed, "valid/domain_indexed.gcl");
 
 // ---------------------------------------------------------------------------
-// Fixture: comments_in_expressions.gcl
-// ---------------------------------------------------------------------------
-
-idempotency_test!(
-    idempotent_comments_in_expressions,
-    "valid/comments_in_expressions.gcl"
-);
-roundtrip_test!(
-    roundtrip_comments_in_expressions,
-    "valid/comments_in_expressions.gcl"
-);
-
-// ---------------------------------------------------------------------------
 // Multi-file fixtures: import syntax, module imports, qualified references
 // ---------------------------------------------------------------------------
 
 // alias: selective import with renaming
-idempotency_test!(
-    idempotent_multi_alias_main,
-    "valid/multi/alias/src/helper/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_alias_helper,
-    "valid/multi/alias/src/helper/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_alias_main,
-    "valid/multi/alias/src/helper/main.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_alias_helper,
-    "valid/multi/alias/src/helper/lib.gcl"
-);
 snapshot_test!(
     snapshot_multi_alias_main,
     "valid/multi/alias/src/helper/main.gcl"
@@ -727,22 +531,6 @@ snapshot_test!(
 );
 
 // alias_conflict: multiple imports with renaming
-idempotency_test!(
-    idempotent_multi_alias_conflict_main,
-    "valid/multi/alias_conflict/src/lib/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_alias_conflict_a,
-    "valid/multi/alias_conflict/src/lib/a.gcl"
-);
-idempotency_test!(
-    idempotent_multi_alias_conflict_b,
-    "valid/multi/alias_conflict/src/lib/b.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_alias_conflict_main,
-    "valid/multi/alias_conflict/src/lib/main.gcl"
-);
 snapshot_test!(
     snapshot_multi_alias_conflict_main,
     "valid/multi/alias_conflict/src/lib/main.gcl"
@@ -771,32 +559,12 @@ snapshot_test!(
 );
 
 // module_import_alias: import with alias
-idempotency_test!(
-    idempotent_multi_module_import_alias_main,
-    "valid/multi/module_import_alias/src/constants/main.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_module_import_alias_main,
-    "valid/multi/module_import_alias/src/constants/main.gcl"
-);
 snapshot_test!(
     snapshot_multi_module_import_alias_main,
     "valid/multi/module_import_alias/src/constants/main.gcl"
 );
 
 // module_import_fn: qualified function call
-idempotency_test!(
-    idempotent_multi_module_import_fn_main,
-    "valid/multi/module_import_fn/src/lib/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_module_import_fn_lib,
-    "valid/multi/module_import_fn/src/lib/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_module_import_fn_main,
-    "valid/multi/module_import_fn/src/lib/main.gcl"
-);
 snapshot_test!(
     snapshot_multi_module_import_fn_main,
     "valid/multi/module_import_fn/src/lib/main.gcl"
@@ -829,18 +597,6 @@ snapshot_test!(
 );
 
 // bare_dag_ref: bare module path DAG references
-idempotency_test!(
-    idempotent_multi_bare_dag_ref_main,
-    "valid/multi/bare_dag_ref/src/bare_dag_ref/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_bare_dag_ref_lib,
-    "valid/multi/bare_dag_ref/src/bare_dag_ref/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_bare_dag_ref_main,
-    "valid/multi/bare_dag_ref/src/bare_dag_ref/main.gcl"
-);
 snapshot_test!(
     snapshot_multi_bare_dag_ref_main,
     "valid/multi/bare_dag_ref/src/bare_dag_ref/main.gcl"
@@ -883,22 +639,6 @@ snapshot_test!(
 );
 
 // rocket_split: selective import with many identifiers
-idempotency_test!(
-    idempotent_multi_rocket_split_main,
-    "valid/multi/rocket_split/src/lib/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_rocket_split_constants,
-    "valid/multi/rocket_split/src/lib/constants.gcl"
-);
-idempotency_test!(
-    idempotent_multi_rocket_split_params,
-    "valid/multi/rocket_split/src/lib/params.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_rocket_split_main,
-    "valid/multi/rocket_split/src/lib/main.gcl"
-);
 snapshot_test!(
     snapshot_multi_rocket_split_main,
     "valid/multi/rocket_split/src/lib/main.gcl"
@@ -913,62 +653,18 @@ snapshot_test!(
 );
 
 // explicit_index: import of index types
-idempotency_test!(
-    idempotent_multi_explicit_index_main,
-    "valid/multi/explicit_index/src/lib/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_explicit_index_lib,
-    "valid/multi/explicit_index/src/lib/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_explicit_index_main,
-    "valid/multi/explicit_index/src/lib/main.gcl"
-);
 snapshot_test!(
     snapshot_multi_explicit_index_main,
     "valid/multi/explicit_index/src/lib/main.gcl"
 );
 
 // diamond_assert: diamond-shaped import graph
-idempotency_test!(
-    idempotent_multi_diamond_assert_main,
-    "valid/multi/diamond_assert/src/graph/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_diamond_assert_shared,
-    "valid/multi/diamond_assert/src/graph/shared.gcl"
-);
-idempotency_test!(
-    idempotent_multi_diamond_assert_left,
-    "valid/multi/diamond_assert/src/graph/left.gcl"
-);
-idempotency_test!(
-    idempotent_multi_diamond_assert_right,
-    "valid/multi/diamond_assert/src/graph/right.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_diamond_assert_main,
-    "valid/multi/diamond_assert/src/graph/main.gcl"
-);
 snapshot_test!(
     snapshot_multi_diamond_assert_main,
     "valid/multi/diamond_assert/src/graph/main.gcl"
 );
 
 // assertions: cross-file assertions with #[assumes]
-idempotency_test!(
-    idempotent_multi_assertions_main,
-    "valid/multi/assertions/src/checks/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_assertions_checks,
-    "valid/multi/assertions/src/checks/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_assertions_main,
-    "valid/multi/assertions/src/checks/main.gcl"
-);
 snapshot_test!(
     snapshot_multi_assertions_main,
     "valid/multi/assertions/src/checks/main.gcl"
@@ -979,18 +675,6 @@ snapshot_test!(
 );
 
 // auto_assert: auto-evaluated assertions from imports
-idempotency_test!(
-    idempotent_multi_auto_assert_main,
-    "valid/multi/auto_assert/src/lib/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_auto_assert_lib,
-    "valid/multi/auto_assert/src/lib/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_auto_assert_main,
-    "valid/multi/auto_assert/src/lib/main.gcl"
-);
 snapshot_test!(
     snapshot_multi_auto_assert_main,
     "valid/multi/auto_assert/src/lib/main.gcl"
@@ -1019,36 +703,12 @@ snapshot_test!(
 );
 
 // imported_deps: import with internal graph dependencies
-idempotency_test!(
-    idempotent_multi_imported_deps_main,
-    "valid/multi/imported_deps/src/lib/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_imported_deps_lib,
-    "valid/multi/imported_deps/src/lib/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_imported_deps_main,
-    "valid/multi/imported_deps/src/lib/main.gcl"
-);
 snapshot_test!(
     snapshot_multi_imported_deps_main,
     "valid/multi/imported_deps/src/lib/main.gcl"
 );
 
 // imported_assert_fail: import with failing assertion
-idempotency_test!(
-    idempotent_multi_imported_assert_fail_main,
-    "runtime_error/multi/imported_assert_fail/src/lib/main.gcl"
-);
-idempotency_test!(
-    idempotent_multi_imported_assert_fail_lib,
-    "runtime_error/multi/imported_assert_fail/src/lib/lib.gcl"
-);
-roundtrip_test!(
-    roundtrip_multi_imported_assert_fail_main,
-    "runtime_error/multi/imported_assert_fail/src/lib/main.gcl"
-);
 snapshot_test!(
     snapshot_multi_imported_assert_fail_main,
     "runtime_error/multi/imported_assert_fail/src/lib/main.gcl"
