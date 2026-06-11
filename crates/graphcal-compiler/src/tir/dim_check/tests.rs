@@ -155,6 +155,7 @@ fn compile_inline_dag_bodies_test(
             name.as_str(),
             &body,
             &tir.registry,
+            &resolver,
             &crate::ir::resolve::ImportedValueNames::default(),
             HashMap::new(),
             HashMap::new(),
@@ -207,7 +208,7 @@ fn hir_dim_check_uses_lowered_builtin_function_not_mutated_syntax_callee() {
     let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
     assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
-        crate::desugar::desugared_ast::ExprKind::StringLiteral("not the HIR".to_string());
+        crate::hir::ExprKind::StringLiteral("not the semantic HIR".to_string());
 
     check_dimensions_tir(&tir, &src).unwrap();
 }
@@ -218,7 +219,7 @@ fn hir_dim_check_uses_lexical_local_ids_not_mutated_syntax_names() {
         module_aware_tir("index Phase = { Burn };\nnode y: Phase[Phase] = for p: Phase { p };");
     assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
-        crate::desugar::desugared_ast::ExprKind::StringLiteral("not the HIR".to_string());
+        crate::hir::ExprKind::StringLiteral("not the semantic HIR".to_string());
 
     check_dimensions_tir(&tir, &src).unwrap();
 }
@@ -228,11 +229,10 @@ fn hir_dim_check_uses_lowered_assert_body_not_mutated_syntax_body() {
     let (mut tir, src) = module_aware_tir("assert ok = sqrt(4.0) == 2.0;");
     assert!(!tir.root().semantic.expressions.asserts.is_empty());
     let span = tir.root().asserts[0].span;
-    tir.root_mut().asserts[0].body =
-        crate::desugar::desugared_ast::AssertBody::Expr(crate::desugar::desugared_ast::Expr::new(
-            crate::desugar::desugared_ast::ExprKind::StringLiteral("not the HIR".to_string()),
-            span,
-        ));
+    tir.root_mut().asserts[0].body = crate::hir::AssertBody::Expr(crate::hir::Expr::new(
+        crate::hir::ExprKind::StringLiteral("not the semantic HIR".to_string()),
+        span,
+    ));
 
     check_dimensions_tir(&tir, &src).unwrap();
 }

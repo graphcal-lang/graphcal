@@ -74,10 +74,8 @@ pub(in crate::eval::project) fn lower_and_finalize(
         &mut unfrozen,
     )?;
 
-    let ir = unfrozen.freeze(builder.build());
-
-    // Apply overrides routed to this file (using original param names).
-    let mut ir = ir;
+    // Apply overrides routed to this file (using original param names)
+    // before the freeze boundary lowers every body to HIR.
     let file_overrides: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr> =
         override_targets
             .iter()
@@ -85,16 +83,18 @@ pub(in crate::eval::project) fn lower_and_finalize(
             .map(|(name, (_, orig_name))| (orig_name.clone(), overrides[name].clone()))
             .collect();
     if !file_overrides.is_empty() {
-        apply_overrides(&mut ir, &file_overrides)?;
+        apply_overrides(&mut unfrozen, &file_overrides)?;
     }
+
+    let module_resolver = project
+        .build_module_resolver()
+        .map_err(|err| module_resolve_compile_error(err, file_src))?;
+    let ir = unfrozen.freeze(builder.build(), file_dag_id, &module_resolver, file_src)?;
 
     // Type-resolve top-level decls; then compile each inline dag body
     // explicitly (loader supplies the per-file self-import set and the
     // canonical parent `DagId`). Cross-file dep dag TIRs are merged in
     // afterward by `merge_dep_dag_tirs`.
-    let module_resolver = project
-        .build_module_resolver()
-        .map_err(|err| module_resolve_compile_error(err, file_src))?;
     let mut module_types = graphcal_compiler::tir::typed::ModuleTypeRegistry::default();
     module_types
         .insert_graphcal_prelude()
@@ -229,6 +229,7 @@ fn compile_inline_dag_modules<'a>(
             file_src,
             &parent_values,
             evaluated_files,
+            module_resolver,
         )?;
         let mut compiled_dag = graphcal_compiler::tir::typed::type_resolve_single_with_modules(
             dag_ir,
@@ -251,6 +252,7 @@ fn compile_loaded_dag_module_ir<'a>(
     file_src: &NamedSource<Arc<String>>,
     parent_values: &crate::inline_dag::ParentValueDecls,
     evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
 ) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
     let parent_loaded = &project.files[&loaded_dag.parent_dag_id];
     let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
@@ -331,7 +333,12 @@ fn compile_loaded_dag_module_ir<'a>(
         &mut unfrozen,
     )?;
 
-    Ok(unfrozen.freeze(builder.build()))
+    Ok(unfrozen.freeze(
+        builder.build(),
+        &loaded_dag.dag_id,
+        module_resolver,
+        file_src,
+    )?)
 }
 
 fn extend_imported_value_names(target: &mut ImportedValueNames, source: ImportedValueNames) {

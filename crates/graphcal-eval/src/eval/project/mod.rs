@@ -425,7 +425,7 @@ pub(super) fn resolve_field_declared_type(
 
 /// Validate and apply parameter overrides to an IR.
 pub(in crate::eval::project) fn apply_overrides(
-    ir: &mut graphcal_compiler::ir::lower::IR,
+    ir: &mut graphcal_compiler::ir::lower::UnfrozenIR,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
 ) -> Result<(), CompileError> {
     for (override_name, override_expr) in overrides {
@@ -446,11 +446,9 @@ pub(in crate::eval::project) fn apply_overrides(
             }));
         }
 
-        if let Some(entry) = ir.params.iter_mut().find(|e| e.name.member() == name_str) {
-            entry.default_expr = Some(override_expr.clone());
-        }
-        // Runtime dependencies are recomputed from the lowered HIR during
-        // type resolution, so the replaced default needs no dep bookkeeping.
+        // Runtime dependencies are recomputed from the lowered HIR at the
+        // freeze boundary, so the replaced default needs no dep bookkeeping.
+        ir.override_param_default(name_str, override_expr.clone());
     }
     Ok(())
 }

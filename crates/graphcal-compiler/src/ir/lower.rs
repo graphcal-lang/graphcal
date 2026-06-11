@@ -40,36 +40,74 @@ use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 // Entry types for IR declarations
 // ---------------------------------------------------------------------------
 
-/// A const declaration with type annotation.
+/// A const declaration with type annotation and lowered body.
 #[derive(Debug, Clone)]
 pub struct ConstEntry {
+    pub name: ScopedName,
+    pub type_ann: TypeExpr,
+    pub expr: crate::hir::Expr,
+    pub span: Span,
+}
+
+/// A param declaration with type annotation and lowered default.
+#[derive(Debug, Clone)]
+pub struct ParamEntry {
+    pub name: ScopedName,
+    pub type_ann: TypeExpr,
+    pub default_expr: Option<crate::hir::Expr>,
+    pub span: Span,
+}
+
+/// A node declaration with type annotation and lowered body.
+#[derive(Debug, Clone)]
+pub struct NodeEntry {
+    pub name: ScopedName,
+    pub type_ann: TypeExpr,
+    pub expr: crate::hir::Expr,
+    pub span: Span,
+}
+
+/// An assert declaration with lowered body.
+#[derive(Debug, Clone)]
+pub struct AssertEntry {
+    pub name: ScopedName,
+    pub body: crate::hir::AssertBody,
+    pub span: Span,
+}
+
+/// A const declaration awaiting body lowering at [`UnfrozenIR::freeze`].
+///
+/// Pre-freeze bodies stay syntactic so include instantiation can rewrite
+/// reference paths (prefixing, index/type rebinding) before resolution.
+#[derive(Debug, Clone)]
+pub struct UnfrozenConstEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
     pub expr: Expr,
     pub span: Span,
 }
 
-/// A param declaration with type annotation.
+/// A param declaration awaiting default lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
-pub struct ParamEntry {
+pub struct UnfrozenParamEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
     pub default_expr: Option<Expr>,
     pub span: Span,
 }
 
-/// A node declaration with type annotation.
+/// A node declaration awaiting body lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
-pub struct NodeEntry {
+pub struct UnfrozenNodeEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
     pub expr: Expr,
     pub span: Span,
 }
 
-/// An assert declaration.
+/// An assert declaration awaiting body lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
-pub struct AssertEntry {
+pub struct UnfrozenAssertEntry {
     pub name: ScopedName,
     pub body: AssertBody,
     pub span: Span,
@@ -204,7 +242,49 @@ fn lower_with_imports(
     dag_id: &crate::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
     let (builder, resolved_ir) = lower_to_builder(ast, src, imported, dag_id)?;
-    Ok(resolved_ir.freeze(builder.build()))
+    let resolver = single_module_resolver(ast, dag_id, src)?;
+    resolved_ir.freeze(builder.build(), dag_id, &resolver, src)
+}
+
+/// Build a resolver covering only this file's own module.
+///
+/// Single-file lowering has no project loader, so imported modules are not
+/// resolvable; bodies that reference them fail at the freeze boundary just
+/// as they previously failed during type resolution.
+fn single_module_resolver(
+    ast: &File,
+    dag_id: &crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::syntax::module_resolve::ModuleResolver, GraphcalError> {
+    fn add_module_with_dags(
+        target: &mut crate::syntax::module_resolve::ModuleResolver,
+        owner: &crate::dag_id::DagId,
+        declarations: &[crate::desugar::desugared_ast::Declaration],
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<(), GraphcalError> {
+        target
+            .add_module(owner.clone(), declarations)
+            .map_err(|err| GraphcalError::EvalError {
+                message: err.to_string(),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        for decl in declarations {
+            if let crate::desugar::desugared_ast::DeclKind::Dag(dag) = &decl.kind {
+                add_module_with_dags(
+                    target,
+                    &owner.child(dag.name.value.as_str()),
+                    &dag.body,
+                    src,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    add_module_with_dags(&mut resolver, dag_id, &ast.declarations, src)?;
+    Ok(resolver)
 }
 
 /// Lower an AST with imported declarations, returning a `RegistryBuilder`
@@ -412,6 +492,7 @@ pub fn lower_dag_body_to_ir(
     dag_name: &str,
     stripped_body: &[crate::desugar::desugared_ast::Declaration],
     parent_registry: &Registry,
+    resolver: &crate::syntax::module_resolve::ModuleResolver,
     imported_names: &ImportedValueNames,
     imported_decl_types: HashMap<ScopedName, DeclaredType>,
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
@@ -432,7 +513,7 @@ pub fn lower_dag_body_to_ir(
         src,
         &dag_dag_id,
     )?;
-    Ok(unfrozen.freeze(builder.build()))
+    unfrozen.freeze(builder.build(), &dag_dag_id, resolver, src)
 }
 
 /// Result of `preprocess_dag_body_self_imports`: imported names, declared
@@ -512,7 +593,7 @@ fn build_ir_from_resolved(
         .map(|entry| {
             let decl_name = DeclName::new(entry.name);
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
-            Ok(ConstEntry {
+            Ok(UnfrozenConstEntry {
                 name: ScopedName::from(decl_name),
                 type_ann,
                 expr: entry.expr,
@@ -526,7 +607,7 @@ fn build_ir_from_resolved(
         .map(|entry| {
             let decl_name = DeclName::new(entry.name);
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
-            Ok(ParamEntry {
+            Ok(UnfrozenParamEntry {
                 name: ScopedName::from(decl_name),
                 type_ann,
                 default_expr: entry.default_expr,
@@ -540,7 +621,7 @@ fn build_ir_from_resolved(
         .map(|entry| {
             let decl_name = DeclName::new(entry.name);
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
-            Ok(NodeEntry {
+            Ok(UnfrozenNodeEntry {
                 name: ScopedName::from(decl_name),
                 type_ann,
                 expr: entry.expr,
@@ -556,7 +637,7 @@ fn build_ir_from_resolved(
         asserts: resolved
             .asserts
             .into_iter()
-            .map(|entry| AssertEntry {
+            .map(|entry| UnfrozenAssertEntry {
                 name: ScopedName::local(entry.name),
                 body: entry.body,
                 span: entry.span,
@@ -629,10 +710,10 @@ fn build_ir_from_resolved(
 
 /// An IR without a frozen registry, awaiting a call to [`freeze`](Self::freeze).
 pub struct UnfrozenIR {
-    consts: Vec<ConstEntry>,
-    params: Vec<ParamEntry>,
-    nodes: Vec<NodeEntry>,
-    asserts: Vec<AssertEntry>,
+    consts: Vec<UnfrozenConstEntry>,
+    params: Vec<UnfrozenParamEntry>,
+    nodes: Vec<UnfrozenNodeEntry>,
+    asserts: Vec<UnfrozenAssertEntry>,
     plots: Vec<PlotEntry>,
     figures: Vec<FigureEntry>,
     layers: Vec<LayerEntry>,
@@ -656,15 +737,126 @@ pub struct UnfrozenIR {
 }
 
 impl UnfrozenIR {
-    /// Freeze into a complete [`IR`] by providing a built [`Registry`].
-    #[must_use]
-    pub fn freeze(self, registry: Registry) -> IR {
-        IR {
+    /// Freeze into a complete [`IR`] by providing a built [`Registry`] and
+    /// the resolution context.
+    ///
+    /// This is the lowering boundary of the pipeline: every declaration body
+    /// assembled so far (including merged include instances and applied
+    /// overrides) is lowered to HIR here, so the frozen [`IR`] carries no
+    /// syntax-AST expression.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphcalError`] if any body contains a reference that
+    /// cannot be resolved.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "single lowering boundary over every declaration kind"
+    )]
+    pub fn freeze(
+        self,
+        registry: Registry,
+        owner: &crate::dag_id::DagId,
+        resolver: &crate::syntax::module_resolve::ModuleResolver,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<IR, GraphcalError> {
+        // Entries already visible in this IR (including prefixed include
+        // instances and dag self-imports) bind their written names to
+        // canonical identities for the lowering below.
+        let mut decl_bindings = HashMap::new();
+        for name in self
+            .consts
+            .iter()
+            .map(|entry| &entry.name)
+            .chain(self.params.iter().map(|entry| &entry.name))
+            .chain(self.nodes.iter().map(|entry| &entry.name))
+        {
+            let canonical =
+                crate::hir::diagnostics::resolved_decl_key(owner, name).ok_or_else(|| {
+                    GraphcalError::InternalError {
+                        message: format!("could not build canonical declaration key for `{name}`"),
+                        src: src.clone(),
+                        span: Span::new(0, 0).into(),
+                    }
+                })?;
+            decl_bindings.insert(name.clone(), canonical);
+        }
+        for (name, source) in &self.imported_value_sources {
+            decl_bindings.insert(
+                name.clone(),
+                crate::syntax::names::ResolvedName::from_def(
+                    source.dag_id.clone(),
+                    source.source_name.clone(),
+                ),
+            );
+        }
+
+        let generic_scope = crate::hir::GenericScope::new();
+        let prelude = crate::hir::PreludeTypeScope::graphcal();
+        let expr_ctx = crate::hir::ExprLoweringContext::new(owner, resolver, &generic_scope)
+            .with_prelude(&prelude)
+            .with_decl_bindings(&decl_bindings);
+        let lower = |expr: &Expr| {
+            crate::hir::lower_expr(expr, expr_ctx)
+                .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src))
+        };
+
+        let consts = self
+            .consts
+            .iter()
+            .map(|entry| {
+                Ok(ConstEntry {
+                    name: entry.name.clone(),
+                    type_ann: entry.type_ann.clone(),
+                    expr: lower(&entry.expr)?,
+                    span: entry.span,
+                })
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        let params = self
+            .params
+            .iter()
+            .map(|entry| {
+                Ok(ParamEntry {
+                    name: entry.name.clone(),
+                    type_ann: entry.type_ann.clone(),
+                    default_expr: entry.default_expr.as_ref().map(&lower).transpose()?,
+                    span: entry.span,
+                })
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        let nodes = self
+            .nodes
+            .iter()
+            .map(|entry| {
+                Ok(NodeEntry {
+                    name: entry.name.clone(),
+                    type_ann: entry.type_ann.clone(),
+                    expr: lower(&entry.expr)?,
+                    span: entry.span,
+                })
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        let asserts = self
+            .asserts
+            .iter()
+            .map(|entry| {
+                Ok(AssertEntry {
+                    name: entry.name.clone(),
+                    body: crate::hir::lower_assert_body(&entry.body, expr_ctx).map_err(|err| {
+                        crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src)
+                    })?,
+                    span: entry.span,
+                })
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+
+        Ok(IR {
             registry,
-            consts: self.consts,
-            params: self.params,
-            nodes: self.nodes,
-            asserts: self.asserts,
+            consts,
+            params,
+            nodes,
+            asserts,
             plots: self.plots,
             figures: self.figures,
             layers: self.layers,
@@ -676,6 +868,23 @@ impl UnfrozenIR {
             imported_decl_types: self.imported_decl_types,
             imported_value_sources: self.imported_value_sources,
             pub_names: self.pub_names,
+        })
+    }
+
+    /// Replace a param's default expression with an override.
+    ///
+    /// Returns `false` when no param entry with that leaf name exists.
+    pub fn override_param_default(&mut self, name: &str, expr: Expr) -> bool {
+        match self
+            .params
+            .iter_mut()
+            .find(|entry| entry.name.member() == name)
+        {
+            Some(entry) => {
+                entry.default_expr = Some(expr);
+                true
+            }
+            None => false,
         }
     }
 
@@ -689,7 +898,7 @@ impl UnfrozenIR {
         expr: Expr,
         span: Span,
     ) {
-        self.consts.push(ConstEntry {
+        self.consts.push(UnfrozenConstEntry {
             name: name.clone(),
             type_ann,
             expr,
@@ -702,7 +911,7 @@ impl UnfrozenIR {
     ///
     /// Used for selective instantiated imports where `delta_v` aliases `prefix.delta_v`.
     pub fn add_node_alias(&mut self, name: ScopedName, type_ann: TypeExpr, expr: Expr, span: Span) {
-        self.nodes.push(NodeEntry {
+        self.nodes.push(UnfrozenNodeEntry {
             name: name.clone(),
             type_ann,
             expr,
@@ -827,7 +1036,7 @@ impl UnfrozenIR {
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.with_prefix(prefix);
-            self.consts.push(ConstEntry {
+            self.consts.push(UnfrozenConstEntry {
                 name: prefixed.clone(),
                 type_ann: entry.type_ann,
                 expr: entry.expr,
@@ -854,7 +1063,7 @@ impl UnfrozenIR {
             substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
-            self.params.push(ParamEntry {
+            self.params.push(UnfrozenParamEntry {
                 name: prefixed.clone(),
                 type_ann: entry.type_ann,
                 default_expr: entry.default_expr,
@@ -872,7 +1081,7 @@ impl UnfrozenIR {
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.with_prefix(prefix);
-            self.nodes.push(NodeEntry {
+            self.nodes.push(UnfrozenNodeEntry {
                 name: prefixed.clone(),
                 type_ann: entry.type_ann,
                 expr: entry.expr,
@@ -907,7 +1116,7 @@ impl UnfrozenIR {
                 }
             }
             let prefixed = entry.name.with_prefix(prefix);
-            self.asserts.push(AssertEntry {
+            self.asserts.push(UnfrozenAssertEntry {
                 name: prefixed.clone(),
                 body: entry.body,
                 span: entry.span,
@@ -2851,13 +3060,13 @@ mod tests {
 
     #[test]
     fn lower_hohmann() {
-        // hohmann.gcl uses DAG+include. Single-file IR lowering accepts it:
-        // reference resolution happens in HIR lowering during type
-        // resolution, where `@transfer` (the include's projected node) is
-        // rejected unless the project pipeline expanded the include first.
+        // hohmann.gcl uses DAG+include. The full project pipeline accepts
+        // it (see the CLI tests), but single-file IR lowering rejects it at
+        // the freeze boundary: include expansion is a higher-phase concern,
+        // so `@transfer` (the include's projected node) cannot resolve.
         let source = include_str!("../../../../tests/fixtures/valid/hohmann.gcl");
-        let ir = parse_and_lower(source).unwrap();
-        assert!(!ir.nodes.is_empty());
+        let err = parse_and_lower(source).unwrap_err();
+        assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
     }
 
     #[test]

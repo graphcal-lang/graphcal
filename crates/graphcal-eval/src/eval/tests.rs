@@ -112,9 +112,7 @@ fn eval_uses_hir_builtin_dispatch_after_syntax_mutation() {
     let mut tir = compile_to_tir(source, "test.gcl").unwrap();
     assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
-        graphcal_compiler::desugar::desugared_ast::ExprKind::StringLiteral(
-            "mutated syntax".to_string(),
-        );
+        graphcal_compiler::hir::ExprKind::StringLiteral("mutated entry".to_string());
 
     let values = run_mutated_tir_values(&tir, source);
     let key = crate::decl_key::RuntimeDeclKey::for_local_decl(
@@ -131,9 +129,7 @@ fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
     let mut tir = compile_to_tir(source, "test.gcl").unwrap();
     assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
-        graphcal_compiler::desugar::desugared_ast::ExprKind::StringLiteral(
-            "mutated syntax".to_string(),
-        );
+        graphcal_compiler::hir::ExprKind::StringLiteral("mutated entry".to_string());
 
     let values = run_mutated_tir_values(&tir, source);
     let key = crate::decl_key::RuntimeDeclKey::for_local_decl(
@@ -154,14 +150,11 @@ fn eval_assertions_use_hir_body_after_syntax_mutation() {
     let mut tir = compile_to_tir(source, "test.gcl").unwrap();
     assert!(!tir.root().semantic.expressions.asserts.is_empty());
     let span = tir.root().asserts[0].span;
-    tir.root_mut().asserts[0].body = graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(
-        graphcal_compiler::desugar::desugared_ast::Expr::new(
-            graphcal_compiler::desugar::desugared_ast::ExprKind::StringLiteral(
-                "mutated syntax".to_string(),
-            ),
+    tir.root_mut().asserts[0].body =
+        graphcal_compiler::hir::AssertBody::Expr(graphcal_compiler::hir::Expr::new(
+            graphcal_compiler::hir::ExprKind::StringLiteral("mutated entry".to_string()),
             span,
-        ),
-    );
+        ));
 
     let src = miette::NamedSource::new("test.gcl", std::sync::Arc::new(source.to_string()));
     let plan = crate::exec_plan::compile(&tir, &src).unwrap();

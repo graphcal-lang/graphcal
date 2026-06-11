@@ -24,6 +24,7 @@
 //! evaluation consume this HIR slice for declaration/assertion semantics rather
 //! than re-resolving source-shaped syntax AST references.
 
+pub(crate) mod diagnostics;
 pub mod expr;
 pub mod lower;
 pub mod types;

@@ -12,10 +12,13 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::hir;
+use crate::hir::diagnostics::{
+    expr_lower_error_to_graphcal, hir_lower_error_to_graphcal, resolved_decl_key,
+};
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, ModuleAliasName,
-    NameAtom, NameNamespace, NamePath, StructTypeName,
+    NameAtom, NamePath, StructTypeName,
 };
 use crate::syntax::nat::Monomial;
 pub use crate::syntax::nat::{NatLinearForm, NatPolyForm};
@@ -1450,6 +1453,13 @@ fn resolve_type_expr_in_struct_scope(
     resolve_hir_type_expr_inner(&hir_type, resolve_ctx)
 }
 
+/// Assemble the semantic expression maps from the IR's lowered bodies and
+/// lower the declaration domain bounds.
+///
+/// Bodies were lowered to HIR at [`crate::ir::lower::UnfrozenIR::freeze`];
+/// this step keys them by canonical declaration identity and lowers the
+/// type-annotation domain-bound expressions, which live in declaration
+/// signatures rather than bodies.
 fn lower_resolved_expressions(
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
@@ -1481,9 +1491,7 @@ fn lower_resolved_expressions(
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
-        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx)
-            .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
-        exprs.consts.insert(key, hir_expr);
+        exprs.consts.insert(key, entry.expr.clone());
     }
     for entry in params {
         let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
@@ -1494,9 +1502,7 @@ fn lower_resolved_expressions(
         let Some(expr) = &entry.default_expr else {
             continue;
         };
-        let hir_expr = hir::lower_expr(expr, expr_ctx)
-            .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
-        exprs.param_defaults.insert(key, hir_expr);
+        exprs.param_defaults.insert(key, expr.clone());
     }
     for entry in nodes {
         let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
@@ -1504,15 +1510,11 @@ fn lower_resolved_expressions(
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
-        let hir_expr = hir::lower_expr(&entry.expr, expr_ctx)
-            .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
-        exprs.nodes.insert(key, hir_expr);
+        exprs.nodes.insert(key, entry.expr.clone());
     }
     for entry in asserts {
         let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
-        let hir_body = hir::lower_assert_body(&entry.body, expr_ctx)
-            .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
-        exprs.asserts.insert(key, hir_body);
+        exprs.asserts.insert(key, entry.body.clone());
     }
 
     Ok(LoweredDagExpressions {
@@ -2800,20 +2802,6 @@ fn collect_resolved_inline_dag_refs_from_assert_body(
     }
 }
 
-fn resolved_decl_key(
-    owner: &crate::dag_id::DagId,
-    name: &ScopedName,
-) -> Option<ResolvedName<namespace::Decl>> {
-    let owner = name
-        .qualifier()
-        .iter()
-        .fold(owner.clone(), |owner, segment| {
-            owner.child(segment.as_ref())
-        });
-    let name = DeclName::try_new(name.member()).ok()?;
-    Some(ResolvedName::from_def(owner, name))
-}
-
 fn collect_hir_decl_bindings(
     owner: &crate::dag_id::DagId,
     consts: &[crate::ir::lower::ConstEntry],
@@ -3954,124 +3942,6 @@ const fn module_lookup_is_absent(err: &ModuleResolveError) -> bool {
     matches!(err, ModuleResolveError::UnknownName { .. })
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "exhaustive mapping from lowering diagnostics to spanned errors"
-)]
-fn expr_lower_error_to_graphcal(
-    err: &hir::ExprLowerError,
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
-    match err {
-        hir::ExprLowerError::UnknownFunction { path, span } => {
-            return GraphcalError::UnknownFunction {
-                name: path.clone(),
-                src: src.clone(),
-                span: (*span).into(),
-            };
-        }
-        hir::ExprLowerError::WrongArity {
-            name,
-            expected,
-            got,
-            span,
-        } => {
-            return GraphcalError::WrongArity {
-                name: name.clone(),
-                expected: *expected,
-                got: *got,
-                src: src.clone(),
-                span: (*span).into(),
-            };
-        }
-        hir::ExprLowerError::UnknownLocalRef { name, span } => {
-            return GraphcalError::UnknownLocalRef {
-                name: name.to_string(),
-                src: src.clone(),
-                span: (*span).into(),
-            };
-        }
-        hir::ExprLowerError::UnknownGraphRef { name, span } => {
-            return GraphcalError::UnknownGraphRef {
-                name: name.clone(),
-                src: src.clone(),
-                span: (*span).into(),
-            };
-        }
-        hir::ExprLowerError::ExtraMapVariant {
-            index_name,
-            variant_name,
-            span,
-        } => {
-            return GraphcalError::ExtraVariants {
-                index_name: index_name.clone(),
-                extra: vec![variant_name.clone()],
-                src: src.clone(),
-                span: (*span).into(),
-            };
-        }
-        hir::ExprLowerError::ModuleResolve {
-            source: ModuleResolveError::UnknownIndexVariant { index, variant },
-            span,
-        } => {
-            return GraphcalError::UnknownVariant {
-                index_name: index.to_unowned_def_name(),
-                variant_name: variant.clone(),
-                src: src.clone(),
-                span: (*span).into(),
-            };
-        }
-        hir::ExprLowerError::ModuleResolve {
-            source:
-                ModuleResolveError::UnknownName {
-                    namespace, name, ..
-                },
-            span,
-        } if *namespace == namespace::Index::DISPLAY_NAME => {
-            if let Ok(index_name) = IndexName::try_new(name.clone()) {
-                return GraphcalError::UnknownIndex {
-                    name: index_name,
-                    src: src.clone(),
-                    span: (*span).into(),
-                };
-            }
-        }
-        hir::ExprLowerError::ModuleResolve {
-            source:
-                ModuleResolveError::UnknownName {
-                    namespace, name, ..
-                },
-            span,
-        } if *namespace == namespace::Decl::DISPLAY_NAME => {
-            return GraphcalError::UnknownLocalRef {
-                name: name.clone(),
-                src: src.clone(),
-                span: (*span).into(),
-            };
-        }
-        _ => {}
-    }
-    let span = match err {
-        hir::ExprLowerError::Type(err) => return hir_lower_error_to_graphcal(err, src),
-        hir::ExprLowerError::ModuleResolve { span, .. }
-        | hir::ExprLowerError::InvalidScopedNameSegment { span, .. }
-        | hir::ExprLowerError::UnknownLocalRef { span, .. }
-        | hir::ExprLowerError::UnknownGraphRef { span, .. }
-        | hir::ExprLowerError::TooManyLocals { span }
-        | hir::ExprLowerError::EmptyMapEntry { span }
-        | hir::ExprLowerError::ExtraMapVariant { span, .. }
-        | hir::ExprLowerError::UnknownPattern { span, .. }
-        | hir::ExprLowerError::UnknownFunction { span, .. }
-        | hir::ExprLowerError::WrongArity { span, .. } => *span,
-        hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. } => *duplicate,
-    };
-    GraphcalError::EvalError {
-        message: err.to_string(),
-        src: src.clone(),
-        span: span.into(),
-    }
-}
-
 fn type_lower_error_to_graphcal(
     err: &hir::HirLowerError,
     type_ann: &TypeExpr,
@@ -4136,27 +4006,6 @@ fn type_expr_has_dim_term_at_span(type_ann: &TypeExpr, span: Span) -> bool {
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => false,
-    }
-}
-
-fn hir_lower_error_to_graphcal(
-    err: &hir::HirLowerError,
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
-    let span = match &err {
-        hir::HirLowerError::ModuleResolve { span, .. }
-        | hir::HirLowerError::UnknownTypePath { span, .. }
-        | hir::HirLowerError::GenericConstraintMismatch { span, .. }
-        | hir::HirLowerError::UnknownGenericParam { span, .. }
-        | hir::HirLowerError::ExpectedTimeScaleName { span }
-        | hir::HirLowerError::UnknownTimeScale { span, .. }
-        | hir::HirLowerError::WrongDatetimeArgCount { span, .. } => *span,
-        hir::HirLowerError::DuplicateGenericParam { duplicate, .. } => *duplicate,
-    };
-    GraphcalError::EvalError {
-        message: err.to_string(),
-        src: src.clone(),
-        span: span.into(),
     }
 }
 
@@ -5533,6 +5382,7 @@ mod tests {
                 name.as_str(),
                 &body,
                 &tir.registry,
+                &resolver,
                 &crate::ir::resolve::ImportedValueNames::default(),
                 HashMap::new(),
                 HashMap::new(),
