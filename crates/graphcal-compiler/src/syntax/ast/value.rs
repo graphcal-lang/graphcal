@@ -34,7 +34,7 @@ pub enum RawExprSugar {
 
 /// Unresolved reference, produced by the parser before HIR lowering.
 ///
-/// Carried by `ExprKind::UnresolvedRef(P::RefSugar)`. The parser emits these
+/// Carried by `ExprKind::UnresolvedRef`. The parser emits these
 /// when the meaning of an identifier path cannot be determined from syntax
 /// alone; HIR expression lowering ([`crate::hir::lower_expr`]) classifies and
 /// resolves them in a single pass against the lexical scope and the
@@ -624,11 +624,9 @@ pub enum ExprKind<P: Phase = Raw> {
     },
     /// Unresolved reference produced by the parser.
     ///
-    /// Carries [`crate::syntax::ast::UnresolvedRef`] in both [`Raw`] and
-    /// [`crate::syntax::phase::Desugared`], as an unresolved identifier
-    /// path. HIR expression lowering is the single stage that classifies
-    /// and resolves these paths.
-    UnresolvedRef(P::RefSugar),
+    /// Carries an unresolved identifier path. HIR expression lowering is the
+    /// single stage that classifies and resolves these paths.
+    UnresolvedRef(UnresolvedRef),
     /// Phase-specific expression sugar.
     ///
     /// In [`Raw`], this is [`crate::syntax::ast::RawExprSugar`] and carries

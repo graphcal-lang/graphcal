@@ -8,9 +8,8 @@
 //!
 //! - [`Raw`] — produced by the parser. Carries every surface sugar via
 //!   [`crate::syntax::ast::RawDeclSugar`] /
-//!   [`crate::syntax::ast::RawExprSugar`], plus the unresolved-ref slot
-//!   [`crate::syntax::ast::UnresolvedRef`]. Consumed by the formatter and any surface-aware
-//!   tooling.
+//!   [`crate::syntax::ast::RawExprSugar`]. Consumed by the formatter and any
+//!   surface-aware tooling.
 //! - [`Desugared`] — produced by [`crate::desugar`]. Surface-sugar slots
 //!   are [`core::convert::Infallible`], so `match` arms over them are
 //!   unreachable. Reference paths stay syntactic
@@ -46,14 +45,6 @@ pub trait Phase: 'static + sealed::Sealed {
     /// [`crate::syntax::ast::RawExprSugar`]; for [`Desugared`] it is
     /// [`Infallible`].
     type ExprSugar: Debug + Clone;
-
-    /// Phase-specific unresolved-reference variants.
-    ///
-    /// Carried by `ExprKind::UnresolvedRef(_)`. For [`Raw`] and [`Desugared`]
-    /// this is [`crate::syntax::ast::UnresolvedRef`] — the parser produces
-    /// unresolved identifier paths, and they stay syntactic until HIR
-    /// lowering resolves them.
-    type RefSugar: Debug + Clone;
 }
 
 /// Pre-desugar phase: every surface sugar is representable.
