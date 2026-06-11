@@ -45,6 +45,7 @@ pub fn eval_hir_expr(
     })
 }
 
+#[expect(clippy::too_many_lines, reason = "exhaustive HIR ExprKind evaluation")]
 fn eval_hir_expr_inner(
     expr: &hir::Expr,
     values: &RuntimeValueMap,

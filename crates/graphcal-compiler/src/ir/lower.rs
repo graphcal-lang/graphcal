@@ -1,11 +1,11 @@
 //! Intermediate Representation (IR) — the result of lowering an AST.
 //!
-//! `lower()` combines name resolution (`resolve`), registry construction
-//! (dimensions, units, indexes, structs), and function registration into a
-//! single `IR` value that downstream stages can consume without reaching
-//! back to the raw AST.
+//! `lower()` combines declaration collection (`resolve`), registry
+//! construction (dimensions, units, indexes, structs), and function
+//! registration into a single `IR` value. Reference resolution happens
+//! later, when type resolution lowers the collected bodies to HIR.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -177,7 +177,7 @@ pub struct ImportedValueSource {
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or registry construction fails
+/// Returns a [`GraphcalError`] if declaration collection or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
 pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalError> {
     let dag_id = crate::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()))
@@ -196,7 +196,7 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalE
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
 fn lower_with_imports(
     ast: &File,
     src: &NamedSource<Arc<String>>,
@@ -215,14 +215,14 @@ fn lower_with_imports(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
 pub(crate) fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
     dag_id: &crate::dag_id::DagId,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    // Step 1: Name resolution
+    // Step 1: Declaration collection
     let resolved = resolve_with_imports(ast, src, imported)?;
 
     // Step 2: Extract type annotations from AST + imported declarations.
@@ -264,7 +264,7 @@ pub(crate) fn lower_to_builder(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
@@ -300,7 +300,7 @@ pub fn lower_to_builder_with_imported_values(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
@@ -314,7 +314,7 @@ pub fn lower_to_builder_with_imported_value_decls(
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     dag_id: &crate::dag_id::DagId,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    // Step 1: Name resolution with imported value names in scope
+    // Step 1: Declaration collection with imported value names in scope
     let resolved = resolve_with_imported_values(ast, src, imported_names)?;
 
     // Step 2: Extract type annotations from local declarations only
@@ -338,7 +338,7 @@ pub fn lower_to_builder_with_imported_value_decls(
 ///
 /// The dag body is a virtual [`File`] whose registry is seeded with the
 /// enclosing file's frozen registry (dimensions, units, types, indexes, and
-/// sibling dags) so that name resolution and type checking behave exactly as
+/// sibling dags) so that reference resolution and type checking behave exactly as
 /// they would for a top-level declaration. Per Concept 9, the dag body cannot
 /// implicitly reference the enclosing file's `const`/`param`/`node` values
 /// — cross-scope values must be either passed in via the dag's own params or
@@ -364,7 +364,7 @@ pub fn lower_to_builder_with_imported_value_decls(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or type-system construction
+/// Returns a [`GraphcalError`] if declaration collection or type-system construction
 /// fails for the dag body.
 #[expect(
     clippy::implicit_hasher,

@@ -1,4 +1,4 @@
-//! Data types and function classification constants used by the name resolution layer.
+//! Data types and function classification constants used by the declaration-collection layer.
 //!
 //! These types have no dependency on the resolution logic itself, making them
 //! suitable for use across all compilation phases.
@@ -459,7 +459,7 @@ pub enum ExpectedFail {
     Variants(Vec<ExpectedFailKey>),
 }
 
-/// The result of name resolution: declarations separated by category with dependency info.
+/// The result of declaration collection: declarations separated by category.
 #[derive(Debug)]
 pub struct ResolvedFile {
     /// Const declarations in source order.

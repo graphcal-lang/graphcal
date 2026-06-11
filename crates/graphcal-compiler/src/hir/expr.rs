@@ -1230,11 +1230,11 @@ impl<'a> ExprLowerer<'a> {
     /// or time scale, a constructor, a type-system entity, a generic `Nat`
     /// parameter, or a declaration — and resolves it to its canonical
     /// identity at the same time. Lexical scope shadows module symbols.
-    fn lower_unresolved_path(&mut self, path: &IdentPath) -> Result<ExprKind, ExprLowerError> {
-        match path.as_bare() {
-            Some(ident) => self.lower_bare_name_ref(ident),
-            None => self.lower_dotted_path_ref(path),
-        }
+    fn lower_unresolved_path(&self, path: &IdentPath) -> Result<ExprKind, ExprLowerError> {
+        path.as_bare().map_or_else(
+            || self.lower_dotted_path_ref(path),
+            |ident| self.lower_bare_name_ref(ident),
+        )
     }
 
     /// Resolve a bare identifier in value position.

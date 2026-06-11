@@ -8,7 +8,7 @@
 //! single declarations.
 //!
 //! The desugar pass is invoked at the top of
-//! [`crate::syntax::name_resolve::resolve_name_refs`]; everything downstream
+//! HIR lowering; everything downstream
 //! can assume `DeclKind::Sugar` does not appear in the AST.
 //!
 //! Note: today this pass mutates a `File<Raw>` in place, eliminating sugar

@@ -21,7 +21,6 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
     graphcal_compiler::stack::with_stack_growth(|| format_expr_inner(fmt, expr))
 }
 
-#[expect(clippy::too_many_lines, reason = "match on ExprKind variants")]
 fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
     match &expr.kind {
         ExprKind::Number(_) | ExprKind::Integer(_) => {

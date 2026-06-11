@@ -32,7 +32,7 @@ pub enum RawExprSugar {
 // Unresolved-ref variants (legal in `Raw` and `Desugared`, not in `Resolved`)
 // ---------------------------------------------------------------------------
 
-/// Unresolved reference, produced by the parser before name resolution.
+/// Unresolved reference, produced by the parser before HIR lowering.
 ///
 /// Carried by `ExprKind::UnresolvedRef(P::RefSugar)`. The parser emits these
 /// when the meaning of an identifier path cannot be determined from syntax
@@ -81,7 +81,7 @@ pub enum RawExprSugar {
 /// so the parser records the complete syntactic structure uniformly:
 /// `Foo`, `Foo.Bar`, and `Foo.Bar.Baz` are all identifier paths. Segment-count
 /// restrictions, such as index variants currently being two-segment paths, are
-/// semantic rules enforced by name resolution rather than parser artifacts.
+/// semantic rules enforced by HIR lowering rather than parser artifacts.
 #[derive(Debug, Clone)]
 pub enum UnresolvedRef {
     /// Unresolved identifier path: `Foo`, `Foo.Bar`, or `Foo.Bar.Baz`.

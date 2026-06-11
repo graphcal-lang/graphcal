@@ -81,7 +81,7 @@ The `@` prefix is the central scoping mechanism:
 ## Evaluation Order
 
 1. **Parse** -- Source files are parsed into an AST
-2. **Resolve** -- Names are resolved, imports are loaded
+2. **Resolve** -- Imports are loaded; references are resolved while lowering to the compiler's internal representation
 3. **Dimension check** -- All expressions are checked for dimensional consistency
 4. **Const evaluation** -- Constants are evaluated in dependency order
 5. **DAG construction** -- A dependency graph is built from `param` and `node` declarations

@@ -767,12 +767,8 @@ pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFi
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if duplicate names, unknown references, or
-/// arity mismatches are found.
-#[expect(
-    clippy::too_many_lines,
-    reason = "complex resolution logic with multiple passes"
-)]
+/// Returns a [`GraphcalError`] if duplicate names or invalid declaration
+/// shells are found.
 pub(crate) fn resolve_with_imports(
     file: &File,
     src: &NamedSource<Arc<String>>,

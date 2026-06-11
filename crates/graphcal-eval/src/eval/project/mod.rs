@@ -123,7 +123,7 @@ struct QualifiedMember {
 /// Promote `FieldAccess(GraphRef(Local(alias)), field)` to a qualified
 /// `GraphRef` in-place. This is the only producer of qualified graph
 /// references in the project pipeline — qualified const references come
-/// out of name resolution directly.
+/// out of reference resolution directly.
 fn rewrite_alias_field_access(expr: &mut Expr, qualified_pairs: &HashSet<QualifiedMember>) {
     if qualified_pairs.is_empty() {
         return;

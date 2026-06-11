@@ -1768,7 +1768,6 @@ impl HirPolicyChecker<'_> {
         })
     }
 
-    #[expect(clippy::too_many_lines, reason = "exhaustive HIR ExprKind walk")]
     fn check_expr_inner(
         &self,
         expr: &hir::Expr,
@@ -3955,6 +3954,10 @@ const fn module_lookup_is_absent(err: &ModuleResolveError) -> bool {
     matches!(err, ModuleResolveError::UnknownName { .. })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive mapping from lowering diagnostics to spanned errors"
+)]
 fn expr_lower_error_to_graphcal(
     err: &hir::ExprLowerError,
     src: &NamedSource<Arc<String>>,

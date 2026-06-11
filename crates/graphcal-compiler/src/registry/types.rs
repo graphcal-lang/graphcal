@@ -878,7 +878,7 @@ impl RegistryBuilder {
     ///
     /// Used by inline-dag compilation: the dag body is lowered as a virtual
     /// file whose registry is seeded with the enclosing file's dimensions,
-    /// units, indexes, types, and sibling dags so that name resolution and
+    /// units, indexes, types, and sibling dags so that reference resolution and
     /// type checking behave as if the dag body were declared inline at the
     /// top level.
     pub fn merge_from_registry(&mut self, parent: &Registry) {
@@ -1007,7 +1007,7 @@ impl RegistryBuilder {
         if let TypeDefKind::Union { ref members } = def.kind {
             for member in members {
                 // Last-wins, like every other register_* entry point —
-                // duplicates are rejected upstream during name resolution.
+                // duplicates are rejected upstream during declaration collection.
                 self.ctors.insert(member.name.clone(), def.name.clone());
             }
         }
