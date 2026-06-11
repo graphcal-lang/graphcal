@@ -81,7 +81,24 @@ pub(super) fn binop_rule(
         }
         // Equality: operands must have the same ValueType.
         // Int and Fin(N) are compatible for equality comparison.
+        // Indexed operands are rejected: the runtime has no element-wise
+        // equality, so accepting them here would make a statically valid
+        // program that can never evaluate (#810). Element-wise broadcasting
+        // is tracked in #809.
         BinOp::Eq | BinOp::Ne => {
+            for (operand_type, operand) in [(lhs_type, lhs), (rhs_type, rhs)] {
+                if matches!(operand_type, InferredType::Indexed { .. }) {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "scalar-comparable operand".to_string(),
+                        found: format_inferred_type(operand_type, registry),
+                        help: "equality on indexed values is not supported; \
+                               compare element-wise with a `for` comprehension"
+                            .to_string(),
+                        src: src.clone(),
+                        span: operand.span.into(),
+                    });
+                }
+            }
             if lhs_type == rhs_type || (lhs_type.is_int_like() && rhs_type.is_int_like()) {
                 return Ok(InferredType::Bool);
             }

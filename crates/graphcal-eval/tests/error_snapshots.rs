@@ -298,6 +298,13 @@ fn error_assert_not_bool() {
 }
 
 #[test]
+fn error_indexed_equality() {
+    let source = include_str!("../../../tests/fixtures/invalid/indexed_equality.gcl");
+    let rendered = render_error(source, "indexed_equality.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_assumes_unknown_assert() {
     let source = include_str!("../../../tests/fixtures/invalid/assumes_unknown_assert.gcl");
     let rendered = render_error(source, "assumes_unknown_assert.gcl");
