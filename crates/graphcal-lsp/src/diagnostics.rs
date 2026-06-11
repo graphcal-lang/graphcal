@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn v003_private_in_public_produces_diagnostic() {
-        let source = "dim Velocity = Length / Time;\nparam kmh: Velocity = 36.0 km/h;\npub node speed: Velocity = @kmh;";
+        let source = "dim Speed = Length / Time;\nparam kmh: Speed = 36.0 km/h;\npub node speed: Speed = @kmh;";
         let diags = produce_diagnostics(source, "test.gcl");
         assert_eq!(diags.len(), 1);
         let code = diags[0].code.as_ref();
@@ -441,7 +441,7 @@ mod tests {
             code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("V003"))),
             "expected V003 error code, got {code:?}"
         );
-        assert!(diags[0].message.contains("Velocity"));
+        assert!(diags[0].message.contains("Speed"));
         // V003 has related information pointing to the pub declaration
         assert!(diags[0].related_information.is_some());
     }

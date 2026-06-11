@@ -1522,8 +1522,8 @@ mod tests {
     #[test]
     fn library_file_with_required_index_has_no_diagnostics() {
         let text = "\
-pub(bind) dim Velocity = Length / Time;
-pub(bind) dim Acceleration = Length / Time^2;
+pub(bind) dim Speed = Length / Time;
+pub(bind) dim CustomAcceleration = Length / Time^2;
 
 pub(bind) index Phase;
 pub(bind) index Step: Time;
@@ -1754,8 +1754,7 @@ node bad: Mass = mass + length;
             ("graphcal.toml", "[package]\nname = \"lib\"\n"),
             (
                 "src/lib/lib.gcl",
-                "pub dim Velocity = Length / Time;\n\
-                 pub dag scale {\n    \
+                "pub dag scale {\n    \
                      param factor: Dimensionless;\n    \
                      param v: Velocity;\n    \
                      pub node result: Velocity = @v * @factor;\n\
