@@ -3035,6 +3035,52 @@ fn eval_idempotent_under_format() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Global invariant: every parseable fixture is already canonically formatted.
+//
+// The per-fixture `format_check_*` tests above only cover a hand-maintained
+// list, so a newly added fixture in unformatted shape slips through. This test
+// auto-discovers the whole tree via `graphcal format`'s directory recursion,
+// so there is nothing to keep in sync.
+//
+// `format --check` emits `Would reformat: <path>` to stdout for any file whose
+// canonical form differs from disk, and `error: <path>: ...` to stderr for
+// files it cannot parse. The deliberately-malformed `invalid/` fixtures land
+// in the latter bucket (and are guarded by `error_snapshots`/`check` tests),
+// so we ignore parse errors and assert only that no parseable fixture is
+// unformatted.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn all_parseable_fixtures_are_formatted() {
+    let root = fixtures_root();
+    let output = graphcal_bin()
+        .args(["format", "--check", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal format");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("No .gcl files found"),
+        "format --check found no fixtures under {}",
+        root.display()
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("format stdout is utf-8");
+    let unformatted: Vec<&str> = stdout
+        .lines()
+        .filter_map(|l| l.strip_prefix("Would reformat: "))
+        .collect();
+
+    assert!(
+        unformatted.is_empty(),
+        "{} fixture(s) are not canonically formatted — run \
+         `graphcal format tests/fixtures`:\n{}",
+        unformatted.len(),
+        unformatted.join("\n")
+    );
+}
+
 #[test]
 fn format_check_fails_on_unparsable_file() {
     // Regression: `graphcal format --check` exited 0 when a file failed to
