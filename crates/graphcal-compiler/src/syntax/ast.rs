@@ -4,10 +4,12 @@ use crate::syntax::phase::{Desugared, Phase, Raw};
 
 mod common;
 mod decl;
+mod format_equivalent;
 mod value;
 
 pub use common::*;
 pub use decl::*;
+pub use format_equivalent::FormatEquivalent;
 pub use value::*;
 
 impl Phase for Raw {
