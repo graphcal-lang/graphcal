@@ -262,8 +262,9 @@ indexed operands. Element-wise tolerance asserts over `T[Index]`
 operands (reporting failing keys exactly like indexed boolean asserts,
 and composing with per-variant `#[expected_fail]`) are the single
 highest-leverage enabler for table-driven testing and are useful even
-without any other part of this proposal. Worth filing/implementing
-independently of #656.
+without any other part of this proposal. Filed as
+[#809](https://github.com/graphcal-lang/graphcal/issues/809),
+independent of #656.
 
 ## 7. The long tail (axes G, H)
 
@@ -346,26 +347,27 @@ graphcal test [PATHS]... [--filter <substr>] [--format text|json] [--seed <n>]
 
 ## 10. Open questions
 
-1. **Visibility for tests.** A `test` body already starts from an empty
-   scope (dag-style isolation), so the only question is what its
-   `import`/`include` may reach. Strict reading: normal visibility
-   rules, tests consume only `pub` surface — tests then double as
-   documentation of the public API, very much "explicit over implicit".
-   Pragmatic reading: a test may import private items from *its own
-   module* (Rust unit-test style), so internal helper dags can be
-   tested without `pub`-leaking them. Leaning strict-only for v1;
-   loosening later is backwards-compatible, tightening is not.
-2. **Does `graphcal test` also run production asserts?** i.e. should it
-   evaluate each entry point with default params so CI is one command?
-   Leaning yes (reported as a synthetic "evals" group), with
-   `--tests-only` to opt out — otherwise every CI needs both commands
-   and the failure modes interleave anyway.
-3. **Plots/figures inside `test` bodies:** reject (lint error) or allow
-   as a debugging aid surfaced via `graphcal test --plot browser` on
-   failure? Leaning reject for v1.
+Items 1, 2, 3, and 5 were decided on 2026-06-11; only item 4 (a
+mechanical parser check) remains for implementation time.
+
+1. **Visibility for tests** — DECIDED: strict-only for v1. A `test`
+   body already starts from an empty scope (dag-style isolation), and
+   its `import`/`include` follow normal visibility rules, so tests
+   consume only `pub` surface and double as documentation of the
+   public API ("explicit over implicit"). The pragmatic alternative —
+   letting a test import private items from *its own* module,
+   Rust-unit-test style, so helper dags can be tested without
+   `pub`-leaking — is rejected for now; loosening later is
+   backwards-compatible, tightening is not.
+2. **Does `graphcal test` also run production asserts?** — DECIDED:
+   yes. Each entry point is evaluated with default params and its
+   asserts reported as a synthetic "evals" group, so CI is one
+   command; `--tests-only` opts out.
+3. **Plots/figures inside `test` bodies** — DECIDED: reject (lint
+   error) for v1. Allowing them as a failure-debugging aid via
+   `graphcal test --plot browser` can be revisited later.
 4. **`test` as contextual vs reserved keyword** — contextual preferred
    (see §4); needs a parser-ambiguity check against `test` as a type
    alias-ish identifier followed by `{` in expression position.
-5. **Naming.** `test` vs `scenario` vs `case`. `test` matches every
-   mainstream toolchain and the CLI verb; `scenario` reads better for
-   the engineering audience. Bikeshed deliberately left unpainted.
+5. **Naming** — DECIDED: `test` (matches mainstream toolchains and the
+   CLI verb), not `scenario`/`case`.
