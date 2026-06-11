@@ -33,12 +33,30 @@ use crate::syntax::dimension::Rational;
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, IndexName, NameAtom, ScopedName, StructTypeName,
 };
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
 // ---------------------------------------------------------------------------
 // Entry types for IR declarations
 // ---------------------------------------------------------------------------
+
+/// One plot declaration's expressions lowered to HIR, in source order.
+#[derive(Debug, Clone, Default)]
+pub struct LoweredPlotBody {
+    /// Encoding channel expressions (`x: ...`, `y: ...`).
+    pub encodings: Vec<(crate::syntax::ast::EncodingChannel, crate::hir::Expr)>,
+    /// Mark property expressions (`stroke_width: ...`).
+    pub mark_properties: Vec<LoweredPlotField>,
+    /// Plot-level property expressions (`title: ...`).
+    pub properties: Vec<LoweredPlotField>,
+}
+
+/// A named plot/figure/layer field expression lowered to HIR.
+#[derive(Debug, Clone)]
+pub struct LoweredPlotField {
+    pub name: crate::syntax::names::PlotPropertyName,
+    pub value: crate::hir::Expr,
+}
 
 /// A const declaration with type annotation and lowered body.
 #[derive(Debug, Clone)]
@@ -113,9 +131,48 @@ pub struct UnfrozenAssertEntry {
     pub span: Span,
 }
 
-/// A plot declaration.
+/// A plot declaration with lowered body.
 #[derive(Debug, Clone)]
 pub struct PlotEntry {
+    pub name: ScopedName,
+    /// Mark shape rendered for this plot.
+    pub mark_type: crate::syntax::ast::MarkType,
+    /// Lowered body, or `None` when an expression failed to lower. Plots
+    /// are best-effort at evaluation time: an incomplete body is skipped by
+    /// the runtime instead of failing the compile.
+    pub body: Option<LoweredPlotBody>,
+    pub span: Span,
+    /// Whether this plot is `pub` (visible in standalone output).
+    pub is_pub: bool,
+}
+
+/// A figure declaration with lowered fields.
+#[derive(Debug, Clone)]
+pub struct FigureEntry {
+    pub name: ScopedName,
+    /// Plots composed by this figure, in source order.
+    pub plot_names: Vec<Spanned<ScopedName>>,
+    /// Lowered field expressions; fields that failed to lower are omitted
+    /// (best-effort, matching plots).
+    pub fields: Vec<LoweredPlotField>,
+    pub span: Span,
+}
+
+/// A layer declaration with lowered fields.
+#[derive(Debug, Clone)]
+pub struct LayerEntry {
+    pub name: ScopedName,
+    /// Plots composed by this layer, in source order.
+    pub plot_names: Vec<Spanned<ScopedName>>,
+    /// Lowered field expressions; fields that failed to lower are omitted
+    /// (best-effort, matching plots).
+    pub fields: Vec<LoweredPlotField>,
+    pub span: Span,
+}
+
+/// A plot declaration awaiting body lowering at [`UnfrozenIR::freeze`].
+#[derive(Debug, Clone)]
+pub struct UnfrozenPlotEntry {
     pub name: ScopedName,
     pub decl: PlotDecl,
     pub span: Span,
@@ -123,17 +180,17 @@ pub struct PlotEntry {
     pub is_pub: bool,
 }
 
-/// A figure declaration.
+/// A figure declaration awaiting field lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
-pub struct FigureEntry {
+pub struct UnfrozenFigureEntry {
     pub name: ScopedName,
     pub decl: FigureDecl,
     pub span: Span,
 }
 
-/// A layer declaration.
+/// A layer declaration awaiting field lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
-pub struct LayerEntry {
+pub struct UnfrozenLayerEntry {
     pub name: ScopedName,
     pub decl: LayerDecl,
     pub span: Span,
@@ -648,7 +705,7 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|entry| {
                 let is_pub = resolved.pub_names.contains(entry.name.as_str());
-                PlotEntry {
+                UnfrozenPlotEntry {
                     name: ScopedName::local(entry.name),
                     decl: entry.decl,
                     span: entry.span,
@@ -659,7 +716,7 @@ fn build_ir_from_resolved(
         figures: resolved
             .figures
             .into_iter()
-            .map(|entry| FigureEntry {
+            .map(|entry| UnfrozenFigureEntry {
                 name: ScopedName::local(entry.name),
                 decl: entry.decl,
                 span: entry.span,
@@ -668,7 +725,7 @@ fn build_ir_from_resolved(
         layers: resolved
             .layers
             .into_iter()
-            .map(|entry| LayerEntry {
+            .map(|entry| UnfrozenLayerEntry {
                 name: ScopedName::local(entry.name),
                 decl: entry.decl,
                 span: entry.span,
@@ -714,9 +771,9 @@ pub struct UnfrozenIR {
     params: Vec<UnfrozenParamEntry>,
     nodes: Vec<UnfrozenNodeEntry>,
     asserts: Vec<UnfrozenAssertEntry>,
-    plots: Vec<PlotEntry>,
-    figures: Vec<FigureEntry>,
-    layers: Vec<LayerEntry>,
+    plots: Vec<UnfrozenPlotEntry>,
+    figures: Vec<UnfrozenFigureEntry>,
+    layers: Vec<UnfrozenLayerEntry>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     assert_names: HashSet<ScopedName>,
@@ -851,15 +908,90 @@ impl UnfrozenIR {
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
 
+        // Plots and figure/layer fields are best-effort at evaluation time:
+        // an expression that fails to lower leaves the body incomplete (the
+        // runtime skips it) instead of failing the compile.
+        let lower_optional = |expr: &Expr| crate::hir::lower_expr(expr, expr_ctx).ok();
+        let plots = self
+            .plots
+            .iter()
+            .map(|entry| {
+                let mut body = LoweredPlotBody::default();
+                let mut complete = true;
+                for encoding in &entry.decl.encodings {
+                    match lower_optional(&encoding.value) {
+                        Some(lowered) => body.encodings.push((encoding.channel, lowered)),
+                        None => complete = false,
+                    }
+                }
+                for field in &entry.decl.mark.properties {
+                    match lower_optional(&field.value) {
+                        Some(lowered) => body.mark_properties.push(LoweredPlotField {
+                            name: field.name.value.clone(),
+                            value: lowered,
+                        }),
+                        None => complete = false,
+                    }
+                }
+                for field in &entry.decl.properties {
+                    match lower_optional(&field.value) {
+                        Some(lowered) => body.properties.push(LoweredPlotField {
+                            name: field.name.value.clone(),
+                            value: lowered,
+                        }),
+                        None => complete = false,
+                    }
+                }
+                PlotEntry {
+                    name: entry.name.clone(),
+                    mark_type: entry.decl.mark.mark_type,
+                    body: complete.then_some(body),
+                    span: entry.span,
+                    is_pub: entry.is_pub,
+                }
+            })
+            .collect();
+        let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField]| {
+            fields
+                .iter()
+                .filter_map(|field| {
+                    Some(LoweredPlotField {
+                        name: field.name.value.clone(),
+                        value: lower_optional(&field.value)?,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let figures = self
+            .figures
+            .iter()
+            .map(|entry| FigureEntry {
+                name: entry.name.clone(),
+                plot_names: entry.decl.plot_names.clone(),
+                fields: lower_fields(&entry.decl.fields),
+                span: entry.span,
+            })
+            .collect();
+        let layers = self
+            .layers
+            .iter()
+            .map(|entry| LayerEntry {
+                name: entry.name.clone(),
+                plot_names: entry.decl.plot_names.clone(),
+                fields: lower_fields(&entry.decl.fields),
+                span: entry.span,
+            })
+            .collect();
+
         Ok(IR {
             registry,
             consts,
             params,
             nodes,
             asserts,
-            plots: self.plots,
-            figures: self.figures,
-            layers: self.layers,
+            plots,
+            figures,
+            layers,
             source_order: self.source_order,
             assert_names: self.assert_names,
             assumes_map: self.assumes_map,
@@ -1143,7 +1275,7 @@ impl UnfrozenIR {
                 prefix_expr_refs(&mut prop.value, prefix, dep_names);
             }
             let prefixed = entry.name.with_prefix(prefix);
-            self.plots.push(PlotEntry {
+            self.plots.push(UnfrozenPlotEntry {
                 name: prefixed.clone(),
                 decl: entry.decl,
                 span: entry.span,
@@ -1166,7 +1298,7 @@ impl UnfrozenIR {
                 }
             }
             let prefixed = entry.name.with_prefix(prefix);
-            self.figures.push(FigureEntry {
+            self.figures.push(UnfrozenFigureEntry {
                 name: prefixed.clone(),
                 decl: entry.decl,
                 span: entry.span,
@@ -1188,7 +1320,7 @@ impl UnfrozenIR {
                 }
             }
             let prefixed = entry.name.with_prefix(prefix);
-            self.layers.push(LayerEntry {
+            self.layers.push(UnfrozenLayerEntry {
                 name: prefixed.clone(),
                 decl: entry.decl,
                 span: entry.span,

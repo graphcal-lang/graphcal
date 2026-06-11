@@ -15,6 +15,7 @@ use crate::hir;
 use crate::hir::diagnostics::{
     expr_lower_error_to_graphcal, hir_lower_error_to_graphcal, resolved_decl_key,
 };
+pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, ModuleAliasName,
@@ -656,24 +657,6 @@ pub struct ResolvedPlotExprs {
     pub figures: HashMap<ScopedName, Vec<LoweredPlotField>>,
     /// Lowered layer field expressions keyed by the layer's declaration name.
     pub layers: HashMap<ScopedName, Vec<LoweredPlotField>>,
-}
-
-/// One plot declaration's expressions lowered to HIR, in source order.
-#[derive(Debug, Clone, Default)]
-pub struct LoweredPlotBody {
-    /// Encoding channel expressions (`x: ...`, `y: ...`).
-    pub encodings: Vec<(crate::syntax::ast::EncodingChannel, hir::Expr)>,
-    /// Mark property expressions (`stroke_width: ...`).
-    pub mark_properties: Vec<LoweredPlotField>,
-    /// Plot-level property expressions (`title: ...`).
-    pub properties: Vec<LoweredPlotField>,
-}
-
-/// A named plot/figure/layer field expression lowered to HIR.
-#[derive(Debug, Clone)]
-pub struct LoweredPlotField {
-    pub name: crate::syntax::names::PlotPropertyName,
-    pub value: hir::Expr,
 }
 
 /// A resolved inline-DAG invocation target, bindings, and projected output.
@@ -1523,14 +1506,14 @@ fn lower_resolved_expressions(
     })
 }
 
-/// Lower plot/figure/layer expressions to HIR into the DAG's semantic body.
+/// Populate the semantic body's plot expression maps from the IR's lowered
+/// plot/figure/layer entries and run the reference-collection walks over
+/// them.
 ///
-/// Plots are best-effort at evaluation time, so a body whose expressions fail
-/// to lower is omitted (the runtime then skips that plot) instead of failing
-/// the compile; figure/layer fields are omitted individually. Successfully
-/// lowered expressions feed the collect walks so index/constructor defs cover
-/// occurrences that appear only in plots.
-fn lower_plot_exprs(
+/// Plot bodies were lowered (best-effort) at
+/// [`crate::ir::lower::UnfrozenIR::freeze`]; an entry without a complete
+/// body is omitted here, and the runtime then skips that plot.
+fn collect_plot_exprs(
     plots: &[crate::ir::lower::PlotEntry],
     figures: &[crate::ir::lower::FigureEntry],
     layers: &[crate::ir::lower::LayerEntry],
@@ -1538,96 +1521,57 @@ fn lower_plot_exprs(
     src: &NamedSource<Arc<String>>,
     semantic: &mut DagSemanticBody,
 ) -> Result<(), GraphcalError> {
-    let generic_scope = hir::GenericScope::new();
-    let prelude = hir::PreludeTypeScope::graphcal();
-    let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
-        .with_prelude(&prelude)
-        .with_decl_bindings(&semantic.decl_bindings);
-
     let mut plot_exprs = ResolvedPlotExprs::default();
 
-    let lower_one = |expr: &crate::desugar::desugared_ast::Expr,
-                     collection_refs: &mut ResolvedCollectionRefs,
-                     constructor_refs: &mut ResolvedConstructorRefs|
-     -> Result<Option<hir::Expr>, GraphcalError> {
-        let Ok(lowered) = hir::lower_expr(expr, expr_ctx) else {
-            return Ok(None);
-        };
-        collect_resolved_collection_refs_from_expr(&lowered, ctx, src, collection_refs)?;
-        collect_resolved_constructor_refs_from_expr(&lowered, ctx, src, constructor_refs)?;
-        Ok(Some(lowered))
+    let collect = |expr: &hir::Expr,
+                   collection_refs: &mut ResolvedCollectionRefs,
+                   constructor_refs: &mut ResolvedConstructorRefs|
+     -> Result<(), GraphcalError> {
+        collect_resolved_collection_refs_from_expr(expr, ctx, src, collection_refs)?;
+        collect_resolved_constructor_refs_from_expr(expr, ctx, src, constructor_refs)
     };
 
     for entry in plots {
-        let mut body = LoweredPlotBody::default();
-        let mut complete = true;
-        for encoding in &entry.decl.encodings {
-            match lower_one(
-                &encoding.value,
+        let Some(body) = &entry.body else {
+            continue;
+        };
+        for (_, expr) in &body.encodings {
+            collect(
+                expr,
                 &mut semantic.collection_refs,
                 &mut semantic.constructor_refs,
-            )? {
-                Some(lowered) => body.encodings.push((encoding.channel, lowered)),
-                None => complete = false,
-            }
+            )?;
         }
-        for field in &entry.decl.mark.properties {
-            match lower_one(
+        for field in body.mark_properties.iter().chain(&body.properties) {
+            collect(
                 &field.value,
                 &mut semantic.collection_refs,
                 &mut semantic.constructor_refs,
-            )? {
-                Some(lowered) => body.mark_properties.push(LoweredPlotField {
-                    name: field.name.value.clone(),
-                    value: lowered,
-                }),
-                None => complete = false,
-            }
+            )?;
         }
-        for field in &entry.decl.properties {
-            match lower_one(
-                &field.value,
-                &mut semantic.collection_refs,
-                &mut semantic.constructor_refs,
-            )? {
-                Some(lowered) => body.properties.push(LoweredPlotField {
-                    name: field.name.value.clone(),
-                    value: lowered,
-                }),
-                None => complete = false,
-            }
-        }
-        if complete {
-            plot_exprs.plots.insert(entry.name.clone(), body);
-        }
+        plot_exprs.plots.insert(entry.name.clone(), body.clone());
     }
 
-    for (name, fields, target) in figures
+    for (name, fields, is_figure) in figures
         .iter()
-        .map(|entry| (&entry.name, &entry.decl.fields, true))
+        .map(|entry| (&entry.name, &entry.fields, true))
         .chain(
             layers
                 .iter()
-                .map(|entry| (&entry.name, &entry.decl.fields, false)),
+                .map(|entry| (&entry.name, &entry.fields, false)),
         )
     {
-        let mut lowered_fields = Vec::new();
         for field in fields {
-            if let Some(lowered) = lower_one(
+            collect(
                 &field.value,
                 &mut semantic.collection_refs,
                 &mut semantic.constructor_refs,
-            )? {
-                lowered_fields.push(LoweredPlotField {
-                    name: field.name.value.clone(),
-                    value: lowered,
-                });
-            }
+            )?;
         }
-        if target {
-            plot_exprs.figures.insert(name.clone(), lowered_fields);
+        if is_figure {
+            plot_exprs.figures.insert(name.clone(), fields.clone());
         } else {
-            plot_exprs.layers.insert(name.clone(), lowered_fields);
+            plot_exprs.layers.insert(name.clone(), fields.clone());
         }
     }
 
@@ -3017,7 +2961,7 @@ impl DagTIRSeed {
 
         let mut semantic = self.semantic;
         semantic.decl_bindings = decl_bindings;
-        lower_plot_exprs(&plots, &figures, &layers, module_ctx, src, &mut semantic)?;
+        collect_plot_exprs(&plots, &figures, &layers, module_ctx, src, &mut semantic)?;
 
         Ok(DagTIR {
             dag_id: self.dag_id,
