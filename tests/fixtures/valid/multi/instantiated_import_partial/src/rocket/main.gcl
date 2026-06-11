@@ -1,6 +1,4 @@
 // main.gcl -- partial override: only override dry_mass, keep other defaults
-dim Velocity = Length / Time;
-
 include rocket.lib(dry_mass: 800.0 kg) as r;
 
 node result: Velocity = @r.delta_v;

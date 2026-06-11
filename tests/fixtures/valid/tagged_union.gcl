@@ -1,7 +1,4 @@
 // tagged_union.gcl -- Tagged union types and match expressions (issue #601 syntax)
-pub dim Velocity = Length / Time;
-pub dim Force = Mass * Length / Time^2;
-
 // Multi-variant tagged union.
 pub type ManeuverKind {
     Impulsive(delta_v: Velocity),

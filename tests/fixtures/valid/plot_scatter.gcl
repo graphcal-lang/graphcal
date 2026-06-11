@@ -4,8 +4,6 @@
 // the same index, useful for visualizing correlations.
 pub index Maneuver = { Departure, MidCourse, Insertion };
 
-pub dim Velocity = Length / Time;
-
 param delta_v: Velocity[Maneuver] = {
     Maneuver.Departure: 3.2 km/s,
     Maneuver.MidCourse: 0.15 km/s,

@@ -1,10 +1,9 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 609
 expression: formatted
 ---
 // generics.gcl -- Generic structs with phantom type parameters
-pub dim Velocity = Length / Time;
-
 // Marker types for reference frames — single unit constructor.
 pub type Eci {
     Eci,

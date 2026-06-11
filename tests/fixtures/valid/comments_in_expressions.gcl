@@ -1,7 +1,4 @@
 // comments_in_expressions.gcl -- Comments inside expressions should stay in place
-pub dim Velocity = Length / Time;
-pub dim Mass = Mass;
-
 pub index Maneuver = { Departure, Correction, Insertion };
 pub index Phase = { Launch, Cruise, Arrival };
 

@@ -1,5 +1,4 @@
 // hohmann.gcl -- Hohmann transfer orbit with structs and DAG
-pub dim Velocity = Length / Time;
 pub dim GravParam = Length^3 / Time^2;
 
 pub type TransferResult {

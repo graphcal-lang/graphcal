@@ -1,3 +1,3 @@
 // leaf.gcl -- the original owner of `g0`.
-pub dim Acceleration = Length / Time^2;
-pub const node g0: Acceleration = 9.80665 m/s^2;
+pub dim GravityAccel = Length / Time^2;
+pub const node g0: GravityAccel = 9.80665 m/s^2;

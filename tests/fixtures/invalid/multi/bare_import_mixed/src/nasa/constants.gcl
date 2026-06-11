@@ -1,2 +1,1 @@
-pub dim Acceleration = Length / Time^2;
 pub const node g0: Acceleration = 9.80665 m/s^2;

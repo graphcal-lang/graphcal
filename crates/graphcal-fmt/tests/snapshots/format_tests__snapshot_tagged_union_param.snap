@@ -1,12 +1,9 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 587
+assertion_line: 617
 expression: formatted
 ---
 // tagged_union_param.gcl -- Tagged union as a param (for JSON input testing)
-pub dim Velocity = Length / Time;
-pub dim Force = Mass * Length / Time^2;
-
 pub type ManeuverKind {
     Impulsive(delta_v: Velocity),
     LowThrust(thrust: Force, duration: Time),

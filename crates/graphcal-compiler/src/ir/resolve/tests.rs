@@ -81,6 +81,18 @@ fn resolve_duplicate_name() {
 }
 
 #[test]
+fn resolve_rejects_builtin_dimension_shadowing() {
+    let err = parse_and_resolve("dim Velocity = Length / Time;").unwrap_err();
+    assert!(matches!(err, GraphcalError::BuiltinNameShadowed { name, .. } if name == "Velocity"));
+}
+
+#[test]
+fn resolve_rejects_builtin_unit_shadowing() {
+    let err = parse_and_resolve("unit m: Length = 1.0 m;").unwrap_err();
+    assert!(matches!(err, GraphcalError::BuiltinNameShadowed { name, .. } if name == "m"));
+}
+
+#[test]
 fn resolve_unknown_graph_ref() {
     // Unknown `@` targets are rejected by HIR lowering during type
     // resolution — the IR collection pass no longer classifies references.
@@ -473,22 +485,20 @@ fn resolve_pub_bind_required_dim_ok() {
 fn resolve_private_in_public_dim() {
     // V003 is triggered by a pub node (not pub param, which is rejected).
     let source = r"
-        dim Velocity = Length / Time;
-        param kmh: Velocity = 36.0 km/h;
-        pub node speed: Velocity = @kmh;
+        dim Speed = Length / Time;
+        param kmh: Speed = 36.0 km/h;
+        pub node speed: Speed = @kmh;
     ";
     let err = parse_and_resolve(source).unwrap_err();
-    assert!(
-        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name == "Velocity")
-    );
+    assert!(matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name == "Speed"));
 }
 
 #[test]
 fn resolve_private_in_public_ok_when_dim_is_pub() {
     let source = r"
-        pub dim Velocity = Length / Time;
-        param kmh: Velocity = 36.0 km/h;
-        pub node speed: Velocity = @kmh;
+        pub dim Speed = Length / Time;
+        param kmh: Speed = 36.0 km/h;
+        pub node speed: Speed = @kmh;
     ";
     parse_and_resolve(source).unwrap();
 }
@@ -522,14 +532,14 @@ fn resolve_private_in_public_index_in_type() {
 #[test]
 fn resolve_pub_names_collected() {
     let source = r"
-        pub dim Velocity = Length / Time;
-        pub dim Acceleration = Length / Time^2;
-        pub const node g0: Acceleration = 9.80665 m/s^2;
-        node speed: Velocity = 10.0 m/s;
+        pub dim Speed = Length / Time;
+        pub dim GravityAccel = Length / Time^2;
+        pub const node g0: GravityAccel = 9.80665 m/s^2;
+        node speed: Speed = 10.0 m/s;
     ";
     let resolved = parse_and_resolve(source).unwrap();
-    assert!(resolved.pub_names.contains("Velocity"));
-    assert!(resolved.pub_names.contains("Acceleration"));
+    assert!(resolved.pub_names.contains("Speed"));
+    assert!(resolved.pub_names.contains("GravityAccel"));
     assert!(resolved.pub_names.contains("g0"));
     assert!(!resolved.pub_names.contains("speed"));
 }
@@ -632,20 +642,18 @@ fn resolve_param_with_private_dim_fires_v003() {
     // `param` is implicitly visible (A5 §4.0), so a private dim in a
     // param's signature is V003 (A9 case 1).
     let source = r"
-        dim Velocity = Length / Time;
-        param speed: Velocity = 10.0 m/s;
+        dim Speed = Length / Time;
+        param speed: Speed = 10.0 m/s;
     ";
     let err = parse_and_resolve(source).unwrap_err();
-    assert!(
-        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name == "Velocity")
-    );
+    assert!(matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name == "Speed"));
 }
 
 #[test]
 fn resolve_param_with_pub_dim_ok() {
     let source = r"
-        pub dim Velocity = Length / Time;
-        param speed: Velocity = 10.0 m/s;
+        pub dim Speed = Length / Time;
+        param speed: Speed = 10.0 m/s;
     ";
     parse_and_resolve(source).unwrap();
 }
@@ -702,13 +710,13 @@ fn resolve_pub_bind_index_with_private_dim_fires_v003() {
     // A required range index carries a dim constraint that participates
     // in A9 case 1.
     let source = r"
-        dim Frequency = Time^-1;
-        pub(bind) index Channel: Frequency;
+        dim Rate = Time^-1;
+        pub(bind) index Channel: Rate;
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
-            if pub_kind == "index" && ref_name == "Frequency")
+            if pub_kind == "index" && ref_name == "Rate")
     );
 }
 

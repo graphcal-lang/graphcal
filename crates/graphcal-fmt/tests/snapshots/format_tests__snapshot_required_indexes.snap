@@ -1,11 +1,9 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
+assertion_line: 679
 expression: formatted
 ---
 // Required index declarations — bindable via parameterized import.
-dim Velocity = Length / Time;
-dim Acceleration = Length / Time^2;
-
 // Required named index (no variants specified)
 pub(bind) index Phase;
 

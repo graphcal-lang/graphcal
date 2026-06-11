@@ -1,6 +1,3 @@
-pub dim Velocity = Length / Time;
-dim Acceleration = Length / Time^2;
-
 param dry_mass: Mass = 1200.0 kg;
 param fuel_mass: Mass = 2800.0 kg;
 param isp: Time = 320.0 s;

@@ -1,6 +1,6 @@
-// middle.gcl -- selective re-export of `Acceleration` (issue #452).
+// middle.gcl -- selective re-export of `GravityAccel` (issue #452).
 //
-// `pub Acceleration` inside the brace list marks the imported dim for
+// `pub GravityAccel` inside the brace list marks the imported dim for
 // re-export at middle.gcl's visible surface, so a downstream importer
 // can reach it transitively.
-import middle.leaf.{ pub Acceleration, g0 };
+import middle.leaf.{ pub GravityAccel, g0 };

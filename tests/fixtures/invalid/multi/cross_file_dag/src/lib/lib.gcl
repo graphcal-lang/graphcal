@@ -1,6 +1,4 @@
 // lib.gcl -- defines a reusable DAG
-pub dim Velocity = Length / Time;
-
 const node speed_of_sound: Velocity = 343.0 m/s;
 
 pub dag double_speed {

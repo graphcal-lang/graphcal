@@ -1,6 +1,4 @@
 // orbital.gcl -- Phase 1 milestone test
-dim Velocity = Length / Time;
-
 param alt: Length = 400.0 km;
 param period: Time = 90.0 min;
 const node r_earth: Length = 6371.0 km;

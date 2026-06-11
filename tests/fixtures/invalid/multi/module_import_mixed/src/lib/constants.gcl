@@ -1,4 +1,3 @@
 // constants.gcl -- shared constants
-pub dim Acceleration = Length / Time^2;
 pub const node g0: Acceleration = 9.80665 m/s^2;
 const node pi: Dimensionless = 3.14159265;

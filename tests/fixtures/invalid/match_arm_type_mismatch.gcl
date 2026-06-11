@@ -1,6 +1,4 @@
 // Error: match arms return different types
-pub dim Velocity = Length / Time;
-
 pub type ManeuverKind {
     Impulsive(delta_v: Velocity),
     Coasting,

@@ -1,7 +1,4 @@
 // mixed_index.gcl -- Mixed range + label indexes
-pub dim Velocity = Length / Time;
-pub dim Acceleration = Velocity / Time;
-
 pub index Maneuver = { Departure, Correction, Insertion };
 
 pub index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);

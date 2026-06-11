@@ -1,6 +1,4 @@
 // range_index.gcl -- Range index and unfold
-pub dim Frequency = Time^-1;
-
 // A range index with time dim
 pub index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
 

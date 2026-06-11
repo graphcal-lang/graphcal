@@ -13,6 +13,9 @@ use crate::desugar::desugared_ast::{
     TypeExpr, TypeExprKind,
 };
 use crate::registry::error::GraphcalError;
+use crate::registry::prelude::{
+    PRELUDE_BUILTIN_TYPE_NAMES, PRELUDE_DIMENSION_NAMES, PRELUDE_UNIT_NAMES,
+};
 use crate::registry::resolve_types::{
     ResolvedAssertEntry, ResolvedConstEntry, ResolvedFigureEntry, ResolvedLayerEntry,
     ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
@@ -51,6 +54,47 @@ fn register_value_namespace_name(
     }
     value_names.insert(scoped_name, span);
     Ok(())
+}
+
+fn check_builtin_name_shadowing(
+    file: &File,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    for decl in &file.declarations {
+        let shadowed = match &decl.kind {
+            DeclKind::BaseDimension(d) if is_builtin_type_name(d.name.value.as_str()) => {
+                Some(("dimension", d.name.value.to_string(), d.name.span))
+            }
+            DeclKind::Dimension(d) if is_builtin_type_name(d.name.value.as_str()) => {
+                Some(("dimension", d.name.value.to_string(), d.name.span))
+            }
+            DeclKind::Type(t) if is_builtin_type_name(t.name.value.as_str()) => {
+                Some(("type", t.name.value.to_string(), t.name.span))
+            }
+            DeclKind::Index(i) if is_builtin_type_name(i.name.value.as_str()) => {
+                Some(("index", i.name.value.to_string(), i.name.span))
+            }
+            DeclKind::Unit(u) if PRELUDE_UNIT_NAMES.contains(&u.name.value.as_str()) => {
+                Some(("unit", u.name.value.to_string(), u.name.span))
+            }
+            _ => None,
+        };
+
+        if let Some((kind, name, span)) = shadowed {
+            return Err(GraphcalError::BuiltinNameShadowed {
+                kind,
+                name,
+                src: src.clone(),
+                span: span.into(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn is_builtin_type_name(name: &str) -> bool {
+    PRELUDE_DIMENSION_NAMES.contains(&name) || PRELUDE_BUILTIN_TYPE_NAMES.contains(&name)
 }
 
 fn check_value_namespace_collisions(
@@ -166,6 +210,7 @@ fn collect_local_declarations(
     let mut source_order: Vec<(DeclName, DeclCategory)> = Vec::new();
     let mut assert_names: HashSet<DeclName> = HashSet::new();
 
+    check_builtin_name_shadowing(file, src)?;
     check_value_namespace_collisions(file, src, names)?;
 
     // Collect names of all visible declarations. Explicit `pub`/`pub(bind)`

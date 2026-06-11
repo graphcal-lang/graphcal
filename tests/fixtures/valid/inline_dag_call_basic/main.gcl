@@ -1,8 +1,6 @@
 // Inline DAG invocation in expression position: `@dag(args).out`.
 // This fixture exercises the parse-only step of the feature; TIR lowering
 // and evaluation are added in later steps.
-pub dim Velocity = Length / Time;
-
 dag scale {
     param factor: Dimensionless;
 

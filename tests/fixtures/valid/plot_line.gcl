@@ -2,8 +2,6 @@
 //
 // Demonstrates a line chart using a range index for time-series data,
 // showing exponential decay over discrete time steps.
-pub dim Frequency = Time^-1;
-
 pub index TimeStep = linspace(0.0 s, 2.0 s, step: 0.5 s);
 
 param decay_rate: Frequency = 1.0 Hz;

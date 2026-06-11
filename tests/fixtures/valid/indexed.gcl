@@ -1,7 +1,4 @@
 // indexed.gcl -- Phase 5 milestone: indexed values
-pub dim Velocity = Length / Time;
-pub dim Mass = Mass;
-
 pub index Maneuver = { Departure, Correction, Insertion };
 
 pub index Phase = { Launch, Cruise, Arrival };

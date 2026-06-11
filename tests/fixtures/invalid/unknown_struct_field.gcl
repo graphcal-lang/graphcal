@@ -1,6 +1,4 @@
 // error: unknown field access on struct
-pub dim Velocity = Length / Time;
-
 pub type Transfer {
     Transfer(dv1: Velocity, dv2: Velocity),
 }

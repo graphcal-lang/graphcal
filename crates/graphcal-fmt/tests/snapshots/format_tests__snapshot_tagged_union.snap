@@ -1,12 +1,9 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 586
+assertion_line: 616
 expression: formatted
 ---
 // tagged_union.gcl -- Tagged union types and match expressions (issue #601 syntax)
-pub dim Velocity = Length / Time;
-pub dim Force = Mass * Length / Time^2;
-
 // Multi-variant tagged union.
 pub type ManeuverKind {
     Impulsive(delta_v: Velocity),

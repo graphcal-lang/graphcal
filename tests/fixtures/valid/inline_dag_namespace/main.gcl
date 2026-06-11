@@ -1,6 +1,4 @@
 // Inline DAG with namespace (module) import.
-pub dim Velocity = Length / Time;
-
 dag scale {
     param factor: Dimensionless;
 

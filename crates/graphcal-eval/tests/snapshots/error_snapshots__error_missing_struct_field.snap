@@ -1,13 +1,14 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 144
 expression: rendered
 ---
 missing field(s) ["dv2"] in construction of `Transfer`
     Diagnostic severity: error
-Begin snippet for missing_struct_field.gcl starting at line 8, column 1
+Begin snippet for missing_struct_field.gcl starting at line 6, column 1
 
-snippet line 8: param v: Velocity = 100.0 m/s;
-snippet line 9: node bad: Transfer = Transfer(dv1: @v);
-    label at line 9, columns 22 to 38: incomplete construction
+snippet line 6: param v: Velocity = 100.0 m/s;
+snippet line 7: node bad: Transfer = Transfer(dv1: @v);
+    label at line 7, columns 22 to 38: incomplete construction
 diagnostic help: all fields are required when constructing a struct
 diagnostic code: graphcal::S004

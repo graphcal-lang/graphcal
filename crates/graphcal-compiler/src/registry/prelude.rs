@@ -32,6 +32,15 @@ pub const PRELUDE_DIMENSION_NAMES: &[&str] = &[
     "Volume",
 ];
 
+/// Non-dimension type names provided by the Graphcal prelude.
+pub const PRELUDE_BUILTIN_TYPE_NAMES: &[&str] = &["Dimensionless", "Bool", "Int", "Datetime"];
+
+/// Unit names provided by the Graphcal prelude.
+pub const PRELUDE_UNIT_NAMES: &[&str] = &[
+    "m", "s", "kg", "K", "A", "mol", "cd", "rad", "km", "cm", "mm", "hour", "min", "deg", "g", "N",
+    "kN", "J", "kJ", "W", "kW", "Pa", "kPa", "MPa", "Hz",
+];
+
 /// Canonical synthetic owner for Graphcal prelude symbols.
 #[must_use]
 pub fn prelude_dag_id() -> DagId {
