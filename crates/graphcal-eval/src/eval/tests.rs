@@ -168,6 +168,57 @@ fn eval_assertions_use_hir_body_after_syntax_mutation() {
 }
 
 #[test]
+fn assert_negative_runtime_tolerance_errors() {
+    // #815: a tolerance computed at runtime must be non-negative; a negative
+    // value is an assertion ERROR, not a silent constant-false FAIL.
+    let result = compile_and_eval(
+        "param x: Dimensionless = 1.0;\n\
+         param tol: Dimensionless = -0.1;\n\
+         assert exact = @x ~= 1.0 +/- @tol;",
+    )
+    .unwrap();
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Error { message } => {
+            assert!(
+                message.contains("tolerance must be non-negative"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected assertion error, got {other:?}"),
+    }
+}
+
+#[test]
+fn assert_negative_runtime_relative_tolerance_errors() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 1.0;\n\
+         param tol: Dimensionless = -5.0;\n\
+         assert exact = @x ~= 1.0 +/- @tol %;",
+    )
+    .unwrap();
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Error { message } => {
+            assert!(
+                message.contains("tolerance must be non-negative") && message.contains('%'),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected assertion error, got {other:?}"),
+    }
+}
+
+#[test]
+fn assert_zero_tolerance_exact_match_passes() {
+    // #815: zero tolerance stays legal — exact-match semantics.
+    let result = compile_and_eval(
+        "param x: Dimensionless = 1.0;\n\
+         assert exact = @x ~= 1.0 +/- 0.0;",
+    )
+    .unwrap();
+    assert_eq!(result.assertions[0].1, super::types::AssertResult::Pass);
+}
+
+#[test]
 fn eval_if_else_true_branch() {
     let result = compile_and_eval(
         "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x > 0.0 { @x } else { 0.0 };",

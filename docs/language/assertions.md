@@ -80,6 +80,10 @@ All three operands are arbitrary expressions. They can reference `@param`,
 
 - `actual` and `expected` must have the **same dimension**.
 - `tolerance` must also have the **same dimension** as `actual` and `expected`.
+- `tolerance` must be **non-negative**. A literal negative tolerance is a
+  compile error (`A015`); a tolerance computed at runtime that turns out
+  negative makes the assertion report an `ERROR`. Zero tolerance is legal and
+  means exact-match semantics.
 
 The check passes when `abs(actual - expected) <= tolerance`.
 
@@ -104,7 +108,8 @@ assert name = <actual> ~= <expected> +/- <tolerance> %;
 The dimension rules change for relative tolerance:
 
 - `actual` and `expected` must have the **same dimension**.
-- `tolerance` must be **dimensionless** (or an integer literal).
+- `tolerance` must be **dimensionless** (or an integer literal), and
+  **non-negative** (same rule as absolute tolerance).
 
 The check passes when `abs(actual - expected) <= abs(expected) * tolerance / 100`.
 

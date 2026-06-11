@@ -752,6 +752,21 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("negative tolerance in tolerance assertion")]
+    #[diagnostic(
+        code(graphcal::A015),
+        help(
+            "the tolerance in `~= expected +/- tolerance` must be non-negative; use `0` for exact-match semantics"
+        )
+    )]
+    NegativeTolerance {
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("tolerance is {found}")]
+        span: SourceSpan,
+    },
+
     #[error("import path `{path}` resolves outside the project root")]
     #[diagnostic(
         code(graphcal::M008),
@@ -1407,6 +1422,7 @@ impl GraphcalError {
             | Self::ExpectedFailDuplicateKey { src, .. }
             | Self::ExpectedFailKeyShapeMismatch { src, .. }
             | Self::ExpectedFailKeyIndexMismatch { src, .. }
+            | Self::NegativeTolerance { src, .. }
             | Self::ImportOutsideRoot { src, .. }
             | Self::RequiredParamNotProvided { src, .. }
             | Self::UnknownParamBinding { src, .. }

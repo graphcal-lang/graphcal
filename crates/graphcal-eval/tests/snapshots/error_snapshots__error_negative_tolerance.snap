@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 311
+expression: rendered
+---
+negative tolerance in tolerance assertion
+    Diagnostic severity: error
+Begin snippet for negative_tolerance.gcl starting at line 4, column 1
+
+snippet line 4: 
+snippet line 5: assert exact = @x ~= 1.0 +/- -0.1;
+    label at line 5, columns 30 to 33: tolerance is -0.1
+diagnostic help: the tolerance in `~= expected +/- tolerance` must be non-negative; use `0` for exact-match semantics
+diagnostic code: graphcal::A015

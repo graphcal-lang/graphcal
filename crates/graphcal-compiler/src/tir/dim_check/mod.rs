@@ -476,8 +476,44 @@ fn check_hir_assert_body(
                     span: tolerance.span.into(),
                 });
             }
+
+            // A negative tolerance makes the assertion unsatisfiable (even an
+            // exact match fails `abs(delta) <= tol`), so a statically-known
+            // negative value is a compile error (#815). Tolerances computed
+            // at runtime are validated by the evaluator instead.
+            if let Some(value) = statically_known_tolerance(tolerance)
+                && value < 0.0
+            {
+                return Err(GraphcalError::NegativeTolerance {
+                    found: crate::registry::format::format_number(value),
+                    src: src.clone(),
+                    span: tolerance.span.into(),
+                });
+            }
             Ok(AssertionIndexShape::scalar())
         }
+    }
+}
+
+/// Structurally fold a tolerance expression to its written literal value
+/// when the sign is statically known: a numeric literal (`0.1`, `5`,
+/// `0.1 m` — unit scales are always positive, so the written value carries
+/// the sign), optionally under unary negation. Returns `None` for anything
+/// computed at runtime; those are sign-checked by the evaluator instead.
+fn statically_known_tolerance(expr: &crate::hir::Expr) -> Option<f64> {
+    match &expr.kind {
+        crate::hir::ExprKind::Number(n) => Some(*n),
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "tolerance literals are small integers"
+        )]
+        crate::hir::ExprKind::Integer(i) => Some(*i as f64),
+        crate::hir::ExprKind::UnitLiteral { value, .. } => Some(*value),
+        crate::hir::ExprKind::UnaryOp {
+            op: crate::syntax::ast::UnaryOp::Neg,
+            operand,
+        } => statically_known_tolerance(operand).map(|v| -v),
+        _ => None,
     }
 }
 

@@ -875,73 +875,102 @@ pub(super) fn evaluate_assert_body(
             expected,
             tolerance,
             is_relative,
-        } => {
-            let actual_val = match eval_hir_expr(actual, values, local_values, ctx) {
-                Ok(RuntimeValue::Scalar(v)) => v,
-                Ok(other) => {
-                    return AssertResult::Error {
-                        message: format!("expected scalar actual, got {other:?}"),
-                    };
-                }
-                Err(e) => {
-                    return AssertResult::Error {
-                        message: format!("{e}"),
-                    };
-                }
-            };
-            let expected_val = match eval_hir_expr(expected, values, local_values, ctx) {
-                Ok(RuntimeValue::Scalar(v)) => v,
-                Ok(other) => {
-                    return AssertResult::Error {
-                        message: format!("expected scalar expected, got {other:?}"),
-                    };
-                }
-                Err(e) => {
-                    return AssertResult::Error {
-                        message: format!("{e}"),
-                    };
-                }
-            };
-            let tolerance_val = match eval_hir_expr(tolerance, values, local_values, ctx) {
-                Ok(RuntimeValue::Scalar(v)) => v,
-                #[expect(
-                    clippy::cast_precision_loss,
-                    reason = "tolerance values are small integers"
-                )]
-                Ok(RuntimeValue::Int(i)) => i as f64,
-                Ok(other) => {
-                    return AssertResult::Error {
-                        message: format!("expected scalar tolerance, got {other:?}"),
-                    };
-                }
-                Err(e) => {
-                    return AssertResult::Error {
-                        message: format!("{e}"),
-                    };
-                }
-            };
+        } => evaluate_tolerance_assert(
+            actual,
+            expected,
+            tolerance,
+            *is_relative,
+            values,
+            local_values,
+            ctx,
+        ),
+    }
+}
 
-            let delta = (actual_val - expected_val).abs();
-            let limit = if *is_relative {
-                expected_val.abs() * tolerance_val / 100.0
-            } else {
-                tolerance_val
+/// Evaluate a tolerance assertion body (`actual ~= expected +/- tolerance`).
+fn evaluate_tolerance_assert(
+    actual: &graphcal_compiler::hir::Expr,
+    expected: &graphcal_compiler::hir::Expr,
+    tolerance: &graphcal_compiler::hir::Expr,
+    is_relative: bool,
+    values: &RuntimeValueMap,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> AssertResult {
+    let actual_val = match eval_hir_expr(actual, values, local_values, ctx) {
+        Ok(RuntimeValue::Scalar(v)) => v,
+        Ok(other) => {
+            return AssertResult::Error {
+                message: format!("expected scalar actual, got {other:?}"),
             };
+        }
+        Err(e) => {
+            return AssertResult::Error {
+                message: format!("{e}"),
+            };
+        }
+    };
+    let expected_val = match eval_hir_expr(expected, values, local_values, ctx) {
+        Ok(RuntimeValue::Scalar(v)) => v,
+        Ok(other) => {
+            return AssertResult::Error {
+                message: format!("expected scalar expected, got {other:?}"),
+            };
+        }
+        Err(e) => {
+            return AssertResult::Error {
+                message: format!("{e}"),
+            };
+        }
+    };
+    let tolerance_val = match eval_hir_expr(tolerance, values, local_values, ctx) {
+        Ok(RuntimeValue::Scalar(v)) => v,
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "tolerance values are small integers"
+        )]
+        Ok(RuntimeValue::Int(i)) => i as f64,
+        Ok(other) => {
+            return AssertResult::Error {
+                message: format!("expected scalar tolerance, got {other:?}"),
+            };
+        }
+        Err(e) => {
+            return AssertResult::Error {
+                message: format!("{e}"),
+            };
+        }
+    };
 
-            if delta <= limit {
-                AssertResult::Pass
-            } else {
-                let tol_display = if *is_relative {
-                    format!("{tolerance_val}%")
-                } else {
-                    format!("{tolerance_val}")
-                };
-                AssertResult::Fail {
-                    message: format!(
-                        "actual {actual_val}, expected {expected_val} +/- {tol_display}, off by {delta}"
-                    ),
-                }
-            }
+    let tol_display = if is_relative {
+        format!("{tolerance_val}%")
+    } else {
+        format!("{tolerance_val}")
+    };
+
+    // A negative tolerance makes the assertion unsatisfiable (even an
+    // exact match fails). Statically-known negatives are rejected at
+    // check time (#815); this guards tolerances computed at runtime.
+    if tolerance_val < 0.0 {
+        return AssertResult::Error {
+            message: format!("tolerance must be non-negative, got {tol_display}"),
+        };
+    }
+
+    let delta = (actual_val - expected_val).abs();
+    let limit = if is_relative {
+        expected_val.abs() * tolerance_val / 100.0
+    } else {
+        tolerance_val
+    };
+
+    if delta <= limit {
+        AssertResult::Pass
+    } else {
+        AssertResult::Fail {
+            message: format!(
+                "actual {actual_val}, expected {expected_val} +/- {tol_display}, off by {delta}"
+            ),
         }
     }
 }
