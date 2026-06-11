@@ -23,6 +23,8 @@ use graphcal_eval::eval::{
 };
 use graphcal_eval::loader::build_rooted_filesystem;
 
+use graphcal::format::{FormatStatus, collect_gcl_files, format_status};
+
 use crate::display::{OutputBlock, build_output_blocks, format_indexed_table, max_flat_name_len};
 use crate::overrides::{OverrideParseError, parse_overrides};
 
@@ -281,18 +283,33 @@ fn handle_eval(
 /// Otherwise, expands directories and passes through individual files.
 fn resolve_target_files(paths: &[PathBuf]) -> Vec<PathBuf> {
     if paths.is_empty() {
-        collect_gcl_files(&PathBuf::from("."))
+        collect_with_warnings(&PathBuf::from("."))
     } else {
         let mut files = Vec::new();
         for path in paths {
             if path.is_dir() {
-                files.extend(collect_gcl_files(path));
+                files.extend(collect_with_warnings(path));
             } else {
                 files.push(path.clone());
             }
         }
         files
     }
+}
+
+/// Thin shell over `format::collect_gcl_files`: surfaces traversal warnings on
+/// stderr (the library returns them as data) so users know when `format` only
+/// saw part of the tree, then yields just the file list.
+fn collect_with_warnings(dir: &Path) -> Vec<PathBuf> {
+    let (files, warnings) = collect_gcl_files(dir);
+    for err in warnings {
+        eprintln!(
+            "warning: could not traverse {}: {err}",
+            err.path()
+                .map_or_else(|| dir.display().to_string(), |p| p.display().to_string())
+        );
+    }
+    files
 }
 
 fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
@@ -346,31 +363,27 @@ fn run_format(paths: &[PathBuf], check: bool) {
             }
         };
 
-        let formatted = match graphcal_fmt::format_source(&source) {
-            Ok(f) => f,
-            Err(e) => {
+        match format_status(&source) {
+            FormatStatus::Unchanged => {}
+            FormatStatus::Error(e) => {
                 // A file that cannot be formatted (usually a parse error) is
                 // a failure, not a skip: `format --check` in CI must not
                 // pass on syntactically broken files.
                 eprintln!("error: {}: {e}", file.display());
                 error_count += 1;
-                continue;
             }
-        };
-
-        if source == formatted {
-            continue;
-        }
-
-        if check {
-            println!("Would reformat: {}", file.display());
-            unformatted_count += 1;
-        } else {
-            std::fs::write(file, &formatted).unwrap_or_else(|e| {
-                eprintln!("error: cannot write {}: {e}", file.display());
-                process::exit(1);
-            });
-            println!("Formatted: {}", file.display());
+            FormatStatus::Changed(formatted) => {
+                if check {
+                    println!("Would reformat: {}", file.display());
+                    unformatted_count += 1;
+                } else {
+                    std::fs::write(file, &formatted).unwrap_or_else(|e| {
+                        eprintln!("error: cannot write {}: {e}", file.display());
+                        process::exit(1);
+                    });
+                    println!("Formatted: {}", file.display());
+                }
+            }
         }
     }
 
@@ -382,58 +395,6 @@ fn run_format(paths: &[PathBuf], check: bool) {
         eprintln!("{error_count} file(s) could not be read or formatted");
         process::exit(1);
     }
-}
-
-/// Directories to skip during recursive `.gcl` file collection.
-const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".build", "__pycache__"];
-
-/// Recursively collect all `.gcl` files under a directory, sorted for deterministic output.
-///
-/// Uses `walkdir` for safe traversal: only regular files are collected,
-/// symlinks are not followed, and common generated directories (`.git`,
-/// `target`, `node_modules`, etc.) are skipped.
-/// Traversal errors (permission denied, transient I/O) are logged to stderr
-/// rather than silently dropped so users know when `format` only saw part of
-/// the tree.
-fn collect_gcl_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = Vec::new();
-    for entry in walkdir::WalkDir::new(dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            // Skip well-known generated/vendored directories.
-            // Non-UTF-8 directory names are not skipped — they won't match
-            // any SKIP_DIRS entry anyway, so we intentionally let them
-            // through rather than treating them as if they were the empty
-            // string.
-            if e.file_type().is_dir() {
-                return !e
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| SKIP_DIRS.contains(&name));
-            }
-            true
-        })
-    {
-        match entry {
-            Ok(e)
-                if e.file_type().is_file()
-                    && e.path().extension().is_some_and(|ext| ext == "gcl") =>
-            {
-                files.push(e.into_path());
-            }
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!(
-                    "warning: could not traverse {}: {err}",
-                    err.path()
-                        .map_or_else(|| dir.display().to_string(), |p| p.display().to_string())
-                );
-            }
-        }
-    }
-    files.sort();
-    files
 }
 
 fn print_text(result: &EvalResult) {

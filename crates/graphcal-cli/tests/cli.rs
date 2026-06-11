@@ -3040,37 +3040,35 @@ fn eval_idempotent_under_format() {
 //
 // The per-fixture `format_check_*` tests above only cover a hand-maintained
 // list, so a newly added fixture in unformatted shape slips through. This test
-// auto-discovers the whole tree via `graphcal format`'s directory recursion,
-// so there is nothing to keep in sync.
+// auto-discovers the whole tree using the same `format::collect_gcl_files`
+// walk and `format::format_status` decision the CLI uses, so there is nothing
+// to keep in sync — and no process to spawn.
 //
-// `format --check` emits `Would reformat: <path>` to stdout for any file whose
-// canonical form differs from disk, and `error: <path>: ...` to stderr for
-// files it cannot parse. The deliberately-malformed `invalid/` fixtures land
-// in the latter bucket (and are guarded by `error_snapshots`/`check` tests),
-// so we ignore parse errors and assert only that no parseable fixture is
-// unformatted.
+// Deliberately-malformed `invalid/` fixtures surface as `FormatStatus::Error`
+// (and are guarded by `error_snapshots`/`check` tests), so only a `Changed`
+// outcome — a parseable file that is not in canonical form — is a violation.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn all_parseable_fixtures_are_formatted() {
-    let root = fixtures_root();
-    let output = graphcal_bin()
-        .args(["format", "--check", root.to_str().unwrap()])
-        .output()
-        .expect("failed to run graphcal format");
+    use graphcal::format::{FormatStatus, collect_gcl_files, format_status};
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let root = fixtures_root();
+    let (files, _warnings) = collect_gcl_files(&root);
     assert!(
-        !stderr.contains("No .gcl files found"),
-        "format --check found no fixtures under {}",
-        root.display()
+        files.len() >= 100,
+        "expected to discover the fixture tree, found only {} files",
+        files.len()
     );
 
-    let stdout = String::from_utf8(output.stdout).expect("format stdout is utf-8");
-    let unformatted: Vec<&str> = stdout
-        .lines()
-        .filter_map(|l| l.strip_prefix("Would reformat: "))
-        .collect();
+    let mut unformatted: Vec<String> = Vec::new();
+    for file in &files {
+        let source = std::fs::read_to_string(file).expect("read fixture");
+        if let FormatStatus::Changed(_) = format_status(&source) {
+            let rel = file.strip_prefix(&root).unwrap_or(file);
+            unformatted.push(rel.display().to_string());
+        }
+    }
 
     assert!(
         unformatted.is_empty(),
