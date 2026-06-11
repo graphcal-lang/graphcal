@@ -310,12 +310,11 @@ graphcal check my_project/
 ## `graphcal graph`
 
 !!! warning "Experimental"
-
-    `graphcal graph` is experimental. The DOT output (node naming, labels,
-    styling) and the CLI surface (flags, formats) may change in any release
-    while the [DAG visualizer](https://github.com/graphcal-lang/graphcal/issues/512)
-    design evolves. The command prints a warning on stderr to that effect;
-    stdout carries only the exported graph.
+`graphcal graph` is experimental. The DOT output (node naming, labels,
+styling) and the CLI surface (flags, formats) may change in any release
+while the [DAG visualizer](https://github.com/graphcal-lang/graphcal/issues/512)
+design evolves. The command prints a warning on stderr to that effect;
+stdout carries only the exported graph.
 
 Export the dependency graph of a `.gcl` file as text for external rendering
 tools. The graph is a one-way projection of the compiled program: `param`,
