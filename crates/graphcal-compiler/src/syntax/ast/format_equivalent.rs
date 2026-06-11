@@ -35,16 +35,16 @@
 //! meaning-changing edit.
 
 use crate::syntax::ast::{
-    AssertBody, AssertDecl, Attribute, AttributeArg, BaseDimDecl, ConstNodeDecl, DagDecl,
-    Declaration, DeclKind, DimDecl, DimExpr, DimExprItem, DimTerm, DomainBound, Encoding, Expr,
-    ExprKind, FieldDecl, FieldInit, FigureDecl, File, ForBinding, ForBindingIndex, GenericArg,
-    GenericParam, Ident, IdentPath, ImportDecl, ImportItem, ImportKind, IncludeDecl, IndexArg,
-    IndexDecl, IndexDeclKind, IndexExpr, LayerDecl, MapEntry, MapEntryKey, MarkSpec, MatchArm,
-    MatchPattern, ModulePath, MultiDataRow, MultiDecl, MultiDeclSharedAxes, MultiDeclSlice,
-    MultiDeclSlot, MultiHeaderCell, MultiSlotAxis, MultiSlotColumnSpan, NatExpr, NodeDecl,
-    ParamBinding, ParamDecl, PatternBinding, PlotDecl, PlotField, RawDeclSugar, RawExprSugar,
-    TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember, UnitDecl, UnitDef,
-    UnitExpr, UnitExprItem, UnresolvedRef,
+    AssertBody, AssertDecl, Attribute, AttributeArg, BaseDimDecl, ConstNodeDecl, DagDecl, DeclKind,
+    Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, DomainBound, Encoding, Expr, ExprKind,
+    FieldDecl, FieldInit, FigureDecl, File, ForBinding, ForBindingIndex, GenericArg, GenericParam,
+    Ident, IdentPath, ImportDecl, ImportItem, ImportKind, IncludeDecl, IndexArg, IndexDecl,
+    IndexDeclKind, IndexExpr, LayerDecl, MapEntry, MapEntryKey, MarkSpec, MatchArm, MatchPattern,
+    ModulePath, MultiDataRow, MultiDecl, MultiDeclSharedAxes, MultiDeclSlice, MultiDeclSlot,
+    MultiHeaderCell, MultiSlotAxis, MultiSlotColumnSpan, NatExpr, NodeDecl, ParamBinding,
+    ParamDecl, PatternBinding, PlotDecl, PlotField, RawDeclSugar, RawExprSugar, TableIndexSpec,
+    TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember, UnitDecl, UnitDef, UnitExpr,
+    UnitExprItem, UnresolvedRef,
 };
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
@@ -203,7 +203,11 @@ impl FormatEquivalent for Ident {
 
 impl FormatEquivalent for Attribute {
     fn format_equivalent(&self, other: &Self) -> bool {
-        let Self { name, args, span: _ } = self;
+        let Self {
+            name,
+            args,
+            span: _,
+        } = self;
         let Self {
             name: other_name,
             args: other_args,
@@ -338,7 +342,9 @@ impl FormatEquivalent for DeclKind {
                 a.format_equivalent(b)
             }
             Self::ConstNode(a) => {
-                let Self::ConstNode(b) = other else { return false };
+                let Self::ConstNode(b) = other else {
+                    return false;
+                };
                 a.format_equivalent(b)
             }
             Self::BaseDimension(a) => {
@@ -348,7 +354,9 @@ impl FormatEquivalent for DeclKind {
                 a.format_equivalent(b)
             }
             Self::Dimension(a) => {
-                let Self::Dimension(b) = other else { return false };
+                let Self::Dimension(b) = other else {
+                    return false;
+                };
                 a.format_equivalent(b)
             }
             Self::Unit(a) => {
@@ -368,7 +376,9 @@ impl FormatEquivalent for DeclKind {
                 a.format_equivalent(b)
             }
             Self::Include(a) => {
-                let Self::Include(b) = other else { return false };
+                let Self::Include(b) = other else {
+                    return false;
+                };
                 a.format_equivalent(b)
             }
             Self::Dag(a) => {
@@ -1779,11 +1789,7 @@ impl FormatEquivalent for ExprKind {
                 };
                 scrutinee.format_equivalent(other_scrutinee) && arms.format_equivalent(other_arms)
             }
-            Self::InlineDagRef {
-                path,
-                args,
-                output,
-            } => {
+            Self::InlineDagRef { path, args, output } => {
                 let Self::InlineDagRef {
                     path: other_path,
                     args: other_args,
