@@ -94,7 +94,7 @@ enum Commands {
         #[arg(long)]
         root: Option<PathBuf>,
     },
-    /// Export the dependency graph of a .gcl file
+    /// Export the dependency graph of a .gcl file (experimental)
     Graph {
         /// Path to the .gcl file
         file: PathBuf,
@@ -364,6 +364,10 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
 /// print it in the requested export format. The projection and rendering are
 /// pure (`graphcal_eval::graph_ir`); this shell only does I/O.
 fn run_graph(file: &Path, format: &GraphFormat, project_root: Option<&Path>) {
+    // On stderr so stdout stays a clean pipe into `dot`.
+    eprintln!(
+        "warning: `graphcal graph` is experimental; its output and CLI surface may change in any release"
+    );
     let fs = build_rooted_filesystem(file, project_root);
     match compile_to_tir_project(file, project_root, &fs) {
         Ok((tir, _project)) => {

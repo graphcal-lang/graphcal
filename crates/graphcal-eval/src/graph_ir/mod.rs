@@ -8,6 +8,10 @@
 //! display-only fields (the resolved-type label) are pre-rendered here —
 //! renderers like [`dot`] are pure functions from this model to a string
 //! and never reach back into the TIR.
+//!
+//! **Experimental:** this module backs the experimental `graphcal graph`
+//! subcommand. The model and renderer output may change in any release
+//! while the visualizer design (#512) evolves.
 
 pub mod dot;
 

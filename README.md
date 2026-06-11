@@ -66,7 +66,7 @@ graphcal eval rocket.gcl --set 'isp=450.0 s'
 graphcal eval analysis.gcl --input params.json --format json
 graphcal eval analysis.gcl --plot browser
 
-# Export the dependency graph as Graphviz DOT
+# Export the dependency graph as Graphviz DOT (experimental)
 graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 ```
 
