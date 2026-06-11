@@ -23,7 +23,7 @@ fn test_index_ref(name: &str) -> IndexTypeRef {
 fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalError> {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-    let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
+    let file = desugared;
     let src = make_src(source);
     let ir = crate::ir::lower::lower(&file, &src)?;
     let parent_dag_id = test_dag_id();
@@ -36,7 +36,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
             span: Span::new(0, 0).into(),
         })?;
     for decl in &file.declarations {
-        if let crate::desugar::resolved_ast::DeclKind::Dag(dag) = &decl.kind {
+        if let crate::desugar::desugared_ast::DeclKind::Dag(dag) = &decl.kind {
             resolver
                 .add_module(parent_dag_id.child(dag.name.value.as_str()), &dag.body)
                 .map_err(|err| GraphcalError::InternalError {
@@ -73,7 +73,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
 fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<String>>) {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-    let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
+    let file = desugared;
     let src = make_src(source);
     let dag_id =
         crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
@@ -98,7 +98,7 @@ fn compile_inline_dag_bodies_test(
     tir: &mut crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
-    parent_declarations: &[crate::desugar::resolved_ast::Declaration],
+    parent_declarations: &[crate::desugar::desugared_ast::Declaration],
 ) -> Result<(), GraphcalError> {
     let dag_bodies = tir
         .registry
@@ -127,7 +127,7 @@ fn compile_inline_dag_bodies_test(
     for (name, body) in &dag_bodies {
         let owner = parent_dag_id.child(name.as_str());
         for decl in body {
-            if let crate::desugar::resolved_ast::DeclKind::Import(import) = &decl.kind {
+            if let crate::desugar::desugared_ast::DeclKind::Import(import) = &decl.kind {
                 resolver
                     .register_import(&owner, &import.path, &import.kind, parent_dag_id)
                     .map_err(|err| GraphcalError::InternalError {
@@ -155,6 +155,7 @@ fn compile_inline_dag_bodies_test(
             name.as_str(),
             &body,
             &tir.registry,
+            &resolver,
             &crate::ir::resolve::ImportedValueNames::default(),
             HashMap::new(),
             HashMap::new(),
@@ -207,7 +208,7 @@ fn hir_dim_check_uses_lowered_builtin_function_not_mutated_syntax_callee() {
     let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
     assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
-        crate::desugar::resolved_ast::ExprKind::StringLiteral("not the HIR".to_string());
+        crate::hir::ExprKind::StringLiteral("not the semantic HIR".to_string());
 
     check_dimensions_tir(&tir, &src).unwrap();
 }
@@ -218,7 +219,7 @@ fn hir_dim_check_uses_lexical_local_ids_not_mutated_syntax_names() {
         module_aware_tir("index Phase = { Burn };\nnode y: Phase[Phase] = for p: Phase { p };");
     assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
-        crate::desugar::resolved_ast::ExprKind::StringLiteral("not the HIR".to_string());
+        crate::hir::ExprKind::StringLiteral("not the semantic HIR".to_string());
 
     check_dimensions_tir(&tir, &src).unwrap();
 }
@@ -228,11 +229,10 @@ fn hir_dim_check_uses_lowered_assert_body_not_mutated_syntax_body() {
     let (mut tir, src) = module_aware_tir("assert ok = sqrt(4.0) == 2.0;");
     assert!(!tir.root().semantic.expressions.asserts.is_empty());
     let span = tir.root().asserts[0].span;
-    tir.root_mut().asserts[0].body =
-        crate::desugar::resolved_ast::AssertBody::Expr(crate::desugar::resolved_ast::Expr::new(
-            crate::desugar::resolved_ast::ExprKind::StringLiteral("not the HIR".to_string()),
-            span,
-        ));
+    tir.root_mut().asserts[0].body = crate::hir::AssertBody::Expr(crate::hir::Expr::new(
+        crate::hir::ExprKind::StringLiteral("not the semantic HIR".to_string()),
+        span,
+    ));
 
     check_dimensions_tir(&tir, &src).unwrap();
 }

@@ -106,7 +106,7 @@ Track progress and discussion on [GitHub Issues](https://github.com/graphcal-lan
 ```
 graphcal/
   crates/
-    graphcal-compiler/  # lexer (logos) + parser + AST + IR + TIR + registry
+    graphcal-compiler/  # lexer (logos) + parser + AST + HIR + IR + TIR + registry
     graphcal-eval/      # const eval, runtime eval, project loader, exec plan
     graphcal-fmt/       # code formatter
     graphcal-io/        # filesystem abstraction (real, in-memory, overlay)

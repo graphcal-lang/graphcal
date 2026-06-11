@@ -21,10 +21,10 @@ pub(in crate::eval::project) fn lower_and_finalize(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
-    file_ast: &graphcal_compiler::desugar::resolved_ast::File,
+    file_ast: &graphcal_compiler::desugar::desugared_ast::File,
     ctx: ImportContext<'_>,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr>,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     override_targets: &HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>,
 ) -> Result<CompiledFile, CompileError> {
     // Snapshot before lower_to_builder_with_imported_values consumes
@@ -74,27 +74,27 @@ pub(in crate::eval::project) fn lower_and_finalize(
         &mut unfrozen,
     )?;
 
-    let ir = unfrozen.freeze(builder.build());
-
-    // Apply overrides routed to this file (using original param names).
-    let mut ir = ir;
-    let file_overrides: HashMap<DeclName, graphcal_compiler::desugar::resolved_ast::Expr> =
+    // Apply overrides routed to this file (using original param names)
+    // before the freeze boundary lowers every body to HIR.
+    let file_overrides: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr> =
         override_targets
             .iter()
             .filter(|(_, (target_dag_id, _))| target_dag_id == file_dag_id)
             .map(|(name, (_, orig_name))| (orig_name.clone(), overrides[name].clone()))
             .collect();
     if !file_overrides.is_empty() {
-        apply_overrides(&mut ir, &file_overrides)?;
+        apply_overrides(&mut unfrozen, &file_overrides)?;
     }
+
+    let module_resolver = project
+        .build_module_resolver()
+        .map_err(|err| module_resolve_compile_error(err, file_src))?;
+    let ir = unfrozen.freeze(builder.build(), file_dag_id, &module_resolver, file_src)?;
 
     // Type-resolve top-level decls; then compile each inline dag body
     // explicitly (loader supplies the per-file self-import set and the
     // canonical parent `DagId`). Cross-file dep dag TIRs are merged in
     // afterward by `merge_dep_dag_tirs`.
-    let module_resolver = project
-        .build_module_resolver()
-        .map_err(|err| module_resolve_compile_error(err, file_src))?;
     let mut module_types = graphcal_compiler::tir::typed::ModuleTypeRegistry::default();
     module_types
         .insert_graphcal_prelude()
@@ -229,6 +229,7 @@ fn compile_inline_dag_modules<'a>(
             file_src,
             &parent_values,
             evaluated_files,
+            module_resolver,
         )?;
         let mut compiled_dag = graphcal_compiler::tir::typed::type_resolve_single_with_modules(
             dag_ir,
@@ -251,6 +252,7 @@ fn compile_loaded_dag_module_ir<'a>(
     file_src: &NamedSource<Arc<String>>,
     parent_values: &crate::inline_dag::ParentValueDecls,
     evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
 ) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
     let parent_loaded = &project.files[&loaded_dag.parent_dag_id];
     let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
@@ -289,7 +291,7 @@ fn compile_loaded_dag_module_ir<'a>(
         .collect();
     imported_decl_types.extend(self_imports.decl_types);
 
-    let dag_ast = graphcal_compiler::desugar::resolved_ast::File {
+    let dag_ast = graphcal_compiler::desugar::desugared_ast::File {
         declarations: self_imports.stripped_body,
     };
     let dag_ast = rewrite_qualified_refs_in_ast(&dag_ast, &ctx.module_map, &ctx.imported_names);
@@ -331,7 +333,12 @@ fn compile_loaded_dag_module_ir<'a>(
         &mut unfrozen,
     )?;
 
-    Ok(unfrozen.freeze(builder.build()))
+    Ok(unfrozen.freeze(
+        builder.build(),
+        &loaded_dag.dag_id,
+        module_resolver,
+        file_src,
+    )?)
 }
 
 fn extend_imported_value_names(target: &mut ImportedValueNames, source: ImportedValueNames) {
@@ -450,7 +457,7 @@ fn find_inline_dag_decl<'a>(
     target: &graphcal_compiler::dag_id::DagId,
 ) -> Option<(
     &'a graphcal_compiler::dag_id::DagId,
-    &'a graphcal_compiler::desugar::resolved_ast::DagDecl,
+    &'a graphcal_compiler::desugar::desugared_ast::DagDecl,
 )> {
     project.files.iter().find_map(|(file_id, loaded)| {
         find_inline_dag_decl_in_declarations(&loaded.ast.declarations, file_id, target)
@@ -459,10 +466,10 @@ fn find_inline_dag_decl<'a>(
 }
 
 fn find_inline_dag_decl_in_declarations<'a>(
-    declarations: &'a [graphcal_compiler::desugar::resolved_ast::Declaration],
+    declarations: &'a [graphcal_compiler::desugar::desugared_ast::Declaration],
     lexical_parent_id: &graphcal_compiler::dag_id::DagId,
     target: &graphcal_compiler::dag_id::DagId,
-) -> Option<&'a graphcal_compiler::desugar::resolved_ast::DagDecl> {
+) -> Option<&'a graphcal_compiler::desugar::desugared_ast::DagDecl> {
     declarations.iter().find_map(|decl| {
         let DeclKind::Dag(dag) = &decl.kind else {
             return None;
@@ -572,7 +579,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
     deferred_dag_includes: &[DeferredDagInclude],
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     importer_src: &NamedSource<Arc<String>>,
-    importer_ast: &graphcal_compiler::desugar::resolved_ast::File,
+    importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
@@ -697,7 +704,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                         }
                     }
 
-                    let stripped_body = graphcal_compiler::desugar::resolved_ast::File {
+                    let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
                         declarations: self_imports.stripped_body,
                     };
                     let stripped_body = rewrite_qualified_refs_in_ast(
@@ -875,7 +882,7 @@ pub(in crate::eval::project) struct AliasSubstitutions<'a> {
 /// includes. Names not found in `decls` (e.g., type-system-only items) are
 /// silently skipped.
 fn add_selective_aliases_inner(
-    decls: &[graphcal_compiler::desugar::resolved_ast::Declaration],
+    decls: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     selective: &[ImportAlias],
     prefix: &ModuleAliasName,
     subs: &AliasSubstitutions<'_>,
@@ -914,7 +921,30 @@ fn add_selective_aliases_inner(
             |d| matches!(&d.kind, DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name),
         );
         let alias_kind = if is_const {
-            ExprKind::ConstRef(Spanned::new(target.clone(), import_span))
+            // A const alias body is a reference path to the prefixed target;
+            // HIR lowering resolves it against the merged entries.
+            let (Ok(prefix_atom), Ok(member_atom)) = (
+                graphcal_compiler::syntax::names::NameAtom::parse(prefix.as_str()),
+                graphcal_compiler::syntax::names::NameAtom::parse(orig_name),
+            ) else {
+                // Alias components come from validated import items; a
+                // non-identifier segment cannot resolve, so skip the alias.
+                continue;
+            };
+            ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(
+                graphcal_compiler::syntax::ast::IdentPath::new(
+                    graphcal_compiler::syntax::non_empty::NonEmpty::new(
+                        graphcal_compiler::syntax::ast::Ident {
+                            name: prefix_atom,
+                            span: import_span,
+                        },
+                        vec![graphcal_compiler::syntax::ast::Ident {
+                            name: member_atom,
+                            span: import_span,
+                        }],
+                    ),
+                ),
+            ))
         } else {
             ExprKind::GraphRef(Spanned::new(target.clone(), import_span))
         };
@@ -926,7 +956,6 @@ fn add_selective_aliases_inner(
                 type_ann,
                 alias_expr,
                 import_span,
-                target,
             );
         } else {
             unfrozen.add_node_alias(
@@ -934,7 +963,6 @@ fn add_selective_aliases_inner(
                 type_ann,
                 alias_expr,
                 import_span,
-                target,
             );
         }
     }
@@ -1057,19 +1085,25 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
 /// Extract a `PascalCase` index name from a binding expression.
 ///
 /// Index bindings use the form `DepIndex = ImporterIndex`, where both sides are
-/// `PascalCase` identifiers. Name resolution can produce `ExprKind::ConstructorCall`
-/// (with empty `fields`/`generic_args`) for bare constructor identifiers in
-/// expression position; type/index names resolve to `TypeSystemRef`.
+/// `PascalCase` identifiers. In the desugared AST a bare identifier is an
+/// unresolved reference path; the parser can also produce a zero-arg
+/// `ConstructorCall` for constructor-shaped binding RHSs.
 pub(in crate::eval::project) fn extract_index_name_from_binding_expr(
     expr: &Expr,
     dep_index_name: &str,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<String, CompileError> {
     match &expr.kind {
-        ExprKind::ConstRef(name) if !name.value.is_qualified() => {
-            Ok(name.value.member().to_string())
-        }
-        ExprKind::TypeSystemRef(name) => Ok(name.value.as_str().to_string()),
+        ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => path
+            .as_bare()
+            .map(|ident| ident.name.to_string())
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::BindingTargetsIndex {
+                    name: dep_index_name.to_string(),
+                    src: file_src.clone(),
+                    span: expr.span.into(),
+                })
+            }),
         ExprKind::ConstructorCall {
             callee,
             generic_args,
@@ -1095,18 +1129,24 @@ pub(in crate::eval::project) fn extract_index_name_from_binding_expr(
 /// Extract a `PascalCase` type name from a binding expression.
 ///
 /// Type bindings use the form `DepType: ImporterType` — the RHS is a bare
-/// `PascalCase` identifier, which resolves to `TypeSystemRef` for type/index
-/// names or a zero-arg `ConstructorCall` for bare constructors.
+/// `PascalCase` identifier (an unresolved reference path in the desugared
+/// AST) or a zero-arg `ConstructorCall` for constructor-shaped RHSs.
 pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
     expr: &Expr,
     dep_type_name: &str,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<String, CompileError> {
     match &expr.kind {
-        ExprKind::ConstRef(name) if !name.value.is_qualified() => {
-            Ok(name.value.member().to_string())
-        }
-        ExprKind::TypeSystemRef(name) => Ok(name.value.as_str().to_string()),
+        ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => path
+            .as_bare()
+            .map(|ident| ident.name.to_string())
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::BindingTargetsIndex {
+                    name: dep_type_name.to_string(),
+                    src: file_src.clone(),
+                    span: expr.span.into(),
+                })
+            }),
         ExprKind::ConstructorCall {
             callee,
             generic_args,
@@ -1211,7 +1251,7 @@ pub(in crate::eval::project) fn build_dep_imported_values(
 /// When `is_import` is `true`, runtime values are skipped (import semantics).
 pub(in crate::eval::project) fn build_dep_import_values_for_kind(
     import_path: &ModulePath,
-    import_kind: &graphcal_compiler::desugar::resolved_ast::ImportKind,
+    import_kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
     trans_dep: &EvaluatedFile,
     dep_src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
@@ -1219,7 +1259,7 @@ pub(in crate::eval::project) fn build_dep_import_values_for_kind(
     is_import: bool,
 ) -> Result<(), CompileError> {
     match import_kind {
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(names) => {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
             for import_item in names {
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
@@ -1241,7 +1281,7 @@ pub(in crate::eval::project) fn build_dep_import_values_for_kind(
                 )?;
             }
         }
-        graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
             let module_name = alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(import_path),
                 |alias_ident| alias_ident.value.clone(),
@@ -1267,7 +1307,7 @@ pub(in crate::eval::project) fn build_dep_import_values_for_kind(
 /// symbol (V = private at the importer) from a builtin or cross-file
 /// symbol for the V006 check.
 fn collect_local_type_names(
-    file: &graphcal_compiler::desugar::resolved_ast::File,
+    file: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> HashMap<String, &'static str> {
     let mut names = HashMap::new();
     for decl in &file.declarations {
@@ -1289,10 +1329,10 @@ fn collect_local_type_names(
 /// check to decide which names in a re-exported signature need a
 /// visibility review at the importing site.
 fn collect_type_expr_names(
-    type_expr: &graphcal_compiler::desugar::resolved_ast::TypeExpr,
+    type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
     refs: &mut Vec<String>,
 ) {
-    use graphcal_compiler::desugar::resolved_ast::{IndexExpr, TypeExprKind};
+    use graphcal_compiler::desugar::desugared_ast::{IndexExpr, TypeExprKind};
     match &type_expr.kind {
         TypeExprKind::DimExpr(dim_expr) => {
             for item in &dim_expr.terms {
@@ -1340,7 +1380,7 @@ fn collect_type_expr_names(
     reason = "the check needs the dep AST, the three substitution maps, and the importer's visibility tables"
 )]
 fn check_generics_leakage(
-    dep_ast: &graphcal_compiler::desugar::resolved_ast::File,
+    dep_ast: &graphcal_compiler::desugar::desugared_ast::File,
     pub_reexport_whole: bool,
     pub_reexport_items: &HashSet<DeclName>,
     index_bindings: &HashMap<IndexName, IndexName>,
@@ -1396,7 +1436,7 @@ fn check_generics_leakage(
                 }
             }
             DeclKind::Type(t) => {
-                if let graphcal_compiler::desugar::resolved_ast::TypeDeclBody::Constructors(
+                if let graphcal_compiler::desugar::desugared_ast::TypeDeclBody::Constructors(
                     members,
                 ) = &t.body
                 {

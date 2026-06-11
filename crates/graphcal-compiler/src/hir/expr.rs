@@ -1,23 +1,32 @@
 //! HIR expression/value reference types and lowering.
 //!
 //! This module is the expression-side counterpart to [`super::types`]. It
-//! lowers the current locally-resolved syntax AST into a HIR expression tree
-//! whose reference positions use canonical module identities or lexical local
-//! IDs. Source paths (`NamePath` / `IdentPath` / `ScopedName`) are consumed at
+//! lowers the desugared syntax AST into a HIR expression tree whose reference
+//! positions use canonical module identities or lexical local IDs. This is the
+//! single name-resolution stage of the pipeline: syntactic reference paths
+//! ([`crate::syntax::ast::UnresolvedRef`]) are classified and resolved here,
+//! in one pass, against the lexical scope and the module-aware resolver.
+//! Source paths (`NamePath` / `IdentPath` / `ScopedName`) are consumed at
 //! this boundary and are not stored in HIR reference fields.
+//!
+//! Lowering is diagnostic-accumulating: a reference that cannot be resolved
+//! becomes an explicit [`ExprKind::Error`] node and its diagnostic is
+//! recorded, so IDE consumers can keep working on incomplete code. The strict
+//! entry points ([`lower_expr`], [`lower_assert_body`]) reject any tree that
+//! contains an error node, so the batch pipeline never sees one.
 
 use std::collections::{BTreeSet, HashMap};
 
 use thiserror::Error;
 
 use crate::dag_id::DagId;
-use crate::desugar::resolved_ast as ast;
+use crate::desugar::desugared_ast as ast;
 use crate::registry::resolve_types::{
     AggregationFn, ConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, SpecialFnKind,
     TypeConversionFn,
 };
 use crate::registry::time_scale::TimeScale;
-use crate::syntax::ast::TypeSystemRefKind as SyntaxTypeSystemRefKind;
+use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
 use crate::syntax::module_resolve::{DeclSymbolKind, ModuleResolveError, ModuleResolver};
 use crate::syntax::names::{
     DeclName, FieldName, GenericParamName, IndexName, IndexVariantName, LocalName, NameAtom,
@@ -58,6 +67,9 @@ pub enum ExprLowerError {
     /// A local reference had no lexical binding in scope.
     #[error("unknown local variable `{name}`")]
     UnknownLocalRef { name: LocalName, span: Span },
+    /// A graph reference (`@name`) did not resolve to any declaration.
+    #[error("unknown graph reference `@{name}`")]
+    UnknownGraphRef { name: ScopedName, span: Span },
     /// A single expression tree introduced more local bindings than HIR can index.
     #[error("too many local bindings in one expression")]
     TooManyLocals { span: Span },
@@ -81,6 +93,14 @@ pub enum ExprLowerError {
     /// A function call could not be resolved to a built-in function.
     #[error("unknown function `{path}`")]
     UnknownFunction { path: String, span: Span },
+    /// A built-in function was called with the wrong number of arguments.
+    #[error("function `{name}` expects {expected} argument(s), got {got}")]
+    WrongArity {
+        name: crate::syntax::names::FnName,
+        expected: usize,
+        got: usize,
+        span: Span,
+    },
     /// A path-pattern could not be resolved to a constructor or index label.
     #[error("unknown match pattern `{path}`")]
     UnknownPattern { path: String, span: Span },
@@ -150,40 +170,93 @@ impl<'a> ExprLoweringContext<'a> {
     }
 }
 
-/// Lower a syntax expression into HIR.
+/// Lower a syntax expression into HIR, accumulating diagnostics.
+///
+/// References that cannot be resolved become [`ExprKind::Error`] nodes and
+/// their diagnostics are returned alongside the lowered tree, so consumers
+/// that must keep working on incomplete code (the LSP) still get a tree with
+/// spans for every position that did resolve.
+#[must_use]
+pub fn lower_expr_tolerant(
+    expr: &ast::Expr,
+    ctx: ExprLoweringContext<'_>,
+) -> (Expr, Vec<ExprLowerError>) {
+    let mut lowerer = ExprLowerer::new(ctx);
+    let hir_expr = lowerer.lower_expr(expr);
+    (hir_expr, lowerer.diagnostics)
+}
+
+/// Lower a syntax expression into HIR, rejecting unresolved references.
+///
+/// This is the batch-pipeline boundary: the lowered tree is guaranteed to
+/// contain no [`ExprKind::Error`] node.
 ///
 /// # Errors
 ///
-/// Returns [`ExprLowerError`] if any expression-level reference cannot be
-/// resolved to a canonical module identity or lexical local binding.
+/// Returns the first [`ExprLowerError`] if any expression-level reference
+/// cannot be resolved to a canonical module identity or lexical local binding.
 pub fn lower_expr(expr: &ast::Expr, ctx: ExprLoweringContext<'_>) -> Result<Expr, ExprLowerError> {
-    ExprLowerer::new(ctx).lower_expr(expr)
+    let (lowered, mut diagnostics) = lower_expr_tolerant(expr, ctx);
+    if diagnostics.is_empty() {
+        Ok(lowered)
+    } else {
+        Err(diagnostics.swap_remove(0))
+    }
 }
 
-/// Lower a syntax assertion body into HIR.
+/// Lower a syntax assertion body into HIR, accumulating diagnostics.
 ///
 /// Each assertion body owns an independent lexical local-id space. Assertion
 /// expressions cannot share locals across the `actual`/`expected`/`tolerance`
 /// slots of a tolerance assertion, so each slot is lowered with a fresh lowerer.
-pub fn lower_assert_body(
-    body: &crate::desugar::resolved_ast::AssertBody,
+#[must_use]
+pub fn lower_assert_body_tolerant(
+    body: &ast::AssertBody,
     ctx: ExprLoweringContext<'_>,
-) -> Result<AssertBody, ExprLowerError> {
+) -> (AssertBody, Vec<ExprLowerError>) {
     match body {
-        crate::desugar::resolved_ast::AssertBody::Expr(expr) => {
-            lower_expr(expr, ctx).map(AssertBody::Expr)
+        ast::AssertBody::Expr(expr) => {
+            let (lowered, diagnostics) = lower_expr_tolerant(expr, ctx);
+            (AssertBody::Expr(lowered), diagnostics)
         }
-        crate::desugar::resolved_ast::AssertBody::Tolerance {
+        ast::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
             is_relative,
-        } => Ok(AssertBody::Tolerance {
-            actual: Box::new(lower_expr(actual, ctx)?),
-            expected: Box::new(lower_expr(expected, ctx)?),
-            tolerance: Box::new(lower_expr(tolerance, ctx)?),
-            is_relative: *is_relative,
-        }),
+        } => {
+            let (actual, mut diagnostics) = lower_expr_tolerant(actual, ctx);
+            let (expected, expected_diags) = lower_expr_tolerant(expected, ctx);
+            let (tolerance, tolerance_diags) = lower_expr_tolerant(tolerance, ctx);
+            diagnostics.extend(expected_diags);
+            diagnostics.extend(tolerance_diags);
+            (
+                AssertBody::Tolerance {
+                    actual: Box::new(actual),
+                    expected: Box::new(expected),
+                    tolerance: Box::new(tolerance),
+                    is_relative: *is_relative,
+                },
+                diagnostics,
+            )
+        }
+    }
+}
+
+/// Lower a syntax assertion body into HIR, rejecting unresolved references.
+///
+/// # Errors
+///
+/// Returns the first [`ExprLowerError`] if any reference cannot be resolved.
+pub fn lower_assert_body(
+    body: &ast::AssertBody,
+    ctx: ExprLoweringContext<'_>,
+) -> Result<AssertBody, ExprLowerError> {
+    let (lowered, mut diagnostics) = lower_assert_body_tolerant(body, ctx);
+    if diagnostics.is_empty() {
+        Ok(lowered)
+    } else {
+        Err(diagnostics.swap_remove(0))
     }
 }
 
@@ -489,6 +562,12 @@ impl Expr {
 /// Resolved expression shape.
 #[derive(Debug, Clone)]
 pub enum ExprKind {
+    /// A reference that failed to resolve.
+    ///
+    /// Produced only by tolerant lowering; the diagnostic for the failure is
+    /// reported alongside the lowered tree. The strict entry points reject
+    /// trees containing this node, so the batch pipeline never observes it.
+    Error,
     Number(f64),
     Integer(i64),
     Bool(bool),
@@ -598,7 +677,8 @@ fn collect_expr_dependencies_into(expr: &Expr, deps: &mut ExprDependencies) {
 
 fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies) {
     match &expr.kind {
-        ExprKind::Number(_)
+        ExprKind::Error
+        | ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
@@ -698,6 +778,7 @@ pub fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedName<namespace::Decl>)
         // Unfold: anything inside accesses the previous step. The rest are
         // leaves without graph references.
         ExprKind::Unfold { .. }
+        | ExprKind::Error
         | ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
@@ -910,6 +991,7 @@ struct ExprLowerer<'a> {
     ctx: ExprLoweringContext<'a>,
     local_scopes: Vec<HashMap<LocalName, LocalDef>>,
     next_local: u32,
+    diagnostics: Vec<ExprLowerError>,
 }
 
 impl<'a> ExprLowerer<'a> {
@@ -918,13 +1000,25 @@ impl<'a> ExprLowerer<'a> {
             ctx,
             local_scopes: Vec::new(),
             next_local: 0,
+            diagnostics: Vec::new(),
         }
     }
 
-    fn lower_expr(&mut self, expr: &ast::Expr) -> Result<Expr, ExprLowerError> {
+    /// Lower one expression level, localizing failures.
+    ///
+    /// A subtree whose references cannot be resolved becomes a single
+    /// [`ExprKind::Error`] node with its diagnostic recorded; sibling
+    /// subtrees keep lowering.
+    fn lower_expr(&mut self, expr: &ast::Expr) -> Expr {
         // Recursion choke point: lowering recurses once per tree level
         // (unbounded for left-nested operator chains).
-        crate::stack::with_stack_growth(|| self.lower_expr_inner(expr))
+        crate::stack::with_stack_growth(|| match self.lower_expr_inner(expr) {
+            Ok(lowered) => lowered,
+            Err(err) => {
+                self.diagnostics.push(err);
+                Expr::new(ExprKind::Error, expr.span)
+            }
+        })
     }
 
     #[expect(clippy::too_many_lines, reason = "exhaustive ExprKind lowering")]
@@ -934,75 +1028,62 @@ impl<'a> ExprLowerer<'a> {
             ast::ExprKind::Integer(value) => ExprKind::Integer(*value),
             ast::ExprKind::Bool(value) => ExprKind::Bool(*value),
             ast::ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value.clone()),
-            ast::ExprKind::TypeSystemRef(value) => ExprKind::TypeSystemRef(Spanned::new(
-                self.lower_type_system_ref(&value.value, value.span)?,
-                value.span,
-            )),
+            ast::ExprKind::UnresolvedRef(unresolved) => {
+                let UnresolvedRef::Path(path) = unresolved;
+                self.lower_unresolved_path(path)?
+            }
             ast::ExprKind::GraphRef(name) => ExprKind::GraphRef(Spanned::new(
                 self.resolve_decl_scoped_name(&name.value, name.span)?,
                 name.span,
             )),
-            ast::ExprKind::ConstRef(name) => ExprKind::ConstRef(Spanned::new(
-                self.lower_const_ref(&name.value, name.span)?,
-                name.span,
-            )),
-            ast::ExprKind::LocalRef(ident) => match self
-                .lookup_local(&LocalName::from_atom(ident.name.clone()), ident.span)
-            {
-                Ok(local) => ExprKind::LocalRef(Spanned::new(local, ident.span)),
-                Err(ExprLowerError::UnknownLocalRef { .. }) => ExprKind::ConstRef(Spanned::new(
-                    self.lower_const_ref(&ScopedName::local(ident.name.as_str()), ident.span)?,
-                    ident.span,
-                )),
-                Err(err) => return Err(err),
-            },
             ast::ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op: *op,
-                lhs: Box::new(self.lower_expr(lhs)?),
-                rhs: Box::new(self.lower_expr(rhs)?),
+                lhs: Box::new(self.lower_expr(lhs)),
+                rhs: Box::new(self.lower_expr(rhs)),
             },
             ast::ExprKind::UnaryOp { op, operand } => ExprKind::UnaryOp {
                 op: *op,
-                operand: Box::new(self.lower_expr(operand)?),
+                operand: Box::new(self.lower_expr(operand)),
             },
             ast::ExprKind::FnCall {
                 callee,
                 type_args,
                 args,
             } => ExprKind::FnCall {
-                callee: Spanned::new(Self::lower_function_ref(callee)?, callee.span()),
+                callee: {
+                    let function_ref = Self::lower_function_ref(callee)?;
+                    Self::check_function_arity(function_ref, args.len(), callee.span())?;
+                    Spanned::new(function_ref, callee.span())
+                },
                 type_args: type_args
                     .iter()
                     .map(|arg| self.lower_generic_arg(arg))
                     .collect::<Result<Vec<_>, _>>()?,
-                args: args
-                    .iter()
-                    .map(|arg| self.lower_expr(arg))
-                    .collect::<Result<Vec<_>, _>>()?,
+                args: args.iter().map(|arg| self.lower_expr(arg)).collect(),
             },
             ast::ExprKind::If {
                 condition,
                 then_branch,
                 else_branch,
             } => ExprKind::If {
-                condition: Box::new(self.lower_expr(condition)?),
-                then_branch: Box::new(self.lower_expr(then_branch)?),
-                else_branch: Box::new(self.lower_expr(else_branch)?),
+                condition: Box::new(self.lower_expr(condition)),
+                then_branch: Box::new(self.lower_expr(then_branch)),
+                else_branch: Box::new(self.lower_expr(else_branch)),
             },
             ast::ExprKind::UnitLiteral { value, unit } => ExprKind::UnitLiteral {
                 value: *value,
                 unit: unit.clone(),
             },
             ast::ExprKind::Convert { expr, target } => ExprKind::Convert {
-                expr: Box::new(self.lower_expr(expr)?),
+                expr: Box::new(self.lower_expr(expr)),
                 target: target.clone(),
             },
             ast::ExprKind::DisplayTimezone { expr, timezone } => ExprKind::DisplayTimezone {
-                expr: Box::new(self.lower_expr(expr)?),
+                expr: Box::new(self.lower_expr(expr)),
                 timezone: timezone.clone(),
             },
             ast::ExprKind::FieldAccess { expr, field } => ExprKind::FieldAccess {
-                expr: Box::new(self.lower_expr(expr)?),
+                expr: Box::new(self.lower_expr(expr)),
                 field: field.clone(),
             },
             ast::ExprKind::ConstructorCall {
@@ -1027,7 +1108,7 @@ impl<'a> ExprLowerer<'a> {
                 fields: fields
                     .iter()
                     .map(|field| self.lower_field_init(field))
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect(),
             },
             ast::ExprKind::MapLiteral { entries } => ExprKind::MapLiteral {
                 entries: entries
@@ -1045,12 +1126,12 @@ impl<'a> ExprLowerer<'a> {
                     .map(|binding| binding.local.clone())
                     .collect::<Vec<_>>();
                 self.push_scope(locals)?;
-                let body = Box::new(self.lower_expr(body)?);
+                let body = Box::new(self.lower_expr(body));
                 self.pop_scope();
                 ExprKind::ForComp { bindings, body }
             }
             ast::ExprKind::IndexAccess { expr, args } => ExprKind::IndexAccess {
-                expr: Box::new(self.lower_expr(expr)?),
+                expr: Box::new(self.lower_expr(expr)),
                 args: args
                     .iter()
                     .map(|arg| self.lower_index_arg(arg))
@@ -1063,12 +1144,12 @@ impl<'a> ExprLowerer<'a> {
                 val_name,
                 body,
             } => {
-                let source = Box::new(self.lower_expr(source)?);
-                let init = Box::new(self.lower_expr(init)?);
+                let source = Box::new(self.lower_expr(source));
+                let init = Box::new(self.lower_expr(init));
                 let acc = self.allocate_local(acc_name.value.clone(), acc_name.span)?;
                 let val = self.allocate_local(val_name.value.clone(), val_name.span)?;
                 self.push_scope(vec![acc.clone(), val.clone()])?;
-                let body = Box::new(self.lower_expr(body)?);
+                let body = Box::new(self.lower_expr(body));
                 self.pop_scope();
                 ExprKind::Scan {
                     source,
@@ -1084,11 +1165,11 @@ impl<'a> ExprLowerer<'a> {
                 curr_name,
                 body,
             } => {
-                let init = Box::new(self.lower_expr(init)?);
+                let init = Box::new(self.lower_expr(init));
                 let prev = self.allocate_local(prev_name.value.clone(), prev_name.span)?;
                 let curr = self.allocate_local(curr_name.value.clone(), curr_name.span)?;
                 self.push_scope(vec![prev.clone(), curr.clone()])?;
-                let body = Box::new(self.lower_expr(body)?);
+                let body = Box::new(self.lower_expr(body));
                 self.pop_scope();
                 ExprKind::Unfold {
                     init,
@@ -1098,21 +1179,12 @@ impl<'a> ExprLowerer<'a> {
                 }
             }
             ast::ExprKind::Match { scrutinee, arms } => ExprKind::Match {
-                scrutinee: Box::new(self.lower_expr(scrutinee)?),
+                scrutinee: Box::new(self.lower_expr(scrutinee)),
                 arms: arms
                     .iter()
                     .map(|arm| self.lower_match_arm(arm))
                     .collect::<Result<Vec<_>, _>>()?,
             },
-            ast::ExprKind::VariantLiteral { index, variant } => {
-                let resolved = self.resolve_index_variant_parts(
-                    &index.value,
-                    &variant.value,
-                    index.span,
-                    variant.span,
-                )?;
-                ExprKind::VariantLiteral(Spanned::new(resolved, index.span.merge(variant.span)))
-            }
             ast::ExprKind::InlineDagRef { path, args, output } => {
                 let target = self
                     .ctx
@@ -1141,13 +1213,148 @@ impl<'a> ExprLowerer<'a> {
                     output: Spanned::new(lowered_output, output.span),
                 }
             }
+            // `Sugar(_)` payload is `Infallible` post-desugar.
             #[expect(
                 clippy::uninhabited_references,
-                reason = "Sugar/UnresolvedRef(Infallible) proves this arm unreachable"
+                reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            ast::ExprKind::Sugar(s) | ast::ExprKind::UnresolvedRef(s) => never(*s),
+            ast::ExprKind::Sugar(s) => never(*s),
         };
         Ok(Expr::new(kind, expr.span))
+    }
+
+    /// Resolve a syntactic reference path in value position.
+    ///
+    /// This is the single classification point of the compiler: it decides,
+    /// in one pass, whether a path names a lexical local, a built-in constant
+    /// or time scale, a constructor, a type-system entity, a generic `Nat`
+    /// parameter, or a declaration — and resolves it to its canonical
+    /// identity at the same time. Lexical scope shadows module symbols.
+    fn lower_unresolved_path(&self, path: &IdentPath) -> Result<ExprKind, ExprLowerError> {
+        path.as_bare().map_or_else(
+            || self.lower_dotted_path_ref(path),
+            |ident| self.lower_bare_name_ref(ident),
+        )
+    }
+
+    /// Resolve a bare identifier in value position.
+    ///
+    /// Priority:
+    /// 1. Lexical locals (for/scan/unfold/match bindings)
+    /// 2. Built-in constants (`PI`, `E`, ...) and time scales (`UTC`, ...)
+    /// 3. Constructors (a bare constructor name is a nullary call)
+    /// 4. Type-system names (struct types, dimensions, indexes, variants)
+    /// 5. Generic `Nat` parameters and declarations (const/node/param)
+    fn lower_bare_name_ref(&self, ident: &Ident) -> Result<ExprKind, ExprLowerError> {
+        let span = ident.span;
+        if let Ok(local) = self.lookup_local(&LocalName::from_atom(ident.name.clone()), span) {
+            return Ok(ExprKind::LocalRef(Spanned::new(local, span)));
+        }
+        if let Some(builtin) = BuiltinConst::parse(ident.name.as_str()) {
+            return Ok(ExprKind::ConstRef(Spanned::new(
+                ConstRef::Builtin(builtin),
+                span,
+            )));
+        }
+        if let Ok(scale) = ident.name.as_str().parse::<TimeScale>() {
+            return Ok(ExprKind::ConstRef(Spanned::new(
+                ConstRef::TimeScale(scale),
+                span,
+            )));
+        }
+        let path = NamePath::local(ident.name.clone());
+        if let Ok(constructor) = self
+            .ctx
+            .resolver
+            .resolve_constructor_path(self.ctx.owner, &path)
+        {
+            return Ok(ExprKind::ConstructorCall {
+                callee: Spanned::new(constructor, span),
+                generic_args: Vec::new(),
+                fields: Vec::new(),
+            });
+        }
+        if let Some(type_system_ref) = self.resolve_bare_type_system_name(&path, &ident.name) {
+            return Ok(ExprKind::TypeSystemRef(Spanned::new(type_system_ref, span)));
+        }
+        self.lower_const_ref(&ScopedName::local(ident.name.as_str()), span)
+            .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span)))
+    }
+
+    /// Resolve a bare identifier against the type-system namespaces.
+    ///
+    /// Bare type-system names appear in value position in include-binding
+    /// RHSs (`Speed: Velocity`); downstream type checking rejects them in
+    /// genuine value positions with a precise diagnostic.
+    fn resolve_bare_type_system_name(
+        &self,
+        path: &NamePath,
+        name: &NameAtom,
+    ) -> Option<TypeSystemRef> {
+        if let Ok(struct_type) = self
+            .ctx
+            .resolver
+            .resolve_struct_type_path(self.ctx.owner, path)
+        {
+            return Some(TypeSystemRef::Type(struct_type));
+        }
+        if let Ok(dimension) = self
+            .ctx
+            .resolver
+            .resolve_dimension_path(self.ctx.owner, path)
+        {
+            return Some(TypeSystemRef::Dimension(dimension));
+        }
+        if let Ok(index) = self.ctx.resolver.resolve_index_path(self.ctx.owner, path) {
+            return Some(TypeSystemRef::Index(index));
+        }
+        let variant_name = IndexVariantName::from_atom(name.clone());
+        if let Ok(variant) = self
+            .ctx
+            .resolver
+            .resolve_bare_index_variant(self.ctx.owner, &variant_name)
+        {
+            return Some(TypeSystemRef::IndexVariant(variant));
+        }
+        None
+    }
+
+    /// Resolve a dotted reference path (`a.b`, `a.b.c`, ...) in value position.
+    ///
+    /// A two-segment path whose head names an index in scope is a variant
+    /// literal; anything else is a qualified constant-like reference
+    /// (declaration, constructor, or index variant of an imported module).
+    fn lower_dotted_path_ref(&self, path: &IdentPath) -> Result<ExprKind, ExprLowerError> {
+        let span = path.span();
+        if let [qualifier, member] = path.segments() {
+            let index_path = NamePath::local(qualifier.name.clone());
+            if self
+                .ctx
+                .resolver
+                .resolve_index_path(self.ctx.owner, &index_path)
+                .is_ok()
+            {
+                let variant = IndexVariantName::from_atom(member.name.clone());
+                let resolved = self.resolve_index_variant_parts(
+                    &index_path,
+                    &variant,
+                    qualifier.span,
+                    member.span,
+                )?;
+                return Ok(ExprKind::VariantLiteral(Spanned::new(
+                    resolved,
+                    qualifier.span.merge(member.span),
+                )));
+            }
+        }
+
+        let (qualifier, member) = path.split_last();
+        let scoped = ScopedName::qualified_path(
+            qualifier.iter().map(|segment| segment.name.to_string()),
+            member.name.to_string(),
+        );
+        self.lower_const_ref(&scoped, span)
+            .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span)))
     }
 
     fn lower_generic_arg(&self, arg: &ast::GenericArg) -> Result<GenericArg, ExprLowerError> {
@@ -1163,11 +1370,11 @@ impl<'a> ExprLowerer<'a> {
         }
     }
 
-    fn lower_field_init(&mut self, field: &ast::FieldInit) -> Result<FieldInit, ExprLowerError> {
-        Ok(FieldInit {
+    fn lower_field_init(&mut self, field: &ast::FieldInit) -> FieldInit {
+        FieldInit {
             name: field.name.clone(),
-            value: self.lower_expr(&field.value)?,
-        })
+            value: self.lower_expr(&field.value),
+        }
     }
 
     fn lower_param_binding(
@@ -1186,42 +1393,9 @@ impl<'a> ExprLowerer<'a> {
             })?;
         Ok(ParamBinding {
             target: Spanned::new(target_name, binding.name.span),
-            value: self.lower_expr(&binding.value)?,
+            value: self.lower_expr(&binding.value),
             span: binding.span,
         })
-    }
-
-    fn lower_type_system_ref(
-        &self,
-        kind: &SyntaxTypeSystemRefKind,
-        span: Span,
-    ) -> Result<TypeSystemRef, ExprLowerError> {
-        match kind {
-            SyntaxTypeSystemRefKind::Type(name) | SyntaxTypeSystemRefKind::Imported(name) => self
-                .ctx
-                .resolver
-                .resolve_struct_type_path(self.ctx.owner, &NamePath::local(name.atom().clone()))
-                .map(TypeSystemRef::Type)
-                .map_err(|source| ExprLowerError::ModuleResolve { source, span }),
-            SyntaxTypeSystemRefKind::Dimension(name) => self
-                .ctx
-                .resolver
-                .resolve_dimension_path(self.ctx.owner, &NamePath::local(name.atom().clone()))
-                .map(TypeSystemRef::Dimension)
-                .map_err(|source| ExprLowerError::ModuleResolve { source, span }),
-            SyntaxTypeSystemRefKind::Index(name) => self
-                .ctx
-                .resolver
-                .resolve_index_path(self.ctx.owner, &NamePath::local(name.atom().clone()))
-                .map(TypeSystemRef::Index)
-                .map_err(|source| ExprLowerError::ModuleResolve { source, span }),
-            SyntaxTypeSystemRefKind::BareVariant(variant) => self
-                .ctx
-                .resolver
-                .resolve_bare_index_variant(self.ctx.owner, variant)
-                .map(TypeSystemRef::IndexVariant)
-                .map_err(|source| ExprLowerError::ModuleResolve { source, span }),
-        }
     }
 
     fn lower_const_ref(&self, name: &ScopedName, span: Span) -> Result<ConstRef, ExprLowerError> {
@@ -1318,15 +1492,14 @@ impl<'a> ExprLowerer<'a> {
         self.ctx
             .resolver
             .resolve_decl_path(self.ctx.owner, &path)
-            .or_else(|_| {
-                self.resolve_synthetic_child_decl_path(&path)
-                    .ok_or_else(|| ModuleResolveError::UnknownName {
-                        owner: self.ctx.owner.clone(),
-                        namespace: namespace::Decl::DISPLAY_NAME,
-                        name: path.to_string(),
-                    })
+            .or_else(|err| self.resolve_synthetic_child_decl_path(&path).ok_or(err))
+            .map_err(|source| match source {
+                ModuleResolveError::UnknownName { .. } => ExprLowerError::UnknownGraphRef {
+                    name: name.clone(),
+                    span,
+                },
+                source => ExprLowerError::ModuleResolve { source, span },
             })
-            .map_err(|source| ExprLowerError::ModuleResolve { source, span })
     }
 
     fn resolve_synthetic_child_decl_path(
@@ -1344,6 +1517,38 @@ impl<'a> ExprLowerer<'a> {
             .modules()
             .contains_key(&owner)
             .then(|| ResolvedName::from_def(owner, DeclName::from_atom(leaf.clone())))
+    }
+
+    /// Validate a built-in call's argument count against the registry's
+    /// arity table. Aggregations are variadic over collections and skip the
+    /// check; their argument shapes are validated during type checking.
+    fn check_function_arity(
+        function_ref: FunctionRef,
+        got: usize,
+        span: Span,
+    ) -> Result<(), ExprLowerError> {
+        let FunctionRef::Builtin(builtin) = function_ref;
+        if builtin.special_kind().is_some_and(|kind| {
+            matches!(
+                kind,
+                crate::registry::resolve_types::SpecialFnKind::Aggregation(_)
+            )
+        }) {
+            return Ok(());
+        }
+        let Some(function) = crate::registry::builtins::builtin_functions().get(builtin.as_str())
+        else {
+            return Ok(());
+        };
+        if got != function.arity() {
+            return Err(ExprLowerError::WrongArity {
+                name: crate::syntax::names::FnName::new(builtin.as_str()),
+                expected: function.arity(),
+                got,
+                span,
+            });
+        }
+        Ok(())
     }
 
     fn lower_function_ref(
@@ -1381,7 +1586,7 @@ impl<'a> ExprLowerer<'a> {
         };
         Ok(MapEntry {
             keys: NonEmpty::new(first, keys.collect()),
-            value: self.lower_expr(&entry.value)?,
+            value: self.lower_expr(&entry.value),
         })
     }
 
@@ -1465,14 +1670,14 @@ impl<'a> ExprLowerer<'a> {
                 self.lookup_local(&LocalName::from_atom(ident.name.clone()), ident.span)?,
                 ident.span,
             ))),
-            ast::IndexArg::Expr(expr) => Ok(IndexArg::Expr(Box::new(self.lower_expr(expr)?))),
+            ast::IndexArg::Expr(expr) => Ok(IndexArg::Expr(Box::new(self.lower_expr(expr)))),
         }
     }
 
     fn lower_match_arm(&mut self, arm: &ast::MatchArm) -> Result<MatchArm, ExprLowerError> {
         let pattern = self.lower_match_pattern(&arm.pattern)?;
         self.push_scope(pattern.bound_locals())?;
-        let body = self.lower_expr(&arm.body)?;
+        let body = self.lower_expr(&arm.body);
         self.pop_scope();
         Ok(MatchArm {
             pattern,
@@ -1677,10 +1882,9 @@ mod tests {
     use super::*;
     use crate::syntax::parser::Parser;
 
-    fn resolved_source(source: &str) -> ast::File {
+    fn desugared_source(source: &str) -> ast::File {
         let raw = Parser::new(source).parse_file().unwrap();
-        let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw);
-        crate::syntax::name_resolve::resolve_name_refs(desugared)
+        crate::syntax::desugar::desugar_multi_decls_in_file(raw)
     }
 
     #[test]
@@ -1762,8 +1966,8 @@ mod tests {
     fn lowers_qualified_index_variant_const_ref_to_canonical_owner() {
         let lib_id = DagId::root("lib");
         let main_id = DagId::root("main");
-        let lib = resolved_source("pub index Phase = { Burn, Coast };");
-        let main = resolved_source(
+        let lib = desugared_source("pub index Phase = { Burn, Coast };");
+        let main = desugared_source(
             "import lib as mission; node phase: Dimensionless = mission.Phase.Burn;",
         );
         let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
@@ -1790,9 +1994,10 @@ mod tests {
     fn lowers_qualified_nullary_constructor_const_ref_to_canonical_owner() {
         let lib_id = DagId::root("lib");
         let main_id = DagId::root("main");
-        let lib = resolved_source("pub type BurnKind { Impulsive, Coast }");
-        let main =
-            resolved_source("import lib as mission; node burn: Dimensionless = mission.Impulsive;");
+        let lib = desugared_source("pub type BurnKind { Impulsive, Coast }");
+        let main = desugared_source(
+            "import lib as mission; node burn: Dimensionless = mission.Impulsive;",
+        );
         let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
         let scope = GenericScope::new();
 
@@ -1815,7 +2020,7 @@ mod tests {
     #[test]
     fn lowers_for_locals_to_lexical_ids() {
         let owner = DagId::root("main");
-        let file = resolved_source(
+        let file = desugared_source(
             "index Phase = { Burn }; node x: Dimensionless[Phase] = for p: Phase { p };",
         );
         let mut resolver = ModuleResolver::default();
@@ -1846,8 +2051,9 @@ mod tests {
     fn lowers_qualified_constructor_match_pattern_and_binding() {
         let lib_id = DagId::root("lib");
         let main_id = DagId::root("main");
-        let lib = resolved_source("pub type BurnKind { Impulsive(delta_v: Dimensionless), Coast }");
-        let main = resolved_source(
+        let lib =
+            desugared_source("pub type BurnKind { Impulsive(delta_v: Dimensionless), Coast }");
+        let main = desugared_source(
             "import lib as mission; param burn: Dimensionless; \
              node dv: Dimensionless = match @burn { mission.Impulsive(delta_v: dv) => dv, mission.Coast => 0.0 };",
         );
@@ -1889,8 +2095,9 @@ mod tests {
     fn collects_canonical_decl_dependencies_from_hir_expr() {
         let lib_id = DagId::root("lib");
         let main_id = DagId::root("main");
-        let lib = resolved_source("pub const node C: Dimensionless = 1.0; param p: Dimensionless;");
-        let main = resolved_source(
+        let lib =
+            desugared_source("pub const node C: Dimensionless = 1.0; param p: Dimensionless;");
+        let main = desugared_source(
             "import lib as mission; import lib.{p}; node x: Dimensionless = @p + mission.C;",
         );
         let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
@@ -1920,7 +2127,7 @@ mod tests {
     #[test]
     fn const_ref_to_runtime_decl_is_rejected_by_decl_kind() {
         let owner = DagId::root("main");
-        let file = resolved_source("param p: Dimensionless; node x: Dimensionless = p;");
+        let file = desugared_source("param p: Dimensionless; node x: Dimensionless = p;");
         let mut resolver = ModuleResolver::default();
         resolver
             .add_module(owner.clone(), &file.declarations)

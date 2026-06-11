@@ -1,11 +1,12 @@
 //! Intermediate Representation (IR) — the result of lowering an AST.
 //!
-//! `lower()` combines name resolution (`resolve`), registry construction
-//! (dimensions, units, indexes, structs), and function registration into a
-//! single `IR` value that downstream stages can consume without reaching
-//! back to the raw AST.
+//! `lower()` combines declaration collection (`resolve`), registry
+//! construction (dimensions, units, indexes, structs), and function
+//! registration into a single `IR` value. Reference resolution happens at
+//! [`UnfrozenIR::freeze`], which lowers every assembled declaration body to
+//! HIR — the frozen `IR` carries no syntax-AST expression.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ use miette::NamedSource;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
-use crate::desugar::resolved_ast::{
+use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl, PlotDecl,
     TypeExpr,
 };
@@ -31,53 +32,148 @@ use crate::registry::types::{
 };
 use crate::syntax::dimension::Rational;
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, IndexName, NameAtom, ScopedName, StructTypeName, UnitName,
+    ConstructorName, DeclName, DimName, IndexName, NameAtom, ScopedName, StructTypeName,
 };
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
 // ---------------------------------------------------------------------------
 // Entry types for IR declarations
 // ---------------------------------------------------------------------------
 
-/// A const declaration with type annotation.
+/// One plot declaration's expressions lowered to HIR, in source order.
+#[derive(Debug, Clone, Default)]
+pub struct LoweredPlotBody {
+    /// Encoding channel expressions (`x: ...`, `y: ...`).
+    pub encodings: Vec<(crate::syntax::ast::EncodingChannel, crate::hir::Expr)>,
+    /// Mark property expressions (`stroke_width: ...`).
+    pub mark_properties: Vec<LoweredPlotField>,
+    /// Plot-level property expressions (`title: ...`).
+    pub properties: Vec<LoweredPlotField>,
+}
+
+/// A named plot/figure/layer field expression lowered to HIR.
+#[derive(Debug, Clone)]
+pub struct LoweredPlotField {
+    pub name: crate::syntax::names::PlotPropertyName,
+    pub value: crate::hir::Expr,
+}
+
+/// A const declaration with type annotation and lowered body.
 #[derive(Debug, Clone)]
 pub struct ConstEntry {
+    pub name: ScopedName,
+    pub type_ann: TypeExpr,
+    pub expr: crate::hir::Expr,
+    pub span: Span,
+}
+
+/// A param declaration with type annotation and lowered default.
+#[derive(Debug, Clone)]
+pub struct ParamEntry {
+    pub name: ScopedName,
+    pub type_ann: TypeExpr,
+    pub default_expr: Option<crate::hir::Expr>,
+    pub span: Span,
+}
+
+/// A node declaration with type annotation and lowered body.
+#[derive(Debug, Clone)]
+pub struct NodeEntry {
+    pub name: ScopedName,
+    pub type_ann: TypeExpr,
+    pub expr: crate::hir::Expr,
+    pub span: Span,
+}
+
+/// An assert declaration with lowered body.
+#[derive(Debug, Clone)]
+pub struct AssertEntry {
+    pub name: ScopedName,
+    pub body: crate::hir::AssertBody,
+    pub span: Span,
+}
+
+/// A const declaration awaiting body lowering at [`UnfrozenIR::freeze`].
+///
+/// Pre-freeze bodies stay syntactic so include instantiation can rewrite
+/// reference paths (prefixing, index/type rebinding) before resolution.
+#[derive(Debug, Clone)]
+pub struct UnfrozenConstEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
     pub expr: Expr,
     pub span: Span,
 }
 
-/// A param declaration with type annotation.
+/// A param declaration awaiting default lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
-pub struct ParamEntry {
+pub struct UnfrozenParamEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
     pub default_expr: Option<Expr>,
     pub span: Span,
 }
 
-/// A node declaration with type annotation.
+/// A node declaration awaiting body lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
-pub struct NodeEntry {
+pub struct UnfrozenNodeEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
     pub expr: Expr,
     pub span: Span,
 }
 
-/// An assert declaration.
+/// An assert declaration awaiting body lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
-pub struct AssertEntry {
+pub struct UnfrozenAssertEntry {
     pub name: ScopedName,
     pub body: AssertBody,
     pub span: Span,
 }
 
-/// A plot declaration.
+/// A plot declaration with lowered body.
 #[derive(Debug, Clone)]
 pub struct PlotEntry {
+    pub name: ScopedName,
+    /// Mark shape rendered for this plot.
+    pub mark_type: crate::syntax::ast::MarkType,
+    /// Lowered body, or `None` when an expression failed to lower. Plots
+    /// are best-effort at evaluation time: an incomplete body is skipped by
+    /// the runtime instead of failing the compile.
+    pub body: Option<LoweredPlotBody>,
+    pub span: Span,
+    /// Whether this plot is `pub` (visible in standalone output).
+    pub is_pub: bool,
+}
+
+/// A figure declaration with lowered fields.
+#[derive(Debug, Clone)]
+pub struct FigureEntry {
+    pub name: ScopedName,
+    /// Plots composed by this figure, in source order.
+    pub plot_names: Vec<Spanned<ScopedName>>,
+    /// Lowered field expressions; fields that failed to lower are omitted
+    /// (best-effort, matching plots).
+    pub fields: Vec<LoweredPlotField>,
+    pub span: Span,
+}
+
+/// A layer declaration with lowered fields.
+#[derive(Debug, Clone)]
+pub struct LayerEntry {
+    pub name: ScopedName,
+    /// Plots composed by this layer, in source order.
+    pub plot_names: Vec<Spanned<ScopedName>>,
+    /// Lowered field expressions; fields that failed to lower are omitted
+    /// (best-effort, matching plots).
+    pub fields: Vec<LoweredPlotField>,
+    pub span: Span,
+}
+
+/// A plot declaration awaiting body lowering at [`UnfrozenIR::freeze`].
+#[derive(Debug, Clone)]
+pub struct UnfrozenPlotEntry {
     pub name: ScopedName,
     pub decl: PlotDecl,
     pub span: Span,
@@ -85,17 +181,17 @@ pub struct PlotEntry {
     pub is_pub: bool,
 }
 
-/// A figure declaration.
+/// A figure declaration awaiting field lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
-pub struct FigureEntry {
+pub struct UnfrozenFigureEntry {
     pub name: ScopedName,
     pub decl: FigureDecl,
     pub span: Span,
 }
 
-/// A layer declaration.
+/// A layer declaration awaiting field lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
-pub struct LayerEntry {
+pub struct UnfrozenLayerEntry {
     pub name: ScopedName,
     pub decl: LayerDecl,
     pub span: Span,
@@ -126,14 +222,6 @@ pub struct IR {
     pub figures: Vec<FigureEntry>,
     /// Layer declarations in source order.
     pub layers: Vec<LayerEntry>,
-    /// For each param/node, the set of `@`-references (runtime deps).
-    /// Outer map is keyed by declaration name (key-lookup only, order irrelevant).
-    /// Inner set uses `BTreeSet` for deterministic iteration when building the DAG.
-    pub runtime_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
-    /// For each const, the set of const-references (const deps).
-    /// Outer map is keyed by declaration name (key-lookup only, order irrelevant).
-    /// Inner set uses `BTreeSet` for deterministic iteration when building the DAG.
-    pub const_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// Set of all assert names.
@@ -176,17 +264,6 @@ pub struct ImportedValueSource {
     pub source_name: DeclName,
 }
 
-/// Convert a resolver dep map (whose value sets are `HashSet`) into the
-/// IR shape that uses `BTreeSet` for deterministic iteration order. Keys
-/// and dep entries are already typed [`ScopedName`]s end-to-end.
-fn wrap_dep_map(
-    map: HashMap<ScopedName, HashSet<ScopedName>>,
-) -> HashMap<ScopedName, BTreeSet<ScopedName>> {
-    map.into_iter()
-        .map(|(k, v)| (k, v.into_iter().collect()))
-        .collect()
-}
-
 /// Lower an AST into an [`IR`].
 ///
 /// This combines:
@@ -196,7 +273,7 @@ fn wrap_dep_map(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or registry construction fails
+/// Returns a [`GraphcalError`] if declaration collection or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
 pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalError> {
     let dag_id = crate::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()))
@@ -215,7 +292,7 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalE
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
 fn lower_with_imports(
     ast: &File,
     src: &NamedSource<Arc<String>>,
@@ -223,7 +300,49 @@ fn lower_with_imports(
     dag_id: &crate::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
     let (builder, resolved_ir) = lower_to_builder(ast, src, imported, dag_id)?;
-    Ok(resolved_ir.freeze(builder.build()))
+    let resolver = single_module_resolver(ast, dag_id, src)?;
+    resolved_ir.freeze(builder.build(), dag_id, &resolver, src)
+}
+
+/// Build a resolver covering only this file's own module.
+///
+/// Single-file lowering has no project loader, so imported modules are not
+/// resolvable; bodies that reference them fail at the freeze boundary just
+/// as they previously failed during type resolution.
+fn single_module_resolver(
+    ast: &File,
+    dag_id: &crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::syntax::module_resolve::ModuleResolver, GraphcalError> {
+    fn add_module_with_dags(
+        target: &mut crate::syntax::module_resolve::ModuleResolver,
+        owner: &crate::dag_id::DagId,
+        declarations: &[crate::desugar::desugared_ast::Declaration],
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<(), GraphcalError> {
+        target
+            .add_module(owner.clone(), declarations)
+            .map_err(|err| GraphcalError::EvalError {
+                message: err.to_string(),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        for decl in declarations {
+            if let crate::desugar::desugared_ast::DeclKind::Dag(dag) = &decl.kind {
+                add_module_with_dags(
+                    target,
+                    &owner.child(dag.name.value.as_str()),
+                    &dag.body,
+                    src,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    add_module_with_dags(&mut resolver, dag_id, &ast.declarations, src)?;
+    Ok(resolver)
 }
 
 /// Lower an AST with imported declarations, returning a `RegistryBuilder`
@@ -234,14 +353,14 @@ fn lower_with_imports(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
 pub(crate) fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
     dag_id: &crate::dag_id::DagId,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    // Step 1: Name resolution
+    // Step 1: Declaration collection
     let resolved = resolve_with_imports(ast, src, imported)?;
 
     // Step 2: Extract type annotations from AST + imported declarations.
@@ -283,7 +402,7 @@ pub(crate) fn lower_to_builder(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
@@ -319,7 +438,7 @@ pub fn lower_to_builder_with_imported_values(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or registry construction fails.
+/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
@@ -333,7 +452,7 @@ pub fn lower_to_builder_with_imported_value_decls(
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     dag_id: &crate::dag_id::DagId,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    // Step 1: Name resolution with imported value names in scope
+    // Step 1: Declaration collection with imported value names in scope
     let resolved = resolve_with_imported_values(ast, src, imported_names)?;
 
     // Step 2: Extract type annotations from local declarations only
@@ -357,7 +476,7 @@ pub fn lower_to_builder_with_imported_value_decls(
 ///
 /// The dag body is a virtual [`File`] whose registry is seeded with the
 /// enclosing file's frozen registry (dimensions, units, types, indexes, and
-/// sibling dags) so that name resolution and type checking behave exactly as
+/// sibling dags) so that reference resolution and type checking behave exactly as
 /// they would for a top-level declaration. Per Concept 9, the dag body cannot
 /// implicitly reference the enclosing file's `const`/`param`/`node` values
 /// — cross-scope values must be either passed in via the dag's own params or
@@ -383,7 +502,7 @@ pub fn lower_to_builder_with_imported_value_decls(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if name resolution or type-system construction
+/// Returns a [`GraphcalError`] if declaration collection or type-system construction
 /// fails for the dag body.
 #[expect(
     clippy::implicit_hasher,
@@ -429,8 +548,9 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls(
 )]
 pub fn lower_dag_body_to_ir(
     dag_name: &str,
-    stripped_body: &[crate::desugar::resolved_ast::Declaration],
+    stripped_body: &[crate::desugar::desugared_ast::Declaration],
     parent_registry: &Registry,
+    resolver: &crate::syntax::module_resolve::ModuleResolver,
     imported_names: &ImportedValueNames,
     imported_decl_types: HashMap<ScopedName, DeclaredType>,
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
@@ -451,7 +571,7 @@ pub fn lower_dag_body_to_ir(
         src,
         &dag_dag_id,
     )?;
-    Ok(unfrozen.freeze(builder.build()))
+    unfrozen.freeze(builder.build(), &dag_dag_id, resolver, src)
 }
 
 /// Result of `preprocess_dag_body_self_imports`: imported names, declared
@@ -460,7 +580,7 @@ pub struct DagBodySelfImports {
     pub names: ImportedValueNames,
     pub decl_types: HashMap<ScopedName, DeclaredType>,
     pub value_sources: HashMap<ScopedName, ImportedValueSource>,
-    pub stripped_body: Vec<crate::desugar::resolved_ast::Declaration>,
+    pub stripped_body: Vec<crate::desugar::desugared_ast::Declaration>,
 }
 
 /// Remove and return the type annotation for `name`, or raise an internal error
@@ -497,7 +617,7 @@ fn take_type_ann(
 fn build_ir_from_resolved(
     ast: &File,
     src: &NamedSource<Arc<String>>,
-    mut resolved: ResolvedFile,
+    resolved: ResolvedFile,
     mut type_anns: HashMap<DeclName, TypeExpr>,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     imported_decl_types: HashMap<ScopedName, DeclaredType>,
@@ -521,15 +641,6 @@ fn build_ir_from_resolved(
     }
     register_file_declarations(ast, &mut builder, src, dag_id)?;
 
-    // Augment runtime deps with transitive dependencies through dynamic units.
-    let dynamic_unit_deps = build_dynamic_unit_deps(&builder);
-    augment_runtime_deps_for_dynamic_units(
-        &mut resolved.runtime_deps,
-        &dynamic_unit_deps,
-        &resolved.params,
-        &resolved.nodes,
-    );
-
     // Pair resolved declarations with type annotations. The resolved entries
     // still carry flat-string names (a wider typing pass is tracked separately);
     // wrap each into a `DeclName` once so both `take_type_ann` and the
@@ -540,7 +651,7 @@ fn build_ir_from_resolved(
         .map(|entry| {
             let decl_name = DeclName::new(entry.name);
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
-            Ok(ConstEntry {
+            Ok(UnfrozenConstEntry {
                 name: ScopedName::from(decl_name),
                 type_ann,
                 expr: entry.expr,
@@ -554,7 +665,7 @@ fn build_ir_from_resolved(
         .map(|entry| {
             let decl_name = DeclName::new(entry.name);
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
-            Ok(ParamEntry {
+            Ok(UnfrozenParamEntry {
                 name: ScopedName::from(decl_name),
                 type_ann,
                 default_expr: entry.default_expr,
@@ -568,7 +679,7 @@ fn build_ir_from_resolved(
         .map(|entry| {
             let decl_name = DeclName::new(entry.name);
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
-            Ok(NodeEntry {
+            Ok(UnfrozenNodeEntry {
                 name: ScopedName::from(decl_name),
                 type_ann,
                 expr: entry.expr,
@@ -584,7 +695,7 @@ fn build_ir_from_resolved(
         asserts: resolved
             .asserts
             .into_iter()
-            .map(|entry| AssertEntry {
+            .map(|entry| UnfrozenAssertEntry {
                 name: ScopedName::local(entry.name),
                 body: entry.body,
                 span: entry.span,
@@ -595,7 +706,7 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|entry| {
                 let is_pub = resolved.pub_names.contains(entry.name.as_str());
-                PlotEntry {
+                UnfrozenPlotEntry {
                     name: ScopedName::local(entry.name),
                     decl: entry.decl,
                     span: entry.span,
@@ -606,7 +717,7 @@ fn build_ir_from_resolved(
         figures: resolved
             .figures
             .into_iter()
-            .map(|entry| FigureEntry {
+            .map(|entry| UnfrozenFigureEntry {
                 name: ScopedName::local(entry.name),
                 decl: entry.decl,
                 span: entry.span,
@@ -615,14 +726,12 @@ fn build_ir_from_resolved(
         layers: resolved
             .layers
             .into_iter()
-            .map(|entry| LayerEntry {
+            .map(|entry| UnfrozenLayerEntry {
                 name: ScopedName::local(entry.name),
                 decl: entry.decl,
                 span: entry.span,
             })
             .collect(),
-        runtime_deps: wrap_dep_map(resolved.runtime_deps),
-        const_deps: wrap_dep_map(resolved.const_deps),
         source_order: resolved
             .source_order
             .into_iter()
@@ -659,15 +768,13 @@ fn build_ir_from_resolved(
 
 /// An IR without a frozen registry, awaiting a call to [`freeze`](Self::freeze).
 pub struct UnfrozenIR {
-    consts: Vec<ConstEntry>,
-    params: Vec<ParamEntry>,
-    nodes: Vec<NodeEntry>,
-    asserts: Vec<AssertEntry>,
-    plots: Vec<PlotEntry>,
-    figures: Vec<FigureEntry>,
-    layers: Vec<LayerEntry>,
-    runtime_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
-    const_deps: HashMap<ScopedName, BTreeSet<ScopedName>>,
+    consts: Vec<UnfrozenConstEntry>,
+    params: Vec<UnfrozenParamEntry>,
+    nodes: Vec<UnfrozenNodeEntry>,
+    asserts: Vec<UnfrozenAssertEntry>,
+    plots: Vec<UnfrozenPlotEntry>,
+    figures: Vec<UnfrozenFigureEntry>,
+    layers: Vec<UnfrozenLayerEntry>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     assert_names: HashSet<ScopedName>,
@@ -688,20 +795,204 @@ pub struct UnfrozenIR {
 }
 
 impl UnfrozenIR {
-    /// Freeze into a complete [`IR`] by providing a built [`Registry`].
-    #[must_use]
-    pub fn freeze(self, registry: Registry) -> IR {
-        IR {
+    /// Freeze into a complete [`IR`] by providing a built [`Registry`] and
+    /// the resolution context.
+    ///
+    /// This is the lowering boundary of the pipeline: every declaration body
+    /// assembled so far (including merged include instances and applied
+    /// overrides) is lowered to HIR here, so the frozen [`IR`] carries no
+    /// syntax-AST expression.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphcalError`] if any body contains a reference that
+    /// cannot be resolved.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "single lowering boundary over every declaration kind"
+    )]
+    pub fn freeze(
+        self,
+        registry: Registry,
+        owner: &crate::dag_id::DagId,
+        resolver: &crate::syntax::module_resolve::ModuleResolver,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<IR, GraphcalError> {
+        // Entries already visible in this IR (including prefixed include
+        // instances and dag self-imports) bind their written names to
+        // canonical identities for the lowering below.
+        let mut decl_bindings = HashMap::new();
+        for name in self
+            .consts
+            .iter()
+            .map(|entry| &entry.name)
+            .chain(self.params.iter().map(|entry| &entry.name))
+            .chain(self.nodes.iter().map(|entry| &entry.name))
+        {
+            let canonical =
+                crate::hir::diagnostics::resolved_decl_key(owner, name).ok_or_else(|| {
+                    GraphcalError::InternalError {
+                        message: format!("could not build canonical declaration key for `{name}`"),
+                        src: src.clone(),
+                        span: Span::new(0, 0).into(),
+                    }
+                })?;
+            decl_bindings.insert(name.clone(), canonical);
+        }
+        for (name, source) in &self.imported_value_sources {
+            decl_bindings.insert(
+                name.clone(),
+                crate::syntax::names::ResolvedName::from_def(
+                    source.dag_id.clone(),
+                    source.source_name.clone(),
+                ),
+            );
+        }
+
+        let generic_scope = crate::hir::GenericScope::new();
+        let prelude = crate::hir::PreludeTypeScope::graphcal();
+        let expr_ctx = crate::hir::ExprLoweringContext::new(owner, resolver, &generic_scope)
+            .with_prelude(&prelude)
+            .with_decl_bindings(&decl_bindings);
+        let lower = |expr: &Expr| {
+            crate::hir::lower_expr(expr, expr_ctx)
+                .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src))
+        };
+
+        let consts = self
+            .consts
+            .iter()
+            .map(|entry| {
+                Ok(ConstEntry {
+                    name: entry.name.clone(),
+                    type_ann: entry.type_ann.clone(),
+                    expr: lower(&entry.expr)?,
+                    span: entry.span,
+                })
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        let params = self
+            .params
+            .iter()
+            .map(|entry| {
+                Ok(ParamEntry {
+                    name: entry.name.clone(),
+                    type_ann: entry.type_ann.clone(),
+                    default_expr: entry.default_expr.as_ref().map(&lower).transpose()?,
+                    span: entry.span,
+                })
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        let nodes = self
+            .nodes
+            .iter()
+            .map(|entry| {
+                Ok(NodeEntry {
+                    name: entry.name.clone(),
+                    type_ann: entry.type_ann.clone(),
+                    expr: lower(&entry.expr)?,
+                    span: entry.span,
+                })
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        let asserts = self
+            .asserts
+            .iter()
+            .map(|entry| {
+                Ok(AssertEntry {
+                    name: entry.name.clone(),
+                    body: crate::hir::lower_assert_body(&entry.body, expr_ctx).map_err(|err| {
+                        crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src)
+                    })?,
+                    span: entry.span,
+                })
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+
+        // Plots and figure/layer fields are best-effort at evaluation time:
+        // an expression that fails to lower leaves the body incomplete (the
+        // runtime skips it) instead of failing the compile.
+        let lower_optional = |expr: &Expr| crate::hir::lower_expr(expr, expr_ctx).ok();
+        let plots = self
+            .plots
+            .iter()
+            .map(|entry| {
+                let mut body = LoweredPlotBody::default();
+                let mut complete = true;
+                for encoding in &entry.decl.encodings {
+                    match lower_optional(&encoding.value) {
+                        Some(lowered) => body.encodings.push((encoding.channel, lowered)),
+                        None => complete = false,
+                    }
+                }
+                for field in &entry.decl.mark.properties {
+                    match lower_optional(&field.value) {
+                        Some(lowered) => body.mark_properties.push(LoweredPlotField {
+                            name: field.name.value.clone(),
+                            value: lowered,
+                        }),
+                        None => complete = false,
+                    }
+                }
+                for field in &entry.decl.properties {
+                    match lower_optional(&field.value) {
+                        Some(lowered) => body.properties.push(LoweredPlotField {
+                            name: field.name.value.clone(),
+                            value: lowered,
+                        }),
+                        None => complete = false,
+                    }
+                }
+                PlotEntry {
+                    name: entry.name.clone(),
+                    mark_type: entry.decl.mark.mark_type,
+                    body: complete.then_some(body),
+                    span: entry.span,
+                    is_pub: entry.is_pub,
+                }
+            })
+            .collect();
+        let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField]| {
+            fields
+                .iter()
+                .filter_map(|field| {
+                    Some(LoweredPlotField {
+                        name: field.name.value.clone(),
+                        value: lower_optional(&field.value)?,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let figures = self
+            .figures
+            .iter()
+            .map(|entry| FigureEntry {
+                name: entry.name.clone(),
+                plot_names: entry.decl.plot_names.clone(),
+                fields: lower_fields(&entry.decl.fields),
+                span: entry.span,
+            })
+            .collect();
+        let layers = self
+            .layers
+            .iter()
+            .map(|entry| LayerEntry {
+                name: entry.name.clone(),
+                plot_names: entry.decl.plot_names.clone(),
+                fields: lower_fields(&entry.decl.fields),
+                span: entry.span,
+            })
+            .collect();
+
+        Ok(IR {
             registry,
-            consts: self.consts,
-            params: self.params,
-            nodes: self.nodes,
-            asserts: self.asserts,
-            plots: self.plots,
-            figures: self.figures,
-            layers: self.layers,
-            runtime_deps: self.runtime_deps,
-            const_deps: self.const_deps,
+            consts,
+            params,
+            nodes,
+            asserts,
+            plots,
+            figures,
+            layers,
             source_order: self.source_order,
             assert_names: self.assert_names,
             assumes_map: self.assumes_map,
@@ -710,6 +1001,23 @@ impl UnfrozenIR {
             imported_decl_types: self.imported_decl_types,
             imported_value_sources: self.imported_value_sources,
             pub_names: self.pub_names,
+        })
+    }
+
+    /// Replace a param's default expression with an override.
+    ///
+    /// Returns `false` when no param entry with that leaf name exists.
+    pub fn override_param_default(&mut self, name: &str, expr: Expr) -> bool {
+        match self
+            .params
+            .iter_mut()
+            .find(|entry| entry.name.member() == name)
+        {
+            Some(entry) => {
+                entry.default_expr = Some(expr);
+                true
+            }
+            None => false,
         }
     }
 
@@ -722,12 +1030,8 @@ impl UnfrozenIR {
         type_ann: TypeExpr,
         expr: Expr,
         span: Span,
-        target: ScopedName,
     ) {
-        let mut deps = BTreeSet::new();
-        deps.insert(target);
-        self.const_deps.insert(name.clone(), deps);
-        self.consts.push(ConstEntry {
+        self.consts.push(UnfrozenConstEntry {
             name: name.clone(),
             type_ann,
             expr,
@@ -739,18 +1043,8 @@ impl UnfrozenIR {
     /// Add a node alias: a synthetic node declaration that references another node/param.
     ///
     /// Used for selective instantiated imports where `delta_v` aliases `prefix.delta_v`.
-    pub fn add_node_alias(
-        &mut self,
-        name: ScopedName,
-        type_ann: TypeExpr,
-        expr: Expr,
-        span: Span,
-        target: ScopedName,
-    ) {
-        let mut deps = BTreeSet::new();
-        deps.insert(target);
-        self.runtime_deps.insert(name.clone(), deps);
-        self.nodes.push(NodeEntry {
+    pub fn add_node_alias(&mut self, name: ScopedName, type_ann: TypeExpr, expr: Expr, span: Span) {
+        self.nodes.push(UnfrozenNodeEntry {
             name: name.clone(),
             type_ann,
             expr,
@@ -829,10 +1123,10 @@ impl UnfrozenIR {
         index_bindings: &HashMap<IndexName, IndexName>,
         type_bindings: &HashMap<StructTypeName, StructTypeName>,
         dim_bindings: &HashMap<DimName, DimName>,
-        import_item_attributes: &HashMap<DeclName, Vec<crate::desugar::resolved_ast::Attribute>>,
+        import_item_attributes: &HashMap<DeclName, Vec<crate::desugar::desugared_ast::Attribute>>,
         importer_src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
-        /// Prefix a `ScopedName` dep if it is an unqualified member owned by
+        /// Prefix a `ScopedName` if it is an unqualified member owned by
         /// the dependency.
         ///
         /// Mirrors [`RefPrefixer::rewrite`]: already-qualified names (e.g. a
@@ -875,15 +1169,7 @@ impl UnfrozenIR {
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.with_prefix(prefix);
-            // Prefix const deps
-            if let Some(deps) = dep.const_deps.get(&entry.name) {
-                let prefixed_deps = deps
-                    .iter()
-                    .map(|d| prefix_dep(d, prefix, dep_names))
-                    .collect();
-                self.const_deps.insert(prefixed.clone(), prefixed_deps);
-            }
-            self.consts.push(ConstEntry {
+            self.consts.push(UnfrozenConstEntry {
                 name: prefixed.clone(),
                 type_ann: entry.type_ann,
                 expr: entry.expr,
@@ -910,25 +1196,7 @@ impl UnfrozenIR {
             substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
-            // Rebuild runtime deps for the (possibly rewritten) expression
-            let mut graph_refs = BTreeSet::new();
-            if let Some(orig_deps) = dep.runtime_deps.get(&entry.name) {
-                if bindings.contains_key(entry.name.member()) {
-                    // Binding expression — deps are already in the importer's namespace.
-                    // We'll recompute deps from the binding expression below.
-                } else {
-                    // Default expression — prefix dep-internal deps
-                    for d in orig_deps {
-                        graph_refs.insert(prefix_dep(d, prefix, dep_names));
-                    }
-                }
-            }
-            if let Some(binding_expr) = bindings.get(entry.name.member()) {
-                // Collect graph refs from the binding expression
-                collect_graph_refs_from_expr(binding_expr, &mut graph_refs);
-            }
-            self.runtime_deps.insert(prefixed.clone(), graph_refs);
-            self.params.push(ParamEntry {
+            self.params.push(UnfrozenParamEntry {
                 name: prefixed.clone(),
                 type_ann: entry.type_ann,
                 default_expr: entry.default_expr,
@@ -946,14 +1214,7 @@ impl UnfrozenIR {
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.with_prefix(prefix);
-            if let Some(deps) = dep.runtime_deps.get(&entry.name) {
-                let prefixed_deps = deps
-                    .iter()
-                    .map(|d| prefix_dep(d, prefix, dep_names))
-                    .collect();
-                self.runtime_deps.insert(prefixed.clone(), prefixed_deps);
-            }
-            self.nodes.push(NodeEntry {
+            self.nodes.push(UnfrozenNodeEntry {
                 name: prefixed.clone(),
                 type_ann: entry.type_ann,
                 expr: entry.expr,
@@ -965,12 +1226,12 @@ impl UnfrozenIR {
         // Merge asserts
         for mut entry in dep.asserts {
             match &mut entry.body {
-                crate::desugar::resolved_ast::AssertBody::Expr(e) => {
+                crate::desugar::desugared_ast::AssertBody::Expr(e) => {
                     substitute_index_names(e, index_bindings);
                     substitute_type_names_in_expr(e, type_bindings);
                     prefix_expr_refs(e, prefix, dep_names);
                 }
-                crate::desugar::resolved_ast::AssertBody::Tolerance {
+                crate::desugar::desugared_ast::AssertBody::Tolerance {
                     actual,
                     expected,
                     tolerance,
@@ -988,7 +1249,7 @@ impl UnfrozenIR {
                 }
             }
             let prefixed = entry.name.with_prefix(prefix);
-            self.asserts.push(AssertEntry {
+            self.asserts.push(UnfrozenAssertEntry {
                 name: prefixed.clone(),
                 body: entry.body,
                 span: entry.span,
@@ -1015,7 +1276,7 @@ impl UnfrozenIR {
                 prefix_expr_refs(&mut prop.value, prefix, dep_names);
             }
             let prefixed = entry.name.with_prefix(prefix);
-            self.plots.push(PlotEntry {
+            self.plots.push(UnfrozenPlotEntry {
                 name: prefixed.clone(),
                 decl: entry.decl,
                 span: entry.span,
@@ -1038,7 +1299,7 @@ impl UnfrozenIR {
                 }
             }
             let prefixed = entry.name.with_prefix(prefix);
-            self.figures.push(FigureEntry {
+            self.figures.push(UnfrozenFigureEntry {
                 name: prefixed.clone(),
                 decl: entry.decl,
                 span: entry.span,
@@ -1060,7 +1321,7 @@ impl UnfrozenIR {
                 }
             }
             let prefixed = entry.name.with_prefix(prefix);
-            self.layers.push(LayerEntry {
+            self.layers.push(UnfrozenLayerEntry {
                 name: prefixed.clone(),
                 decl: entry.decl,
                 span: entry.span,
@@ -1187,7 +1448,7 @@ impl OverrideReconciliationChecker<'_> {
     }
 
     fn check_type_expr(&self, type_expr: &TypeExpr) -> Result<(), GraphcalError> {
-        use crate::desugar::resolved_ast::TypeExprKind;
+        use crate::desugar::desugared_ast::TypeExprKind;
         match &type_expr.kind {
             TypeExprKind::DimExpr(dim_expr) => {
                 for item in &dim_expr.terms {
@@ -1234,20 +1495,31 @@ impl OverrideReconciliationChecker<'_> {
     }
 }
 
-impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationChecker<'_> {
+impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChecker<'_> {
     type Error = GraphcalError;
 
-    fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::VariantLiteral { index, variant } = &expr.kind
-            && self
-                .index_bindings
-                .contains_key(index.value.leaf().as_str())
+    fn visit_unresolved_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+        let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) = &expr.kind
+        else {
+            return Ok(());
+        };
+        // A two-segment path whose head names a rebound index is a variant
+        // literal of that index.
+        if let [head, variant] = path.segments()
+            && self.index_bindings.contains_key(head.name.as_str())
         {
             return Err(self.orphan_error(
                 "index",
-                index.value.leaf().as_str(),
-                format!("`{}.{}`", index.value, variant.value),
+                head.name.as_str(),
+                format!("`{}.{}`", head.name, variant.name),
             ));
+        }
+        // A bare path naming a rebound type is a nullary constructor use.
+        if let Some(ident) = path.as_bare()
+            && self.type_bindings.contains_key(ident.name.as_str())
+        {
+            let n = ident.name.as_str();
+            return Err(self.orphan_error("type", n, format!("constructor `{n}`")));
         }
         Ok(())
     }
@@ -1255,7 +1527,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
     fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::IndexAccess { args, .. } = &expr.kind {
             for arg in args {
-                if let crate::desugar::resolved_ast::IndexArg::Variant { index, variant } = arg
+                if let crate::desugar::desugared_ast::IndexArg::Variant { index, variant } = arg
                     && self
                         .index_bindings
                         .contains_key(index.value.leaf().as_str())
@@ -1274,7 +1546,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
     fn visit_map_entries(
         &mut self,
         _expr: &Expr,
-        entries: &[crate::desugar::resolved_ast::MapEntry],
+        entries: &[crate::desugar::desugared_ast::MapEntry],
     ) -> Result<(), Self::Error> {
         for entry in entries {
             let key = entry.keys.first();
@@ -1296,21 +1568,35 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
         &mut self,
         _expr: &Expr,
         scrutinee: &Expr,
-        arms: &[crate::desugar::resolved_ast::MatchArm],
+        arms: &[crate::desugar::desugared_ast::MatchArm],
     ) -> Result<(), Self::Error> {
         self.visit_expr(scrutinee)?;
         for arm in arms {
-            if let crate::desugar::resolved_ast::MatchPattern::IndexLabel { index, variant, .. } =
-                &arm.pattern
-                && self
+            match &arm.pattern {
+                crate::desugar::desugared_ast::MatchPattern::IndexLabel {
+                    index, variant, ..
+                } if self
                     .index_bindings
-                    .contains_key(index.value.leaf().as_str())
-            {
-                return Err(self.orphan_error(
-                    "index",
-                    index.value.leaf().as_str(),
-                    format!("`{}.{}`", index.value, variant.value),
-                ));
+                    .contains_key(index.value.leaf().as_str()) =>
+                {
+                    return Err(self.orphan_error(
+                        "index",
+                        index.value.leaf().as_str(),
+                        format!("`{}.{}`", index.value, variant.value),
+                    ));
+                }
+                crate::desugar::desugared_ast::MatchPattern::Path { path, .. } => {
+                    if let [head, variant] = path.segments()
+                        && self.index_bindings.contains_key(head.name.as_str())
+                    {
+                        return Err(self.orphan_error(
+                            "index",
+                            head.name.as_str(),
+                            format!("`{}.{}`", head.name, variant.name),
+                        ));
+                    }
+                }
+                _ => {}
             }
             self.visit_expr(&arm.body)?;
         }
@@ -1320,7 +1606,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
     fn visit_constructor_call(
         &mut self,
         expr: &Expr,
-        fields: &[crate::desugar::resolved_ast::FieldInit],
+        fields: &[crate::desugar::desugared_ast::FieldInit],
     ) -> Result<(), Self::Error> {
         if let ExprKind::ConstructorCall {
             callee,
@@ -1335,7 +1621,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
                 }
             }
             for arg in generic_args {
-                if let crate::desugar::resolved_ast::GenericArg::Type(ty) = arg {
+                if let crate::desugar::desugared_ast::GenericArg::Type(ty) = arg {
                     self.check_type_expr(ty)?;
                 }
             }
@@ -1349,7 +1635,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
     fn visit_fn_call(&mut self, expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
         if let ExprKind::FnCall { type_args, .. } = &expr.kind {
             for ga in type_args {
-                if let crate::desugar::resolved_ast::GenericArg::Type(ty) = ga {
+                if let crate::desugar::desugared_ast::GenericArg::Type(ty) = ga {
                     self.check_type_expr(ty)?;
                 }
             }
@@ -1370,6 +1656,7 @@ impl ExprVisitor<crate::syntax::phase::Resolved> for OverrideReconciliationCheck
 /// local/qualified distinction lives in the structured qualifier path.
 struct RefPrefixer<'a> {
     prefix: &'a str,
+    prefix_atom: NameAtom,
     dep_names: &'a HashSet<DeclName>,
 }
 
@@ -1387,7 +1674,7 @@ impl RefPrefixer<'_> {
     }
 }
 
-impl ExprVisitorMut<crate::syntax::phase::Resolved> for RefPrefixer<'_> {
+impl ExprVisitorMut<crate::syntax::phase::Desugared> for RefPrefixer<'_> {
     type Error = std::convert::Infallible;
 
     fn visit_graph_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
@@ -1399,11 +1686,25 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for RefPrefixer<'_> {
         Ok(())
     }
 
-    fn visit_const_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        if let ExprKind::ConstRef(ident) = &mut expr.kind
-            && let Some(prefixed) = self.rewrite(&ident.value)
+    fn visit_unresolved_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        // A bare reference path owned by the dependency becomes a qualified
+        // path under the merge prefix, mirroring the prefixed entry name it
+        // resolves to. Already-qualified paths belong to another namespace
+        // (a transitive import inside the dep) and keep their qualifier.
+        if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) =
+            &mut expr.kind
+            && let Some(ident) = path.as_bare()
+            && self.dep_names.contains(ident.name.as_str())
         {
-            ident.value = prefixed;
+            let leaf = ident.clone();
+            let prefix_segment = crate::syntax::ast::Ident {
+                name: self.prefix_atom.clone(),
+                span: leaf.span,
+            };
+            *path = crate::syntax::ast::IdentPath::new(crate::syntax::non_empty::NonEmpty::new(
+                prefix_segment,
+                vec![leaf],
+            ));
         }
         Ok(())
     }
@@ -1422,7 +1723,16 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for RefPrefixer<'_> {
 ///
 /// Built-in names and names from the importer's scope are left unchanged.
 pub(crate) fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<DeclName>) {
-    let mut prefixer = RefPrefixer { prefix, dep_names };
+    let Ok(prefix_atom) = NameAtom::parse(prefix) else {
+        // The prefix comes from a validated include alias; a non-identifier
+        // prefix cannot name any reference, so there is nothing to rewrite.
+        return;
+    };
+    let mut prefixer = RefPrefixer {
+        prefix,
+        prefix_atom,
+        dep_names,
+    };
     let _ = prefixer.visit_expr_mut(expr);
 }
 
@@ -1436,14 +1746,20 @@ struct IndexSubstituter<'a> {
     bindings: &'a HashMap<IndexName, IndexName>,
 }
 
-impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
+impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
     type Error = std::convert::Infallible;
 
-    fn visit_variant_literal_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        if let ExprKind::VariantLiteral { index, .. } = &mut expr.kind
-            && let Some(new) = self.bindings.get(index.value.leaf().as_str())
+    fn visit_unresolved_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        // A two-segment path whose head names a rebound index is a variant
+        // literal of that index (`Phase.Burn`); rewrite the head segment so
+        // the literal points at the importer's index.
+        if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) =
+            &mut expr.kind
+            && let [head, _variant] = path.segments.as_mut_slice()
+            && let Some(new) = self.bindings.get(head.name.as_str())
+            && let Ok(new_atom) = NameAtom::parse(new.as_str())
         {
-            index.value = new.clone().into();
+            head.name = new_atom;
         }
         Ok(())
     }
@@ -1451,7 +1767,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
     fn visit_for_comp_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         if let ExprKind::ForComp { bindings, body } = &mut expr.kind {
             for b in bindings {
-                if let crate::desugar::resolved_ast::ForBindingIndex::Named(ref mut spanned_idx) =
+                if let crate::desugar::desugared_ast::ForBindingIndex::Named(ref mut spanned_idx) =
                     b.index
                     && let Some(new) = self.bindings.get(spanned_idx.value.leaf().as_str())
                 {
@@ -1464,7 +1780,7 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
     }
 
     fn visit_index_access_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        use crate::desugar::resolved_ast::IndexArg;
+        use crate::desugar::desugared_ast::IndexArg;
         if let ExprKind::IndexAccess { expr: inner, args } = &mut expr.kind {
             for arg in args.iter_mut() {
                 match arg {
@@ -1505,11 +1821,23 @@ impl ExprVisitorMut<crate::syntax::phase::Resolved> for IndexSubstituter<'_> {
         if let ExprKind::Match { scrutinee, arms } = &mut expr.kind {
             self.visit_expr_mut(scrutinee)?;
             for arm in arms {
-                if let crate::desugar::resolved_ast::MatchPattern::IndexLabel { index, .. } =
-                    &mut arm.pattern
-                    && let Some(new) = self.bindings.get(index.value.leaf().as_str())
-                {
-                    index.value = new.clone().into();
+                match &mut arm.pattern {
+                    crate::desugar::desugared_ast::MatchPattern::IndexLabel { index, .. } => {
+                        if let Some(new) = self.bindings.get(index.value.leaf().as_str()) {
+                            index.value = new.clone().into();
+                        }
+                    }
+                    // A two-segment path pattern whose head names a rebound
+                    // index is an index-label pattern; rewrite the head.
+                    crate::desugar::desugared_ast::MatchPattern::Path { path, .. } => {
+                        if let [head, _variant] = path.segments.as_mut_slice()
+                            && let Some(new) = self.bindings.get(head.name.as_str())
+                            && let Ok(new_atom) = NameAtom::parse(new.as_str())
+                        {
+                            head.name = new_atom;
+                        }
+                    }
+                    crate::desugar::desugared_ast::MatchPattern::Constructor { .. } => {}
                 }
                 self.visit_expr_mut(&mut arm.body)?;
             }
@@ -1548,7 +1876,7 @@ pub fn substitute_type_expr_index_names(
     type_expr: &mut TypeExpr,
     bindings: &HashMap<IndexName, IndexName>,
 ) {
-    use crate::desugar::resolved_ast::TypeExprKind;
+    use crate::desugar::desugared_ast::TypeExprKind;
 
     if bindings.is_empty() {
         return;
@@ -1556,7 +1884,7 @@ pub fn substitute_type_expr_index_names(
     match &mut type_expr.kind {
         TypeExprKind::Indexed { base, indexes } => {
             for idx_expr in indexes.iter_mut() {
-                if let crate::desugar::resolved_ast::IndexExpr::Name(path) = idx_expr
+                if let crate::desugar::desugared_ast::IndexExpr::Name(path) = idx_expr
                     && let Some(atom) = path.value.as_bare()
                     && let Some(new_name) = bindings.get(atom.as_str())
                 {
@@ -1595,7 +1923,7 @@ pub fn substitute_type_expr_nominal_names<K>(type_expr: &mut TypeExpr, bindings:
 where
     K: std::hash::Hash + Eq + std::borrow::Borrow<str> + AsRef<str>,
 {
-    use crate::desugar::resolved_ast::TypeExprKind;
+    use crate::desugar::desugared_ast::TypeExprKind;
 
     if bindings.is_empty() {
         return;
@@ -1650,7 +1978,7 @@ pub(crate) fn substitute_type_names_in_expr(
     expr: &mut Expr,
     bindings: &HashMap<StructTypeName, StructTypeName>,
 ) {
-    use crate::desugar::resolved_ast::{GenericArg, IndexArg};
+    use crate::desugar::desugared_ast::{GenericArg, IndexArg};
 
     if bindings.is_empty() {
         return;
@@ -1660,12 +1988,19 @@ pub(crate) fn substitute_type_names_in_expr(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
-        | ExprKind::TypeSystemRef(_)
         | ExprKind::UnitLiteral { .. }
-        | ExprKind::LocalRef(_)
-        | ExprKind::GraphRef(_)
-        | ExprKind::ConstRef(_)
-        | ExprKind::VariantLiteral { .. } => {}
+        | ExprKind::GraphRef(_) => {}
+
+        // A bare reference path naming a rebound type is a nullary
+        // constructor use; rewrite it to the importer's constructor name.
+        ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
+            if let Some(ident) = path.as_bare_mut()
+                && let Some(new_name) = bindings.get(ident.name.as_str())
+                && let Ok(parsed_name) = NameAtom::parse(new_name.as_ref())
+            {
+                ident.name = parsed_name;
+            }
+        }
 
         ExprKind::InlineDagRef { args, .. } => {
             for binding in args {
@@ -1761,23 +2096,14 @@ pub(crate) fn substitute_type_names_in_expr(
                 substitute_type_names_in_expr(&mut arm.body, bindings);
             }
         }
-        // `Sugar` and `UnresolvedRef` payloads are `Infallible` in `Resolved`
-        // — both arms are statically unreachable.
+        // `Sugar` payload is `Infallible` post-desugar — statically
+        // unreachable.
         #[expect(
             clippy::uninhabited_references,
-            reason = "Sugar/UnresolvedRef(Infallible) — proof of unreachability"
+            reason = "Sugar(Infallible) — proof of unreachability"
         )]
-        ExprKind::Sugar(s) | ExprKind::UnresolvedRef(s) => match *s {},
+        ExprKind::Sugar(s) => match *s {},
     }
-}
-
-/// Collect all `@`-referenced names from an expression (non-recursive into child scopes).
-///
-/// This is a simpler version of `resolve::collect_graph_refs` that operates on
-/// arbitrary expressions without requiring a known-names set. Used for building
-/// runtime deps from binding expressions.
-fn collect_graph_refs_from_expr(expr: &Expr, refs: &mut BTreeSet<ScopedName>) {
-    crate::ir::resolve::collect_scoped_graph_refs(expr, refs);
 }
 
 /// Register dimensions, units, indexes, and struct types from a file's declarations
@@ -1865,7 +2191,7 @@ fn register_declarations_impl(
     filter: Option<&SelectedDeclarations>,
     dag_id: &crate::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
-    use crate::desugar::resolved_ast::{DimDecl, IndexDecl, UnitDecl};
+    use crate::desugar::desugared_ast::{DimDecl, IndexDecl, UnitDecl};
 
     let should_register_default =
         |name: &str| filter.is_none_or(|names| names.default.contains(name));
@@ -1979,9 +2305,9 @@ fn register_declarations_impl(
 /// are considered satisfied and do not create graph edges. Only dependencies between
 /// the file-local derived dimensions are edges.
 fn topo_sort_derived_dims<'a>(
-    dims: &[&'a crate::desugar::resolved_ast::DimDecl],
+    dims: &[&'a crate::desugar::desugared_ast::DimDecl],
     src: &NamedSource<Arc<String>>,
-) -> Result<Vec<&'a crate::desugar::resolved_ast::DimDecl>, GraphcalError> {
+) -> Result<Vec<&'a crate::desugar::desugared_ast::DimDecl>, GraphcalError> {
     let mut graph = DiGraph::<&str, ()>::new();
     let mut name_to_idx: HashMap<&str, petgraph::graph::NodeIndex> = HashMap::new();
     let mut idx_to_pos: HashMap<petgraph::graph::NodeIndex, usize> = HashMap::new();
@@ -2048,9 +2374,9 @@ fn topo_sort_derived_dims<'a>(
 /// depends on `m`). Dependencies on units already in the registry are satisfied and
 /// do not create graph edges.
 fn topo_sort_units<'a>(
-    units: &[&'a crate::desugar::resolved_ast::UnitDecl],
+    units: &[&'a crate::desugar::desugared_ast::UnitDecl],
     src: &NamedSource<Arc<String>>,
-) -> Result<Vec<&'a crate::desugar::resolved_ast::UnitDecl>, GraphcalError> {
+) -> Result<Vec<&'a crate::desugar::desugared_ast::UnitDecl>, GraphcalError> {
     let mut graph = DiGraph::<&str, ()>::new();
     let mut name_to_idx: HashMap<&str, petgraph::graph::NodeIndex> = HashMap::new();
     let mut idx_to_pos: HashMap<petgraph::graph::NodeIndex, usize> = HashMap::new();
@@ -2097,7 +2423,7 @@ fn topo_sort_units<'a>(
 }
 
 fn register_base_dimension_decl(
-    d: &crate::desugar::resolved_ast::BaseDimDecl,
+    d: &crate::desugar::desugared_ast::BaseDimDecl,
     registry: &mut RegistryBuilder,
     dag_id: &crate::dag_id::DagId,
 ) {
@@ -2109,7 +2435,7 @@ fn register_base_dimension_decl(
 }
 
 fn register_dimension_decl(
-    d: &crate::desugar::resolved_ast::DimDecl,
+    d: &crate::desugar::desugared_ast::DimDecl,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -2140,7 +2466,7 @@ fn register_dimension_decl(
 /// compiling standalone. Later include-time substitution rewires
 /// references through the importer's dim bindings.
 fn register_required_dimension_decl(
-    d: &crate::desugar::resolved_ast::DimDecl,
+    d: &crate::desugar::desugared_ast::DimDecl,
     registry: &mut RegistryBuilder,
     dag_id: &crate::dag_id::DagId,
 ) {
@@ -2189,7 +2515,7 @@ fn multiply_positive_scales(
 }
 
 fn register_unit_decl(
-    u: &crate::desugar::resolved_ast::UnitDecl,
+    u: &crate::desugar::desugared_ast::UnitDecl,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -2266,7 +2592,7 @@ fn register_unit_decl(
 /// The base unit itself must be static (not dynamic).
 fn resolve_base_unit_static_scale(
     registry: &RegistryBuilder,
-    unit_expr: &crate::desugar::resolved_ast::UnitExpr,
+    unit_expr: &crate::desugar::desugared_ast::UnitExpr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<PositiveFiniteScale, GraphcalError> {
     let (_dim, base_scale) = registry
@@ -2305,119 +2631,6 @@ fn contains_graph_ref(expr: &Expr) -> bool {
     crate::ir::resolve::contains_graph_ref(expr)
 }
 
-/// Build a map of dynamic unit name → set of `@`-references from the registry.
-///
-/// For each dynamic unit, extracts the graph refs from its `scale_expr`.
-/// Returns an empty map if no dynamic units exist. The refs keep their
-/// structured [`ScopedName`] form — flattening them to strings used to
-/// corrupt qualified refs into local names containing a dot.
-fn build_dynamic_unit_deps(registry: &RegistryBuilder) -> HashMap<UnitName, BTreeSet<ScopedName>> {
-    let mut dynamic_deps: HashMap<UnitName, BTreeSet<ScopedName>> = HashMap::new();
-
-    for (name, _dim, scale) in registry.all_units() {
-        if let UnitScale::Dynamic { scale_expr, .. } = scale {
-            let mut refs = BTreeSet::new();
-            crate::ir::resolve::collect_scoped_graph_refs(scale_expr, &mut refs);
-            if !refs.is_empty() {
-                dynamic_deps.insert(name.clone(), refs);
-            }
-        }
-    }
-
-    dynamic_deps
-}
-
-/// Visitor that collects all unit names referenced by `UnitLiteral` and `Convert` nodes.
-struct UnitNameCollector {
-    unit_names: HashSet<UnitName>,
-}
-
-impl ExprVisitor<crate::syntax::phase::Resolved> for UnitNameCollector {
-    type Error = std::convert::Infallible;
-
-    fn visit_leaf(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        if let ExprKind::UnitLiteral { unit, .. } = &expr.kind {
-            for term in &unit.terms {
-                self.unit_names.insert(term.name.value.clone());
-            }
-        }
-        Ok(())
-    }
-
-    fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
-        // Collect unit names from Convert targets
-        if let ExprKind::Convert { target, .. } = &expr.kind {
-            for term in &target.terms {
-                self.unit_names.insert(term.name.value.clone());
-            }
-        }
-        // Continue recursion into the inner expression
-        self.visit_expr(inner)
-    }
-}
-
-/// Augment `runtime_deps` with transitive dependencies through dynamic units.
-///
-/// When a param/node expression references a dynamic unit (via `UnitLiteral` or
-/// `Convert`), the `@`-references in that unit's scale expression become implicit
-/// dependencies of the param/node. This ensures correct topological ordering:
-/// the params referenced by dynamic unit scales are evaluated before any
-/// node/param that uses the dynamic unit.
-fn augment_runtime_deps_for_dynamic_units(
-    runtime_deps: &mut HashMap<ScopedName, HashSet<ScopedName>>,
-    dynamic_unit_deps: &HashMap<UnitName, BTreeSet<ScopedName>>,
-    params: &[crate::registry::resolve_types::ResolvedParamEntry],
-    nodes: &[crate::registry::resolve_types::ResolvedNodeEntry],
-) {
-    if dynamic_unit_deps.is_empty() {
-        return;
-    }
-
-    // For each param with a default expression, check for dynamic unit references.
-    // Resolved param/node names are bare locals at this stage of the resolver.
-    for param in params {
-        if let Some(expr) = &param.default_expr {
-            let extra_deps = collect_dynamic_unit_deps_from_expr(expr, dynamic_unit_deps);
-            if !extra_deps.is_empty() {
-                runtime_deps
-                    .entry(ScopedName::local(param.name.as_str()))
-                    .or_default()
-                    .extend(extra_deps);
-            }
-        }
-    }
-
-    // For each node, check for dynamic unit references
-    for node in nodes {
-        let extra_deps = collect_dynamic_unit_deps_from_expr(&node.expr, dynamic_unit_deps);
-        if !extra_deps.is_empty() {
-            runtime_deps
-                .entry(ScopedName::local(node.name.as_str()))
-                .or_default()
-                .extend(extra_deps);
-        }
-    }
-}
-
-/// Collect transitive `@`-dependencies from dynamic units referenced in an expression.
-fn collect_dynamic_unit_deps_from_expr(
-    expr: &Expr,
-    dynamic_unit_deps: &HashMap<UnitName, BTreeSet<ScopedName>>,
-) -> HashSet<ScopedName> {
-    let mut collector = UnitNameCollector {
-        unit_names: HashSet::new(),
-    };
-    let _ = collector.visit_expr(expr);
-
-    let mut extra_deps = HashSet::new();
-    for unit_name in &collector.unit_names {
-        if let Some(deps) = dynamic_unit_deps.get(unit_name) {
-            extra_deps.extend(deps.iter().cloned());
-        }
-    }
-    extra_deps
-}
-
 /// Convert an AST-level `u64` nat literal to the `usize` size the registry
 /// stores, raising a graceful runtime error if the value doesn't fit in
 /// `usize` on the current target (e.g., a > 4G literal on a 32-bit build).
@@ -2443,23 +2656,24 @@ fn nat_size_to_usize(
 /// Recursively scan a type expression for nat literals in index position
 /// and register the corresponding synthetic nat range indexes in the registry.
 fn collect_nat_ranges_from_type_expr(
-    type_expr: &crate::desugar::resolved_ast::TypeExpr,
+    type_expr: &crate::desugar::desugared_ast::TypeExpr,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    if let crate::desugar::resolved_ast::TypeExprKind::Indexed { base, indexes } = &type_expr.kind {
+    if let crate::desugar::desugared_ast::TypeExprKind::Indexed { base, indexes } = &type_expr.kind
+    {
         collect_nat_ranges_from_type_expr(base, registry, src)?;
         for idx in indexes {
             match idx {
-                crate::desugar::resolved_ast::IndexExpr::NatExpr(nat_expr) => {
+                crate::desugar::desugared_ast::IndexExpr::NatExpr(nat_expr) => {
                     collect_nat_range_literals_from_nat_expr(nat_expr, registry, src)?;
                 }
-                crate::desugar::resolved_ast::IndexExpr::Name(_) => {}
+                crate::desugar::desugared_ast::IndexExpr::Name(_) => {}
             }
         }
     }
-    if let crate::desugar::resolved_ast::TypeExprKind::TypeApplication { type_args, .. }
-    | crate::desugar::resolved_ast::TypeExprKind::DatetimeApplication { type_args } =
+    if let crate::desugar::desugared_ast::TypeExprKind::TypeApplication { type_args, .. }
+    | crate::desugar::desugared_ast::TypeExprKind::DatetimeApplication { type_args } =
         &type_expr.kind
     {
         for arg in type_args {
@@ -2474,11 +2688,11 @@ fn collect_nat_ranges_from_type_expr(
 /// Only literal-only expressions can be registered at compile time;
 /// expressions containing variables are resolved at call sites.
 fn collect_nat_range_literals_from_nat_expr(
-    expr: &crate::desugar::resolved_ast::NatExpr,
+    expr: &crate::desugar::desugared_ast::NatExpr,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    use crate::desugar::resolved_ast::NatExpr;
+    use crate::desugar::desugared_ast::NatExpr;
     match expr {
         NatExpr::Literal(n, span) => {
             let size = nat_size_to_usize(*n, *span, src)?;
@@ -2496,11 +2710,11 @@ fn collect_nat_range_literals_from_nat_expr(
 /// Recursively scan an expression for `for i: range(N)` and register
 /// nat range indexes for concrete nat literals.
 fn collect_nat_ranges_from_expr(
-    expr: &crate::desugar::resolved_ast::Expr,
+    expr: &crate::desugar::desugared_ast::Expr,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    use crate::desugar::resolved_ast::{ExprKind, ForBindingIndex};
+    use crate::desugar::desugared_ast::{ExprKind, ForBindingIndex};
 
     // Use the visitor trait to walk all sub-expressions
     struct NatRangeCollector<'a> {
@@ -2508,12 +2722,14 @@ fn collect_nat_ranges_from_expr(
         src: &'a NamedSource<Arc<String>>,
     }
 
-    impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Resolved> for NatRangeCollector<'_> {
+    impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
+        for NatRangeCollector<'_>
+    {
         type Error = GraphcalError;
 
         fn visit_expr(
             &mut self,
-            expr: &crate::desugar::resolved_ast::Expr,
+            expr: &crate::desugar::desugared_ast::Expr,
         ) -> Result<(), GraphcalError> {
             match &expr.kind {
                 ExprKind::ForComp { bindings, .. } => {
@@ -2545,18 +2761,18 @@ fn collect_nat_ranges_from_expr(
 }
 
 fn register_index_decl(
-    idx: &crate::desugar::resolved_ast::IndexDecl,
+    idx: &crate::desugar::desugared_ast::IndexDecl,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     decl_span: Span,
 ) -> Result<(), GraphcalError> {
     let kind = match &idx.kind {
-        crate::desugar::resolved_ast::IndexDeclKind::Named { variants } => {
+        crate::desugar::desugared_ast::IndexDeclKind::Named { variants } => {
             types::IndexKind::Named {
                 variants: variants.iter().map(|v| v.value.clone()).collect(),
             }
         }
-        crate::desugar::resolved_ast::IndexDeclKind::Range {
+        crate::desugar::desugared_ast::IndexDeclKind::Range {
             start: start_expr,
             end: end_expr,
             step: step_expr,
@@ -2569,10 +2785,10 @@ fn register_index_decl(
             src,
             decl_span,
         )?,
-        crate::desugar::resolved_ast::IndexDeclKind::RequiredNamed => {
+        crate::desugar::desugared_ast::IndexDeclKind::RequiredNamed => {
             types::IndexKind::RequiredNamed
         }
-        crate::desugar::resolved_ast::IndexDeclKind::RequiredRange { dimension } => {
+        crate::desugar::desugared_ast::IndexDeclKind::RequiredRange { dimension } => {
             let dim = registry
                 .resolve_dim_expr(dimension)
                 .map_err(|_| GraphcalError::DimensionOverflow {
@@ -2594,7 +2810,7 @@ fn register_index_decl(
     Ok(())
 }
 
-fn register_type_decl(t: &crate::desugar::resolved_ast::TypeDecl, registry: &mut RegistryBuilder) {
+fn register_type_decl(t: &crate::desugar::desugared_ast::TypeDecl, registry: &mut RegistryBuilder) {
     let generic_params: Vec<types::TypeGenericParam> = t
         .generic_params
         .iter()
@@ -2606,8 +2822,8 @@ fn register_type_decl(t: &crate::desugar::resolved_ast::TypeDecl, registry: &mut
         .collect();
 
     let kind = match &t.body {
-        crate::desugar::resolved_ast::TypeDeclBody::Required => types::TypeDefKind::Required,
-        crate::desugar::resolved_ast::TypeDeclBody::Constructors(type_members) => {
+        crate::desugar::desugared_ast::TypeDeclBody::Required => types::TypeDefKind::Required,
+        crate::desugar::desugared_ast::TypeDeclBody::Constructors(type_members) => {
             // Every constructor carries its payload inline; no per-constructor
             // TypeDef is synthesized. The constructor namespace lives on the
             // registry and points back to this type.
@@ -2648,27 +2864,27 @@ fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, G
         ExprKind::Number(n) => Ok(*n),
         #[expect(clippy::cast_precision_loss, reason = "unit scale constant expression")]
         ExprKind::Integer(n) => Ok(*n as f64),
-        ExprKind::ConstRef(ident) => {
+        ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
             // Route through the typed builtin-constant table instead of
             // string-matching a hand-picked subset: all built-in constants
             // (PI, E, TAU, SQRT2, LN2, LN10) are legal in scale expressions.
-            let builtin = (!ident.value.is_qualified())
-                .then(|| crate::hir::BuiltinConst::parse(ident.value.member()))
-                .flatten();
+            let builtin = path
+                .as_bare()
+                .and_then(|ident| crate::hir::BuiltinConst::parse(ident.name.as_str()));
             builtin
                 .map(crate::hir::BuiltinConst::value)
                 .ok_or_else(|| GraphcalError::EvalError {
                     message: format!(
                         "unknown constant `{}` in scale expression; only built-in \
                          constants (PI, E, TAU, SQRT2, LN2, LN10) are supported",
-                        ident.value
+                        path.display_path()
                     ),
                     src: src.clone(),
-                    span: ident.span.into(),
+                    span: path.span().into(),
                 })
         }
         ExprKind::BinOp { op, lhs, rhs } => {
-            use crate::desugar::resolved_ast::BinOp;
+            use crate::desugar::desugared_ast::BinOp;
             let l = eval_scale_expr(lhs, src)?;
             let r = eval_scale_expr(rhs, src)?;
             match op {
@@ -2688,7 +2904,7 @@ fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, G
             }
         }
         ExprKind::UnaryOp {
-            op: crate::desugar::resolved_ast::UnaryOp::Neg,
+            op: crate::desugar::desugared_ast::UnaryOp::Neg,
             operand,
         } => Ok(-eval_scale_expr(operand, src)?),
         _ => Err(GraphcalError::EvalError {
@@ -2737,7 +2953,7 @@ fn eval_range_expr(
             Ok((ensure_finite(*value * scale.get(), expr.span)?, dim))
         }
         ExprKind::UnaryOp {
-            op: crate::desugar::resolved_ast::UnaryOp::Neg,
+            op: crate::desugar::desugared_ast::UnaryOp::Neg,
             operand,
         } => {
             let (val, dim) = eval_range_expr(operand, registry, src)?;
@@ -2944,7 +3160,7 @@ mod tests {
     fn parse_and_lower(source: &str) -> Result<IR, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        let file = crate::syntax::name_resolve::resolve_name_refs(desugared);
+        let file = desugared;
         lower(&file, &make_src(source))
     }
 
@@ -2978,9 +3194,9 @@ mod tests {
     #[test]
     fn lower_hohmann() {
         // hohmann.gcl uses DAG+include. The full project pipeline accepts
-        // it (see the CLI tests), but single-file IR lowering rejects it:
-        // include expansion is a higher-phase concern, so `@transfer`
-        // (the include's projected node) remains unresolved at this layer.
+        // it (see the CLI tests), but single-file IR lowering rejects it at
+        // the freeze boundary: include expansion is a higher-phase concern,
+        // so `@transfer` (the include's projected node) cannot resolve.
         let source = include_str!("../../../../tests/fixtures/valid/hohmann.gcl");
         let err = parse_and_lower(source).unwrap_err();
         assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
@@ -3014,9 +3230,7 @@ mod tests {
         let dep_source = "node out: Dimensionless = 2.0;";
         let dep_src = make_src(dep_source);
         let raw_file = Parser::new(dep_source).parse_file().unwrap();
-        let dep_file = crate::syntax::name_resolve::resolve_name_refs(
-            crate::syntax::desugar::desugar_multi_decls_in_file(raw_file),
-        );
+        let dep_file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let (_dep_builder, mut dep_unfrozen) = lower_to_builder(
             &dep_file,
             &dep_src,
@@ -3043,9 +3257,7 @@ mod tests {
         let importer_source = "node anchor: Dimensionless = 1.0;";
         let importer_src = make_src(importer_source);
         let raw_importer = Parser::new(importer_source).parse_file().unwrap();
-        let importer_file = crate::syntax::name_resolve::resolve_name_refs(
-            crate::syntax::desugar::desugar_multi_decls_in_file(raw_importer),
-        );
+        let importer_file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_importer);
         let (_importer_builder, mut unfrozen) = lower_to_builder(
             &importer_file,
             &importer_src,
@@ -3088,17 +3300,5 @@ mod tests {
                 .contains_key(&ScopedName::qualified("inst", "C")),
             "imported value must not be re-keyed with the instance prefix"
         );
-    }
-
-    #[test]
-    fn lower_deps_extracted() {
-        let ir = parse_and_lower(
-            "param a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;\nnode c: Dimensionless = @a + @b;",
-        )
-        .unwrap();
-        let c_deps = &ir.runtime_deps[&ScopedName::local("c")];
-        assert!(c_deps.contains(&ScopedName::local("a")));
-        assert!(c_deps.contains(&ScopedName::local("b")));
-        assert_eq!(c_deps.len(), 2);
     }
 }

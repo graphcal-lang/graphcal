@@ -24,6 +24,7 @@
 //! evaluation consume this HIR slice for declaration/assertion semantics rather
 //! than re-resolving source-shaped syntax AST references.
 
+pub(crate) mod diagnostics;
 pub mod expr;
 pub mod lower;
 pub mod types;
@@ -31,7 +32,8 @@ pub mod types;
 pub use expr::{
     AssertBody, BuiltinConst, BuiltinFnName, ConstRef, Expr, ExprDependencies, ExprKind,
     ExprLowerError, ExprLoweringContext, FunctionRef, LocalDef, LocalEnv, LocalId,
-    collect_expr_dependencies, has_ref_outside_unfold, lower_assert_body, lower_expr,
+    collect_expr_dependencies, has_ref_outside_unfold, lower_assert_body,
+    lower_assert_body_tolerant, lower_expr, lower_expr_tolerant,
 };
 pub use lower::{
     GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope, TypeLoweringContext,

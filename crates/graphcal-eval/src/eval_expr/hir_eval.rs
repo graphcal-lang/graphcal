@@ -45,6 +45,7 @@ pub fn eval_hir_expr(
     })
 }
 
+#[expect(clippy::too_many_lines, reason = "exhaustive HIR ExprKind evaluation")]
 fn eval_hir_expr_inner(
     expr: &hir::Expr,
     values: &RuntimeValueMap,
@@ -52,6 +53,11 @@ fn eval_hir_expr_inner(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match &expr.kind {
+        // Error nodes exist only in tolerant lowering for IDE consumers; the
+        // batch pipeline rejects them before evaluation.
+        hir::ExprKind::Error => {
+            Err(ctx.eval_error("unresolved reference reached evaluation", expr.span))
+        }
         hir::ExprKind::Number(n) => checked_finite_scalar(*n, "numeric literal", expr.span, ctx),
         hir::ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
         hir::ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
@@ -204,14 +210,14 @@ fn eval_hir_nullary_constructor(
 
 fn eval_hir_binop(
     span: Span,
-    op: graphcal_compiler::desugar::resolved_ast::BinOp,
+    op: graphcal_compiler::desugar::desugared_ast::BinOp,
     lhs: &hir::Expr,
     rhs: &hir::Expr,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    use graphcal_compiler::desugar::resolved_ast::BinOp;
+    use graphcal_compiler::desugar::desugared_ast::BinOp;
     match op {
         BinOp::And => {
             let l = eval_hir_expr(lhs, values, local_values, ctx)?
@@ -288,14 +294,14 @@ fn eval_hir_binop(
 
 fn eval_hir_unary(
     span: Span,
-    op: graphcal_compiler::desugar::resolved_ast::UnaryOp,
+    op: graphcal_compiler::desugar::desugared_ast::UnaryOp,
     operand: &hir::Expr,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match op {
-        graphcal_compiler::desugar::resolved_ast::UnaryOp::Neg => {
+        graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg => {
             let v = eval_hir_expr(operand, values, local_values, ctx)?;
             match v {
                 RuntimeValue::Int(i) => i
@@ -308,7 +314,7 @@ fn eval_hir_unary(
                 )),
             }
         }
-        graphcal_compiler::desugar::resolved_ast::UnaryOp::Not => {
+        graphcal_compiler::desugar::desugared_ast::UnaryOp::Not => {
             let v = eval_hir_expr(operand, values, local_values, ctx)?
                 .expect_bool("logical NOT")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;

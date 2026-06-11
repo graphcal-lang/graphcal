@@ -255,7 +255,7 @@ mod tests {
     use graphcal_io::RealFileSystem;
 
     use super::*;
-    use crate::symbol_table::build_from_ast;
+    use crate::symbol_table::build_for_buffer;
 
     fn build_symbol_table(source: &str) -> SymbolTable {
         let mut parser = Parser::new(source);
@@ -264,8 +264,8 @@ mod tests {
             .map(|raw_ast| {
                 let desugared =
                     graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
-                let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
-                build_from_ast(&ast, source)
+                let ast = desugared;
+                build_for_buffer(&ast, source)
             })
             .unwrap_or_default()
     }

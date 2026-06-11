@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use graphcal_compiler::desugar::resolved_ast::Expr;
+use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::syntax::names::{DeclName, NameAtomError};
 use graphcal_compiler::syntax::parser::ParseError;
 use miette::Diagnostic;
@@ -211,18 +211,17 @@ pub fn parse_overrides(
     Ok(overrides)
 }
 
-/// Lift a raw override expression into the resolved AST.
+/// Lift a raw override expression into the desugared AST.
 ///
 /// Override expressions are user-provided literals — they never carry sugar
-/// variants, so the `Raw → Desugared` lift is a structural rebind, and
-/// resolution happens with no file scope (only builtins and time-scale names
-/// visible). Shared by the `--set` and `--input` paths so the
-/// standalone-resolution contract lives in one place.
+/// variants, so the `Raw → Desugared` lift is a structural rebind. Reference
+/// resolution happens once, in HIR lowering, when the override replaces the
+/// target param's default in the compiled file's scope. Shared by the
+/// `--set` and `--input` paths so the lift contract lives in one place.
 fn resolve_override_expr(
     raw: graphcal_compiler::syntax::ast::Expr,
-) -> graphcal_compiler::desugar::resolved_ast::Expr {
-    let desugared: graphcal_compiler::desugar::desugared_ast::Expr = raw.into();
-    graphcal_compiler::syntax::name_resolve::resolve_standalone_expr(desugared)
+) -> graphcal_compiler::desugar::desugared_ast::Expr {
+    raw.into()
 }
 
 #[cfg(test)]

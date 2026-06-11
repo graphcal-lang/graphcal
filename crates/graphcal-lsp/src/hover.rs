@@ -1,6 +1,6 @@
 //! textDocument/hover handler.
 
-use graphcal_compiler::desugar::resolved_ast::BindableVisibility;
+use graphcal_compiler::desugar::desugared_ast::BindableVisibility;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use crate::convert::LineIndex;

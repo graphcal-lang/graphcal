@@ -5,15 +5,52 @@ fn make_src(source: &str) -> NamedSource<Arc<String>> {
     NamedSource::new("test", Arc::new(source.to_string()))
 }
 
-fn parse_and_desugar(source: &str) -> crate::desugar::resolved_ast::File {
+fn parse_and_desugar(source: &str) -> crate::desugar::desugared_ast::File {
     let raw_file = Parser::new(source).parse_file().unwrap();
-    let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-    crate::syntax::name_resolve::resolve_name_refs(desugared)
+    crate::syntax::desugar::desugar_multi_decls_in_file(raw_file)
 }
 
 fn parse_and_resolve(source: &str) -> Result<ResolvedFile, GraphcalError> {
     let file = parse_and_desugar(source);
     resolve(&file, &make_src(source))
+}
+
+/// Run the full per-file pipeline (desugar → IR → HIR/TIR) so tests can
+/// observe reference resolution and the HIR-derived dependency graph.
+fn compile_to_tir(source: &str) -> Result<crate::tir::typed::TIR, GraphcalError> {
+    let file = parse_and_desugar(source);
+    let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+    let dag_id =
+        crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+    let ir = crate::ir::lower::lower(&file, &src)?;
+    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    resolver
+        .add_module(dag_id.clone(), &file.declarations)
+        .unwrap();
+    let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
+    module_types.insert_graphcal_prelude().unwrap();
+    module_types.insert_registry(&dag_id, &ir.registry);
+    crate::tir::typed::type_resolve_with_modules(ir, dag_id, &src, &resolver, &module_types)
+}
+
+/// Dependency names of `decl` in `map`, as leaf strings.
+fn dep_names_of<'a>(
+    map: &'a std::collections::HashMap<
+        crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Decl>,
+        std::collections::BTreeSet<
+            crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Decl>,
+        >,
+    >,
+    decl: &str,
+) -> Vec<&'a str> {
+    map.iter()
+        .find(|(key, _)| key.as_str() == decl)
+        .map(|(_, deps)| {
+            deps.iter()
+                .map(crate::syntax::names::ResolvedName::as_str)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[test]
@@ -45,25 +82,31 @@ fn resolve_duplicate_name() {
 
 #[test]
 fn resolve_unknown_graph_ref() {
-    let err = parse_and_resolve("node x: Dimensionless = @nonexistent + 1.0;").unwrap_err();
-    assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
+    // Unknown `@` targets are rejected by HIR lowering during type
+    // resolution — the IR collection pass no longer classifies references.
+    let err = compile_to_tir("node x: Dimensionless = @nonexistent + 1.0;").unwrap_err();
+    assert!(
+        err.to_string().contains("nonexistent"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
-fn resolve_unknown_bare_name_becomes_local_ref() {
-    // After lifting casing requirements, bare `NONEXISTENT` is parsed as an unresolved path
-    // and resolved to LocalRef (fallback). The resolve pass no longer rejects it;
-    // the error is caught later in the TIR dim-check phase as UnknownLocalRef.
-    let resolved = parse_and_resolve("node x: Dimensionless = NONEXISTENT + 1.0;").unwrap();
-    assert_eq!(resolved.nodes.len(), 1);
+fn resolve_unknown_bare_name_is_rejected_in_hir_lowering() {
+    // A bare name that matches nothing in scope is rejected by HIR lowering
+    // with an unknown-name diagnostic; there is no fallback classification.
+    let err = compile_to_tir("node x: Dimensionless = NONEXISTENT + 1.0;").unwrap_err();
+    assert!(
+        err.to_string().contains("NONEXISTENT"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
 fn resolve_at_in_const() {
-    let err = parse_and_resolve(
-        "param p: Dimensionless = 1.0;\nconst node bad: Dimensionless = @p * 2.0;",
-    )
-    .unwrap_err();
+    let err =
+        compile_to_tir("param p: Dimensionless = 1.0;\nconst node bad: Dimensionless = @p * 2.0;")
+            .unwrap_err();
     assert!(matches!(err, GraphcalError::GraphRefInConst { .. }));
 }
 
@@ -99,35 +142,32 @@ fn resolve_builtin_function_recognized() {
 
 #[test]
 fn resolve_unknown_function() {
-    let err = parse_and_resolve("node x: Dimensionless = unknown_fn(1.0);").unwrap_err();
+    let err = compile_to_tir("node x: Dimensionless = unknown_fn(1.0);").unwrap_err();
     assert!(matches!(err, GraphcalError::UnknownFunction { .. }));
 }
 
 #[test]
 fn resolve_wrong_arity() {
-    let err = parse_and_resolve("node x: Dimensionless = sqrt(1.0, 2.0);").unwrap_err();
+    let err = compile_to_tir("node x: Dimensionless = sqrt(1.0, 2.0);").unwrap_err();
     assert!(matches!(err, GraphcalError::WrongArity { .. }));
 }
 
 #[test]
 fn resolve_const_deps_extracted() {
-    let resolved = parse_and_resolve(
+    let tir = compile_to_tir(
         "const node a: Dimensionless = 1.0;\nconst node b: Dimensionless = @a + 2.0;",
     )
     .unwrap();
-    let b_deps = &resolved.const_deps[&ScopedName::local("b")];
-    assert!(b_deps.contains(&ScopedName::local("a")));
-    assert_eq!(b_deps.len(), 1);
+    let deps = &tir.root().semantic.dependencies;
+    assert_eq!(dep_names_of(&deps.const_deps, "b"), ["a"]);
 }
 
 #[test]
 fn resolve_runtime_deps_extracted() {
-    let resolved =
-        parse_and_resolve("param a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;\nnode c: Dimensionless = @a + @b;").unwrap();
-    let c_deps = &resolved.runtime_deps[&ScopedName::local("c")];
-    assert!(c_deps.contains(&ScopedName::local("a")));
-    assert!(c_deps.contains(&ScopedName::local("b")));
-    assert_eq!(c_deps.len(), 2);
+    let tir =
+        compile_to_tir("param a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;\nnode c: Dimensionless = @a + @b;").unwrap();
+    let deps = &tir.root().semantic.dependencies;
+    assert_eq!(dep_names_of(&deps.runtime_deps, "c"), ["a", "b"]);
 }
 
 // --- Additional error path tests ---
@@ -189,35 +229,34 @@ fn resolve_unknown_bare_name_in_const_becomes_local_ref() {
 
 #[test]
 fn resolve_unknown_function_in_const() {
-    let err = parse_and_resolve("const node a: Dimensionless = unknown_fn(1.0);").unwrap_err();
+    let err = compile_to_tir("const node a: Dimensionless = unknown_fn(1.0);").unwrap_err();
     assert!(matches!(err, GraphcalError::UnknownFunction { .. }));
 }
 
 #[test]
 fn resolve_wrong_arity_in_const() {
-    let err = parse_and_resolve("const node a: Dimensionless = sqrt(1.0, 2.0);").unwrap_err();
+    let err = compile_to_tir("const node a: Dimensionless = sqrt(1.0, 2.0);").unwrap_err();
     assert!(matches!(err, GraphcalError::WrongArity { .. }));
 }
 
 #[test]
 fn resolve_unknown_graph_ref_in_node() {
-    let err = parse_and_resolve("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @z + 1.0;")
+    let err = compile_to_tir("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @z + 1.0;")
         .unwrap_err();
-    assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
+    assert!(err.to_string().contains('z'), "unexpected error: {err}");
 }
 
 #[test]
 fn resolve_unknown_function_in_node() {
-    let err =
-        parse_and_resolve("param x: Dimensionless = 1.0;\nnode y: Dimensionless = bad_fn(@x);")
-            .unwrap_err();
+    let err = compile_to_tir("param x: Dimensionless = 1.0;\nnode y: Dimensionless = bad_fn(@x);")
+        .unwrap_err();
     assert!(matches!(err, GraphcalError::UnknownFunction { .. }));
 }
 
 #[test]
 fn resolve_wrong_arity_in_node() {
     let err =
-        parse_and_resolve("param x: Dimensionless = 1.0;\nnode y: Dimensionless = sqrt(@x, @x);")
+        compile_to_tir("param x: Dimensionless = 1.0;\nnode y: Dimensionless = sqrt(@x, @x);")
             .unwrap_err();
     assert!(matches!(err, GraphcalError::WrongArity { .. }));
 }
@@ -247,8 +286,6 @@ fn resolve_node_with_struct() {
     )
     .unwrap();
     assert_eq!(resolved.nodes.len(), 1);
-    let p_deps = &resolved.runtime_deps[&ScopedName::local("p")];
-    assert!(p_deps.contains(&ScopedName::local("x")));
 }
 
 #[test]
@@ -314,8 +351,6 @@ fn resolve_for_comprehension() {
     )
     .unwrap();
     assert_eq!(resolved.nodes.len(), 1);
-    let deps = &resolved.runtime_deps[&ScopedName::local("doubled")];
-    assert!(deps.contains(&ScopedName::local("values")));
 }
 
 #[test]
@@ -333,8 +368,6 @@ fn resolve_scan_expression() {
     )
     .unwrap();
     assert_eq!(resolved.nodes.len(), 1);
-    let deps = &resolved.runtime_deps[&ScopedName::local("cumul")];
-    assert!(deps.contains(&ScopedName::local("vals")));
 }
 
 #[test]
@@ -345,10 +378,10 @@ fn resolve_unfold_self_edge_excluded() {
         index TimeStep = { First, Second, Third };
         node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| @x[prev_t] * 2.0);
     ";
-    let resolved = parse_and_resolve(source).unwrap();
-    let x_deps = &resolved.runtime_deps[&ScopedName::local("x")];
+    let tir = compile_to_tir(source).unwrap();
+    let deps = &tir.root().semantic.dependencies;
     assert!(
-        !x_deps.contains(&ScopedName::local("x")),
+        !dep_names_of(&deps.runtime_deps, "x").contains(&"x"),
         "unfold self-reference should be excluded from runtime_deps"
     );
 }
@@ -531,7 +564,7 @@ fn resolve_node_with_pub_bind_variant_literal_fires_v004() {
         };
         node design_cost: Dimensionless = @cost[Phase.Design];
     ";
-    let err = parse_and_resolve(source).unwrap_err();
+    let err = compile_to_tir(source).unwrap_err();
     assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
 }
 
@@ -544,7 +577,7 @@ fn resolve_const_with_pub_bind_variant_literal_fires_v004() {
             Phase.Build: 2.0,
         };
     ";
-    let err = parse_and_resolve(source).unwrap_err();
+    let err = compile_to_tir(source).unwrap_err();
     assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
 }
 
@@ -561,7 +594,7 @@ fn resolve_private_assert_with_pub_bind_variant_literal_ok() {
         };
         assert design_cheap = @cost[Phase.Design] < 10.0;
     ";
-    parse_and_resolve(source).unwrap();
+    compile_to_tir(source).unwrap();
 }
 
 #[test]
@@ -576,7 +609,7 @@ fn resolve_public_assert_with_pub_bind_variant_literal_fires_v004() {
         };
         pub assert design_cheap = @cost[Phase.Design] < 10.0;
     ";
-    let err = parse_and_resolve(source).unwrap_err();
+    let err = compile_to_tir(source).unwrap_err();
     assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
 }
 

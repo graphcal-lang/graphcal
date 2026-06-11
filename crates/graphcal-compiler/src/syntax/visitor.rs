@@ -47,14 +47,10 @@ pub(crate) trait ExprVisitor<P: Phase> {
             | ExprKind::Integer(_)
             | ExprKind::Bool(_)
             | ExprKind::StringLiteral(_)
-            | ExprKind::TypeSystemRef(_)
-            | ExprKind::UnitLiteral { .. }
-            | ExprKind::LocalRef(_)
-            | ExprKind::VariantLiteral { .. }
-            | ExprKind::UnresolvedRef(_) => self.visit_leaf(expr),
+            | ExprKind::UnitLiteral { .. } => self.visit_leaf(expr),
 
+            ExprKind::UnresolvedRef(_) => self.visit_unresolved_ref(expr),
             ExprKind::GraphRef(_) => self.visit_graph_ref(expr),
-            ExprKind::ConstRef(_) => self.visit_const_ref(expr),
             ExprKind::InlineDagRef { args, .. } => self.visit_inline_dag_ref(expr, args),
 
             ExprKind::FnCall { args, .. } => self.visit_fn_call(expr, args),
@@ -123,7 +119,10 @@ pub(crate) trait ExprVisitor<P: Phase> {
         Ok(())
     }
 
-    fn visit_const_ref(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
+    /// Called for unresolved reference paths (`Foo`, `Foo.Bar`, ...). Leaf
+    /// node — classification happens in HIR lowering, so visitors that care
+    /// about reference shapes inspect the syntactic path.
+    fn visit_unresolved_ref(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -264,15 +263,10 @@ pub trait ExprVisitorMut<P: Phase> {
             | ExprKind::Integer(_)
             | ExprKind::Bool(_)
             | ExprKind::StringLiteral(_)
-            | ExprKind::TypeSystemRef(_)
-            | ExprKind::UnitLiteral { .. }
-            | ExprKind::LocalRef(_)
-            | ExprKind::UnresolvedRef(_) => Ok(()),
+            | ExprKind::UnitLiteral { .. } => Ok(()),
 
-            ExprKind::VariantLiteral { .. } => self.visit_variant_literal_mut(expr),
-
+            ExprKind::UnresolvedRef(_) => self.visit_unresolved_ref_mut(expr),
             ExprKind::GraphRef(_) => self.visit_graph_ref_mut(expr),
-            ExprKind::ConstRef(_) => self.visit_const_ref_mut(expr),
             ExprKind::InlineDagRef { .. } => self.visit_inline_dag_ref_mut(expr),
 
             ExprKind::FnCall { .. } => self.visit_fn_call_mut(expr),
@@ -329,7 +323,10 @@ pub trait ExprVisitorMut<P: Phase> {
         Ok(())
     }
 
-    fn visit_const_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
+    /// Called for unresolved reference paths (`Foo`, `Foo.Bar`, ...). Leaf
+    /// node — classification happens in HIR lowering, so visitors that
+    /// rewrite reference shapes rewrite the syntactic path.
+    fn visit_unresolved_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -356,11 +353,6 @@ pub trait ExprVisitorMut<P: Phase> {
     //
     // These allow visitors to intercept structural fields (index names,
     // bindings, pattern labels) without overriding the entire `dispatch_mut`.
-
-    /// Called for `VariantLiteral`. Default: no-op (leaf node).
-    fn visit_variant_literal_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        Ok(())
-    }
 
     /// Called for `ForComp`. Default: recurse into `body`.
     fn visit_for_comp_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {

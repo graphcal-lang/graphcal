@@ -466,7 +466,7 @@ pub(super) fn evaluate_plan_with_values(
         .filter_map(|entry| {
             let lowered = plot_exprs.plots.get(&entry.name)?;
             evaluate_plot(
-                &entry.decl,
+                entry.mark_type,
                 lowered,
                 &entry.name,
                 entry.is_pub,
@@ -484,7 +484,7 @@ pub(super) fn evaluate_plan_with_values(
         .map(|entry| {
             let fields = plot_exprs.figures.get(&entry.name).unwrap_or(&no_fields);
             let (properties, plot_names) =
-                eval_composition_fields(fields, &entry.decl.plot_names, &values, &ctx);
+                eval_composition_fields(fields, &entry.plot_names, &values, &ctx);
             super::types::FigureSpec {
                 name: entry.name.clone(),
                 plot_names,
@@ -500,7 +500,7 @@ pub(super) fn evaluate_plan_with_values(
         .map(|entry| {
             let fields = plot_exprs.layers.get(&entry.name).unwrap_or(&no_fields);
             let (properties, plot_names) =
-                eval_composition_fields(fields, &entry.decl.plot_names, &values, &ctx);
+                eval_composition_fields(fields, &entry.plot_names, &values, &ctx);
             super::types::LayerSpec {
                 name: entry.name.clone(),
                 plot_names,
@@ -971,7 +971,7 @@ fn eval_plot_property(
 /// not runtime values in Graphcal).
 /// Returns `None` if any expression evaluation fails (plots are best-effort).
 fn evaluate_plot(
-    decl: &graphcal_compiler::desugar::resolved_ast::PlotDecl,
+    mark_type: graphcal_compiler::syntax::ast::MarkType,
     lowered: &graphcal_compiler::tir::typed::LoweredPlotBody,
     name: &ScopedName,
     is_pub: bool,
@@ -1017,7 +1017,7 @@ fn evaluate_plot(
 
     Some(PlotSpec {
         name: name.clone(),
-        mark_type: decl.mark.mark_type,
+        mark_type,
         encodings,
         encoding_meta,
         mark_properties,

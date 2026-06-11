@@ -1,4 +1,4 @@
-//! Module-aware symbol tables and name resolution scaffolding.
+//! Module-aware symbol tables backing HIR name resolution.
 //!
 //! This module is the first HIR/resolver-oriented layer after the syntax-first
 //! name refactor. It does **not** rewrite the AST yet. Instead it builds typed
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::dag_id::DagId;
-use crate::desugar::resolved_ast as ast;
+use crate::desugar::desugared_ast as ast;
 use crate::syntax::ast::{IdentPath, ImportItem, ImportItemNamespace, ImportKind, ModulePath};
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, IndexName, IndexVariantName, ModuleAliasName, NameAtom,
@@ -1447,6 +1447,15 @@ impl ModuleResolver {
             })
     }
 
+    /// Import scope registered for a module, if any.
+    ///
+    /// IDE consumers use this to map canonical owners back to the module
+    /// aliases a file spelled in its imports.
+    #[must_use]
+    pub fn scope(&self, owner: &DagId) -> Option<&ModuleScope> {
+        self.scopes.get(owner)
+    }
+
     fn module_scope(&self, owner: &DagId) -> Result<&ModuleScope, ModuleResolveError> {
         self.scopes
             .get(owner)
@@ -1751,10 +1760,9 @@ mod tests {
     use crate::syntax::ast::Ident;
     use crate::syntax::parser::Parser;
 
-    fn resolved_source(source: &str) -> ast::File {
+    fn desugared_source(source: &str) -> ast::File {
         let raw = Parser::new(source).parse_file().unwrap();
-        let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw);
-        crate::syntax::name_resolve::resolve_name_refs(desugared)
+        crate::syntax::desugar::desugar_multi_decls_in_file(raw)
     }
 
     fn first_import(file: &ast::File) -> (&ModulePath, &ImportKind) {
@@ -1814,8 +1822,8 @@ mod tests {
     fn resolves_qualified_index_variant_to_canonical_owner() {
         let lib_id = DagId::root("lib");
         let main_id = DagId::root("main");
-        let lib = resolved_source("pub index Phase = { Burn, Coast };");
-        let main = resolved_source("import lib as physics;");
+        let lib = desugared_source("pub index Phase = { Burn, Coast };");
+        let main = desugared_source("import lib as physics;");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -1842,8 +1850,8 @@ mod tests {
     fn selective_type_alias_resolves_to_original_owner_and_leaf() {
         let lib_id = DagId::root("lib");
         let main_id = DagId::root("main");
-        let lib = resolved_source("pub type Vec3 { Vec3 }");
-        let main = resolved_source("import lib.{ type Vec3 as Vector };");
+        let lib = desugared_source("pub type Vec3 { Vec3 }");
+        let main = desugared_source("import lib.{ type Vec3 as Vector };");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -1869,7 +1877,7 @@ mod tests {
     fn type_import_in_child_dag_does_not_import_same_named_constructor() {
         let main_id = DagId::root("main");
         let child_id = main_id.child("build_transfer");
-        let main = resolved_source(
+        let main = desugared_source(
             "pub type TransferResult { TransferResult }
              dag build_transfer {
                  import main.{ type TransferResult };
@@ -1917,8 +1925,8 @@ mod tests {
     fn qualified_private_type_is_rejected() {
         let lib_id = DagId::root("lib");
         let main_id = DagId::root("main");
-        let lib = resolved_source("type Secret { Secret }");
-        let main = resolved_source("import lib as hidden;");
+        let lib = desugared_source("type Secret { Secret }");
+        let main = desugared_source("import lib as hidden;");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -1950,8 +1958,8 @@ mod tests {
     fn include_selective_private_decl_is_rejected() {
         let lib_id = DagId::root("lib");
         let main_id = DagId::root("main");
-        let lib = resolved_source("node hidden: Dimensionless = 1.0;");
-        let main = resolved_source("include lib().{ hidden };");
+        let lib = desugared_source("node hidden: Dimensionless = 1.0;");
+        let main = desugared_source("include lib().{ hidden };");
         let (include_path, include_kind) = first_include(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -1981,12 +1989,12 @@ mod tests {
         let lib_id = DagId::root("lib");
         let helper_id = lib_id.child("helper");
         let main_id = DagId::root("main");
-        let lib = resolved_source(
+        let lib = desugared_source(
             "dag helper {
                 pub node shown: Dimensionless = 1.0;
             }",
         );
-        let main = resolved_source("import lib as lib;");
+        let main = desugared_source("import lib as lib;");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -2025,12 +2033,12 @@ mod tests {
         let lib_id = DagId::root("lib");
         let helper_id = lib_id.child("helper");
         let main_id = DagId::root("main");
-        let lib = resolved_source(
+        let lib = desugared_source(
             "dag helper {
                 pub node shown: Dimensionless = 1.0;
             }",
         );
-        let main = resolved_source("import lib as lib;");
+        let main = desugared_source("import lib as lib;");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -2068,8 +2076,8 @@ mod tests {
     fn qualified_constructor_resolves_to_canonical_owner() {
         let lib_id = DagId::root("lib");
         let main_id = DagId::root("main");
-        let lib = resolved_source("pub type BurnKind { Impulsive, Coast }");
-        let main = resolved_source("import lib as mission;");
+        let lib = desugared_source("pub type BurnKind { Impulsive, Coast }");
+        let main = desugared_source("import lib as mission;");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -2096,9 +2104,9 @@ mod tests {
         let leaf_id = DagId::root("leaf");
         let middle_id = DagId::root("middle");
         let main_id = DagId::root("main");
-        let leaf = resolved_source("pub dim Acceleration = Length / Time^2;");
-        let middle = resolved_source("import leaf.{ pub Acceleration };");
-        let main = resolved_source("import middle.{ Acceleration };");
+        let leaf = desugared_source("pub dim Acceleration = Length / Time^2;");
+        let middle = desugared_source("import leaf.{ pub Acceleration };");
+        let main = desugared_source("import middle.{ Acceleration };");
         let (middle_import_path, middle_import_kind) = first_import(&middle);
         let (main_import_path, main_import_kind) = first_import(&main);
 

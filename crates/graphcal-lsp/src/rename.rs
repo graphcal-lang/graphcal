@@ -134,8 +134,8 @@ mod tests {
             .parse_file()
             .unwrap();
         let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
-        let ast = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
-        let symbol_table = symbol_table::build_from_ast(&ast, source);
+        let ast = desugared;
+        let symbol_table = symbol_table::build_for_buffer(&ast, source);
         AnalysisResult {
             source: Arc::new(source.to_string()),
             symbol_table,

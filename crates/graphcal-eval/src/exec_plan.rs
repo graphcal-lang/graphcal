@@ -8,13 +8,12 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::resolved_ast::{FigureDecl, LayerDecl, PlotDecl};
 use graphcal_compiler::hir::AssertBody;
 use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::syntax::names::{
     ConstructorName, FieldName, ResolvedName, ScopedName, namespace,
 };
-use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::span::{Span, Spanned};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
@@ -40,7 +39,8 @@ pub struct AssertBodyEntry {
 #[derive(Debug, Clone)]
 pub struct PlotBodyEntry {
     pub(crate) name: ScopedName,
-    pub(crate) decl: PlotDecl,
+    /// Mark shape rendered for this plot.
+    pub(crate) mark_type: graphcal_compiler::syntax::ast::MarkType,
     /// Whether this plot is `pub` (visible in standalone output).
     pub(crate) is_pub: bool,
 }
@@ -49,14 +49,16 @@ pub struct PlotBodyEntry {
 #[derive(Debug, Clone)]
 pub struct FigureBodyEntry {
     pub(crate) name: ScopedName,
-    pub(crate) decl: FigureDecl,
+    /// Plots composed by this figure, in source order.
+    pub(crate) plot_names: Vec<Spanned<ScopedName>>,
 }
 
 /// A layer body entry for execution.
 #[derive(Debug, Clone)]
 pub struct LayerBodyEntry {
     pub(crate) name: ScopedName,
-    pub(crate) decl: LayerDecl,
+    /// Plots composed by this layer, in source order.
+    pub(crate) plot_names: Vec<Spanned<ScopedName>>,
 }
 
 /// A compiled execution plan ready for runtime evaluation.
@@ -149,7 +151,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .iter()
         .map(|entry| PlotBodyEntry {
             name: entry.name.clone(),
-            decl: entry.decl.clone(),
+            mark_type: entry.mark_type,
             is_pub: entry.is_pub,
         })
         .collect();
@@ -160,7 +162,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .iter()
         .map(|entry| FigureBodyEntry {
             name: entry.name.clone(),
-            decl: entry.decl.clone(),
+            plot_names: entry.plot_names.clone(),
         })
         .collect();
 
@@ -170,7 +172,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .iter()
         .map(|entry| LayerBodyEntry {
             name: entry.name.clone(),
-            decl: entry.decl.clone(),
+            plot_names: entry.plot_names.clone(),
         })
         .collect();
 
@@ -960,7 +962,7 @@ fn format_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> S
             format!("{val_str} {unit_str}")
         }
         ExprKind::UnaryOp {
-            op: graphcal_compiler::desugar::resolved_ast::UnaryOp::Neg,
+            op: graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg,
             operand,
         } => {
             format!("-{}", format_bound_display(operand, -si_value))
@@ -995,7 +997,7 @@ mod tests {
     ) -> (graphcal_compiler::tir::typed::TIR, NamedSource<Arc<String>>) {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        let file = graphcal_compiler::syntax::name_resolve::resolve_name_refs(desugared);
+        let file = desugared;
         let src = make_src(source);
         let ir = lower(&file, &src).unwrap();
         let dag_id =

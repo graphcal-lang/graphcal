@@ -1,6 +1,6 @@
 //! Stack-growth helper for recursive walkers over user expressions.
 //!
-//! The compiler pipeline (desugar, name resolution, HIR lowering, dependency
+//! The compiler pipeline (desugar, HIR lowering, dependency
 //! collection, dimension inference), the evaluators, the formatter, and the
 //! LSP symbol walker all recurse once per expression-tree level. Structural
 //! *nesting* is bounded by the parser

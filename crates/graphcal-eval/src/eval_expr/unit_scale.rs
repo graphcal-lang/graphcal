@@ -1,4 +1,4 @@
-use graphcal_compiler::desugar::resolved_ast::{MulDivOp, UnitExpr};
+use graphcal_compiler::desugar::desugared_ast::{MulDivOp, UnitExpr};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::UnitScale;

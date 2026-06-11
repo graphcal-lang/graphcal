@@ -1,4 +1,4 @@
-//! Lowering from the syntax `Resolved` AST into HIR type-level nodes.
+//! Lowering from the desugared syntax AST into HIR type-level nodes.
 //!
 //! This module is the first consumer of the module-aware resolver at the HIR
 //! boundary. It deliberately resolves source `NamePath`s into canonical
@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 use crate::dag_id::DagId;
-use crate::desugar::resolved_ast as ast;
+use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
@@ -669,10 +669,9 @@ mod tests {
     use crate::syntax::names::{ResolvedName, StructTypeName};
     use crate::syntax::parser::Parser;
 
-    fn resolved_source(source: &str) -> ast::File {
+    fn desugared_source(source: &str) -> ast::File {
         let raw = Parser::new(source).parse_file().unwrap();
-        let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw);
-        crate::syntax::name_resolve::resolve_name_refs(desugared)
+        crate::syntax::desugar::desugar_multi_decls_in_file(raw)
     }
 
     fn first_import(file: &ast::File) -> (&ast::ModulePath, &ast::ImportKind) {
@@ -709,10 +708,10 @@ mod tests {
     fn lowers_qualified_type_level_paths_to_canonical_owners() {
         let lib_id = DagId::root("lib");
         let main_id = DagId::root("main");
-        let lib = resolved_source(
+        let lib = desugared_source(
             "pub base dim Length; pub index Phase = { Burn }; pub type Vec3<D: Dim> { Vec3(x: D) }",
         );
-        let main = resolved_source(
+        let main = desugared_source(
             "import lib as physics; param v: physics.Vec3<physics.Length>[physics.Phase];",
         );
         let (import_path, import_kind) = first_import(&main);
@@ -769,7 +768,7 @@ mod tests {
     #[test]
     fn lowers_generic_scope_references_to_lexical_ids() {
         let owner_id = DagId::root("main");
-        let file = resolved_source(
+        let file = desugared_source(
             "type Series<D: Dim, I: Index, N: Nat, F: Type> { Series(value: F, samples: D[I, N]) }",
         );
         let mut resolver = ModuleResolver::default();

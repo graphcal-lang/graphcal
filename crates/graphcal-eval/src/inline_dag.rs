@@ -10,11 +10,12 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::desugar::resolved_ast::{DeclKind, Declaration, File, ImportItemNamespace};
+use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, File};
 use graphcal_compiler::ir::lower::{DagBodySelfImports, ImportedValueSource};
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::names::DeclName;
 use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type};
 
@@ -195,7 +196,7 @@ pub fn preprocess_dag_body_self_imports(
 /// same-file path lets the importer's own resolved types win at
 /// dim-check time.
 pub fn classify_value_decls_in_ast(
-    ast: &graphcal_compiler::desugar::resolved_ast::File,
+    ast: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> ParentValueDecls {
     let placeholder =
         || DeclaredType::Scalar(graphcal_compiler::syntax::dimension::Dimension::dimensionless());

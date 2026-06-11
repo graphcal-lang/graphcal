@@ -401,7 +401,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 .ok()
                 .map(|single| {
                     let root_ast = &single.files[&single.root].ast;
-                    symbol_table::build_from_ast(root_ast, text)
+                    symbol_table::build_for_buffer(root_ast, text)
                 })
                 .unwrap_or_default();
             return AnalysisResult {
@@ -418,15 +418,22 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
 
     let root_ast = &project.files[&project.root].ast;
     let import_links = collect_import_links(&project);
+    // The project resolver backs the symbol table's reference walk: bodies
+    // are tolerantly lowered to HIR and references keyed from canonical
+    // identities. A resolver failure (e.g. duplicate symbols) degrades to
+    // an empty resolver — references then surface via the spelling fallback.
+    let module_resolver = project.build_module_resolver().unwrap_or_default();
 
     // Stage 2: Compile TIR from the project.
     match compile_to_tir_from_project(&project) {
         Ok(tir) => {
             // Full success: symbol table from AST + TIR enrichment.
-            let mut symbol_table = symbol_table::build_from_ast(root_ast, text);
+            let mut symbol_table =
+                symbol_table::build_from_ast(root_ast, text, &project.root, &module_resolver);
             symbol_table::enrich_from_tir(&mut symbol_table, &tir);
 
-            let imported_definitions = collect_imported_definitions(uri, &project, Some(&tir));
+            let imported_definitions =
+                collect_imported_definitions(uri, &project, Some(&tir), &module_resolver);
             let fn_signatures = build_fn_signatures();
             // Library files (required param/index not yet bound) cannot be evaluated
             // standalone. Skip the eval pipeline so editors don't surface false-positive
@@ -451,8 +458,10 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
         }
         Err(e) => {
             // TIR failed (type/dim error) but parse succeeded — use AST for partial info.
-            let symbol_table = symbol_table::build_from_ast(root_ast, text);
-            let imported_definitions = collect_imported_definitions(uri, &project, None);
+            let symbol_table =
+                symbol_table::build_from_ast(root_ast, text, &project.root, &module_resolver);
+            let imported_definitions =
+                collect_imported_definitions(uri, &project, None, &module_resolver);
             let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri);
             diagnostics.entry(uri.clone()).or_default();
 
@@ -769,6 +778,7 @@ fn collect_imported_definitions(
     root_uri: &Url,
     project: &graphcal_eval::loader::LoadedProject,
     tir: Option<&graphcal_compiler::tir::typed::TIR>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
 ) -> HashMap<SymbolKey, ImportedDefinition> {
     let mut result = HashMap::new();
 
@@ -797,7 +807,12 @@ fn collect_imported_definitions(
 
         let (imported_table, imported_uri, source) =
             table_cache.entry(dag_id).or_insert_with(|| {
-                let mut table = symbol_table::build_from_ast(&loaded_file.ast, &loaded_file.source);
+                let mut table = symbol_table::build_from_ast(
+                    &loaded_file.ast,
+                    &loaded_file.source,
+                    dag_id,
+                    module_resolver,
+                );
                 if let Some(tir) = tir {
                     symbol_table::enrich_from_tir(&mut table, tir);
                 }
@@ -824,7 +839,7 @@ fn collect_imported_definitions(
             });
 
         match kind {
-            graphcal_compiler::desugar::resolved_ast::ImportKind::Selective(items) => {
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
                 for import_item in items {
                     let original_name = import_item.name.name.clone();
                     let local_name = import_item.local_name().to_string();
@@ -850,7 +865,7 @@ fn collect_imported_definitions(
                     }
                 }
             }
-            graphcal_compiler::desugar::resolved_ast::ImportKind::Module { alias } => {
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
                 let module_name = alias.as_ref().map_or_else(
                     || {
                         graphcal_eval::loader::derive_module_name(&path_display)
@@ -880,7 +895,7 @@ fn collect_imported_definitions(
 fn rekey_selective_import(
     key: &SymbolKey,
     category: SymbolCategory,
-    namespace: graphcal_compiler::desugar::resolved_ast::ImportItemNamespace,
+    namespace: graphcal_compiler::desugar::desugared_ast::ImportItemNamespace,
     original: &str,
     local: &str,
 ) -> Option<SymbolKey> {
@@ -925,14 +940,14 @@ fn rekey_selective_import(
 }
 
 const fn selective_import_allows_category(
-    namespace: graphcal_compiler::desugar::resolved_ast::ImportItemNamespace,
+    namespace: graphcal_compiler::desugar::desugared_ast::ImportItemNamespace,
     category: SymbolCategory,
 ) -> bool {
     match namespace {
-        graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Type => {
+        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Type => {
             matches!(category, SymbolCategory::StructType | SymbolCategory::Field)
         }
-        graphcal_compiler::desugar::resolved_ast::ImportItemNamespace::Default => {
+        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Default => {
             !matches!(category, SymbolCategory::StructType)
         }
     }

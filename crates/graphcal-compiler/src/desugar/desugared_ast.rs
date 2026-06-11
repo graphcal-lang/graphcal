@@ -1,7 +1,7 @@
 //! Type aliases pinning every phase-parameterized AST node to
 //! [`crate::syntax::phase::Desugared`].
 //!
-//! Post-desugar consumers — name resolution, IR lowering, TIR, evaluation —
+//! Post-desugar consumers — HIR lowering, IR lowering, TIR, evaluation —
 //! `use graphcal_compiler::desugar::desugared_ast as ast` (or `use … ast::*`)
 //! instead of `crate::syntax::ast`. Bare type names like `File` or
 //! `Declaration` then resolve to their `<Desugared>` variants without each
@@ -70,8 +70,8 @@ pub type FieldDecl = crate::syntax::ast::FieldDecl<Desugared>;
 pub use crate::syntax::ast::{
     Attribute, AttributeArg, BaseDimDecl, BinOp, BindableVisibility, DomainBoundKind,
     EncodingChannel, ForBinding, ForBindingIndex, GenericConstraint, Ident, ImportDecl, ImportItem,
-    ImportKind, MapEntryKey, MarkType, MatchPattern, ModulePath, MulDivOp, MultiDataRow, MultiDecl,
-    MultiDeclSlice, MultiDeclSlot, MultiHeaderCell, MultiSlotAxis, MultiSlotColumnSpan,
-    MultiSlotKind, NatExpr, PatternBinding, TableIndexSpec, UnaryOp, UnitExpr, UnitExprItem,
-    Visibility,
+    ImportItemNamespace, ImportKind, MapEntryKey, MarkType, MatchPattern, ModulePath, MulDivOp,
+    MultiDataRow, MultiDecl, MultiDeclSlice, MultiDeclSlot, MultiHeaderCell, MultiSlotAxis,
+    MultiSlotColumnSpan, MultiSlotKind, NatExpr, PatternBinding, TableIndexSpec, UnaryOp, UnitExpr,
+    UnitExprItem, Visibility,
 };

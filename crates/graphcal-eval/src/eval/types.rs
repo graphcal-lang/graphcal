@@ -5,7 +5,7 @@ use miette::Diagnostic;
 use thiserror::Error;
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::desugar::resolved_ast::EncodingChannel;
+use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::syntax::names::{
@@ -668,7 +668,7 @@ pub struct PlotSpec {
     /// The plot declaration name.
     pub name: ScopedName,
     /// The mark type (point, line, bar, area, rect, tick).
-    pub mark_type: graphcal_compiler::desugar::resolved_ast::MarkType,
+    pub mark_type: graphcal_compiler::desugar::desugared_ast::MarkType,
     /// Evaluated encoding channels (x, y, color, etc.) with their data.
     pub encodings: Vec<(EncodingChannel, PlotFieldValue)>,
     /// Axis metadata per encoding channel.
