@@ -233,6 +233,12 @@ Format `.gcl` files. When given a directory, recursively formats regular
 skipped; an explicitly named symlinked file path is treated like any other
 file argument and may write through to its target.
 
+Formatting only ever changes layout, never meaning. After producing the
+formatted text, the formatter re-parses it and verifies the result is the same
+syntax tree as the input (ignoring source positions). If they ever diverge —
+which would be a bug in the formatter, not in your code — formatting fails with
+an error instead of writing a file whose meaning might differ from the source.
+
 ```bash
 graphcal format [OPTIONS] [PATHS]...
 ```

@@ -1,5 +1,6 @@
 mod format;
 
+use graphcal_compiler::syntax::ast::{File, FormatEquivalent};
 use graphcal_compiler::syntax::parser::{ParseError, Parser};
 
 /// Default line width for formatting.
@@ -34,6 +35,23 @@ pub enum FormatError {
     /// silently hide the case).
     #[error("formatted output was not valid UTF-8: {0}")]
     Utf8(#[from] std::string::FromUtf8Error),
+    /// The formatted output failed to parse back into an AST.
+    ///
+    /// Distinct from [`Self::Parse`] (which means the *input* was invalid):
+    /// this means the formatter emitted text the parser rejects — a formatter
+    /// bug, never a user error. Carried without `#[from]` so it cannot be
+    /// conflated with an input parse failure.
+    #[error("internal formatter error: formatted output did not re-parse: {0}")]
+    Reparse(ParseError),
+    /// The formatted output parsed, but into a *different* syntax tree than the
+    /// input (ignoring spans).
+    ///
+    /// Formatting must only change layout, never meaning — so this is always a
+    /// formatter bug. Surfacing it as an error (instead of silently emitting
+    /// the changed output) upholds the project's safety-over-usability stance:
+    /// better to refuse than to quietly rewrite a program.
+    #[error("internal formatter error: formatting changed the program's syntax tree")]
+    AstChanged,
 }
 
 /// Format a `.gcl` source string, returning the formatted output.
@@ -43,6 +61,11 @@ pub enum FormatError {
 /// Returns [`FormatError::Parse`] if `source` cannot be parsed,
 /// [`FormatError::Render`] if rendering the formatted document fails,
 /// or [`FormatError::Utf8`] if the rendered bytes are not valid UTF-8.
+///
+/// As a self-check, the formatted output is re-parsed and compared against the
+/// input AST (ignoring spans). Returns [`FormatError::Reparse`] if the output
+/// fails to parse, or [`FormatError::AstChanged`] if it parses into a different
+/// tree — both indicate a formatter bug, never invalid input.
 pub fn format_source(source: &str) -> Result<String, FormatError> {
     let mut parser = Parser::new(source);
     let file = parser.parse_file()?;
@@ -65,7 +88,27 @@ pub fn format_source(source: &str) -> Result<String, FormatError> {
         result.push('\n');
     }
 
+    verify_ast_preserved(&file, &result)?;
+
     Ok(result)
+}
+
+/// Confirm that formatting changed only layout, not the program.
+///
+/// Re-parses the formatted output and checks it yields the same AST as the
+/// input, ignoring source spans (see
+/// [`FormatEquivalent`](graphcal_compiler::syntax::ast::FormatEquivalent)).
+/// Any divergence is a formatter bug, reported as a [`FormatError`] rather than
+/// silently returning text whose meaning may differ from the source.
+fn verify_ast_preserved(original: &File, formatted: &str) -> Result<(), FormatError> {
+    let reparsed = Parser::new(formatted)
+        .parse_file()
+        .map_err(FormatError::Reparse)?;
+    if original.format_equivalent(&reparsed) {
+        Ok(())
+    } else {
+        Err(FormatError::AstChanged)
+    }
 }
 
 fn strip_trailing_horizontal_whitespace(s: &mut String) {
