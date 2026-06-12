@@ -2653,6 +2653,61 @@ fn eval_plot_basic_standalone_figures() {
     assert_eq!(arr[1]["name"].as_str(), Some("my_bar"));
 }
 
+#[test]
+fn eval_plot_html_file_output() {
+    // --plot <path>.html writes the self-contained HTML page to that path (#848)
+    let dir = tempfile::tempdir().unwrap();
+    let out_path = dir.path().join("plots.html");
+
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/plot_basic.gcl"),
+            "--plot",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = std::fs::read_to_string(&out_path).expect("expected HTML file to be written");
+    assert!(
+        html.contains("vegaEmbed"),
+        "expected Vega-Embed HTML page: {html}"
+    );
+    // Normal evaluation output still goes to stdout in HTML file mode.
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !stdout.trim().is_empty(),
+        "expected normal eval output on stdout in HTML file mode"
+    );
+}
+
+#[test]
+fn eval_plot_rejects_non_html_path() {
+    // Anything that is not browser/json/*.html is a CLI argument error (#848)
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/plot_basic.gcl"),
+            "--plot",
+            "out.png",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(!output.status.success(), "expected argument parse failure");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("expected `browser`, `json`, or a path ending in `.html`"),
+        "expected helpful --plot error message, got: {stderr}"
+    );
+}
+
 // --- Unit definitions referencing imported units (#822) ---
 
 #[test]

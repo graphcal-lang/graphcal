@@ -328,6 +328,9 @@ graphcal eval file.gcl --plot browser
 
 # Print only the plot JSON array to stdout
 graphcal eval file.gcl --plot json
+
+# Write a self-contained HTML page (headless/CI-friendly)
+graphcal eval file.gcl --plot report.html
 ```
 
 In `--plot json` mode, stdout is exactly one JSON array of figure objects,

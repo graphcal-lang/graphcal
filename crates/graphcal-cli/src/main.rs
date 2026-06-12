@@ -74,8 +74,10 @@ enum Commands {
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
-        /// Plot output mode: browser (default), json, or a file path for HTML output
-        #[arg(long)]
+        /// Plot output mode: `browser` opens the rendered plots in the default
+        /// browser, `json` prints the Vega-Lite spec array to stdout, and a
+        /// path ending in `.html` writes a self-contained HTML page to that file
+        #[arg(long, value_name = "browser|json|FILE.html", value_parser = parse_plot_output)]
         plot: Option<PlotOutput>,
     },
     /// Format .gcl files
@@ -121,12 +123,32 @@ enum OutputFormat {
     Json,
 }
 
-#[derive(ValueEnum, Clone)]
+/// Plot output destination selected by `--plot`.
+#[derive(Clone)]
 enum PlotOutput {
-    /// Open interactive plot in the default browser
+    /// Open the rendered plots in the default browser.
     Browser,
-    /// Print Plotly JSON spec to stdout
+    /// Print the Vega-Lite spec array to stdout.
     Json,
+    /// Write the self-contained HTML page to the given path.
+    HtmlFile(PathBuf),
+}
+
+/// Parse the `--plot` argument: `browser`, `json`, or a `.html` file path.
+fn parse_plot_output(s: &str) -> Result<PlotOutput, String> {
+    match s {
+        "browser" => Ok(PlotOutput::Browser),
+        "json" => Ok(PlotOutput::Json),
+        path if Path::new(path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("html")) =>
+        {
+            Ok(PlotOutput::HtmlFile(PathBuf::from(path)))
+        }
+        other => Err(format!(
+            "expected `browser`, `json`, or a path ending in `.html`, got `{other}`"
+        )),
+    }
 }
 
 /// Stack segment size for running a command.
@@ -251,7 +273,15 @@ fn handle_eval(
                     eprintln!("warning: no plot declarations found");
                 }
                 match plot_mode {
-                    PlotOutput::Browser if rendered.is_empty() => {}
+                    PlotOutput::Browser | PlotOutput::HtmlFile(_) if rendered.is_empty() => {}
+                    PlotOutput::HtmlFile(path) => {
+                        let html = plot::render_html(&rendered)
+                            .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
+                        std::fs::write(path, html).unwrap_or_else(|e| {
+                            bail_with(&format!("could not write {}", path.display()), e, 2)
+                        });
+                        eprintln!("wrote plots to {}", path.display());
+                    }
                     PlotOutput::Browser => {
                         let html = plot::render_html(&rendered)
                             .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
