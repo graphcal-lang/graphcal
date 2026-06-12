@@ -85,6 +85,13 @@ pub(crate) struct AnalysisResult {
     pub(crate) fn_signatures: &'static HashMap<String, FnSignatureInfo>,
     /// Loader-resolved import links (for Document Links).
     pub(crate) import_links: Vec<ResolvedImportLink>,
+    /// `false` when this result is a parse-failure fallback: the buffer did
+    /// not parse, so the symbol-dependent fields are empty placeholders and
+    /// only `diagnostics` is meaningful. [`store_analysis`] keeps the
+    /// previous good symbol state in that case (#834) — mid-edit buffers are
+    /// unparsable more often than not, and completion/hover/goto should keep
+    /// answering from the last successfully analyzed state.
+    pub(crate) buffer_parsed: bool,
 }
 
 /// Debounce delay for `did_change` notifications (milliseconds).
@@ -141,6 +148,7 @@ impl std::fmt::Debug for AnalysisResult {
             .field("eval_values_count", &self.eval_values.len())
             .field("fn_signatures_count", &self.fn_signatures.len())
             .field("import_links_count", &self.import_links.len())
+            .field("buffer_parsed", &self.buffer_parsed)
             .finish()
     }
 }
@@ -320,7 +328,7 @@ async fn analyze_store_publish(
             }
         }
     }
-    docs.insert(uri.clone(), analysis);
+    store_analysis(&mut docs, &uri, analysis);
     let publish = merged_diagnostics_for(&docs, &affected);
     drop(docs);
     for (target_uri, diags) in publish {
@@ -328,6 +336,25 @@ async fn analyze_store_publish(
     }
     // Best-effort: the client may not support inlay-hint refresh.
     let _ = client.inlay_hint_refresh().await;
+}
+
+/// Store a fresh analysis for `uri`, keeping the previous symbol-dependent
+/// state when the new result is a parse-failure fallback.
+///
+/// Mid-edit buffers fail to parse more often than not (the parser has no
+/// error recovery), so replacing the cached analysis with an empty symbol
+/// table would make completion/hover/goto go dark ~300 ms after every
+/// keystroke (#834). Instead, only the diagnostics are refreshed; symbol
+/// queries keep answering from the last successfully analyzed state (whose
+/// `source` snapshot they remain consistent with).
+fn store_analysis(docs: &mut HashMap<Url, AnalysisResult>, uri: &Url, analysis: AnalysisResult) {
+    if !analysis.buffer_parsed
+        && let Some(prev) = docs.get_mut(uri)
+    {
+        prev.diagnostics = analysis.diagnostics;
+        return;
+    }
+    docs.insert(uri.clone(), analysis);
 }
 
 /// Compute the diagnostics to publish for each URI in `targets` from the
@@ -475,21 +502,28 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
         Err(e) => {
             let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri);
             diagnostics.entry(uri.clone()).or_default();
-            let symbol_table = LoadedProject::from_source(text, uri.as_str())
-                .ok()
-                .map(|single| {
-                    let root_ast = &single.files[&single.root].ast;
-                    symbol_table::build_for_buffer(root_ast, text)
-                })
-                .unwrap_or_default();
+            // `Some` when the failure was in an *import* (the buffer itself
+            // parses): the buffer's own symbols are still fully usable.
+            // `None` when the buffer doesn't parse — the result is then a
+            // diagnostics-only fallback and `store_analysis` retains the
+            // previous symbol state (#834).
+            let parsed_buffer_table =
+                LoadedProject::from_source(text, uri.as_str())
+                    .ok()
+                    .map(|single| {
+                        let root_ast = &single.files[&single.root].ast;
+                        symbol_table::build_for_buffer(root_ast, text)
+                    });
+            let buffer_parsed = parsed_buffer_table.is_some();
             return AnalysisResult {
                 source: Arc::new(text.to_string()),
-                symbol_table,
+                symbol_table: parsed_buffer_table.unwrap_or_default(),
                 imported_definitions: HashMap::new(),
                 diagnostics: Arc::new(diagnostics),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
                 import_links: Vec::new(),
+                buffer_parsed,
             };
         }
     };
@@ -532,6 +566,7 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
                 eval_values,
                 fn_signatures,
                 import_links,
+                buffer_parsed: true,
             }
         }
         Err(e) => {
@@ -551,6 +586,7 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
                 import_links,
+                buffer_parsed: true,
             }
         }
     }
@@ -2038,6 +2074,7 @@ node bad: Mass = mass + length;
             eval_values: HashMap::new(),
             fn_signatures: build_fn_signatures(),
             import_links: Vec::new(),
+            buffer_parsed: true,
         }
     }
 
@@ -2134,6 +2171,56 @@ node bad: Mass = mass + length;
         let mut messages: Vec<_> = published[0].1.iter().map(|d| d.message.clone()).collect();
         messages.sort();
         assert_eq!(messages, vec!["also broken", "broken"]);
+    }
+
+    /// Issue #834: a parse-failure analysis (the normal state mid-keystroke)
+    /// must not replace the cached symbol state with an empty table —
+    /// completion/hover/goto keep answering from the last good analysis
+    /// while only the diagnostics refresh.
+    #[test]
+    fn parse_failure_keeps_last_good_symbol_state() {
+        let uri = untitled_uri();
+        let good_text = "\
+param mass: Mass = 100.0 kg;
+param velocity: Velocity = 50.0 m/s;
+node momentum: Force * Time = @mass * @velocity;
+";
+        let good = run_analysis(&uri, good_text, &[]);
+        assert!(good.buffer_parsed);
+        assert!(good.has_no_diagnostics());
+
+        // Mid-edit: the buffer no longer parses.
+        let broken_text = format!("{good_text}node next: Mass = @");
+        let broken = run_analysis(&uri, &broken_text, &[]);
+        assert!(!broken.buffer_parsed, "broken buffer must be flagged");
+        assert!(
+            !broken.has_no_diagnostics(),
+            "the parse error must still be reported"
+        );
+
+        let mut docs = HashMap::new();
+        store_analysis(&mut docs, &uri, good);
+        store_analysis(&mut docs, &uri, broken);
+
+        let cached = &docs[&uri];
+        for name in ["mass", "velocity", "momentum"] {
+            assert!(
+                cached
+                    .symbol_table
+                    .definitions
+                    .contains_key(&SymbolKey::TopLevel(name.to_string())),
+                "symbol `{name}` must survive the parse failure"
+            );
+        }
+        assert!(
+            !cached.has_no_diagnostics(),
+            "diagnostics must come from the failed analysis"
+        );
+        assert_eq!(
+            cached.source.as_str(),
+            good_text,
+            "the kept source must stay consistent with the kept symbol table"
+        );
     }
 
     /// Issue #833: analysis must overlay the latest text of *all* open

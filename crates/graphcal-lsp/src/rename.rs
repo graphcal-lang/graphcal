@@ -238,6 +238,7 @@ mod tests {
             eval_values: HashMap::new(),
             fn_signatures: build_fn_signatures(),
             import_links: Vec::new(),
+            buffer_parsed: true,
         }
     }
 
