@@ -1459,6 +1459,10 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> PlotFieldValue {
                 match entry_rv {
                     RuntimeValue::Scalar(v) => numbers.push(*v),
                     RuntimeValue::Int(i) => numbers.push(*i as f64),
+                    // A range-index loop variable surfacing as the entry value
+                    // (e.g. `x: for t: T { t }`) is numeric data, exactly like
+                    // the top-level RangeLabel arm below (#839).
+                    RuntimeValue::RangeLabel { value, .. } => numbers.push(*value),
                     RuntimeValue::Label { variant, .. } => {
                         labels.push(variant.to_string());
                         all_numeric = false;

@@ -2467,6 +2467,25 @@ fn eval_plot_line_json() {
         stdout.contains("\"mark\": \"line\""),
         "expected line mark: {stdout}"
     );
+
+    // Range-index data must plot as numeric values, not nominal "#N"
+    // variant labels (#839).
+    let json = parse_plot_json_stdout(&stdout);
+    let spec = &json[0]["spec"];
+    assert_eq!(
+        spec["encoding"]["x"]["type"].as_str(),
+        Some("quantitative"),
+        "expected quantitative x for range-index data: {stdout}"
+    );
+    let values = spec["data"]["values"]
+        .as_array()
+        .expect("expected data values array");
+    assert_eq!(values.len(), 5, "expected 5 time steps: {stdout}");
+    assert_eq!(
+        values[1]["x"].as_f64(),
+        Some(0.5),
+        "expected the second time step value 0.5 s: {stdout}"
+    );
 }
 
 #[test]
