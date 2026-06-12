@@ -281,10 +281,12 @@ pub(in crate::eval::project) struct ImportContext<'a> {
     >,
     pub(in crate::eval::project) module_map:
         HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
-    /// Registry + `pub_names` + import-statement span for module-imported
-    /// dependencies. The span localizes merge-conflict diagnostics.
+    /// Registry + `pub_names` + module alias + import-statement span for
+    /// module-imported dependencies. The alias keys the dependency's `pub`
+    /// units in the importer's unit scope (`alias.unit`); the span localizes
+    /// merge-conflict diagnostics.
     pub(in crate::eval::project) extra_registry_builders:
-        Vec<(&'a Registry, &'a HashSet<DeclName>, Span)>,
+        Vec<(&'a Registry, &'a HashSet<DeclName>, ModuleAliasName, Span)>,
     pub(in crate::eval::project) deferred_dag_includes: Vec<DeferredDagInclude>,
 }
 

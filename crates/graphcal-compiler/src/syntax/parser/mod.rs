@@ -209,17 +209,17 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
-    #[error("module-qualified unit references are not supported")]
+    #[error("unit reference path is too deep")]
     #[diagnostic(
         code(graphcal::P017),
         help(
-            "units are file-global once imported — refer to the unit by its bare name (`mile`, not `alias.mile`); conflicting imported definitions are rejected at import time (N010)"
+            "unit references are at most `alias.unit` — a bare name for local, selectively imported, or prelude units, or one module-alias qualifier for module-imported units"
         )
     )]
-    QualifiedUnitReference {
+    UnitReferenceTooDeep {
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("unit names cannot be qualified")]
+        #[label("at most one `alias.` qualifier is allowed here")]
         span: SourceSpan,
     },
 
@@ -275,7 +275,7 @@ impl ParseError {
             | Self::InlineDagCallMissingProjection { src, .. }
             | Self::TooDeeplyNested { src, .. }
             | Self::ZeroExponent { src, .. }
-            | Self::QualifiedUnitReference { src, .. } => src,
+            | Self::UnitReferenceTooDeep { src, .. } => src,
         }
     }
 }

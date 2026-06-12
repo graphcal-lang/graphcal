@@ -9,5 +9,5 @@ Begin snippet for unknown_unit.gcl starting at line 1, column 1
 snippet line 1: // error: unknown unit
 snippet line 2: node x: Length = 100.0 foobar;
     label at line 2, columns 24 to 29: unknown unit
-diagnostic help: unit must be declared or part of the prelude
+diagnostic help: a bare unit name must be declared in this file, selectively imported, or part of the prelude; units of a module imported with an alias are referenced as `alias.unit`
 diagnostic code: graphcal::D003

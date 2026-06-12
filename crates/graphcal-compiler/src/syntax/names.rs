@@ -749,6 +749,89 @@ impl From<DeclName> for ScopedName {
     }
 }
 
+/// A unit reference, optionally qualified by a module alias.
+///
+/// Unit references follow the same scoping rules as every other imported
+/// category: a bare name (`mile`) refers to a local declaration, a selective
+/// import, or a prelude unit; a qualified name (`u.mile`) refers to a `pub`
+/// unit of the module imported as `u`. The qualifier is at most one module
+/// alias — unit references never nest deeper.
+///
+/// The `Display` impl renders `u.mile` / `mile` for diagnostics and
+/// formatting boundaries only; the compiler core matches on the typed parts.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct UnitRef {
+    /// Module alias qualifying `name`, or `None` for a file-local reference.
+    qualifier: Option<ModuleAliasName>,
+    /// The unit leaf name inside the qualifier scope.
+    name: UnitName,
+}
+
+impl UnitRef {
+    /// Create an unqualified (file-local, selective-import, or prelude) unit reference.
+    #[must_use]
+    pub fn local(name: impl Into<UnitName>) -> Self {
+        Self {
+            qualifier: None,
+            name: name.into(),
+        }
+    }
+
+    /// Create a unit reference qualified by a module alias (`u.mile`).
+    #[must_use]
+    pub const fn qualified(qualifier: ModuleAliasName, name: UnitName) -> Self {
+        Self {
+            qualifier: Some(qualifier),
+            name,
+        }
+    }
+
+    /// The module alias qualifying this reference, if any.
+    #[must_use]
+    pub const fn qualifier(&self) -> Option<&ModuleAliasName> {
+        self.qualifier.as_ref()
+    }
+
+    /// The unit leaf name.
+    #[must_use]
+    pub const fn name(&self) -> &UnitName {
+        &self.name
+    }
+
+    /// Returns whether this reference is module-qualified.
+    #[must_use]
+    pub const fn is_qualified(&self) -> bool {
+        self.qualifier.is_some()
+    }
+}
+
+impl From<UnitName> for UnitRef {
+    /// Wrap a bare unit name as a local reference. Definition sites always
+    /// produce local references; qualified forms are constructed explicitly
+    /// via [`UnitRef::qualified`].
+    fn from(name: UnitName) -> Self {
+        Self::local(name)
+    }
+}
+
+impl From<NameAtom> for UnitRef {
+    /// Wrap a bare atom as a local unit reference. This is what
+    /// [`crate::syntax::ast::Ident::into_spanned`] uses to lift parser
+    /// identifiers into the typed reference.
+    fn from(atom: NameAtom) -> Self {
+        Self::local(UnitName::from_atom(atom))
+    }
+}
+
+impl std::fmt::Display for UnitRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(qualifier) = &self.qualifier {
+            write!(f, "{qualifier}.")?;
+        }
+        write!(f, "{}", self.name)
+    }
+}
+
 /// A syntactic non-empty dot-separated name path.
 ///
 /// `NamePath` preserves source-level path shape (`Foo`, `module.Foo`,

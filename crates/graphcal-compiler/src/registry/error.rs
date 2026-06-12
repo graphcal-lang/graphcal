@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::syntax::names::{
     DeclName, DimName, FieldName, FnName, IndexName, IndexVariantName, ScopedName, StructTypeName,
-    UnitName,
+    UnitName, UnitRef,
 };
 
 /// Rich diagnostic error types for graphcal evaluation.
@@ -37,15 +37,15 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("conflicting definitions of unit `{name}` reach this file through imports")]
+    #[error("conflicting definitions of unit `{name}` reach this file through includes")]
     #[diagnostic(
         code(graphcal::N010),
         help(
-            "units are file-global once imported; two modules define `{name}` with different dimensions or scales, so references would be ambiguous — rename one of the definitions"
+            "included modules share this file's unit scope, and two of them define `{name}` with different dimensions or scales, so references would be ambiguous — rename one of the definitions"
         )
     )]
     ConflictingImportedUnit {
-        name: UnitName,
+        name: UnitRef,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("import brings in a conflicting `{name}`")]
@@ -270,10 +270,12 @@ pub enum GraphcalError {
     #[error("unknown unit `{name}`")]
     #[diagnostic(
         code(graphcal::D003),
-        help("unit must be declared or part of the prelude")
+        help(
+            "a bare unit name must be declared in this file, selectively imported, or part of the prelude; units of a module imported with an alias are referenced as `alias.unit`"
+        )
     )]
     UnknownUnit {
-        name: UnitName,
+        name: UnitRef,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unknown unit")]

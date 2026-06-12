@@ -64,7 +64,7 @@ pub fn resolve_unit_scale(
         let info = ctx
             .registry
             .units
-            .get_unit(item.name.value.as_str())
+            .get_unit(&item.name.value)
             .ok_or_else(|| {
                 ctx.eval_error(
                     format!("unknown unit `{}`", item.name.value),
@@ -78,14 +78,12 @@ pub fn resolve_unit_scale(
             UnitScale::Dynamic {
                 base_unit_scale, ..
             } => {
-                let unit_name =
-                    graphcal_compiler::syntax::names::UnitName::new(item.name.value.as_str());
                 let scale_hir = ctx
                     .tir
                     .root()
                     .semantic
                     .dynamic_unit_scales
-                    .get(&unit_name)
+                    .get(&item.name.value)
                     .ok_or_else(|| {
                         ctx.eval_error(
                             format!(

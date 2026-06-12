@@ -2399,7 +2399,12 @@ fn topo_sort_units<'a>(
         let from = name_to_idx[self_name];
         if let Some(def) = &u.definition {
             for item in &def.unit_expr.terms {
-                let dep_name = item.name.value.as_str();
+                // Module-qualified references can never name a file-local
+                // unit, so only bare references create graph edges.
+                if item.name.value.is_qualified() {
+                    continue;
+                }
+                let dep_name = item.name.value.name().as_str();
                 if dep_name != self_name
                     && let Some(&to) = name_to_idx.get(dep_name)
                 {
@@ -3183,7 +3188,12 @@ mod tests {
         assert_eq!(ir.params.len(), 3); // dry_mass, fuel_mass, isp
         assert_eq!(ir.nodes.len(), 3); // v_exhaust, mass_ratio, delta_v
         assert!(ir.registry.dimensions.get_dimension("Length").is_some());
-        assert!(ir.registry.units.get_unit("km").is_some());
+        assert!(
+            ir.registry
+                .units
+                .get_unit(&crate::syntax::names::UnitRef::local("km"))
+                .is_some()
+        );
     }
 
     #[test]

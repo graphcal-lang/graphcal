@@ -87,6 +87,11 @@ node alt_m: Length = @altitude -> m;
 node time_h: Time = @duration -> hour;
 ```
 
+The target follows unit scoping rules: bare names for local, selectively
+imported, or prelude units, and `alias.unit` for units of a module imported
+with an alias (see
+[Unit Scoping](dimensions-and-units.md#unit-scoping)).
+
 `->` is non-chaining: an expression carries at most one conversion target.
 `@x -> km -> m` is a parse error, and the parenthesized `(@x -> km) -> m` is
 rejected by the dimension checker (`D012`).

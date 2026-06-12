@@ -1,0 +1,6 @@
+// A selectively imported unit joins this file's bare unit scope, so the
+// bare name works in conversion targets and unit literals.
+import app.units.{ mile };
+
+param a: Length = 3218.688 m;
+node b: Length = @a -> mile;

@@ -330,7 +330,10 @@ mod tests {
         load_prelude(&mut b).unwrap();
         let r = b.build();
         let force_dim = r.dimensions.get_dimension("Force").unwrap().clone();
-        let newton = r.units.get_unit("N").unwrap();
+        let newton = r
+            .units
+            .get_unit(&crate::syntax::names::UnitRef::local("N"))
+            .unwrap();
         assert_eq!(newton.dimension, force_dim);
         assert!((newton.scale.as_static().unwrap() - 1.0).abs() < f64::EPSILON);
     }
@@ -340,7 +343,10 @@ mod tests {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
         let r = b.build();
-        let km = r.units.get_unit("km").unwrap();
+        let km = r
+            .units
+            .get_unit(&crate::syntax::names::UnitRef::local("km"))
+            .unwrap();
         assert!((km.scale.as_static().unwrap() - 1000.0).abs() < f64::EPSILON);
     }
 
@@ -349,7 +355,10 @@ mod tests {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
         let r = b.build();
-        let deg = r.units.get_unit("deg").unwrap();
+        let deg = r
+            .units
+            .get_unit(&crate::syntax::names::UnitRef::local("deg"))
+            .unwrap();
         assert!((deg.scale.as_static().unwrap() - std::f64::consts::PI / 180.0).abs() < 1e-15);
     }
 

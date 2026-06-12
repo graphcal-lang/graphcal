@@ -74,15 +74,6 @@ impl Parser<'_> {
                 ));
             }
             let target = self.parse_unit_expr()?;
-            // `-> alias.unit` reads like a module-qualified unit; give it a
-            // teaching diagnostic instead of a generic unexpected-token error
-            // (#648 N6).
-            if self.lexer.peek() == Some(&Token::Dot) {
-                return Err(ParseError::QualifiedUnitReference {
-                    src: self.named_source(),
-                    span: target.span.into(),
-                });
-            }
             let span = expr.span.merge(target.span);
             Ok(Expr::new(
                 ExprKind::Convert {
@@ -1007,7 +998,7 @@ mod tests {
                 ExprKind::UnitLiteral { value, unit } => {
                     assert!((value - 400.0).abs() < f64::EPSILON);
                     assert_eq!(unit.terms.len(), 1);
-                    assert_eq!(unit.terms[0].name.value.as_str(), "km");
+                    assert_eq!(unit.terms[0].name.value.to_string(), "km");
                 }
                 _ => panic!("expected UnitLiteral"),
             },
@@ -1025,9 +1016,9 @@ mod tests {
                 ExprKind::UnitLiteral { value, unit } => {
                     assert!((value - 9.80665).abs() < f64::EPSILON);
                     assert_eq!(unit.terms.len(), 2);
-                    assert_eq!(unit.terms[0].name.value.as_str(), "m");
+                    assert_eq!(unit.terms[0].name.value.to_string(), "m");
                     assert_eq!(unit.terms[1].op, crate::syntax::ast::MulDivOp::Div);
-                    assert_eq!(unit.terms[1].name.value.as_str(), "s");
+                    assert_eq!(unit.terms[1].name.value.to_string(), "s");
                     assert_eq!(
                         unit.terms[1].power,
                         Some(crate::syntax::dimension::Rational::from_int(2))
@@ -1051,14 +1042,65 @@ mod tests {
                         matches!(&expr.kind, ExprKind::GraphRef(id) if id.value.member() == "speed")
                     );
                     assert_eq!(target.terms.len(), 2);
-                    assert_eq!(target.terms[0].name.value.as_str(), "km");
+                    assert_eq!(target.terms[0].name.value.to_string(), "km");
                     assert_eq!(target.terms[1].op, crate::syntax::ast::MulDivOp::Div);
-                    assert_eq!(target.terms[1].name.value.as_str(), "hour");
+                    assert_eq!(target.terms[1].name.value.to_string(), "hour");
                 }
                 _ => panic!("expected Convert"),
             },
             _ => panic!("expected node"),
         }
+    }
+
+    #[test]
+    fn parse_conversion_with_qualified_unit() {
+        let file = Parser::new("node b: Length = @a -> u.mile;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::Convert { target, .. } => {
+                    assert_eq!(target.terms.len(), 1);
+                    let unit_ref = &target.terms[0].name.value;
+                    assert_eq!(
+                        unit_ref.qualifier().map(ToString::to_string).as_deref(),
+                        Some("u")
+                    );
+                    assert_eq!(unit_ref.name().as_str(), "mile");
+                }
+                _ => panic!("expected Convert"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_qualified_unit_literal() {
+        let file = Parser::new("node d: Length = 2.0 u.mile;")
+            .parse_file()
+            .unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Node(n) => match &n.value.kind {
+                ExprKind::UnitLiteral { unit, .. } => {
+                    assert_eq!(unit.terms[0].name.value.to_string(), "u.mile");
+                }
+                _ => panic!("expected UnitLiteral"),
+            },
+            _ => panic!("expected node"),
+        }
+    }
+
+    #[test]
+    fn parse_unit_path_deeper_than_alias_is_rejected() {
+        // Module aliases are single segments, so `a.b.mile` can never resolve
+        // as a unit reference (P017).
+        let err = Parser::new("node b: Length = @a -> app.units.mile;")
+            .parse_file()
+            .unwrap_err();
+        assert!(
+            matches!(err, super::ParseError::UnitReferenceTooDeep { .. }),
+            "expected UnitReferenceTooDeep, got {err:?}"
+        );
     }
 
     #[test]
@@ -1070,7 +1112,7 @@ mod tests {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Convert { expr, target } => {
                     assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
-                    assert_eq!(target.terms[0].name.value.as_str(), "km");
+                    assert_eq!(target.terms[0].name.value.to_string(), "km");
                 }
                 _ => panic!("expected Convert"),
             },

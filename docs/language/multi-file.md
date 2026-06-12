@@ -148,9 +148,9 @@ Runtime values — non-`const` `node` and any `param` — are **not**
 importable. To consume runtime values from another file, instantiate
 the producing DAG via `include` (see [The `include` Form](#the-include-form)).
 
-Imported module aliases are first-class qualifiers in type and expression
-positions. If two imports export the same leaf name, write the module-qualified
-path to select the owner explicitly:
+Imported module aliases are first-class qualifiers in type, expression, and
+unit positions. If two imports export the same leaf name, write the
+module-qualified path to select the owner explicitly:
 
 ```graphcal
 import collide.a as a;
@@ -159,6 +159,8 @@ import collide.b as b;
 const node gain: Dimensionless = a.bias;
 node phase: a.Phase = a.Phase.Burn;
 node result: a.Item = a.Pick(distance: 2.0 m);
+node span: Length = 2.0 a.mile;
+node span_miles: Length = @span -> a.mile;
 node code: Dimensionless = match @phase {
     a.Phase.Burn => 1.0,
     a.Phase.Coast => 2.0,

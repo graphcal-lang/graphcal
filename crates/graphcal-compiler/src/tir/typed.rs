@@ -628,11 +628,13 @@ pub struct DagSemanticBody {
     pub domain_bounds: HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
     /// Plot/figure/layer expressions lowered to HIR, keyed by declaration name.
     pub plot_exprs: ResolvedPlotExprs,
-    /// Dynamic unit scale expressions lowered to HIR, keyed by unit name.
+    /// Dynamic unit scale expressions lowered to HIR, keyed by unit reference.
     ///
     /// Units are file-level declarations, so only the root DAG's semantic
     /// body carries entries; evaluation looks them up through the TIR root.
-    pub dynamic_unit_scales: HashMap<crate::syntax::names::UnitName, hir::Expr>,
+    /// Module-alias-qualified references (`u.mile`) key the entry the import
+    /// merged under that alias.
+    pub dynamic_unit_scales: HashMap<crate::syntax::names::UnitRef, hir::Expr>,
     /// Canonical dependency maps for this DAG.
     pub dependencies: ResolvedDagDependencies,
     /// Canonical HIR-derived collection/index references.
@@ -1888,7 +1890,7 @@ fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticBody) {
         return;
     }
     let scale_deps: HashMap<
-        crate::syntax::names::UnitName,
+        crate::syntax::names::UnitRef,
         BTreeSet<ResolvedName<namespace::Decl>>,
     > = semantic
         .dynamic_unit_scales
@@ -1928,7 +1930,7 @@ fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticBody) {
 /// Collect every unit name mentioned by `UnitLiteral` / `Convert` nodes.
 fn collect_unit_names_from_hir(
     expr: &hir::Expr,
-    names: &mut std::collections::HashSet<crate::syntax::names::UnitName>,
+    names: &mut std::collections::HashSet<crate::syntax::names::UnitRef>,
 ) {
     // Recursion choke point: recurses once per tree level.
     crate::stack::with_stack_growth(|| match &expr.kind {
