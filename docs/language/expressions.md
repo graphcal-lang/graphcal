@@ -56,7 +56,12 @@ left.
 | `<=` | Less or equal | Same type and dimension |
 | `>=` | Greater or equal | Same type and dimension |
 
-All comparison operators return `Bool`.
+All comparison operators return `Bool` for scalar operands.
+
+Comparisons broadcast element-wise over indexed operands: `T[I] op T[I]`
+zips the two collections per key, and `T[I] op scalar` applies the scalar to
+every key — both return `Bool[I]`. Indexed operands must share the same
+axes in the same order; mismatched axes are a compile error (`D011`).
 
 ## Logical Operators
 

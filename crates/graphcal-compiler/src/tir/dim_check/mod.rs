@@ -382,18 +382,10 @@ struct AssertionIndexShape {
 }
 
 impl AssertionIndexShape {
-    const fn scalar() -> Self {
-        Self { axes: Vec::new() }
-    }
-
     fn from_bool_type(ty: &InferredType) -> Self {
-        let mut axes = Vec::new();
-        let mut current = ty;
-        while let InferredType::Indexed { element, index } = current {
-            axes.push(index.clone());
-            current = element;
+        Self {
+            axes: peel_index_axes(ty).0,
         }
-        Self { axes }
     }
 
     const fn is_indexed(&self) -> bool {
@@ -435,8 +427,29 @@ fn check_hir_assert_body(
             let expected_type = ctx.infer_hir(expected)?;
             let tolerance_type = ctx.infer_hir(tolerance)?;
 
-            let actual_dim = expect_scalar(&actual_type, registry, src, actual.span)?;
-            let expected_dim = expect_scalar(&expected_type, registry, src, expected.span)?;
+            // Element-wise broadcasting (#809): the assertion's index shape
+            // comes from `actual`; `expected` and `tolerance` are each scalar
+            // (broadcast to every key) or indexed by exactly the same axes.
+            let (actual_axes, actual_elem) = peel_index_axes(&actual_type);
+            let expected_elem = broadcast_operand_element(
+                &actual_axes,
+                &actual_type,
+                &expected_type,
+                expected.span,
+                registry,
+                src,
+            )?;
+            let tolerance_elem = broadcast_operand_element(
+                &actual_axes,
+                &actual_type,
+                &tolerance_type,
+                tolerance.span,
+                registry,
+                src,
+            )?;
+
+            let actual_dim = expect_scalar(actual_elem, registry, src, actual.span)?;
+            let expected_dim = expect_scalar(expected_elem, registry, src, expected.span)?;
             if actual_dim != expected_dim {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(&actual_dim),
@@ -449,10 +462,10 @@ fn check_hir_assert_body(
             }
 
             let tolerance_ok = if *is_relative {
-                tolerance_type.is_int_like()
-                    || matches!(&tolerance_type, InferredType::Scalar(d) if d.is_dimensionless())
+                tolerance_elem.is_int_like()
+                    || matches!(tolerance_elem, InferredType::Scalar(d) if d.is_dimensionless())
             } else {
-                let tolerance_dim = expect_scalar(&tolerance_type, registry, src, tolerance.span)?;
+                let tolerance_dim = expect_scalar(tolerance_elem, registry, src, tolerance.span)?;
                 tolerance_dim == actual_dim
             };
             if !tolerance_ok {
@@ -490,9 +503,45 @@ fn check_hir_assert_body(
                     span: tolerance.span.into(),
                 });
             }
-            Ok(AssertionIndexShape::scalar())
+            Ok(AssertionIndexShape { axes: actual_axes })
         }
     }
+}
+
+/// Peel the index axes off an inferred type, outermost first.
+fn peel_index_axes(ty: &InferredType) -> (Vec<InferredIndex>, &InferredType) {
+    let mut axes = Vec::new();
+    let mut current = ty;
+    while let InferredType::Indexed { element, index } = current {
+        axes.push(index.clone());
+        current = element;
+    }
+    (axes, current)
+}
+
+/// Validate that a tolerance-assertion operand broadcasts against `actual`'s
+/// axes (#809): it is either unindexed (applied to every key) or indexed by
+/// exactly the same axes in the same order. Returns the operand's element
+/// type.
+fn broadcast_operand_element<'a>(
+    actual_axes: &[InferredIndex],
+    actual_type: &InferredType,
+    operand_type: &'a InferredType,
+    operand_span: crate::syntax::span::Span,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<&'a InferredType, GraphcalError> {
+    let (operand_axes, operand_elem) = peel_index_axes(operand_type);
+    if !operand_axes.is_empty() && operand_axes != *actual_axes {
+        return Err(GraphcalError::IndexedShapeMismatch {
+            context: "tolerance assertion".to_string(),
+            lhs: format_inferred_type(actual_type, registry),
+            rhs: format_inferred_type(operand_type, registry),
+            src: src.clone(),
+            span: operand_span.into(),
+        });
+    }
+    Ok(operand_elem)
 }
 
 /// Structurally fold a tolerance expression to its written literal value

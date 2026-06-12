@@ -1,0 +1,34 @@
+// #809: tolerance assertions broadcast element-wise over indexed operands.
+// The assertion's shape comes from `actual`; `expected`/`tolerance` are each
+// scalar (applied to every key) or indexed by the same axes.
+index Case = { A, B };
+
+node actual: Length[Case] = {
+    Case.A: 1.0 m,
+    Case.B: 2.0 m,
+};
+node expected: Length[Case] = {
+    Case.A: 1.0 m,
+    Case.B: 2.5 m,
+};
+node per_key_tol: Length[Case] = {
+    Case.A: 0.01 m,
+    Case.B: 0.6 m,
+};
+
+// Scalar tolerance applied to every key.
+assert scalar_tol = @actual ~= @expected +/- 0.6 m;
+
+// Per-key tolerance over the same axes.
+assert per_key = @actual ~= @expected +/- @per_key_tol;
+
+// Relative tolerance, scalar.
+assert relative = @actual ~= @expected +/- 25%;
+
+// Scalar expected broadcast against indexed actual.
+assert near_scalar = @actual ~= 1.5 m +/- 1.0 m;
+
+// Per-variant expected_fail works on indexed tolerance assertions exactly
+// as on indexed boolean ones.
+#[expected_fail(Case.B)]
+assert known_off = @actual ~= @expected +/- 0.1 m;

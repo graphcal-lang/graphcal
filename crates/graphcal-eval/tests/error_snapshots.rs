@@ -298,9 +298,18 @@ fn error_assert_not_bool() {
 }
 
 #[test]
-fn error_indexed_equality() {
-    let source = include_str!("../../../tests/fixtures/invalid/indexed_equality.gcl");
-    let rendered = render_error(source, "indexed_equality.gcl");
+fn error_indexed_comparison_axis_mismatch() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/indexed_comparison_axis_mismatch.gcl");
+    let rendered = render_error(source, "indexed_comparison_axis_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_indexed_tolerance_axis_mismatch() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/indexed_tolerance_axis_mismatch.gcl");
+    let rendered = render_error(source, "indexed_tolerance_axis_mismatch.gcl");
     insta::assert_snapshot!(rendered);
 }
 

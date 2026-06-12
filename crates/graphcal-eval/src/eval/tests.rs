@@ -168,6 +168,128 @@ fn eval_assertions_use_hir_body_after_syntax_mutation() {
 }
 
 #[test]
+fn indexed_tolerance_reports_failing_keys_with_detail() {
+    // #809: indexed tolerance assertions check per key and report each
+    // failing key with its actual/expected/delta detail.
+    let result = compile_and_eval(
+        "index Case = { A, B };\n\
+         node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
+         node expected: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.5 };\n\
+         assert close = @actual ~= @expected +/- 0.1;",
+    )
+    .unwrap();
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Fail { message } => {
+            assert_eq!(
+                message,
+                "failed at Case.B (actual 2, expected 2.5 +/- 0.1, off by 0.5)"
+            );
+        }
+        other => panic!("expected Fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn indexed_tolerance_per_key_and_relative_pass() {
+    let result = compile_and_eval(
+        "index Case = { A, B };\n\
+         node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
+         node expected: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.5 };\n\
+         node tol: Dimensionless[Case] = { Case.A: 0.01, Case.B: 0.6 };\n\
+         assert per_key = @actual ~= @expected +/- @tol;\n\
+         assert relative = @actual ~= @expected +/- 25 %;",
+    )
+    .unwrap();
+    for (name, result, _) in &result.assertions {
+        assert_eq!(
+            result,
+            &super::types::AssertResult::Pass,
+            "assertion `{name}` should pass"
+        );
+    }
+}
+
+#[test]
+fn indexed_tolerance_respects_per_variant_expected_fail() {
+    // Expected failure occurs → Pass; unexpected pass at the marked key →
+    // Fail, exactly as for indexed boolean assertions.
+    let source = |tol: &str| {
+        format!(
+            "index Case = {{ A, B }};\n\
+             node actual: Dimensionless[Case] = {{ Case.A: 1.0, Case.B: 2.0 }};\n\
+             node expected: Dimensionless[Case] = {{ Case.A: 1.0, Case.B: 2.5 }};\n\
+             #[expected_fail(Case.B)]\n\
+             assert known = @actual ~= @expected +/- {tol};"
+        )
+    };
+
+    let result = compile_and_eval(&source("0.1")).unwrap();
+    assert_eq!(result.assertions[0].1, super::types::AssertResult::Pass);
+
+    let result = compile_and_eval(&source("1.0")).unwrap();
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Fail { message } => {
+            assert!(
+                message.contains("unexpected pass at Case.B"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected Fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn indexed_comparison_broadcasts_element_wise() {
+    // #809: `T[I] == T[I]` and `T[I] op scalar` evaluate per key.
+    let result = compile_and_eval(
+        "index Case = { A, B };\n\
+         node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
+         node expected: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.5 };\n\
+         node same: Bool[Case] = @actual == @expected;\n\
+         node below: Bool[Case] = @actual < 3.0;\n\
+         assert per_key_report = @actual == @expected;",
+    )
+    .unwrap();
+    let node = |name: &str| {
+        result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.to_string() == name)
+            .unwrap_or_else(|| panic!("node `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap()
+            .clone()
+    };
+    let entries = |value: &super::types::Value| match value {
+        super::types::Value::Indexed { entries, .. } => entries
+            .iter()
+            .map(|(k, v)| {
+                let super::types::Value::Bool(b) = v else {
+                    panic!("expected Bool entry, got {v:?}")
+                };
+                (k.to_string(), *b)
+            })
+            .collect::<Vec<_>>(),
+        other => panic!("expected indexed value, got {other:?}"),
+    };
+    assert_eq!(
+        entries(&node("same")),
+        vec![("A".to_string(), true), ("B".to_string(), false)]
+    );
+    assert_eq!(
+        entries(&node("below")),
+        vec![("A".to_string(), true), ("B".to_string(), true)]
+    );
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Fail { message } => {
+            assert_eq!(message, "failed at Case.B");
+        }
+        other => panic!("expected per-key Fail, got {other:?}"),
+    }
+}
+
+#[test]
 fn expected_fail_range_key_passes_when_step_fails() {
     // #816: `#[expected_fail(#N)]` keys bind to Nat range axes positionally.
     let result = compile_and_eval(

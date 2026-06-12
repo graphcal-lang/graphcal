@@ -620,33 +620,65 @@ pub fn evaluate_assert_with_expected_fail(
             }
         }
         Some(ExpectedFail::Variants(keys)) => {
-            // Per-variant: we need the raw RuntimeValue to invert specific entries.
-            // Only Expr-based assertions can be indexed; Tolerance assertions are scalar.
-            let graphcal_compiler::hir::AssertBody::Expr(body_expr) = body else {
-                // Tolerance assertions cannot be indexed, so Variants makes no sense.
-                // The resolver should have caught this, but be safe.
-                return AssertResult::Error {
-                    message: "per-variant #[expected_fail] on a tolerance assertion".to_string(),
-                };
+            // Per-variant: we need the raw per-key Bool tree to invert
+            // specific entries. For `Expr` bodies that is the evaluated
+            // expression; for tolerance bodies it is the element-wise
+            // pass/fail tree (#809).
+            let bool_tree = match body {
+                graphcal_compiler::hir::AssertBody::Expr(body_expr) => {
+                    match eval_hir_expr(body_expr, values, local_values, ctx) {
+                        Ok(value) => value,
+                        Err(e) => {
+                            return AssertResult::Error {
+                                message: format!("{e}"),
+                            };
+                        }
+                    }
+                }
+                graphcal_compiler::hir::AssertBody::Tolerance {
+                    actual,
+                    expected,
+                    tolerance,
+                    is_relative,
+                } => {
+                    let operands = eval_tolerance_operands(
+                        actual,
+                        expected,
+                        tolerance,
+                        values,
+                        local_values,
+                        ctx,
+                    );
+                    let (actual_val, expected_val, tolerance_val) = match operands {
+                        Ok(operands) => operands,
+                        Err(result) => return result,
+                    };
+                    match eval_tolerance_tree(
+                        &actual_val,
+                        &expected_val,
+                        &tolerance_val,
+                        *is_relative,
+                    ) {
+                        Ok((tree, _)) => tree,
+                        Err(message) => return AssertResult::Error { message },
+                    }
+                }
             };
-            match eval_hir_expr(body_expr, values, local_values, ctx) {
-                Ok(RuntimeValue::Indexed {
+            match bool_tree {
+                RuntimeValue::Indexed {
                     index_name,
                     entries,
-                }) => {
+                } => {
                     let inverted = invert_indexed_variants(&index_name, entries, keys);
                     check_indexed_assert_with_expected_fail(&inverted.0, &inverted.1, keys)
                 }
-                Ok(RuntimeValue::Bool(_)) => AssertResult::Error {
+                RuntimeValue::Bool(_) => AssertResult::Error {
                     message:
                         "invalid compiled plan: per-variant #[expected_fail(...)] on a non-indexed assertion"
                             .to_string(),
                 },
-                Ok(other) => AssertResult::Error {
+                other => AssertResult::Error {
                     message: format!("expected Bool or Indexed, got {other:?}"),
-                },
-                Err(e) => AssertResult::Error {
-                    message: format!("{e}"),
                 },
             }
         }
@@ -929,6 +961,11 @@ pub(super) fn evaluate_assert_body(
 }
 
 /// Evaluate a tolerance assertion body (`actual ~= expected +/- tolerance`).
+///
+/// Indexed operands broadcast element-wise (#809): the assertion's shape
+/// comes from `actual`; `expected` and `tolerance` are each scalar (applied
+/// to every key) or indexed by the same axes. Failures report each failing
+/// key with its actual/expected/delta detail.
 fn evaluate_tolerance_assert(
     actual: &graphcal_compiler::hir::Expr,
     expected: &graphcal_compiler::hir::Expr,
@@ -938,49 +975,118 @@ fn evaluate_tolerance_assert(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> AssertResult {
-    let actual_val = match eval_hir_expr(actual, values, local_values, ctx) {
-        Ok(RuntimeValue::Scalar(v)) => v,
-        Ok(other) => {
-            return AssertResult::Error {
-                message: format!("expected scalar actual, got {other:?}"),
-            };
-        }
-        Err(e) => {
-            return AssertResult::Error {
-                message: format!("{e}"),
-            };
-        }
+    let (actual_val, expected_val, tolerance_val) =
+        match eval_tolerance_operands(actual, expected, tolerance, values, local_values, ctx) {
+            Ok(operands) => operands,
+            Err(result) => return result,
+        };
+    match eval_tolerance_tree(&actual_val, &expected_val, &tolerance_val, is_relative) {
+        Err(message) => AssertResult::Error { message },
+        Ok((_, failures)) if failures.is_empty() => AssertResult::Pass,
+        Ok((_, failures)) => AssertResult::Fail {
+            message: format_tolerance_failures(&failures),
+        },
+    }
+}
+
+/// Evaluate the three operand expressions of a tolerance assertion.
+///
+/// Returns the raw runtime values (any shape — shape checking happens in
+/// [`eval_tolerance_tree`]), or the `AssertResult::Error` to report.
+fn eval_tolerance_operands(
+    actual: &graphcal_compiler::hir::Expr,
+    expected: &graphcal_compiler::hir::Expr,
+    tolerance: &graphcal_compiler::hir::Expr,
+    values: &RuntimeValueMap,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> Result<(RuntimeValue, RuntimeValue, RuntimeValue), AssertResult> {
+    let eval = |expr: &graphcal_compiler::hir::Expr| {
+        eval_hir_expr(expr, values, local_values, ctx).map_err(|e| AssertResult::Error {
+            message: format!("{e}"),
+        })
     };
-    let expected_val = match eval_hir_expr(expected, values, local_values, ctx) {
-        Ok(RuntimeValue::Scalar(v)) => v,
-        Ok(other) => {
-            return AssertResult::Error {
-                message: format!("expected scalar expected, got {other:?}"),
-            };
-        }
-        Err(e) => {
-            return AssertResult::Error {
-                message: format!("{e}"),
-            };
-        }
-    };
-    let tolerance_val = match eval_hir_expr(tolerance, values, local_values, ctx) {
-        Ok(RuntimeValue::Scalar(v)) => v,
+    Ok((eval(actual)?, eval(expected)?, eval(tolerance)?))
+}
+
+/// A failing key of a tolerance assertion, with its numeric detail.
+struct ToleranceFailure {
+    /// Index path from outermost to innermost axis; empty for a scalar
+    /// assertion.
+    path: Vec<(IndexTypeRef, IndexVariantName)>,
+    /// `actual X, expected Y +/- T, off by D`.
+    detail: String,
+}
+
+/// Walk a tolerance assertion's operands element-wise, producing the per-key
+/// `Bool` tree (mirroring `actual`'s index structure) plus the detail for
+/// every failing key. A shape/sign/type problem aborts with `Err` —
+/// reported as an assertion ERROR.
+fn eval_tolerance_tree(
+    actual: &RuntimeValue,
+    expected: &RuntimeValue,
+    tolerance: &RuntimeValue,
+    is_relative: bool,
+) -> Result<(RuntimeValue, Vec<ToleranceFailure>), String> {
+    let mut failures = Vec::new();
+    let mut path = Vec::new();
+    let tree = tolerance_tree_inner(
+        actual,
+        expected,
+        tolerance,
+        is_relative,
+        &mut path,
+        &mut failures,
+    )?;
+    Ok((tree, failures))
+}
+
+fn tolerance_tree_inner(
+    actual: &RuntimeValue,
+    expected: &RuntimeValue,
+    tolerance: &RuntimeValue,
+    is_relative: bool,
+    path: &mut Vec<(IndexTypeRef, IndexVariantName)>,
+    failures: &mut Vec<ToleranceFailure>,
+) -> Result<RuntimeValue, String> {
+    if let RuntimeValue::Indexed {
+        index_name,
+        entries,
+    } = actual
+    {
+        let checked_entries = entries
+            .iter()
+            .map(|(variant, actual_entry)| {
+                let expected_entry = tolerance_entry_or_broadcast(expected, index_name, variant)?;
+                let tolerance_entry = tolerance_entry_or_broadcast(tolerance, index_name, variant)?;
+                path.push((index_name.clone(), variant.clone()));
+                let result = tolerance_tree_inner(
+                    actual_entry,
+                    expected_entry,
+                    tolerance_entry,
+                    is_relative,
+                    path,
+                    failures,
+                );
+                path.pop();
+                Ok((variant.clone(), result?))
+            })
+            .collect::<Result<_, String>>()?;
+        return Ok(RuntimeValue::Indexed {
+            index_name: index_name.clone(),
+            entries: checked_entries,
+        });
+    }
+
+    let actual_val = tolerance_scalar_operand(actual, "actual")?;
+    let expected_val = tolerance_scalar_operand(expected, "expected")?;
+    let tolerance_val = match tolerance {
         #[expect(
             clippy::cast_precision_loss,
             reason = "tolerance values are small integers"
         )]
-        Ok(RuntimeValue::Int(i)) => i as f64,
-        Ok(other) => {
-            return AssertResult::Error {
-                message: format!("expected scalar tolerance, got {other:?}"),
-            };
-        }
-        Err(e) => {
-            return AssertResult::Error {
-                message: format!("{e}"),
-            };
-        }
+        RuntimeValue::Int(i) => *i as f64,
+        other => tolerance_scalar_operand(other, "tolerance")?,
     };
 
     let tol_display = if is_relative {
@@ -993,9 +1099,7 @@ fn evaluate_tolerance_assert(
     // exact match fails). Statically-known negatives are rejected at
     // check time (#815); this guards tolerances computed at runtime.
     if tolerance_val < 0.0 {
-        return AssertResult::Error {
-            message: format!("tolerance must be non-negative, got {tol_display}"),
-        };
+        return Err(format!("tolerance must be non-negative, got {tol_display}"));
     }
 
     let delta = (actual_val - expected_val).abs();
@@ -1005,15 +1109,75 @@ fn evaluate_tolerance_assert(
         tolerance_val
     };
 
-    if delta <= limit {
-        AssertResult::Pass
-    } else {
-        AssertResult::Fail {
-            message: format!(
+    let ok = delta <= limit;
+    if !ok {
+        failures.push(ToleranceFailure {
+            path: path.clone(),
+            detail: format!(
                 "actual {actual_val}, expected {expected_val} +/- {tol_display}, off by {delta}"
             ),
-        }
+        });
     }
+    Ok(RuntimeValue::Bool(ok))
+}
+
+/// Select the entry of a broadcastable tolerance operand for one key of
+/// `actual`'s axis: indexed operands index per key (axes were checked
+/// statically; mismatches here are evaluation errors), unindexed operands
+/// broadcast unchanged.
+fn tolerance_entry_or_broadcast<'a>(
+    operand: &'a RuntimeValue,
+    axis: &IndexTypeRef,
+    variant: &IndexVariantName,
+) -> Result<&'a RuntimeValue, String> {
+    match operand {
+        RuntimeValue::Indexed {
+            index_name,
+            entries,
+        } => {
+            if !index_name.matches_ref(axis) {
+                return Err(format!(
+                    "tolerance assertion operand has mismatched index axes: `{}` vs `{}`",
+                    axis.display_name(),
+                    index_name.display_name()
+                ));
+            }
+            entries.get(variant).ok_or_else(|| {
+                format!(
+                    "tolerance assertion operand is missing entry `{}.{variant}`",
+                    index_name.display_name()
+                )
+            })
+        }
+        other => Ok(other),
+    }
+}
+
+fn tolerance_scalar_operand(value: &RuntimeValue, role: &str) -> Result<f64, String> {
+    match value {
+        RuntimeValue::Scalar(v) => Ok(*v),
+        other => Err(format!("expected scalar {role}, got {other:?}")),
+    }
+}
+
+/// Render tolerance failures: a scalar assertion reports its detail bare
+/// (`actual X, expected Y +/- T, off by D`); indexed assertions report each
+/// failing key with its detail.
+fn format_tolerance_failures(failures: &[ToleranceFailure]) -> String {
+    if let [failure] = failures
+        && failure.path.is_empty()
+    {
+        return failure.detail.clone();
+    }
+    let is_multi_index = failures.iter().any(|f| f.path.len() > 1);
+    let formatted: Vec<String> = failures
+        .iter()
+        .map(|f| {
+            let key = format_indexed_paths(&[f.path.as_slice()], is_multi_index);
+            format!("failed at {key} ({})", f.detail)
+        })
+        .collect();
+    formatted.join("; ")
 }
 
 /// Evaluate one plot property expression to a `PlotFieldValue`. String

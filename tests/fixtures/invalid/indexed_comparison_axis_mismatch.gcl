@@ -1,0 +1,15 @@
+// #809: element-wise comparisons require both indexed operands to share the
+// same axes (in the same order); mismatched axes are a check-time error.
+index Case = { A, B };
+index Other = { X, Y };
+
+node lhs: Length[Case] = {
+    Case.A: 1.0 m,
+    Case.B: 2.0 m,
+};
+node rhs: Length[Other] = {
+    Other.X: 1.0 m,
+    Other.Y: 2.5 m,
+};
+
+node same: Bool[Case] = @lhs == @rhs;

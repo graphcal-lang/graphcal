@@ -1,0 +1,14 @@
+// #809: a failing indexed tolerance assertion reports each failing key with
+// its actual/expected/delta detail.
+index Case = { A, B };
+
+node actual: Length[Case] = {
+    Case.A: 1.0 m,
+    Case.B: 2.0 m,
+};
+node expected: Length[Case] = {
+    Case.A: 1.0 m,
+    Case.B: 2.5 m,
+};
+
+assert close = @actual ~= @expected +/- 0.1 m;

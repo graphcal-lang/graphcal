@@ -53,8 +53,14 @@ param min_thrust: Force = 100.0 kN;
 
 assert all_stages_ok = @thrust > @min_thrust;
 // If First and Third fail:
-//   FAIL  (failed at Stage: First, Third)
+//   FAIL  (failed at Stage.First, Stage.Third)
 ```
+
+Comparisons broadcast element-wise over indexed operands: `T[I] op T[I]`
+zips the two collections per key, and `T[I] op scalar` applies the scalar
+to every key — both infer `Bool[I]`. A `for` comprehension yielding
+`Bool[I]` works the same way. Indexed operands must share the same axes in
+the same order; mismatched axes are a compile error (`D011`).
 
 ### Tolerance Assertions
 
@@ -137,6 +143,35 @@ assert efficiency = @eta ~= 0.85 +/- 5 %;
 assert velocity_approx = @velocity ~= 49.5 m/s +/- 5 %;
 // Passes if velocity is within [47.025, 51.975] m/s
 ```
+
+#### Indexed Tolerance Assertions
+
+Tolerance assertions broadcast element-wise over indexed operands. The
+assertion's index shape comes from `actual`; `expected` and `tolerance` are
+each either a scalar (applied to every key) or indexed by exactly the same
+axes in the same order (`D011` otherwise):
+
+```
+index Case = { A, B };
+
+node actual: Length[Case] = { Case.A: 1.0 m, Case.B: 2.0 m };
+node expected: Length[Case] = { Case.A: 1.0 m, Case.B: 2.5 m };
+node tol: Length[Case] = { Case.A: 0.01 m, Case.B: 0.6 m };
+
+// Scalar tolerance applied to every key:
+assert close = @actual ~= @expected +/- 0.1 m;
+//   FAIL  (failed at Case.B (actual 2, expected 2.5 +/- 0.1, off by 0.5))
+
+// Per-key tolerance over the same axes:
+assert per_key = @actual ~= @expected +/- @tol;
+
+// Relative tolerance works the same way (scalar or indexed, dimensionless):
+assert relative = @actual ~= @expected +/- 25 %;
+```
+
+Each failing key is reported with its own actual/expected/delta detail.
+Per-variant `#[expected_fail(Case.B)]` works on indexed tolerance assertions
+exactly as on indexed boolean ones.
 
 ## Attributes
 

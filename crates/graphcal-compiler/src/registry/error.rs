@@ -221,6 +221,23 @@ pub enum GraphcalError {
         help: String,
     },
 
+    #[error("mismatched index axes in {context}: {lhs} vs {rhs}")]
+    #[diagnostic(
+        code(graphcal::D011),
+        help(
+            "element-wise operands must be indexed by the same axes in the same order; a scalar operand broadcasts to every key"
+        )
+    )]
+    IndexedShapeMismatch {
+        context: String,
+        lhs: String,
+        rhs: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("has type {rhs}")]
+        span: SourceSpan,
+    },
+
     #[error("type annotation mismatch: declared {declared}, inferred {inferred}")]
     #[diagnostic(
         code(graphcal::D002),
@@ -1398,6 +1415,7 @@ impl GraphcalError {
             | Self::InternalError { src, .. }
             | Self::DimensionOverflow { src, .. }
             | Self::DimensionMismatch { src, .. }
+            | Self::IndexedShapeMismatch { src, .. }
             | Self::DimensionMismatchInAnnotation { src, .. }
             | Self::UnknownUnit { src, .. }
             | Self::UnknownDimension { src, .. }

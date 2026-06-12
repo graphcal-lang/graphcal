@@ -17,13 +17,68 @@ use crate::registry::types::Registry;
 use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::span::Span;
 
-use super::super::InferredType;
 use super::super::helpers::{expect_scalar, format_inferred_type};
+use super::super::{InferredIndex, InferredType};
 
 /// A typed operand with the span diagnostics should point at.
 pub(super) struct Operand {
     pub ty: InferredType,
     pub span: Span,
+}
+
+/// Peel the index axes off an inferred type, outermost first.
+fn peel_axes(ty: &InferredType) -> (Vec<&InferredIndex>, &InferredType) {
+    let mut axes = Vec::new();
+    let mut current = ty;
+    while let InferredType::Indexed { element, index } = current {
+        axes.push(index);
+        current = element;
+    }
+    (axes, current)
+}
+
+/// Wrap `Bool` back into the given axes, outermost first.
+fn bool_with_axes(axes: &[&InferredIndex]) -> InferredType {
+    axes.iter()
+        .rev()
+        .fold(InferredType::Bool, |element, index| InferredType::Indexed {
+            element: Box::new(element),
+            index: (*index).clone(),
+        })
+}
+
+/// Resolve the broadcast axes of two comparison operands (#809).
+///
+/// Either both operands carry the same axes (in order), or one side is
+/// unindexed and broadcasts to every key of the other. Returns the shared
+/// axes plus each operand's element type.
+fn comparison_axes<'a>(
+    lhs: &'a Operand,
+    rhs: &'a Operand,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(Vec<&'a InferredIndex>, &'a InferredType, &'a InferredType), GraphcalError> {
+    let (lhs_axes, lhs_elem) = peel_axes(&lhs.ty);
+    let (rhs_axes, rhs_elem) = peel_axes(&rhs.ty);
+    let axes = match (lhs_axes.is_empty(), rhs_axes.is_empty()) {
+        (_, true) => lhs_axes,
+        (true, false) => rhs_axes,
+        (false, false) => {
+            if lhs_axes.len() != rhs_axes.len()
+                || lhs_axes.iter().zip(&rhs_axes).any(|(l, r)| l != r)
+            {
+                return Err(GraphcalError::IndexedShapeMismatch {
+                    context: "comparison".to_string(),
+                    lhs: format_inferred_type(&lhs.ty, registry),
+                    rhs: format_inferred_type(&rhs.ty, registry),
+                    src: src.clone(),
+                    span: rhs.span.into(),
+                });
+            }
+            lhs_axes
+        }
+    };
+    Ok((axes, lhs_elem, rhs_elem))
 }
 
 /// A compile-time-known exponent literal (possibly behind a unary minus).
@@ -79,68 +134,57 @@ pub(super) fn binop_rule(
             }
             Ok(InferredType::Bool)
         }
-        // Equality: operands must have the same ValueType.
-        // Int and Fin(N) are compatible for equality comparison.
-        // Indexed operands are rejected: the runtime has no element-wise
-        // equality, so accepting them here would make a statically valid
-        // program that can never evaluate (#810). Element-wise broadcasting
-        // is tracked in #809.
+        // Equality: element types must have the same ValueType (Int and
+        // Fin(N) are compatible). Indexed operands broadcast element-wise
+        // (#809): `T[I] == T[I]` and `T[I] == scalar` infer `Bool[I]`.
         BinOp::Eq | BinOp::Ne => {
-            for (operand_type, operand) in [(lhs_type, lhs), (rhs_type, rhs)] {
-                if matches!(operand_type, InferredType::Indexed { .. }) {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "scalar-comparable operand".to_string(),
-                        found: format_inferred_type(operand_type, registry),
-                        help: "equality on indexed values is not supported; \
-                               compare element-wise with a `for` comprehension"
-                            .to_string(),
-                        src: src.clone(),
-                        span: operand.span.into(),
-                    });
-                }
-            }
-            if lhs_type == rhs_type || (lhs_type.is_int_like() && rhs_type.is_int_like()) {
-                return Ok(InferredType::Bool);
+            let (axes, lhs_elem, rhs_elem) = comparison_axes(lhs, rhs, registry, src)?;
+            if lhs_elem == rhs_elem || (lhs_elem.is_int_like() && rhs_elem.is_int_like()) {
+                return Ok(bool_with_axes(&axes));
             }
             Err(GraphcalError::DimensionMismatch {
-                expected: format_inferred_type(lhs_type, registry),
-                found: format_inferred_type(rhs_type, registry),
+                expected: format_inferred_type(lhs_elem, registry),
+                found: format_inferred_type(rhs_elem, registry),
                 help: "equality operands must have the same type".to_string(),
                 src: src.clone(),
                 span: rhs.span.into(),
             })
         }
-        // Ordering comparisons: require same-type scalar or Int/Fin operands, return Bool
+        // Ordering comparisons: element types must be same-type scalar,
+        // Int/Fin, or same-scale Datetime. Indexed operands broadcast
+        // element-wise (#809): `T[I] op T[I]` and `T[I] op scalar` infer
+        // `Bool[I]`.
         BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-            if lhs_type.is_int_like() || rhs_type.is_int_like() {
-                if !lhs_type.is_int_like() || !rhs_type.is_int_like() {
+            let (axes, lhs_elem, rhs_elem) = comparison_axes(lhs, rhs, registry, src)?;
+            if lhs_elem.is_int_like() || rhs_elem.is_int_like() {
+                if !lhs_elem.is_int_like() || !rhs_elem.is_int_like() {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(lhs_type, registry),
-                        found: format_inferred_type(rhs_type, registry),
+                        expected: format_inferred_type(lhs_elem, registry),
+                        found: format_inferred_type(rhs_elem, registry),
                         help: "comparison operands must have the same type".to_string(),
                         src: src.clone(),
                         span: rhs.span.into(),
                     });
                 }
-                return Ok(InferredType::Bool);
+                return Ok(bool_with_axes(&axes));
             }
             // Datetime comparisons: same time scale required
-            if let InferredType::Datetime(ls) = lhs_type
-                && let InferredType::Datetime(rs) = rhs_type
+            if let InferredType::Datetime(ls) = lhs_elem
+                && let InferredType::Datetime(rs) = rhs_elem
             {
                 if ls != rs {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(lhs_type, registry),
-                        found: format_inferred_type(rhs_type, registry),
+                        expected: format_inferred_type(lhs_elem, registry),
+                        found: format_inferred_type(rhs_elem, registry),
                         help: "cannot compare datetimes with different time scales".to_string(),
                         src: src.clone(),
                         span: rhs.span.into(),
                     });
                 }
-                return Ok(InferredType::Bool);
+                return Ok(bool_with_axes(&axes));
             }
-            let lhs_dim = expect_scalar(lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(rhs_type, registry, src, rhs.span)?;
+            let lhs_dim = expect_scalar(lhs_elem, registry, src, lhs.span)?;
+            let rhs_dim = expect_scalar(rhs_elem, registry, src, rhs.span)?;
             if lhs_dim != rhs_dim {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(&lhs_dim),
@@ -150,7 +194,7 @@ pub(super) fn binop_rule(
                     span: rhs.span.into(),
                 });
             }
-            Ok(InferredType::Bool)
+            Ok(bool_with_axes(&axes))
         }
         // Arithmetic operators: require matching numeric operands (Int or Scalar)
         BinOp::Add | BinOp::Sub => {

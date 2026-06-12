@@ -1,0 +1,20 @@
+// #809: comparisons broadcast element-wise over indexed operands.
+// `T[I] op T[I]` zips per key; `T[I] op scalar` broadcasts the scalar.
+index Case = { A, B };
+
+node actual: Length[Case] = {
+    Case.A: 1.0 m,
+    Case.B: 2.0 m,
+};
+node expected: Length[Case] = {
+    Case.A: 1.0 m,
+    Case.B: 2.5 m,
+};
+
+node same: Bool[Case] = @actual == @expected;
+node below: Bool[Case] = @actual < 3.0 m;
+
+// The docs' indexed-boolean example shape: indexed-vs-scalar in an assert
+// body infers Bool[Case] and reports per key.
+assert all_below = @actual < 3.0 m;
+assert none_above = 0.0 m < @actual;
