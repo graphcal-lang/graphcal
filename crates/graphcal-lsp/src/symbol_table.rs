@@ -205,16 +205,25 @@ struct HirRefCollector<'a> {
 
 impl<'a> HirRefCollector<'a> {
     fn new(dag_id: &'a DagId, resolver: &'a ModuleResolver) -> Self {
-        let alias_of = resolver
-            .scope(dag_id)
-            .map(|scope| {
-                scope
-                    .module_aliases()
-                    .iter()
-                    .map(|(alias, target)| (target.target().clone(), alias.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut alias_of: HashMap<DagId, String> = HashMap::new();
+        if let Some(scope) = resolver.scope(dag_id) {
+            for (alias, target) in scope.module_aliases() {
+                let alias = alias.to_string();
+                // One module can be imported under several names (bare +
+                // `as` alias). HIR references carry only the canonical
+                // identity, so pick the smallest alias deterministically
+                // for the spelling-domain key; the imported-definition map
+                // registers every alias, so lookups succeed either way.
+                alias_of
+                    .entry(target.target().clone())
+                    .and_modify(|existing| {
+                        if alias < *existing {
+                            existing.clone_from(&alias);
+                        }
+                    })
+                    .or_insert(alias);
+            }
+        }
         Self {
             dag_id,
             resolver,

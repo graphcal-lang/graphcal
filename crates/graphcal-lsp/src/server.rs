@@ -795,12 +795,12 @@ fn collect_imported_definitions(
 
     let imports = root_file
         .imports_with_dag_ids()
-        .map(|(_, decl, dag_id)| (decl.path.display_path(), &decl.kind, dag_id));
+        .map(|(_, decl, dag_id)| (&decl.path, &decl.kind, dag_id));
     let includes = root_file
         .includes_with_dag_ids()
-        .map(|(_, decl, dag_id)| (decl.path.display_path(), &decl.kind, dag_id));
+        .map(|(_, decl, dag_id)| (&decl.path, &decl.kind, dag_id));
 
-    for (path_display, kind, dag_id) in imports.chain(includes) {
+    for (path, kind, dag_id) in imports.chain(includes) {
         let Some(loaded_file) = project.files.get(dag_id) else {
             continue;
         };
@@ -866,11 +866,15 @@ fn collect_imported_definitions(
                 }
             }
             graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
+                // The local module qualifier is the alias when written,
+                // otherwise the import path's leaf segment (`lib` for
+                // `import gotom.lib;`). The structured path is used directly:
+                // feeding its dotted display form to a *filesystem*-path
+                // helper used to truncate `gotom.lib` to `gotom`, keying
+                // every imported definition under a qualifier no reference
+                // could ever produce (#830).
                 let module_name = alias.as_ref().map_or_else(
-                    || {
-                        graphcal_eval::loader::derive_module_name(&path_display)
-                            .unwrap_or_else(|stem| stem)
-                    },
+                    || path.leaf().name.to_string(),
                     |alias_ident| alias_ident.value.to_string(),
                 );
                 for (key, def) in &imported_table.definitions {
@@ -1891,6 +1895,50 @@ node bad: Mass = mass + length;
             "expected imported variant under local alias `Palette.Red`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
+    }
+
+    /// Issue #830: goto-definition and hover must resolve symbols brought in
+    /// by module imports — bare (`import gotom.lib;` → `@lib.g0`) and aliased
+    /// (`import gotom.lib as alias_lib;` → `@alias_lib.g0`).
+    #[test]
+    fn module_imported_symbols_resolve_for_goto_and_hover() {
+        use crate::resolve::{SymbolLocation, resolve_symbol_at};
+
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"gotom\"\n"),
+            (
+                "src/gotom/lib.gcl",
+                "pub const node g0: Acceleration = 9.80665 m/s^2;\n",
+            ),
+            (
+                "src/gotom/main.gcl",
+                "import gotom.lib;\n\
+                 import gotom.lib as alias_lib;\n\
+                 node g: Acceleration = @lib.g0;\n\
+                 node g2: Acceleration = @alias_lib.g0;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/gotom/main.gcl");
+        let lib_path = dir.path().join("src/gotom/lib.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        for (needle, prefix) in [("@lib.g0", "@lib."), ("@alias_lib.g0", "@alias_lib.")] {
+            let offset = text.find(needle).expect("reference in main.gcl") + prefix.len();
+            let resolved = resolve_symbol_at(&analysis, offset)
+                .unwrap_or_else(|| panic!("expected `{needle}` to resolve"));
+            let SymbolLocation::Imported(imported) = resolved.location else {
+                panic!("expected `{needle}` to resolve to an imported definition");
+            };
+            assert_eq!(imported.uri, lib_uri, "`{needle}` should jump to lib.gcl");
+        }
     }
 
     #[test]

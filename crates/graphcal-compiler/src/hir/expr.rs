@@ -1116,10 +1116,18 @@ impl<'a> ExprLowerer<'a> {
                 expr: Box::new(self.lower_expr(expr)),
                 timezone: timezone.clone(),
             },
-            ast::ExprKind::FieldAccess { expr, field } => ExprKind::FieldAccess {
-                expr: Box::new(self.lower_expr(expr)),
-                field: field.clone(),
-            },
+            // `@alias.member` parses as `FieldAccess(GraphRef(alias), member)`.
+            // When `alias.member` resolves as a module-qualified declaration,
+            // promote the access to a qualified graph reference — this is the
+            // same promotion the project pipeline applies before evaluation,
+            // done here so every consumer of HIR (LSP included) sees the
+            // resolved identity. Otherwise it is a struct-field access.
+            ast::ExprKind::FieldAccess { expr, field } => self
+                .resolve_alias_field_access(expr, field)
+                .unwrap_or_else(|| ExprKind::FieldAccess {
+                    expr: Box::new(self.lower_expr(expr)),
+                    field: field.clone(),
+                }),
             ast::ExprKind::ConstructorCall {
                 callee,
                 generic_args,
@@ -1398,6 +1406,37 @@ impl<'a> ExprLowerer<'a> {
                 .ok_or(const_err)
                 .map(ExprKind::VariantLiteral),
         }
+    }
+
+    /// Promote `FieldAccess(GraphRef(alias), member)` to a qualified graph
+    /// reference when `alias.member` resolves as a module-qualified
+    /// declaration. Returns `None` when it does not (a struct-field access).
+    ///
+    /// Resolution goes through [`ModuleResolver::resolve_decl_path`] only —
+    /// it applies the alias boundary's visibility rule, so a private member
+    /// of an imported/included module does not get promoted (and therefore
+    /// stays an unresolved reference, exactly like writing the qualified
+    /// path directly).
+    fn resolve_alias_field_access(
+        &self,
+        inner: &ast::Expr,
+        field: &Spanned<FieldName>,
+    ) -> Option<ExprKind> {
+        let ast::ExprKind::GraphRef(name) = &inner.kind else {
+            return None;
+        };
+        if name.value.is_qualified() {
+            return None;
+        }
+        let scoped = ScopedName::qualified(name.value.member(), field.value.as_str());
+        let span = name.span.merge(field.span);
+        let path = scoped_name_to_path(&scoped, span).ok()?;
+        let resolved = self
+            .ctx
+            .resolver
+            .resolve_decl_path(self.ctx.owner, &path)
+            .ok()?;
+        Some(ExprKind::GraphRef(Spanned::new(resolved, span)))
     }
 
     /// Resolve a dotted path as an index-variant literal, keeping the index
