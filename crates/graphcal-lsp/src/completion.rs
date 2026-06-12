@@ -4,7 +4,7 @@ use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 use crate::cursor_context::{CompletionContext, determine_completion_context};
 use crate::server::AnalysisResult;
-use crate::symbol_table::{DefinitionInfo, SymbolCategory};
+use crate::symbol_table::{DefinitionInfo, SymbolCategory, SymbolKey};
 
 /// Top-level declaration keywords.
 ///
@@ -41,7 +41,7 @@ pub fn completion(
     let context = determine_completion_context(source, offset);
 
     let items = match context {
-        CompletionContext::GraphRef => complete_graph_refs(analysis),
+        CompletionContext::GraphRef => complete_graph_refs(analysis, offset),
         CompletionContext::TypeAnnotation => complete_types(analysis),
         CompletionContext::ConversionTarget => complete_conversion_targets(analysis),
         CompletionContext::TopLevel => complete_top_level(),
@@ -84,14 +84,76 @@ fn keyword_items(keywords: &[&str]) -> Vec<CompletionItem> {
         .collect()
 }
 
-/// Complete param, node, and const node names (after `@`).
-fn complete_graph_refs(analysis: &AnalysisResult) -> Vec<CompletionItem> {
-    build_definition_items(analysis, |cat| match cat {
+/// Completion kind for a definition referenceable through `@`.
+const fn graph_ref_kind(cat: SymbolCategory) -> Option<CompletionItemKind> {
+    match cat {
         SymbolCategory::Param | SymbolCategory::Node | SymbolCategory::Const => {
             Some(CompletionItemKind::VARIABLE)
         }
         _ => None,
+    }
+}
+
+/// Build a completion item for a graph-referenceable definition.
+fn graph_ref_item(def: &DefinitionInfo) -> Option<CompletionItem> {
+    if def.name_span.is_empty() {
+        return None;
+    }
+    let kind = graph_ref_kind(def.category)?;
+    Some(CompletionItem {
+        label: def.name.clone(),
+        kind: Some(kind),
+        detail: def.type_description.clone(),
+        ..Default::default()
     })
+}
+
+/// Complete param, node, and const node names (after `@`), respecting the
+/// cursor's lexical scope.
+///
+/// Inside a `dag` body, top-level declarations are not referenceable: only
+/// the dag's own params/nodes/consts (registered under `Qualified` keys
+/// whose single qualifier segment is the dag name) and imported names are
+/// offered. At the top level the dag members are excluded for the same
+/// reason — offering identifiers that cannot compile is a usability trap.
+fn complete_graph_refs(analysis: &AnalysisResult, offset: usize) -> Vec<CompletionItem> {
+    let enclosing_dag = analysis.symbol_table.enclosing_dag_at(offset);
+
+    let local = analysis
+        .symbol_table
+        .definitions
+        .iter()
+        .filter(|(key, _)| {
+            enclosing_dag.map_or_else(
+                // Top level: only top-level declarations (dag members are
+                // registered under `Qualified` keys and not in scope here).
+                || matches!(key, SymbolKey::TopLevel(_)),
+                // Inside a dag body: only that dag's own members.
+                |dag_name| {
+                    matches!(
+                        key,
+                        SymbolKey::Qualified { module, .. }
+                            if matches!(&module[..], [segment] if segment == dag_name)
+                    )
+                },
+            )
+        })
+        .map(|(_, def)| def);
+    // Imported names are referenceable in both scopes (a dag body may not
+    // reach top-level declarations, but imports stay visible). Members of
+    // imported dags (`Qualified` with more than one segment) need call
+    // arguments and are not bare `@`-referenceable.
+    let imported = analysis
+        .imported_definitions
+        .iter()
+        .filter(|(key, _)| match key {
+            SymbolKey::TopLevel(_) => true,
+            SymbolKey::Qualified { module, .. } => module.len() == 1,
+            _ => false,
+        })
+        .map(|(_, imp)| &imp.definition);
+
+    local.chain(imported).filter_map(graph_ref_item).collect()
 }
 
 /// Complete type names (after `:`).
@@ -306,6 +368,54 @@ mod tests {
             !labels.contains(&"g0"),
             "expression completion must not offer the bare `g0`: {labels:?}"
         );
+    }
+
+    /// Issue #835: `@` completion respects lexical scope. Inside a `dag`
+    /// body only the dag's own params/nodes are offered (a top-level name
+    /// would not compile there); at the top level the dag's members are
+    /// excluded for the same reason.
+    #[test]
+    fn graph_ref_completion_respects_dag_scope() {
+        let source = "\
+param outer: Mass = 1.0 kg;
+dag d {
+    param inner: Mass;
+    node doubled: Mass = @inner * 2.0;
+}
+include d(inner: @outer).{ doubled as result };
+";
+        let uri = tower_lsp::lsp_types::Url::parse("untitled:test.gcl").unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, source);
+
+        // Inside the dag body, right after the `@` of `@inner`.
+        let inside_offset = source.find("@inner").unwrap() + 1;
+        let items = completion(&analysis, source, inside_offset).unwrap_or_default();
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        for expected in ["inner", "doubled"] {
+            assert!(
+                labels.contains(&expected),
+                "dag-body completion must offer `{expected}`: {labels:?}"
+            );
+        }
+        assert!(
+            !labels.contains(&"outer"),
+            "dag-body completion must not offer the out-of-scope top-level `outer`: {labels:?}"
+        );
+
+        // At the top level, right after the `@` of `@outer`.
+        let top_offset = source.find("@outer").unwrap() + 1;
+        let items = completion(&analysis, source, top_offset).unwrap_or_default();
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels.contains(&"outer"),
+            "top-level completion must offer `outer`: {labels:?}"
+        );
+        for excluded in ["inner", "doubled"] {
+            assert!(
+                !labels.contains(&excluded),
+                "top-level completion must not offer the dag member `{excluded}`: {labels:?}"
+            );
+        }
     }
 
     #[test]

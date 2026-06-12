@@ -85,6 +85,13 @@ pub(crate) struct AnalysisResult {
     pub(crate) fn_signatures: &'static HashMap<String, FnSignatureInfo>,
     /// Loader-resolved import links (for Document Links).
     pub(crate) import_links: Vec<ResolvedImportLink>,
+    /// `false` when this result is a parse-failure fallback: the buffer did
+    /// not parse, so the symbol-dependent fields are empty placeholders and
+    /// only `diagnostics` is meaningful. [`store_analysis`] keeps the
+    /// previous good symbol state in that case (#834) — mid-edit buffers are
+    /// unparsable more often than not, and completion/hover/goto should keep
+    /// answering from the last successfully analyzed state.
+    pub(crate) buffer_parsed: bool,
 }
 
 /// Debounce delay for `did_change` notifications (milliseconds).
@@ -141,6 +148,7 @@ impl std::fmt::Debug for AnalysisResult {
             .field("eval_values_count", &self.eval_values.len())
             .field("fn_signatures_count", &self.fn_signatures.len())
             .field("import_links_count", &self.import_links.len())
+            .field("buffer_parsed", &self.buffer_parsed)
             .finish()
     }
 }
@@ -204,6 +212,7 @@ impl Backend {
             &self.client,
             &self.documents,
             &self.change_generations,
+            &self.latest_text,
             uri,
             text,
             generation,
@@ -220,6 +229,7 @@ impl Backend {
         let client = self.client.clone();
         let documents = self.documents.clone();
         let generations = self.change_generations.clone();
+        let latest_text = self.latest_text.clone();
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
@@ -229,7 +239,16 @@ impl Backend {
                 return;
             }
 
-            analyze_store_publish(&client, &documents, &generations, uri, text, generation).await;
+            analyze_store_publish(
+                &client,
+                &documents,
+                &generations,
+                &latest_text,
+                uri,
+                text,
+                generation,
+            )
+            .await;
         });
     }
 
@@ -252,12 +271,30 @@ async fn analyze_store_publish(
     client: &Client,
     documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
+    latest_text: &Arc<RwLock<HashMap<Url, Arc<String>>>>,
     uri: Url,
     text: String,
     generation: u64,
 ) {
+    // Snapshot every *other* open document's latest text: the analysis
+    // overlays them onto the filesystem so imports of open-but-dirty files
+    // see the editor state, not stale disk content. The analyzed document
+    // itself uses `text` (this analysis pass's snapshot).
+    let open_buffers: Vec<OpenBuffer> = latest_text
+        .read()
+        .await
+        .iter()
+        .filter(|(open_uri, _)| **open_uri != uri)
+        .filter_map(|(open_uri, open_text)| {
+            open_uri.to_file_path().ok().map(|path| OpenBuffer {
+                path,
+                text: Arc::clone(open_text),
+            })
+        })
+        .collect();
     let uri_for_analysis = uri.clone();
-    let task = tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text));
+    let task =
+        tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text, &open_buffers));
     let analysis = match tokio::time::timeout(ANALYSIS_TIMEOUT, task).await {
         Ok(Ok(a)) => a,
         Ok(Err(e)) => {
@@ -272,38 +309,85 @@ async fn analyze_store_publish(
         }
     };
 
-    let new_diags = Arc::clone(&analysis.diagnostics);
-    let stale_uris = {
-        // Hold the documents write lock across the generation re-check and
-        // the insert: a newer-generation analysis completing between a
-        // separate check and insert used to be clobbered by this older one.
-        let mut docs = documents.write().await;
-        if !is_generation_current(generations, &uri, generation).await {
-            return;
-        }
-        let stale_uris = docs
-            .get(&uri)
-            .map(|prev| {
-                prev.diagnostics
-                    .keys()
-                    .filter(|u| !new_diags.contains_key(*u))
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        docs.insert(uri.clone(), analysis);
-        stale_uris
-    };
-    for stale in stale_uris {
-        client.publish_diagnostics(stale, Vec::new(), None).await;
+    // Hold the documents write lock across the generation re-check and
+    // the insert: a newer-generation analysis completing between a
+    // separate check and insert used to be clobbered by this older one.
+    let mut docs = documents.write().await;
+    if !is_generation_current(generations, &uri, generation).await {
+        return;
     }
-    for (target_uri, diags) in new_diags.iter() {
-        client
-            .publish_diagnostics(target_uri.clone(), diags.clone(), None)
-            .await;
+    // Every URI this analysis touches — newly reported plus previously
+    // reported (which may need clearing) — is re-published from the
+    // merged view of all open documents, so one document's analysis
+    // cannot clobber diagnostics another open document owns.
+    let mut affected: Vec<Url> = analysis.diagnostics.keys().cloned().collect();
+    if let Some(prev) = docs.get(&uri) {
+        for prev_uri in prev.diagnostics.keys() {
+            if !affected.contains(prev_uri) {
+                affected.push(prev_uri.clone());
+            }
+        }
+    }
+    store_analysis(&mut docs, &uri, analysis);
+    let publish = merged_diagnostics_for(&docs, &affected);
+    drop(docs);
+    for (target_uri, diags) in publish {
+        client.publish_diagnostics(target_uri, diags, None).await;
     }
     // Best-effort: the client may not support inlay-hint refresh.
     let _ = client.inlay_hint_refresh().await;
+}
+
+/// Store a fresh analysis for `uri`, keeping the previous symbol-dependent
+/// state when the new result is a parse-failure fallback.
+///
+/// Mid-edit buffers fail to parse more often than not (the parser has no
+/// error recovery), so replacing the cached analysis with an empty symbol
+/// table would make completion/hover/goto go dark ~300 ms after every
+/// keystroke (#834). Instead, only the diagnostics are refreshed; symbol
+/// queries keep answering from the last successfully analyzed state (whose
+/// `source` snapshot they remain consistent with).
+fn store_analysis(docs: &mut HashMap<Url, AnalysisResult>, uri: &Url, analysis: AnalysisResult) {
+    if !analysis.buffer_parsed
+        && let Some(prev) = docs.get_mut(uri)
+    {
+        prev.diagnostics = analysis.diagnostics;
+        return;
+    }
+    docs.insert(uri.clone(), analysis);
+}
+
+/// Compute the diagnostics to publish for each URI in `targets` from the
+/// whole open-document set.
+///
+/// Ownership rule (#832): a URI that is itself an open, analyzed document is
+/// authoritative for its own diagnostics — its analysis ran on the exact
+/// buffer the user sees. For URIs that are not open (imported files on
+/// disk), the contributions of every open document are merged, deduplicating
+/// identical diagnostics reported by multiple importers. A URI no open
+/// document reports on yields an empty list, clearing stale squiggles.
+fn merged_diagnostics_for(
+    docs: &HashMap<Url, AnalysisResult>,
+    targets: &[Url],
+) -> Vec<(Url, Vec<Diagnostic>)> {
+    targets
+        .iter()
+        .map(|target| {
+            if let Some(own) = docs.get(target) {
+                let diags = own.diagnostics.get(target).cloned().unwrap_or_default();
+                return (target.clone(), diags);
+            }
+            let mut merged: Vec<Diagnostic> = Vec::new();
+            for analysis in docs.values() {
+                for diag in analysis.diagnostics.get(target).into_iter().flatten() {
+                    if !merged.contains(diag) {
+                        merged.push(diag.clone());
+                    }
+                }
+            }
+            (target.clone(), merged)
+        })
+        .collect()
 }
 
 /// Publish a single error diagnostic on `uri` indicating that the analysis
@@ -341,23 +425,44 @@ async fn is_generation_current(
     *generations.read().await.get(uri).unwrap_or(&0) == generation
 }
 
+/// Snapshot of another open editor buffer, overlaid onto the filesystem
+/// during analysis so cross-file diagnostics, goto-definition targets, and
+/// hover reflect what the user actually sees instead of stale disk content.
+pub(crate) struct OpenBuffer {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) text: Arc<String>,
+}
+
 /// Build a `LoadedProject` from a URI and in-memory text.
 ///
 /// For file-backed URIs, loads the project from disk with the in-memory text
-/// overlaid on the root file via [`graphcal_io::OverlayFileSystem`]. The base
+/// overlaid on the root file — and every other open document's latest text
+/// overlaid on its path — via [`graphcal_io::OverlayFileSystem`]. The base
 /// reader is sandboxed to the discovered project root (when a `graphcal.toml`
 /// is reachable from the buffer's directory) — keeping the LSP's filesystem
 /// access in lockstep with the CLI's. For untitled/non-file URIs, builds a
 /// single-file project from the in-memory text alone.
-fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Box<CompileError>> {
+fn build_project(
+    uri: &Url,
+    text: &str,
+    open_buffers: &[OpenBuffer],
+) -> std::result::Result<LoadedProject, Box<CompileError>> {
     let name = uri.as_str();
     match uri.to_file_path() {
         Ok(path) => {
             // OverlayFileSystem canonicalizes internally and falls back to the
             // raw path when the overlay file is not yet on disk — this makes
             // unsaved LSP buffers work without a preflight `FileNotFound`.
+            // The analyzed snapshot comes first so it wins over any (possibly
+            // newer) latest-text entry for the same file: the produced
+            // `AnalysisResult` must stay consistent with `text`.
             let base = graphcal_eval::loader::build_rooted_filesystem(&path, None);
-            let fs = graphcal_io::OverlayFileSystem::new(base, path.clone(), text.to_string());
+            let overlays = std::iter::once((path.clone(), text.to_string())).chain(
+                open_buffers
+                    .iter()
+                    .map(|buffer| (buffer.path.clone(), buffer.text.as_ref().clone())),
+            );
+            let fs = graphcal_io::OverlayFileSystem::with_overlays(base, overlays);
             graphcal_eval::loader::load_project(&path, None, &fs).map_err(Box::new)
         }
         Err(()) => LoadedProject::from_source(text, name).map_err(Box::new),
@@ -383,35 +488,42 @@ fn diagnostics_for_active_uri(uri: &Url, diags: Vec<Diagnostic>) -> HashMap<Url,
 /// Both stages use the same source text, eliminating data provenance mismatches.
 #[cfg(test)]
 pub(crate) fn run_analysis_for_test(uri: &Url, text: &str) -> AnalysisResult {
-    run_analysis(uri, text)
+    run_analysis(uri, text, &[])
 }
 
-fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
+fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisResult {
     // Stage 1: Build project (parse + load imports).
     // If this fails, no AST is available for the multi-file pipeline. Fall
     // back to parsing just the active buffer so hover/goto-def on the active
     // file's own symbols still answer — the imported-file error remains
     // visible, but local LSP features degrade gracefully.
-    let project = match build_project(uri, text) {
+    let project = match build_project(uri, text, open_buffers) {
         Ok(project) => project,
         Err(e) => {
             let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri);
             diagnostics.entry(uri.clone()).or_default();
-            let symbol_table = LoadedProject::from_source(text, uri.as_str())
-                .ok()
-                .map(|single| {
-                    let root_ast = &single.files[&single.root].ast;
-                    symbol_table::build_for_buffer(root_ast, text)
-                })
-                .unwrap_or_default();
+            // `Some` when the failure was in an *import* (the buffer itself
+            // parses): the buffer's own symbols are still fully usable.
+            // `None` when the buffer doesn't parse — the result is then a
+            // diagnostics-only fallback and `store_analysis` retains the
+            // previous symbol state (#834).
+            let parsed_buffer_table =
+                LoadedProject::from_source(text, uri.as_str())
+                    .ok()
+                    .map(|single| {
+                        let root_ast = &single.files[&single.root].ast;
+                        symbol_table::build_for_buffer(root_ast, text)
+                    });
+            let buffer_parsed = parsed_buffer_table.is_some();
             return AnalysisResult {
                 source: Arc::new(text.to_string()),
-                symbol_table,
+                symbol_table: parsed_buffer_table.unwrap_or_default(),
                 imported_definitions: HashMap::new(),
                 diagnostics: Arc::new(diagnostics),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
                 import_links: Vec::new(),
+                buffer_parsed,
             };
         }
     };
@@ -430,7 +542,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             // Full success: symbol table from AST + TIR enrichment.
             let mut symbol_table =
                 symbol_table::build_from_ast(root_ast, text, &project.root, &module_resolver);
-            symbol_table::enrich_from_tir(&mut symbol_table, &tir);
+            symbol_table::enrich_from_tir(&mut symbol_table, &tir, &project.root);
 
             let imported_definitions =
                 collect_imported_definitions(uri, &project, Some(&tir), &module_resolver);
@@ -454,6 +566,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 eval_values,
                 fn_signatures,
                 import_links,
+                buffer_parsed: true,
             }
         }
         Err(e) => {
@@ -473,6 +586,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
                 import_links,
+                buffer_parsed: true,
             }
         }
     }
@@ -795,12 +909,12 @@ fn collect_imported_definitions(
 
     let imports = root_file
         .imports_with_dag_ids()
-        .map(|(_, decl, dag_id)| (decl.path.display_path(), &decl.kind, dag_id));
+        .map(|(_, decl, dag_id)| (&decl.path, &decl.kind, dag_id));
     let includes = root_file
         .includes_with_dag_ids()
-        .map(|(_, decl, dag_id)| (decl.path.display_path(), &decl.kind, dag_id));
+        .map(|(_, decl, dag_id)| (&decl.path, &decl.kind, dag_id));
 
-    for (path_display, kind, dag_id) in imports.chain(includes) {
+    for (path, kind, dag_id) in imports.chain(includes) {
         let Some(loaded_file) = project.files.get(dag_id) else {
             continue;
         };
@@ -814,7 +928,7 @@ fn collect_imported_definitions(
                     module_resolver,
                 );
                 if let Some(tir) = tir {
-                    symbol_table::enrich_from_tir(&mut table, tir);
+                    symbol_table::enrich_from_tir(&mut table, tir, dag_id);
                 }
                 let uri = Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| {
                     // Url::from_file_path only fails for non-absolute paths.
@@ -866,11 +980,15 @@ fn collect_imported_definitions(
                 }
             }
             graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
+                // The local module qualifier is the alias when written,
+                // otherwise the import path's leaf segment (`lib` for
+                // `import gotom.lib;`). The structured path is used directly:
+                // feeding its dotted display form to a *filesystem*-path
+                // helper used to truncate `gotom.lib` to `gotom`, keying
+                // every imported definition under a qualifier no reference
+                // could ever produce (#830).
                 let module_name = alias.as_ref().map_or_else(
-                    || {
-                        graphcal_eval::loader::derive_module_name(&path_display)
-                            .unwrap_or_else(|stem| stem)
-                    },
+                    || path.leaf().name.to_string(),
                     |alias_ident| alias_ident.value.to_string(),
                 );
                 for (key, def) in &imported_table.definitions {
@@ -1123,25 +1241,33 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
-        // Pull the previous diagnostic URI set out of the cached analysis so
-        // we can clear cross-file diagnostics this document had published.
-        let stale_uris: Vec<Url> = self
-            .documents
-            .read()
-            .await
-            .get(&uri)
-            .map(|prev| prev.diagnostics.keys().cloned().collect())
-            .unwrap_or_default();
-        self.documents.write().await.remove(&uri);
+        // Re-publish every URI the closing document reported on from the
+        // *remaining* open documents' merged view: closing one document only
+        // removes that document's contribution — a URI another open document
+        // still reports on keeps its diagnostics (#832). The closed URI
+        // itself is always included so its squiggles clear even if this
+        // document was never analyzed.
+        let publish = {
+            let mut docs = self.documents.write().await;
+            let mut affected: Vec<Url> = docs
+                .get(&uri)
+                .map(|prev| prev.diagnostics.keys().cloned().collect())
+                .unwrap_or_default();
+            if !affected.contains(&uri) {
+                affected.push(uri.clone());
+            }
+            docs.remove(&uri);
+            let publish = merged_diagnostics_for(&docs, &affected);
+            drop(docs);
+            publish
+        };
         self.change_generations.write().await.remove(&uri);
         self.latest_text.write().await.remove(&uri);
-        for stale in stale_uris {
+        for (target_uri, diags) in publish {
             self.client
-                .publish_diagnostics(stale, Vec::new(), None)
+                .publish_diagnostics(target_uri, diags, None)
                 .await;
         }
-        // Always clear the closed document's URI even if it was never analyzed.
-        self.client.publish_diagnostics(uri, Vec::new(), None).await;
         // No `inlay_hint_refresh` here — the document is gone; there's
         // nothing for the client to re-fetch hints for. The refresh call
         // at `analyze_and_publish` and `spawn_debounced_analysis` sites
@@ -1243,11 +1369,22 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let new_name = params.new_name;
-        self.with_analysis(&uri, |analysis| {
-            let offset = position_to_byte_offset(&analysis.source, position);
-            crate::rename::rename(analysis, &uri, offset, &new_name)
-        })
-        .await
+        let outcome = self
+            .with_analysis(&uri, |analysis| {
+                let offset = position_to_byte_offset(&analysis.source, position);
+                Some(crate::rename::rename(analysis, &uri, offset, &new_name))
+            })
+            .await?;
+        match outcome {
+            None | Some(Ok(None)) => Ok(None),
+            Some(Ok(Some(edit))) => Ok(Some(edit)),
+            // An explicit refusal (invalid identifier, name collision) is a
+            // descriptive error the client shows to the user — silently
+            // returning null would suggest "nothing to rename here".
+            Some(Err(refusal)) => Err(tower_lsp::jsonrpc::Error::invalid_params(
+                refusal.to_string(),
+            )),
+        }
     }
 
     async fn prepare_rename(
@@ -1529,7 +1666,7 @@ pub(bind) index Phase;
 pub(bind) index Step: Time;
 pub(bind) index Accel: Length / Time^2;
 ";
-        let analysis = run_analysis(&untitled_uri(), text);
+        let analysis = run_analysis(&untitled_uri(), text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "library file should have no diagnostics, got: {:?}",
@@ -1542,7 +1679,7 @@ pub(bind) index Accel: Length / Time^2;
         let text = "\
 param mass: Mass;
 ";
-        let analysis = run_analysis(&untitled_uri(), text);
+        let analysis = run_analysis(&untitled_uri(), text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "file with required param should have no diagnostics, got: {:?}",
@@ -1559,7 +1696,7 @@ param mass: Mass = 1.0 kg;
 param length: Length = 1.0 m;
 node bad: Mass = mass + length;
 ";
-        let analysis = run_analysis(&untitled_uri(), text);
+        let analysis = run_analysis(&untitled_uri(), text, &[]);
         assert!(
             !analysis.has_no_diagnostics(),
             "dim mismatch in executable file must still produce a diagnostic",
@@ -1594,7 +1731,7 @@ node bad: Mass = mass + length;
         let main_path = dir.path().join("src/lib/main.gcl");
         let uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&uri, &text);
+        let analysis = run_analysis(&uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -1630,7 +1767,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(main_path.canonicalize().unwrap()).unwrap();
         let helper_uri = Url::from_file_path(helper_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
 
         let helper_diags = analysis
             .diagnostics
@@ -1690,7 +1827,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(main_path.canonicalize().unwrap()).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
 
         let lib_diags = analysis
             .diagnostics
@@ -1729,7 +1866,7 @@ node bad: Mass = mass + length;
         let main_path = dir.path().join("src/helper/main.gcl");
         let uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&uri, &text);
+        let analysis = run_analysis(&uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -1772,7 +1909,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -1829,7 +1966,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -1869,7 +2006,7 @@ node bad: Mass = mass + length;
         let main_path = dir.path().join("src/lib/main.gcl");
         let uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&uri, &text);
+        let analysis = run_analysis(&uri, &text, &[]);
 
         let palette_red_key = crate::symbol_table::SymbolKey::Variant {
             parent: crate::symbol_table::SymbolPath::local("Palette"),
@@ -1880,6 +2017,305 @@ node bad: Mass = mass + length;
             "expected imported variant under local alias `Palette.Red`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
+    }
+
+    /// Issue #830: goto-definition and hover must resolve symbols brought in
+    /// by module imports — bare (`import gotom.lib;` → `@lib.g0`) and aliased
+    /// (`import gotom.lib as alias_lib;` → `@alias_lib.g0`).
+    #[test]
+    fn module_imported_symbols_resolve_for_goto_and_hover() {
+        use crate::resolve::{SymbolLocation, resolve_symbol_at};
+
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"gotom\"\n"),
+            (
+                "src/gotom/lib.gcl",
+                "pub const node g0: Acceleration = 9.80665 m/s^2;\n",
+            ),
+            (
+                "src/gotom/main.gcl",
+                "import gotom.lib;\n\
+                 import gotom.lib as alias_lib;\n\
+                 node g: Acceleration = @lib.g0;\n\
+                 node g2: Acceleration = @alias_lib.g0;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/gotom/main.gcl");
+        let lib_path = dir.path().join("src/gotom/lib.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text, &[]);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        for (needle, prefix) in [("@lib.g0", "@lib."), ("@alias_lib.g0", "@alias_lib.")] {
+            let offset = text.find(needle).expect("reference in main.gcl") + prefix.len();
+            let resolved = resolve_symbol_at(&analysis, offset)
+                .unwrap_or_else(|| panic!("expected `{needle}` to resolve"));
+            let SymbolLocation::Imported(imported) = resolved.location else {
+                panic!("expected `{needle}` to resolve to an imported definition");
+            };
+            assert_eq!(imported.uri, lib_uri, "`{needle}` should jump to lib.gcl");
+        }
+    }
+
+    /// Build a bare `AnalysisResult` carrying only a diagnostics map, for
+    /// exercising the per-URI ownership merge.
+    fn analysis_with_diags(diags: HashMap<Url, Vec<Diagnostic>>) -> AnalysisResult {
+        AnalysisResult {
+            source: Arc::new(String::new()),
+            symbol_table: SymbolTable::default(),
+            imported_definitions: HashMap::new(),
+            diagnostics: Arc::new(diags),
+            eval_values: HashMap::new(),
+            fn_signatures: build_fn_signatures(),
+            import_links: Vec::new(),
+            buffer_parsed: true,
+        }
+    }
+
+    fn diag(message: &str) -> Diagnostic {
+        Diagnostic {
+            message: message.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Issue #832: an open document's own analysis is authoritative for its
+    /// own URI — an importer's (possibly stale) contribution must not
+    /// overwrite or clear it.
+    #[test]
+    fn open_document_owns_its_own_diagnostics() {
+        let lib_uri = Url::parse("file:///p/lib.gcl").unwrap();
+        let main_uri = Url::parse("file:///p/main.gcl").unwrap();
+
+        let mut docs = HashMap::new();
+        // lib's own analysis reports its own error.
+        docs.insert(
+            lib_uri.clone(),
+            analysis_with_diags(HashMap::from([(lib_uri.clone(), vec![diag("lib broken")])])),
+        );
+        // main's analysis reports nothing for lib (e.g. computed before
+        // lib's latest edit).
+        docs.insert(
+            main_uri.clone(),
+            analysis_with_diags(HashMap::from([
+                (main_uri, vec![]),
+                (lib_uri.clone(), vec![]),
+            ])),
+        );
+
+        let published = merged_diagnostics_for(&docs, std::slice::from_ref(&lib_uri));
+        assert_eq!(published.len(), 1);
+        assert_eq!(
+            published[0].1,
+            vec![diag("lib broken")],
+            "lib's own analysis must win for lib's URI"
+        );
+    }
+
+    /// Issue #832 repro: after closing the importer, a still-open imported
+    /// document keeps its own diagnostics instead of having them wiped.
+    #[test]
+    fn closing_importer_keeps_open_imported_documents_diagnostics() {
+        let lib_uri = Url::parse("file:///p/lib.gcl").unwrap();
+        let main_uri = Url::parse("file:///p/main.gcl").unwrap();
+
+        let mut docs = HashMap::new();
+        docs.insert(
+            lib_uri.clone(),
+            analysis_with_diags(HashMap::from([(lib_uri.clone(), vec![diag("lib broken")])])),
+        );
+        // The importer was just closed: only lib remains open. The closing
+        // path re-publishes every URI from the remaining documents' view.
+        let affected = vec![lib_uri.clone(), main_uri.clone()];
+        let published = merged_diagnostics_for(&docs, &affected);
+        let by_uri: HashMap<_, _> = published.into_iter().collect();
+        assert_eq!(
+            by_uri[&lib_uri],
+            vec![diag("lib broken")],
+            "still-open lib keeps its diagnostics"
+        );
+        assert!(
+            by_uri[&main_uri].is_empty(),
+            "the closed importer's URI clears"
+        );
+    }
+
+    /// Diagnostics for a file that is not open merge across importers,
+    /// deduplicating identical reports.
+    #[test]
+    fn unopened_uri_merges_and_dedups_contributions() {
+        let disk_uri = Url::parse("file:///p/disk.gcl").unwrap();
+        let a_uri = Url::parse("file:///p/a.gcl").unwrap();
+        let b_uri = Url::parse("file:///p/b.gcl").unwrap();
+
+        let mut docs = HashMap::new();
+        docs.insert(
+            a_uri,
+            analysis_with_diags(HashMap::from([(disk_uri.clone(), vec![diag("broken")])])),
+        );
+        docs.insert(
+            b_uri,
+            analysis_with_diags(HashMap::from([(
+                disk_uri.clone(),
+                vec![diag("broken"), diag("also broken")],
+            )])),
+        );
+
+        let published = merged_diagnostics_for(&docs, std::slice::from_ref(&disk_uri));
+        let mut messages: Vec<_> = published[0].1.iter().map(|d| d.message.clone()).collect();
+        messages.sort();
+        assert_eq!(messages, vec!["also broken", "broken"]);
+    }
+
+    /// Issue #834: a parse-failure analysis (the normal state mid-keystroke)
+    /// must not replace the cached symbol state with an empty table —
+    /// completion/hover/goto keep answering from the last good analysis
+    /// while only the diagnostics refresh.
+    #[test]
+    fn parse_failure_keeps_last_good_symbol_state() {
+        let uri = untitled_uri();
+        let good_text = "\
+param mass: Mass = 100.0 kg;
+param velocity: Velocity = 50.0 m/s;
+node momentum: Force * Time = @mass * @velocity;
+";
+        let good = run_analysis(&uri, good_text, &[]);
+        assert!(good.buffer_parsed);
+        assert!(good.has_no_diagnostics());
+
+        // Mid-edit: the buffer no longer parses.
+        let broken_text = format!("{good_text}node next: Mass = @");
+        let broken = run_analysis(&uri, &broken_text, &[]);
+        assert!(!broken.buffer_parsed, "broken buffer must be flagged");
+        assert!(
+            !broken.has_no_diagnostics(),
+            "the parse error must still be reported"
+        );
+
+        let mut docs = HashMap::new();
+        store_analysis(&mut docs, &uri, good);
+        store_analysis(&mut docs, &uri, broken);
+
+        let cached = &docs[&uri];
+        for name in ["mass", "velocity", "momentum"] {
+            assert!(
+                cached
+                    .symbol_table
+                    .definitions
+                    .contains_key(&SymbolKey::TopLevel(name.to_string())),
+                "symbol `{name}` must survive the parse failure"
+            );
+        }
+        assert!(
+            !cached.has_no_diagnostics(),
+            "diagnostics must come from the failed analysis"
+        );
+        assert_eq!(
+            cached.source.as_str(),
+            good_text,
+            "the kept source must stay consistent with the kept symbol table"
+        );
+    }
+
+    /// Issue #833: analysis must overlay the latest text of *all* open
+    /// documents, not just the analyzed one — otherwise an importer's
+    /// analysis sees stale disk content of an open-but-unsaved imported file
+    /// and publishes phantom diagnostics on the imported file's URI.
+    #[test]
+    fn analysis_overlays_other_open_documents() {
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"staleo\"\n"),
+            (
+                // Broken on disk; the open editor buffer has the fix.
+                "src/staleo/lib.gcl",
+                "pub const node g0: Acceleration = @broken_ref;\n",
+            ),
+            (
+                "src/staleo/main.gcl",
+                "import staleo.lib;\nnode x: Acceleration = @lib.g0;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/staleo/main.gcl");
+        let lib_path = dir.path().join("src/staleo/lib.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+
+        // Control: without the overlay, the stale disk content produces
+        // diagnostics (on lib.gcl's URI).
+        let stale = run_analysis(&main_uri, &text, &[]);
+        assert!(
+            !stale.has_no_diagnostics(),
+            "expected diagnostics from the broken on-disk lib.gcl"
+        );
+
+        let open_buffers = vec![OpenBuffer {
+            path: lib_path,
+            text: Arc::new("pub const node g0: Acceleration = 9.80665 m/s^2;\n".to_string()),
+        }];
+        let analysis = run_analysis(&main_uri, &text, &open_buffers);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "the fixed editor buffer must shadow the broken disk content, got: {:?}",
+            analysis.diagnostics,
+        );
+    }
+
+    /// Issue #831: imported symbols hover with the same type fidelity as
+    /// local ones — the project TIR is already computed; the type must be
+    /// read off the dependency's own `DagTIR`, not the root's.
+    #[test]
+    fn imported_definitions_carry_resolved_types() {
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"gotom\"\n"),
+            (
+                "src/gotom/lib.gcl",
+                "pub const node g0: Acceleration = 9.80665 m/s^2;\n",
+            ),
+            (
+                "src/gotom/main.gcl",
+                "import gotom.lib.{g0};\n\
+                 import gotom.lib as m;\n\
+                 node g: Acceleration = @g0;\n\
+                 node g2: Acceleration = @m.g0;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/gotom/main.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text, &[]);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        for key in [
+            SymbolKey::TopLevel("g0".to_string()),
+            SymbolKey::Qualified {
+                module: vec!["m".to_string()],
+                name: "g0".to_string(),
+            },
+        ] {
+            let imported = analysis
+                .imported_definitions
+                .get(&key)
+                .unwrap_or_else(|| panic!("expected imported definition for {key:?}"));
+            let type_description = imported
+                .definition
+                .type_description
+                .as_deref()
+                .unwrap_or_else(|| panic!("expected a type description for {key:?}"));
+            assert!(
+                type_description.contains("Acceleration"),
+                "expected resolved type for {key:?}, got `{type_description}`"
+            );
+        }
     }
 
     #[test]
@@ -1916,7 +2352,7 @@ node bad: Mass = mass + length;
         let a_uri = Url::from_file_path(a_path.canonicalize().unwrap()).unwrap();
         let b_uri = Url::from_file_path(b_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",

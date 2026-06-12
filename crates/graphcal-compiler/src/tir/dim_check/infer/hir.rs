@@ -139,9 +139,9 @@ fn infer_hir_type_inner(
             });
         }
         hir::ExprKind::UnitLiteral { unit, .. } => infer_hir_unit_literal(unit, registry, src)?,
-        hir::ExprKind::VariantLiteral(variant) => {
-            InferredType::Label(InferredIndex::from_resolved(variant.value.index().clone()))
-        }
+        hir::ExprKind::VariantLiteral(variant) => InferredType::Label(
+            InferredIndex::from_resolved(variant.variant.index().clone()),
+        ),
         hir::ExprKind::GraphRef(target) => {
             infer_resolved_decl_ref_type(&target.value, target.span, declared_types, dag, src)?
         }
@@ -479,9 +479,6 @@ fn infer_hir_const_ref(
         ConstRef::Decl(resolved) => {
             infer_resolved_decl_ref_type(resolved, target.span, declared_types, dag, src)
         }
-        ConstRef::IndexVariant(variant) => Ok(InferredType::Label(InferredIndex::from_resolved(
-            variant.index().clone(),
-        ))),
         ConstRef::Builtin(_) => Ok(InferredType::Scalar(Dimension::dimensionless())),
         ConstRef::TimeScale(_) => Err(GraphcalError::DimensionMismatch {
             expected: "value expression".to_string(),
@@ -1404,13 +1401,13 @@ fn infer_hir_index_access(
         };
         match arg {
             hir::expr::IndexArg::Variant(variant) => {
-                let arg_index = InferredIndex::from_resolved(variant.value.index().clone());
+                let arg_index = InferredIndex::from_resolved(variant.variant.index().clone());
                 if arg_index != index {
                     return Err(GraphcalError::IndexMismatch {
                         expected: index.name(),
                         found: arg_index.name(),
                         src: src.clone(),
-                        span: variant.span.into(),
+                        span: variant.path_span().into(),
                     });
                 }
             }
@@ -2340,9 +2337,9 @@ fn inferred_index_for_hir_map_key(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredIndex, GraphcalError> {
     match key {
-        hir::expr::MapEntryKey::IndexVariant(variant) => {
-            Ok(InferredIndex::from_resolved(variant.value.index().clone()))
-        }
+        hir::expr::MapEntryKey::IndexVariant(variant) => Ok(InferredIndex::from_resolved(
+            variant.variant.index().clone(),
+        )),
         hir::expr::MapEntryKey::NatRangeVariant { size, variant } => {
             InferredIndex::from_nat_range_form(NatLinearForm::from_constant(*size))
                 .map_err(|err| nat_range_error(err, src, variant.span))
@@ -2352,7 +2349,7 @@ fn inferred_index_for_hir_map_key(
 
 fn hir_map_key_variant(key: &hir::expr::MapEntryKey) -> IndexVariantName {
     match key {
-        hir::expr::MapEntryKey::IndexVariant(variant) => variant.value.variant().clone(),
+        hir::expr::MapEntryKey::IndexVariant(variant) => variant.variant.variant().clone(),
         hir::expr::MapEntryKey::NatRangeVariant { variant, .. } => variant.value.clone(),
     }
 }
@@ -2454,7 +2451,7 @@ fn infer_hir_map_literal(
             .enumerate()
             .map(|(i, key)| match key {
                 hir::expr::MapEntryKey::IndexVariant(variant) => {
-                    MapLiteralVariantKey::Declared(variant.value.clone())
+                    MapLiteralVariantKey::Declared(variant.variant.clone())
                 }
                 hir::expr::MapEntryKey::NatRangeVariant { variant, .. } => {
                     axes[i].variant_key(variant.value.clone())
@@ -2876,21 +2873,21 @@ fn infer_hir_match(
                         span: arm.span.into(),
                     });
                 };
-                if !index_identity.matches_resolved(variant.value.index()) {
+                if !index_identity.matches_resolved(variant.variant.index()) {
                     return Err(GraphcalError::IndexMismatch {
                         expected: index_identity.name(),
-                        found: variant.value.index().to_unowned_def_name(),
+                        found: variant.variant.index().to_unowned_def_name(),
                         src: src.clone(),
                         span: (*span).into(),
                     });
                 }
-                let variant_name = variant.value.variant();
+                let variant_name = variant.variant.variant();
                 if !variants.iter().any(|v| v == variant_name) {
                     return Err(GraphcalError::UnknownVariant {
                         index_name: index_identity.name(),
                         variant_name: variant_name.clone(),
                         src: src.clone(),
-                        span: variant.span.into(),
+                        span: variant.path_span().into(),
                     });
                 }
                 if !covered.insert(variant_name.clone()) {

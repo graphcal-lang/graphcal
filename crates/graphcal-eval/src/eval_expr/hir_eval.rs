@@ -149,7 +149,9 @@ fn eval_hir_expr_inner(
         hir::ExprKind::Match { scrutinee, arms } => {
             eval_hir_match(expr.span, scrutinee, arms, values, local_values, ctx)
         }
-        hir::ExprKind::VariantLiteral(variant) => Ok(RuntimeValue::resolved_label(&variant.value)),
+        hir::ExprKind::VariantLiteral(variant) => {
+            Ok(RuntimeValue::resolved_label(&variant.variant))
+        }
         hir::ExprKind::InlineDagRef {
             target,
             args,
@@ -172,7 +174,6 @@ fn eval_hir_const_ref(
         ConstRef::Constructor(constructor) => {
             eval_hir_nullary_constructor(constructor, target.span, ctx)
         }
-        ConstRef::IndexVariant(variant) => Ok(RuntimeValue::resolved_label(variant)),
         ConstRef::Builtin(builtin) => {
             let value = ctx.builtin_consts.get(builtin.as_str()).ok_or_else(|| {
                 ctx.eval_error(
@@ -815,7 +816,7 @@ fn map_entry_index_ref(
 ) -> Result<IndexTypeRef, GraphcalError> {
     match key {
         hir::expr::MapEntryKey::IndexVariant(variant) => {
-            Ok(IndexTypeRef::from_resolved(variant.value.index().clone()))
+            Ok(IndexTypeRef::from_resolved(variant.variant.index().clone()))
         }
         hir::expr::MapEntryKey::NatRangeVariant { size, variant } => {
             let nat_range = graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(*size)
@@ -832,8 +833,13 @@ fn map_entry_variant_for_axis(
 ) -> Result<IndexVariantName, GraphcalError> {
     match key {
         hir::expr::MapEntryKey::IndexVariant(variant) => {
-            ensure_index_ref_matches_resolved(axis, variant.value.index(), variant.span, ctx)?;
-            Ok(variant.value.variant().clone())
+            ensure_index_ref_matches_resolved(
+                axis,
+                variant.variant.index(),
+                variant.variant_span,
+                ctx,
+            )?;
+            Ok(variant.variant.variant().clone())
         }
         hir::expr::MapEntryKey::NatRangeVariant { variant, .. } => Ok(variant.value.clone()),
     }
@@ -848,7 +854,7 @@ fn map_entry_index_def<'a>(
         hir::expr::MapEntryKey::IndexVariant(variant) => ctx
             .current_dag
             .map(|dag| &dag.semantic.collection_refs)
-            .and_then(|refs| refs.index_defs.get(variant.value.index())),
+            .and_then(|refs| refs.index_defs.get(variant.variant.index())),
         hir::expr::MapEntryKey::NatRangeVariant { .. } => index_def_for_ref(index_ref, ctx),
     }
 }
@@ -1059,11 +1065,11 @@ fn eval_hir_index_access(
             hir::expr::IndexArg::Variant(variant) => {
                 ensure_index_ref_matches_resolved(
                     &index_name,
-                    variant.value.index(),
-                    variant.span,
+                    variant.variant.index(),
+                    variant.path_span(),
                     ctx,
                 )?;
-                variant.value.variant().clone()
+                variant.variant.variant().clone()
             }
             hir::expr::IndexArg::Var(local) => {
                 let var_val = local_values
@@ -1280,8 +1286,8 @@ fn eval_hir_match(
                 .iter()
                 .find(|arm| match &arm.pattern {
                     hir::expr::MatchPattern::IndexLabel { variant: pat, .. } => {
-                        index_ref_matches_resolved(index_name, pat.value.index())
-                            && pat.value.variant() == variant
+                        index_ref_matches_resolved(index_name, pat.variant.index())
+                            && pat.variant.variant() == variant
                     }
                     hir::expr::MatchPattern::Constructor { .. } => false,
                 })
