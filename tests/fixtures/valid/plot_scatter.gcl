@@ -16,7 +16,7 @@ param spacecraft_mass: Mass[Maneuver] = {
     Maneuver.Insertion: 3800.0 kg,
 };
 
-pub plot mass_vs_delta_v = {
+plot mass_vs_delta_v = {
     mark: point,
     encode: {
         x: for m: Maneuver { @delta_v[m] },

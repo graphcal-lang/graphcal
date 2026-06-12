@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use graphcal_compiler::syntax::names::DeclName;
 
 mod display;
+mod plot_data;
 mod project;
 pub(crate) mod runtime;
 #[cfg(test)]
@@ -16,8 +17,8 @@ pub use project::{
 };
 pub use types::{
     AssertResult, AxisMeta, CompileError, CompositionProperty, DeclType, DisplayUnit, EvalResult,
-    FigureSpec, LayerSpec, MarkProperty, NodeError, PlotFieldValue, PlotProperty, PlotSpec, Value,
-    ValueError, format_epoch_with_tz, scalar_display_value,
+    FigureSpec, LayerSpec, MarkProperty, NodeError, PlotError, PlotFieldValue, PlotProperty,
+    PlotSpec, Value, ValueError, format_epoch_with_tz, scalar_display_value,
 };
 
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {

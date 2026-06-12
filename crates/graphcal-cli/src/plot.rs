@@ -24,9 +24,10 @@ pub fn build_figures(
 ) -> Vec<RenderedFigure> {
     let mut result = Vec::new();
 
-    // Standalone figures from pub plots (non-pub plots are only usable in figures/layers)
+    // Standalone figures from displayed plots (#[hidden] plots are only
+    // usable in figure/layer composition; #847)
     for spec in plots {
-        if !spec.is_pub {
+        if !spec.displayed {
             continue;
         }
         result.push(RenderedFigure {
@@ -86,9 +87,11 @@ fn build_single_spec(spec: &PlotSpec) -> JsonValue {
     vl
 }
 
-/// Resolve the plots referenced by a figure/layer, warning about unknown
-/// names instead of silently dropping them: a typo in `plots: [my_polt]`
-/// must not yield an empty figure without any diagnostic.
+/// Resolve the plots referenced by a figure/layer.
+///
+/// Unknown names are rejected at resolution time (#843), so the lookup
+/// here always succeeds for well-formed input; the warning is a defensive
+/// backstop, not a user-facing contract.
 fn referenced_plots<'a>(
     owner_kind: &str,
     owner_name: &graphcal_compiler::syntax::names::ScopedName,
@@ -298,6 +301,7 @@ const fn infer_vega_type(value: &PlotFieldValue) -> &'static str {
     match value {
         PlotFieldValue::Numbers(_) | PlotFieldValue::Number(_) => "quantitative",
         PlotFieldValue::Labels(_) | PlotFieldValue::String(_) => "nominal",
+        PlotFieldValue::Datetimes(_) | PlotFieldValue::Datetime(_) => "temporal",
     }
 }
 
@@ -305,9 +309,11 @@ const fn infer_vega_type(value: &PlotFieldValue) -> &'static str {
 fn field_value_to_json_array(value: &PlotFieldValue) -> Vec<JsonValue> {
     match value {
         PlotFieldValue::Numbers(nums) => nums.iter().copied().map(json_number).collect(),
-        PlotFieldValue::Labels(labels) => labels.iter().map(|s| json!(s)).collect(),
+        PlotFieldValue::Labels(labels) | PlotFieldValue::Datetimes(labels) => {
+            labels.iter().map(|s| json!(s)).collect()
+        }
         PlotFieldValue::Number(n) => vec![json_number(*n)],
-        PlotFieldValue::String(s) => vec![json!(s)],
+        PlotFieldValue::String(s) | PlotFieldValue::Datetime(s) => vec![json!(s)],
     }
 }
 

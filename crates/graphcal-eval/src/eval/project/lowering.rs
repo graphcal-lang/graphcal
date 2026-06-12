@@ -163,6 +163,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
         declared_types,
         imported_values: saved_imported_values,
         imported_source_order: ctx.imported_source_order,
+        included_plots: ctx.included_plot_specs,
     })
 }
 
@@ -270,6 +271,7 @@ fn compile_loaded_dag_module_ir<'a>(
         module_map: HashMap::new(),
         extra_registry_builders: Vec::new(),
         deferred_dag_includes: Vec::new(),
+        included_plot_specs: Vec::new(),
     };
 
     process_dag_body_import_declarations(project, loaded_dag, file_src, evaluated_files, &mut ctx)?;
@@ -644,6 +646,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                         module_map: HashMap::new(),
                         extra_registry_builders: Vec::new(),
                         deferred_dag_includes: Vec::new(),
+                        included_plot_specs: Vec::new(),
                     };
                     if let Some(loaded_inline) = loaded_inline {
                         process_dag_body_import_declarations(
@@ -839,6 +842,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
             &deferred.type_bindings,
             &deferred.dim_bindings,
             &deferred.import_item_attributes,
+            &deferred.requested_plots,
             importer_src,
         )?;
 

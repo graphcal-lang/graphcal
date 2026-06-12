@@ -2467,6 +2467,25 @@ fn eval_plot_line_json() {
         stdout.contains("\"mark\": \"line\""),
         "expected line mark: {stdout}"
     );
+
+    // Range-index data must plot as numeric values, not nominal "#N"
+    // variant labels (#839).
+    let json = parse_plot_json_stdout(&stdout);
+    let spec = &json[0]["spec"];
+    assert_eq!(
+        spec["encoding"]["x"]["type"].as_str(),
+        Some("quantitative"),
+        "expected quantitative x for range-index data: {stdout}"
+    );
+    let values = spec["data"]["values"]
+        .as_array()
+        .expect("expected data values array");
+    assert_eq!(values.len(), 5, "expected 5 time steps: {stdout}");
+    assert_eq!(
+        values[1]["x"].as_f64(),
+        Some(0.5),
+        "expected the second time step value 0.5 s: {stdout}"
+    );
 }
 
 #[test]
@@ -2504,6 +2523,177 @@ fn eval_plot_heatmap_json() {
     assert!(
         stdout.contains("\"mark\": \"rect\""),
         "expected rect mark for heatmap: {stdout}"
+    );
+
+    // The 2D color comprehension drives a Subsystem × OpMode cross product;
+    // the 1D x/y channels broadcast across the axis they do not mention
+    // (#840).
+    let json = parse_plot_json_stdout(&stdout);
+    let spec = &json[0]["spec"];
+    let values = spec["data"]["values"]
+        .as_array()
+        .expect("expected data values array");
+    assert_eq!(values.len(), 9, "expected 3×3 heat-map cells: {stdout}");
+    assert_eq!(values[0]["x"].as_str(), Some("Safe"));
+    assert_eq!(values[0]["y"].as_str(), Some("Comms"));
+    assert_eq!(values[0]["color"].as_f64(), Some(2.0));
+    assert_eq!(values[8]["x"].as_str(), Some("Science"));
+    assert_eq!(values[8]["y"].as_str(), Some("Payload"));
+    assert_eq!(values[8]["color"].as_f64(), Some(35.0));
+    assert_eq!(
+        spec["encoding"]["color"]["type"].as_str(),
+        Some("quantitative"),
+        "color carries the cell values: {stdout}"
+    );
+}
+
+#[test]
+fn eval_plot_mismatched_channel_axes_is_an_error() {
+    // Channels over unrelated indexes have no meaningful row pairing; they
+    // must fail loudly instead of zipping to the longest channel (#841).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("mismatch.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B, C, D };\n\
+         pub index Pair = { L, R };\n\
+         param values: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0, Step.C: 4.0, Step.D: 8.0 };\n\
+         param twos: Dimensionless[Pair] = { Pair.L: 10.0, Pair.R: 20.0 };\n\
+         pub plot mismatch = {\n\
+             mark: line,\n\
+             encode: {\n\
+                 x: for s: Step { @values[s] },\n\
+                 y: for p: Pair { @twos[p] },\n\
+             },\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        !output.status.success(),
+        "mismatched channel axes must fail the run"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("plot `mismatch` not rendered")
+            && stderr.contains("incompatible index axes"),
+        "expected an axes mismatch report: {stderr}"
+    );
+    // Stdout keeps the JSON contract: an empty array, no misaligned rows.
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    assert_eq!(json.as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn eval_plot_indexed_bools_encode_like_scalar_bools() {
+    // Indexed Bool entries must encode as "true"/"false" labels, never as
+    // index variant names (#840).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("flags.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B, C };\n\
+         param values: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0, Step.C: 3.0 };\n\
+         node flags: Bool[Step] = for s: Step { @values[s] > 1.5 };\n\
+         pub plot p = {\n\
+             mark: point,\n\
+             encode: { x: for s: Step { @values[s] }, y: for s: Step { @flags[s] } },\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    let values = json[0]["spec"]["data"]["values"]
+        .as_array()
+        .expect("expected data values array");
+    let ys: Vec<&str> = values.iter().map(|v| v["y"].as_str().unwrap()).collect();
+    assert_eq!(
+        ys,
+        ["false", "true", "true"],
+        "expected bool labels: {stdout}"
+    );
+}
+
+#[test]
+fn eval_plot_negative_width_is_an_error() {
+    // Sizes must be strictly positive; -500 was previously passed straight
+    // through to the Vega-Lite spec (#845).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("neg.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B };\n\
+         param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };\n\
+         pub plot p = {\n\
+             mark: line,\n\
+             encode: { x: for s: Step { @vals[s] }, y: for s: Step { @vals[s] } },\n\
+             width: -500.0,\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(!output.status.success(), "negative width must fail the run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("`width` must be a positive number"),
+        "expected positivity error: {stderr}"
+    );
+}
+
+#[test]
+fn check_rejects_typoed_plot_property() {
+    // Mistyped property names must fail `graphcal check`, not vanish (#845).
+    // `caption` is deliberately not a misspelling of a real property so the
+    // typos pre-commit hook leaves it alone.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("typo.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B };\n\
+         param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };\n\
+         pub plot p = {\n\
+             mark: line,\n\
+             encode: { x: for s: Step { @vals[s] } },\n\
+             caption: \"typo\",\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["check", file.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        !output.status.success(),
+        "typo'd property must fail graphcal check"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("caption"),
+        "expected the typo'd name in the diagnostic: {stderr}"
     );
 }
 
@@ -2651,6 +2841,152 @@ fn eval_plot_basic_standalone_figures() {
     );
     assert_eq!(arr[0]["name"].as_str(), Some("my_line"));
     assert_eq!(arr[1]["name"].as_str(), Some("my_bar"));
+}
+
+#[test]
+fn eval_plot_datetime_is_temporal_iso8601() {
+    // Datetime values must plot as ISO 8601 strings with temporal encoding,
+    // not nominal hifitime display strings (#846).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("dt.gcl");
+    std::fs::write(
+        &file,
+        "node t0: Datetime = datetime(\"2026-01-01T00:00:00Z\");\n\
+         pub plot dt = {\n\
+             mark: point,\n\
+             encode: { x: @t0, y: 1.0 },\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    let spec = &json[0]["spec"];
+    assert_eq!(
+        spec["encoding"]["x"]["type"].as_str(),
+        Some("temporal"),
+        "expected temporal x encoding for Datetime: {stdout}"
+    );
+    assert_eq!(
+        spec["data"]["values"][0]["x"].as_str(),
+        Some("2026-01-01T00:00:00Z"),
+        "expected RFC 3339 datetime string: {stdout}"
+    );
+}
+
+#[test]
+fn eval_plot_failure_reported_on_stderr() {
+    // A plot skipped because a plotted node failed must be reported with the
+    // plot name and root cause, not hidden behind "no plot declarations
+    // found" (#842).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("div.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B, C };\n\
+         param values: Dimensionless[Step] = { Step.A: 1.0, Step.B: 0.0, Step.C: 4.0 };\n\
+         node inv: Dimensionless[Step] = for s: Step { 1.0 / @values[s] };\n\
+         pub plot p = {\n\
+             mark: line,\n\
+             encode: { x: for s: Step { @values[s] }, y: for s: Step { @inv[s] } },\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    // The node error still drives the exit code.
+    assert!(!output.status.success(), "expected exit code 1");
+    // Stdout keeps the JSON contract: a single valid (empty) array.
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    assert_eq!(json.as_array().map(Vec::len), Some(0));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("plot `p` not rendered"),
+        "expected skipped-plot report naming the plot: {stderr}"
+    );
+    assert!(
+        stderr.contains("inv"),
+        "expected the failed dependency to be named: {stderr}"
+    );
+    assert!(
+        stderr.contains("division by zero"),
+        "expected the root cause in the report: {stderr}"
+    );
+    assert!(
+        !stderr.contains("no plot declarations found"),
+        "a plot declaration exists; the no-plots warning is misleading: {stderr}"
+    );
+}
+
+#[test]
+fn eval_plot_html_file_output() {
+    // --plot <path>.html writes the self-contained HTML page to that path (#848)
+    let dir = tempfile::tempdir().unwrap();
+    let out_path = dir.path().join("plots.html");
+
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/plot_basic.gcl"),
+            "--plot",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = std::fs::read_to_string(&out_path).expect("expected HTML file to be written");
+    assert!(
+        html.contains("vegaEmbed"),
+        "expected Vega-Embed HTML page: {html}"
+    );
+    // Normal evaluation output still goes to stdout in HTML file mode.
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !stdout.trim().is_empty(),
+        "expected normal eval output on stdout in HTML file mode"
+    );
+}
+
+#[test]
+fn eval_plot_rejects_non_html_path() {
+    // Anything that is not browser/json/*.html is a CLI argument error (#848)
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/plot_basic.gcl"),
+            "--plot",
+            "out.png",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(!output.status.success(), "expected argument parse failure");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("expected `browser`, `json`, or a path ending in `.html`"),
+        "expected helpful --plot error message, got: {stderr}"
+    );
 }
 
 // --- Unit definitions referencing imported units (#822) ---
@@ -3366,5 +3702,188 @@ fn graph_imported_values_render_as_external_nodes() {
     assert!(
         stdout.contains("\"src.lib.constants.g0\" -> \"src.lib.main.v_exhaust\";"),
         "cross-file dataflow edge should be present:\n{stdout}"
+    );
+}
+
+// --- Cross-file plots via include brace lists (#847) ---
+
+/// Build a two-file project: a library with a pub plot and a main file with
+/// the given contents. Returns (tempdir, main path).
+fn plot_include_project(main_source: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("lib.gcl"),
+        "pub index Step = { A, B };\n\
+         param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };\n\
+         pub plot lib_plot = {\n\
+             mark: line,\n\
+             encode: { x: for s: Step { @vals[s] }, y: for s: Step { @vals[s] } },\n\
+         };\n",
+    )
+    .unwrap();
+    let main = root_dir.join("main.gcl");
+    std::fs::write(&main, main_source).unwrap();
+    (dir, main)
+}
+
+fn plot_names(main: &Path) -> (Vec<String>, std::process::Output) {
+    let output = graphcal_bin()
+        .args(["eval", main.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
+    let names = json
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|f| f["name"].as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    (names, output)
+}
+
+#[test]
+fn include_brace_plot_renders_under_alias() {
+    let (_dir, main) = plot_include_project(
+        "include pkg.lib().{ lib_plot as lp };\n\
+         param own: Dimensionless = 5.0;\n",
+    );
+    let (names, output) = plot_names(&main);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(names, ["lp"], "included plot renders under its alias");
+}
+
+#[test]
+fn unrequested_library_plots_do_not_render() {
+    let (_dir, main) = plot_include_project(
+        "include pkg.lib().{ vals };\n\
+         param own: Dimensionless = 5.0;\n",
+    );
+    let (names, output) = plot_names(&main);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        names.is_empty(),
+        "library plots not named in the brace list must not render: {names:?}"
+    );
+}
+
+#[test]
+fn hidden_include_item_composes_without_standalone_output() {
+    let (_dir, main) = plot_include_project(
+        "include pkg.lib().{ #[hidden] lib_plot as lp };\n\
+         figure combo = { plots: [lp] };\n\
+         param own: Dimensionless = 5.0;\n",
+    );
+    let (names, output) = plot_names(&main);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        names,
+        ["combo"],
+        "#[hidden] include item must compose without standalone output"
+    );
+}
+
+#[test]
+fn import_of_plot_is_an_error() {
+    let (_dir, main) = plot_include_project(
+        "import pkg.lib.{ lib_plot };\n\
+         param own: Dimensionless = 5.0;\n",
+    );
+    let output = graphcal_bin()
+        .args(["check", main.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(!output.status.success(), "import of a plot must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot `import` plot"),
+        "expected the structured import-plot error: {stderr}"
+    );
+}
+
+#[test]
+fn instantiated_include_plot_evaluates_against_instance() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("eng.gcl"),
+        "param scale: Dimensionless = 1.0;\n\
+         pub node doubled: Dimensionless = @scale * 2.0;\n\
+         pub plot scaled_plot = { mark: point, encode: { x: @scale, y: @doubled } };\n",
+    )
+    .unwrap();
+    let main = root_dir.join("main.gcl");
+    std::fs::write(
+        &main,
+        "include pkg.eng(scale: 10.0).{ scaled_plot as sp };\n\
+         param own: Dimensionless = 5.0;\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", main.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    assert_eq!(json[0]["name"].as_str(), Some("sp"));
+    assert_eq!(
+        json[0]["spec"]["data"]["values"][0]["x"].as_f64(),
+        Some(10.0),
+        "included plot must evaluate against the instance's bindings: {stdout}"
+    );
+    assert_eq!(
+        json[0]["spec"]["data"]["values"][0]["y"].as_f64(),
+        Some(20.0)
+    );
+}
+
+#[test]
+fn hidden_on_non_plot_include_item_is_an_error() {
+    let (_dir, main) = plot_include_project(
+        "include pkg.lib().{ #[hidden] vals };\n\
+         param own: Dimensionless = 5.0;\n",
+    );
+    let output = graphcal_bin()
+        .args(["check", main.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("attribute `hidden` does not apply to include item"),
+        "expected A018: {stderr}"
     );
 }

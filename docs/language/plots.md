@@ -25,9 +25,30 @@ plot <name> = {
 A `plot` declaration has:
 
 - A **name** (conventionally `lower_snake_case`, like `param` and `node`).
-- A **`mark` field** specifying the visual mark type.
-- An **`encode` block** mapping data to visual channels.
+- A **`mark` field** specifying the visual mark type (required).
+- An **`encode` block** mapping data to visual channels (required, with at
+  least one channel).
 - Optional **properties** like `title`.
+
+Each field — `mark`, `encode`, each encoding channel, and each property —
+may appear at most once; duplicates are parse errors.
+
+The plot-level properties:
+
+| Property | Type |
+|----------|------|
+| `title` | String literal |
+| `width` | Positive dimensionless number |
+| `height` | Positive dimensionless number |
+| `x_label` | String literal |
+| `y_label` | String literal |
+
+Property names and value types are validated by `graphcal check`: an unknown
+name (e.g. a misspelled `title:`) is an error, a wrongly-typed value (e.g.
+`title: 42.0`) is an error, and a dimensioned value (e.g.
+`stroke_width: 2.0 m`) is rejected — plot properties are raw rendering
+quantities, so units never get silently stripped. `width`/`height` must be
+strictly positive (checked at evaluation time).
 
 ### Mark Types
 
@@ -48,6 +69,15 @@ plot styled = {
     encode: { ... },
 };
 ```
+
+| Mark property | Type |
+|---------------|------|
+| `stroke_width` | Dimensionless number |
+| `opacity` | Dimensionless number |
+| `size` | Dimensionless number |
+| `color` | String literal |
+| `filled` | Boolean |
+| `interpolate` | String literal |
 
 ### Encoding Channels
 
@@ -73,6 +103,27 @@ encode: {
     y: for m: Maneuver { @mass[m] },
 },
 ```
+
+### Channel Alignment
+
+All channels of one plot are flattened onto a single shared row set:
+
+- The row set is the cross product of the index axes of the channel with the
+  *widest* axis set. A two-variable comprehension like
+  `color: for p: P, t: T { ... }` drives one row per `P × T` cell.
+- Every other channel must range over a subset of those axes; its values are
+  broadcast across the axes it does not mention. A channel with no index (a
+  plain scalar) repeats on every row.
+- Channels ranging over unrelated indexes (e.g. `x: for s: Step { ... }` with
+  `y: for p: Pair { ... }`) have no meaningful row pairing and are rejected
+  with an error — rows are never silently padded or misaligned.
+- Values that cannot be represented in a plot (structs, or a mix of numbers
+  and labels within one channel) are errors. Index variant names are never
+  substituted for data.
+
+Booleans encode as the labels `"true"`/`"false"`, labels as their variant
+names, datetimes as ISO 8601 timestamps with a temporal axis, and numbers
+as quantitative data.
 
 ### Unit-Aware Axis Titles
 
@@ -167,13 +218,12 @@ plot efficiency_map = {
 };
 ```
 
-## Visibility and Standalone Output
+## Display and Visibility
 
-By default, plots are **private** and do not produce standalone figures in the
-output. To make a plot appear as a standalone chart, mark it `pub`:
+Plots are **displayed standalone by default** — you write a plot to see it:
 
 ```gcl
-pub plot curve_a = {
+plot curve_a = {
     mark: line,
     encode: {
         x: for t: Time { t },
@@ -183,9 +233,68 @@ pub plot curve_a = {
 };
 ```
 
-A non-`pub` plot still participates in the computation graph and can be
-referenced by `figure` and `layer` declarations -- it simply does not appear
-as a standalone chart in the output.
+To keep a plot as a composition-only building block (referenced by `figure`
+or `layer` declarations but not rendered standalone), mark it `#[hidden]`:
+
+```gcl
+#[hidden]
+plot curve_a = { mark: line, encode: { ... } };
+```
+
+A `#[hidden]` plot still participates in the computation graph and can be
+referenced by `figure` and `layer` declarations — it simply does not appear
+as a standalone chart. `#[hidden]` is valid only on `plot` declarations
+(figures and layers cannot be referenced by anything, so hiding one would be
+equivalent to deleting it).
+
+Display and cross-file visibility are independent axes: `pub` makes a plot
+includable by consumer files (like `pub` on any other declaration) and says
+nothing about display. `#[hidden]` governs only the declaring file's own
+output when that file is the entry point.
+
+## Cross-File Plots
+
+A library plot never displays implicitly in a consumer's output — the
+consumer of a library cannot edit its code, so the consumer (not the library
+author) controls what is displayed. Naming a `pub plot` in an include's brace
+list is the display request:
+
+```gcl
+include pkg.engine(fuel: 500.0 kg).{ delta_v, thrust_curve, mass_breakdown as mb };
+```
+
+- A library plot must be `pub` to be includable — `pub` keeps its single
+  meaning (exported across the file boundary), exactly as for other
+  declarations.
+- An included plot evaluates against **its instance** — the include's
+  parameter bindings. Two instantiations of the same library may include the
+  same plot under different aliases, and both render.
+- Included plots enter the root namespace under their local alias and are
+  referenceable from root `figure`/`layer` declarations. Alias collisions
+  with root declarations are the usual duplicate-name error.
+- To include a plot **for composition only** (e.g. to layer it into a
+  consumer figure without standalone output), put `#[hidden]` on the include
+  item:
+
+```gcl
+include pkg.engine(fuel: 500.0 kg).{
+    thrust_curve,                    // displayed
+    #[hidden] mass_breakdown as mb,  // included for composition only
+};
+
+figure summary = { plots: [thrust_curve, mb] };
+```
+
+- `#[hidden]` on a non-plot include item is an error. An explicit include of
+  a library plot that is itself declared `#[hidden]` **does** display it: the
+  include is the consumer's explicit request, and the library author does not
+  control the consumer's output.
+- Requesting a plot via `import` is an error: plots are runtime sinks
+  evaluated against an instance, and `import` carries only compile-time
+  names.
+- Library plots that are *not* named in any brace list (including everything
+  behind a module-form `include ... as alias`) are simply not part of the
+  consumer's output.
 
 ## Figure Declarations
 
@@ -210,6 +319,11 @@ A `figure` declaration has:
 |-------|------|-------------|
 | `plots` | List of plot names | Plots to include as subplots (required) |
 | `title` | String literal | Figure title |
+
+`title` is the only property a figure supports: figures render as
+side-by-side concatenation, which has no overall width/height — set sizes on
+the constituent plots (or use a `layer`). `width:`/`height:` on a figure are
+check-time errors.
 
 ### Example
 
@@ -243,11 +357,13 @@ This produces **three** figures in the output: `curve_a` (standalone),
 
 ### Hiding Standalone Plots
 
-To output only the combined figure, omit `pub` from the individual plots:
+To output only the combined figure, mark the individual plots `#[hidden]`:
 
 ```gcl
+#[hidden]
 plot curve_a = { mark: line, encode: { ... } };
 
+#[hidden]
 plot curve_b = { mark: bar, encode: { ... } };
 
 figure comparison = {
@@ -256,7 +372,7 @@ figure comparison = {
 };
 ```
 
-This produces **one** figure: `comparison`. The non-`pub` plots are still
+This produces **one** figure: `comparison`. The `#[hidden]` plots are still
 evaluated and included in the combined figure, but do not appear as standalone
 charts.
 
@@ -278,6 +394,8 @@ layer <name> = {
 |-------|------|-------------|
 | `plots` | List of plot names | Plots to overlay (required) |
 | `title` | String literal | Layer title |
+| `width` | Positive dimensionless number | Chart width in pixels |
+| `height` | Positive dimensionless number | Chart height in pixels |
 
 ### Layer Example
 
@@ -316,7 +434,9 @@ This overlays the line and point marks on the same axes.
 - Plots participate in the dependency graph (they depend on the nodes they
   reference) but do not produce runtime values.
 - Figures and layers reference plots by name and are validated at resolution
-  time.
+  time: an unknown name, a reference to another figure/layer (they cannot
+  nest), or a repeated entry in `plots:` is a check-time error, and the
+  `plots:` list must be non-empty.
 
 ## CLI Output
 
@@ -328,6 +448,9 @@ graphcal eval file.gcl --plot browser
 
 # Print only the plot JSON array to stdout
 graphcal eval file.gcl --plot json
+
+# Write a self-contained HTML page (headless/CI-friendly)
+graphcal eval file.gcl --plot report.html
 ```
 
 In `--plot json` mode, stdout is exactly one JSON array of figure objects,

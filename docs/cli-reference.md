@@ -50,7 +50,7 @@ graphcal eval [OPTIONS] <FILE>
 | `--format <FORMAT>` | Output format: `text` (default) or `json` |
 | `--set <SET>` | Override or provide a param value: `--set 'name=expr'` (repeatable) |
 | `--input <INPUT>` | JSON input file for param values |
-| `--plot <MODE>` | Plot output mode: `browser` (open in browser) or `json` (print only plot JSON to stdout) |
+| `--plot <MODE>` | Plot output mode: `browser` (open in browser), `json` (print only plot JSON to stdout), or a path ending in `.html` (write a self-contained HTML page) |
 
 When both `--set` and `--input` are provided, `--set` takes precedence.
 
@@ -189,7 +189,7 @@ Assertions:
 ### Plot Output
 
 When a file contains `plot`, `figure`, or `layer` declarations, use the
-`--plot` option to render them. Two output modes are available:
+`--plot` option to render them. Three output modes are available:
 
 **Browser mode** generates a self-contained HTML file with all figures
 (rendered via [Vega-Embed](https://github.com/vega/vega-embed)) and opens
@@ -209,6 +209,15 @@ suppressed in this mode, and `--format` does not add eval values to stdout:
 graphcal eval analysis.gcl --plot json
 ```
 
+**HTML file mode** writes the same self-contained HTML page that browser mode
+generates to a path of your choice (the path must end in `.html`) without
+opening a browser — useful in headless or CI environments. Normal evaluation
+output is still printed according to `--format`:
+
+```bash
+graphcal eval analysis.gcl --plot report.html
+```
+
 Each figure in the array has a `name` and a `spec` (Vega-Lite JSON):
 
 ```json
@@ -218,11 +227,11 @@ Each figure in the array has a `name` and a `spec` (Vega-Lite JSON):
 ]
 ```
 
-Each `pub plot` declaration produces a standalone figure. Each `figure`
+Each `plot` declaration produces a standalone figure. Each `figure`
 declaration produces a combined chart using Vega-Lite `hconcat`. Each `layer`
-declaration produces a chart using Vega-Lite `layer`. Non-`pub` plots are
-suppressed from standalone output but still appear in any `figure` or `layer`
-that references them.
+declaration produces a chart using Vega-Lite `layer`. Plots marked
+`#[hidden]` are suppressed from standalone output but still appear in any
+`figure` or `layer` that references them.
 
 If no `plot`, `figure`, or `layer` declarations are found, JSON mode prints
 `[]` to stdout and a warning to stderr. Browser mode prints the warning and

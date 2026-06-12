@@ -52,6 +52,122 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("property `{property}` is not valid in {context}")]
+    #[diagnostic(code(graphcal::N011), help("{valid}"))]
+    InvalidPlotProperty {
+        property: String,
+        context: &'static str,
+        /// Preformatted help listing the valid property set for `context`.
+        valid: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a {context} property")]
+        span: SourceSpan,
+    },
+
+    #[error("property `{property}` expects {expected}")]
+    #[diagnostic(code(graphcal::D015))]
+    PlotPropertyTypeMismatch {
+        property: &'static str,
+        expected: &'static str,
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this is {found}")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "property `{property}` must be dimensionless, but this value has dimension {dimension}"
+    )]
+    #[diagnostic(
+        code(graphcal::D016),
+        help(
+            "plot properties are raw rendering quantities (pixels, ratios); write a plain number instead of a dimensioned value"
+        )
+    )]
+    PlotPropertyDimensioned {
+        property: &'static str,
+        dimension: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("dimensioned value")]
+        span: SourceSpan,
+    },
+
+    #[error("cannot `import` plot `{name}`")]
+    #[diagnostic(
+        code(graphcal::M021),
+        help(
+            "plots are runtime sinks evaluated against an instance; request them through an include brace list instead: `include path(...).{{ {name} }}`"
+        )
+    )]
+    ImportPlotItem {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("plots cannot travel through `import`")]
+        span: SourceSpan,
+    },
+
+    #[error("attribute `hidden` does not apply to include item `{name}`")]
+    #[diagnostic(
+        code(graphcal::A018),
+        help("`#[hidden]` on an include item is only valid when the item names a plot")
+    )]
+    HiddenIncludeItemNotAPlot {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a plot item")]
+        span: SourceSpan,
+    },
+
+    #[error("{owner_kind} `{owner}` references unknown plot `{name}`")]
+    #[diagnostic(
+        code(graphcal::N012),
+        help("`plots:` entries must name `plot` declarations visible in this file")
+    )]
+    UnknownPlotReference {
+        owner_kind: &'static str,
+        owner: ScopedName,
+        name: ScopedName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("no plot with this name")]
+        span: SourceSpan,
+    },
+
+    #[error("`{name}` is a {actual_kind}, not a plot")]
+    #[diagnostic(
+        code(graphcal::N013),
+        help("{owner_kind}s compose `plot` declarations; they cannot nest other {actual_kind}s")
+    )]
+    CompositionReferencesNonPlot {
+        owner_kind: &'static str,
+        actual_kind: &'static str,
+        name: ScopedName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this names a {actual_kind}")]
+        span: SourceSpan,
+    },
+
+    #[error("{owner_kind} `{owner}` lists plot `{name}` more than once")]
+    #[diagnostic(
+        code(graphcal::N014),
+        help("each plot may appear at most once in a `plots:` list")
+    )]
+    DuplicatePlotReference {
+        owner_kind: &'static str,
+        owner: ScopedName,
+        name: ScopedName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate entry")]
+        span: SourceSpan,
+    },
+
     #[error("unknown graph reference `@{name}`")]
     #[diagnostic(
         code(graphcal::N002),
@@ -727,10 +843,27 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("attribute `hidden` does not apply to `{kind}` declarations")]
+    #[diagnostic(
+        code(graphcal::A017),
+        help(
+            "`#[hidden]` suppresses a plot's standalone output; it is only valid on `plot` declarations"
+        )
+    )]
+    InvalidHiddenTarget {
+        kind: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a plot")]
+        span: SourceSpan,
+    },
+
     #[error("unknown attribute `{name}`")]
     #[diagnostic(
         code(graphcal::A007),
-        help("recognized attributes are `#[assumes(...)]`, `#[lazy]`, and `#[expected_fail]`")
+        help(
+            "recognized attributes are `#[assumes(...)]`, `#[expected_fail]`, `#[hidden]`, and `#[lazy]`"
+        )
     )]
     UnknownAttribute {
         name: String,
@@ -1466,6 +1599,14 @@ impl GraphcalError {
             Self::DuplicateName { src, .. }
             | Self::BuiltinNameShadowed { src, .. }
             | Self::ConflictingImportedUnit { src, .. }
+            | Self::InvalidPlotProperty { src, .. }
+            | Self::PlotPropertyTypeMismatch { src, .. }
+            | Self::PlotPropertyDimensioned { src, .. }
+            | Self::UnknownPlotReference { src, .. }
+            | Self::CompositionReferencesNonPlot { src, .. }
+            | Self::DuplicatePlotReference { src, .. }
+            | Self::ImportPlotItem { src, .. }
+            | Self::HiddenIncludeItemNotAPlot { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }
@@ -1516,6 +1657,7 @@ impl GraphcalError {
             | Self::AssumedAssertionFailed { src, .. }
             | Self::UnknownAssertInAssumes { src, .. }
             | Self::InvalidAssumesTarget { src, .. }
+            | Self::InvalidHiddenTarget { src, .. }
             | Self::UnknownAttribute { src, .. }
             | Self::InvalidExpectedFailTarget { src, .. }
             | Self::ExpectedFailInvalidArg { src, .. }

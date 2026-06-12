@@ -7,6 +7,7 @@ use thiserror::Error;
 pub enum AttributeName {
     Assumes,
     ExpectedFail,
+    Hidden,
     Lazy,
 }
 
@@ -44,6 +45,7 @@ impl std::str::FromStr for AttributeName {
         match s {
             "assumes" => Ok(Self::Assumes),
             "expected_fail" => Ok(Self::ExpectedFail),
+            "hidden" => Ok(Self::Hidden),
             "lazy" => Ok(Self::Lazy),
             _ => Err(UnknownAttributeName::new(s)),
         }

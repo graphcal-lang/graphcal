@@ -477,6 +477,17 @@ fn format_epoch_in_timezone(
     Ok(zdt.strftime("%Y-%m-%dT%H:%M:%S%:z[%Q]").to_string())
 }
 
+/// Format a `hifitime::Epoch` as an RFC 3339 / ISO 8601 string in UTC
+/// (e.g. `"2026-01-01T00:00:00Z"`), for machine consumers such as
+/// Vega-Lite temporal data.
+///
+/// Falls back to the hifitime `Display` form for epochs outside jiff's
+/// representable range (beyond year ±9999).
+#[must_use]
+pub fn epoch_to_rfc3339(epoch: &hifitime::Epoch) -> String {
+    epoch_to_jiff_timestamp(epoch).map_or_else(|_| format!("{epoch}"), |ts| ts.to_string())
+}
+
 /// Convert a `hifitime::Epoch` to a `jiff::Timestamp`.
 fn epoch_to_jiff_timestamp(epoch: &hifitime::Epoch) -> Result<jiff::Timestamp, jiff::Error> {
     let unix_secs = epoch.to_unix_seconds();
@@ -514,6 +525,19 @@ impl std::fmt::Display for NodeError {
             }
         }
     }
+}
+
+/// A plot declaration that could not be evaluated, with the reason.
+///
+/// Plot evaluation is per-plot best-effort: one failing plot does not stop
+/// the others, but the failure must be reported, never silently dropped
+/// (#842).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlotError {
+    /// The plot declaration name.
+    pub name: ScopedName,
+    /// Human-readable reason the plot was not rendered.
+    pub message: String,
 }
 
 /// The result of evaluating an assertion.
@@ -556,6 +580,8 @@ pub struct EvalResult {
     pub assertions: Vec<(ScopedName, AssertResult, Span)>,
     /// Evaluated plot specifications in source order.
     pub plots: Vec<PlotSpec>,
+    /// Plots that failed to evaluate, with their reasons (#842).
+    pub plot_errors: Vec<PlotError>,
     /// Evaluated figure specifications in source order.
     pub figures: Vec<FigureSpec>,
     /// Evaluated layer specifications in source order.
@@ -584,91 +610,10 @@ impl EvalResult {
     }
 }
 
-/// A mark-level property (style applied to the mark in a plot).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MarkProperty {
-    StrokeWidth,
-    Opacity,
-    Size,
-    Color,
-    Filled,
-    Interpolate,
-}
-
-impl MarkProperty {
-    /// Parse a mark property from its source-level name.
-    #[must_use]
-    pub fn from_name(s: &str) -> Option<Self> {
-        match s {
-            "stroke_width" => Some(Self::StrokeWidth),
-            "opacity" => Some(Self::Opacity),
-            "size" => Some(Self::Size),
-            "color" => Some(Self::Color),
-            "filled" => Some(Self::Filled),
-            "interpolate" => Some(Self::Interpolate),
-            _ => None,
-        }
-    }
-
-    /// The Vega-Lite camelCase property name.
-    #[must_use]
-    pub const fn vega_name(&self) -> &'static str {
-        match self {
-            Self::StrokeWidth => "strokeWidth",
-            Self::Opacity => "opacity",
-            Self::Size => "size",
-            Self::Color => "color",
-            Self::Filled => "filled",
-            Self::Interpolate => "interpolate",
-        }
-    }
-}
-
-/// A plot-level property.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PlotProperty {
-    Title,
-    Width,
-    Height,
-    XLabel,
-    YLabel,
-}
-
-impl PlotProperty {
-    /// Parse a plot property from its source-level name.
-    #[must_use]
-    pub fn from_name(s: &str) -> Option<Self> {
-        match s {
-            "title" => Some(Self::Title),
-            "width" => Some(Self::Width),
-            "height" => Some(Self::Height),
-            "x_label" => Some(Self::XLabel),
-            "y_label" => Some(Self::YLabel),
-            _ => None,
-        }
-    }
-}
-
-/// A figure/layer-level property.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CompositionProperty {
-    Title,
-    Width,
-    Height,
-}
-
-impl CompositionProperty {
-    /// Parse a composition property from its source-level name.
-    #[must_use]
-    pub fn from_name(s: &str) -> Option<Self> {
-        match s {
-            "title" => Some(Self::Title),
-            "width" => Some(Self::Width),
-            "height" => Some(Self::Height),
-            _ => None,
-        }
-    }
-}
+// The typed property registry (names, value types, Vega names) lives in the
+// compiler so resolution-time validation and runtime evaluation dispatch on
+// one source of truth (#845).
+pub use graphcal_compiler::syntax::ast::{CompositionProperty, MarkProperty, PlotProperty};
 
 /// A single evaluated plot specification.
 #[derive(Debug, Clone)]
@@ -686,9 +631,9 @@ pub struct PlotSpec {
     pub mark_properties: Vec<(MarkProperty, PlotFieldValue)>,
     /// Evaluated plot-level properties (title, width, height, etc.).
     pub properties: Vec<(PlotProperty, PlotFieldValue)>,
-    /// Whether this plot is `pub` (visible in standalone output).
-    /// Non-`pub` plots are only usable in figure composition.
-    pub is_pub: bool,
+    /// Whether this plot renders standalone. `false` for `#[hidden]`
+    /// plots, which are only usable in figure/layer composition (#847).
+    pub displayed: bool,
 }
 
 /// A single evaluated figure specification.
@@ -729,10 +674,15 @@ pub enum PlotFieldValue {
     Numbers(Vec<f64>),
     /// A list of string labels (from evaluated label expressions/for-comprehensions).
     Labels(Vec<String>),
+    /// A list of datetime instants as RFC 3339 / ISO 8601 strings,
+    /// rendered with Vega-Lite temporal encoding (#846).
+    Datetimes(Vec<String>),
     /// A single string value (e.g., title).
     String(String),
     /// A single numeric value.
     Number(f64),
+    /// A single datetime instant as an RFC 3339 / ISO 8601 string (#846).
+    Datetime(String),
 }
 
 /// Top-level compile error that wraps both parse and eval errors.

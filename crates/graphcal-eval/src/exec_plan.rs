@@ -41,8 +41,8 @@ pub struct PlotBodyEntry {
     pub(crate) name: ScopedName,
     /// Mark shape rendered for this plot.
     pub(crate) mark_type: graphcal_compiler::syntax::ast::MarkType,
-    /// Whether this plot is `pub` (visible in standalone output).
-    pub(crate) is_pub: bool,
+    /// Whether this plot renders standalone (no `#[hidden]`; #847).
+    pub(crate) displayed: bool,
 }
 
 /// A figure body entry for execution.
@@ -152,7 +152,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .map(|entry| PlotBodyEntry {
             name: entry.name.clone(),
             mark_type: entry.mark_type,
-            is_pub: entry.is_pub,
+            displayed: entry.displayed,
         })
         .collect();
 

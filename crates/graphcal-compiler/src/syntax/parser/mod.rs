@@ -236,6 +236,47 @@ pub enum ParseError {
         #[label("exponent must be a non-zero integer")]
         span: SourceSpan,
     },
+
+    #[error("duplicate `{field}` in {context}")]
+    #[diagnostic(
+        code(graphcal::P018),
+        help("each field may appear at most once; remove or rename the duplicate")
+    )]
+    DuplicatePlotField {
+        field: String,
+        context: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate field here")]
+        span: SourceSpan,
+    },
+
+    #[error("plot declaration has no encoding channels")]
+    #[diagnostic(
+        code(graphcal::P019),
+        help(
+            "add an `encode:` block with at least one channel, e.g. `encode: {{ x: ..., y: ... }}`"
+        )
+    )]
+    MissingPlotEncoding {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this plot has an empty or missing `encode:` block")]
+        span: SourceSpan,
+    },
+
+    #[error("{kind} declaration has no plots")]
+    #[diagnostic(
+        code(graphcal::P020),
+        help("add a non-empty `plots:` list, e.g. `plots: [my_plot]`")
+    )]
+    EmptyCompositionPlots {
+        kind: &'static str,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this {kind} has an empty or missing `plots:` list")]
+        span: SourceSpan,
+    },
 }
 
 /// Maximum nesting depth for recursive grammar productions (expressions,
@@ -275,7 +316,10 @@ impl ParseError {
             | Self::InlineDagCallMissingProjection { src, .. }
             | Self::TooDeeplyNested { src, .. }
             | Self::ZeroExponent { src, .. }
-            | Self::UnitReferenceTooDeep { src, .. } => src,
+            | Self::UnitReferenceTooDeep { src, .. }
+            | Self::DuplicatePlotField { src, .. }
+            | Self::MissingPlotEncoding { src, .. }
+            | Self::EmptyCompositionPlots { src, .. } => src,
         }
     }
 }
@@ -349,6 +393,21 @@ impl<'src> Parser<'src> {
         ParseError::UnexpectedToken {
             expected: expected.to_string(),
             found: found.to_string(),
+            src: self.named_source(),
+            span: span.into(),
+        }
+    }
+
+    /// Build a duplicate-field error for plot/figure/layer block parsing.
+    pub(super) fn duplicate_plot_field(
+        &self,
+        field: &str,
+        context: &str,
+        span: Span,
+    ) -> ParseError {
+        ParseError::DuplicatePlotField {
+            field: field.to_string(),
+            context: context.to_string(),
             src: self.named_source(),
             span: span.into(),
         }

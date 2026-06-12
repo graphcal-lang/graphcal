@@ -154,6 +154,9 @@ pub(in crate::eval::project) struct EvaluatedFile {
     /// Assertion results from this file: name → (result, span).
     /// Names keep alias qualification for include-instantiated asserts (#813).
     pub(in crate::eval::project) assertions: HashMap<ScopedName, (AssertResult, Span)>,
+    /// Evaluated plot specs of this file, keyed by their local (leaf) name.
+    /// Consumers request them through include brace lists (#847).
+    pub(in crate::eval::project) plots: HashMap<DeclName, super::types::PlotSpec>,
     /// The file's frozen registry (for type-system import by downstream files).
     pub(in crate::eval::project) registry: Registry,
     /// Names of declarations marked `pub` in the source file.
@@ -196,6 +199,9 @@ pub(in crate::eval::project) struct CompiledFile {
     pub(in crate::eval::project) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     /// Imported value categories in source order (for root output).
     pub(in crate::eval::project) imported_source_order: Vec<(ScopedName, DeclCategory)>,
+    /// Plot specs requested from standalone-evaluated dependencies via
+    /// include brace lists, renamed to their local aliases (#847).
+    pub(in crate::eval::project) included_plots: Vec<super::types::PlotSpec>,
 }
 
 /// Return type for [`build_dep_imported_values`].
@@ -230,6 +236,10 @@ pub(in crate::eval::project) struct DeferredDagInclude {
     /// For selective includes: the selected names and their local aliases.
     /// `None` for module-form includes (all names accessible via `prefix::`).
     pub(in crate::eval::project) selective_names: Option<Vec<ImportAlias>>,
+    /// Plots requested by the include brace list, keyed by the dep-side
+    /// plot name (#847).
+    pub(in crate::eval::project) requested_plots:
+        HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot>,
     /// Span of the include declaration (for diagnostics).
     pub(in crate::eval::project) import_span: Span,
     /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on
@@ -292,6 +302,9 @@ pub(in crate::eval::project) struct ImportContext<'a> {
     /// importer's registry builder before its own declarations register.
     pub(in crate::eval::project) extra_registry_builders: Vec<ModuleRegistryImport<'a>>,
     pub(in crate::eval::project) deferred_dag_includes: Vec<DeferredDagInclude>,
+    /// Plot specs requested from standalone-evaluated dependencies via
+    /// include brace lists, renamed to their local aliases (#847).
+    pub(in crate::eval::project) included_plot_specs: Vec<super::types::PlotSpec>,
 }
 
 /// A module-imported dependency's registry surface, queued for merging into

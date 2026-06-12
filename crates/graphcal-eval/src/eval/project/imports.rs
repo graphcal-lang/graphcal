@@ -33,6 +33,8 @@ impl OtherDeclKind {
 /// `declarations` four or five times per binding.
 struct DepDeclIndex<'a> {
     params: HashSet<DeclName>,
+    /// Plot declaration names (requestable through include brace lists; #847).
+    plots: HashSet<DeclName>,
     types: HashSet<StructTypeName>,
     dims: HashSet<DimName>,
     units: HashSet<graphcal_compiler::syntax::names::UnitName>,
@@ -72,6 +74,9 @@ impl DepDeclIndex<'_> {
     }
     fn is_assert(&self, name: &str) -> bool {
         matches!(self.other.get(name), Some(OtherDeclKind::Assert))
+    }
+    fn is_plot(&self, name: &str) -> bool {
+        self.plots.contains(name)
     }
     fn is_type_system(&self, name: &str) -> bool {
         self.dims.contains(name)
@@ -145,10 +150,46 @@ fn include_value_decl(
     }
 }
 
+/// Validate an include item's attributes and return whether it carries
+/// `#[hidden]` (#847). `#[hidden]` is only valid on plot items; other
+/// attributes keep their existing per-item semantics (e.g.
+/// `#[expected_fail]` on included asserts).
+fn include_item_hidden_flag(
+    import_item: &graphcal_compiler::desugar::desugared_ast::ImportItem,
+    is_plot: bool,
+    file_src: &NamedSource<Arc<String>>,
+) -> Result<bool, CompileError> {
+    let mut hidden = false;
+    for attr in &import_item.attributes {
+        if attr.name.name.as_str() != "hidden" {
+            continue;
+        }
+        if !is_plot {
+            return Err(CompileError::Eval(
+                GraphcalError::HiddenIncludeItemNotAPlot {
+                    name: import_item.name.name.to_string(),
+                    src: file_src.clone(),
+                    span: attr.span.into(),
+                },
+            ));
+        }
+        if !attr.args.is_empty() {
+            return Err(CompileError::Eval(GraphcalError::EvalError {
+                message: "`#[hidden]` takes no arguments".to_string(),
+                src: file_src.clone(),
+                span: attr.span.into(),
+            }));
+        }
+        hidden = true;
+    }
+    Ok(hidden)
+}
+
 fn build_dep_decl_index(
     decls: &[graphcal_compiler::desugar::desugared_ast::Declaration],
 ) -> DepDeclIndex<'_> {
     let mut params = HashSet::new();
+    let mut plots = HashSet::new();
     let mut types = HashSet::new();
     let mut dims = HashSet::new();
     let mut units = HashSet::new();
@@ -184,11 +225,15 @@ fn build_dep_decl_index(
             DeclKind::Assert(a) => {
                 other.insert(a.name.value.clone(), OtherDeclKind::Assert);
             }
+            DeclKind::Plot(pl) => {
+                plots.insert(pl.name.value.clone());
+            }
             _ => {}
         }
     }
     DepDeclIndex {
         params,
+        plots,
         types,
         dims,
         units,
@@ -448,6 +493,8 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         DeclName,
         Vec<graphcal_compiler::desugar::desugared_ast::Attribute>,
     > = HashMap::new();
+    let mut requested_plots: HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot> =
+        HashMap::new();
     let selective_names = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
             let mut selective = Vec::new();
@@ -464,6 +511,27 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                     file_src,
                     import_item.name.span,
                 )?;
+
+                let is_plot = import_item.namespace
+                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Default
+                    && dep_index.is_plot(orig_name);
+                let hidden = include_item_hidden_flag(import_item, is_plot, file_src)?;
+                if is_plot {
+                    // The requested plot merges into the root namespace under
+                    // its local alias, evaluating against this instance (#847).
+                    requested_plots.insert(
+                        DeclName::new(orig_name),
+                        graphcal_compiler::ir::lower::RequestedPlot {
+                            alias: DeclName::new(&local_name),
+                            hidden,
+                        },
+                    );
+                    ctx.imported_names.plot_names.push((
+                        ScopedName::local(local_name.as_str()),
+                        import_item.local_span(),
+                    ));
+                    continue;
+                }
 
                 // Collect import-item attributes for deferred processing.
                 if !import_item.attributes.is_empty() {
@@ -569,6 +637,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         type_bindings,
         dim_bindings,
         selective_names,
+        requested_plots,
         import_span: decl.span,
         import_item_attributes,
         pub_reexport_whole,
@@ -650,6 +719,8 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         DeclName,
         Vec<graphcal_compiler::desugar::desugared_ast::Attribute>,
     > = HashMap::new();
+    let mut requested_plots: HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot> =
+        HashMap::new();
     let selective_names = match &include_decl.kind {
         ImportKind::Selective(names) => {
             let mut selective = Vec::new();
@@ -666,6 +737,27 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                     file_src,
                     import_item.name.span,
                 )?;
+
+                let is_plot = import_item.namespace
+                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Default
+                    && dag_body.declarations.iter().any(|d| {
+                        matches!(&d.kind, DeclKind::Plot(pl) if pl.name.value.as_str() == orig_name.as_str())
+                    });
+                let hidden = include_item_hidden_flag(import_item, is_plot, file_src)?;
+                if is_plot {
+                    requested_plots.insert(
+                        DeclName::new(orig_name),
+                        graphcal_compiler::ir::lower::RequestedPlot {
+                            alias: DeclName::new(&local_name),
+                            hidden,
+                        },
+                    );
+                    ctx.imported_names.plot_names.push((
+                        ScopedName::local(local_name.as_str()),
+                        import_item.local_span(),
+                    ));
+                    continue;
+                }
 
                 if !import_item.attributes.is_empty() {
                     import_item_attributes
@@ -753,6 +845,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         type_bindings,
         dim_bindings,
         selective_names,
+        requested_plots,
         import_span: decl.span,
         import_item_attributes,
         pub_reexport_whole,
@@ -863,6 +956,41 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
 
                 let is_default_namespace = import_item.namespace
                     == graphcal_compiler::syntax::ast::ImportItemNamespace::Default;
+
+                // Plot items: the brace entry is the consumer's display
+                // request (#847). The dep file evaluated standalone (its
+                // default instance); its evaluated spec travels as data,
+                // renamed to the local alias.
+                let is_plot = is_default_namespace && dep_index.is_plot(orig_name);
+                let hidden = include_item_hidden_flag(import_item, is_plot, file_src)?;
+                if is_plot {
+                    if is_import {
+                        return Err(CompileError::Eval(GraphcalError::ImportPlotItem {
+                            name: orig_name.to_string(),
+                            src: file_src.clone(),
+                            span: import_item.name.span.into(),
+                        }));
+                    }
+                    let Some(spec) = dep.plots.get(orig_name.as_str()) else {
+                        let item_description = format!("plot `{orig_name}`");
+                        return Err(runtime_artifact_unavailable_error(
+                            &item_description,
+                            import_path,
+                            file_src,
+                            import_item.name.span,
+                        ));
+                    };
+                    let mut spec = spec.clone();
+                    spec.name = ScopedName::local(local_name.as_str());
+                    spec.displayed = !hidden;
+                    ctx.included_plot_specs.push(spec);
+                    ctx.imported_names.plot_names.push((
+                        ScopedName::local(local_name.as_str()),
+                        import_item.local_span(),
+                    ));
+                    continue;
+                }
+
                 if is_default_namespace && dep_index.is_runtime(orig_name) {
                     if is_import {
                         return Err(CompileError::Eval(GraphcalError::ImportRuntimeItem {
@@ -1239,6 +1367,7 @@ mod tests {
             const_values: HashMap::new(),
             declared_types: HashMap::new(),
             assertions: HashMap::new(),
+            plots: HashMap::new(),
             registry: graphcal_compiler::registry::types::RegistryBuilder::new().build(),
             pub_names: HashSet::new(),
             resolved_dynamic_unit_scales: HashMap::new(),

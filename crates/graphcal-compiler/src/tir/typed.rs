@@ -840,6 +840,7 @@ impl TIR {
                 plots: Vec::new(),
                 figures: Vec::new(),
                 layers: Vec::new(),
+                included_plots: Vec::new(),
                 semantic: DagSemanticBody::default(),
                 source_order: Vec::new(),
                 assert_names: std::collections::HashSet::new(),
@@ -888,6 +889,8 @@ pub struct DagTIR {
     pub figures: Vec<crate::ir::lower::FigureEntry>,
     /// Layer declarations in source order.
     pub layers: Vec<crate::ir::lower::LayerEntry>,
+    /// Plot aliases from include brace lists (#847).
+    pub included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
     /// Authoritative semantic facts for this checked DAG body.
     pub semantic: DagSemanticBody,
     /// All declaration names in source order with their category.
@@ -1059,6 +1062,7 @@ fn type_resolve_impl(
         ir.plots,
         ir.figures,
         ir.layers,
+        ir.included_plots,
         ir.source_order,
         ir.assert_names,
         ir.assumes_map,
@@ -1119,6 +1123,7 @@ fn type_resolve_single_impl(
         ir.plots,
         ir.figures,
         ir.layers,
+        ir.included_plots,
         ir.source_order,
         ir.assert_names,
         ir.assumes_map,
@@ -2935,6 +2940,7 @@ impl DagTIRSeed {
         plots: Vec<crate::ir::lower::PlotEntry>,
         figures: Vec<crate::ir::lower::FigureEntry>,
         layers: Vec<crate::ir::lower::LayerEntry>,
+        included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
         source_order: Vec<(ScopedName, DeclCategory)>,
         assert_names: std::collections::HashSet<ScopedName>,
         assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
@@ -2976,6 +2982,7 @@ impl DagTIRSeed {
             plots,
             figures,
             layers,
+            included_plots,
             semantic,
             source_order,
             assert_names,

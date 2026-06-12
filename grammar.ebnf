@@ -141,6 +141,8 @@ source_file
 declaration
    = { attribute }, [ "pub", [ "(", "bind", ")" ] ], declaration_kind;
 
+(* Recognized attribute names: "assumes" (node/param), "expected_fail"
+   (assert), "hidden" (plot; suppresses standalone display), "lazy". *)
 attribute
    = "#", "[", IDENT, [ "(", [ attribute_arg_list ], ")" ], "]";
 
@@ -491,7 +493,10 @@ assert_body
 (* --- plot --- *)
 (* Plot declarations produce Vega-Lite chart specifications.
    They specify a mark type, encoding channels, and optional
-   properties. *)
+   properties. Semantic constraints enforced by the parser: the
+   `mark` field and a non-empty `encode` block are required, and
+   every field name (mark, encode, channels, properties) may
+   appear at most once. *)
 plot_decl
    = "plot", IDENT, "=",
      "{", [ plot_body_field, { ",", plot_body_field }, [ "," ] ], "}", ";";

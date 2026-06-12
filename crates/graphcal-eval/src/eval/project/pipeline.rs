@@ -34,6 +34,7 @@ pub(in crate::eval::project) fn compile_single_file_in_project(
         module_map: HashMap::new(),
         extra_registry_builders: Vec::new(),
         deferred_dag_includes: Vec::new(),
+        included_plot_specs: Vec::new(),
     };
 
     // Collect inline DAG definitions from the file's AST.
@@ -314,6 +315,7 @@ pub(in crate::eval::project) fn store_compiled_file_artifact(
         file_dag_id.clone(),
         EvaluatedFile {
             runtime_available: false,
+            plots: HashMap::new(),
             values: HashMap::new(),
             const_values: top_level_consts,
             declared_types: compiled.declared_types,
@@ -360,10 +362,22 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
     // into the importer's TIR::dags under module-prefixed keys.
     let dag_tirs = compiled.tir.dags.clone();
 
+    // Evaluated plot specs, requestable by consumers through include brace
+    // lists (#847). Includes this file's own plots and the ones it included
+    // itself (for `pub`-item re-export chains); keys are local leaf names.
+    let plots: HashMap<DeclName, crate::eval::PlotSpec> = eval_result
+        .plots
+        .iter()
+        .chain(compiled.included_plots.iter())
+        .filter(|spec| !spec.name.is_qualified())
+        .map(|spec| (DeclName::new(spec.name.member()), spec.clone()))
+        .collect();
+
     evaluated_files.insert(
         file_dag_id.clone(),
         EvaluatedFile {
             runtime_available: true,
+            plots,
             values: file_runtime_values,
             const_values: top_level_consts,
             declared_types: compiled.declared_types,
@@ -528,13 +542,19 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
             let all_nodes = eval_result.nodes;
             all_all.extend(eval_result.all);
 
+            // Plots requested from standalone-evaluated dependencies render
+            // alongside this file's own plots (#847).
+            let mut all_plots = compiled.included_plots;
+            all_plots.extend(eval_result.plots);
+
             return Ok(EvalResult {
                 consts: all_consts,
                 params: all_params,
                 nodes: all_nodes,
                 all: all_all,
                 assertions: all_assertions,
-                plots: eval_result.plots,
+                plots: all_plots,
+                plot_errors: eval_result.plot_errors,
                 figures: eval_result.figures,
                 layers: eval_result.layers,
                 assumes_map: eval_result.assumes_map,

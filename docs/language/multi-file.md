@@ -147,6 +147,10 @@ Only compile-time names cross the `import` boundary:
 Runtime values — non-`const` `node` and any `param` — are **not**
 importable. To consume runtime values from another file, instantiate
 the producing DAG via `include` (see [The `include` Form](#the-include-form)).
+Plots are likewise not importable: they are runtime sinks evaluated against
+an instance, so naming one in an `import` brace list is an error — request
+it through an `include` brace list instead (see
+[Cross-File Plots](plots.md#cross-file-plots)).
 
 Imported module aliases are first-class qualifiers in type, expression, and
 unit positions. If two imports export the same leaf name, write the
@@ -231,6 +235,12 @@ Across module boundaries, the DAG named by `path.dag` must be `pub`, and
 each output selected through a brace list or reached through an include alias
 must be public. Renaming an output does not change its visibility. Private
 nodes inside the included DAG remain implementation details.
+
+A brace-list item may also name a `pub plot` of the included file: that is
+the consumer's request to display the library's chart of this instance. The
+plot enters the root namespace under its local alias; `#[hidden]` on the
+item includes it for figure/layer composition only. See
+[Cross-File Plots](plots.md#cross-file-plots).
 
 ### `include` does not require `import` of the DAG
 

@@ -497,39 +497,54 @@ pub(super) fn evaluate_plan_with_values(
         })
         .collect();
 
-    // Evaluate plot declarations. A plot whose lowered HIR body is absent
-    // failed to lower and is skipped, matching the best-effort contract.
+    // Evaluate plot declarations. Evaluation is per-plot best-effort, but a
+    // plot that cannot be rendered is reported, never silently dropped
+    // (#842).
     let plot_exprs = &tir.root().semantic.plot_exprs;
     let no_fields: Vec<graphcal_compiler::tir::typed::LoweredPlotField> = Vec::new();
+    let mut plot_errors: Vec<super::types::PlotError> = Vec::new();
     let plots: Vec<PlotSpec> = plan
         .plot_bodies
         .iter()
         .filter_map(|entry| {
-            let lowered = plot_exprs.plots.get(&entry.name)?;
-            evaluate_plot(
-                entry.mark_type,
-                lowered,
-                &entry.name,
-                entry.is_pub,
-                &values,
-                &ctx,
-                declared_types,
-            )
+            let Some(lowered) = plot_exprs.plots.get(&entry.name) else {
+                plot_errors.push(super::types::PlotError {
+                    name: entry.name.clone(),
+                    message: "internal: lowered plot body is missing".to_string(),
+                });
+                return None;
+            };
+            evaluate_plot(entry, lowered, &values, &errors, &ctx, declared_types)
+                .map_err(|message| {
+                    plot_errors.push(super::types::PlotError {
+                        name: entry.name.clone(),
+                        message,
+                    });
+                })
+                .ok()
         })
         .collect();
 
-    // Evaluate figure declarations
+    // Evaluate figure declarations; a failing field reports the figure
+    // instead of silently dropping the property (#845).
     let figures: Vec<super::types::FigureSpec> = plan
         .figure_bodies
         .iter()
-        .map(|entry| {
+        .filter_map(|entry| {
             let fields = plot_exprs.figures.get(&entry.name).unwrap_or(&no_fields);
-            let (properties, plot_names) =
-                eval_composition_fields(fields, &entry.plot_names, &values, &ctx);
-            super::types::FigureSpec {
-                name: entry.name.clone(),
-                plot_names,
-                properties,
+            match eval_composition_fields(fields, &entry.plot_names, &values, &ctx) {
+                Ok(evaluated) => Some(super::types::FigureSpec {
+                    name: entry.name.clone(),
+                    plot_names: evaluated.plot_names,
+                    properties: evaluated.properties,
+                }),
+                Err(message) => {
+                    plot_errors.push(super::types::PlotError {
+                        name: entry.name.clone(),
+                        message,
+                    });
+                    None
+                }
             }
         })
         .collect();
@@ -538,14 +553,21 @@ pub(super) fn evaluate_plan_with_values(
     let layers: Vec<super::types::LayerSpec> = plan
         .layer_bodies
         .iter()
-        .map(|entry| {
+        .filter_map(|entry| {
             let fields = plot_exprs.layers.get(&entry.name).unwrap_or(&no_fields);
-            let (properties, plot_names) =
-                eval_composition_fields(fields, &entry.plot_names, &values, &ctx);
-            super::types::LayerSpec {
-                name: entry.name.clone(),
-                plot_names,
-                properties,
+            match eval_composition_fields(fields, &entry.plot_names, &values, &ctx) {
+                Ok(evaluated) => Some(super::types::LayerSpec {
+                    name: entry.name.clone(),
+                    plot_names: evaluated.plot_names,
+                    properties: evaluated.properties,
+                }),
+                Err(message) => {
+                    plot_errors.push(super::types::PlotError {
+                        name: entry.name.clone(),
+                        message,
+                    });
+                    None
+                }
             }
         })
         .collect();
@@ -572,6 +594,7 @@ pub(super) fn evaluate_plan_with_values(
         all,
         assertions,
         plots,
+        plot_errors,
         figures,
         layers,
         assumes_map,
@@ -593,9 +616,6 @@ fn assert_dependency_failure(
     body: &graphcal_compiler::hir::AssertBody,
     errors: &HashMap<RuntimeDeclKey, NodeError>,
 ) -> Option<String> {
-    if errors.is_empty() {
-        return None;
-    }
     let body_exprs: Vec<&graphcal_compiler::hir::Expr> = match body {
         graphcal_compiler::hir::AssertBody::Expr(expr) => vec![expr],
         graphcal_compiler::hir::AssertBody::Tolerance {
@@ -605,7 +625,24 @@ fn assert_dependency_failure(
             ..
         } => vec![actual, expected, tolerance],
     };
-    let deps: std::collections::BTreeSet<_> = body_exprs
+    dependency_failure_message(body_exprs, errors)
+}
+
+/// If any declaration referenced by the given expressions failed to
+/// evaluate, render a `dependency failed: ...` message naming each failed
+/// dependency (direct failures carry their root cause inline).
+///
+/// Shared by assertions (#814) and plots (#842): a reference to a failed
+/// declaration is not "undefined", it is unevaluable, and the report must
+/// point at the root cause.
+fn dependency_failure_message<'a>(
+    exprs: impl IntoIterator<Item = &'a graphcal_compiler::hir::Expr>,
+    errors: &HashMap<RuntimeDeclKey, NodeError>,
+) -> Option<String> {
+    if errors.is_empty() {
+        return None;
+    }
+    let deps: std::collections::BTreeSet<_> = exprs
         .into_iter()
         .flat_map(|expr| {
             graphcal_compiler::hir::collect_expr_dependencies(expr)
@@ -1220,19 +1257,20 @@ fn format_tolerance_failures(failures: &[ToleranceFailure]) -> String {
 /// Evaluate one plot property expression to a `PlotFieldValue`. String
 /// literals are passed through directly (Graphcal has no runtime String
 /// value); any other expression is evaluated and converted from a
-/// `RuntimeValue`. Returns `None` on evaluation failure — plots are
-/// best-effort, so a single bad encoding/property aborts the plot.
+/// `RuntimeValue`. An evaluation failure aborts the whole plot; the error
+/// message is reported on the plot (#842).
 fn eval_plot_property(
     expr: &graphcal_compiler::hir::Expr,
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
-) -> Option<PlotFieldValue> {
+) -> Result<PlotFieldValue, String> {
     if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &expr.kind {
-        return Some(PlotFieldValue::String(s.clone()));
+        return Ok(PlotFieldValue::String(s.clone()));
     }
     let empty_locals = HirLocalValueMap::root();
-    let rv = eval_hir_expr(expr, values, &empty_locals, ctx).ok()?;
-    Some(runtime_to_plot_field_value(&rv))
+    eval_hir_expr(expr, values, &empty_locals, ctx)
+        .map_err(|e| eval_failed_node_error(&e).to_string())
+        .and_then(|rv| runtime_to_plot_field_value(&rv))
 }
 
 /// Evaluate a plot declaration, producing a `PlotSpec`.
@@ -1240,38 +1278,69 @@ fn eval_plot_property(
 /// The lowered HIR body carries the expressions; the source declaration
 /// supplies the mark type. String literals are handled directly (they are
 /// not runtime values in Graphcal).
-/// Returns `None` if any expression evaluation fails (plots are best-effort).
+///
+/// Returns `Err` with a human-readable reason when the plot cannot be
+/// rendered: a referenced declaration failed to evaluate, or one of the
+/// plot's own expressions failed (#842).
 fn evaluate_plot(
-    mark_type: graphcal_compiler::syntax::ast::MarkType,
+    entry: &crate::exec_plan::PlotBodyEntry,
     lowered: &graphcal_compiler::tir::typed::LoweredPlotBody,
-    name: &ScopedName,
-    is_pub: bool,
     values: &RuntimeValueMap,
+    errors: &HashMap<RuntimeDeclKey, NodeError>,
     ctx: &EvalContext<'_>,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
-) -> Option<PlotSpec> {
-    let mut encodings = Vec::new();
+) -> Result<PlotSpec, String> {
+    // A reference to a failed declaration must report the root cause, not a
+    // generic lookup failure on the missing value.
+    let body_exprs = lowered
+        .encodings
+        .iter()
+        .map(|(_, expr)| expr)
+        .chain(lowered.mark_properties.iter().map(|f| &f.value))
+        .chain(lowered.properties.iter().map(|f| &f.value));
+    if let Some(message) = dependency_failure_message(body_exprs, errors) {
+        return Err(message);
+    }
+
     let mut encoding_meta = Vec::new();
 
-    // Evaluate encoding channels
+    // Evaluate encoding channels to axes-aware data, then align them onto
+    // one shared row set (cross-product flattening with broadcasting); see
+    // `plot_data` for the rules (#840, #841).
+    let empty_locals = HirLocalValueMap::root();
+    let mut channel_data = Vec::new();
     for (channel, expr) in &lowered.encodings {
-        let field_value = eval_plot_property(expr, values, ctx)?;
+        let data = if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &expr.kind {
+            super::plot_data::ChannelData::scalar_label(s.clone())
+        } else {
+            let rv = eval_hir_expr(expr, values, &empty_locals, ctx).map_err(|e| {
+                format!(
+                    "encoding channel `{channel}`: {}",
+                    eval_failed_node_error(&e)
+                )
+            })?;
+            super::plot_data::channel_data_from_runtime(&rv)
+                .map_err(|e| format!("encoding channel `{channel}`: {e}"))?
+        };
 
         // Extract axis metadata: dimension from graph refs, display unit from expression
         let meta = extract_encoding_axis_meta(expr, declared_types, ctx, values);
         encoding_meta.push((*channel, meta));
 
-        encodings.push((*channel, field_value));
+        channel_data.push((*channel, data));
     }
+    let encodings = super::plot_data::align_encoding_channels(&channel_data)?;
 
-    // Evaluate mark properties (e.g., stroke_width, opacity)
+    // Evaluate mark properties (e.g., stroke_width, opacity). Unknown names
+    // are rejected at check time (#845); one that still reaches evaluation
+    // is an internal inconsistency.
     let mut mark_properties = Vec::new();
     for field in &lowered.mark_properties {
         let Some(mark_prop) = super::types::MarkProperty::from_name(field.name.as_str()) else {
-            // Unknown mark property — skip (could be reported as a warning in the future)
-            continue;
+            return Err(format!("internal: unknown mark property `{}`", field.name));
         };
-        let field_value = eval_plot_property(&field.value, values, ctx)?;
+        let field_value = eval_plot_property(&field.value, values, ctx)
+            .map_err(|e| format!("mark property `{}`: {e}", field.name))?;
         mark_properties.push((mark_prop, field_value));
     }
 
@@ -1279,21 +1348,22 @@ fn evaluate_plot(
     let mut properties = Vec::new();
     for field in &lowered.properties {
         let Some(plot_prop) = super::types::PlotProperty::from_name(field.name.as_str()) else {
-            // Unknown plot property — skip
-            continue;
+            return Err(format!("internal: unknown property `{}`", field.name));
         };
-        let field_value = eval_plot_property(&field.value, values, ctx)?;
+        let field_value = eval_plot_property(&field.value, values, ctx)
+            .map_err(|e| format!("property `{}`: {e}", field.name))?;
+        check_positive_property(plot_prop.name(), plot_prop.value_type(), &field_value)?;
         properties.push((plot_prop, field_value));
     }
 
-    Some(PlotSpec {
-        name: name.clone(),
-        mark_type,
+    Ok(PlotSpec {
+        name: entry.name.clone(),
+        mark_type: entry.mark_type,
         encodings,
         encoding_meta,
         mark_properties,
         properties,
-        is_pub,
+        displayed: entry.displayed,
     })
 }
 
@@ -1370,80 +1440,86 @@ fn dimension_label_from_declared_type(
     }
 }
 
+/// Evaluated fields of a figure/layer declaration.
+struct CompositionFields {
+    properties: Vec<(super::types::CompositionProperty, PlotFieldValue)>,
+    plot_names: Vec<ScopedName>,
+}
+
 /// Evaluate composition fields (properties and plot names) shared by figures and layers.
 fn eval_composition_fields(
     fields: &[graphcal_compiler::tir::typed::LoweredPlotField],
     plot_name_spans: &[graphcal_compiler::syntax::span::Spanned<ScopedName>],
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
-) -> (
-    Vec<(super::types::CompositionProperty, PlotFieldValue)>,
-    Vec<ScopedName>,
-) {
+) -> Result<CompositionFields, String> {
     let empty_locals = HirLocalValueMap::root();
     let mut properties = Vec::new();
     for field in fields {
         let Some(comp_prop) = super::types::CompositionProperty::from_name(field.name.as_str())
         else {
-            continue;
+            // Unknown names are rejected at check time (#845); an entry that
+            // still reaches evaluation is an internal inconsistency.
+            return Err(format!("internal: unknown property `{}`", field.name));
         };
         if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &field.value.kind {
             properties.push((comp_prop, PlotFieldValue::String(s.clone())));
             continue;
         }
-        if let Ok(rv) = eval_hir_expr(&field.value, values, &empty_locals, ctx) {
-            properties.push((comp_prop, runtime_to_plot_field_value(&rv)));
-        }
+        let rv = eval_hir_expr(&field.value, values, &empty_locals, ctx)
+            .map_err(|e| format!("property `{}`: {}", field.name, eval_failed_node_error(&e)))?;
+        let field_value = runtime_to_plot_field_value(&rv)
+            .map_err(|e| format!("property `{}`: {e}", field.name))?;
+        check_positive_property(comp_prop.name(), comp_prop.value_type(), &field_value)?;
+        properties.push((comp_prop, field_value));
     }
     let plot_names = plot_name_spans.iter().map(|p| p.value.clone()).collect();
-    (properties, plot_names)
+    Ok(CompositionFields {
+        properties,
+        plot_names,
+    })
+}
+
+/// Enforce strictly positive values for `PositiveNumber` properties
+/// (`width`, `height`) — value-dependent, so checked at evaluation time
+/// (#845).
+fn check_positive_property(
+    property: &'static str,
+    value_type: graphcal_compiler::syntax::ast::PlotPropertyType,
+    value: &PlotFieldValue,
+) -> Result<(), String> {
+    if value_type != graphcal_compiler::syntax::ast::PlotPropertyType::PositiveNumber {
+        return Ok(());
+    }
+    match value {
+        PlotFieldValue::Number(n) if n.is_finite() && *n > 0.0 => Ok(()),
+        PlotFieldValue::Number(n) => Err(format!(
+            "property `{property}` must be a positive number, got {n}"
+        )),
+        _ => Err(format!("property `{property}` must be a positive number")),
+    }
 }
 
 /// Convert a `RuntimeValue` to a `PlotFieldValue`.
+///
+/// A value that cannot be represented in a plot (a struct, or an indexed
+/// value mixing kinds) is an error — never silently replaced by a
+/// placeholder or by index variant names (#840).
 #[expect(
     clippy::cast_precision_loss,
     reason = "plot data loss of precision from i64 to f64 is acceptable"
 )]
-fn runtime_to_plot_field_value(rv: &RuntimeValue) -> PlotFieldValue {
+fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, String> {
     match rv {
-        RuntimeValue::Scalar(v) => PlotFieldValue::Number(*v),
-        RuntimeValue::Int(i) => PlotFieldValue::Number(*i as f64),
-        RuntimeValue::Bool(b) => PlotFieldValue::String(b.to_string()),
-        RuntimeValue::Label { variant, .. } => PlotFieldValue::String(variant.to_string()),
-        RuntimeValue::Indexed { entries, .. } => {
-            // Try to interpret as a list of numbers or labels
-            let mut numbers = Vec::new();
-            let mut labels = Vec::new();
-            let mut all_numeric = true;
-            for (_variant, entry_rv) in entries {
-                match entry_rv {
-                    RuntimeValue::Scalar(v) => numbers.push(*v),
-                    RuntimeValue::Int(i) => numbers.push(*i as f64),
-                    RuntimeValue::Label { variant, .. } => {
-                        labels.push(variant.to_string());
-                        all_numeric = false;
-                    }
-                    _ => {
-                        all_numeric = false;
-                    }
-                }
-            }
-            if all_numeric && !numbers.is_empty() {
-                PlotFieldValue::Numbers(numbers)
-            } else if !labels.is_empty() {
-                PlotFieldValue::Labels(labels)
-            } else {
-                // Fallback: extract variant names as labels
-                PlotFieldValue::Labels(
-                    entries
-                        .keys()
-                        .map(graphcal_compiler::syntax::names::IndexVariantName::to_string)
-                        .collect(),
-                )
-            }
-        }
-        RuntimeValue::Struct { .. } => PlotFieldValue::String("<struct>".to_string()),
-        RuntimeValue::Datetime(epoch) => PlotFieldValue::String(format!("{epoch}")),
-        RuntimeValue::RangeLabel { value, .. } => PlotFieldValue::Number(*value),
+        RuntimeValue::Scalar(v) => Ok(PlotFieldValue::Number(*v)),
+        RuntimeValue::Int(i) => Ok(PlotFieldValue::Number(*i as f64)),
+        RuntimeValue::Bool(b) => Ok(PlotFieldValue::String(b.to_string())),
+        RuntimeValue::Label { variant, .. } => Ok(PlotFieldValue::String(variant.to_string())),
+        RuntimeValue::Indexed { .. } => super::plot_data::flatten_to_field_value(rv),
+        RuntimeValue::Struct { .. } => Err(format!("{} cannot be plotted", rv.kind())),
+        RuntimeValue::Datetime(epoch) => Ok(PlotFieldValue::Datetime(
+            super::types::epoch_to_rfc3339(epoch),
+        )),
+        RuntimeValue::RangeLabel { value, .. } => Ok(PlotFieldValue::Number(*value)),
     }
 }
