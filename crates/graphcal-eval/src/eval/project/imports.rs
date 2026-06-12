@@ -388,7 +388,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         let importer_idx_from_registry = if importer_idx_ast.is_none() {
             ctx.extra_registry_builders
                 .iter()
-                .find_map(|(reg, _, _, _)| reg.indexes.get_index(&rhs_name))
+                .find_map(|import| import.registry.indexes.get_index(&rhs_name))
                 .or_else(|| {
                     evaluated_files
                         .values()
@@ -520,12 +520,14 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
             }
             // Import type-system declarations (pub items only).
             if let Some(dep_eval) = evaluated_files.get(import_dag_id) {
-                ctx.extra_registry_builders.push((
-                    &dep_eval.registry,
-                    &dep_eval.pub_names,
-                    prefix.clone(),
-                    include_decl.path.span(),
-                ));
+                ctx.extra_registry_builders
+                    .push(super::ModuleRegistryImport {
+                        registry: &dep_eval.registry,
+                        pub_names: &dep_eval.pub_names,
+                        unit_alias: prefix.clone(),
+                        resolved_dynamic_scales: &dep_eval.resolved_dynamic_unit_scales,
+                        import_span: include_decl.path.span(),
+                    });
             }
             None
         }
@@ -992,12 +994,14 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
             )?;
             // Import all public type-system declarations from dep's registry.
             // The module alias keys the dep's pub units in this file's scope.
-            ctx.extra_registry_builders.push((
-                &dep.registry,
-                &dep.pub_names,
-                module_name.clone(),
-                import_span,
-            ));
+            ctx.extra_registry_builders
+                .push(super::ModuleRegistryImport {
+                    registry: &dep.registry,
+                    pub_names: &dep.pub_names,
+                    unit_alias: module_name.clone(),
+                    resolved_dynamic_scales: &dep.resolved_dynamic_unit_scales,
+                    import_span,
+                });
         }
     }
     Ok(())
@@ -1237,6 +1241,7 @@ mod tests {
             assertions: HashMap::new(),
             registry: graphcal_compiler::registry::types::RegistryBuilder::new().build(),
             pub_names: HashSet::new(),
+            resolved_dynamic_unit_scales: HashMap::new(),
             dag_tirs: HashMap::new(),
         }
     }
