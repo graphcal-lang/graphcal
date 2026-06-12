@@ -497,24 +497,31 @@ pub(super) fn evaluate_plan_with_values(
         })
         .collect();
 
-    // Evaluate plot declarations. A plot whose lowered HIR body is absent
-    // failed to lower and is skipped, matching the best-effort contract.
+    // Evaluate plot declarations. Evaluation is per-plot best-effort, but a
+    // plot that cannot be rendered is reported, never silently dropped
+    // (#842).
     let plot_exprs = &tir.root().semantic.plot_exprs;
     let no_fields: Vec<graphcal_compiler::tir::typed::LoweredPlotField> = Vec::new();
+    let mut plot_errors: Vec<super::types::PlotError> = Vec::new();
     let plots: Vec<PlotSpec> = plan
         .plot_bodies
         .iter()
         .filter_map(|entry| {
-            let lowered = plot_exprs.plots.get(&entry.name)?;
-            evaluate_plot(
-                entry.mark_type,
-                lowered,
-                &entry.name,
-                entry.is_pub,
-                &values,
-                &ctx,
-                declared_types,
-            )
+            let Some(lowered) = plot_exprs.plots.get(&entry.name) else {
+                plot_errors.push(super::types::PlotError {
+                    name: entry.name.clone(),
+                    message: "internal: lowered plot body is missing".to_string(),
+                });
+                return None;
+            };
+            evaluate_plot(entry, lowered, &values, &errors, &ctx, declared_types)
+                .map_err(|message| {
+                    plot_errors.push(super::types::PlotError {
+                        name: entry.name.clone(),
+                        message,
+                    });
+                })
+                .ok()
         })
         .collect();
 
@@ -572,6 +579,7 @@ pub(super) fn evaluate_plan_with_values(
         all,
         assertions,
         plots,
+        plot_errors,
         figures,
         layers,
         assumes_map,
@@ -593,9 +601,6 @@ fn assert_dependency_failure(
     body: &graphcal_compiler::hir::AssertBody,
     errors: &HashMap<RuntimeDeclKey, NodeError>,
 ) -> Option<String> {
-    if errors.is_empty() {
-        return None;
-    }
     let body_exprs: Vec<&graphcal_compiler::hir::Expr> = match body {
         graphcal_compiler::hir::AssertBody::Expr(expr) => vec![expr],
         graphcal_compiler::hir::AssertBody::Tolerance {
@@ -605,7 +610,24 @@ fn assert_dependency_failure(
             ..
         } => vec![actual, expected, tolerance],
     };
-    let deps: std::collections::BTreeSet<_> = body_exprs
+    dependency_failure_message(body_exprs, errors)
+}
+
+/// If any declaration referenced by the given expressions failed to
+/// evaluate, render a `dependency failed: ...` message naming each failed
+/// dependency (direct failures carry their root cause inline).
+///
+/// Shared by assertions (#814) and plots (#842): a reference to a failed
+/// declaration is not "undefined", it is unevaluable, and the report must
+/// point at the root cause.
+fn dependency_failure_message<'a>(
+    exprs: impl IntoIterator<Item = &'a graphcal_compiler::hir::Expr>,
+    errors: &HashMap<RuntimeDeclKey, NodeError>,
+) -> Option<String> {
+    if errors.is_empty() {
+        return None;
+    }
+    let deps: std::collections::BTreeSet<_> = exprs
         .into_iter()
         .flat_map(|expr| {
             graphcal_compiler::hir::collect_expr_dependencies(expr)
@@ -1220,19 +1242,20 @@ fn format_tolerance_failures(failures: &[ToleranceFailure]) -> String {
 /// Evaluate one plot property expression to a `PlotFieldValue`. String
 /// literals are passed through directly (Graphcal has no runtime String
 /// value); any other expression is evaluated and converted from a
-/// `RuntimeValue`. Returns `None` on evaluation failure — plots are
-/// best-effort, so a single bad encoding/property aborts the plot.
+/// `RuntimeValue`. An evaluation failure aborts the whole plot; the error
+/// message is reported on the plot (#842).
 fn eval_plot_property(
     expr: &graphcal_compiler::hir::Expr,
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
-) -> Option<PlotFieldValue> {
+) -> Result<PlotFieldValue, String> {
     if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &expr.kind {
-        return Some(PlotFieldValue::String(s.clone()));
+        return Ok(PlotFieldValue::String(s.clone()));
     }
     let empty_locals = HirLocalValueMap::root();
-    let rv = eval_hir_expr(expr, values, &empty_locals, ctx).ok()?;
-    Some(runtime_to_plot_field_value(&rv))
+    eval_hir_expr(expr, values, &empty_locals, ctx)
+        .map(|rv| runtime_to_plot_field_value(&rv))
+        .map_err(|e| eval_failed_node_error(&e).to_string())
 }
 
 /// Evaluate a plot declaration, producing a `PlotSpec`.
@@ -1240,22 +1263,37 @@ fn eval_plot_property(
 /// The lowered HIR body carries the expressions; the source declaration
 /// supplies the mark type. String literals are handled directly (they are
 /// not runtime values in Graphcal).
-/// Returns `None` if any expression evaluation fails (plots are best-effort).
+///
+/// Returns `Err` with a human-readable reason when the plot cannot be
+/// rendered: a referenced declaration failed to evaluate, or one of the
+/// plot's own expressions failed (#842).
 fn evaluate_plot(
-    mark_type: graphcal_compiler::syntax::ast::MarkType,
+    entry: &crate::exec_plan::PlotBodyEntry,
     lowered: &graphcal_compiler::tir::typed::LoweredPlotBody,
-    name: &ScopedName,
-    is_pub: bool,
     values: &RuntimeValueMap,
+    errors: &HashMap<RuntimeDeclKey, NodeError>,
     ctx: &EvalContext<'_>,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
-) -> Option<PlotSpec> {
+) -> Result<PlotSpec, String> {
+    // A reference to a failed declaration must report the root cause, not a
+    // generic lookup failure on the missing value.
+    let body_exprs = lowered
+        .encodings
+        .iter()
+        .map(|(_, expr)| expr)
+        .chain(lowered.mark_properties.iter().map(|f| &f.value))
+        .chain(lowered.properties.iter().map(|f| &f.value));
+    if let Some(message) = dependency_failure_message(body_exprs, errors) {
+        return Err(message);
+    }
+
     let mut encodings = Vec::new();
     let mut encoding_meta = Vec::new();
 
     // Evaluate encoding channels
     for (channel, expr) in &lowered.encodings {
-        let field_value = eval_plot_property(expr, values, ctx)?;
+        let field_value = eval_plot_property(expr, values, ctx)
+            .map_err(|e| format!("encoding channel `{channel}`: {e}"))?;
 
         // Extract axis metadata: dimension from graph refs, display unit from expression
         let meta = extract_encoding_axis_meta(expr, declared_types, ctx, values);
@@ -1271,7 +1309,8 @@ fn evaluate_plot(
             // Unknown mark property — skip (could be reported as a warning in the future)
             continue;
         };
-        let field_value = eval_plot_property(&field.value, values, ctx)?;
+        let field_value = eval_plot_property(&field.value, values, ctx)
+            .map_err(|e| format!("mark property `{}`: {e}", field.name))?;
         mark_properties.push((mark_prop, field_value));
     }
 
@@ -1282,18 +1321,19 @@ fn evaluate_plot(
             // Unknown plot property — skip
             continue;
         };
-        let field_value = eval_plot_property(&field.value, values, ctx)?;
+        let field_value = eval_plot_property(&field.value, values, ctx)
+            .map_err(|e| format!("property `{}`: {e}", field.name))?;
         properties.push((plot_prop, field_value));
     }
 
-    Some(PlotSpec {
-        name: name.clone(),
-        mark_type,
+    Ok(PlotSpec {
+        name: entry.name.clone(),
+        mark_type: entry.mark_type,
         encodings,
         encoding_meta,
         mark_properties,
         properties,
-        is_pub,
+        is_pub: entry.is_pub,
     })
 }
 

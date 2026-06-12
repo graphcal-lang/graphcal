@@ -269,7 +269,17 @@ fn handle_eval(
             // evaluation output is suppressed above.
             if let Some(plot_mode) = plot_output {
                 let rendered = plot::build_figures(&result.plots, &result.figures, &result.layers);
-                if rendered.is_empty() {
+                // Plots that failed to evaluate are reported on stderr —
+                // outside the stdout JSON contract — so the root cause is
+                // never hidden in --plot mode (#842).
+                for err in &result.plot_errors {
+                    eprintln!("warning: plot `{}` not rendered: {}", err.name, err.message);
+                }
+                let no_plot_decls = result.plots.is_empty()
+                    && result.plot_errors.is_empty()
+                    && result.figures.is_empty()
+                    && result.layers.is_empty();
+                if no_plot_decls {
                     eprintln!("warning: no plot declarations found");
                 }
                 match plot_mode {

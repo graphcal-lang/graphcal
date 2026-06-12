@@ -2654,6 +2654,56 @@ fn eval_plot_basic_standalone_figures() {
 }
 
 #[test]
+fn eval_plot_failure_reported_on_stderr() {
+    // A plot skipped because a plotted node failed must be reported with the
+    // plot name and root cause, not hidden behind "no plot declarations
+    // found" (#842).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("div.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B, C };\n\
+         param values: Dimensionless[Step] = { Step.A: 1.0, Step.B: 0.0, Step.C: 4.0 };\n\
+         node inv: Dimensionless[Step] = for s: Step { 1.0 / @values[s] };\n\
+         pub plot p = {\n\
+             mark: line,\n\
+             encode: { x: for s: Step { @values[s] }, y: for s: Step { @inv[s] } },\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    // The node error still drives the exit code.
+    assert!(!output.status.success(), "expected exit code 1");
+    // Stdout keeps the JSON contract: a single valid (empty) array.
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    assert_eq!(json.as_array().map(Vec::len), Some(0));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("plot `p` not rendered"),
+        "expected skipped-plot report naming the plot: {stderr}"
+    );
+    assert!(
+        stderr.contains("inv"),
+        "expected the failed dependency to be named: {stderr}"
+    );
+    assert!(
+        stderr.contains("division by zero"),
+        "expected the root cause in the report: {stderr}"
+    );
+    assert!(
+        !stderr.contains("no plot declarations found"),
+        "a plot declaration exists; the no-plots warning is misleading: {stderr}"
+    );
+}
+
+#[test]
 fn eval_plot_html_file_output() {
     // --plot <path>.html writes the self-contained HTML page to that path (#848)
     let dir = tempfile::tempdir().unwrap();

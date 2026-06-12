@@ -516,6 +516,19 @@ impl std::fmt::Display for NodeError {
     }
 }
 
+/// A plot declaration that could not be evaluated, with the reason.
+///
+/// Plot evaluation is per-plot best-effort: one failing plot does not stop
+/// the others, but the failure must be reported, never silently dropped
+/// (#842).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlotError {
+    /// The plot declaration name.
+    pub name: ScopedName,
+    /// Human-readable reason the plot was not rendered.
+    pub message: String,
+}
+
 /// The result of evaluating an assertion.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssertResult {
@@ -556,6 +569,8 @@ pub struct EvalResult {
     pub assertions: Vec<(ScopedName, AssertResult, Span)>,
     /// Evaluated plot specifications in source order.
     pub plots: Vec<PlotSpec>,
+    /// Plots that failed to evaluate, with their reasons (#842).
+    pub plot_errors: Vec<PlotError>,
     /// Evaluated figure specifications in source order.
     pub figures: Vec<FigureSpec>,
     /// Evaluated layer specifications in source order.

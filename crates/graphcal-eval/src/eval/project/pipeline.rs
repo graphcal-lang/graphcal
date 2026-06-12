@@ -535,6 +535,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
                 all: all_all,
                 assertions: all_assertions,
                 plots: eval_result.plots,
+                plot_errors: eval_result.plot_errors,
                 figures: eval_result.figures,
                 layers: eval_result.layers,
                 assumes_map: eval_result.assumes_map,
