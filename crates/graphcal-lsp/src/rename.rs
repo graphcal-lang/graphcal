@@ -7,7 +7,7 @@ use tower_lsp::lsp_types::{PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};
 use crate::convert::LineIndex;
 use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, resolve_symbol_at};
 use crate::server::AnalysisResult;
-use crate::symbol_table::SymbolCategory;
+use crate::symbol_table::{SymbolCategory, SymbolKey, SymbolPath};
 
 /// Check whether a name is a valid Graphcal identifier.
 ///
@@ -64,24 +64,118 @@ pub fn prepare_rename(analysis: &AnalysisResult, offset: usize) -> Option<Prepar
     })
 }
 
+/// Why a rename request was explicitly refused.
+///
+/// Surfaced to the client as a descriptive JSON-RPC error rather than a
+/// silent `null` response: applying the rename anyway would produce a
+/// non-compiling buffer, which is the worst available outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenameRefusal {
+    /// The new name is not a lexable identifier (or is a reserved keyword).
+    InvalidIdentifier { new_name: String },
+    /// The new name collides with a visible declaration in the same
+    /// namespace, which would compile to a duplicate-name error (N001).
+    NameCollision { new_name: String },
+}
+
+impl std::fmt::Display for RenameRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidIdentifier { new_name } => {
+                write!(f, "`{new_name}` is not a valid graphcal identifier")
+            }
+            Self::NameCollision { new_name } => write!(
+                f,
+                "cannot rename to `{new_name}`: a declaration with that name is already in scope"
+            ),
+        }
+    }
+}
+
+/// The key the renamed symbol would occupy: the same key shape with the
+/// leaf name replaced. Used to probe the symbol table for collisions in
+/// the renamed symbol's own namespace/scope.
+fn key_with_new_name(key: &SymbolKey, new_name: &str) -> SymbolKey {
+    fn path_with_new_leaf(path: &SymbolPath, new_name: &str) -> SymbolPath {
+        match path {
+            SymbolPath::Local(_) => SymbolPath::local(new_name),
+            SymbolPath::Qualified { module, .. } => SymbolPath::Qualified {
+                module: module.clone(),
+                name: new_name.to_string(),
+            },
+        }
+    }
+    match key {
+        SymbolKey::TopLevel(_) => SymbolKey::TopLevel(new_name.to_string()),
+        SymbolKey::Qualified { module, .. } => SymbolKey::Qualified {
+            module: module.clone(),
+            name: new_name.to_string(),
+        },
+        SymbolKey::Constructor(path) => SymbolKey::Constructor(path_with_new_leaf(path, new_name)),
+        SymbolKey::Variant { parent, .. } => SymbolKey::Variant {
+            parent: parent.clone(),
+            variant: new_name.to_string(),
+        },
+        SymbolKey::Field { owner, .. } => SymbolKey::Field {
+            owner: owner.clone(),
+            field_name: new_name.to_string(),
+        },
+        SymbolKey::ExprScoped { kind, offset, .. } => SymbolKey::ExprScoped {
+            kind: *kind,
+            offset: *offset,
+            local: new_name.to_string(),
+        },
+    }
+}
+
+/// True when `new_name` collides with a visible declaration in the renamed
+/// symbol's namespace/scope. Builtins (`PI`, `sqrt`, unit names) are not
+/// collisions: the compiler allows shadowing them.
+fn collides_with_existing(analysis: &AnalysisResult, key: &SymbolKey, new_name: &str) -> bool {
+    let candidate = key_with_new_name(key, new_name);
+    if let Some(existing) = analysis.symbol_table.definitions.get(&candidate)
+        && !existing.is_builtin()
+    {
+        return true;
+    }
+    analysis.imported_definitions.contains_key(&candidate)
+}
+
 /// Perform the rename, returning a workspace edit.
+///
+/// `Ok(None)` means there is nothing renameable at the cursor (the client
+/// sees a plain `null`); `Err` is an explicit refusal with a reason the
+/// client should show to the user.
 pub fn rename(
     analysis: &AnalysisResult,
     uri: &Url,
     offset: usize,
     new_name: &str,
-) -> Option<WorkspaceEdit> {
+) -> Result<Option<WorkspaceEdit>, RenameRefusal> {
     if !is_valid_identifier(new_name) {
-        return None;
+        return Err(RenameRefusal::InvalidIdentifier {
+            new_name: new_name.to_string(),
+        });
     }
 
-    let resolved = resolve_symbol_at(analysis, offset)?;
+    let Some(resolved) = resolve_symbol_at(analysis, offset) else {
+        return Ok(None);
+    };
     if !is_renameable(&resolved) {
-        return None;
+        return Ok(None);
     }
     let SymbolLocation::Local(def) = &resolved.location else {
-        return None;
+        return Ok(None);
     };
+    // Renaming to the symbol's current name is a no-op, not a collision.
+    if def.name == new_name {
+        return Ok(None);
+    }
+    if collides_with_existing(analysis, &resolved.key, new_name) {
+        return Err(RenameRefusal::NameCollision {
+            new_name: new_name.to_string(),
+        });
+    }
 
     let lines = LineIndex::new(&analysis.source);
     // Expand the resolved key the same way `references` does: a reference
@@ -107,17 +201,17 @@ pub fn rename(
         .collect();
 
     if current_file_edits.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
     changes.insert(uri.clone(), current_file_edits);
 
-    Some(WorkspaceEdit {
+    Ok(Some(WorkspaceEdit {
         changes: Some(changes),
         document_changes: None,
         change_annotations: None,
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -155,7 +249,9 @@ mod tests {
 
         // Cursor on "x" in "param x"
         let offset = source.find("x:").unwrap();
-        let result = rename(&analysis, &uri, offset, "velocity").unwrap();
+        let result = rename(&analysis, &uri, offset, "velocity")
+            .unwrap()
+            .unwrap();
         let edits = result.changes.unwrap();
         let file_edits = edits.get(&uri).unwrap();
         // Should have 2 edits: the definition and the @x reference.
@@ -171,7 +267,7 @@ mod tests {
 
         // Cursor on "x" in "@x" — offset of the ident after @
         let at_x = source.find("@x").unwrap() + 1;
-        let result = rename(&analysis, &uri, at_x, "velocity").unwrap();
+        let result = rename(&analysis, &uri, at_x, "velocity").unwrap().unwrap();
         let edits = result.changes.unwrap();
         let file_edits = edits.get(&uri).unwrap();
         assert_eq!(file_edits.len(), 2);
@@ -195,9 +291,14 @@ mod tests {
         let uri = Url::parse("file:///test.gcl").unwrap();
 
         let offset = source.find("x:").unwrap();
-        assert!(rename(&analysis, &uri, offset, "").is_none());
-        assert!(rename(&analysis, &uri, offset, "123bad").is_none());
-        assert!(rename(&analysis, &uri, offset, "has space").is_none());
+        for bad in ["", "123bad", "has space"] {
+            assert_eq!(
+                rename(&analysis, &uri, offset, bad),
+                Err(RenameRefusal::InvalidIdentifier {
+                    new_name: bad.to_string()
+                })
+            );
+        }
     }
 
     #[test]
@@ -206,21 +307,27 @@ mod tests {
         // Cross-file rename is not yet implemented; the request must be
         // refused rather than producing a partial workspace edit.
         let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/helper")).unwrap();
         std::fs::write(
             dir.path().join("graphcal.toml"),
-            "[package]\nname = \"helper\"\nsource_dir = \".\"\n",
+            "[package]\nname = \"helper\"\n",
         )
         .unwrap();
         std::fs::write(
-            dir.path().join("helper.gcl"),
+            dir.path().join("src/helper/lib.gcl"),
             "pub const node y: Dimensionless = 2.0;",
         )
         .unwrap();
-        let main_path = dir.path().join("main.gcl");
-        let main_text = "import helper.{y};\nnode z: Dimensionless = @y + 1.0;\n";
+        let main_path = dir.path().join("src/helper/main.gcl");
+        let main_text = "import helper.lib.{y};\nnode z: Dimensionless = @y + 1.0;\n";
         std::fs::write(&main_path, main_text).unwrap();
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected the import to load cleanly, got: {:?}",
+            analysis.diagnostics,
+        );
 
         let cursor = main_text.find("@y").unwrap() + 1;
         assert!(
@@ -228,8 +335,20 @@ mod tests {
             "imported symbol must not be prepare-renameable"
         );
         assert!(
-            rename(&analysis, &main_uri, cursor, "renamed").is_none(),
+            rename(&analysis, &main_uri, cursor, "renamed")
+                .unwrap()
+                .is_none(),
             "imported symbol must not be renamed",
+        );
+
+        // Issue #829: renaming a local declaration to the name of an
+        // imported symbol collides as well — both would be visible.
+        let z_cursor = main_text.find("node z").unwrap() + "node ".len();
+        assert_eq!(
+            rename(&analysis, &main_uri, z_cursor, "y"),
+            Err(RenameRefusal::NameCollision {
+                new_name: "y".to_string()
+            })
         );
     }
 
@@ -244,7 +363,7 @@ mod tests {
         let offset = source.find("x:").unwrap();
         for keyword in ["node", "param", "index", "true", "unfold"] {
             assert!(
-                rename(&analysis, &uri, offset, keyword).is_none(),
+                rename(&analysis, &uri, offset, keyword).is_err(),
                 "renaming to keyword `{keyword}` must be rejected"
             );
         }
@@ -264,7 +383,7 @@ node t: Dimensionless = match @s { Idle => 1.0, Active => 2.0 };
         let uri = Url::parse("file:///test.gcl").unwrap();
 
         let offset = source.find("Idle,").unwrap();
-        if let Some(result) = rename(&analysis, &uri, offset, "Standby") {
+        if let Ok(Some(result)) = rename(&analysis, &uri, offset, "Standby") {
             let edits = result.changes.unwrap();
             let file_edits = edits.get(&uri).unwrap();
             let lines = LineIndex::new(&analysis.source);
@@ -277,6 +396,63 @@ node t: Dimensionless = match @s { Idle => 1.0, Active => 2.0 };
                 file_edits.len()
             );
         }
+    }
+
+    /// Issue #829: renaming a declaration to the name of another visible
+    /// declaration must be refused — applying it would produce an N001
+    /// duplicate-name compile error.
+    #[test]
+    fn rename_to_colliding_declaration_rejected() {
+        let source = "\
+param mass: Mass = 100.0 kg;
+param velocity: Velocity = 50.0 m/s;
+node momentum: Force * Time = @mass * @velocity;
+node kinetic: Energy = 0.5 * @mass * @velocity ^ 2.0;
+";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+
+        let offset = source.find("momentum").unwrap();
+        assert_eq!(
+            rename(&analysis, &uri, offset, "velocity"),
+            Err(RenameRefusal::NameCollision {
+                new_name: "velocity".to_string()
+            })
+        );
+        // Builtins may be shadowed, so renaming to `PI` is allowed.
+        assert!(
+            rename(&analysis, &uri, offset, "PI").is_ok_and(|edit| edit.is_some()),
+            "renaming to a builtin name must stay allowed (shadowing compiles)"
+        );
+    }
+
+    /// Issue #829, scoped namespaces: a variant name only collides with a
+    /// sibling variant of the same index, not with a same-named variant of
+    /// another index.
+    #[test]
+    fn rename_variant_collision_is_scoped_to_its_index() {
+        let source = "\
+index Season = { Winter, Summer };
+index Hemisphere = { North, Winter };
+node pick: Season = Season.Summer;
+";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+
+        // `Summer` → `Winter` collides with its sibling.
+        let offset = source.find("Summer }").unwrap();
+        assert_eq!(
+            rename(&analysis, &uri, offset, "Winter"),
+            Err(RenameRefusal::NameCollision {
+                new_name: "Winter".to_string()
+            })
+        );
+        // `North` → `Summer` is fine: `Summer` only exists under `Season`.
+        let offset = source.find("North").unwrap();
+        assert!(
+            rename(&analysis, &uri, offset, "Summer").is_ok_and(|edit| edit.is_some()),
+            "same-named variant of a different index is not a collision"
+        );
     }
 
     /// Issues #827/#828: renaming an index variant must edit exactly the
@@ -297,7 +473,7 @@ node total: Velocity = @dv[Maneuver.Departure];
 
         // Cursor on the `Departure` variant declaration.
         let offset = source.find("Departure").unwrap();
-        let result = rename(&analysis, &uri, offset, "Begin").unwrap();
+        let result = rename(&analysis, &uri, offset, "Begin").unwrap().unwrap();
         let edits = result.changes.unwrap();
         let file_edits = edits.get(&uri).unwrap();
         // Declaration + table row key + index-access segment.

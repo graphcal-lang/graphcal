@@ -1243,11 +1243,22 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let new_name = params.new_name;
-        self.with_analysis(&uri, |analysis| {
-            let offset = position_to_byte_offset(&analysis.source, position);
-            crate::rename::rename(analysis, &uri, offset, &new_name)
-        })
-        .await
+        let outcome = self
+            .with_analysis(&uri, |analysis| {
+                let offset = position_to_byte_offset(&analysis.source, position);
+                Some(crate::rename::rename(analysis, &uri, offset, &new_name))
+            })
+            .await?;
+        match outcome {
+            None | Some(Ok(None)) => Ok(None),
+            Some(Ok(Some(edit))) => Ok(Some(edit)),
+            // An explicit refusal (invalid identifier, name collision) is a
+            // descriptive error the client shows to the user — silently
+            // returning null would suggest "nothing to rename here".
+            Some(Err(refusal)) => Err(tower_lsp::jsonrpc::Error::invalid_params(
+                refusal.to_string(),
+            )),
+        }
     }
 
     async fn prepare_rename(
