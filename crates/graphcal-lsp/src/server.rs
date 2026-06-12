@@ -204,6 +204,7 @@ impl Backend {
             &self.client,
             &self.documents,
             &self.change_generations,
+            &self.latest_text,
             uri,
             text,
             generation,
@@ -220,6 +221,7 @@ impl Backend {
         let client = self.client.clone();
         let documents = self.documents.clone();
         let generations = self.change_generations.clone();
+        let latest_text = self.latest_text.clone();
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
@@ -229,7 +231,16 @@ impl Backend {
                 return;
             }
 
-            analyze_store_publish(&client, &documents, &generations, uri, text, generation).await;
+            analyze_store_publish(
+                &client,
+                &documents,
+                &generations,
+                &latest_text,
+                uri,
+                text,
+                generation,
+            )
+            .await;
         });
     }
 
@@ -252,12 +263,30 @@ async fn analyze_store_publish(
     client: &Client,
     documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
+    latest_text: &Arc<RwLock<HashMap<Url, Arc<String>>>>,
     uri: Url,
     text: String,
     generation: u64,
 ) {
+    // Snapshot every *other* open document's latest text: the analysis
+    // overlays them onto the filesystem so imports of open-but-dirty files
+    // see the editor state, not stale disk content. The analyzed document
+    // itself uses `text` (this analysis pass's snapshot).
+    let open_buffers: Vec<OpenBuffer> = latest_text
+        .read()
+        .await
+        .iter()
+        .filter(|(open_uri, _)| **open_uri != uri)
+        .filter_map(|(open_uri, open_text)| {
+            open_uri.to_file_path().ok().map(|path| OpenBuffer {
+                path,
+                text: Arc::clone(open_text),
+            })
+        })
+        .collect();
     let uri_for_analysis = uri.clone();
-    let task = tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text));
+    let task =
+        tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text, &open_buffers));
     let analysis = match tokio::time::timeout(ANALYSIS_TIMEOUT, task).await {
         Ok(Ok(a)) => a,
         Ok(Err(e)) => {
@@ -341,23 +370,44 @@ async fn is_generation_current(
     *generations.read().await.get(uri).unwrap_or(&0) == generation
 }
 
+/// Snapshot of another open editor buffer, overlaid onto the filesystem
+/// during analysis so cross-file diagnostics, goto-definition targets, and
+/// hover reflect what the user actually sees instead of stale disk content.
+pub(crate) struct OpenBuffer {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) text: Arc<String>,
+}
+
 /// Build a `LoadedProject` from a URI and in-memory text.
 ///
 /// For file-backed URIs, loads the project from disk with the in-memory text
-/// overlaid on the root file via [`graphcal_io::OverlayFileSystem`]. The base
+/// overlaid on the root file — and every other open document's latest text
+/// overlaid on its path — via [`graphcal_io::OverlayFileSystem`]. The base
 /// reader is sandboxed to the discovered project root (when a `graphcal.toml`
 /// is reachable from the buffer's directory) — keeping the LSP's filesystem
 /// access in lockstep with the CLI's. For untitled/non-file URIs, builds a
 /// single-file project from the in-memory text alone.
-fn build_project(uri: &Url, text: &str) -> std::result::Result<LoadedProject, Box<CompileError>> {
+fn build_project(
+    uri: &Url,
+    text: &str,
+    open_buffers: &[OpenBuffer],
+) -> std::result::Result<LoadedProject, Box<CompileError>> {
     let name = uri.as_str();
     match uri.to_file_path() {
         Ok(path) => {
             // OverlayFileSystem canonicalizes internally and falls back to the
             // raw path when the overlay file is not yet on disk — this makes
             // unsaved LSP buffers work without a preflight `FileNotFound`.
+            // The analyzed snapshot comes first so it wins over any (possibly
+            // newer) latest-text entry for the same file: the produced
+            // `AnalysisResult` must stay consistent with `text`.
             let base = graphcal_eval::loader::build_rooted_filesystem(&path, None);
-            let fs = graphcal_io::OverlayFileSystem::new(base, path.clone(), text.to_string());
+            let overlays = std::iter::once((path.clone(), text.to_string())).chain(
+                open_buffers
+                    .iter()
+                    .map(|buffer| (buffer.path.clone(), buffer.text.as_ref().clone())),
+            );
+            let fs = graphcal_io::OverlayFileSystem::with_overlays(base, overlays);
             graphcal_eval::loader::load_project(&path, None, &fs).map_err(Box::new)
         }
         Err(()) => LoadedProject::from_source(text, name).map_err(Box::new),
@@ -383,16 +433,16 @@ fn diagnostics_for_active_uri(uri: &Url, diags: Vec<Diagnostic>) -> HashMap<Url,
 /// Both stages use the same source text, eliminating data provenance mismatches.
 #[cfg(test)]
 pub(crate) fn run_analysis_for_test(uri: &Url, text: &str) -> AnalysisResult {
-    run_analysis(uri, text)
+    run_analysis(uri, text, &[])
 }
 
-fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
+fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisResult {
     // Stage 1: Build project (parse + load imports).
     // If this fails, no AST is available for the multi-file pipeline. Fall
     // back to parsing just the active buffer so hover/goto-def on the active
     // file's own symbols still answer — the imported-file error remains
     // visible, but local LSP features degrade gracefully.
-    let project = match build_project(uri, text) {
+    let project = match build_project(uri, text, open_buffers) {
         Ok(project) => project,
         Err(e) => {
             let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri);
@@ -1544,7 +1594,7 @@ pub(bind) index Phase;
 pub(bind) index Step: Time;
 pub(bind) index Accel: Length / Time^2;
 ";
-        let analysis = run_analysis(&untitled_uri(), text);
+        let analysis = run_analysis(&untitled_uri(), text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "library file should have no diagnostics, got: {:?}",
@@ -1557,7 +1607,7 @@ pub(bind) index Accel: Length / Time^2;
         let text = "\
 param mass: Mass;
 ";
-        let analysis = run_analysis(&untitled_uri(), text);
+        let analysis = run_analysis(&untitled_uri(), text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "file with required param should have no diagnostics, got: {:?}",
@@ -1574,7 +1624,7 @@ param mass: Mass = 1.0 kg;
 param length: Length = 1.0 m;
 node bad: Mass = mass + length;
 ";
-        let analysis = run_analysis(&untitled_uri(), text);
+        let analysis = run_analysis(&untitled_uri(), text, &[]);
         assert!(
             !analysis.has_no_diagnostics(),
             "dim mismatch in executable file must still produce a diagnostic",
@@ -1609,7 +1659,7 @@ node bad: Mass = mass + length;
         let main_path = dir.path().join("src/lib/main.gcl");
         let uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&uri, &text);
+        let analysis = run_analysis(&uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -1645,7 +1695,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(main_path.canonicalize().unwrap()).unwrap();
         let helper_uri = Url::from_file_path(helper_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
 
         let helper_diags = analysis
             .diagnostics
@@ -1705,7 +1755,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(main_path.canonicalize().unwrap()).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
 
         let lib_diags = analysis
             .diagnostics
@@ -1744,7 +1794,7 @@ node bad: Mass = mass + length;
         let main_path = dir.path().join("src/helper/main.gcl");
         let uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&uri, &text);
+        let analysis = run_analysis(&uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -1787,7 +1837,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -1844,7 +1894,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -1884,7 +1934,7 @@ node bad: Mass = mass + length;
         let main_path = dir.path().join("src/lib/main.gcl");
         let uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&uri, &text);
+        let analysis = run_analysis(&uri, &text, &[]);
 
         let palette_red_key = crate::symbol_table::SymbolKey::Variant {
             parent: crate::symbol_table::SymbolPath::local("Palette"),
@@ -1923,7 +1973,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -1939,6 +1989,49 @@ node bad: Mass = mass + length;
             };
             assert_eq!(imported.uri, lib_uri, "`{needle}` should jump to lib.gcl");
         }
+    }
+
+    /// Issue #833: analysis must overlay the latest text of *all* open
+    /// documents, not just the analyzed one — otherwise an importer's
+    /// analysis sees stale disk content of an open-but-unsaved imported file
+    /// and publishes phantom diagnostics on the imported file's URI.
+    #[test]
+    fn analysis_overlays_other_open_documents() {
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"staleo\"\n"),
+            (
+                // Broken on disk; the open editor buffer has the fix.
+                "src/staleo/lib.gcl",
+                "pub const node g0: Acceleration = @broken_ref;\n",
+            ),
+            (
+                "src/staleo/main.gcl",
+                "import staleo.lib;\nnode x: Acceleration = @lib.g0;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/staleo/main.gcl");
+        let lib_path = dir.path().join("src/staleo/lib.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+
+        // Control: without the overlay, the stale disk content produces
+        // diagnostics (on lib.gcl's URI).
+        let stale = run_analysis(&main_uri, &text, &[]);
+        assert!(
+            !stale.has_no_diagnostics(),
+            "expected diagnostics from the broken on-disk lib.gcl"
+        );
+
+        let open_buffers = vec![OpenBuffer {
+            path: lib_path,
+            text: Arc::new("pub const node g0: Acceleration = 9.80665 m/s^2;\n".to_string()),
+        }];
+        let analysis = run_analysis(&main_uri, &text, &open_buffers);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "the fixed editor buffer must shadow the broken disk content, got: {:?}",
+            analysis.diagnostics,
+        );
     }
 
     /// Issue #831: imported symbols hover with the same type fidelity as
@@ -1963,7 +2056,7 @@ node bad: Mass = mass + length;
         let main_path = dir.path().join("src/gotom/main.gcl");
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -2027,7 +2120,7 @@ node bad: Mass = mass + length;
         let a_uri = Url::from_file_path(a_path.canonicalize().unwrap()).unwrap();
         let b_uri = Url::from_file_path(b_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text);
+        let analysis = run_analysis(&main_uri, &text, &[]);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
