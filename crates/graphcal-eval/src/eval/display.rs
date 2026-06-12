@@ -2,15 +2,21 @@
 //! formatting range steps, and converting unit expressions to strings.
 
 use graphcal_compiler::hir::ExprKind;
-use graphcal_compiler::hir::expr::MapEntryKey;
+use graphcal_compiler::hir::expr::{ConstRef, IndexArg, MapEntry, MapEntryKey, MatchPattern};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::names::IndexVariantName;
+use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use graphcal_compiler::syntax::names::{IndexVariantName, ResolvedName, namespace};
 use indexmap::IndexMap;
 
-use crate::eval_expr::{EvalContext, RuntimeValueMap};
+use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
 
 use super::types::{DisplayUnit, Value};
 use graphcal_compiler::registry::format::{format_number, format_unit_expr_canonical};
+
+/// Maximum number of value reads (`@x`, field/index access, if/match
+/// selection) followed when propagating display metadata. Read chains track
+/// the acyclic value graph, so this is insurance, not a semantic limit.
+const MAX_READ_DEPTH: usize = 64;
 
 /// Attach display units to a computed value based on its defining expression.
 ///
@@ -20,11 +26,21 @@ use graphcal_compiler::registry::format::{format_number, format_unit_expr_canoni
 /// (unknown unit, non-positive or non-finite scale, dynamic scale evaluation
 /// failure). A conversion the user wrote must either take effect or fail
 /// loudly — silently falling back to the base unit would misreport the value.
-pub(super) fn attach_display_units(
+pub(super) fn attach_display_units<'a>(
     value: &mut Value,
-    expr: &graphcal_compiler::hir::Expr,
-    ctx: &EvalContext<'_>,
+    expr: &'a graphcal_compiler::hir::Expr,
+    ctx: &EvalContext<'a>,
     values: &RuntimeValueMap,
+) -> Result<(), GraphcalError> {
+    attach_display_units_depth(value, expr, ctx, values, MAX_READ_DEPTH)
+}
+
+fn attach_display_units_depth<'a>(
+    value: &mut Value,
+    expr: &'a graphcal_compiler::hir::Expr,
+    ctx: &EvalContext<'a>,
+    values: &RuntimeValueMap,
+    depth: usize,
 ) -> Result<(), GraphcalError> {
     match (&mut *value, &expr.kind) {
         (Value::Scalar { display_unit, .. }, ExprKind::UnitLiteral { unit, .. }) => {
@@ -45,7 +61,7 @@ pub(super) fn attach_display_units(
         (Value::Struct { fields, .. }, ExprKind::ConstructorCall { fields: inits, .. }) => {
             for init in inits {
                 if let Some(field_val) = fields.get_mut(&init.name.value) {
-                    attach_display_units(field_val, &init.value, ctx, values)?;
+                    attach_display_units_depth(field_val, &init.value, ctx, values, depth)?;
                 }
             }
         }
@@ -59,7 +75,7 @@ pub(super) fn attach_display_units(
         ) => {
             for map_entry in map_entries {
                 if let Some(target) = walk_indexed_keys(entries, map_entry.keys.as_slice()) {
-                    attach_display_units(target, &map_entry.value, ctx, values)?;
+                    attach_display_units_depth(target, &map_entry.value, ctx, values, depth)?;
                 }
             }
         }
@@ -84,10 +100,128 @@ pub(super) fn attach_display_units(
         (Value::Datetime { display_tz, .. }, ExprKind::DisplayTimezone { timezone, .. }) => {
             *display_tz = Some(timezone.clone());
         }
-        // All other combinations: no display unit to attach
-        _ => {}
+        // Value reads propagate the source's display metadata (#648 B1/N5):
+        // follow `@x`, const refs, field/index access, inline-dag projections,
+        // and runtime-selected if/match branches back to the constructing
+        // expression, then attach from that expression instead.
+        _ => {
+            if depth > 0
+                && let Some(src_expr) = resolve_defining_expr(expr, ctx, values, depth)?
+            {
+                attach_display_units_depth(value, src_expr, ctx, values, depth - 1)?;
+            }
+        }
     }
     Ok(())
+}
+
+/// Follow a value-read expression back to the expression that constructed the
+/// value it reads (#648 B1/N5).
+///
+/// Returns `Ok(None)` when the expression is not a read (arithmetic, function
+/// calls, literals without units, …) or the source cannot be determined
+/// statically — display metadata is simply not propagated in that case.
+///
+/// `if`/`match` selections and conditions are evaluated against the final
+/// value map to pick the live branch; evaluation failures fall back to `None`
+/// (the read target itself reports its own error).
+fn resolve_defining_expr<'a>(
+    expr: &'a graphcal_compiler::hir::Expr,
+    ctx: &EvalContext<'a>,
+    values: &RuntimeValueMap,
+    depth: usize,
+) -> Result<Option<&'a graphcal_compiler::hir::Expr>, GraphcalError> {
+    if depth == 0 {
+        return Ok(None);
+    }
+    let exprs = &ctx.tir.root().semantic.expressions;
+    let decl_expr = |name: &ResolvedName<namespace::Decl>| {
+        exprs.runtime_expr(name).or_else(|| exprs.consts.get(name))
+    };
+    let resolved = match &expr.kind {
+        ExprKind::GraphRef(target) => decl_expr(&target.value),
+        ExprKind::ConstRef(target) => match &target.value {
+            ConstRef::Decl(name) => exprs.consts.get(name),
+            _ => None,
+        },
+        ExprKind::InlineDagRef { output, .. } => decl_expr(&output.value),
+        ExprKind::FieldAccess { expr: inner, field } => {
+            let Some(ctor) = resolve_defining_expr(inner, ctx, values, depth - 1)? else {
+                return Ok(None);
+            };
+            let ExprKind::ConstructorCall { fields, .. } = &ctor.kind else {
+                return Ok(None);
+            };
+            fields
+                .iter()
+                .find(|init| init.name.value == field.value)
+                .map(|init| &init.value)
+        }
+        ExprKind::IndexAccess { expr: inner, args } => {
+            let Some(map_expr) = resolve_defining_expr(inner, ctx, values, depth - 1)? else {
+                return Ok(None);
+            };
+            let ExprKind::MapLiteral { entries } = &map_expr.kind else {
+                return Ok(None);
+            };
+            find_static_map_entry(entries, args)
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            let cond = eval_hir_expr(condition, values, &HirLocalValueMap::root(), ctx).ok();
+            let Some(RuntimeValue::Bool(b)) = cond else {
+                return Ok(None);
+            };
+            Some(if b {
+                then_branch.as_ref()
+            } else {
+                else_branch.as_ref()
+            })
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            let scrut = eval_hir_expr(scrutinee, values, &HirLocalValueMap::root(), ctx).ok();
+            let Some(RuntimeValue::Label { variant, .. }) = scrut else {
+                return Ok(None);
+            };
+            arms.iter()
+                .find(|arm| {
+                    matches!(
+                        &arm.pattern,
+                        MatchPattern::IndexLabel { variant: pat, .. }
+                            if *pat.value.variant() == variant
+                    )
+                })
+                .map(|arm| &arm.body)
+        }
+        _ => None,
+    };
+    Ok(resolved)
+}
+
+/// Find the map-literal entry selected by statically known index variants.
+///
+/// Only fully static accesses resolve (`@x[R.A]`, `@grid[R.A, C.X]`); a
+/// dynamic key or a partial multi-axis access returns `None`.
+fn find_static_map_entry<'a>(
+    entries: &'a [MapEntry],
+    args: &[IndexArg],
+) -> Option<&'a graphcal_compiler::hir::Expr> {
+    entries.iter().find_map(|entry| {
+        if entry.keys.len() != args.len() {
+            return None;
+        }
+        let all_match = entry.keys.iter().zip(args).all(|(key, arg)| {
+            matches!(
+                (key, arg),
+                (MapEntryKey::IndexVariant(k), IndexArg::Variant(a))
+                    if k.value.variant() == a.value.variant()
+            )
+        });
+        all_match.then_some(&entry.value)
+    })
 }
 
 /// Resolve a `UnitExpr` to a `DisplayUnit`.
