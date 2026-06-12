@@ -62,6 +62,12 @@ leaf names; the override key never carries module identity.
 Params not given via `--set` or `--input` keep their declared defaults.
 Params declared without a default (required params) must be provided.
 
+Output entries (text and JSON) are keyed by the full alias-qualified path for
+declarations instantiated through `include ... as alias` (e.g. `good.out`,
+`good.v_positive`), so multiple instantiations of the same dag never collide
+and JSON output never silently drops an instance. This qualification applies
+only to output names — the `--set` override surface is unaffected.
+
 **Exit codes:**
 
 | Code | Meaning |

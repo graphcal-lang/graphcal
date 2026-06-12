@@ -9,7 +9,7 @@ fn fs() -> RealFileSystem {
 /// Find the SI value of a named scalar declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
     // Check consts first (they are not wrapped in Result)
-    if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.as_str() == name) {
+    if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.to_string() == name) {
         return val.si_value().unwrap();
     }
     // Check params and nodes (wrapped in Result)
@@ -17,7 +17,7 @@ fn find_value(result: &EvalResult, name: &str) -> f64 {
         .params
         .iter()
         .chain(result.nodes.iter())
-        .find(|(n, _)| n.as_str() == name)
+        .find(|(n, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
         .as_ref()
@@ -224,7 +224,7 @@ fn assert_on_failed_dependency_reports_dependency_failure() {
         result
             .assertions
             .iter()
-            .find(|(assert_name, _, _)| assert_name.as_str() == name)
+            .find(|(assert_name, _, _)| assert_name.to_string() == name)
             .unwrap_or_else(|| panic!("assertion `{name}` not found"))
             .1
             .clone()
@@ -325,17 +325,17 @@ fn eval_result_source_order() {
         "param b: Dimensionless = 2.0;\nparam a: Dimensionless = 1.0;\nnode z: Dimensionless = @a + @b;\nnode y: Dimensionless = @z * 2.0;",
     )
     .unwrap();
-    assert_eq!(result.params[0].0.as_str(), "b");
-    assert_eq!(result.params[1].0.as_str(), "a");
-    assert_eq!(result.nodes[0].0.as_str(), "z");
-    assert_eq!(result.nodes[1].0.as_str(), "y");
+    assert_eq!(result.params[0].0.to_string(), "b");
+    assert_eq!(result.params[1].0.to_string(), "a");
+    assert_eq!(result.nodes[0].0.to_string(), "z");
+    assert_eq!(result.nodes[1].0.to_string(), "y");
 }
 
 #[test]
 fn eval_result_all_field_source_order() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     let result = compile_and_eval(source).unwrap();
-    let names: Vec<&str> = result.all.iter().map(|(n, _, _)| n.as_str()).collect();
+    let names: Vec<String> = result.all.iter().map(|(n, _, _)| n.to_string()).collect();
     assert_eq!(
         names,
         vec![
@@ -404,7 +404,7 @@ fn eval_orbital_milestone() {
     let speed_kmh = result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "speed_kmh")
+        .find(|(n, _)| n.to_string() == "speed_kmh")
         .unwrap();
     let speed_kmh_val = speed_kmh.1.as_ref().unwrap();
     assert_eq!(
@@ -462,7 +462,7 @@ fn find_entry(result: &EvalResult, name: &str) -> Value {
     result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == name)
+        .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
         .as_ref()
@@ -802,7 +802,7 @@ fn assert_node_error(source: &str, node_name: &str, needle: &str) {
     let (_, node_result, _) = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == node_name)
+        .find(|(n, _, _)| n.to_string() == node_name)
         .unwrap_or_else(|| panic!("node `{node_name}` not found"));
     match node_result {
         Err(NodeError::EvalFailed { message }) => {
@@ -888,7 +888,7 @@ fn eval_error_does_not_block_independent_nodes() {
         result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == "bad")
+            .find(|(n, _)| n.to_string() == "bad")
             .unwrap()
             .1
             .is_err()
@@ -909,7 +909,7 @@ fn eval_error_propagates_to_dependents() {
     let bad_result = &result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "bad")
+        .find(|(n, _)| n.to_string() == "bad")
         .unwrap()
         .1;
     assert!(matches!(bad_result, Err(NodeError::EvalFailed { .. })));
@@ -917,7 +917,7 @@ fn eval_error_propagates_to_dependents() {
     let ds_result = &result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "downstream")
+        .find(|(n, _)| n.to_string() == "downstream")
         .unwrap()
         .1;
     assert!(matches!(ds_result, Err(NodeError::DependencyFailed { .. })));
@@ -946,7 +946,7 @@ fn find_int_value(result: &EvalResult, name: &str) -> i64 {
     let val = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == name)
+        .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
         .as_ref()
@@ -962,7 +962,7 @@ fn find_bool_value(result: &EvalResult, name: &str) -> bool {
     let val = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == name)
+        .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
         .as_ref()
@@ -1408,7 +1408,7 @@ fn eval_constructor_calls_preserve_same_leaf_struct_owners() {
         let value = result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == name)
+            .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("node `{name}` not found"))
             .1
             .as_ref()
@@ -1605,7 +1605,7 @@ fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fie
     let a_ok = result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "a_ok")
+        .find(|(n, _)| n.to_string() == "a_ok")
         .expect("node a_ok")
         .1
         .as_ref();
@@ -1616,7 +1616,7 @@ fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fie
     let b_bad = result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "b_bad")
+        .find(|(n, _)| n.to_string() == "b_bad")
         .expect("node b_bad")
         .1
         .as_ref();
@@ -1949,7 +1949,7 @@ fn project_expected_fail_keys_accept_resolved_index_owner_with_same_leaf_indexes
         result
             .assertions
             .iter()
-            .find(|(assert_name, _, _)| assert_name.as_str() == name)
+            .find(|(assert_name, _, _)| assert_name.to_string() == name)
             .unwrap_or_else(|| panic!("assertion `{name}` not found"))
             .1
             .clone()
@@ -2023,7 +2023,7 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
         let value = result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == name)
+            .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("node `{name}` not found"))
             .1
             .as_ref()
@@ -2040,7 +2040,7 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
         let value = result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == name)
+            .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("node `{name}` not found"))
             .1
             .as_ref()
@@ -2077,7 +2077,7 @@ fn eval_unfold_uses_resolved_declared_range_index_owner_with_same_leaf_indexes()
     let value = result
         .nodes
         .iter()
-        .find(|(name, _)| name.as_str() == "y")
+        .find(|(name, _)| name.to_string() == "y")
         .expect("node y")
         .1
         .as_ref()
@@ -2243,7 +2243,7 @@ mod prop {
             );
             let r = compile_and_eval(&source).unwrap();
             let z_result = &r.all.iter()
-                .find(|(n, _, _)| n.as_str() == "z")
+                .find(|(n, _, _)| n.to_string() == "z")
                 .unwrap().1;
             match z_result {
                 Ok(val) => {
@@ -2489,7 +2489,7 @@ fn project_injectable_index_expected_fail() {
     let assert_result = result
         .assertions
         .iter()
-        .find(|(name, _, _)| name.as_str().contains("within_limit"))
+        .find(|(name, _, _)| name.to_string().contains("within_limit"))
         .expect("within_limit assertion not found");
     assert!(
         matches!(assert_result.1, AssertResult::Pass),
@@ -3095,7 +3095,7 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
     let distances_entry = result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "distances")
+        .find(|(n, _)| n.to_string() == "distances")
         .expect("distances node")
         .1
         .as_ref()
@@ -3141,7 +3141,7 @@ node effective: Length[Source, Region] = for s: Source, r: Region {
     let entry = result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "effective")
+        .find(|(n, _)| n.to_string() == "effective")
         .expect("effective node")
         .1
         .as_ref()
@@ -3309,7 +3309,7 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
         let value = result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == name)
+            .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
             .as_ref()
@@ -3337,7 +3337,7 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
         let value = result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == name)
+            .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
             .as_ref()
@@ -3389,7 +3389,7 @@ fn struct_field_within_bounds_passes() {
     let (_, val) = result
         .consts
         .iter()
-        .find(|(n, _)| n.as_str() == "SAT")
+        .find(|(n, _)| n.to_string() == "SAT")
         .expect("SAT not found");
     matches!(val, Value::Struct { .. });
 }
@@ -3425,7 +3425,7 @@ node SAT: Spec = Spec(mass: @x);
     let (_, sat_result, _) = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == "SAT")
+        .find(|(n, _, _)| n.to_string() == "SAT")
         .expect("SAT not found");
     let err = sat_result.as_ref().unwrap_err();
     let NodeError::EvalFailed { message } = err else {
@@ -3450,7 +3450,7 @@ node R: Result = Burn(dv: 50.0 km/s);
     let (_, r_result, _) = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == "R")
+        .find(|(n, _, _)| n.to_string() == "R")
         .expect("R not found");
     let err = r_result.as_ref().unwrap_err();
     let NodeError::EvalFailed { message } = err else {
@@ -3530,8 +3530,8 @@ include bumper(v: @speed).{ out as doubled };
     let (_, v_result, _) = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == "v")
-        .expect("v not found");
+        .find(|(n, _, _)| n.to_string() == "bumper.v")
+        .expect("bumper.v not found");
     assert!(v_result.is_err(), "v should violate domain constraint");
 }
 

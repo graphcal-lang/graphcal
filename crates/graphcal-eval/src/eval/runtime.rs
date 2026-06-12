@@ -390,20 +390,20 @@ pub(super) fn evaluate_plan_with_values(
         .map(|e| {
             let key = local_key(&e.name);
             let val = make_value(&e.name, &plan.const_values[&key]);
-            (DeclName::new(e.name.member()), val)
+            (e.name.clone(), val)
         })
         .collect();
     let params = tir
         .root()
         .params
         .iter()
-        .map(|e| (DeclName::new(e.name.member()), make_result(&e.name)))
+        .map(|e| (e.name.clone(), make_result(&e.name)))
         .collect();
     let nodes = tir
         .root()
         .nodes
         .iter()
-        .map(|e| (DeclName::new(e.name.member()), make_result(&e.name)))
+        .map(|e| (e.name.clone(), make_result(&e.name)))
         .collect();
 
     let all = tir
@@ -431,7 +431,7 @@ pub(super) fn evaluate_plan_with_values(
                 | DeclCategory::Figure
                 | DeclCategory::Layer => return None,
             };
-            Some((DeclName::new(name.member()), result, decl_type))
+            Some((name.clone(), result, decl_type))
         })
         .collect();
 
@@ -439,7 +439,7 @@ pub(super) fn evaluate_plan_with_values(
     // An assertion whose body references a failed declaration reports the
     // dependency failure (with its root cause) instead of evaluating over a
     // value map where the failed name is simply absent (#814).
-    let assertions: Vec<(DeclName, AssertResult, Span)> = plan
+    let assertions: Vec<(ScopedName, AssertResult, Span)> = plan
         .assert_bodies
         .iter()
         .map(|entry| {
@@ -456,11 +456,7 @@ pub(super) fn evaluate_plan_with_values(
                 },
                 |message| AssertResult::Error { message },
             );
-            (
-                DeclName::new(entry.name.member()),
-                assert_result,
-                entry.span,
-            )
+            (entry.name.clone(), assert_result, entry.span)
         })
         .collect();
 
@@ -517,21 +513,20 @@ pub(super) fn evaluate_plan_with_values(
         })
         .collect();
 
-    let domain_constraints: HashMap<DeclName, _> = plan
-        .domain_constraints
+    // Re-key domain constraints from runtime identities back to the
+    // source-order `ScopedName`s using the same key derivation the value
+    // maps use, so output entries keep their alias qualification (#813).
+    let domain_constraints: HashMap<ScopedName, _> = tir
+        .root()
+        .source_order
         .iter()
-        .map(|(k, v)| (k.to_decl_name(), v.clone()))
-        .collect();
-    let assumes_map: HashMap<DeclName, Vec<DeclName>> = plan
-        .assumes_map
-        .iter()
-        .map(|(k, v)| {
-            (
-                DeclName::new(k.member()),
-                v.iter().map(|n| DeclName::new(n.member())).collect(),
-            )
+        .filter_map(|(name, _)| {
+            plan.domain_constraints
+                .get(&local_key(name))
+                .map(|v| (name.clone(), v.clone()))
         })
         .collect();
+    let assumes_map: HashMap<ScopedName, Vec<ScopedName>> = plan.assumes_map.clone();
 
     let result = EvalResult {
         consts,

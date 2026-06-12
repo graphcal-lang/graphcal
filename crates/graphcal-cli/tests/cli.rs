@@ -211,6 +211,119 @@ fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
 }
 
 #[test]
+fn eval_multiple_includes_qualified_output() {
+    // #813: multiple instantiations of the same dag must stay distinct in
+    // both text and JSON output, keyed by their include alias path.
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        r"
+dag checked {
+    param v: Dimensionless;
+    pub node out: Dimensionless = @v * 2.0;
+    assert v_positive = @v > 0.0;
+}
+
+include checked(v: 1.0) as good;
+include checked(v: -1.0) as bad;
+node sum2: Dimensionless = @good.out + @bad.out;
+",
+    );
+
+    let output = graphcal_bin()
+        .args(["eval", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let combined = format!("{stdout}{stderr}");
+    for needle in [
+        "good.v ",
+        "good.out",
+        "bad.v ",
+        "bad.out",
+        "good.v_positive",
+        "bad.v_positive",
+    ] {
+        assert!(
+            combined.contains(needle),
+            "missing `{needle}` in output:\n{combined}"
+        );
+    }
+    assert!(
+        combined.contains("good.v_positive  PASS"),
+        "good instance should pass:\n{combined}"
+    );
+    assert!(
+        combined.contains("bad.v_positive   FAIL"),
+        "bad instance should fail:\n{combined}"
+    );
+
+    let output = graphcal_bin()
+        .args(["eval", root.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("failed to run graphcal");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
+
+    // JSON keeps one entry per instance — nothing is silently dropped.
+    assert_eq!(json["param"]["good.v"]["si_value"].as_f64(), Some(1.0));
+    assert_eq!(json["param"]["bad.v"]["si_value"].as_f64(), Some(-1.0));
+    assert_eq!(json["node"]["good.out"]["si_value"].as_f64(), Some(2.0));
+    assert_eq!(json["node"]["bad.out"]["si_value"].as_f64(), Some(-2.0));
+    assert_eq!(json["node"]["sum2"]["si_value"].as_f64(), Some(0.0));
+    assert_eq!(
+        json["assert"]["good.v_positive"]["status"].as_str(),
+        Some("pass")
+    );
+    assert_eq!(
+        json["assert"]["bad.v_positive"]["status"].as_str(),
+        Some("fail")
+    );
+}
+
+#[test]
+fn eval_multiple_includes_expected_fail_attribution() {
+    // #813: with #[expected_fail] on the dag's assert, the per-instance
+    // results stay attributable — one PASS (failure occurred as expected)
+    // and one "unexpected pass" FAIL.
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        r"
+dag checked {
+    param v: Dimensionless;
+    pub node out: Dimensionless = @v * 2.0;
+    #[expected_fail]
+    assert is_neg = @v < 0.0;
+}
+
+include checked(v: 1.0) as pos;
+include checked(v: -1.0) as neg;
+node use_both: Dimensionless = @pos.out + @neg.out;
+",
+    );
+
+    let output = graphcal_bin()
+        .args(["eval", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("pos.is_neg  PASS"),
+        "pos instance fails as expected → PASS:\n{combined}"
+    );
+    assert!(
+        combined.contains("neg.is_neg  FAIL  (assertion passed but was marked #[expected_fail])"),
+        "neg instance passes unexpectedly → FAIL:\n{combined}"
+    );
+}
+
+#[test]
 fn check_rejects_duplicate_expected_fail_variant() {
     // Duplicate expected_fail keys are ambiguous and must be rejected at check time.
     let dir = tempfile::tempdir().unwrap();

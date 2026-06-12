@@ -31,14 +31,14 @@ pub fn eval_result_to_diagnostics(
             Err(err) => {
                 let range = symbol_table
                     .definitions
-                    .get(&SymbolKey::TopLevel(name.as_str().to_string()))
+                    .get(&SymbolKey::TopLevel(name.to_string()))
                     .map_or_else(Range::default, |def| lines.span_to_range(def.name_span));
                 Some(Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::WARNING),
                     code: Some(NumberOrString::String("graphcal::E001".to_string())),
                     source: Some("graphcal".to_string()),
-                    message: format!("{}: {err}", name.as_str()),
+                    message: format!("{name}: {err}"),
                     ..Default::default()
                 })
             }
@@ -57,12 +57,13 @@ pub fn eval_result_to_diagnostics(
                 let (message, severity) = match assert_result {
                     AssertResult::Pass => return None,
                     AssertResult::Fail { message } => {
-                        let msg = result.assumes_map.get(name.as_str()).map_or_else(
-                            || format!("assertion `{}` failed: {message}", name.as_str()),
+                        let msg = result.assumes_map.get(name).map_or_else(
+                            || format!("assertion `{name}` failed: {message}"),
                             |affected| {
+                                let affected: Vec<String> =
+                                    affected.iter().map(ToString::to_string).collect();
                                 format!(
-                                    "assertion `{}` failed: {message} (affected: {})",
-                                    name.as_str(),
+                                    "assertion `{name}` failed: {message} (affected: {})",
                                     affected.join(", ")
                                 )
                             },
@@ -70,7 +71,7 @@ pub fn eval_result_to_diagnostics(
                         (msg, DiagnosticSeverity::WARNING)
                     }
                     AssertResult::Error { message } => (
-                        format!("assertion `{}` error: {message}", name.as_str()),
+                        format!("assertion `{name}` error: {message}"),
                         DiagnosticSeverity::WARNING,
                     ),
                 };

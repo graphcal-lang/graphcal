@@ -24,14 +24,14 @@ use proptest::prelude::*;
 
 /// Find the SI value of a named scalar declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
-    if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.as_str() == name) {
+    if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.to_string() == name) {
         return val.si_value().unwrap();
     }
     result
         .params
         .iter()
         .chain(result.nodes.iter())
-        .find(|(n, _)| n.as_str() == name)
+        .find(|(n, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
         .as_ref()
@@ -45,7 +45,7 @@ fn find_int_value(result: &EvalResult, name: &str) -> i64 {
     let val = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == name)
+        .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
         .as_ref()
@@ -61,7 +61,7 @@ fn find_entry(result: &EvalResult, name: &str) -> Value {
     result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == name)
+        .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
         .as_ref()
@@ -74,7 +74,7 @@ fn has_node_error(result: &EvalResult, name: &str) -> bool {
     result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == name)
+        .find(|(n, _, _)| n.to_string() == name)
         .is_some_and(|(_, r, _)| r.is_err())
 }
 
@@ -83,7 +83,7 @@ fn get_node_error_message(result: &EvalResult, name: &str) -> Option<String> {
     result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == name)
+        .find(|(n, _, _)| n.to_string() == name)
         .and_then(|(_, r, _)| match r {
             Err(NodeError::EvalFailed { message }) => Some(message.clone()),
             _ => None,
@@ -487,7 +487,7 @@ node eq: Bool = @x == 0.3;
     let val = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == "eq")
+        .find(|(n, _, _)| n.to_string() == "eq")
         .unwrap()
         .1
         .as_ref()

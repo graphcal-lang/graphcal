@@ -152,7 +152,8 @@ pub(in crate::eval::project) struct EvaluatedFile {
     /// Declared types for all consts/params/nodes in this file.
     pub(in crate::eval::project) declared_types: HashMap<ScopedName, DeclaredType>,
     /// Assertion results from this file: name → (result, span).
-    pub(in crate::eval::project) assertions: HashMap<DeclName, (AssertResult, Span)>,
+    /// Names keep alias qualification for include-instantiated asserts (#813).
+    pub(in crate::eval::project) assertions: HashMap<ScopedName, (AssertResult, Span)>,
     /// The file's frozen registry (for type-system import by downstream files).
     pub(in crate::eval::project) registry: Registry,
     /// Names of declarations marked `pub` in the source file.
@@ -169,9 +170,10 @@ pub(in crate::eval::project) struct EvaluatedFile {
 }
 
 impl EvaluatedFile {
-    /// Check whether this file has an evaluated assertion with the given name.
+    /// Check whether this file has an evaluated top-level assertion with the
+    /// given (bare local) name.
     pub(in crate::eval::project) fn has_assert(&self, name: &str) -> bool {
-        self.assertions.keys().any(|n| n.as_str() == name)
+        self.assertions.contains_key(&ScopedName::local(name))
     }
 }
 

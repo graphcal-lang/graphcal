@@ -23,7 +23,7 @@ fn render_node_error(source: &str, name: &str, node_name: &str) -> String {
     let (_, node_result, _) = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == node_name)
+        .find(|(n, _, _)| n.to_string() == node_name)
         .unwrap_or_else(|| panic!("node `{node_name}` not found"));
     match node_result {
         Err(NodeError::EvalFailed { message }) => message.clone(),

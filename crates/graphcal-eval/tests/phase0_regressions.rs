@@ -15,14 +15,14 @@ fn has_decl_error(result: &EvalResult, name: &str) -> bool {
     result
         .all
         .iter()
-        .any(|(decl_name, value, _)| decl_name.as_str() == name && value.is_err())
+        .any(|(decl_name, value, _)| decl_name.to_string() == name && value.is_err())
 }
 
 fn value_for<'a>(result: &'a EvalResult, name: &str) -> &'a Value {
     result
         .all
         .iter()
-        .find(|(decl_name, _, _)| decl_name.as_str() == name)
+        .find(|(decl_name, _, _)| decl_name.to_string() == name)
         .unwrap_or_else(|| panic!("declaration `{name}` not found"))
         .1
         .as_ref()
