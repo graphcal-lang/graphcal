@@ -1762,3 +1762,127 @@ fn negating_a_bool_is_rejected() {
         "expected DimensionMismatch, got: {err:?}"
     );
 }
+
+// --- Plot/mark/figure/layer property validation (#845) ---
+
+#[test]
+fn check_unknown_plot_property_is_rejected() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, titel: \"typo\" };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::InvalidPlotProperty { ref property, .. } if property == "titel"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_unknown_mark_property_is_rejected() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = { mark: line { strokewidth: 3.0 }, encode: { x: for s: Step { @vals[s] } } };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::InvalidPlotProperty { ref property, .. } if property == "strokewidth"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_string_property_with_number_value_is_rejected() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, title: 42.0 };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            GraphcalError::PlotPropertyTypeMismatch {
+                property: "title",
+                ..
+            }
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_numeric_property_with_string_value_is_rejected() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, width: \"wide\" };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            GraphcalError::PlotPropertyTypeMismatch {
+                property: "width",
+                ..
+            }
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_dimensioned_mark_property_is_rejected() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = { mark: line { stroke_width: 2.0 m }, encode: { x: for s: Step { @vals[s] } } };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            GraphcalError::PlotPropertyDimensioned {
+                property: "stroke_width",
+                ..
+            }
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_figure_width_is_rejected() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
+figure f = { plots: [p], width: 300.0 };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::InvalidPlotProperty { ref property, context: "a figure declaration", .. } if property == "width"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_layer_width_is_accepted() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
+layer l = { plots: [p], width: 300.0, title: \"ok\" };";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_valid_plot_properties_pass() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = {
+    mark: line { stroke_width: 2.0, opacity: 0.5, color: \"steelblue\", filled: true },
+    encode: { x: for s: Step { @vals[s] }, y: for s: Step { @vals[s] } },
+    title: \"ok\",
+    width: 400.0,
+    x_label: \"X\",
+};";
+    check(source).unwrap();
+}

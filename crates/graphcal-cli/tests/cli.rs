@@ -2632,6 +2632,70 @@ fn eval_plot_indexed_bools_encode_like_scalar_bools() {
 }
 
 #[test]
+fn eval_plot_negative_width_is_an_error() {
+    // Sizes must be strictly positive; -500 was previously passed straight
+    // through to the Vega-Lite spec (#845).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("neg.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B };\n\
+         param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };\n\
+         pub plot p = {\n\
+             mark: line,\n\
+             encode: { x: for s: Step { @vals[s] }, y: for s: Step { @vals[s] } },\n\
+             width: -500.0,\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(!output.status.success(), "negative width must fail the run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("`width` must be a positive number"),
+        "expected positivity error: {stderr}"
+    );
+}
+
+#[test]
+fn check_rejects_typoed_plot_property() {
+    // Typo'd property names must fail `graphcal check`, not vanish (#845).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("typo.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B };\n\
+         param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };\n\
+         pub plot p = {\n\
+             mark: line,\n\
+             encode: { x: for s: Step { @vals[s] } },\n\
+             titel: \"typo\",\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["check", file.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        !output.status.success(),
+        "typo'd property must fail graphcal check"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("titel"),
+        "expected the typo'd name in the diagnostic: {stderr}"
+    );
+}
+
+#[test]
 fn eval_plot_no_plots_warns() {
     let output = graphcal_bin()
         .args(["eval", &fixture("valid/rocket.gcl"), "--plot", "json"])

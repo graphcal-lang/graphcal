@@ -52,6 +52,49 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("property `{property}` is not valid in {context}")]
+    #[diagnostic(code(graphcal::N011), help("{valid}"))]
+    InvalidPlotProperty {
+        property: String,
+        context: &'static str,
+        /// Preformatted help listing the valid property set for `context`.
+        valid: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a {context} property")]
+        span: SourceSpan,
+    },
+
+    #[error("property `{property}` expects {expected}")]
+    #[diagnostic(code(graphcal::D015))]
+    PlotPropertyTypeMismatch {
+        property: &'static str,
+        expected: &'static str,
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this is {found}")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "property `{property}` must be dimensionless, but this value has dimension {dimension}"
+    )]
+    #[diagnostic(
+        code(graphcal::D016),
+        help(
+            "plot properties are raw rendering quantities (pixels, ratios); write a plain number instead of a dimensioned value"
+        )
+    )]
+    PlotPropertyDimensioned {
+        property: &'static str,
+        dimension: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("dimensioned value")]
+        span: SourceSpan,
+    },
+
     #[error("unknown graph reference `@{name}`")]
     #[diagnostic(
         code(graphcal::N002),
@@ -1466,6 +1509,9 @@ impl GraphcalError {
             Self::DuplicateName { src, .. }
             | Self::BuiltinNameShadowed { src, .. }
             | Self::ConflictingImportedUnit { src, .. }
+            | Self::InvalidPlotProperty { src, .. }
+            | Self::PlotPropertyTypeMismatch { src, .. }
+            | Self::PlotPropertyDimensioned { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }

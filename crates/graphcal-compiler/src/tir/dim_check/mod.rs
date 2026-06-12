@@ -29,6 +29,7 @@ mod helpers;
               large match on ExprKind variants is inherently long"
 )]
 mod infer;
+mod plot;
 #[cfg(test)]
 mod tests;
 
@@ -903,6 +904,8 @@ fn check_dimensions_dag(
             }
         }
     }
+
+    plot::check_plot_properties_dag(&ctx)?;
 
     check_domain_constraint_targets_dag(dag, src)?;
     check_domain_constraint_dimensions_dag(dag, &declared_types, tir, registry, builtin_fns, src)?;

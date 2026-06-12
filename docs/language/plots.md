@@ -33,6 +33,23 @@ A `plot` declaration has:
 Each field — `mark`, `encode`, each encoding channel, and each property —
 may appear at most once; duplicates are parse errors.
 
+The plot-level properties:
+
+| Property | Type |
+|----------|------|
+| `title` | String literal |
+| `width` | Positive dimensionless number |
+| `height` | Positive dimensionless number |
+| `x_label` | String literal |
+| `y_label` | String literal |
+
+Property names and value types are validated by `graphcal check`: an unknown
+name (e.g. a typo like `titel:`) is an error, a wrongly-typed value (e.g.
+`title: 42.0`) is an error, and a dimensioned value (e.g.
+`stroke_width: 2.0 m`) is rejected — plot properties are raw rendering
+quantities, so units never get silently stripped. `width`/`height` must be
+strictly positive (checked at evaluation time).
+
 ### Mark Types
 
 | Type | Description |
@@ -52,6 +69,15 @@ plot styled = {
     encode: { ... },
 };
 ```
+
+| Mark property | Type |
+|---------------|------|
+| `stroke_width` | Dimensionless number |
+| `opacity` | Dimensionless number |
+| `size` | Dimensionless number |
+| `color` | String literal |
+| `filled` | Boolean |
+| `interpolate` | String literal |
 
 ### Encoding Channels
 
@@ -236,6 +262,11 @@ A `figure` declaration has:
 | `plots` | List of plot names | Plots to include as subplots (required) |
 | `title` | String literal | Figure title |
 
+`title` is the only property a figure supports: figures render as
+side-by-side concatenation, which has no overall width/height — set sizes on
+the constituent plots (or use a `layer`). `width:`/`height:` on a figure are
+check-time errors.
+
 ### Example
 
 ```gcl
@@ -303,6 +334,8 @@ layer <name> = {
 |-------|------|-------------|
 | `plots` | List of plot names | Plots to overlay (required) |
 | `title` | String literal | Layer title |
+| `width` | Positive dimensionless number | Chart width in pixels |
+| `height` | Positive dimensionless number | Chart height in pixels |
 
 ### Layer Example
 

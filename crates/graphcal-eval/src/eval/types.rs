@@ -610,91 +610,10 @@ impl EvalResult {
     }
 }
 
-/// A mark-level property (style applied to the mark in a plot).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MarkProperty {
-    StrokeWidth,
-    Opacity,
-    Size,
-    Color,
-    Filled,
-    Interpolate,
-}
-
-impl MarkProperty {
-    /// Parse a mark property from its source-level name.
-    #[must_use]
-    pub fn from_name(s: &str) -> Option<Self> {
-        match s {
-            "stroke_width" => Some(Self::StrokeWidth),
-            "opacity" => Some(Self::Opacity),
-            "size" => Some(Self::Size),
-            "color" => Some(Self::Color),
-            "filled" => Some(Self::Filled),
-            "interpolate" => Some(Self::Interpolate),
-            _ => None,
-        }
-    }
-
-    /// The Vega-Lite camelCase property name.
-    #[must_use]
-    pub const fn vega_name(&self) -> &'static str {
-        match self {
-            Self::StrokeWidth => "strokeWidth",
-            Self::Opacity => "opacity",
-            Self::Size => "size",
-            Self::Color => "color",
-            Self::Filled => "filled",
-            Self::Interpolate => "interpolate",
-        }
-    }
-}
-
-/// A plot-level property.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PlotProperty {
-    Title,
-    Width,
-    Height,
-    XLabel,
-    YLabel,
-}
-
-impl PlotProperty {
-    /// Parse a plot property from its source-level name.
-    #[must_use]
-    pub fn from_name(s: &str) -> Option<Self> {
-        match s {
-            "title" => Some(Self::Title),
-            "width" => Some(Self::Width),
-            "height" => Some(Self::Height),
-            "x_label" => Some(Self::XLabel),
-            "y_label" => Some(Self::YLabel),
-            _ => None,
-        }
-    }
-}
-
-/// A figure/layer-level property.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CompositionProperty {
-    Title,
-    Width,
-    Height,
-}
-
-impl CompositionProperty {
-    /// Parse a composition property from its source-level name.
-    #[must_use]
-    pub fn from_name(s: &str) -> Option<Self> {
-        match s {
-            "title" => Some(Self::Title),
-            "width" => Some(Self::Width),
-            "height" => Some(Self::Height),
-            _ => None,
-        }
-    }
-}
+// The typed property registry (names, value types, Vega names) lives in the
+// compiler so resolution-time validation and runtime evaluation dispatch on
+// one source of truth (#845).
+pub use graphcal_compiler::syntax::ast::{CompositionProperty, MarkProperty, PlotProperty};
 
 /// A single evaluated plot specification.
 #[derive(Debug, Clone)]

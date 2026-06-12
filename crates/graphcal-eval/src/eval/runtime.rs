@@ -525,18 +525,26 @@ pub(super) fn evaluate_plan_with_values(
         })
         .collect();
 
-    // Evaluate figure declarations
+    // Evaluate figure declarations; a failing field reports the figure
+    // instead of silently dropping the property (#845).
     let figures: Vec<super::types::FigureSpec> = plan
         .figure_bodies
         .iter()
-        .map(|entry| {
+        .filter_map(|entry| {
             let fields = plot_exprs.figures.get(&entry.name).unwrap_or(&no_fields);
-            let (properties, plot_names) =
-                eval_composition_fields(fields, &entry.plot_names, &values, &ctx);
-            super::types::FigureSpec {
-                name: entry.name.clone(),
-                plot_names,
-                properties,
+            match eval_composition_fields(fields, &entry.plot_names, &values, &ctx) {
+                Ok(evaluated) => Some(super::types::FigureSpec {
+                    name: entry.name.clone(),
+                    plot_names: evaluated.plot_names,
+                    properties: evaluated.properties,
+                }),
+                Err(message) => {
+                    plot_errors.push(super::types::PlotError {
+                        name: entry.name.clone(),
+                        message,
+                    });
+                    None
+                }
             }
         })
         .collect();
@@ -545,14 +553,21 @@ pub(super) fn evaluate_plan_with_values(
     let layers: Vec<super::types::LayerSpec> = plan
         .layer_bodies
         .iter()
-        .map(|entry| {
+        .filter_map(|entry| {
             let fields = plot_exprs.layers.get(&entry.name).unwrap_or(&no_fields);
-            let (properties, plot_names) =
-                eval_composition_fields(fields, &entry.plot_names, &values, &ctx);
-            super::types::LayerSpec {
-                name: entry.name.clone(),
-                plot_names,
-                properties,
+            match eval_composition_fields(fields, &entry.plot_names, &values, &ctx) {
+                Ok(evaluated) => Some(super::types::LayerSpec {
+                    name: entry.name.clone(),
+                    plot_names: evaluated.plot_names,
+                    properties: evaluated.properties,
+                }),
+                Err(message) => {
+                    plot_errors.push(super::types::PlotError {
+                        name: entry.name.clone(),
+                        message,
+                    });
+                    None
+                }
             }
         })
         .collect();
@@ -1316,12 +1331,13 @@ fn evaluate_plot(
     }
     let encodings = super::plot_data::align_encoding_channels(&channel_data)?;
 
-    // Evaluate mark properties (e.g., stroke_width, opacity)
+    // Evaluate mark properties (e.g., stroke_width, opacity). Unknown names
+    // are rejected at check time (#845); one that still reaches evaluation
+    // is an internal inconsistency.
     let mut mark_properties = Vec::new();
     for field in &lowered.mark_properties {
         let Some(mark_prop) = super::types::MarkProperty::from_name(field.name.as_str()) else {
-            // Unknown mark property — skip (could be reported as a warning in the future)
-            continue;
+            return Err(format!("internal: unknown mark property `{}`", field.name));
         };
         let field_value = eval_plot_property(&field.value, values, ctx)
             .map_err(|e| format!("mark property `{}`: {e}", field.name))?;
@@ -1332,11 +1348,11 @@ fn evaluate_plot(
     let mut properties = Vec::new();
     for field in &lowered.properties {
         let Some(plot_prop) = super::types::PlotProperty::from_name(field.name.as_str()) else {
-            // Unknown plot property — skip
-            continue;
+            return Err(format!("internal: unknown property `{}`", field.name));
         };
         let field_value = eval_plot_property(&field.value, values, ctx)
             .map_err(|e| format!("property `{}`: {e}", field.name))?;
+        check_positive_property(plot_prop.name(), plot_prop.value_type(), &field_value)?;
         properties.push((plot_prop, field_value));
     }
 
@@ -1424,35 +1440,64 @@ fn dimension_label_from_declared_type(
     }
 }
 
+/// Evaluated fields of a figure/layer declaration.
+struct CompositionFields {
+    properties: Vec<(super::types::CompositionProperty, PlotFieldValue)>,
+    plot_names: Vec<ScopedName>,
+}
+
 /// Evaluate composition fields (properties and plot names) shared by figures and layers.
 fn eval_composition_fields(
     fields: &[graphcal_compiler::tir::typed::LoweredPlotField],
     plot_name_spans: &[graphcal_compiler::syntax::span::Spanned<ScopedName>],
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
-) -> (
-    Vec<(super::types::CompositionProperty, PlotFieldValue)>,
-    Vec<ScopedName>,
-) {
+) -> Result<CompositionFields, String> {
     let empty_locals = HirLocalValueMap::root();
     let mut properties = Vec::new();
     for field in fields {
         let Some(comp_prop) = super::types::CompositionProperty::from_name(field.name.as_str())
         else {
-            continue;
+            // Unknown names are rejected at check time (#845); an entry that
+            // still reaches evaluation is an internal inconsistency.
+            return Err(format!("internal: unknown property `{}`", field.name));
         };
         if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &field.value.kind {
             properties.push((comp_prop, PlotFieldValue::String(s.clone())));
             continue;
         }
-        if let Ok(rv) = eval_hir_expr(&field.value, values, &empty_locals, ctx)
-            && let Ok(field_value) = runtime_to_plot_field_value(&rv)
-        {
-            properties.push((comp_prop, field_value));
-        }
+        let rv = eval_hir_expr(&field.value, values, &empty_locals, ctx)
+            .map_err(|e| format!("property `{}`: {}", field.name, eval_failed_node_error(&e)))?;
+        let field_value = runtime_to_plot_field_value(&rv)
+            .map_err(|e| format!("property `{}`: {e}", field.name))?;
+        check_positive_property(comp_prop.name(), comp_prop.value_type(), &field_value)?;
+        properties.push((comp_prop, field_value));
     }
     let plot_names = plot_name_spans.iter().map(|p| p.value.clone()).collect();
-    (properties, plot_names)
+    Ok(CompositionFields {
+        properties,
+        plot_names,
+    })
+}
+
+/// Enforce strictly positive values for `PositiveNumber` properties
+/// (`width`, `height`) — value-dependent, so checked at evaluation time
+/// (#845).
+fn check_positive_property(
+    property: &'static str,
+    value_type: graphcal_compiler::syntax::ast::PlotPropertyType,
+    value: &PlotFieldValue,
+) -> Result<(), String> {
+    if value_type != graphcal_compiler::syntax::ast::PlotPropertyType::PositiveNumber {
+        return Ok(());
+    }
+    match value {
+        PlotFieldValue::Number(n) if n.is_finite() && *n > 0.0 => Ok(()),
+        PlotFieldValue::Number(n) => Err(format!(
+            "property `{property}` must be a positive number, got {n}"
+        )),
+        _ => Err(format!("property `{property}` must be a positive number")),
+    }
 }
 
 /// Convert a `RuntimeValue` to a `PlotFieldValue`.

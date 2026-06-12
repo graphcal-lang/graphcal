@@ -56,6 +56,8 @@ pub struct LoweredPlotBody {
 #[derive(Debug, Clone)]
 pub struct LoweredPlotField {
     pub name: crate::syntax::names::PlotPropertyName,
+    /// Span of the property name in the source, for validation diagnostics.
+    pub name_span: crate::syntax::span::Span,
     pub value: crate::hir::Expr,
 }
 
@@ -956,6 +958,7 @@ impl UnfrozenIR {
                     match lower_optional(&field.value) {
                         Some(lowered) => body.mark_properties.push(LoweredPlotField {
                             name: field.name.value.clone(),
+                            name_span: field.name.span,
                             value: lowered,
                         }),
                         None => complete = false,
@@ -965,6 +968,7 @@ impl UnfrozenIR {
                     match lower_optional(&field.value) {
                         Some(lowered) => body.properties.push(LoweredPlotField {
                             name: field.name.value.clone(),
+                            name_span: field.name.span,
                             value: lowered,
                         }),
                         None => complete = false,
@@ -985,6 +989,7 @@ impl UnfrozenIR {
                 .filter_map(|field| {
                     Some(LoweredPlotField {
                         name: field.name.value.clone(),
+                        name_span: field.name.span,
                         value: lower_optional(&field.value)?,
                     })
                 })
