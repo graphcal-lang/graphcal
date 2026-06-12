@@ -123,9 +123,11 @@ pub fn resolve_unit_scale(
                 )?
             }
         };
-        let exp = item.power.unwrap_or(1);
+        let exp = item
+            .power
+            .unwrap_or(graphcal_compiler::syntax::dimension::Rational::ONE);
         let powered_scale = checked_positive_finite_unit_scale(
-            unit_scale.powi(exp),
+            graphcal_compiler::registry::types::pow_scale(unit_scale, exp),
             "unit scale exponentiation",
             item.name.span,
             ctx,

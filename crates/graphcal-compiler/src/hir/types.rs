@@ -8,6 +8,7 @@
 
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::{GenericConstraint, MulDivOp};
+use crate::syntax::dimension::Rational;
 use crate::syntax::names::{GenericParamName, ResolvedName, TimeScaleName, namespace};
 use crate::syntax::span::{Span, Spanned};
 
@@ -130,8 +131,8 @@ pub struct DimExprItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DimTermRef {
     pub target: DimTermTarget,
-    /// `None` means exponent 1.
-    pub power: Option<i32>,
+    /// `None` means exponent 1. Rational exponents (`^(1/2)`) are kept exact.
+    pub power: Option<Rational>,
     pub span: Span,
 }
 

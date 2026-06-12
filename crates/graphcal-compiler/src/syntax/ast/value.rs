@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
 use crate::syntax::ast::common::{Ident, ModulePath};
+use crate::syntax::dimension::Rational;
 use crate::syntax::names::{
     ConstructorName, DeclName, FieldName, IndexName, IndexVariantName, LocalName, NamePath,
     ScopedName, UnitName,
@@ -415,8 +416,8 @@ pub struct DimExprItem {
 #[derive(Debug, Clone)]
 pub struct DimTerm {
     pub name: Spanned<NamePath>,
-    /// `None` means exponent 1.
-    pub power: Option<i32>,
+    /// `None` means exponent 1. Rational exponents (`^(1/2)`) are kept exact.
+    pub power: Option<Rational>,
     pub span: Span,
 }
 
@@ -436,8 +437,8 @@ pub struct UnitExprItem {
     /// `Mul` for the first term and for `*`, `Div` for `/`.
     pub op: MulDivOp,
     pub name: Spanned<UnitName>,
-    /// `None` means exponent 1.
-    pub power: Option<i32>,
+    /// `None` means exponent 1. Rational exponents (`^(1/2)`) are kept exact.
+    pub power: Option<Rational>,
 }
 
 /// Multiply or divide operator used in dimension/unit expressions.

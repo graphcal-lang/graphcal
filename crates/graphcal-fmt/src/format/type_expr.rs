@@ -106,7 +106,7 @@ pub fn format_dim_expr_inline(de: &DimExpr) -> RcDoc<'static> {
 fn format_dim_term(t: &DimTerm) -> RcDoc<'static> {
     let mut doc = RcDoc::text(t.name.value.display_path());
     if let Some(power) = t.power {
-        doc = doc.append(RcDoc::text(format!("^{power}")));
+        doc = doc.append(RcDoc::text(format_power(power)));
     }
     doc
 }
@@ -114,6 +114,16 @@ fn format_dim_term(t: &DimTerm) -> RcDoc<'static> {
 // ---------------------------------------------------------------------------
 // Unit expressions
 // ---------------------------------------------------------------------------
+
+/// Render an exponent suffix: `^2` for integers, `^(1/2)` for rationals —
+/// the parenthesized form is what the grammar accepts back.
+fn format_power(power: graphcal_compiler::syntax::dimension::Rational) -> String {
+    if power.is_integer() {
+        format!("^{}", power.num())
+    } else {
+        format!("^({}/{})", power.num(), power.den())
+    }
+}
 
 pub fn format_unit_expr_inline(unit_expr: &UnitExpr) -> RcDoc<'static> {
     let mut docs: Vec<RcDoc<'static>> = Vec::new();
@@ -128,7 +138,7 @@ pub fn format_unit_expr_inline(unit_expr: &UnitExpr) -> RcDoc<'static> {
         }
         let mut term = RcDoc::text(item.name.value.as_str().to_string());
         if let Some(power) = item.power {
-            term = term.append(RcDoc::text(format!("^{power}")));
+            term = term.append(RcDoc::text(format_power(power)));
         }
         docs.push(term);
     }

@@ -512,8 +512,8 @@ fn resolve_dim_expr_impl(
             let Some(base) = dimensions.get(atom.as_str()) else {
                 return Ok(None);
             };
-            let exp = item.term.power.unwrap_or(1);
-            let powered = base.pow(Rational::from_int(exp))?;
+            let exp = item.term.power.unwrap_or(Rational::ONE);
+            let powered = base.pow(exp)?;
             match item.op {
                 MulDivOp::Mul => acc * powered,
                 MulDivOp::Div => acc / powered,
@@ -539,6 +539,19 @@ fn resolve_type_expr_impl(
     }
 }
 
+/// Raise a positive unit scale to a rational power.
+///
+/// Integer powers use `powi` for exactness; fractional powers fall back to
+/// `powf`, which is well-defined because unit scales are always positive.
+#[must_use]
+pub fn pow_scale(scale: f64, exp: Rational) -> f64 {
+    if exp.is_integer() {
+        scale.powi(exp.num())
+    } else {
+        scale.powf(f64::from(exp.num()) / f64::from(exp.den()))
+    }
+}
+
 /// Shared implementation for resolving a `UnitExpr` to its dimension and static scale factor.
 fn resolve_unit_expr_impl(
     units: &HashMap<UnitName, UnitInfo>,
@@ -550,12 +563,12 @@ fn resolve_unit_expr_impl(
         let Some(info) = units.get(item.name.value.as_str()) else {
             return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
         };
-        let exp = item.power.unwrap_or(1);
-        let powered_dim = info.dimension.pow(Rational::from_int(exp))?;
+        let exp = item.power.unwrap_or(Rational::ONE);
+        let powered_dim = info.dimension.pow(exp)?;
         let Some(static_scale) = info.scale.as_static() else {
             return Err(UnitResolveError::DynamicScale(item.name.value.clone()));
         };
-        let powered_scale = static_scale.powi(exp);
+        let powered_scale = pow_scale(static_scale, exp);
         match item.op {
             MulDivOp::Mul => {
                 dim = (dim * powered_dim)?;
@@ -582,8 +595,8 @@ fn resolve_unit_dimension_impl(
         let Some(info) = units.get(item.name.value.as_str()) else {
             return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
         };
-        let exp = item.power.unwrap_or(1);
-        let powered_dim = info.dimension.pow(Rational::from_int(exp))?;
+        let exp = item.power.unwrap_or(Rational::ONE);
+        let powered_dim = info.dimension.pow(exp)?;
         dim = match item.op {
             MulDivOp::Mul => (dim * powered_dim)?,
             MulDivOp::Div => (dim / powered_dim)?,
@@ -1334,7 +1347,7 @@ mod tests {
                 UnitExprItem {
                     op: MulDivOp::Div,
                     name: make_unit_name("s"),
-                    power: Some(2),
+                    power: Some(Rational::from_int(2)),
                 },
             ],
             span: Span::new(0, 0),

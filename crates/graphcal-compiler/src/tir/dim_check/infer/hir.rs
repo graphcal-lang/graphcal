@@ -1994,7 +1994,7 @@ fn infer_hir_dim_expr_arg(
                             src: src.clone(),
                             span: target.span.into(),
                         })?;
-                    (dim, item.term.power.unwrap_or(1), item.term.span)
+                    (dim, item.term.power.unwrap_or(Rational::ONE), item.term.span)
                 }
                 hir::DimTermTarget::GenericParam(param) => {
                     return Err(GraphcalError::EvalError {
@@ -2007,7 +2007,7 @@ fn infer_hir_dim_expr_arg(
                     });
                 }
             };
-            let powered = dim.pow(Rational::from_int(power)).map_err(|_| {
+            let powered = dim.pow(power).map_err(|_| {
                 GraphcalError::DimensionOverflow {
                     src: src.clone(),
                     span: span.into(),

@@ -47,7 +47,7 @@ The allowed operations are:
 | Division | `A / B` | `Length / Time` |
 | Exponentiation | `A^n` | `Time^2` |
 
-Exponents are integer or rational literals.
+Exponents are non-zero integers (`Time^2`, `Length^-1`) or parenthesized rationals (`Length^(1/2)`, `m^(-3/2)`); the same exponent grammar applies to dimension and unit expressions, including conversion targets.
 
 ### User-Defined Base Dimensions
 

@@ -1019,7 +1019,10 @@ mod tests {
                     assert_eq!(unit.terms[0].name.value.as_str(), "m");
                     assert_eq!(unit.terms[1].op, crate::syntax::ast::MulDivOp::Div);
                     assert_eq!(unit.terms[1].name.value.as_str(), "s");
-                    assert_eq!(unit.terms[1].power, Some(2));
+                    assert_eq!(
+                        unit.terms[1].power,
+                        Some(crate::syntax::dimension::Rational::from_int(2))
+                    );
                 }
                 _ => panic!("expected UnitLiteral"),
             },

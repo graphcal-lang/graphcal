@@ -618,12 +618,17 @@ dim_expr
    = dim_term, { ( "*" | "/" ), dim_term };
 
 dim_term
-   = ident_path, [ "^", signed_integer ]
-   | "(", dim_expr, ")", [ "^", signed_integer ];
+   = ident_path, [ "^", exponent ]
+   | "(", dim_expr, ")", [ "^", exponent ];
+
+exponent
+   = signed_integer
+   | "(", signed_integer, [ "/", signed_integer ], ")";
+(* Rational exponents use the parenthesized form: `Length^(1/2)`, `m^(-1/2)`.
+   The exponent must be non-zero; `^0` would erase its term (P016). *)
 
 signed_integer
-   = [ "-" ], NUMBER;  (* Must be a non-zero integer (no decimal point or
-                          exponent); `^0` would erase its term (P016). *)
+   = [ "-" ], NUMBER;  (* Must be an integer (no decimal point or exponent). *)
 
 (* --- Unit expressions --- *)
 (* Used in unit declarations, unit literals, and conversion targets. *)
@@ -633,8 +638,8 @@ unit_expr
    literal `1` numerator contributes nothing and only `1` is allowed there. *)
 
 unit_term
-   = IDENT, [ "^", signed_integer ]
-   | "(", unit_expr, ")", [ "^", signed_integer ];
+   = IDENT, [ "^", exponent ]
+   | "(", unit_expr, ")", [ "^", exponent ];
 
 (* ================================================================== *)
 (* 6. Expressions                                                     *)
