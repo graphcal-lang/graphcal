@@ -208,6 +208,20 @@ pub enum ParseError {
         #[label("nesting exceeds the limit here")]
         span: SourceSpan,
     },
+
+    #[error("`^0` exponent has no effect")]
+    #[diagnostic(
+        code(graphcal::P016),
+        help(
+            "a zero power erases its term; remove the term (or the exponent) instead of raising to zero"
+        )
+    )]
+    ZeroExponent {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("exponent must be a non-zero integer")]
+        span: SourceSpan,
+    },
 }
 
 /// Maximum nesting depth for recursive grammar productions (expressions,
@@ -245,7 +259,8 @@ impl ParseError {
             | Self::MultiDeclNoSharedAxis { src, .. }
             | Self::MultiDeclUnsupportedShape { src, .. }
             | Self::InlineDagCallMissingProjection { src, .. }
-            | Self::TooDeeplyNested { src, .. } => src,
+            | Self::TooDeeplyNested { src, .. }
+            | Self::ZeroExponent { src, .. } => src,
         }
     }
 }

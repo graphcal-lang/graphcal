@@ -622,7 +622,8 @@ dim_term
    | "(", dim_expr, ")", [ "^", signed_integer ];
 
 signed_integer
-   = [ "-" ], NUMBER;  (* Must be an integer (no decimal point or exponent). *)
+   = [ "-" ], NUMBER;  (* Must be a non-zero integer (no decimal point or
+                          exponent); `^0` would erase its term (P016). *)
 
 (* --- Unit expressions --- *)
 (* Used in unit declarations, unit literals, and conversion targets. *)

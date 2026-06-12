@@ -138,6 +138,13 @@ fn error_arrow_chain_paren() {
 }
 
 #[test]
+fn error_unit_zero_exponent() {
+    let source = include_str!("../../../tests/fixtures/invalid/unit_zero_exponent.gcl");
+    let rendered = render_error(source, "unit_zero_exponent.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_convert_int_source() {
     let source = include_str!("../../../tests/fixtures/invalid/convert_int_source.gcl");
     let rendered = render_error(source, "convert_int_source.gcl");

@@ -313,7 +313,8 @@ impl Parser<'_> {
     fn parse_outer_power(&mut self) -> Result<i32, ParseError> {
         if self.lexer.peek() == Some(&Token::Caret) {
             self.lexer.next_token();
-            let (neg, value, _span) = self.parse_integer_literal()?;
+            let (neg, value, span) = self.parse_integer_literal()?;
+            self.reject_zero_exponent(value, span)?;
             Ok(if neg { -value } else { value })
         } else {
             Ok(1)
@@ -328,11 +329,27 @@ impl Parser<'_> {
         if self.lexer.peek() == Some(&Token::Caret) {
             self.lexer.next_token();
             let (neg, value, span) = self.parse_integer_literal()?;
+            self.reject_zero_exponent(value, span)?;
             *end_span = span;
             Ok(Some(if neg { -value } else { value }))
         } else {
             Ok(None)
         }
+    }
+
+    /// Reject a `^0` exponent in dimension and unit expressions (#648 N3).
+    ///
+    /// A zero power erases its term, so it is never meaningful: as a
+    /// conversion target it produced an empty display label, and in a
+    /// dimension expression it is dead weight. `-0` is rejected too.
+    fn reject_zero_exponent(&self, value: i32, span: Span) -> Result<(), ParseError> {
+        if value == 0 {
+            return Err(ParseError::ZeroExponent {
+                src: self.named_source(),
+                span: span.into(),
+            });
+        }
+        Ok(())
     }
 
     /// Combine two `MulDivOp`s: `Mul*Mul=Mul`, `Mul*Div=Div`, `Div*Mul=Div`, `Div*Div=Mul`.
