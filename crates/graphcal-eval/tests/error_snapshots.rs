@@ -124,6 +124,13 @@ fn error_conversion_dim_mismatch() {
 }
 
 #[test]
+fn error_convert_int_source() {
+    let source = include_str!("../../../tests/fixtures/invalid/convert_int_source.gcl");
+    let rendered = render_error(source, "convert_int_source.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_unknown_struct_field() {
     let source = include_str!("../../../tests/fixtures/invalid/unknown_struct_field.gcl");
     let rendered = render_error(source, "unknown_struct_field.gcl");

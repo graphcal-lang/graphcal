@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected scalar dimension, found Int
+    Diagnostic severity: error
+Begin snippet for convert_int_source.gcl starting at line 3, column 1
+
+snippet line 3: param n: Int = 5;
+snippet line 4: node bad: Int = @n -> km;
+    label at line 4, columns 17 to 18: has dimension Int
+diagnostic help: expected a scalar value, not an Int value
+diagnostic code: graphcal::D001

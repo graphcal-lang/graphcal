@@ -204,16 +204,22 @@ pub fn expect_scalar(
     src: &NamedSource<Arc<String>>,
     span: crate::syntax::span::Span,
 ) -> Result<Dimension, GraphcalError> {
-    match inferred {
-        InferredType::Scalar(d) => Ok(d.clone()),
-        other => Err(GraphcalError::DimensionMismatch {
-            expected: "scalar dimension".to_string(),
-            found: format_inferred_type(other, registry),
-            help: "expected a scalar value, not an indexed value or struct".to_string(),
-            src: src.clone(),
-            span: span.into(),
-        }),
-    }
+    let found_kind = match inferred {
+        InferredType::Scalar(d) => return Ok(d.clone()),
+        InferredType::Bool => "a Bool value",
+        InferredType::Int | InferredType::Fin(_) => "an Int value",
+        InferredType::Datetime(_) => "a Datetime value",
+        InferredType::Label(_) => "an index label",
+        InferredType::Struct(..) => "a struct",
+        InferredType::Indexed { .. } => "an indexed value",
+    };
+    Err(GraphcalError::DimensionMismatch {
+        expected: "scalar dimension".to_string(),
+        found: format_inferred_type(inferred, registry),
+        help: format!("expected a scalar value, not {found_kind}"),
+        src: src.clone(),
+        span: span.into(),
+    })
 }
 
 /// Build the Cartesian product of variant-key slices across multiple axes.
