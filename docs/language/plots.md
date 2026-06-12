@@ -374,7 +374,9 @@ This overlays the line and point marks on the same axes.
 - Plots participate in the dependency graph (they depend on the nodes they
   reference) but do not produce runtime values.
 - Figures and layers reference plots by name and are validated at resolution
-  time.
+  time: an unknown name, a reference to another figure/layer (they cannot
+  nest), or a repeated entry in `plots:` is a check-time error, and the
+  `plots:` list must be non-empty.
 
 ## CLI Output
 

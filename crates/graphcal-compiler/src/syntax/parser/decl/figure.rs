@@ -74,6 +74,17 @@ impl Parser<'_> {
 
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
+
+        // A figure with no plots renders an empty (non-renderable) hconcat
+        // spec — always a mistake (#843).
+        if plot_names.is_empty() {
+            return Err(ParseError::EmptyCompositionPlots {
+                kind: "figure",
+                src: self.named_source(),
+                span: span.into(),
+            });
+        }
+
         Ok(Declaration {
             attributes: vec![],
             kind: DeclKind::Figure(FigureDecl {

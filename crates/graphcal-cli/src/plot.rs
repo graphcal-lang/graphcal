@@ -86,9 +86,11 @@ fn build_single_spec(spec: &PlotSpec) -> JsonValue {
     vl
 }
 
-/// Resolve the plots referenced by a figure/layer, warning about unknown
-/// names instead of silently dropping them: a typo in `plots: [my_polt]`
-/// must not yield an empty figure without any diagnostic.
+/// Resolve the plots referenced by a figure/layer.
+///
+/// Unknown names are rejected at resolution time (#843), so the lookup
+/// here always succeeds for well-formed input; the warning is a defensive
+/// backstop, not a user-facing contract.
 fn referenced_plots<'a>(
     owner_kind: &str,
     owner_name: &graphcal_compiler::syntax::names::ScopedName,

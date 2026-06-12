@@ -95,6 +95,51 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("{owner_kind} `{owner}` references unknown plot `{name}`")]
+    #[diagnostic(
+        code(graphcal::N012),
+        help("`plots:` entries must name `plot` declarations visible in this file")
+    )]
+    UnknownPlotReference {
+        owner_kind: &'static str,
+        owner: ScopedName,
+        name: ScopedName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("no plot with this name")]
+        span: SourceSpan,
+    },
+
+    #[error("`{name}` is a {actual_kind}, not a plot")]
+    #[diagnostic(
+        code(graphcal::N013),
+        help("{owner_kind}s compose `plot` declarations; they cannot nest other {actual_kind}s")
+    )]
+    CompositionReferencesNonPlot {
+        owner_kind: &'static str,
+        actual_kind: &'static str,
+        name: ScopedName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this names a {actual_kind}")]
+        span: SourceSpan,
+    },
+
+    #[error("{owner_kind} `{owner}` lists plot `{name}` more than once")]
+    #[diagnostic(
+        code(graphcal::N014),
+        help("each plot may appear at most once in a `plots:` list")
+    )]
+    DuplicatePlotReference {
+        owner_kind: &'static str,
+        owner: ScopedName,
+        name: ScopedName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate entry")]
+        span: SourceSpan,
+    },
+
     #[error("unknown graph reference `@{name}`")]
     #[diagnostic(
         code(graphcal::N002),
@@ -1512,6 +1557,9 @@ impl GraphcalError {
             | Self::InvalidPlotProperty { src, .. }
             | Self::PlotPropertyTypeMismatch { src, .. }
             | Self::PlotPropertyDimensioned { src, .. }
+            | Self::UnknownPlotReference { src, .. }
+            | Self::CompositionReferencesNonPlot { src, .. }
+            | Self::DuplicatePlotReference { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }

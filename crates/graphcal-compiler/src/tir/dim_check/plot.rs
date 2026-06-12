@@ -19,6 +19,7 @@ pub(super) fn check_plot_properties_dag(ctx: &DimCheckContext<'_>) -> Result<(),
     let Some(dag) = ctx.dag else {
         return Ok(());
     };
+    check_plot_references(ctx, dag)?;
     for entry in &dag.plots {
         let Some(body) = &entry.body else { continue };
         for field in &body.mark_properties {
@@ -79,6 +80,59 @@ pub(super) fn check_plot_properties_dag(ctx: &DimCheckContext<'_>) -> Result<(),
                 ));
             };
             check_property_value(ctx, prop.name(), prop.value_type(), field)?;
+        }
+    }
+    Ok(())
+}
+
+/// Validate the `plots:` lists of figure/layer declarations (#843):
+/// every entry must name a plot declared in this DAG (a figure/layer name
+/// gets a targeted "is not a plot" error), and no entry may repeat.
+fn check_plot_references(
+    ctx: &DimCheckContext<'_>,
+    dag: &crate::tir::typed::DagTIR,
+) -> Result<(), GraphcalError> {
+    let owners = dag
+        .figures
+        .iter()
+        .map(|f| ("figure", &f.name, &f.plot_names))
+        .chain(dag.layers.iter().map(|l| ("layer", &l.name, &l.plot_names)));
+    for (owner_kind, owner, plot_names) in owners {
+        for (i, reference) in plot_names.iter().enumerate() {
+            if !dag.plots.iter().any(|p| p.name == reference.value) {
+                let actual_kind = if dag.figures.iter().any(|f| f.name == reference.value) {
+                    Some("figure")
+                } else if dag.layers.iter().any(|l| l.name == reference.value) {
+                    Some("layer")
+                } else {
+                    None
+                };
+                return Err(actual_kind.map_or_else(
+                    || GraphcalError::UnknownPlotReference {
+                        owner_kind,
+                        owner: owner.clone(),
+                        name: reference.value.clone(),
+                        src: ctx.src.clone(),
+                        span: reference.span.into(),
+                    },
+                    |actual_kind| GraphcalError::CompositionReferencesNonPlot {
+                        owner_kind,
+                        actual_kind,
+                        name: reference.value.clone(),
+                        src: ctx.src.clone(),
+                        span: reference.span.into(),
+                    },
+                ));
+            }
+            if plot_names[..i].iter().any(|p| p.value == reference.value) {
+                return Err(GraphcalError::DuplicatePlotReference {
+                    owner_kind,
+                    owner: owner.clone(),
+                    name: reference.value.clone(),
+                    src: ctx.src.clone(),
+                    span: reference.span.into(),
+                });
+            }
         }
     }
     Ok(())

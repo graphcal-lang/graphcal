@@ -264,6 +264,19 @@ pub enum ParseError {
         #[label("this plot has an empty or missing `encode:` block")]
         span: SourceSpan,
     },
+
+    #[error("{kind} declaration has no plots")]
+    #[diagnostic(
+        code(graphcal::P020),
+        help("add a non-empty `plots:` list, e.g. `plots: [my_plot]`")
+    )]
+    EmptyCompositionPlots {
+        kind: &'static str,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this {kind} has an empty or missing `plots:` list")]
+        span: SourceSpan,
+    },
 }
 
 /// Maximum nesting depth for recursive grammar productions (expressions,
@@ -305,7 +318,8 @@ impl ParseError {
             | Self::ZeroExponent { src, .. }
             | Self::UnitReferenceTooDeep { src, .. }
             | Self::DuplicatePlotField { src, .. }
-            | Self::MissingPlotEncoding { src, .. } => src,
+            | Self::MissingPlotEncoding { src, .. }
+            | Self::EmptyCompositionPlots { src, .. } => src,
         }
     }
 }

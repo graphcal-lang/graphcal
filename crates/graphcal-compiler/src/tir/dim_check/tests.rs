@@ -1886,3 +1886,66 @@ plot p = {
 };";
     check(source).unwrap();
 }
+
+// --- Figure/layer plot references are validated at resolution time (#843) ---
+
+#[test]
+fn check_unknown_plot_reference_is_rejected() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot real_plot = { mark: line, encode: { x: for s: Step { @vals[s] } } };
+figure f = { plots: [real_plot, my_polt] };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::UnknownPlotReference { owner_kind: "figure", ref name, .. } if name.to_string() == "my_polt"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_figure_referencing_figure_is_rejected() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
+figure inner = { plots: [p] };
+figure outer = { plots: [inner] };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            GraphcalError::CompositionReferencesNonPlot {
+                actual_kind: "figure",
+                ..
+            }
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_duplicate_plot_reference_is_rejected() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
+figure f = { plots: [p, p] };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DuplicatePlotReference { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_valid_plot_references_pass() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
+plot q = { mark: point, encode: { x: for s: Step { @vals[s] } } };
+figure f = { plots: [p, q] };
+layer l = { plots: [p, q] };";
+    check(source).unwrap();
+}

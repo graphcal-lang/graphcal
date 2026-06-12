@@ -1707,3 +1707,31 @@ fn plot_with_empty_encode_is_rejected() {
         "expected MissingPlotEncoding, got {err:?}"
     );
 }
+
+#[test]
+fn figure_without_plots_is_rejected() {
+    let err = Parser::new(r#"figure f = { title: "no plots" };"#)
+        .parse_file()
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::syntax::parser::ParseError::EmptyCompositionPlots { kind: "figure", .. }
+        ),
+        "expected EmptyCompositionPlots, got {err:?}"
+    );
+}
+
+#[test]
+fn layer_with_empty_plots_is_rejected() {
+    let err = Parser::new("layer l = { plots: [] };")
+        .parse_file()
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::syntax::parser::ParseError::EmptyCompositionPlots { kind: "layer", .. }
+        ),
+        "expected EmptyCompositionPlots, got {err:?}"
+    );
+}
