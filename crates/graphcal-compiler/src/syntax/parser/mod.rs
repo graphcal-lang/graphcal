@@ -208,6 +208,34 @@ pub enum ParseError {
         #[label("nesting exceeds the limit here")]
         span: SourceSpan,
     },
+
+    #[error("module-qualified unit references are not supported")]
+    #[diagnostic(
+        code(graphcal::P017),
+        help(
+            "units are file-global once imported — refer to the unit by its bare name (`mile`, not `alias.mile`); conflicting imported definitions are rejected at import time (N010)"
+        )
+    )]
+    QualifiedUnitReference {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unit names cannot be qualified")]
+        span: SourceSpan,
+    },
+
+    #[error("`^0` exponent has no effect")]
+    #[diagnostic(
+        code(graphcal::P016),
+        help(
+            "a zero power erases its term; remove the term (or the exponent) instead of raising to zero"
+        )
+    )]
+    ZeroExponent {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("exponent must be a non-zero integer")]
+        span: SourceSpan,
+    },
 }
 
 /// Maximum nesting depth for recursive grammar productions (expressions,
@@ -245,7 +273,9 @@ impl ParseError {
             | Self::MultiDeclNoSharedAxis { src, .. }
             | Self::MultiDeclUnsupportedShape { src, .. }
             | Self::InlineDagCallMissingProjection { src, .. }
-            | Self::TooDeeplyNested { src, .. } => src,
+            | Self::TooDeeplyNested { src, .. }
+            | Self::ZeroExponent { src, .. }
+            | Self::QualifiedUnitReference { src, .. } => src,
         }
     }
 }

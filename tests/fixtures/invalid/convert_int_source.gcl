@@ -1,0 +1,4 @@
+// error: `->` requires a scalar source; Int is not a scalar.
+// The help text must name the actual found type (not "indexed value or struct").
+param n: Int = 5;
+node bad: Int = @n -> km;

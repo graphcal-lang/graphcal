@@ -1,0 +1,4 @@
+// error: unit references cannot be module-qualified (P017, #648 N6);
+// units are file-global once imported.
+param a: Length = 3218.688 m;
+node bad: Length = @a -> u.mile;

@@ -1,0 +1,44 @@
+// convert_display_propagation.gcl -- display metadata follows value reads
+// (#648 B1/N5): dag projections, struct fields, index entries, consts,
+// timezone displays, and runtime-selected if/match branches all render the
+// way the source was written.
+pub type S {
+    S(a: Length),
+}
+pub index R = { A, B };
+pub index K = { Big, Small };
+
+dag mydag {
+    param x: Length;
+    node out: Length = @x -> km;
+}
+
+param a: Length = 1500.0 m;
+include mydag(x: @a).{ out as inst_out };
+node projected: Length = @inst_out;
+
+node s: S = S(a: 100.0 m -> km);
+node field_read: Length = @s.a;
+
+param xs: Length[R] = {
+    R.A: 1000.0 m -> km,
+    R.B: 2000.0 m -> km,
+};
+node entry_read: Length = @xs[R.A];
+node whole_read: Length[R] = @xs;
+
+const node c: Length = 1500.0 m -> km;
+node const_read: Length = @c;
+
+param flag: Bool = true;
+node branch_read: Length = if @flag { @a -> km } else { @a -> cm };
+
+param k: K = K.Big;
+node arm_read: Length = match @k {
+    K.Big => @a -> km,
+    K.Small => @a -> mm,
+};
+
+param t: Datetime = datetime("2026-01-15T12:00:00Z");
+node tz: Datetime = @t -> "Asia/Tokyo";
+node tz_read: Datetime = @tz;

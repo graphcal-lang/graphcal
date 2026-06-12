@@ -1,0 +1,4 @@
+// error: assertion results are never displayed with units, so a conversion
+// anywhere in an assert body has no effect (D013).
+param a: Length = 1500.0 m;
+assert bad = (@a -> km) == 1.5 km;

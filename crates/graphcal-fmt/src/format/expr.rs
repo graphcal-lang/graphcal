@@ -66,13 +66,13 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::Convert {
             expr: inner,
             target,
-        } => format_expr(fmt, inner)
+        } => format_convert_operand(fmt, inner)
             .append(RcDoc::text(" -> "))
             .append(format_unit_expr_inline(target)),
         ExprKind::DisplayTimezone {
             expr: inner,
             timezone,
-        } => format_expr(fmt, inner)
+        } => format_convert_operand(fmt, inner)
             .append(RcDoc::text(" -> "))
             .append(RcDoc::text(format!("\"{timezone}\""))),
         ExprKind::FieldAccess { expr: inner, field } => format_expr(fmt, inner)
@@ -160,6 +160,24 @@ const fn op_str(op: BinOp) -> &'static str {
         BinOp::And => " && ",
         BinOp::Or => " || ",
     }
+}
+
+/// Format the operand of `->`, parenthesizing a nested conversion.
+///
+/// `(x -> u) -> v` parses but `x -> u -> v` does not (`->` is non-chaining),
+/// so stripping the parens would make the output unparsable. The shape is
+/// rejected by the dimension checker (D012), but the formatter must stay
+/// robust on everything the parser accepts.
+fn format_convert_operand(fmt: &mut Formatter<'_>, inner: &Expr) -> RcDoc<'static> {
+    if matches!(
+        inner.kind,
+        ExprKind::Convert { .. } | ExprKind::DisplayTimezone { .. }
+    ) {
+        return RcDoc::text("(")
+            .append(format_expr(fmt, inner))
+            .append(RcDoc::text(")"));
+    }
+    format_expr(fmt, inner)
 }
 
 /// Format a child expression of a binary op, adding parens if needed to

@@ -74,6 +74,15 @@ impl Parser<'_> {
                 ));
             }
             let target = self.parse_unit_expr()?;
+            // `-> alias.unit` reads like a module-qualified unit; give it a
+            // teaching diagnostic instead of a generic unexpected-token error
+            // (#648 N6).
+            if self.lexer.peek() == Some(&Token::Dot) {
+                return Err(ParseError::QualifiedUnitReference {
+                    src: self.named_source(),
+                    span: target.span.into(),
+                });
+            }
             let span = expr.span.merge(target.span);
             Ok(Expr::new(
                 ExprKind::Convert {
@@ -1019,7 +1028,10 @@ mod tests {
                     assert_eq!(unit.terms[0].name.value.as_str(), "m");
                     assert_eq!(unit.terms[1].op, crate::syntax::ast::MulDivOp::Div);
                     assert_eq!(unit.terms[1].name.value.as_str(), "s");
-                    assert_eq!(unit.terms[1].power, Some(2));
+                    assert_eq!(
+                        unit.terms[1].power,
+                        Some(crate::syntax::dimension::Rational::from_int(2))
+                    );
                 }
                 _ => panic!("expected UnitLiteral"),
             },

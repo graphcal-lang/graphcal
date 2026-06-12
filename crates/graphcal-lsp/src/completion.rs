@@ -43,6 +43,7 @@ pub fn completion(
     let items = match context {
         CompletionContext::GraphRef => complete_graph_refs(analysis),
         CompletionContext::TypeAnnotation => complete_types(analysis),
+        CompletionContext::ConversionTarget => complete_conversion_targets(analysis),
         CompletionContext::TopLevel => complete_top_level(),
         CompletionContext::Expression => complete_expression(analysis),
     };
@@ -105,6 +106,29 @@ fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
     items
 }
 
+/// Complete unit names after `->` (conversion target, #648 U5).
+///
+/// Offers every in-scope unit: the prelude's plus user-defined and imported
+/// `unit` declarations. The dimension checker rejects a wrong-dimension pick
+/// with D006, so offering all units keeps the list useful while mid-edit
+/// source (which often does not parse) cannot be type-inferred.
+fn complete_conversion_targets(analysis: &AnalysisResult) -> Vec<CompletionItem> {
+    let mut items: Vec<CompletionItem> = graphcal_compiler::registry::prelude::PRELUDE_UNIT_NAMES
+        .iter()
+        .map(|name| CompletionItem {
+            label: (*name).to_string(),
+            kind: Some(CompletionItemKind::UNIT),
+            detail: Some("prelude unit".to_string()),
+            ..Default::default()
+        })
+        .collect();
+    items.extend(build_definition_items(analysis, |cat| match cat {
+        SymbolCategory::Unit => Some(CompletionItemKind::UNIT),
+        _ => None,
+    }));
+    items
+}
+
 /// Complete top-level keywords.
 fn complete_top_level() -> Vec<CompletionItem> {
     keyword_items(TOP_LEVEL_KEYWORDS)
@@ -145,6 +169,39 @@ mod tests {
                 "missing top-level keyword: {required}"
             );
         }
+    }
+
+    #[test]
+    fn conversion_target_offers_units() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/app")).unwrap();
+        std::fs::write(
+            dir.path().join("graphcal.toml"),
+            "[package]\nname = \"app\"\n",
+        )
+        .unwrap();
+        let main_path = dir.path().join("src/app/main.gcl");
+        let main_text = "unit mile: Length = 1609.344 m;\n\
+                         param a: Length = 1500.0 m;\n\
+                         node b: Length = @a -> km;\n";
+        std::fs::write(&main_path, main_text).unwrap();
+        let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
+        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+
+        // Cursor right after `-> `, at the start of `km`.
+        let offset = main_text.find("-> km").unwrap() + 3;
+        let items = completion(&analysis, main_text, offset).unwrap_or_default();
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        for expected in ["m", "km", "s", "mile"] {
+            assert!(
+                labels.contains(&expected),
+                "conversion-target completion must offer `{expected}`: {labels:?}"
+            );
+        }
+        assert!(
+            !labels.contains(&"sqrt"),
+            "conversion-target completion must not offer functions: {labels:?}"
+        );
     }
 
     #[test]

@@ -1,0 +1,4 @@
+// error: a conversion in arithmetic-operand position has no display effect;
+// it is silently inert, so it is rejected (D013, #648 B3).
+param a: Length = 1500.0 m;
+node bad: Length = (@a -> km) + 100.0 m;

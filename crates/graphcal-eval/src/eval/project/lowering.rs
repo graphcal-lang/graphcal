@@ -55,8 +55,16 @@ pub(in crate::eval::project) fn lower_and_finalize(
     }
 
     // Merge type-system declarations from module-imported registries (pub items only).
-    for (dep_registry, pub_names) in &ctx.extra_registry_builders {
-        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names);
+    for (dep_registry, pub_names, import_span) in &ctx.extra_registry_builders {
+        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names).map_err(
+            |conflict| {
+                CompileError::Eval(GraphcalError::ConflictingImportedUnit {
+                    name: conflict.name,
+                    src: file_src.clone(),
+                    span: (*import_span).into(),
+                })
+            },
+        )?;
     }
 
     // Process every deferred DAG include (file-level instantiated, inline
@@ -317,8 +325,16 @@ fn compile_loaded_dag_module_ir<'a>(
             dep_dag_id,
         )?;
     }
-    for (dep_registry, pub_names) in &ctx.extra_registry_builders {
-        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names);
+    for (dep_registry, pub_names, import_span) in &ctx.extra_registry_builders {
+        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names).map_err(
+            |conflict| {
+                CompileError::Eval(GraphcalError::ConflictingImportedUnit {
+                    name: conflict.name,
+                    src: file_src.clone(),
+                    span: (*import_span).into(),
+                })
+            },
+        )?;
     }
 
     process_deferred_dag_includes(
@@ -734,12 +750,20 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                             dep_dag_id,
                         )?;
                     }
-                    for (dep_registry, pub_names) in &body_ctx.extra_registry_builders {
+                    for (dep_registry, pub_names, import_span) in &body_ctx.extra_registry_builders
+                    {
                         merge_registry_into_builder_pub_filtered(
                             &mut dag_builder,
                             dep_registry,
                             pub_names,
-                        );
+                        )
+                        .map_err(|conflict| {
+                            CompileError::Eval(GraphcalError::ConflictingImportedUnit {
+                                name: conflict.name,
+                                src: importer_src.clone(),
+                                span: (*import_span).into(),
+                            })
+                        })?;
                     }
                     process_deferred_dag_includes(
                         project,
@@ -770,7 +794,14 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
             &deferred.index_bindings,
             &deferred.type_bindings,
             &deferred.dim_bindings,
-        );
+        )
+        .map_err(|conflict| {
+            CompileError::Eval(GraphcalError::ConflictingImportedUnit {
+                name: conflict.name,
+                src: importer_src.clone(),
+                span: deferred.import_span.into(),
+            })
+        })?;
 
         // ---- 3. Validate range-index dimension matching (file include
         // only — inline DAGs share the file's registry, so there are no
@@ -978,7 +1009,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder(
     index_bindings: &HashMap<IndexName, IndexName>,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
-) {
+) -> Result<(), UnitMergeConflict> {
     merge_registry_into_builder_filtered(
         builder,
         dep_registry,
@@ -986,7 +1017,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder(
         type_bindings,
         dim_bindings,
         None,
-    );
+    )
 }
 
 /// Merge type-system declarations from a dependency's frozen Registry into a
@@ -996,7 +1027,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder_pub_filtered(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
     pub_names: &HashSet<DeclName>,
-) {
+) -> Result<(), UnitMergeConflict> {
     merge_registry_into_builder_filtered(
         builder,
         dep_registry,
@@ -1004,7 +1035,17 @@ pub(in crate::eval::project) fn merge_registry_into_builder_pub_filtered(
         &HashMap::new(),
         &HashMap::new(),
         Some(pub_names),
-    );
+    )
+}
+
+/// A unit name reached the importing file with two different definitions.
+///
+/// Units are file-global once imported, so a silent last-write-wins merge
+/// would make `-> mile` resolve to whichever import happened to land last
+/// (#648 N6). The conflict is surfaced as a loud error instead.
+#[derive(Debug)]
+pub(in crate::eval::project) struct UnitMergeConflict {
+    pub name: graphcal_compiler::syntax::names::UnitName,
 }
 
 pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
@@ -1014,7 +1055,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
     pub_names: Option<&HashSet<DeclName>>,
-) {
+) -> Result<(), UnitMergeConflict> {
     // Import base dimension names (for display formatting).
     for (id, name) in dep_registry.dimensions.base_dim_names() {
         if dim_bindings.contains_key(name.as_str()) {
@@ -1045,10 +1086,20 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
         builder.set_base_dim_symbol(id.clone(), symbol.clone());
     }
 
-    // Import units.
+    // Import units. Re-merging an identical definition (diamond imports,
+    // prelude units present in every dep registry) is idempotent; a
+    // *different* definition under the same name is a conflict.
     for (name, dim, scale) in dep_registry.units.all_units() {
         if pub_names.is_some_and(|visible| !visible.contains(name.as_str())) {
             continue;
+        }
+        if let Some(existing) = builder.get_unit(name.as_str()) {
+            if unit_definitions_compatible(existing, dim, scale) {
+                continue;
+            }
+            return Err(UnitMergeConflict {
+                name: (*name).clone(),
+            });
         }
         builder.register_unit_dynamic((*name).clone(), dim.clone(), scale.clone());
     }
@@ -1079,6 +1130,36 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
             continue;
         }
         builder.register_type(type_def.clone());
+    }
+    Ok(())
+}
+
+/// Two unit definitions are compatible when they agree on dimension and
+/// scale. Dynamic scales cannot be compared structurally; two dynamic
+/// definitions are assumed to be the same declaration reached through a
+/// diamond import (a genuinely different pair still differs in dimension or
+/// base scale in practice).
+fn unit_definitions_compatible(
+    existing: &graphcal_compiler::registry::types::UnitInfo,
+    dim: &graphcal_compiler::syntax::dimension::Dimension,
+    scale: &graphcal_compiler::registry::types::UnitScale,
+) -> bool {
+    use graphcal_compiler::registry::types::UnitScale;
+    if existing.dimension != *dim {
+        return false;
+    }
+    match (&existing.scale, scale) {
+        (UnitScale::Static(a), UnitScale::Static(b))
+        | (
+            UnitScale::Dynamic {
+                base_unit_scale: a, ..
+            },
+            UnitScale::Dynamic {
+                base_unit_scale: b, ..
+            },
+        ) => a == b,
+        (UnitScale::Static(_), UnitScale::Dynamic { .. })
+        | (UnitScale::Dynamic { .. }, UnitScale::Static(_)) => false,
     }
 }
 

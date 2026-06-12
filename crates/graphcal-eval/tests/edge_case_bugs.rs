@@ -25,7 +25,7 @@ use proptest::prelude::*;
 /// Find the SI value of a named scalar declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
     if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.to_string() == name) {
-        return val.si_value().unwrap();
+        return val.as_ref().unwrap().si_value().unwrap();
     }
     result
         .params
@@ -881,4 +881,66 @@ assert all_positive = for l: Layer, b: Band, c: Channel {
             .all(|(_, r, _)| matches!(r, graphcal_eval::eval::AssertResult::Pass)),
         "all values are positive, 3D assertion should pass"
     );
+}
+
+// ============================================================================
+// #648 B1/N5: display metadata follows value reads.
+//
+// A value converted at its construction site must render the same way at
+// every access site: dag projections, struct field reads, index entry reads,
+// const reads, and runtime-selected if/match branches.
+// ============================================================================
+
+/// Extract the display unit label of a scalar declaration, if any.
+fn display_label(result: &EvalResult, name: &str) -> Option<String> {
+    match find_entry(result, name) {
+        Value::Scalar { display_unit, .. } => display_unit.map(|du| du.label),
+        other => panic!("expected scalar for `{name}`, got {other:?}"),
+    }
+}
+
+#[test]
+fn display_unit_propagates_through_reads() {
+    let source = include_str!("../../../tests/fixtures/valid/convert_display_propagation.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    for name in [
+        "projected",
+        "field_read",
+        "entry_read",
+        "const_read",
+        "branch_read",
+        "arm_read",
+    ] {
+        assert_eq!(
+            display_label(&result, name).as_deref(),
+            Some("km"),
+            "`{name}` must render in the unit written at its construction site"
+        );
+    }
+
+    // Timezone display follows reads the same way.
+    match find_entry(&result, "tz_read") {
+        Value::Datetime { display_tz, .. } => {
+            assert_eq!(display_tz.as_deref(), Some("Asia/Tokyo"));
+        }
+        other => panic!("expected datetime, got {other:?}"),
+    }
+
+    // Whole-map reads keep per-entry displays.
+    match find_entry(&result, "whole_read") {
+        Value::Indexed { entries, .. } => {
+            for (variant, entry) in &entries {
+                match entry {
+                    Value::Scalar { display_unit, .. } => assert_eq!(
+                        display_unit.as_ref().map(|du| du.label.as_str()),
+                        Some("km"),
+                        "entry `{variant}` must keep its display unit"
+                    ),
+                    other => panic!("expected scalar entry, got {other:?}"),
+                }
+            }
+        }
+        other => panic!("expected indexed, got {other:?}"),
+    }
 }

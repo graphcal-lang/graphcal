@@ -2,6 +2,7 @@ use crate::syntax::ast::{
     DimExpr, DimExprItem, DimTerm, Expr, ExprKind, GenericConstraint, GenericParam, IdentPath,
     IndexExpr, MulDivOp, NatExpr, TypeExpr, TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
+use crate::syntax::dimension::Rational;
 use crate::syntax::names::{GenericParamName, UnitName};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
@@ -261,19 +262,22 @@ impl Parser<'_> {
                 .terms
                 .into_iter()
                 .map(|item| {
-                    let inner_power = item.term.power.unwrap_or(1);
-                    let combined = inner_power.checked_mul(outer_power).ok_or_else(|| {
-                        ParseError::InvalidNumber {
+                    let inner_power = item.term.power.unwrap_or(Rational::ONE);
+                    let combined =
+                        (inner_power * outer_power).map_err(|_| ParseError::InvalidNumber {
                             reason: "dimension exponent overflows `i32`".to_string(),
                             src: self.named_source(),
                             span: item.term.span.into(),
-                        }
-                    })?;
+                        })?;
                     Ok(DimExprItem {
                         op: item.op,
                         term: DimTerm {
                             name: item.term.name,
-                            power: if combined == 1 { None } else { Some(combined) },
+                            power: if combined == Rational::ONE {
+                                None
+                            } else {
+                                Some(combined)
+                            },
                             span: item.term.span,
                         },
                     })
@@ -310,13 +314,13 @@ impl Parser<'_> {
     /// Parse an optional `^` power suffix, returning the exponent (defaulting to 1).
     ///
     /// Used for parenthesized groups: `(A * B)^2` → returns `2`.
-    fn parse_outer_power(&mut self) -> Result<i32, ParseError> {
+    fn parse_outer_power(&mut self) -> Result<Rational, ParseError> {
         if self.lexer.peek() == Some(&Token::Caret) {
             self.lexer.next_token();
-            let (neg, value, _span) = self.parse_integer_literal()?;
-            Ok(if neg { -value } else { value })
+            let (value, _span) = self.parse_exponent_value()?;
+            Ok(value)
         } else {
-            Ok(1)
+            Ok(Rational::ONE)
         }
     }
 
@@ -324,15 +328,53 @@ impl Parser<'_> {
     ///
     /// Used for individual terms: `m^2` → `Some(2)`, `m` → `None`.
     /// Updates `end_span` to cover the power literal when present.
-    fn parse_term_power(&mut self, end_span: &mut Span) -> Result<Option<i32>, ParseError> {
+    fn parse_term_power(&mut self, end_span: &mut Span) -> Result<Option<Rational>, ParseError> {
         if self.lexer.peek() == Some(&Token::Caret) {
             self.lexer.next_token();
-            let (neg, value, span) = self.parse_integer_literal()?;
+            let (value, span) = self.parse_exponent_value()?;
             *end_span = span;
-            Ok(Some(if neg { -value } else { value }))
+            Ok(Some(value))
         } else {
             Ok(None)
         }
+    }
+
+    /// Parse the exponent value after a `^` in a dimension or unit expression:
+    /// a signed integer (`2`, `-3`) or a parenthesized rational (`(1/2)`,
+    /// `(-3/2)`, `(2)`). Returns the value and its end span.
+    ///
+    /// Zero exponents (including `0/n`) are rejected (#648 N3): a zero power
+    /// erases its term, so it is never meaningful.
+    fn parse_exponent_value(&mut self) -> Result<(Rational, Span), ParseError> {
+        let (value, span) = if self.lexer.peek() == Some(&Token::LParen) {
+            self.lexer.next_token();
+            let (num_neg, num, num_span) = self.parse_integer_literal()?;
+            let num = if num_neg { -num } else { num };
+            let value = if self.lexer.peek() == Some(&Token::Slash) {
+                self.lexer.next_token();
+                let (den_neg, den, den_span) = self.parse_integer_literal()?;
+                let den = if den_neg { -den } else { den };
+                Rational::try_new(num, den).map_err(|_| ParseError::InvalidNumber {
+                    reason: "exponent denominator must be a non-zero integer".to_string(),
+                    src: self.named_source(),
+                    span: den_span.into(),
+                })?
+            } else {
+                Rational::from_int(num)
+            };
+            let (_, rparen_span) = self.expect(Token::RParen)?;
+            (value, num_span.merge(rparen_span))
+        } else {
+            let (neg, value, span) = self.parse_integer_literal()?;
+            (Rational::from_int(if neg { -value } else { value }), span)
+        };
+        if value.is_zero() {
+            return Err(ParseError::ZeroExponent {
+                src: self.named_source(),
+                span: span.into(),
+            });
+        }
+        Ok((value, span))
     }
 
     /// Combine two `MulDivOp`s: `Mul*Mul=Mul`, `Mul*Div=Div`, `Div*Mul=Div`, `Div*Div=Mul`.
@@ -356,8 +398,28 @@ impl Parser<'_> {
     }
 
     fn parse_unit_expr_inner(&mut self) -> Result<UnitExpr, ParseError> {
-        let (first_terms, start_span, mut end_span) =
-            self.parse_unit_term_or_group(MulDivOp::Mul)?;
+        // `1/unit` shorthand (#648 U2/N4): a literal `1` numerator contributes
+        // nothing — the term after the slash is a plain division. This matches
+        // the canonical display rendering (`min^-1` prints as `1/min`), so
+        // displayed unit labels round-trip as source.
+        let (first_terms, start_span, mut end_span) = if self.lexer.peek() == Some(&Token::Number)
+            && self.lexer.peek_second() == Some(&Token::Slash)
+        {
+            let (_, one_span) = self.expect(Token::Number)?;
+            let text = self.lexer.slice_at(one_span);
+            if text != "1" {
+                return Err(ParseError::InvalidNumber {
+                    reason: "only `1` can appear as a unit numerator (e.g. `1/min`)".to_string(),
+                    src: self.named_source(),
+                    span: one_span.into(),
+                });
+            }
+            self.expect(Token::Slash)?;
+            let (terms, _, end) = self.parse_unit_term_or_group(MulDivOp::Div)?;
+            (terms, one_span, end)
+        } else {
+            self.parse_unit_term_or_group(MulDivOp::Mul)?
+        };
 
         let mut terms: Vec<UnitExprItem> = first_terms;
 
@@ -414,11 +476,8 @@ impl Parser<'_> {
                 .terms
                 .into_iter()
                 .map(|item| {
-                    let combined_power = item
-                        .power
-                        .unwrap_or(1)
-                        .checked_mul(outer_power)
-                        .ok_or_else(|| ParseError::InvalidNumber {
+                    let combined_power = (item.power.unwrap_or(Rational::ONE) * outer_power)
+                        .map_err(|_| ParseError::InvalidNumber {
                             reason: "unit exponent overflows `i32`".to_string(),
                             src: self.named_source(),
                             span: item.name.span.into(),
@@ -426,7 +485,7 @@ impl Parser<'_> {
                     Ok(UnitExprItem {
                         op: Self::combine_ops(outer_op, item.op),
                         name: item.name,
-                        power: if combined_power == 1 {
+                        power: if combined_power == Rational::ONE {
                             None
                         } else {
                             Some(combined_power)

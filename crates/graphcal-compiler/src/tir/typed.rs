@@ -140,13 +140,13 @@ pub enum ResolvedDimTerm {
     /// A concrete dimension with power and combining operator.
     Concrete {
         dim: Dimension,
-        power: i32,
+        power: Rational,
         op: MulDivOp,
     },
     /// A generic dimension parameter with power and combining operator.
     GenericParam {
         name: GenericParamName,
-        power: i32,
+        power: Rational,
         op: MulDivOp,
         span: Span,
     },
@@ -176,10 +176,13 @@ impl ResolvedDimTerm {
             MulDivOp::Mul => "",
             MulDivOp::Div => "/ ",
         };
-        if power == 1 {
+        if power == Rational::ONE {
             format!("{prefix}{name}")
         } else {
-            format!("{prefix}{name}^{power}")
+            format!(
+                "{prefix}{name}{}",
+                crate::registry::format::format_exponent(power)
+            )
         }
     }
 }
@@ -3561,15 +3564,17 @@ pub fn unify_resolved_type(
                     ..
                 } = &terms[0]
             {
-                let bound_dim = if *power == 1 {
+                let bound_dim = if *power == Rational::ONE {
                     actual_dim
                 } else {
-                    let exponent =
-                        Rational::try_new(1, *power).map_err(|_| GraphcalError::InternalError {
+                    // D^(p/q) bound against `actual` means D = actual^(q/p).
+                    let exponent = Rational::try_new(power.den(), power.num()).map_err(|_| {
+                        GraphcalError::InternalError {
                             message: format!("generic dimension parameter `{gp}` has zero power"),
                             src: src.clone(),
                             span: span.into(),
-                        })?;
+                        }
+                    })?;
                     actual_dim
                         .pow(exponent)
                         .map_err(|_| GraphcalError::DimensionOverflow {
@@ -3601,15 +3606,14 @@ pub fn unify_resolved_type(
                     span: span.into(),
                 };
                 let term_dim = match term {
-                    ResolvedDimTerm::Concrete { dim, power, .. } => dim
-                        .pow(Rational::from_int(*power))
-                        .map_err(|_| overflow_err())?,
+                    ResolvedDimTerm::Concrete { dim, power, .. } => {
+                        dim.pow(*power).map_err(|_| overflow_err())?
+                    }
                     ResolvedDimTerm::GenericParam {
                         name: gp, power, ..
                     } => {
                         if let Some(prev) = dim_sub.get(gp) {
-                            prev.pow(Rational::from_int(*power))
-                                .map_err(|_| overflow_err())?
+                            prev.pow(*power).map_err(|_| overflow_err())?
                         } else {
                             return Err(GraphcalError::DimensionMismatch {
                                 expected: format!("generic `{gp}` (unresolved)"),
@@ -3746,9 +3750,9 @@ pub fn substitute_resolved_type_with_types(
             let mut result = Dimension::dimensionless();
             for term in terms {
                 let term_dim = match term {
-                    ResolvedDimTerm::Concrete { dim, power, .. } => dim
-                        .pow(Rational::from_int(*power))
-                        .map_err(|_| overflow_err())?,
+                    ResolvedDimTerm::Concrete { dim, power, .. } => {
+                        dim.pow(*power).map_err(|_| overflow_err())?
+                    }
                     ResolvedDimTerm::GenericParam {
                         name: gp,
                         power,
@@ -3760,8 +3764,7 @@ pub fn substitute_resolved_type_with_types(
                             src: src.clone(),
                             span: (*term_span).into(),
                         })?;
-                        base.pow(Rational::from_int(*power))
-                            .map_err(|_| overflow_err())?
+                        base.pow(*power).map_err(|_| overflow_err())?
                     }
                 };
                 result = match term.op() {
@@ -4120,11 +4123,12 @@ fn resolve_hir_dim_expr(
     if let [
         ResolvedDimTerm::GenericParam {
             name,
-            power: 1,
+            power,
             op: MulDivOp::Mul,
             span,
         },
     ] = terms.as_slice()
+        && *power == Rational::ONE
     {
         return Ok(ResolvedTypeExpr::GenericDimParam(name.clone(), *span));
     }
@@ -4154,9 +4158,7 @@ fn resolve_hir_dim_expr(
                 src: ctx.src.clone(),
                 span: dim_expr.span.into(),
             };
-            let powered = dim
-                .pow(Rational::from_int(*power))
-                .map_err(|_| overflow_err())?;
+            let powered = dim.pow(*power).map_err(|_| overflow_err())?;
             match op {
                 MulDivOp::Mul => (acc * powered).map_err(|_| overflow_err()),
                 MulDivOp::Div => (acc / powered).map_err(|_| overflow_err()),
@@ -4170,7 +4172,7 @@ fn resolve_hir_dim_expr_item(
     item: &hir::DimExprItem,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedDimTerm, GraphcalError> {
-    let power = item.term.power.unwrap_or(1);
+    let power = item.term.power.unwrap_or(Rational::ONE);
     match &item.term.target {
         hir::DimTermTarget::Dimension(name) => Ok(ResolvedDimTerm::Concrete {
             dim: hir_dimension(&name.value, name.span, ctx)?,
@@ -4718,14 +4720,12 @@ fn resolve_dim_expr(
             Dimension::dimensionless(),
             |acc, item| -> Result<Dimension, GraphcalError> {
                 let base = concrete_dimension_for_term(item, registry, src, module_ctx)?;
-                let exp = item.term.power.unwrap_or(1);
+                let exp = item.term.power.unwrap_or(Rational::ONE);
                 let overflow_err = || GraphcalError::DimensionOverflow {
                     src: src.clone(),
                     span: item.term.span.into(),
                 };
-                let powered = base
-                    .pow(Rational::from_int(exp))
-                    .map_err(|_| overflow_err())?;
+                let powered = base.pow(exp).map_err(|_| overflow_err())?;
                 match item.op {
                     MulDivOp::Mul => (acc * powered).map_err(|_| overflow_err()),
                     MulDivOp::Div => (acc / powered).map_err(|_| overflow_err()),
@@ -4743,7 +4743,7 @@ fn resolve_dim_term_in_generic_expr(
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<ResolvedDimTerm, GraphcalError> {
-    let power = item.term.power.unwrap_or(1);
+    let power = item.term.power.unwrap_or(Rational::ONE);
     let op = item.op;
     if let Some(atom) = item.term.name.value.as_bare()
         && let Some(gp) = dim_params.iter().find(|p| p.as_str() == atom.as_str())
@@ -5105,7 +5105,7 @@ mod tests {
                 match &terms[0] {
                     ResolvedDimTerm::GenericParam { name, power, .. } => {
                         assert_eq!(name.as_str(), "D");
-                        assert_eq!(*power, 2);
+                        assert_eq!(*power, Rational::from_int(2));
                     }
                     ResolvedDimTerm::Concrete { .. } => panic!("expected GenericParam term"),
                 }

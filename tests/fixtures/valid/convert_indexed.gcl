@@ -1,0 +1,21 @@
+// convert_indexed.gcl -- element-wise `->` on indexed values (#648 U1).
+// The conversion distributes the display unit over every entry; values
+// stay SI underneath.
+pub index R = { A, B };
+pub index C = { X, Y };
+
+param x: Length[R] = {
+    R.A: 1000.0 m,
+    R.B: 2000.0 m,
+};
+node y: Length[R] = @x -> km;
+
+param grid: Length[R, C] = {
+    (R.A, C.X): 1000.0 m,
+    (R.A, C.Y): 2000.0 m,
+    (R.B, C.X): 3000.0 m,
+    (R.B, C.Y): 4000.0 m,
+};
+node grid_km: Length[R, C] = @grid -> km;
+
+assert unchanged = @y[R.A] == @x[R.A];

@@ -373,7 +373,133 @@ fn check_decl_expr_type(
             span: (*type_ann_span).into(),
         });
     }
+    check_ineffective_conversions(hir_expr, true, ctx.src)?;
     Ok(())
+}
+
+/// Reject `->` conversions whose display effect is discarded (#648 B3).
+///
+/// A conversion only matters in a *display position*: the top level of a
+/// declaration body, a selected `if`/`match` branch, a constructor field
+/// initializer, a map-literal entry, a for-comprehension body, or a
+/// `scan`/`unfold` init. Anywhere else — arithmetic operands, function
+/// arguments, comparison operands, conditions, scrutinees, assertion bodies —
+/// the conversion evaluates to the unchanged SI value and its display target
+/// is silently dropped, so it is either a typo or dead code.
+fn check_ineffective_conversions(
+    expr: &crate::hir::Expr,
+    display_position: bool,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    // Recursion choke point: recurses once per tree level.
+    crate::stack::with_stack_growth(|| {
+        check_ineffective_conversions_inner(expr, display_position, src)
+    })
+}
+
+fn check_ineffective_conversions_inner(
+    expr: &crate::hir::Expr,
+    display_position: bool,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    use crate::hir::ExprKind;
+    match &expr.kind {
+        ExprKind::Convert { expr: inner, .. } | ExprKind::DisplayTimezone { expr: inner, .. } => {
+            if !display_position {
+                return Err(GraphcalError::IneffectiveConversion {
+                    src: src.clone(),
+                    span: expr.span.into(),
+                });
+            }
+            // The operand of a conversion is not itself a display position
+            // (direct nesting is already rejected as D012).
+            check_ineffective_conversions(inner, false, src)
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            check_ineffective_conversions(condition, false, src)?;
+            check_ineffective_conversions(then_branch, display_position, src)?;
+            check_ineffective_conversions(else_branch, display_position, src)
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            check_ineffective_conversions(scrutinee, false, src)?;
+            for arm in arms {
+                check_ineffective_conversions(&arm.body, display_position, src)?;
+            }
+            Ok(())
+        }
+        ExprKind::ConstructorCall { fields, .. } => {
+            for init in fields {
+                check_ineffective_conversions(&init.value, display_position, src)?;
+            }
+            Ok(())
+        }
+        ExprKind::MapLiteral { entries } => {
+            for entry in entries {
+                check_ineffective_conversions(&entry.value, display_position, src)?;
+            }
+            Ok(())
+        }
+        ExprKind::ForComp { body, .. } => {
+            check_ineffective_conversions(body, display_position, src)
+        }
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            check_ineffective_conversions(source, false, src)?;
+            check_ineffective_conversions(init, display_position, src)?;
+            check_ineffective_conversions(body, false, src)
+        }
+        ExprKind::Unfold { init, body, .. } => {
+            check_ineffective_conversions(init, display_position, src)?;
+            check_ineffective_conversions(body, false, src)
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            check_ineffective_conversions(lhs, false, src)?;
+            check_ineffective_conversions(rhs, false, src)
+        }
+        ExprKind::UnaryOp { operand, .. } => check_ineffective_conversions(operand, false, src),
+        ExprKind::FnCall { args, .. } => {
+            for arg in args {
+                check_ineffective_conversions(arg, false, src)?;
+            }
+            Ok(())
+        }
+        ExprKind::FieldAccess { expr: inner, .. } => {
+            check_ineffective_conversions(inner, false, src)
+        }
+        ExprKind::IndexAccess { expr: inner, args } => {
+            check_ineffective_conversions(inner, false, src)?;
+            for arg in args {
+                if let crate::hir::expr::IndexArg::Expr(e) = arg {
+                    check_ineffective_conversions(e, false, src)?;
+                }
+            }
+            Ok(())
+        }
+        // Inline-dag param bindings flow into the callee's params, whose
+        // reads propagate display metadata; treat them as display positions.
+        ExprKind::InlineDagRef { args, .. } => {
+            for binding in args {
+                check_ineffective_conversions(&binding.value, display_position, src)?;
+            }
+            Ok(())
+        }
+        ExprKind::Error
+        | ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::TypeSystemRef(_)
+        | ExprKind::GraphRef(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::LocalRef(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::VariantLiteral(_) => Ok(()),
+    }
 }
 
 #[derive(Debug)]
@@ -760,6 +886,21 @@ fn check_dimensions_dag(
         let shape = check_hir_assert_body(&ctx, body, entry.span)?;
         if let Some(expected_fail) = dag.expected_fail.get(&entry.name) {
             validate_expected_fail(expected_fail, &shape, src, entry.span)?;
+        }
+        // Assertion results are never displayed with units, so no position
+        // inside an assert body is display-effective.
+        match body {
+            crate::hir::expr::AssertBody::Expr(e) => check_ineffective_conversions(e, false, src)?,
+            crate::hir::expr::AssertBody::Tolerance {
+                actual,
+                expected,
+                tolerance,
+                ..
+            } => {
+                check_ineffective_conversions(actual, false, src)?;
+                check_ineffective_conversions(expected, false, src)?;
+                check_ineffective_conversions(tolerance, false, src)?;
+            }
         }
     }
 

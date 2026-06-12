@@ -3180,10 +3180,10 @@ fn graph_rocket_dot_output() {
     "rocket.dry_mass" [label="dry_mass\nMass", shape=ellipse];
     "rocket.fuel_mass" [label="fuel_mass\nMass", shape=ellipse];
     "rocket.isp" [label="isp\nTime", shape=ellipse];
-    "rocket.g0" [label="g0\nLength / Time^2", shape=box, style=rounded];
-    "rocket.v_exhaust" [label="v_exhaust\nLength / Time", shape=box];
+    "rocket.g0" [label="g0\nAcceleration", shape=box, style=rounded];
+    "rocket.v_exhaust" [label="v_exhaust\nVelocity", shape=box];
     "rocket.mass_ratio" [label="mass_ratio\nDimensionless", shape=box];
-    "rocket.delta_v" [label="delta_v\nLength / Time", shape=box];
+    "rocket.delta_v" [label="delta_v\nVelocity", shape=box];
     "rocket.dry_mass" -> "rocket.mass_ratio";
     "rocket.fuel_mass" -> "rocket.mass_ratio";
     "rocket.g0" -> "rocket.v_exhaust";

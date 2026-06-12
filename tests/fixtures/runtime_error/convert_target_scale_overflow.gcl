@@ -1,0 +1,6 @@
+// convert_target_scale_overflow.gcl -- a conversion target whose dimension
+// matches but whose compound scale overflows to inf must fail loudly,
+// not silently fall back to base-unit display (#648 N1).
+unit big: Length = 1.0e200 m;
+param a: Length = 1.0 m;
+node bad: Length = @a -> big * big/m;

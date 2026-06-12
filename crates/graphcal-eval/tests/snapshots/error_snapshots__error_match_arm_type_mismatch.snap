@@ -1,9 +1,8 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
-assertion_line: 258
 expression: rendered
 ---
-dimension mismatch: expected Length / Time, found Dimensionless
+dimension mismatch: expected Velocity, found Dimensionless
     Diagnostic severity: error
 Begin snippet for match_arm_type_mismatch.gcl starting at line 10, column 1
 

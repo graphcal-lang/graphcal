@@ -47,7 +47,7 @@ The allowed operations are:
 | Division | `A / B` | `Length / Time` |
 | Exponentiation | `A^n` | `Time^2` |
 
-Exponents are integer or rational literals.
+Exponents are non-zero integers (`Time^2`, `Length^-1`) or parenthesized rationals (`Length^(1/2)`, `m^(-3/2)`); the same exponent grammar applies to dimension and unit expressions, including conversion targets.
 
 ### User-Defined Base Dimensions
 
@@ -107,7 +107,15 @@ unit kB: Information = 1000.0 byte;
 
 A `base unit` declaration (`base unit bit: Information;` with no `= ...`) defines the canonical unit for a user-defined base dimension. Non-base units must always carry an `= ...` body.
 
+User unit definitions on bare `Temperature` are rejected (`D014`): the common temperature units (°C, °F) are *affine* scales with an offset, which a multiplicative `unit` definition cannot express — `unit C: Temperature = 1.0 K;` would print `300 K` as a meaningless `300 C`. Keep absolute temperatures in `K`, or model offsets explicitly in expressions. Compound dimensions involving Temperature (e.g. `Temperature / Time`) still accept unit definitions, since offsets cancel in differences and rates.
+
 Unit scale factors must be **positive and finite**. Static unit definitions such as `unit z: Length = 0.0 m;`, negative scales, and overflowing scales are rejected. Dynamic unit scales are checked at evaluation time with the same rule.
+
+### Unit Scoping
+
+Units form a single, file-global namespace: the prelude's units, the file's own definitions, and every `pub unit` reaching the file through imports all share it. Unit references are always bare names — `@a -> mile`, never `alias.mile` (`P017`) — regardless of how the defining module was imported.
+
+Because the namespace is flat, two imports that define the same unit name *differently* would make every reference ambiguous; that conflict is rejected at import time (`N010`). Importing the same definition through several paths (diamond imports) is fine.
 
 ### Dynamic Units
 
@@ -154,6 +162,18 @@ node alt_cm: Length = @alt -> cm;       // 20000000.0 cm
 ```
 
 The source and target must share the same dimension. Attempting to convert between incompatible dimensions is a compile-time error.
+
+`->` also distributes element-wise over indexed values: `@x -> km` on a `Length[R]` (or multi-axis `Length[R, C]`) applies the display unit to every entry.
+
+Compound targets support the `1/unit` reciprocal shorthand, matching how unit labels are displayed: `@f -> 1/min` is equivalent to `@f -> min^-1`. Only a literal `1` is allowed as the numerator.
+
+The conversion sets the value's *display* unit; values are always stored in SI internally. Display metadata follows value reads: a value converted at its construction site renders the same way when read back through `@x`, a struct field, an index entry, a dag output projection, a `const`, or the branch of an `if`/`match` selected at runtime. The same applies to timezone displays on `Datetime` values.
+
+`->` is non-chaining: an expression carries at most one conversion target. Both the bare chain `@alt -> km -> m` (a parse error) and the parenthesized form `(@alt -> km) -> m` (a `D012` dimension-check error) are rejected — only the outermost target could ever take effect, so an inner conversion is either a typo or dead code.
+
+A conversion is only allowed where its display effect can land — the top level of a declaration body, an `if`/`match` branch, a constructor field initializer, a map-literal entry, a for-comprehension body, or a `scan`/`unfold` init. Anywhere else (arithmetic operands, function arguments, comparisons, conditions, assert bodies) the conversion would be silently inert, so it is rejected (`D013`).
+
+A conversion must also be *resolvable* at runtime: if the target's scale cannot be computed (for example, a [dynamic unit](#dynamic-units) whose scale expression evaluates to zero or a negative value), the declaration fails with a per-node error rather than silently falling back to the base unit.
 
 ## Dimension Inference
 

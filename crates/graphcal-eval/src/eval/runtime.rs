@@ -272,16 +272,22 @@ pub(super) fn run_eval_loop(
                 values.insert(name.clone(), val);
             }
             Err(e) => {
-                let message = match &e {
-                    GraphcalError::EvalError { message, .. } => message.clone(),
-                    other => format!("{other}"),
-                };
-                errors.insert(name.clone(), NodeError::EvalFailed { message });
+                errors.insert(name.clone(), eval_failed_node_error(&e));
             }
         }
     }
 
     EvalLoopResult { values, errors }
+}
+
+/// Convert a runtime `GraphcalError` into a per-node `EvalFailed` error,
+/// preferring the bare eval message over the full rendered diagnostic.
+fn eval_failed_node_error(e: &GraphcalError) -> NodeError {
+    let message = match e {
+        GraphcalError::EvalError { message, .. } => message.clone(),
+        other => format!("{other}"),
+    };
+    NodeError::EvalFailed { message }
 }
 
 fn failed_runtime_dependencies(
@@ -367,20 +373,23 @@ pub(super) fn evaluate_plan_with_values(
 
     let local_key = |name: &ScopedName| RuntimeDeclKey::for_local_decl(tir.root(), name);
 
-    let make_value = |name: &ScopedName, rv: &RuntimeValue| -> Value {
+    let make_value = |name: &ScopedName, rv: &RuntimeValue| -> Result<Value, NodeError> {
         let mut value = runtime_to_value(rv, declared_types.get(name), &tir.registry);
         if let Some(expr) = expr_map.get(name) {
-            attach_display_units(&mut value, expr, &ctx, &values);
+            // A display unit that fails to resolve (e.g. a dynamic conversion
+            // target whose scale became non-positive) is a per-node error, not
+            // a silent fallback to the base unit.
+            attach_display_units(&mut value, expr, &ctx, &values)
+                .map_err(|e| eval_failed_node_error(&e))?;
         }
-        value
+        Ok(value)
     };
 
     let make_result = |name: &ScopedName| -> Result<Value, NodeError> {
         let key = local_key(name);
-        errors.get(&key).map_or_else(
-            || Ok(make_value(name, &values[&key])),
-            |err| Err(err.clone()),
-        )
+        errors
+            .get(&key)
+            .map_or_else(|| make_value(name, &values[&key]), |err| Err(err.clone()))
     };
 
     let consts = tir
@@ -423,7 +432,7 @@ pub(super) fn evaluate_plan_with_values(
             let result = match cat {
                 DeclCategory::Const => {
                     let key = local_key(name);
-                    Ok(make_value(name, &plan.const_values[&key]))
+                    make_value(name, &plan.const_values[&key])
                 }
                 DeclCategory::Param | DeclCategory::Node => make_result(name),
                 DeclCategory::Assert
@@ -1272,7 +1281,12 @@ fn extract_encoding_axis_meta(
     values: &RuntimeValueMap,
 ) -> AxisMeta {
     let dimension_label = extract_dimension_from_expr(expr, declared_types, ctx.registry);
-    let unit_label = extract_flat_display_unit(expr, ctx, values).map(|du| du.label);
+    // Axis metadata is best-effort decoration: a failing display scale already
+    // surfaces as a per-node error on the plotted declaration itself.
+    let unit_label = extract_flat_display_unit(expr, ctx, values)
+        .ok()
+        .flatten()
+        .map(|du| du.label);
     AxisMeta {
         dimension_label,
         unit_label,

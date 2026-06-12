@@ -1,0 +1,3 @@
+// error: only `1` is allowed as a unit numerator; `2/min` is not a unit.
+param f: Frequency = 2.0 Hz;
+node bad: Frequency = @f -> 2/min;

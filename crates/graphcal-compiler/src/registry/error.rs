@@ -37,6 +37,21 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("conflicting definitions of unit `{name}` reach this file through imports")]
+    #[diagnostic(
+        code(graphcal::N010),
+        help(
+            "units are file-global once imported; two modules define `{name}` with different dimensions or scales, so references would be ambiguous — rename one of the definitions"
+        )
+    )]
+    ConflictingImportedUnit {
+        name: UnitName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("import brings in a conflicting `{name}`")]
+        span: SourceSpan,
+    },
+
     #[error("unknown graph reference `@{name}`")]
     #[diagnostic(
         code(graphcal::N002),
@@ -324,6 +339,49 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("target unit has different dimension")]
+        span: SourceSpan,
+    },
+
+    #[error("`->` cannot be applied to an expression that already has a display target")]
+    #[diagnostic(
+        code(graphcal::D012),
+        help(
+            "an expression carries at most one `->` target; remove the inner conversion — only the outermost target takes effect"
+        )
+    )]
+    NestedConversion {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("the operand of this conversion is itself a conversion")]
+        span: SourceSpan,
+    },
+
+    #[error("`->` has no effect in this position")]
+    #[diagnostic(
+        code(graphcal::D013),
+        help(
+            "a conversion only affects how a declaration's final value is displayed; move it to the top level of the declaration (or a selected `if`/`match` branch, constructor field, map entry, for-comprehension body, or scan/unfold init), or remove it"
+        )
+    )]
+    IneffectiveConversion {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this conversion's display target is discarded")]
+        span: SourceSpan,
+    },
+
+    #[error("user-defined units on dimension `{dim}` are not supported")]
+    #[diagnostic(
+        code(graphcal::D014),
+        help(
+            "common units of this dimension (e.g. \u{b0}C, \u{b0}F for Temperature) are affine scales with an offset; a purely multiplicative `unit` definition would display silently wrong values. Keep values in the base unit, or model the offset explicitly in your expressions"
+        )
+    )]
+    AffineProneUnitDefinition {
+        dim: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unit defined on an affine-prone dimension")]
         span: SourceSpan,
     },
 
@@ -1392,6 +1450,10 @@ impl GraphcalError {
     /// [`Self::ManifestError`]) and CLI override errors
     /// ([`Self::OverrideNotAParam`], [`Self::OverrideUnknownParam`]).
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive variant list; one arm per error variant"
+    )]
     pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
         let src = match self {
             Self::FileNotFound { .. }
@@ -1401,6 +1463,7 @@ impl GraphcalError {
             | Self::OverrideUnknownParam { .. } => return None,
             Self::DuplicateName { src, .. }
             | Self::BuiltinNameShadowed { src, .. }
+            | Self::ConflictingImportedUnit { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }
@@ -1423,6 +1486,9 @@ impl GraphcalError {
             | Self::CyclicUnit { src, .. }
             | Self::NonLiteralExponent { src, .. }
             | Self::ConversionDimensionMismatch { src, .. }
+            | Self::NestedConversion { src, .. }
+            | Self::IneffectiveConversion { src, .. }
+            | Self::AffineProneUnitDefinition { src, .. }
             | Self::UnknownStructType { src, .. }
             | Self::UnknownField { src, .. }
             | Self::MissingFields { src, .. }

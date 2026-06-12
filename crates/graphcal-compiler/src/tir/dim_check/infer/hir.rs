@@ -1577,6 +1577,29 @@ fn infer_hir_index_access(
     Ok(current)
 }
 
+/// Reject `(expr -> u) -> v` and its timezone-display analogues (#648 B2).
+///
+/// The surface grammar already rejects bare chaining (`expr -> u -> v`), but
+/// parentheses used to smuggle a nested conversion through; only the outermost
+/// target ever took effect, so the inner one is either a typo or dead code.
+/// Parens are flattened in HIR, so a direct nested `Convert`/`DisplayTimezone`
+/// operand is exactly the parenthesized-chain shape.
+fn reject_nested_conversion(
+    inner: &hir::Expr,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    if matches!(
+        inner.kind,
+        hir::ExprKind::Convert { .. } | hir::ExprKind::DisplayTimezone { .. }
+    ) {
+        return Err(GraphcalError::NestedConversion {
+            src: src.clone(),
+            span: inner.span.into(),
+        });
+    }
+    Ok(())
+}
+
 #[expect(clippy::too_many_arguments, reason = "conversion expression context")]
 fn infer_hir_convert(
     inner: &hir::Expr,
@@ -1590,6 +1613,7 @@ fn infer_hir_convert(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
+    reject_nested_conversion(inner, src)?;
     let inner_type = infer_hir_type(
         inner,
         owner_decl_name,
@@ -1601,7 +1625,17 @@ fn infer_hir_convert(
         builtin_fns,
         src,
     )?;
-    let expr_dim = expect_scalar(&inner_type, registry, src, inner.span)?;
+    // `->` distributes element-wise over indexed values (#648 U1): the scalar
+    // element dimension must match the target. Multi-axis values unwrap
+    // through each nested Indexed layer.
+    let mut element = &inner_type;
+    while let InferredType::Indexed {
+        element: nested, ..
+    } = element
+    {
+        element = nested;
+    }
+    let expr_dim = expect_scalar(element, registry, src, inner.span)?;
     let target_dim = rules::resolve_unit_dimension_or_diagnose(target, registry, src)?;
 
     if expr_dim != target_dim {
@@ -1613,7 +1647,7 @@ fn infer_hir_convert(
         });
     }
 
-    Ok(InferredType::Scalar(expr_dim))
+    Ok(inner_type)
 }
 
 #[expect(
@@ -1633,6 +1667,7 @@ fn infer_hir_display_timezone(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
+    reject_nested_conversion(inner, src)?;
     let inner_type = infer_hir_type(
         inner,
         owner_decl_name,
@@ -1959,7 +1994,7 @@ fn infer_hir_dim_expr_arg(
                             src: src.clone(),
                             span: target.span.into(),
                         })?;
-                    (dim, item.term.power.unwrap_or(1), item.term.span)
+                    (dim, item.term.power.unwrap_or(Rational::ONE), item.term.span)
                 }
                 hir::DimTermTarget::GenericParam(param) => {
                     return Err(GraphcalError::EvalError {
@@ -1972,7 +2007,7 @@ fn infer_hir_dim_expr_arg(
                     });
                 }
             };
-            let powered = dim.pow(Rational::from_int(power)).map_err(|_| {
+            let powered = dim.pow(power).map_err(|_| {
                 GraphcalError::DimensionOverflow {
                     src: src.clone(),
                     span: span.into(),

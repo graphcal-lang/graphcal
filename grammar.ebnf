@@ -618,20 +618,33 @@ dim_expr
    = dim_term, { ( "*" | "/" ), dim_term };
 
 dim_term
-   = ident_path, [ "^", signed_integer ]
-   | "(", dim_expr, ")", [ "^", signed_integer ];
+   = ident_path, [ "^", exponent ]
+   | "(", dim_expr, ")", [ "^", exponent ];
+
+exponent
+   = signed_integer
+   | "(", signed_integer, [ "/", signed_integer ], ")";
+(* Rational exponents use the parenthesized form: `Length^(1/2)`, `m^(-1/2)`.
+   The exponent must be non-zero; `^0` would erase its term (P016). *)
 
 signed_integer
    = [ "-" ], NUMBER;  (* Must be an integer (no decimal point or exponent). *)
 
 (* --- Unit expressions --- *)
-(* Used in unit declarations, unit literals, and conversion targets. *)
+(* Used in unit declarations, unit literals, and conversion targets.
+   Unit expressions share dim_expr's structure and exponent grammar; the one
+   deliberate difference is the term name: dims are module-scoped ident_paths,
+   while units form a single file-global namespace, so unit_term takes a bare
+   IDENT (qualified unit references are rejected with P017; conflicting
+   imported definitions with N010). *)
 unit_expr
-   = unit_term, { ( "*" | "/" ), unit_term };
+   = [ "1", "/" ], unit_term, { ( "*" | "/" ), unit_term };
+(* The optional `1/` prefix is the reciprocal shorthand (e.g. `1/min`); the
+   literal `1` numerator contributes nothing and only `1` is allowed there. *)
 
 unit_term
-   = IDENT, [ "^", signed_integer ]
-   | "(", unit_expr, ")", [ "^", signed_integer ];
+   = IDENT, [ "^", exponent ]
+   | "(", unit_expr, ")", [ "^", exponent ];
 
 (* ================================================================== *)
 (* 6. Expressions                                                     *)

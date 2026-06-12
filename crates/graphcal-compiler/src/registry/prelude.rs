@@ -94,6 +94,10 @@ fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
         BaseDimId::Prelude("Temperature".to_string()),
         "K".to_string(),
     );
+    // Real-world temperature units (°C, °F) are affine scales; reject user
+    // unit definitions on bare Temperature so a linear definition cannot
+    // silently display wrong values (#648 U4).
+    r.mark_affine_prone(temperature_id.clone());
     let electric_current_id = r.register_base_dimension_with_symbol(
         DimName::new("ElectricCurrent"),
         BaseDimId::Prelude("ElectricCurrent".to_string()),

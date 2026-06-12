@@ -388,7 +388,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         let importer_idx_from_registry = if importer_idx_ast.is_none() {
             ctx.extra_registry_builders
                 .iter()
-                .find_map(|(reg, _)| reg.indexes.get_index(&rhs_name))
+                .find_map(|(reg, _, _)| reg.indexes.get_index(&rhs_name))
                 .or_else(|| {
                     evaluated_files
                         .values()
@@ -520,8 +520,11 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
             }
             // Import type-system declarations (pub items only).
             if let Some(dep_eval) = evaluated_files.get(import_dag_id) {
-                ctx.extra_registry_builders
-                    .push((&dep_eval.registry, &dep_eval.pub_names));
+                ctx.extra_registry_builders.push((
+                    &dep_eval.registry,
+                    &dep_eval.pub_names,
+                    include_decl.path.span(),
+                ));
             }
             None
         }
@@ -988,7 +991,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
             )?;
             // Import all public type-system declarations from dep's registry.
             ctx.extra_registry_builders
-                .push((&dep.registry, &dep.pub_names));
+                .push((&dep.registry, &dep.pub_names, import_span));
         }
     }
     Ok(())

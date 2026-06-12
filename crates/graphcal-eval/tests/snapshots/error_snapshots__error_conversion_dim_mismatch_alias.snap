@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+conversion target dimension Energy does not match expression dimension Length
+    Diagnostic severity: error
+Begin snippet for conversion_dim_mismatch_alias.gcl starting at line 3, column 1
+
+snippet line 3: param a: Length = 1.0 m;
+snippet line 4: node bad: Length = @a -> J;
+    label at line 4, column 26: target unit has different dimension
+diagnostic help: the `->` conversion operator can only change units within the same dimension
+diagnostic code: graphcal::D006

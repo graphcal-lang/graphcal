@@ -5,6 +5,7 @@
 
 /// Format a numeric value for display: integers without decimal point, floats with
 /// reasonable precision (up to 6 decimal places, trailing zeros stripped).
+use crate::syntax::dimension::Rational;
 #[must_use]
 pub fn format_number(value: f64) -> String {
     if value.fract() == 0.0 && value.abs() < 1e15 {
@@ -20,6 +21,22 @@ pub fn format_number(value: f64) -> String {
         let s = s.trim_end_matches('.');
         s.to_string()
     }
+}
+
+/// Render a unit/dimension exponent suffix: `^2` for integers,
+/// `^(1/2)` for rationals (the parenthesized form is re-parseable).
+#[must_use]
+pub fn format_exponent(exp: Rational) -> String {
+    if exp.is_integer() {
+        format!("^{}", exp.num())
+    } else {
+        format!("^({}/{})", exp.num(), exp.den())
+    }
+}
+
+/// Negate an exponent for display, saturating instead of overflowing.
+fn negate_exponent(exp: Rational) -> Rational {
+    Rational::try_new(exp.num().checked_neg().unwrap_or(i32::MAX), exp.den()).unwrap_or(exp)
 }
 
 /// Format a `UnitExpr` as a human-readable label.
@@ -40,9 +57,9 @@ pub fn format_unit_expr_with_config(
     for item in &expr.terms {
         let mut part = item.name.value.to_string();
         if let Some(pow) = item.power
-            && pow != 1
+            && pow != Rational::ONE
         {
-            part = format!("{part}^{pow}");
+            part = format!("{part}{}", format_exponent(pow));
         }
         match item.op {
             MulDivOp::Mul => numerator.push(part),
@@ -88,32 +105,33 @@ pub fn format_unit_expr_canonical(expr: &crate::syntax::ast::UnitExpr) -> String
     use crate::syntax::ast::MulDivOp;
     use std::collections::BTreeMap;
 
-    let mut exponents: BTreeMap<String, i32> = BTreeMap::new();
+    let mut exponents: BTreeMap<String, Rational> = BTreeMap::new();
     for item in &expr.terms {
-        let pow = item.power.unwrap_or(1);
+        let pow = item.power.unwrap_or(Rational::ONE);
         let signed = match item.op {
             MulDivOp::Mul => pow,
-            MulDivOp::Div => -pow,
+            MulDivOp::Div => negate_exponent(pow),
         };
         let name = item.name.value.to_string();
-        let entry = exponents.entry(name).or_insert(0);
-        *entry = entry.saturating_add(signed);
+        let entry = exponents.entry(name).or_insert(Rational::ZERO);
+        // Saturate on overflow: this is a display label, not a value.
+        *entry = (*entry + signed).unwrap_or(*entry);
     }
 
-    let render = |name: &str, exp: i32| -> String {
-        if exp == 1 {
+    let render = |name: &str, exp: Rational| -> String {
+        if exp == Rational::ONE {
             name.to_string()
         } else {
-            format!("{name}^{exp}")
+            format!("{name}{}", format_exponent(exp))
         }
     };
 
     let mut numerator: Vec<String> = Vec::new();
     let mut denominator: Vec<String> = Vec::new();
     for (name, exp) in &exponents {
-        match exp.cmp(&0) {
+        match exp.num().cmp(&0) {
             std::cmp::Ordering::Greater => numerator.push(render(name, *exp)),
-            std::cmp::Ordering::Less => denominator.push(render(name, -*exp)),
+            std::cmp::Ordering::Less => denominator.push(render(name, negate_exponent(*exp))),
             std::cmp::Ordering::Equal => {}
         }
     }
@@ -146,7 +164,7 @@ mod tests {
         UnitExprItem {
             op,
             name: Spanned::new(UnitName::new(name), Span::new(0, 0)),
-            power,
+            power: power.map(Rational::from_int),
         }
     }
 

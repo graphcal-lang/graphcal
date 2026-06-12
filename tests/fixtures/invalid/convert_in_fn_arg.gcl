@@ -1,0 +1,3 @@
+// error: a conversion in function-argument position has no display effect (D013).
+pub index R = { A, B, C };
+node bad: Length = sum(for r: R { 1000.0 m -> km });

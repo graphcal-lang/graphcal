@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroUsize;
 
 use thiserror::Error;
@@ -512,8 +512,8 @@ fn resolve_dim_expr_impl(
             let Some(base) = dimensions.get(atom.as_str()) else {
                 return Ok(None);
             };
-            let exp = item.term.power.unwrap_or(1);
-            let powered = base.pow(Rational::from_int(exp))?;
+            let exp = item.term.power.unwrap_or(Rational::ONE);
+            let powered = base.pow(exp)?;
             match item.op {
                 MulDivOp::Mul => acc * powered,
                 MulDivOp::Div => acc / powered,
@@ -539,6 +539,19 @@ fn resolve_type_expr_impl(
     }
 }
 
+/// Raise a positive unit scale to a rational power.
+///
+/// Integer powers use `powi` for exactness; fractional powers fall back to
+/// `powf`, which is well-defined because unit scales are always positive.
+#[must_use]
+pub fn pow_scale(scale: f64, exp: Rational) -> f64 {
+    if exp.is_integer() {
+        scale.powi(exp.num())
+    } else {
+        scale.powf(f64::from(exp.num()) / f64::from(exp.den()))
+    }
+}
+
 /// Shared implementation for resolving a `UnitExpr` to its dimension and static scale factor.
 fn resolve_unit_expr_impl(
     units: &HashMap<UnitName, UnitInfo>,
@@ -550,12 +563,12 @@ fn resolve_unit_expr_impl(
         let Some(info) = units.get(item.name.value.as_str()) else {
             return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
         };
-        let exp = item.power.unwrap_or(1);
-        let powered_dim = info.dimension.pow(Rational::from_int(exp))?;
+        let exp = item.power.unwrap_or(Rational::ONE);
+        let powered_dim = info.dimension.pow(exp)?;
         let Some(static_scale) = info.scale.as_static() else {
             return Err(UnitResolveError::DynamicScale(item.name.value.clone()));
         };
-        let powered_scale = static_scale.powi(exp);
+        let powered_scale = pow_scale(static_scale, exp);
         match item.op {
             MulDivOp::Mul => {
                 dim = (dim * powered_dim)?;
@@ -582,14 +595,41 @@ fn resolve_unit_dimension_impl(
         let Some(info) = units.get(item.name.value.as_str()) else {
             return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
         };
-        let exp = item.power.unwrap_or(1);
-        let powered_dim = info.dimension.pow(Rational::from_int(exp))?;
+        let exp = item.power.unwrap_or(Rational::ONE);
+        let powered_dim = info.dimension.pow(exp)?;
         dim = match item.op {
             MulDivOp::Mul => (dim * powered_dim)?,
             MulDivOp::Div => (dim / powered_dim)?,
         };
     }
     Ok(dim)
+}
+
+/// Format a dimension, preferring a registered named alias for compound forms.
+///
+/// A pure base dimension (`Length`) or `Dimensionless` keeps its canonical
+/// rendering. A compound dimension (`Length^2 * Mass / Time^2`) is replaced by
+/// a matching named dimension (`Energy`) when one is registered; if several
+/// names match, the lexicographically smallest is chosen for determinism.
+fn format_dimension_preferring_alias(
+    dimensions: &HashMap<DimName, Dimension>,
+    base_dim_names: &BTreeMap<BaseDimId, String>,
+    dim: &Dimension,
+) -> String {
+    let canonical = format!("{}", dim.display_with(base_dim_names));
+    // Base dimensions and Dimensionless render as a single bare name already;
+    // only compound renderings benefit from an alias.
+    let is_compound = canonical.contains([' ', '^', '*', '/']);
+    if is_compound
+        && let Some(alias) = dimensions
+            .iter()
+            .filter(|(_, d)| *d == dim)
+            .map(|(name, _)| name)
+            .min()
+    {
+        return alias.to_string();
+    }
+    canonical
 }
 
 // ---------------------------------------------------------------------------
@@ -634,9 +674,12 @@ impl DimensionRegistry {
     /// Format a dimension as a human-readable string using registered base dimension names.
     ///
     /// Returns `"Dimensionless"` for dimensionless, or names like `"Length / Time"`.
+    /// When a compound dimension matches a named dimension alias (e.g. `Energy`
+    /// for `Length^2 * Mass / Time^2`), the alias is preferred so diagnostics
+    /// speak the user's vocabulary.
     #[must_use]
     pub fn format_dimension(&self, dim: &Dimension) -> String {
-        format!("{}", dim.display_with(&self.base_dim_names))
+        format_dimension_preferring_alias(&self.dimensions, &self.base_dim_names, dim)
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
@@ -836,6 +879,11 @@ pub struct RegistryBuilder {
     indexes: HashMap<IndexName, IndexDef>,
     nat_ranges: HashMap<NatRangeIndex, IndexDef>,
     dags: HashMap<DeclName, DagDecl>,
+    /// Base dimensions whose real-world units are affine (offset) scales,
+    /// e.g. Temperature (°C, °F). User unit definitions on these dimensions
+    /// are rejected because a purely multiplicative definition would display
+    /// silently wrong values (#648 U4).
+    affine_prone_dims: BTreeSet<BaseDimId>,
 }
 
 impl RegistryBuilder {
@@ -933,6 +981,26 @@ impl RegistryBuilder {
     ///
     /// The caller provides the [`BaseDimId`] which encodes the dimension's
     /// identity (prelude name or user-defined file+name).
+    /// Mark a base dimension as affine-prone: its real-world units (e.g.
+    /// Celsius/Fahrenheit on Temperature) need offset conversions that unit
+    /// definitions cannot express, so user unit definitions on the bare
+    /// dimension are rejected (#648 U4).
+    pub fn mark_affine_prone(&mut self, id: BaseDimId) {
+        self.affine_prone_dims.insert(id);
+    }
+
+    /// Returns `true` when `dim` is exactly an affine-prone base dimension
+    /// (power 1). Compound dimensions involving the base (e.g.
+    /// `Temperature / Time`) stay allowed: offsets cancel in differences.
+    #[must_use]
+    pub fn is_affine_prone(&self, dim: &Dimension) -> bool {
+        let mut iter = dim.iter();
+        let Some((id, &exp)) = iter.next() else {
+            return false;
+        };
+        iter.next().is_none() && exp == Rational::ONE && self.affine_prone_dims.contains(id)
+    }
+
     pub fn register_base_dimension(&mut self, name: DimName, id: BaseDimId) -> BaseDimId {
         let dim = Dimension::base(id.clone());
         self.base_dim_names.insert(id.clone(), name.to_string());
@@ -1089,9 +1157,12 @@ impl RegistryBuilder {
     }
 
     /// Format a dimension as a human-readable string using registered base dimension names.
+    ///
+    /// Prefers a named dimension alias for compound dimensions, like
+    /// [`DimensionRegistry::format_dimension`].
     #[must_use]
     pub fn format_dimension(&self, dim: &Dimension) -> String {
-        format!("{}", dim.display_with(&self.base_dim_names))
+        format_dimension_preferring_alias(&self.dimensions, &self.base_dim_names, dim)
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
@@ -1276,7 +1347,7 @@ mod tests {
                 UnitExprItem {
                     op: MulDivOp::Div,
                     name: make_unit_name("s"),
-                    power: Some(2),
+                    power: Some(Rational::from_int(2)),
                 },
             ],
             span: Span::new(0, 0),

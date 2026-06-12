@@ -124,6 +124,55 @@ fn error_conversion_dim_mismatch() {
 }
 
 #[test]
+fn error_conversion_dim_mismatch_alias() {
+    let source = include_str!("../../../tests/fixtures/invalid/conversion_dim_mismatch_alias.gcl");
+    let rendered = render_error(source, "conversion_dim_mismatch_alias.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_arrow_chain_paren() {
+    let source = include_str!("../../../tests/fixtures/invalid/arrow_chain_paren.gcl");
+    let rendered = render_error(source, "arrow_chain_paren.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unit_zero_exponent() {
+    let source = include_str!("../../../tests/fixtures/invalid/unit_zero_exponent.gcl");
+    let rendered = render_error(source, "unit_zero_exponent.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_in_arithmetic() {
+    let source = include_str!("../../../tests/fixtures/invalid/convert_in_arithmetic.gcl");
+    let rendered = render_error(source, "convert_in_arithmetic.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_in_assert() {
+    let source = include_str!("../../../tests/fixtures/invalid/convert_in_assert.gcl");
+    let rendered = render_error(source, "convert_in_assert.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_affine_temperature_unit() {
+    let source = include_str!("../../../tests/fixtures/invalid/affine_temperature_unit.gcl");
+    let rendered = render_error(source, "affine_temperature_unit.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_int_source() {
+    let source = include_str!("../../../tests/fixtures/invalid/convert_int_source.gcl");
+    let rendered = render_error(source, "convert_int_source.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_unknown_struct_field() {
     let source = include_str!("../../../tests/fixtures/invalid/unknown_struct_field.gcl");
     let rendered = render_error(source, "unknown_struct_field.gcl");
@@ -218,6 +267,22 @@ fn error_non_literal_exponent() {
 fn error_boolean_dim_error() {
     let source = include_str!("../../../tests/fixtures/invalid/boolean_dim_error.gcl");
     let rendered = render_error(source, "boolean_dim_error.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_target_scale_overflow() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/convert_target_scale_overflow.gcl");
+    let rendered = render_node_error(source, "convert_target_scale_overflow.gcl", "bad");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_dynamic_target_zero_scale() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/convert_dynamic_target_zero_scale.gcl");
+    let rendered = render_node_error(source, "convert_dynamic_target_zero_scale.gcl", "bad");
     insta::assert_snapshot!(rendered);
 }
 
