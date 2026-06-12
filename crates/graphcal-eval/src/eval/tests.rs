@@ -168,6 +168,52 @@ fn eval_assertions_use_hir_body_after_syntax_mutation() {
 }
 
 #[test]
+fn expected_fail_range_key_passes_when_step_fails() {
+    // #816: `#[expected_fail(#N)]` keys bind to Nat range axes positionally.
+    let result = compile_and_eval(
+        "#[expected_fail(#1)]\n\
+         assert r = for i: range(2) { i == 0 };",
+    )
+    .unwrap();
+    assert_eq!(result.assertions[0].1, super::types::AssertResult::Pass);
+}
+
+#[test]
+fn expected_fail_range_key_unexpected_pass_fails() {
+    // The "unexpected pass" tripwire works for range keys: #0 passes but was
+    // marked expected_fail, and #1 fails without being marked.
+    let result = compile_and_eval(
+        "#[expected_fail(#0)]\n\
+         assert r = for i: range(2) { i == 0 };",
+    )
+    .unwrap();
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Fail { message } => {
+            assert!(
+                message.contains("unexpected pass") && message.contains("#0"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected Fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn expected_fail_mixed_named_and_range_tuple_key() {
+    let result = compile_and_eval(
+        "index Mode = { Boost, Cruise };\n\
+         #[expected_fail((Mode.Boost, #1))]\n\
+         assert m = for m: Mode {\n\
+             for i: range(2) {\n\
+                 if m == Mode.Boost && i == 1 { false } else { true }\n\
+             }\n\
+         };",
+    )
+    .unwrap();
+    assert_eq!(result.assertions[0].1, super::types::AssertResult::Pass);
+}
+
+#[test]
 fn inline_dag_call_with_failing_assert_fails_calling_node() {
     // #812: inline invocation of an assert-carrying dag evaluates the dag's
     // asserts; a failure fails the calling expression (fault-isolated).

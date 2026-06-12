@@ -1136,7 +1136,9 @@ fn collect_attribute_refs(
                             target: SymbolKey::TopLevel(ident.name.to_string()),
                         });
                     }
-                    AttributeArg::Path { .. } | AttributeArg::Group { .. } => {}
+                    AttributeArg::Path { .. }
+                    | AttributeArg::RangeStep { .. }
+                    | AttributeArg::Group { .. } => {}
                 }
             }
         }

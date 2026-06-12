@@ -1,0 +1,13 @@
+// #816: per-key `#[expected_fail]` on assertions indexed by Nat range axes
+// uses `#N` keys, matching the `#N` slice-label syntax of `table` expressions.
+#[expected_fail(#1)]
+assert single_range = for i: range(2) { i == 0 };
+
+index Mode = { Boost, Cruise };
+
+// Mixed tuple keys: named axes use `Index.Variant`, range axes use `#N`,
+// in assertion axis order.
+#[expected_fail((Mode.Boost, #1))]
+assert mixed = for m: Mode {
+    for i: range(2) { if m == Mode.Boost && i == 1 { false } else { true } }
+};

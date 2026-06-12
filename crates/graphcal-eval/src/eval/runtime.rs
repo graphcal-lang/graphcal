@@ -653,10 +653,6 @@ pub fn evaluate_assert_with_expected_fail(
     }
 }
 
-fn expected_index_key_matches(actual: &IndexTypeRef, expected: &IndexTypeRef) -> bool {
-    actual.matches_ref(expected)
-}
-
 fn expected_fail_key_matches_path(
     path: &[(IndexTypeRef, IndexVariantName)],
     key: &ExpectedFailKey,
@@ -666,8 +662,7 @@ fn expected_fail_key_matches_path(
             .iter()
             .zip(key.iter())
             .all(|((actual_index, actual_variant), expected)| {
-                expected_index_key_matches(actual_index, &expected.index)
-                    && actual_variant == &expected.variant
+                expected.matches_entry(actual_index, actual_variant)
             })
 }
 
@@ -687,11 +682,9 @@ fn invert_indexed_variants(
             let new_value = match value {
                 RuntimeValue::Bool(b) => {
                     // Single-index: check if this variant is in any key
-                    let should_invert = keys.iter().any(|key| {
-                        key.len() == 1
-                            && expected_index_key_matches(index_name, &key[0].index)
-                            && key[0].variant == variant
-                    });
+                    let should_invert = keys
+                        .iter()
+                        .any(|key| key.len() == 1 && key[0].matches_entry(index_name, &variant));
                     if should_invert {
                         RuntimeValue::Bool(!b)
                     } else {
@@ -706,11 +699,7 @@ fn invert_indexed_variants(
                     // then strip the first element and recurse.
                     let sub_keys: Vec<ExpectedFailKey> = keys
                         .iter()
-                        .filter(|key| {
-                            key.len() >= 2
-                                && expected_index_key_matches(index_name, &key[0].index)
-                                && key[0].variant == variant
-                        })
+                        .filter(|key| key.len() >= 2 && key[0].matches_entry(index_name, &variant))
                         .map(|key| key[1..].to_vec())
                         .collect();
                     if sub_keys.is_empty() {

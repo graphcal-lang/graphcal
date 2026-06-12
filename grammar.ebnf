@@ -149,10 +149,16 @@ attribute_arg_list
 
 attribute_arg
    = attribute_path
+   | attribute_range_step
    | attribute_group;
 
 attribute_path
    = IDENT, { ".", IDENT };
+
+(* Key for a Nat range axis (e.g. `#[expected_fail(#2)]`), matching the   *)
+(* `#N` slice-label syntax that `table` expressions use for range axes.   *)
+attribute_range_step
+   = "#", NUMBER;
 
 attribute_group
    = "(", attribute_arg, { ",", attribute_arg }, [ "," ], ")";

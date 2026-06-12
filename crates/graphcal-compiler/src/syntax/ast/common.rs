@@ -13,7 +13,8 @@ pub struct Attribute {
 /// An argument inside an attribute's parenthesized list.
 ///
 /// Supports plain identifiers (`pressure_safe`), qualified paths
-/// (`Index.Variant`), and parenthesized groups (`(Mode.Boost, Phase.Launch)`).
+/// (`Index.Variant`), Nat range steps (`#2`), and parenthesized groups
+/// (`(Mode.Boost, Phase.Launch)`, `(Mode.Boost, #2)`).
 #[derive(Debug, Clone)]
 pub enum AttributeArg {
     /// A path of one or more `.`-separated segments: `foo`, `Index.Variant`.
@@ -21,6 +22,9 @@ pub enum AttributeArg {
         segments: NonEmpty<Ident>,
         span: Span,
     },
+    /// A Nat range step key: `#N` — matches the `#N` slice-label syntax of
+    /// `table` expressions for `range(N)` axes.
+    RangeStep { step: u64, span: Span },
     /// A parenthesized group of args: `(Index.A, Index.B).`
     Group { elements: Vec<Self>, span: Span },
 }
@@ -30,7 +34,9 @@ impl AttributeArg {
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
-            Self::Path { span, .. } | Self::Group { span, .. } => *span,
+            Self::Path { span, .. } | Self::RangeStep { span, .. } | Self::Group { span, .. } => {
+                *span
+            }
         }
     }
 }

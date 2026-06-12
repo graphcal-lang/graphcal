@@ -305,6 +305,29 @@ fn error_indexed_equality() {
 }
 
 #[test]
+fn error_expected_fail_range_step_out_of_bounds() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/expected_fail_range_step_out_of_bounds.gcl");
+    let rendered = render_error(source, "expected_fail_range_step_out_of_bounds.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_expected_fail_range_key_on_named_axis() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/expected_fail_range_key_on_named_axis.gcl");
+    let rendered = render_error(source, "expected_fail_range_key_on_named_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_expected_fail_bare_int_key() {
+    let source = include_str!("../../../tests/fixtures/invalid/expected_fail_bare_int_key.gcl");
+    let rendered = render_error(source, "expected_fail_bare_int_key.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_negative_tolerance() {
     let source = include_str!("../../../tests/fixtures/invalid/negative_tolerance.gcl");
     let rendered = render_error(source, "negative_tolerance.gcl");

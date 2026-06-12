@@ -4,7 +4,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
-use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey};
+use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{
     IndexName, IndexVariantName, ResolvedName, ScopedName, StructTypeName, namespace,
@@ -519,14 +519,16 @@ fn statically_known_tolerance(expr: &crate::hir::Expr) -> Option<f64> {
 
 fn expected_fail_key_span(key: &ExpectedFailKey) -> crate::syntax::span::Span {
     key.iter()
-        .map(|part| part.span)
+        .map(ExpectedFailKeyPart::span)
         .reduce(crate::syntax::span::Span::merge)
         .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0))
 }
 
-fn expected_fail_key_signature(key: &ExpectedFailKey) -> Vec<(IndexTypeRef, IndexVariantName)> {
+fn expected_fail_key_signature(
+    key: &ExpectedFailKey,
+) -> Vec<(Option<IndexTypeRef>, IndexVariantName)> {
     key.iter()
-        .map(|part| (part.index.clone(), part.variant.clone()))
+        .map(|part| (part.named_index().cloned(), part.variant()))
         .collect()
 }
 
@@ -545,13 +547,41 @@ fn validate_expected_fail_key(
     }
 
     for (part, expected_axis) in key.iter().zip(&shape.axes) {
-        if !part.index.matches_ref(expected_axis.type_ref()) {
-            return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
-                expected: expected_axis.name().to_string(),
-                found: part.index.display_name().to_string(),
-                src: src.clone(),
-                span: part.span.into(),
-            });
+        match part {
+            ExpectedFailKeyPart::Named { index, .. } => {
+                if !index.matches_ref(expected_axis.type_ref()) {
+                    return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
+                        expected: expected_axis.name().to_string(),
+                        found: part.display(),
+                        src: src.clone(),
+                        span: part.span().into(),
+                    });
+                }
+            }
+            ExpectedFailKeyPart::RangeStep { step, span } => {
+                let Some(range) = expected_axis.type_ref().nat_range_ref() else {
+                    return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
+                        expected: expected_axis.name().to_string(),
+                        found: part.display(),
+                        src: src.clone(),
+                        span: (*span).into(),
+                    });
+                };
+                // Bound-check `#N` against a statically known range size.
+                // Symbolic sizes are checked nowhere earlier; an out-of-range
+                // step there can never match at runtime, which surfaces as an
+                // "unexpected pass" — acceptable for the symbolic case.
+                if let Some(concrete) = range.concrete_index()
+                    && *step >= concrete.size_u64()
+                {
+                    return Err(GraphcalError::ExpectedFailRangeStepOutOfBounds {
+                        step: *step,
+                        size: concrete.size_u64(),
+                        src: src.clone(),
+                        span: (*span).into(),
+                    });
+                }
+            }
         }
     }
 

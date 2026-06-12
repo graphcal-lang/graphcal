@@ -391,6 +391,21 @@ impl Parser<'_> {
                 elements,
                 span: start_span.merge(end_span),
             })
+        } else if self.lexer.peek() == Some(&Token::Hash) {
+            // Range step: #N (key syntax for Nat range axes, matching the
+            // `#N` slice labels of `table` expressions).
+            let (_, hash_span) = self.expect(Token::Hash)?;
+            let (_, num_span) = self.expect(Token::Number)?;
+            let text = self.lexer.slice_at(num_span).replace('_', "");
+            let step: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
+                reason: "expected non-negative integer after `#` in attribute argument".to_string(),
+                src: self.named_source(),
+                span: num_span.into(),
+            })?;
+            Ok(AttributeArg::RangeStep {
+                step,
+                span: hash_span.merge(num_span),
+            })
         } else {
             // Path: ident or ident.ident.ident...
             let first = self.parse_any_ident()?;

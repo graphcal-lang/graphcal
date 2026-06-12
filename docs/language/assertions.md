@@ -265,6 +265,31 @@ index Phase = { Launch, Cruise };
 assert within_limits = for m: Mode, p: Phase { @actual[m, p] < @threshold[m, p] };
 ```
 
+#### Nat Range Axes (`#N` Keys)
+
+Assertions indexed by Nat range axes (`for i: range(N) { ... }`) use `#N`
+keys, matching the `#N` slice-label syntax that `table` expressions use for
+range axes:
+
+```
+#[expected_fail(#1)]
+assert steps_ok = for i: range(3) { @residual[i] < @tolerance };
+```
+
+In multi-axis tuple keys, each component uses its axis's key form — named
+axes use `Index.Variant`, range axes use `#N` — in assertion axis order:
+
+```
+index Mode = { Normal, Boost };
+
+#[expected_fail((Mode.Boost, #2))]
+assert grid_ok = for m: Mode, i: range(4) { @value[m, i] < @limit };
+```
+
+The step must be in bounds for the axis: `#N` on a `range(size)` axis
+requires `N < size` (A016). A bare integer (`#[expected_fail(1)]`) is a
+parse error — range keys are always written with the `#` prefix.
+
 ### `#[lazy]`
 
 Recognized by the parser but not yet implemented. Will mark a node for lazy

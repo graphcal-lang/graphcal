@@ -1355,8 +1355,12 @@ impl UnfrozenIR {
                             .into_iter()
                             .filter(|key| {
                                 // Drop keys that reference any overridden index.
+                                // `#N` range segments never name an index, so
+                                // they cannot reference an overridden one.
                                 !key.iter().any(|part| {
-                                    index_bindings.contains_key(part.index.display_name().as_str())
+                                    part.named_index().is_some_and(|index| {
+                                        index_bindings.contains_key(index.display_name().as_str())
+                                    })
                                 })
                             })
                             .collect();

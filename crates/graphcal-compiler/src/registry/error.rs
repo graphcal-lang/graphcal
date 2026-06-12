@@ -677,7 +677,7 @@ pub enum GraphcalError {
     },
 
     #[error(
-        "invalid argument in `#[expected_fail(...)]`: expected `Index.Variant`, `module.Index.Variant`, or grouped variants"
+        "invalid argument in `#[expected_fail(...)]`: expected `Index.Variant`, `module.Index.Variant`, `#N` (range axes), or grouped variants"
     )]
     #[diagnostic(code(graphcal::A009))]
     ExpectedFailInvalidArg {
@@ -703,7 +703,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::A011),
         help(
-            "use `#[expected_fail(Index.Variant, ...)]` or qualified `#[expected_fail(module.Index.Variant, ...)]` to specify which variants are expected to fail"
+            "use `#[expected_fail(Index.Variant, ...)]` (qualified `module.Index.Variant` also works) to specify which variants are expected to fail; for Nat range axes use `#[expected_fail(#N, ...)]`"
         )
     )]
     ExpectedFailAllOnIndexed {
@@ -749,6 +749,22 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("expected index `{expected}`, found `{found}`")]
+        span: SourceSpan,
+    },
+
+    #[error("`#[expected_fail(...)]` range step `#{step}` is out of bounds")]
+    #[diagnostic(
+        code(graphcal::A016),
+        help(
+            "range steps in expected-fail keys must satisfy `0 <= N < size` for a `range(size)` axis"
+        )
+    )]
+    ExpectedFailRangeStepOutOfBounds {
+        step: u64,
+        size: u64,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("step #{step} on an axis of size {size}")]
         span: SourceSpan,
     },
 
@@ -1422,6 +1438,7 @@ impl GraphcalError {
             | Self::ExpectedFailDuplicateKey { src, .. }
             | Self::ExpectedFailKeyShapeMismatch { src, .. }
             | Self::ExpectedFailKeyIndexMismatch { src, .. }
+            | Self::ExpectedFailRangeStepOutOfBounds { src, .. }
             | Self::NegativeTolerance { src, .. }
             | Self::ImportOutsideRoot { src, .. }
             | Self::RequiredParamNotProvided { src, .. }

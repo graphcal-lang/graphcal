@@ -2882,7 +2882,7 @@ fn resolve_expected_fail_keys(
                         .map(|key| {
                             key.into_iter()
                                 .map(|part| {
-                                    let Some(index_path) = part.source_index_path.clone() else {
+                                    let Some(index_path) = part.source_index_path().cloned() else {
                                         return Ok(part);
                                     };
                                     let resolved = ctx
@@ -2890,10 +2890,10 @@ fn resolve_expected_fail_keys(
                                         .resolve_index_variant_parts(
                                             ctx.owner,
                                             &index_path,
-                                            &part.variant,
+                                            &part.variant(),
                                         )
                                         .map_err(|err| {
-                                            module_resolve_error(&err, src, part.span)
+                                            module_resolve_error(&err, src, part.span())
                                         })?;
                                     Ok(part.with_resolved_variant(resolved))
                                 })
