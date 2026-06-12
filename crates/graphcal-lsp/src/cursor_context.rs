@@ -22,6 +22,8 @@ pub enum CompletionContext {
     GraphRef,
     /// After `:` in a declaration context — complete type names.
     TypeAnnotation,
+    /// After `->` — complete unit names (conversion target, #648 U5).
+    ConversionTarget,
     /// Top-level position (start of file, after `;`, after `}`) — complete keywords.
     TopLevel,
     /// Inside an expression — complete constants, functions, etc.
@@ -163,6 +165,7 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
         match prev_tok {
             Token::At => return CompletionContext::GraphRef,
             Token::Colon => return CompletionContext::TypeAnnotation,
+            Token::Arrow => return CompletionContext::ConversionTarget,
             _ => {}
         }
     }
@@ -170,6 +173,7 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
     match tok {
         Token::At => CompletionContext::GraphRef,
         Token::Colon => CompletionContext::TypeAnnotation,
+        Token::Arrow => CompletionContext::ConversionTarget,
         Token::Semicolon | Token::RBrace => CompletionContext::TopLevel,
         _ => CompletionContext::Expression,
     }
