@@ -118,11 +118,13 @@ fn format_dim_term(t: &DimTerm) -> RcDoc<'static> {
 pub fn format_unit_expr_inline(unit_expr: &UnitExpr) -> RcDoc<'static> {
     let mut docs: Vec<RcDoc<'static>> = Vec::new();
     for (i, item) in unit_expr.terms.iter().enumerate() {
-        if i > 0 {
-            match item.op {
-                MulDivOp::Mul => docs.push(RcDoc::text(" * ")),
-                MulDivOp::Div => docs.push(RcDoc::text("/")),
-            }
+        match (i, item.op) {
+            (0, MulDivOp::Mul) => {}
+            // `1/unit` shorthand: a leading division carries an implicit `1`
+            // numerator that must be preserved to stay parseable.
+            (0, MulDivOp::Div) => docs.push(RcDoc::text("1/")),
+            (_, MulDivOp::Mul) => docs.push(RcDoc::text(" * ")),
+            (_, MulDivOp::Div) => docs.push(RcDoc::text("/")),
         }
         let mut term = RcDoc::text(item.name.value.as_str().to_string());
         if let Some(power) = item.power {

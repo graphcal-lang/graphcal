@@ -373,8 +373,28 @@ impl Parser<'_> {
     }
 
     fn parse_unit_expr_inner(&mut self) -> Result<UnitExpr, ParseError> {
-        let (first_terms, start_span, mut end_span) =
-            self.parse_unit_term_or_group(MulDivOp::Mul)?;
+        // `1/unit` shorthand (#648 U2/N4): a literal `1` numerator contributes
+        // nothing — the term after the slash is a plain division. This matches
+        // the canonical display rendering (`min^-1` prints as `1/min`), so
+        // displayed unit labels round-trip as source.
+        let (first_terms, start_span, mut end_span) = if self.lexer.peek() == Some(&Token::Number)
+            && self.lexer.peek_second() == Some(&Token::Slash)
+        {
+            let (_, one_span) = self.expect(Token::Number)?;
+            let text = self.lexer.slice_at(one_span);
+            if text != "1" {
+                return Err(ParseError::InvalidNumber {
+                    reason: "only `1` can appear as a unit numerator (e.g. `1/min`)".to_string(),
+                    src: self.named_source(),
+                    span: one_span.into(),
+                });
+            }
+            self.expect(Token::Slash)?;
+            let (terms, _, end) = self.parse_unit_term_or_group(MulDivOp::Div)?;
+            (terms, one_span, end)
+        } else {
+            self.parse_unit_term_or_group(MulDivOp::Mul)?
+        };
 
         let mut terms: Vec<UnitExprItem> = first_terms;
 
