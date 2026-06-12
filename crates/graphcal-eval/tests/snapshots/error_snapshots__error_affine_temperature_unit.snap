@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+user-defined units on dimension `Temperature` are not supported
+    Diagnostic severity: error
+Begin snippet for affine_temperature_unit.gcl starting at line 3, column 1
+
+snippet line 3: // silently wrong values (300 K would render as "300 C").
+snippet line 4: unit C: Temperature = 1.0 K;
+    label at line 4, column 6: unit defined on an affine-prone dimension
+diagnostic help: common units of this dimension (e.g. °C, °F for Temperature) are affine scales with an offset; a purely multiplicative `unit` definition would display silently wrong values. Keep values in the base unit, or model the offset explicitly in your expressions
+diagnostic code: graphcal::D014

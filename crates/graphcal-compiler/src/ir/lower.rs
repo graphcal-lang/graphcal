@@ -2534,6 +2534,13 @@ fn register_unit_decl(
             src: src.clone(),
             span: u.name.span.into(),
         })?;
+    if u.definition.is_some() && registry.is_affine_prone(&dim) {
+        return Err(GraphcalError::AffineProneUnitDefinition {
+            dim: registry.format_dimension(&dim),
+            src: src.clone(),
+            span: u.name.span.into(),
+        });
+    }
     let scale = if let Some(def) = &u.definition {
         if contains_graph_ref(&def.scale_expr) {
             // Dynamic unit: scale depends on runtime values (e.g., `(@rate) USD`).

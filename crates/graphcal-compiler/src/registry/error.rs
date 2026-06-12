@@ -355,6 +355,21 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("user-defined units on dimension `{dim}` are not supported")]
+    #[diagnostic(
+        code(graphcal::D014),
+        help(
+            "common units of this dimension (e.g. \u{b0}C, \u{b0}F for Temperature) are affine scales with an offset; a purely multiplicative `unit` definition would display silently wrong values. Keep values in the base unit, or model the offset explicitly in your expressions"
+        )
+    )]
+    AffineProneUnitDefinition {
+        dim: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unit defined on an affine-prone dimension")]
+        span: SourceSpan,
+    },
+
     #[error("unknown struct type `{name}`")]
     #[diagnostic(
         code(graphcal::S002),
@@ -1457,6 +1472,7 @@ impl GraphcalError {
             | Self::ConversionDimensionMismatch { src, .. }
             | Self::NestedConversion { src, .. }
             | Self::IneffectiveConversion { src, .. }
+            | Self::AffineProneUnitDefinition { src, .. }
             | Self::UnknownStructType { src, .. }
             | Self::UnknownField { src, .. }
             | Self::MissingFields { src, .. }

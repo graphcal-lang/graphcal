@@ -159,6 +159,13 @@ fn error_convert_in_assert() {
 }
 
 #[test]
+fn error_affine_temperature_unit() {
+    let source = include_str!("../../../tests/fixtures/invalid/affine_temperature_unit.gcl");
+    let rendered = render_error(source, "affine_temperature_unit.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_convert_int_source() {
     let source = include_str!("../../../tests/fixtures/invalid/convert_int_source.gcl");
     let rendered = render_error(source, "convert_int_source.gcl");

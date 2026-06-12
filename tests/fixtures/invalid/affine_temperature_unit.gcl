@@ -1,0 +1,4 @@
+// error: user units on Temperature are rejected (D014, #648 U4) — Celsius
+// and Fahrenheit are affine scales; a multiplicative definition would print
+// silently wrong values (300 K would render as "300 C").
+unit C: Temperature = 1.0 K;

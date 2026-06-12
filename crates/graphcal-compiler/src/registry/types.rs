@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroUsize;
 
 use thiserror::Error;
@@ -866,6 +866,11 @@ pub struct RegistryBuilder {
     indexes: HashMap<IndexName, IndexDef>,
     nat_ranges: HashMap<NatRangeIndex, IndexDef>,
     dags: HashMap<DeclName, DagDecl>,
+    /// Base dimensions whose real-world units are affine (offset) scales,
+    /// e.g. Temperature (°C, °F). User unit definitions on these dimensions
+    /// are rejected because a purely multiplicative definition would display
+    /// silently wrong values (#648 U4).
+    affine_prone_dims: BTreeSet<BaseDimId>,
 }
 
 impl RegistryBuilder {
@@ -963,6 +968,26 @@ impl RegistryBuilder {
     ///
     /// The caller provides the [`BaseDimId`] which encodes the dimension's
     /// identity (prelude name or user-defined file+name).
+    /// Mark a base dimension as affine-prone: its real-world units (e.g.
+    /// Celsius/Fahrenheit on Temperature) need offset conversions that unit
+    /// definitions cannot express, so user unit definitions on the bare
+    /// dimension are rejected (#648 U4).
+    pub fn mark_affine_prone(&mut self, id: BaseDimId) {
+        self.affine_prone_dims.insert(id);
+    }
+
+    /// Returns `true` when `dim` is exactly an affine-prone base dimension
+    /// (power 1). Compound dimensions involving the base (e.g.
+    /// `Temperature / Time`) stay allowed: offsets cancel in differences.
+    #[must_use]
+    pub fn is_affine_prone(&self, dim: &Dimension) -> bool {
+        let mut iter = dim.iter();
+        let Some((id, &exp)) = iter.next() else {
+            return false;
+        };
+        iter.next().is_none() && exp == Rational::ONE && self.affine_prone_dims.contains(id)
+    }
+
     pub fn register_base_dimension(&mut self, name: DimName, id: BaseDimId) -> BaseDimId {
         let dim = Dimension::base(id.clone());
         self.base_dim_names.insert(id.clone(), name.to_string());
