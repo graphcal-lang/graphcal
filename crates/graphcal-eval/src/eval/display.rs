@@ -33,6 +33,14 @@ pub(super) fn attach_display_units(
         (Value::Scalar { display_unit, .. }, ExprKind::Convert { target, .. }) => {
             *display_unit = Some(resolve_unit_to_display(target, ctx, values)?);
         }
+        // Element-wise conversion on indexed values (#648 U1): apply the
+        // target uniformly to every scalar entry, through nested axes.
+        (Value::Indexed { entries, .. }, ExprKind::Convert { target, .. }) => {
+            let du = resolve_unit_to_display(target, ctx, values)?;
+            for entry_val in entries.values_mut() {
+                set_scalar_display_unit_deep(entry_val, &du);
+            }
+        }
         // Constructor call: recurse into each field initializer.
         (Value::Struct { fields, .. }, ExprKind::ConstructorCall { fields: inits, .. }) => {
             for init in inits {
@@ -155,6 +163,20 @@ pub(super) fn format_range_step(
 pub(super) fn set_scalar_display_unit(value: &mut Value, du: &DisplayUnit) {
     if let Value::Scalar { display_unit, .. } = value {
         *display_unit = Some(du.clone());
+    }
+}
+
+/// Set display unit on every scalar leaf, descending through nested
+/// `Indexed` layers (multi-axis values).
+pub(super) fn set_scalar_display_unit_deep(value: &mut Value, du: &DisplayUnit) {
+    match value {
+        Value::Scalar { display_unit, .. } => *display_unit = Some(du.clone()),
+        Value::Indexed { entries, .. } => {
+            for entry in entries.values_mut() {
+                set_scalar_display_unit_deep(entry, du);
+            }
+        }
+        _ => {}
     }
 }
 

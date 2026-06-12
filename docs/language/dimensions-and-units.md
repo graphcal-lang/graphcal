@@ -155,6 +155,8 @@ node alt_cm: Length = @alt -> cm;       // 20000000.0 cm
 
 The source and target must share the same dimension. Attempting to convert between incompatible dimensions is a compile-time error.
 
+`->` also distributes element-wise over indexed values: `@x -> km` on a `Length[R]` (or multi-axis `Length[R, C]`) applies the display unit to every entry.
+
 Compound targets support the `1/unit` reciprocal shorthand, matching how unit labels are displayed: `@f -> 1/min` is equivalent to `@f -> min^-1`. Only a literal `1` is allowed as the numerator.
 
 `->` is non-chaining: an expression carries at most one conversion target. Both the bare chain `@alt -> km -> m` (a parse error) and the parenthesized form `(@alt -> km) -> m` (a `D012` dimension-check error) are rejected — only the outermost target could ever take effect, so an inner conversion is either a typo or dead code.

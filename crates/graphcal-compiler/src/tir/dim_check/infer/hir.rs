@@ -1625,7 +1625,17 @@ fn infer_hir_convert(
         builtin_fns,
         src,
     )?;
-    let expr_dim = expect_scalar(&inner_type, registry, src, inner.span)?;
+    // `->` distributes element-wise over indexed values (#648 U1): the scalar
+    // element dimension must match the target. Multi-axis values unwrap
+    // through each nested Indexed layer.
+    let mut element = &inner_type;
+    while let InferredType::Indexed {
+        element: nested, ..
+    } = element
+    {
+        element = nested;
+    }
+    let expr_dim = expect_scalar(element, registry, src, inner.span)?;
     let target_dim = rules::resolve_unit_dimension_or_diagnose(target, registry, src)?;
 
     if expr_dim != target_dim {
@@ -1637,7 +1647,7 @@ fn infer_hir_convert(
         });
     }
 
-    Ok(InferredType::Scalar(expr_dim))
+    Ok(inner_type)
 }
 
 #[expect(
