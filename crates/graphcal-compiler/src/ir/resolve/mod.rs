@@ -422,6 +422,9 @@ fn collect_local_declarations(
 struct ValidatedAttributes {
     assumes_map: HashMap<DeclName, Vec<DeclName>>,
     expected_fail_map: HashMap<DeclName, ExpectedFail>,
+    /// Plot names carrying `#[hidden]`: evaluated and referenceable from
+    /// figures/layers, but excluded from standalone output (#847).
+    hidden_plots: HashSet<DeclName>,
 }
 
 /// Validate attributes and build `assumes_map` / `expected_fail_map`.
@@ -433,6 +436,7 @@ fn validate_attributes(
 ) -> Result<ValidatedAttributes, GraphcalError> {
     let mut assumes_map: HashMap<DeclName, Vec<DeclName>> = HashMap::new();
     let mut expected_fail_map: HashMap<DeclName, ExpectedFail> = HashMap::new();
+    let mut hidden_plots: HashSet<DeclName> = HashSet::new();
 
     for decl in &file.declarations {
         let decl_name: Option<DeclName> = match &decl.kind {
@@ -561,6 +565,45 @@ fn validate_attributes(
                         span: attr.span.into(),
                     });
                 }
+                AttributeName::Hidden => {
+                    // #[hidden] is plot-only: figures/layers cannot be
+                    // referenced by anything, so hiding one is equivalent to
+                    // deleting it; other declarations have no display axis.
+                    let kind = match &decl.kind {
+                        DeclKind::Plot(_) => None,
+                        DeclKind::Param(_) => Some("param"),
+                        DeclKind::ConstNode(_) => Some("const node"),
+                        DeclKind::Node(_) => Some("node"),
+                        DeclKind::Assert(_) => Some("assert"),
+                        DeclKind::Figure(_) => Some("figure"),
+                        DeclKind::Layer(_) => Some("layer"),
+                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => Some("dim"),
+                        DeclKind::Unit(_) => Some("unit"),
+                        DeclKind::Type(_) => Some("type"),
+                        DeclKind::Index(_) => Some("cat/range"),
+                        DeclKind::Import(_) => Some("import"),
+                        DeclKind::Include(_) => Some("include"),
+                        DeclKind::Dag(_) => Some("dag"),
+                        DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+                    };
+                    if let Some(kind) = kind {
+                        return Err(GraphcalError::InvalidHiddenTarget {
+                            kind: kind.to_string(),
+                            src: src.clone(),
+                            span: attr.span.into(),
+                        });
+                    }
+                    if !attr.args.is_empty() {
+                        return Err(GraphcalError::EvalError {
+                            message: "`#[hidden]` takes no arguments".to_string(),
+                            src: src.clone(),
+                            span: attr.span.into(),
+                        });
+                    }
+                    if let Some(ref dname) = decl_name {
+                        hidden_plots.insert(dname.clone());
+                    }
+                }
                 AttributeName::Lazy => {
                     // Recognized but semantics deferred — no validation needed
                 }
@@ -571,6 +614,7 @@ fn validate_attributes(
     Ok(ValidatedAttributes {
         assumes_map,
         expected_fail_map,
+        hidden_plots,
     })
 }
 
@@ -925,6 +969,7 @@ pub(crate) fn resolve_with_imports(
         assert_names: all_assert_names,
         assumes_map: validated.assumes_map,
         expected_fail: validated.expected_fail_map,
+        hidden_plots: validated.hidden_plots,
         pub_names: local.pub_names,
     })
 }
@@ -992,6 +1037,7 @@ pub(crate) fn resolve_with_imported_values(
         assert_names: all_assert_names,
         assumes_map: validated.assumes_map,
         expected_fail: validated.expected_fail_map,
+        hidden_plots: validated.hidden_plots,
         pub_names: local.pub_names,
     })
 }

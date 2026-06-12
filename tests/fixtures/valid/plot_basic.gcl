@@ -10,7 +10,7 @@ param values: Dimensionless[Step] = {
     Step.Fourth: 8.0,
 };
 
-pub plot my_line = {
+plot my_line = {
     mark: line,
     encode: {
         x: for s: Step { @values[s] },
@@ -19,7 +19,7 @@ pub plot my_line = {
     title: "Values Squared",
 };
 
-pub plot my_bar = {
+plot my_bar = {
     mark: bar,
     encode: {
         x: for s: Step { @values[s] },

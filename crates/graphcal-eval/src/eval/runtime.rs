@@ -1363,7 +1363,7 @@ fn evaluate_plot(
         encoding_meta,
         mark_properties,
         properties,
-        is_pub: entry.is_pub,
+        displayed: entry.displayed,
     })
 }
 

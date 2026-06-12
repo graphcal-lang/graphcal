@@ -15,7 +15,7 @@ param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
 
 node total_power: Power[OpMode] = for m: OpMode { sum(for s: Subsystem { @power_draw[s, m] }) };
 
-pub plot power_by_mode = {
+plot power_by_mode = {
     mark: bar,
     encode: {
         x: for m: OpMode { @total_power[m] },

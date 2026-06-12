@@ -14,7 +14,7 @@ param power_draw: Power[Subsystem, OpMode] = table[Subsystem, OpMode] {
     Payload: 0.0 W,   0.0 W,  35.0 W;
 };
 
-pub plot power_heatmap = {
+plot power_heatmap = {
     mark: rect,
     encode: {
         x: for m: OpMode { m },

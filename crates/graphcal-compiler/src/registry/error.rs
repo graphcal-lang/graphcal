@@ -815,10 +815,27 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("attribute `hidden` does not apply to `{kind}` declarations")]
+    #[diagnostic(
+        code(graphcal::A017),
+        help(
+            "`#[hidden]` suppresses a plot's standalone output; it is only valid on `plot` declarations"
+        )
+    )]
+    InvalidHiddenTarget {
+        kind: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a plot")]
+        span: SourceSpan,
+    },
+
     #[error("unknown attribute `{name}`")]
     #[diagnostic(
         code(graphcal::A007),
-        help("recognized attributes are `#[assumes(...)]`, `#[lazy]`, and `#[expected_fail]`")
+        help(
+            "recognized attributes are `#[assumes(...)]`, `#[expected_fail]`, `#[hidden]`, and `#[lazy]`"
+        )
     )]
     UnknownAttribute {
         name: String,
@@ -1610,6 +1627,7 @@ impl GraphcalError {
             | Self::AssumedAssertionFailed { src, .. }
             | Self::UnknownAssertInAssumes { src, .. }
             | Self::InvalidAssumesTarget { src, .. }
+            | Self::InvalidHiddenTarget { src, .. }
             | Self::UnknownAttribute { src, .. }
             | Self::InvalidExpectedFailTarget { src, .. }
             | Self::ExpectedFailInvalidArg { src, .. }

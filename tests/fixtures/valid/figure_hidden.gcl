@@ -1,6 +1,6 @@
-// figure_hidden.gcl -- Non-pub plots with figure
+// figure_hidden.gcl -- #[hidden] plots with figure
 //
-// Plots without `pub` are hidden from standalone output.
+// Plots marked #[hidden] are excluded from standalone output.
 // Only the figure's combined chart should appear in the output.
 pub index Step = { First, Second, Third, Fourth };
 
@@ -13,6 +13,7 @@ param values: Dimensionless[Step] = {
     Step.Fourth: 8.0,
 };
 
+#[hidden]
 plot curve_a = {
     mark: line,
     encode: {
@@ -22,6 +23,7 @@ plot curve_a = {
     title: "Values Squared",
 };
 
+#[hidden]
 plot curve_b = {
     mark: bar,
     encode: {

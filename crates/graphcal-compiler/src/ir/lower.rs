@@ -145,8 +145,12 @@ pub struct PlotEntry {
     /// the runtime instead of failing the compile.
     pub body: Option<LoweredPlotBody>,
     pub span: Span,
-    /// Whether this plot is `pub` (visible in standalone output).
+    /// Whether this plot is `pub` (exported across the file boundary,
+    /// requestable by include brace lists). Says nothing about display.
     pub is_pub: bool,
+    /// Whether this plot renders standalone when its file is the entry
+    /// point. `true` unless the declaration carries `#[hidden]` (#847).
+    pub displayed: bool,
 }
 
 /// A figure declaration with lowered fields.
@@ -181,6 +185,8 @@ pub struct UnfrozenPlotEntry {
     pub span: Span,
     /// Whether this plot is `pub` (visible in standalone output).
     pub is_pub: bool,
+    /// Whether this plot renders standalone (no `#[hidden]`).
+    pub displayed: bool,
 }
 
 /// A figure declaration awaiting field lowering at [`UnfrozenIR::freeze`].
@@ -735,11 +741,13 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|entry| {
                 let is_pub = resolved.pub_names.contains(entry.name.as_str());
+                let displayed = !resolved.hidden_plots.contains(entry.name.as_str());
                 UnfrozenPlotEntry {
                     name: ScopedName::local(entry.name),
                     decl: entry.decl,
                     span: entry.span,
                     is_pub,
+                    displayed,
                 }
             })
             .collect(),
@@ -980,6 +988,7 @@ impl UnfrozenIR {
                     body: complete.then_some(body),
                     span: entry.span,
                     is_pub: entry.is_pub,
+                    displayed: entry.displayed,
                 }
             })
             .collect();
@@ -1313,6 +1322,7 @@ impl UnfrozenIR {
                 decl: entry.decl,
                 span: entry.span,
                 is_pub: entry.is_pub,
+                displayed: entry.displayed,
             });
             self.source_order.push((prefixed, DeclCategory::Plot));
         }

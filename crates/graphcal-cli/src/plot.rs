@@ -24,9 +24,10 @@ pub fn build_figures(
 ) -> Vec<RenderedFigure> {
     let mut result = Vec::new();
 
-    // Standalone figures from pub plots (non-pub plots are only usable in figures/layers)
+    // Standalone figures from displayed plots (#[hidden] plots are only
+    // usable in figure/layer composition; #847)
     for spec in plots {
-        if !spec.is_pub {
+        if !spec.displayed {
             continue;
         }
         result.push(RenderedFigure {

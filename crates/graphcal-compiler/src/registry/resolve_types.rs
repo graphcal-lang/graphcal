@@ -561,6 +561,9 @@ pub struct ResolvedFile {
     /// Mapping from assert name to its expected-fail configuration.
     /// Built from `#[expected_fail]` / `#[expected_fail(...)]` attributes.
     pub expected_fail: HashMap<DeclName, ExpectedFail>,
+    /// Plot names carrying `#[hidden]`: evaluated and referenceable from
+    /// figures/layers, but excluded from standalone output (#847).
+    pub hidden_plots: HashSet<DeclName>,
     /// Names of all declarations marked `pub` in this file (values + type-system).
     pub pub_names: HashSet<DeclName>,
 }

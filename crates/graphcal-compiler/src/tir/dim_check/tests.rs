@@ -1949,3 +1949,56 @@ figure f = { plots: [p, q] };
 layer l = { plots: [p, q] };";
     check(source).unwrap();
 }
+
+// --- #[hidden] attribute (#847) ---
+
+#[test]
+fn check_hidden_on_plot_is_accepted() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+#[hidden]
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_hidden_on_node_is_rejected() {
+    let source = "\
+#[hidden]
+node x: Dimensionless = 1.0;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::InvalidHiddenTarget { ref kind, .. } if kind == "node"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_hidden_on_figure_is_rejected() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
+#[hidden]
+figure f = { plots: [p] };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::InvalidHiddenTarget { ref kind, .. } if kind == "figure"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_hidden_with_args_is_rejected() {
+    let source = "\
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+#[hidden(now)]
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::EvalError { ref message, .. } if message.contains("no arguments")),
+        "got: {err:?}"
+    );
+}

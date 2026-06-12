@@ -141,6 +141,8 @@ source_file
 declaration
    = { attribute }, [ "pub", [ "(", "bind", ")" ] ], declaration_kind;
 
+(* Recognized attribute names: "assumes" (node/param), "expected_fail"
+   (assert), "hidden" (plot; suppresses standalone display), "lazy". *)
 attribute
    = "#", "[", IDENT, [ "(", [ attribute_arg_list ], ")" ], "]";
 

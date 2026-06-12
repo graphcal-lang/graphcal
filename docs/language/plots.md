@@ -218,13 +218,12 @@ plot efficiency_map = {
 };
 ```
 
-## Visibility and Standalone Output
+## Display and Visibility
 
-By default, plots are **private** and do not produce standalone figures in the
-output. To make a plot appear as a standalone chart, mark it `pub`:
+Plots are **displayed standalone by default** — you write a plot to see it:
 
 ```gcl
-pub plot curve_a = {
+plot curve_a = {
     mark: line,
     encode: {
         x: for t: Time { t },
@@ -234,9 +233,24 @@ pub plot curve_a = {
 };
 ```
 
-A non-`pub` plot still participates in the computation graph and can be
-referenced by `figure` and `layer` declarations -- it simply does not appear
-as a standalone chart in the output.
+To keep a plot as a composition-only building block (referenced by `figure`
+or `layer` declarations but not rendered standalone), mark it `#[hidden]`:
+
+```gcl
+#[hidden]
+plot curve_a = { mark: line, encode: { ... } };
+```
+
+A `#[hidden]` plot still participates in the computation graph and can be
+referenced by `figure` and `layer` declarations — it simply does not appear
+as a standalone chart. `#[hidden]` is valid only on `plot` declarations
+(figures and layers cannot be referenced by anything, so hiding one would be
+equivalent to deleting it).
+
+Display and cross-file visibility are independent axes: `pub` makes a plot
+includable by consumer files (like `pub` on any other declaration) and says
+nothing about display. `#[hidden]` governs only the declaring file's own
+output when that file is the entry point.
 
 ## Figure Declarations
 
@@ -299,11 +313,13 @@ This produces **three** figures in the output: `curve_a` (standalone),
 
 ### Hiding Standalone Plots
 
-To output only the combined figure, omit `pub` from the individual plots:
+To output only the combined figure, mark the individual plots `#[hidden]`:
 
 ```gcl
+#[hidden]
 plot curve_a = { mark: line, encode: { ... } };
 
+#[hidden]
 plot curve_b = { mark: bar, encode: { ... } };
 
 figure comparison = {
@@ -312,7 +328,7 @@ figure comparison = {
 };
 ```
 
-This produces **one** figure: `comparison`. The non-`pub` plots are still
+This produces **one** figure: `comparison`. The `#[hidden]` plots are still
 evaluated and included in the combined figure, but do not appear as standalone
 charts.
 
