@@ -491,7 +491,10 @@ assert_body
 (* --- plot --- *)
 (* Plot declarations produce Vega-Lite chart specifications.
    They specify a mark type, encoding channels, and optional
-   properties. *)
+   properties. Semantic constraints enforced by the parser: the
+   `mark` field and a non-empty `encode` block are required, and
+   every field name (mark, encode, channels, properties) may
+   appear at most once. *)
 plot_decl
    = "plot", IDENT, "=",
      "{", [ plot_body_field, { ",", plot_body_field }, [ "," ] ], "}", ";";

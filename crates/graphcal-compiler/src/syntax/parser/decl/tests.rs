@@ -1612,3 +1612,98 @@ fn plain_unit_decl_still_parses() {
         .parse_file()
         .unwrap();
 }
+
+// --- Duplicate plot/figure/layer fields are parse errors (#844) ---
+
+fn expect_duplicate_field(src: &str, field: &str) {
+    let err = Parser::new(src).parse_file().unwrap_err();
+    match &err {
+        crate::syntax::parser::ParseError::DuplicatePlotField { field: f, .. } => {
+            assert_eq!(f, field, "wrong duplicate field reported: {err:?}");
+        }
+        other => panic!("expected DuplicatePlotField for `{field}`, got {other:?}"),
+    }
+}
+
+#[test]
+fn duplicate_mark_field_is_rejected() {
+    expect_duplicate_field(
+        "plot p = { mark: line, mark: bar, encode: { x: 1.0 } };",
+        "mark",
+    );
+}
+
+#[test]
+fn duplicate_encode_block_is_rejected() {
+    expect_duplicate_field(
+        "plot p = { mark: line, encode: { x: 1.0 }, encode: { y: 2.0 } };",
+        "encode",
+    );
+}
+
+#[test]
+fn duplicate_encoding_channel_is_rejected() {
+    expect_duplicate_field("plot p = { mark: line, encode: { x: 1.0, x: 2.0 } };", "x");
+}
+
+#[test]
+fn duplicate_plot_property_is_rejected() {
+    expect_duplicate_field(
+        r#"plot p = { mark: line, encode: { x: 1.0 }, title: "a", title: "b" };"#,
+        "title",
+    );
+}
+
+#[test]
+fn duplicate_mark_property_is_rejected() {
+    expect_duplicate_field(
+        "plot p = { mark: line { stroke_width: 1.0, stroke_width: 2.0 }, encode: { x: 1.0 } };",
+        "stroke_width",
+    );
+}
+
+#[test]
+fn duplicate_figure_field_is_rejected() {
+    expect_duplicate_field(
+        r#"figure f = { plots: [a], title: "a", title: "b" };"#,
+        "title",
+    );
+}
+
+#[test]
+fn duplicate_figure_plots_field_is_rejected() {
+    expect_duplicate_field("figure f = { plots: [a], plots: [b] };", "plots");
+}
+
+#[test]
+fn duplicate_layer_plots_field_is_rejected() {
+    expect_duplicate_field("layer l = { plots: [a], plots: [b] };", "plots");
+}
+
+#[test]
+fn plot_without_encode_is_rejected() {
+    let err = Parser::new("plot p = { mark: line };")
+        .parse_file()
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::syntax::parser::ParseError::MissingPlotEncoding { .. }
+        ),
+        "expected MissingPlotEncoding, got {err:?}"
+    );
+}
+
+#[test]
+fn plot_with_empty_encode_is_rejected() {
+    let err = Parser::new("plot p = { mark: line, encode: { } };")
+        .parse_file()
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::syntax::parser::ParseError::MissingPlotEncoding { .. }
+        ),
+        "expected MissingPlotEncoding, got {err:?}"
+    );
+}

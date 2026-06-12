@@ -13,6 +13,7 @@ impl Parser<'_> {
 
         // Parse field block: { plots: [...], title: "...", ... }
         self.expect(Token::LBrace)?;
+        let mut plots_seen = false;
         let mut plot_names = Vec::new();
         let mut fields = Vec::new();
 
@@ -22,6 +23,15 @@ impl Parser<'_> {
             self.expect(Token::Colon)?;
 
             if field_name.name == "plots" {
+                // Duplicate fields would silently shadow each other (#844).
+                if plots_seen {
+                    return Err(self.duplicate_plot_field(
+                        "plots",
+                        "layer declaration",
+                        field_start,
+                    ));
+                }
+                plots_seen = true;
                 // Parse plots: [name1, name2, ...]
                 self.expect(Token::LBracket)?;
                 while self.lexer.peek() != Some(&Token::RBracket) {
@@ -35,6 +45,16 @@ impl Parser<'_> {
                 }
                 self.expect(Token::RBracket)?;
             } else {
+                if fields
+                    .iter()
+                    .any(|f: &PlotField| f.name.value.as_str() == field_name.name)
+                {
+                    return Err(self.duplicate_plot_field(
+                        &field_name.name,
+                        "layer declaration",
+                        field_start,
+                    ));
+                }
                 // Parse regular field: name: expr
                 let value = self.parse_expr()?;
                 let field_end = value.span;

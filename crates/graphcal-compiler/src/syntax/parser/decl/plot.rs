@@ -18,6 +18,7 @@ impl Parser<'_> {
         self.expect(Token::LBrace)?;
 
         let mut mark: Option<MarkSpec> = None;
+        let mut encode_seen = false;
         let mut encodings: Vec<Encoding> = Vec::new();
         let mut properties: Vec<PlotField> = Vec::new();
 
@@ -26,15 +27,42 @@ impl Parser<'_> {
             let field_start = field_name.span;
             self.expect(Token::Colon)?;
 
+            // Duplicate fields would silently shadow each other with
+            // implementation-defined precedence; reject them (#844).
             match field_name.name.as_str() {
                 "mark" => {
+                    if mark.is_some() {
+                        return Err(self.duplicate_plot_field(
+                            "mark",
+                            "plot declaration",
+                            field_start,
+                        ));
+                    }
                     let mark_spec = self.parse_mark_spec(field_start)?;
                     mark = Some(mark_spec);
                 }
                 "encode" => {
+                    if encode_seen {
+                        return Err(self.duplicate_plot_field(
+                            "encode",
+                            "plot declaration",
+                            field_start,
+                        ));
+                    }
+                    encode_seen = true;
                     encodings = self.parse_encode_block()?;
                 }
                 _ => {
+                    if properties
+                        .iter()
+                        .any(|p| p.name.value.as_str() == field_name.name)
+                    {
+                        return Err(self.duplicate_plot_field(
+                            &field_name.name,
+                            "plot declaration",
+                            field_start,
+                        ));
+                    }
                     let value = self.parse_expr()?;
                     let field_end = value.span;
                     properties.push(PlotField {
@@ -58,6 +86,16 @@ impl Parser<'_> {
         let Some(mark) = mark else {
             return Err(self.unexpected_token("`mark` field in plot declaration", "}", span));
         };
+
+        // A plot with no encoding channels renders an empty chart — almost
+        // certainly a mistake; require at least one channel, symmetric with
+        // the required `mark` field (#844).
+        if encodings.is_empty() {
+            return Err(ParseError::MissingPlotEncoding {
+                src: self.named_source(),
+                span: span.into(),
+            });
+        }
 
         Ok(Declaration {
             attributes: vec![],
@@ -103,6 +141,16 @@ impl Parser<'_> {
                 let prop_name = self.parse_any_ident()?;
                 let prop_start = prop_name.span;
                 self.expect(Token::Colon)?;
+                if properties
+                    .iter()
+                    .any(|p: &PlotField| p.name.value.as_str() == prop_name.name)
+                {
+                    return Err(self.duplicate_plot_field(
+                        &prop_name.name,
+                        "mark properties",
+                        prop_start,
+                    ));
+                }
                 let value = self.parse_expr()?;
                 let prop_end = value.span;
                 properties.push(PlotField {
@@ -157,6 +205,13 @@ impl Parser<'_> {
                 }
             };
             self.expect(Token::Colon)?;
+            if encodings.iter().any(|e: &Encoding| e.channel == channel) {
+                return Err(self.duplicate_plot_field(
+                    &channel_ident.name,
+                    "encode block",
+                    channel_span,
+                ));
+            }
             let value = self.parse_expr()?;
             let value_span = value.span;
             encodings.push(Encoding {

@@ -25,9 +25,13 @@ plot <name> = {
 A `plot` declaration has:
 
 - A **name** (conventionally `lower_snake_case`, like `param` and `node`).
-- A **`mark` field** specifying the visual mark type.
-- An **`encode` block** mapping data to visual channels.
+- A **`mark` field** specifying the visual mark type (required).
+- An **`encode` block** mapping data to visual channels (required, with at
+  least one channel).
 - Optional **properties** like `title`.
+
+Each field — `mark`, `encode`, each encoding channel, and each property —
+may appear at most once; duplicates are parse errors.
 
 ### Mark Types
 
