@@ -301,38 +301,66 @@ async fn analyze_store_publish(
         }
     };
 
-    let new_diags = Arc::clone(&analysis.diagnostics);
-    let stale_uris = {
-        // Hold the documents write lock across the generation re-check and
-        // the insert: a newer-generation analysis completing between a
-        // separate check and insert used to be clobbered by this older one.
-        let mut docs = documents.write().await;
-        if !is_generation_current(generations, &uri, generation).await {
-            return;
-        }
-        let stale_uris = docs
-            .get(&uri)
-            .map(|prev| {
-                prev.diagnostics
-                    .keys()
-                    .filter(|u| !new_diags.contains_key(*u))
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        docs.insert(uri.clone(), analysis);
-        stale_uris
-    };
-    for stale in stale_uris {
-        client.publish_diagnostics(stale, Vec::new(), None).await;
+    // Hold the documents write lock across the generation re-check and
+    // the insert: a newer-generation analysis completing between a
+    // separate check and insert used to be clobbered by this older one.
+    let mut docs = documents.write().await;
+    if !is_generation_current(generations, &uri, generation).await {
+        return;
     }
-    for (target_uri, diags) in new_diags.iter() {
-        client
-            .publish_diagnostics(target_uri.clone(), diags.clone(), None)
-            .await;
+    // Every URI this analysis touches — newly reported plus previously
+    // reported (which may need clearing) — is re-published from the
+    // merged view of all open documents, so one document's analysis
+    // cannot clobber diagnostics another open document owns.
+    let mut affected: Vec<Url> = analysis.diagnostics.keys().cloned().collect();
+    if let Some(prev) = docs.get(&uri) {
+        for prev_uri in prev.diagnostics.keys() {
+            if !affected.contains(prev_uri) {
+                affected.push(prev_uri.clone());
+            }
+        }
+    }
+    docs.insert(uri.clone(), analysis);
+    let publish = merged_diagnostics_for(&docs, &affected);
+    drop(docs);
+    for (target_uri, diags) in publish {
+        client.publish_diagnostics(target_uri, diags, None).await;
     }
     // Best-effort: the client may not support inlay-hint refresh.
     let _ = client.inlay_hint_refresh().await;
+}
+
+/// Compute the diagnostics to publish for each URI in `targets` from the
+/// whole open-document set.
+///
+/// Ownership rule (#832): a URI that is itself an open, analyzed document is
+/// authoritative for its own diagnostics — its analysis ran on the exact
+/// buffer the user sees. For URIs that are not open (imported files on
+/// disk), the contributions of every open document are merged, deduplicating
+/// identical diagnostics reported by multiple importers. A URI no open
+/// document reports on yields an empty list, clearing stale squiggles.
+fn merged_diagnostics_for(
+    docs: &HashMap<Url, AnalysisResult>,
+    targets: &[Url],
+) -> Vec<(Url, Vec<Diagnostic>)> {
+    targets
+        .iter()
+        .map(|target| {
+            if let Some(own) = docs.get(target) {
+                let diags = own.diagnostics.get(target).cloned().unwrap_or_default();
+                return (target.clone(), diags);
+            }
+            let mut merged: Vec<Diagnostic> = Vec::new();
+            for analysis in docs.values() {
+                for diag in analysis.diagnostics.get(target).into_iter().flatten() {
+                    if !merged.contains(diag) {
+                        merged.push(diag.clone());
+                    }
+                }
+            }
+            (target.clone(), merged)
+        })
+        .collect()
 }
 
 /// Publish a single error diagnostic on `uri` indicating that the analysis
@@ -1177,25 +1205,33 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
-        // Pull the previous diagnostic URI set out of the cached analysis so
-        // we can clear cross-file diagnostics this document had published.
-        let stale_uris: Vec<Url> = self
-            .documents
-            .read()
-            .await
-            .get(&uri)
-            .map(|prev| prev.diagnostics.keys().cloned().collect())
-            .unwrap_or_default();
-        self.documents.write().await.remove(&uri);
+        // Re-publish every URI the closing document reported on from the
+        // *remaining* open documents' merged view: closing one document only
+        // removes that document's contribution — a URI another open document
+        // still reports on keeps its diagnostics (#832). The closed URI
+        // itself is always included so its squiggles clear even if this
+        // document was never analyzed.
+        let publish = {
+            let mut docs = self.documents.write().await;
+            let mut affected: Vec<Url> = docs
+                .get(&uri)
+                .map(|prev| prev.diagnostics.keys().cloned().collect())
+                .unwrap_or_default();
+            if !affected.contains(&uri) {
+                affected.push(uri.clone());
+            }
+            docs.remove(&uri);
+            let publish = merged_diagnostics_for(&docs, &affected);
+            drop(docs);
+            publish
+        };
         self.change_generations.write().await.remove(&uri);
         self.latest_text.write().await.remove(&uri);
-        for stale in stale_uris {
+        for (target_uri, diags) in publish {
             self.client
-                .publish_diagnostics(stale, Vec::new(), None)
+                .publish_diagnostics(target_uri, diags, None)
                 .await;
         }
-        // Always clear the closed document's URI even if it was never analyzed.
-        self.client.publish_diagnostics(uri, Vec::new(), None).await;
         // No `inlay_hint_refresh` here — the document is gone; there's
         // nothing for the client to re-fetch hints for. The refresh call
         // at `analyze_and_publish` and `spawn_debounced_analysis` sites
@@ -1989,6 +2025,115 @@ node bad: Mass = mass + length;
             };
             assert_eq!(imported.uri, lib_uri, "`{needle}` should jump to lib.gcl");
         }
+    }
+
+    /// Build a bare `AnalysisResult` carrying only a diagnostics map, for
+    /// exercising the per-URI ownership merge.
+    fn analysis_with_diags(diags: HashMap<Url, Vec<Diagnostic>>) -> AnalysisResult {
+        AnalysisResult {
+            source: Arc::new(String::new()),
+            symbol_table: SymbolTable::default(),
+            imported_definitions: HashMap::new(),
+            diagnostics: Arc::new(diags),
+            eval_values: HashMap::new(),
+            fn_signatures: build_fn_signatures(),
+            import_links: Vec::new(),
+        }
+    }
+
+    fn diag(message: &str) -> Diagnostic {
+        Diagnostic {
+            message: message.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Issue #832: an open document's own analysis is authoritative for its
+    /// own URI — an importer's (possibly stale) contribution must not
+    /// overwrite or clear it.
+    #[test]
+    fn open_document_owns_its_own_diagnostics() {
+        let lib_uri = Url::parse("file:///p/lib.gcl").unwrap();
+        let main_uri = Url::parse("file:///p/main.gcl").unwrap();
+
+        let mut docs = HashMap::new();
+        // lib's own analysis reports its own error.
+        docs.insert(
+            lib_uri.clone(),
+            analysis_with_diags(HashMap::from([(lib_uri.clone(), vec![diag("lib broken")])])),
+        );
+        // main's analysis reports nothing for lib (e.g. computed before
+        // lib's latest edit).
+        docs.insert(
+            main_uri.clone(),
+            analysis_with_diags(HashMap::from([
+                (main_uri, vec![]),
+                (lib_uri.clone(), vec![]),
+            ])),
+        );
+
+        let published = merged_diagnostics_for(&docs, std::slice::from_ref(&lib_uri));
+        assert_eq!(published.len(), 1);
+        assert_eq!(
+            published[0].1,
+            vec![diag("lib broken")],
+            "lib's own analysis must win for lib's URI"
+        );
+    }
+
+    /// Issue #832 repro: after closing the importer, a still-open imported
+    /// document keeps its own diagnostics instead of having them wiped.
+    #[test]
+    fn closing_importer_keeps_open_imported_documents_diagnostics() {
+        let lib_uri = Url::parse("file:///p/lib.gcl").unwrap();
+        let main_uri = Url::parse("file:///p/main.gcl").unwrap();
+
+        let mut docs = HashMap::new();
+        docs.insert(
+            lib_uri.clone(),
+            analysis_with_diags(HashMap::from([(lib_uri.clone(), vec![diag("lib broken")])])),
+        );
+        // The importer was just closed: only lib remains open. The closing
+        // path re-publishes every URI from the remaining documents' view.
+        let affected = vec![lib_uri.clone(), main_uri.clone()];
+        let published = merged_diagnostics_for(&docs, &affected);
+        let by_uri: HashMap<_, _> = published.into_iter().collect();
+        assert_eq!(
+            by_uri[&lib_uri],
+            vec![diag("lib broken")],
+            "still-open lib keeps its diagnostics"
+        );
+        assert!(
+            by_uri[&main_uri].is_empty(),
+            "the closed importer's URI clears"
+        );
+    }
+
+    /// Diagnostics for a file that is not open merge across importers,
+    /// deduplicating identical reports.
+    #[test]
+    fn unopened_uri_merges_and_dedups_contributions() {
+        let disk_uri = Url::parse("file:///p/disk.gcl").unwrap();
+        let a_uri = Url::parse("file:///p/a.gcl").unwrap();
+        let b_uri = Url::parse("file:///p/b.gcl").unwrap();
+
+        let mut docs = HashMap::new();
+        docs.insert(
+            a_uri,
+            analysis_with_diags(HashMap::from([(disk_uri.clone(), vec![diag("broken")])])),
+        );
+        docs.insert(
+            b_uri,
+            analysis_with_diags(HashMap::from([(
+                disk_uri.clone(),
+                vec![diag("broken"), diag("also broken")],
+            )])),
+        );
+
+        let published = merged_diagnostics_for(&docs, std::slice::from_ref(&disk_uri));
+        let mut messages: Vec<_> = published[0].1.iter().map(|d| d.message.clone()).collect();
+        messages.sort();
+        assert_eq!(messages, vec!["also broken", "broken"]);
     }
 
     /// Issue #833: analysis must overlay the latest text of *all* open
