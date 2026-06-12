@@ -631,7 +631,12 @@ signed_integer
    = [ "-" ], NUMBER;  (* Must be an integer (no decimal point or exponent). *)
 
 (* --- Unit expressions --- *)
-(* Used in unit declarations, unit literals, and conversion targets. *)
+(* Used in unit declarations, unit literals, and conversion targets.
+   Unit expressions share dim_expr's structure and exponent grammar; the one
+   deliberate difference is the term name: dims are module-scoped ident_paths,
+   while units form a single file-global namespace, so unit_term takes a bare
+   IDENT (qualified unit references are rejected with P017; conflicting
+   imported definitions with N010). *)
 unit_expr
    = [ "1", "/" ], unit_term, { ( "*" | "/" ), unit_term };
 (* The optional `1/` prefix is the reciprocal shorthand (e.g. `1/min`); the
