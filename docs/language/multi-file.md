@@ -273,9 +273,19 @@ dag mission {
 }
 ```
 
-Each call site is a fresh instantiation; arguments are evaluated in the
-surrounding expression scope, so they may reference local variables
-from an enclosing `for`, `scan`, `unfold`, or `match` binding:
+Each call site is a fresh instantiation, and the dag's `assert`
+declarations are checked per instantiation just like the `include`
+path. Because an expression has no reporting surface, a failing (or
+erroring) assert fails the calling expression itself — the calling
+node reports an evaluation error such as ``assertion `v_positive`
+failed in inline call of dag `checked` (assertion evaluated to
+false)``, fault-isolated to that node. `#[expected_fail]` inversion
+applies as usual: an expected failure is not an error, and an
+unexpected pass is.
+
+Arguments are evaluated in the surrounding expression scope, so they
+may reference local variables from an enclosing `for`, `scan`,
+`unfold`, or `match` binding:
 
 ```graphcal
 node distances: Length[Region] = for r: Region {

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use graphcal_compiler::hir::{self, BuiltinFnName, ConstRef, FunctionRef};
+use graphcal_compiler::ir::resolve::DeclCategory;
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
@@ -1370,6 +1371,92 @@ fn eval_hir_inline_dag_call(
         dag_values.insert(super::dag_decl_runtime_key(&binding.target.value), value);
     }
 
+    seed_inline_dag_imported_values(dag_tir, &mut dag_values, caller_values, ctx);
+
+    let dag_ctx = EvalContext {
+        builtin_consts: ctx.builtin_consts,
+        builtin_fns: ctx.builtin_fns,
+        registry: ctx.registry,
+        src: ctx.src,
+        unfold_context: None,
+        tir: ctx.tir,
+        current_dag: Some(dag_tir),
+        root_values: ctx.root_values,
+        struct_field_constraints: ctx.struct_field_constraints,
+    };
+    let empty_hir_locals = HirLocalValueMap::root();
+
+    let topo = topo_order_for_dag_body(dag_tir).map_err(|remaining| {
+        ctx.internal_error(
+            format!(
+                "dag body dependency cycle involving: {}",
+                remaining
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            output.span,
+        )
+    })?;
+    let categories: std::collections::HashMap<&ScopedName, DeclCategory> = dag_tir
+        .source_order
+        .iter()
+        .map(|(name, cat)| (name, *cat))
+        .collect();
+    for name in topo {
+        // Only value declarations evaluate in the topo order. Asserts are
+        // checked after every value is available (the dag-body dependency
+        // graph carries no edges for them), and plots/figures/layers have
+        // no runtime value in an expression context.
+        match categories.get(&name) {
+            Some(
+                DeclCategory::Assert
+                | DeclCategory::Plot
+                | DeclCategory::Figure
+                | DeclCategory::Layer,
+            ) => continue,
+            Some(DeclCategory::Const | DeclCategory::Param | DeclCategory::Node) | None => {}
+        }
+        let local_key = RuntimeDeclKey::for_local_decl(dag_tir, &name);
+        if dag_values.contains_key(&local_key) {
+            continue;
+        }
+        if let Some(hir_expr) = hir_expr_for_dag_body_name(dag_tir, &name) {
+            let value = eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx)?;
+            dag_values.insert(local_key, value);
+        } else {
+            return Err(ctx.internal_error(
+                format!("semantic TIR missing HIR expression for DAG body declaration `{name}`"),
+                output.span,
+            ));
+        }
+    }
+
+    check_inline_dag_asserts(dag_tir, &dag_values, &dag_ctx, target, output.span, ctx)?;
+
+    let output_key = super::dag_decl_runtime_key(&output.value);
+    dag_values.get(&output_key).cloned().ok_or_else(|| {
+        ctx.internal_error(
+            format!(
+                "dag `{}` has no node `{}` after evaluation (should have been caught by dim-check)",
+                target.value,
+                output.value.as_str()
+            ),
+            output.span,
+        )
+    })
+}
+
+/// Seed an inline dag instantiation's value map with the dag's imported
+/// (outer-scope) values: pre-evaluated imports plus values resolvable from
+/// the caller's scope. Values already provided by call-site bindings win.
+fn seed_inline_dag_imported_values(
+    dag_tir: &DagTIR,
+    dag_values: &mut RuntimeValueMap,
+    caller_values: &RuntimeValueMap,
+    ctx: &EvalContext<'_>,
+) {
     let own_names: std::collections::HashSet<&str> = dag_tir
         .consts
         .iter()
@@ -1404,58 +1491,67 @@ fn eval_hir_inline_dag_call(
             dag_values.insert(visible_key, value.clone());
         }
     }
+}
 
-    let dag_ctx = EvalContext {
-        builtin_consts: ctx.builtin_consts,
-        builtin_fns: ctx.builtin_fns,
-        registry: ctx.registry,
-        src: ctx.src,
-        unfold_context: None,
-        tir: ctx.tir,
-        current_dag: Some(dag_tir),
-        root_values: ctx.root_values,
-        struct_field_constraints: ctx.struct_field_constraints,
-    };
+/// Check the asserts of an inline-instantiated dag body (#812).
+///
+/// An inline call site is a fresh instantiation (sugar for a synthetic
+/// include), so the dag's asserts are checked here too — instantiating
+/// inline must not silently skip the dag's invariants. Unlike the include
+/// path, an expression has no reporting surface, so a FAIL or ERROR fails
+/// the calling expression (fault-isolated to the calling declaration).
+/// `#[expected_fail]` inversion applies as usual.
+fn check_inline_dag_asserts(
+    dag_tir: &DagTIR,
+    dag_values: &RuntimeValueMap,
+    dag_ctx: &EvalContext<'_>,
+    target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
+    call_span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<(), GraphcalError> {
     let empty_hir_locals = HirLocalValueMap::root();
-
-    let topo = topo_order_for_dag_body(dag_tir).map_err(|remaining| {
-        ctx.internal_error(
-            format!(
-                "dag body dependency cycle involving: {}",
-                remaining
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            output.span,
-        )
-    })?;
-    for name in topo {
-        let local_key = RuntimeDeclKey::for_local_decl(dag_tir, &name);
-        if dag_values.contains_key(&local_key) {
+    for (name, cat) in &dag_tir.source_order {
+        if !matches!(cat, DeclCategory::Assert) {
             continue;
         }
-        if let Some(hir_expr) = hir_expr_for_dag_body_name(dag_tir, &name) {
-            let value = eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx)?;
-            dag_values.insert(local_key, value);
-        } else {
-            return Err(ctx.internal_error(
-                format!("semantic TIR missing HIR expression for DAG body declaration `{name}`"),
-                output.span,
-            ));
+        let body = dag_tir
+            .resolved_decl_key_for_local(name)
+            .and_then(|key| dag_tir.semantic.expressions.asserts.get(&key))
+            .ok_or_else(|| {
+                ctx.internal_error(
+                    format!("semantic TIR missing HIR body for DAG assertion `{name}`"),
+                    call_span,
+                )
+            })?;
+        let ef = dag_tir.expected_fail.get(name);
+        let result = crate::eval::runtime::evaluate_assert_with_expected_fail(
+            body,
+            ef,
+            dag_values,
+            &empty_hir_locals,
+            dag_ctx,
+        );
+        match result {
+            crate::eval::AssertResult::Pass => {}
+            crate::eval::AssertResult::Fail { message } => {
+                return Err(ctx.eval_error(
+                    format!(
+                        "assertion `{name}` failed in inline call of dag `{}` ({message})",
+                        target.value.name()
+                    ),
+                    call_span,
+                ));
+            }
+            crate::eval::AssertResult::Error { message } => {
+                return Err(ctx.eval_error(
+                    format!(
+                        "assertion `{name}` errored in inline call of dag `{}` ({message})",
+                        target.value.name()
+                    ),
+                    call_span,
+                ));
+            }
         }
     }
-
-    let output_key = super::dag_decl_runtime_key(&output.value);
-    dag_values.get(&output_key).cloned().ok_or_else(|| {
-        ctx.internal_error(
-            format!(
-                "dag `{}` has no node `{}` after evaluation (should have been caught by dim-check)",
-                target.value,
-                output.value.as_str()
-            ),
-            output.span,
-        )
-    })
+    Ok(())
 }

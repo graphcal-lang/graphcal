@@ -168,6 +168,98 @@ fn eval_assertions_use_hir_body_after_syntax_mutation() {
 }
 
 #[test]
+fn inline_dag_call_with_failing_assert_fails_calling_node() {
+    // #812: inline invocation of an assert-carrying dag evaluates the dag's
+    // asserts; a failure fails the calling expression (fault-isolated).
+    let result = compile_and_eval(
+        "dag checked {\n\
+             param v: Dimensionless;\n\
+             pub node out: Dimensionless = @v * 2.0;\n\
+             assert v_positive = @v > 0.0;\n\
+         }\n\
+         node y: Dimensionless = @checked(v: -3.0).out;\n\
+         node independent: Dimensionless = 1.0;",
+    )
+    .unwrap();
+    let node_result = |name: &str| {
+        result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.to_string() == name)
+            .unwrap_or_else(|| panic!("node `{name}` not found"))
+            .1
+            .clone()
+    };
+    match node_result("y") {
+        Err(NodeError::EvalFailed { message }) => {
+            assert_eq!(
+                message,
+                "assertion `v_positive` failed in inline call of dag `checked` \
+                 (assertion evaluated to false)"
+            );
+        }
+        other => panic!("expected eval failure for `y`, got {other:?}"),
+    }
+    assert!(
+        node_result("independent").is_ok(),
+        "independent node must not be affected"
+    );
+}
+
+#[test]
+fn inline_dag_call_with_passing_assert_succeeds() {
+    let result = compile_and_eval(
+        "dag checked {\n\
+             param v: Dimensionless;\n\
+             pub node out: Dimensionless = @v * 2.0;\n\
+             assert v_positive = @v > 0.0;\n\
+         }\n\
+         node y: Dimensionless = @checked(v: 3.0).out;",
+    )
+    .unwrap();
+    assert!((find_value(&result, "y") - 6.0).abs() < f64::EPSILON);
+    // The dag's assert is internal to the instantiation — no spurious
+    // top-level assertion report.
+    assert!(result.assertions.is_empty());
+}
+
+#[test]
+fn inline_dag_call_respects_expected_fail() {
+    // An #[expected_fail] assert that fails inside the inline instantiation
+    // is an expected failure → Pass → no error. One that passes unexpectedly
+    // inverts to a failure → the calling node errors.
+    let source_template = |v: &str| {
+        format!(
+            "dag checked {{\n\
+                 param v: Dimensionless;\n\
+                 pub node out: Dimensionless = @v * 2.0;\n\
+                 #[expected_fail]\n\
+                 assert is_neg = @v < 0.0;\n\
+             }}\n\
+             node y: Dimensionless = @checked(v: {v}).out;"
+        )
+    };
+
+    let result = compile_and_eval(&source_template("3.0")).unwrap();
+    assert!(
+        result.nodes[0].1.is_ok(),
+        "expected failure occurred → no error: {:?}",
+        result.nodes[0].1
+    );
+
+    let result = compile_and_eval(&source_template("-3.0")).unwrap();
+    match &result.nodes[0].1 {
+        Err(NodeError::EvalFailed { message }) => {
+            assert!(
+                message.contains("assertion passed but was marked #[expected_fail]"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected eval failure for unexpected pass, got {other:?}"),
+    }
+}
+
+#[test]
 fn assert_negative_runtime_tolerance_errors() {
     // #815: a tolerance computed at runtime must be non-negative; a negative
     // value is an assertion ERROR, not a silent constant-false FAIL.

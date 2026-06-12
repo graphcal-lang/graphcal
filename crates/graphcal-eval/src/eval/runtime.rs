@@ -600,7 +600,7 @@ fn assert_dependency_failure(
 /// For `Some(ExpectedFail::Variants(keys))`: evaluate the expression to get
 /// the raw indexed `RuntimeValue`, invert only the matching variant entries,
 /// then aggregate.
-fn evaluate_assert_with_expected_fail(
+pub fn evaluate_assert_with_expected_fail(
     body: &graphcal_compiler::hir::AssertBody,
     ef: Option<&ExpectedFail>,
     values: &RuntimeValueMap,
