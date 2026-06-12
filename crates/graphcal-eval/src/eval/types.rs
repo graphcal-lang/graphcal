@@ -542,8 +542,10 @@ pub enum AssertResult {
 /// same dag never collapse onto one key (#813).
 #[derive(Debug)]
 pub struct EvalResult {
-    /// Const values in source order (consts are compile-time and never fail at runtime).
-    pub consts: Vec<(ScopedName, Value)>,
+    /// Const values in source order. Const *values* are compile-time, but a
+    /// const's display unit (e.g. a dynamic conversion target) resolves at
+    /// runtime and can fail per-node.
+    pub consts: Vec<(ScopedName, Result<Value, NodeError>)>,
     /// Param values in source order (may contain per-node errors).
     pub params: Vec<(ScopedName, Result<Value, NodeError>)>,
     /// Node values in source order (may contain per-node errors).

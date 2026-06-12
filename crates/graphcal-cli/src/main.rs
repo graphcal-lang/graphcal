@@ -705,7 +705,7 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
     let consts: serde_json::Map<String, serde_json::Value> = result
         .consts
         .iter()
-        .map(|(n, v)| (n.to_string(), value_to_json(v, symbols)))
+        .map(|(n, r)| (n.to_string(), result_to_json(r, symbols)))
         .collect();
     let params: serde_json::Map<String, serde_json::Value> = result
         .params

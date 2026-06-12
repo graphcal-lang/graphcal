@@ -1,0 +1,9 @@
+// convert_dynamic_target_zero_scale.gcl -- a dynamic unit used only as a
+// conversion target must fail loudly when its scale is non-positive,
+// matching the behavior of unit literals (#648 N1).
+pub base dim Money;
+pub base unit USD: Money;
+param rate: Dimensionless = 0.0;
+unit EUR: Money = (@rate) USD;
+param price: Money = 100.0 USD;
+node bad: Money = @price -> EUR;

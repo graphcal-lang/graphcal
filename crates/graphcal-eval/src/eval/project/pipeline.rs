@@ -481,7 +481,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
                     let decl_name = name.clone();
                     match cat {
                         DeclCategory::Const => {
-                            all_consts.push((decl_name.clone(), value.clone()));
+                            all_consts.push((decl_name.clone(), Ok(value.clone())));
                             all_all.push((
                                 decl_name,
                                 Ok(value),

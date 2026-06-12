@@ -236,6 +236,22 @@ fn error_boolean_dim_error() {
 }
 
 #[test]
+fn error_convert_target_scale_overflow() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/convert_target_scale_overflow.gcl");
+    let rendered = render_node_error(source, "convert_target_scale_overflow.gcl", "bad");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_dynamic_target_zero_scale() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/convert_dynamic_target_zero_scale.gcl");
+    let rendered = render_node_error(source, "convert_dynamic_target_zero_scale.gcl", "bad");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_division_by_zero() {
     let source = include_str!("../../../tests/fixtures/runtime_error/division_by_zero.gcl");
     let rendered = render_node_error(source, "division_by_zero.gcl", "y");

@@ -1,0 +1,5 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dynamic unit scale must be greater than zero, got 0

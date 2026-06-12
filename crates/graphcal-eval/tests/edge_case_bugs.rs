@@ -25,7 +25,7 @@ use proptest::prelude::*;
 /// Find the SI value of a named scalar declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
     if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.to_string() == name) {
-        return val.si_value().unwrap();
+        return val.as_ref().unwrap().si_value().unwrap();
     }
     result
         .params

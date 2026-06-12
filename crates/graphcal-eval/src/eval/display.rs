@@ -3,6 +3,7 @@
 
 use graphcal_compiler::hir::ExprKind;
 use graphcal_compiler::hir::expr::MapEntryKey;
+use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::names::IndexVariantName;
 use indexmap::IndexMap;
 
@@ -11,24 +12,32 @@ use crate::eval_expr::{EvalContext, RuntimeValueMap};
 use super::types::{DisplayUnit, Value};
 use graphcal_compiler::registry::format::{format_number, format_unit_expr_canonical};
 
+/// Attach display units to a computed value based on its defining expression.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] when a display unit's scale cannot be resolved
+/// (unknown unit, non-positive or non-finite scale, dynamic scale evaluation
+/// failure). A conversion the user wrote must either take effect or fail
+/// loudly — silently falling back to the base unit would misreport the value.
 pub(super) fn attach_display_units(
     value: &mut Value,
     expr: &graphcal_compiler::hir::Expr,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
-) {
+) -> Result<(), GraphcalError> {
     match (&mut *value, &expr.kind) {
         (Value::Scalar { display_unit, .. }, ExprKind::UnitLiteral { unit, .. }) => {
-            *display_unit = resolve_unit_to_display(unit, ctx, values);
+            *display_unit = Some(resolve_unit_to_display(unit, ctx, values)?);
         }
         (Value::Scalar { display_unit, .. }, ExprKind::Convert { target, .. }) => {
-            *display_unit = resolve_unit_to_display(target, ctx, values);
+            *display_unit = Some(resolve_unit_to_display(target, ctx, values)?);
         }
         // Constructor call: recurse into each field initializer.
         (Value::Struct { fields, .. }, ExprKind::ConstructorCall { fields: inits, .. }) => {
             for init in inits {
                 if let Some(field_val) = fields.get_mut(&init.name.value) {
-                    attach_display_units(field_val, &init.value, ctx, values);
+                    attach_display_units(field_val, &init.value, ctx, values)?;
                 }
             }
         }
@@ -42,13 +51,13 @@ pub(super) fn attach_display_units(
         ) => {
             for map_entry in map_entries {
                 if let Some(target) = walk_indexed_keys(entries, map_entry.keys.as_slice()) {
-                    attach_display_units(target, &map_entry.value, ctx, values);
+                    attach_display_units(target, &map_entry.value, ctx, values)?;
                 }
             }
         }
         // For comprehension: extract a single display unit from body, apply uniformly
         (Value::Indexed { entries, .. }, ExprKind::ForComp { body, .. }) => {
-            if let Some(du) = extract_flat_display_unit(body, ctx, values) {
+            if let Some(du) = extract_flat_display_unit(body, ctx, values)? {
                 for entry_val in entries.values_mut() {
                     set_scalar_display_unit(entry_val, &du);
                 }
@@ -57,7 +66,7 @@ pub(super) fn attach_display_units(
         // Scan: extract a single display unit from init, apply uniformly
         (Value::Indexed { entries, .. }, ExprKind::Scan { init, .. })
         | (Value::Indexed { entries, .. }, ExprKind::Unfold { init, .. }) => {
-            if let Some(du) = extract_flat_display_unit(init, ctx, values) {
+            if let Some(du) = extract_flat_display_unit(init, ctx, values)? {
                 for entry_val in entries.values_mut() {
                     set_scalar_display_unit(entry_val, &du);
                 }
@@ -70,19 +79,25 @@ pub(super) fn attach_display_units(
         // All other combinations: no display unit to attach
         _ => {}
     }
+    Ok(())
 }
 
 /// Resolve a `UnitExpr` to a `DisplayUnit`.
 ///
 /// Handles both static and dynamic unit scales. For dynamic units, the scale
 /// expression is evaluated using the provided evaluation context and value map.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] when the scale cannot be resolved; see
+/// [`attach_display_units`].
 pub(super) fn resolve_unit_to_display(
     unit: &graphcal_compiler::desugar::desugared_ast::UnitExpr,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
-) -> Option<DisplayUnit> {
-    let scale = resolve_display_unit_scale(unit, ctx, values)?;
-    Some(DisplayUnit {
+) -> Result<DisplayUnit, GraphcalError> {
+    let scale = crate::eval_expr::resolve_unit_scale(unit, values, ctx)?;
+    Ok(DisplayUnit {
         label: format_unit_expr_canonical(unit),
         scale,
     })
@@ -91,37 +106,30 @@ pub(super) fn resolve_unit_to_display(
 /// Extract a single display unit from a scalar-producing expression.
 ///
 /// Used for indexed collections (for comprehensions, scan) where all entries
-/// share the same display unit.
+/// share the same display unit. `Ok(None)` means the expression carries no
+/// display unit; `Err` means it carries one that failed to resolve.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] when a present display unit's scale cannot be
+/// resolved; see [`attach_display_units`].
 pub(super) fn extract_flat_display_unit(
     expr: &graphcal_compiler::hir::Expr,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
-) -> Option<DisplayUnit> {
+) -> Result<Option<DisplayUnit>, GraphcalError> {
     match &expr.kind {
-        ExprKind::UnitLiteral { unit, .. } => resolve_unit_to_display(unit, ctx, values),
-        ExprKind::Convert { target, .. } => resolve_unit_to_display(target, ctx, values),
-        ExprKind::MapLiteral { entries } => entries
-            .first()
-            .and_then(|e| extract_flat_display_unit(&e.value, ctx, values)),
+        ExprKind::UnitLiteral { unit, .. } => resolve_unit_to_display(unit, ctx, values).map(Some),
+        ExprKind::Convert { target, .. } => resolve_unit_to_display(target, ctx, values).map(Some),
+        ExprKind::MapLiteral { entries } => entries.first().map_or(Ok(None), |e| {
+            extract_flat_display_unit(&e.value, ctx, values)
+        }),
         ExprKind::ForComp { body, .. } => extract_flat_display_unit(body, ctx, values),
         ExprKind::Scan { init, .. } | ExprKind::Unfold { init, .. } => {
             extract_flat_display_unit(init, ctx, values)
         }
-        _ => None,
+        _ => Ok(None),
     }
-}
-
-/// Resolve a `UnitExpr` to its compound scale factor for display purposes.
-///
-/// Delegates to `eval_expr::resolve_unit_scale`, preserving the caller's
-/// module-aware runtime declaration keys so dynamic-unit graph refs are not
-/// reclassified through display leaf names.
-fn resolve_display_unit_scale(
-    unit: &graphcal_compiler::desugar::desugared_ast::UnitExpr,
-    ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
-) -> Option<f64> {
-    crate::eval_expr::resolve_unit_scale(unit, values, ctx).ok()
 }
 
 /// Format a range index step value for display, e.g. `"0 s"`, `"0.25 s"`.

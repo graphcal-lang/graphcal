@@ -8,9 +8,9 @@ fn fs() -> RealFileSystem {
 
 /// Find the SI value of a named scalar declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
-    // Check consts first (they are not wrapped in Result)
+    // Check consts first
     if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.to_string() == name) {
-        return val.si_value().unwrap();
+        return val.as_ref().unwrap().si_value().unwrap();
     }
     // Check params and nodes (wrapped in Result)
     result
@@ -3651,7 +3651,7 @@ fn struct_field_within_bounds_passes() {
         .iter()
         .find(|(n, _)| n.to_string() == "SAT")
         .expect("SAT not found");
-    matches!(val, Value::Struct { .. });
+    matches!(val.as_ref().unwrap(), Value::Struct { .. });
 }
 
 #[test]
