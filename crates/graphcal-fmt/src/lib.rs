@@ -1,3 +1,5 @@
+//! Formatting for `.gcl` sources: parse, pretty-print, and verify the
+//! result re-parses to the same syntax tree.
 #![expect(
     clippy::result_large_err,
     reason = "FormatError embeds ParseError, which is inherently large and only constructed on the error path"

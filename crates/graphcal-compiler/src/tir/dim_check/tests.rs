@@ -1770,10 +1770,10 @@ fn check_unknown_plot_property_is_rejected() {
     let source = "\
 pub index Step = { A, B };
 param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
-plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, titel: \"typo\" };";
+plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, caption: \"typo\" };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::InvalidPlotProperty { ref property, .. } if property == "titel"),
+        matches!(err, GraphcalError::InvalidPlotProperty { ref property, .. } if property == "caption"),
         "got: {err:?}"
     );
 }

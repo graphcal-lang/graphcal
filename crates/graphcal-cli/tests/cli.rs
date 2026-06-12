@@ -2664,7 +2664,9 @@ fn eval_plot_negative_width_is_an_error() {
 
 #[test]
 fn check_rejects_typoed_plot_property() {
-    // Typo'd property names must fail `graphcal check`, not vanish (#845).
+    // Mistyped property names must fail `graphcal check`, not vanish (#845).
+    // `caption` is deliberately not a misspelling of a real property so the
+    // typos pre-commit hook leaves it alone.
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("typo.gcl");
     std::fs::write(
@@ -2674,7 +2676,7 @@ fn check_rejects_typoed_plot_property() {
          pub plot p = {\n\
              mark: line,\n\
              encode: { x: for s: Step { @vals[s] } },\n\
-             titel: \"typo\",\n\
+             caption: \"typo\",\n\
          };\n",
     )
     .unwrap();
@@ -2690,7 +2692,7 @@ fn check_rejects_typoed_plot_property() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("titel"),
+        stderr.contains("caption"),
         "expected the typo'd name in the diagnostic: {stderr}"
     );
 }

@@ -44,7 +44,7 @@ The plot-level properties:
 | `y_label` | String literal |
 
 Property names and value types are validated by `graphcal check`: an unknown
-name (e.g. a typo like `titel:`) is an error, a wrongly-typed value (e.g.
+name (e.g. a misspelled `title:`) is an error, a wrongly-typed value (e.g.
 `title: 42.0`) is an error, and a dimensioned value (e.g.
 `stroke_width: 2.0 m`) is rejected — plot properties are raw rendering
 quantities, so units never get silently stripped. `width`/`height` must be
