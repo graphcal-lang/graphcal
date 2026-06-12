@@ -9,7 +9,7 @@ fn fs() -> RealFileSystem {
 /// Find the SI value of a named scalar declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
     // Check consts first (they are not wrapped in Result)
-    if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.as_str() == name) {
+    if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.to_string() == name) {
         return val.si_value().unwrap();
     }
     // Check params and nodes (wrapped in Result)
@@ -17,7 +17,7 @@ fn find_value(result: &EvalResult, name: &str) -> f64 {
         .params
         .iter()
         .chain(result.nodes.iter())
-        .find(|(n, _)| n.as_str() == name)
+        .find(|(n, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
         .as_ref()
@@ -168,6 +168,367 @@ fn eval_assertions_use_hir_body_after_syntax_mutation() {
 }
 
 #[test]
+fn indexed_tolerance_reports_failing_keys_with_detail() {
+    // #809: indexed tolerance assertions check per key and report each
+    // failing key with its actual/expected/delta detail.
+    let result = compile_and_eval(
+        "index Case = { A, B };\n\
+         node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
+         node expected: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.5 };\n\
+         assert close = @actual ~= @expected +/- 0.1;",
+    )
+    .unwrap();
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Fail { message } => {
+            assert_eq!(
+                message,
+                "failed at Case.B (actual 2, expected 2.5 +/- 0.1, off by 0.5)"
+            );
+        }
+        other => panic!("expected Fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn indexed_tolerance_per_key_and_relative_pass() {
+    let result = compile_and_eval(
+        "index Case = { A, B };\n\
+         node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
+         node expected: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.5 };\n\
+         node tol: Dimensionless[Case] = { Case.A: 0.01, Case.B: 0.6 };\n\
+         assert per_key = @actual ~= @expected +/- @tol;\n\
+         assert relative = @actual ~= @expected +/- 25 %;",
+    )
+    .unwrap();
+    for (name, result, _) in &result.assertions {
+        assert_eq!(
+            result,
+            &super::types::AssertResult::Pass,
+            "assertion `{name}` should pass"
+        );
+    }
+}
+
+#[test]
+fn indexed_tolerance_respects_per_variant_expected_fail() {
+    // Expected failure occurs → Pass; unexpected pass at the marked key →
+    // Fail, exactly as for indexed boolean assertions.
+    let source = |tol: &str| {
+        format!(
+            "index Case = {{ A, B }};\n\
+             node actual: Dimensionless[Case] = {{ Case.A: 1.0, Case.B: 2.0 }};\n\
+             node expected: Dimensionless[Case] = {{ Case.A: 1.0, Case.B: 2.5 }};\n\
+             #[expected_fail(Case.B)]\n\
+             assert known = @actual ~= @expected +/- {tol};"
+        )
+    };
+
+    let result = compile_and_eval(&source("0.1")).unwrap();
+    assert_eq!(result.assertions[0].1, super::types::AssertResult::Pass);
+
+    let result = compile_and_eval(&source("1.0")).unwrap();
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Fail { message } => {
+            assert!(
+                message.contains("unexpected pass at Case.B"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected Fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn indexed_comparison_broadcasts_element_wise() {
+    // #809: `T[I] == T[I]` and `T[I] op scalar` evaluate per key.
+    let result = compile_and_eval(
+        "index Case = { A, B };\n\
+         node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
+         node expected: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.5 };\n\
+         node same: Bool[Case] = @actual == @expected;\n\
+         node below: Bool[Case] = @actual < 3.0;\n\
+         assert per_key_report = @actual == @expected;",
+    )
+    .unwrap();
+    let node = |name: &str| {
+        result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.to_string() == name)
+            .unwrap_or_else(|| panic!("node `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap()
+            .clone()
+    };
+    let entries = |value: &super::types::Value| match value {
+        super::types::Value::Indexed { entries, .. } => entries
+            .iter()
+            .map(|(k, v)| {
+                let super::types::Value::Bool(b) = v else {
+                    panic!("expected Bool entry, got {v:?}")
+                };
+                (k.to_string(), *b)
+            })
+            .collect::<Vec<_>>(),
+        other => panic!("expected indexed value, got {other:?}"),
+    };
+    assert_eq!(
+        entries(&node("same")),
+        vec![("A".to_string(), true), ("B".to_string(), false)]
+    );
+    assert_eq!(
+        entries(&node("below")),
+        vec![("A".to_string(), true), ("B".to_string(), true)]
+    );
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Fail { message } => {
+            assert_eq!(message, "failed at Case.B");
+        }
+        other => panic!("expected per-key Fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn expected_fail_range_key_passes_when_step_fails() {
+    // #816: `#[expected_fail(#N)]` keys bind to Nat range axes positionally.
+    let result = compile_and_eval(
+        "#[expected_fail(#1)]\n\
+         assert r = for i: range(2) { i == 0 };",
+    )
+    .unwrap();
+    assert_eq!(result.assertions[0].1, super::types::AssertResult::Pass);
+}
+
+#[test]
+fn expected_fail_range_key_unexpected_pass_fails() {
+    // The "unexpected pass" tripwire works for range keys: #0 passes but was
+    // marked expected_fail, and #1 fails without being marked.
+    let result = compile_and_eval(
+        "#[expected_fail(#0)]\n\
+         assert r = for i: range(2) { i == 0 };",
+    )
+    .unwrap();
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Fail { message } => {
+            assert!(
+                message.contains("unexpected pass") && message.contains("#0"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected Fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn expected_fail_mixed_named_and_range_tuple_key() {
+    let result = compile_and_eval(
+        "index Mode = { Boost, Cruise };\n\
+         #[expected_fail((Mode.Boost, #1))]\n\
+         assert m = for m: Mode {\n\
+             for i: range(2) {\n\
+                 if m == Mode.Boost && i == 1 { false } else { true }\n\
+             }\n\
+         };",
+    )
+    .unwrap();
+    assert_eq!(result.assertions[0].1, super::types::AssertResult::Pass);
+}
+
+#[test]
+fn inline_dag_call_with_failing_assert_fails_calling_node() {
+    // #812: inline invocation of an assert-carrying dag evaluates the dag's
+    // asserts; a failure fails the calling expression (fault-isolated).
+    let result = compile_and_eval(
+        "dag checked {\n\
+             param v: Dimensionless;\n\
+             pub node out: Dimensionless = @v * 2.0;\n\
+             assert v_positive = @v > 0.0;\n\
+         }\n\
+         node y: Dimensionless = @checked(v: -3.0).out;\n\
+         node independent: Dimensionless = 1.0;",
+    )
+    .unwrap();
+    let node_result = |name: &str| {
+        result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.to_string() == name)
+            .unwrap_or_else(|| panic!("node `{name}` not found"))
+            .1
+            .clone()
+    };
+    match node_result("y") {
+        Err(NodeError::EvalFailed { message }) => {
+            assert_eq!(
+                message,
+                "assertion `v_positive` failed in inline call of dag `checked` \
+                 (assertion evaluated to false)"
+            );
+        }
+        other => panic!("expected eval failure for `y`, got {other:?}"),
+    }
+    assert!(
+        node_result("independent").is_ok(),
+        "independent node must not be affected"
+    );
+}
+
+#[test]
+fn inline_dag_call_with_passing_assert_succeeds() {
+    let result = compile_and_eval(
+        "dag checked {\n\
+             param v: Dimensionless;\n\
+             pub node out: Dimensionless = @v * 2.0;\n\
+             assert v_positive = @v > 0.0;\n\
+         }\n\
+         node y: Dimensionless = @checked(v: 3.0).out;",
+    )
+    .unwrap();
+    assert!((find_value(&result, "y") - 6.0).abs() < f64::EPSILON);
+    // The dag's assert is internal to the instantiation — no spurious
+    // top-level assertion report.
+    assert!(result.assertions.is_empty());
+}
+
+#[test]
+fn inline_dag_call_respects_expected_fail() {
+    // An #[expected_fail] assert that fails inside the inline instantiation
+    // is an expected failure → Pass → no error. One that passes unexpectedly
+    // inverts to a failure → the calling node errors.
+    let source_template = |v: &str| {
+        format!(
+            "dag checked {{\n\
+                 param v: Dimensionless;\n\
+                 pub node out: Dimensionless = @v * 2.0;\n\
+                 #[expected_fail]\n\
+                 assert is_neg = @v < 0.0;\n\
+             }}\n\
+             node y: Dimensionless = @checked(v: {v}).out;"
+        )
+    };
+
+    let result = compile_and_eval(&source_template("3.0")).unwrap();
+    assert!(
+        result.nodes[0].1.is_ok(),
+        "expected failure occurred → no error: {:?}",
+        result.nodes[0].1
+    );
+
+    let result = compile_and_eval(&source_template("-3.0")).unwrap();
+    match &result.nodes[0].1 {
+        Err(NodeError::EvalFailed { message }) => {
+            assert!(
+                message.contains("assertion passed but was marked #[expected_fail]"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected eval failure for unexpected pass, got {other:?}"),
+    }
+}
+
+#[test]
+fn assert_negative_runtime_tolerance_errors() {
+    // #815: a tolerance computed at runtime must be non-negative; a negative
+    // value is an assertion ERROR, not a silent constant-false FAIL.
+    let result = compile_and_eval(
+        "param x: Dimensionless = 1.0;\n\
+         param tol: Dimensionless = -0.1;\n\
+         assert exact = @x ~= 1.0 +/- @tol;",
+    )
+    .unwrap();
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Error { message } => {
+            assert!(
+                message.contains("tolerance must be non-negative"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected assertion error, got {other:?}"),
+    }
+}
+
+#[test]
+fn assert_negative_runtime_relative_tolerance_errors() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 1.0;\n\
+         param tol: Dimensionless = -5.0;\n\
+         assert exact = @x ~= 1.0 +/- @tol %;",
+    )
+    .unwrap();
+    match &result.assertions[0].1 {
+        super::types::AssertResult::Error { message } => {
+            assert!(
+                message.contains("tolerance must be non-negative") && message.contains('%'),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected assertion error, got {other:?}"),
+    }
+}
+
+#[test]
+fn assert_on_failed_dependency_reports_dependency_failure() {
+    // #814: an assertion referencing a failed node reports the dependency
+    // failure with its root cause and the source-level leaf name — not
+    // "undefined graph reference `@file.e`".
+    let result = compile_and_eval(
+        "param zero: Dimensionless = 0.0;\n\
+         node e: Dimensionless = 1.0 / @zero;\n\
+         node fine: Dimensionless = 2.0;\n\
+         assert uses_e = @e > 0.0;\n\
+         assert uses_fine = @fine > 0.0;",
+    )
+    .unwrap();
+    let assert_result = |name: &str| {
+        result
+            .assertions
+            .iter()
+            .find(|(assert_name, _, _)| assert_name.to_string() == name)
+            .unwrap_or_else(|| panic!("assertion `{name}` not found"))
+            .1
+            .clone()
+    };
+    assert_eq!(
+        assert_result("uses_e"),
+        super::types::AssertResult::Error {
+            message: "dependency failed: e (division by zero)".to_string()
+        }
+    );
+    assert_eq!(assert_result("uses_fine"), super::types::AssertResult::Pass);
+}
+
+#[test]
+fn assert_on_transitively_failed_dependency_reports_dependency_name() {
+    // A dependency that itself failed only because of an upstream failure is
+    // listed by name; the root cause is reported on the failing declaration.
+    let result = compile_and_eval(
+        "param zero: Dimensionless = 0.0;\n\
+         node e: Dimensionless = 1.0 / @zero;\n\
+         node f: Dimensionless = @e + 1.0;\n\
+         assert uses_f = @f > 0.0;",
+    )
+    .unwrap();
+    assert_eq!(
+        result.assertions[0].1,
+        super::types::AssertResult::Error {
+            message: "dependency failed: f".to_string()
+        }
+    );
+}
+
+#[test]
+fn assert_zero_tolerance_exact_match_passes() {
+    // #815: zero tolerance stays legal — exact-match semantics.
+    let result = compile_and_eval(
+        "param x: Dimensionless = 1.0;\n\
+         assert exact = @x ~= 1.0 +/- 0.0;",
+    )
+    .unwrap();
+    assert_eq!(result.assertions[0].1, super::types::AssertResult::Pass);
+}
+
+#[test]
 fn eval_if_else_true_branch() {
     let result = compile_and_eval(
         "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x > 0.0 { @x } else { 0.0 };",
@@ -224,17 +585,17 @@ fn eval_result_source_order() {
         "param b: Dimensionless = 2.0;\nparam a: Dimensionless = 1.0;\nnode z: Dimensionless = @a + @b;\nnode y: Dimensionless = @z * 2.0;",
     )
     .unwrap();
-    assert_eq!(result.params[0].0.as_str(), "b");
-    assert_eq!(result.params[1].0.as_str(), "a");
-    assert_eq!(result.nodes[0].0.as_str(), "z");
-    assert_eq!(result.nodes[1].0.as_str(), "y");
+    assert_eq!(result.params[0].0.to_string(), "b");
+    assert_eq!(result.params[1].0.to_string(), "a");
+    assert_eq!(result.nodes[0].0.to_string(), "z");
+    assert_eq!(result.nodes[1].0.to_string(), "y");
 }
 
 #[test]
 fn eval_result_all_field_source_order() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     let result = compile_and_eval(source).unwrap();
-    let names: Vec<&str> = result.all.iter().map(|(n, _, _)| n.as_str()).collect();
+    let names: Vec<String> = result.all.iter().map(|(n, _, _)| n.to_string()).collect();
     assert_eq!(
         names,
         vec![
@@ -303,7 +664,7 @@ fn eval_orbital_milestone() {
     let speed_kmh = result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "speed_kmh")
+        .find(|(n, _)| n.to_string() == "speed_kmh")
         .unwrap();
     let speed_kmh_val = speed_kmh.1.as_ref().unwrap();
     assert_eq!(
@@ -361,7 +722,7 @@ fn find_entry(result: &EvalResult, name: &str) -> Value {
     result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == name)
+        .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
         .as_ref()
@@ -701,7 +1062,7 @@ fn assert_node_error(source: &str, node_name: &str, needle: &str) {
     let (_, node_result, _) = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == node_name)
+        .find(|(n, _, _)| n.to_string() == node_name)
         .unwrap_or_else(|| panic!("node `{node_name}` not found"));
     match node_result {
         Err(NodeError::EvalFailed { message }) => {
@@ -787,7 +1148,7 @@ fn eval_error_does_not_block_independent_nodes() {
         result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == "bad")
+            .find(|(n, _)| n.to_string() == "bad")
             .unwrap()
             .1
             .is_err()
@@ -808,7 +1169,7 @@ fn eval_error_propagates_to_dependents() {
     let bad_result = &result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "bad")
+        .find(|(n, _)| n.to_string() == "bad")
         .unwrap()
         .1;
     assert!(matches!(bad_result, Err(NodeError::EvalFailed { .. })));
@@ -816,7 +1177,7 @@ fn eval_error_propagates_to_dependents() {
     let ds_result = &result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "downstream")
+        .find(|(n, _)| n.to_string() == "downstream")
         .unwrap()
         .1;
     assert!(matches!(ds_result, Err(NodeError::DependencyFailed { .. })));
@@ -845,7 +1206,7 @@ fn find_int_value(result: &EvalResult, name: &str) -> i64 {
     let val = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == name)
+        .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
         .as_ref()
@@ -861,7 +1222,7 @@ fn find_bool_value(result: &EvalResult, name: &str) -> bool {
     let val = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == name)
+        .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
         .as_ref()
@@ -1307,7 +1668,7 @@ fn eval_constructor_calls_preserve_same_leaf_struct_owners() {
         let value = result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == name)
+            .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("node `{name}` not found"))
             .1
             .as_ref()
@@ -1504,7 +1865,7 @@ fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fie
     let a_ok = result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "a_ok")
+        .find(|(n, _)| n.to_string() == "a_ok")
         .expect("node a_ok")
         .1
         .as_ref();
@@ -1515,7 +1876,7 @@ fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fie
     let b_bad = result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "b_bad")
+        .find(|(n, _)| n.to_string() == "b_bad")
         .expect("node b_bad")
         .1
         .as_ref();
@@ -1848,7 +2209,7 @@ fn project_expected_fail_keys_accept_resolved_index_owner_with_same_leaf_indexes
         result
             .assertions
             .iter()
-            .find(|(assert_name, _, _)| assert_name.as_str() == name)
+            .find(|(assert_name, _, _)| assert_name.to_string() == name)
             .unwrap_or_else(|| panic!("assertion `{name}` not found"))
             .1
             .clone()
@@ -1922,7 +2283,7 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
         let value = result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == name)
+            .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("node `{name}` not found"))
             .1
             .as_ref()
@@ -1939,7 +2300,7 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
         let value = result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == name)
+            .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("node `{name}` not found"))
             .1
             .as_ref()
@@ -1976,7 +2337,7 @@ fn eval_unfold_uses_resolved_declared_range_index_owner_with_same_leaf_indexes()
     let value = result
         .nodes
         .iter()
-        .find(|(name, _)| name.as_str() == "y")
+        .find(|(name, _)| name.to_string() == "y")
         .expect("node y")
         .1
         .as_ref()
@@ -2142,7 +2503,7 @@ mod prop {
             );
             let r = compile_and_eval(&source).unwrap();
             let z_result = &r.all.iter()
-                .find(|(n, _, _)| n.as_str() == "z")
+                .find(|(n, _, _)| n.to_string() == "z")
                 .unwrap().1;
             match z_result {
                 Ok(val) => {
@@ -2388,7 +2749,7 @@ fn project_injectable_index_expected_fail() {
     let assert_result = result
         .assertions
         .iter()
-        .find(|(name, _, _)| name.as_str().contains("within_limit"))
+        .find(|(name, _, _)| name.to_string().contains("within_limit"))
         .expect("within_limit assertion not found");
     assert!(
         matches!(assert_result.1, AssertResult::Pass),
@@ -2994,7 +3355,7 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
     let distances_entry = result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "distances")
+        .find(|(n, _)| n.to_string() == "distances")
         .expect("distances node")
         .1
         .as_ref()
@@ -3040,7 +3401,7 @@ node effective: Length[Source, Region] = for s: Source, r: Region {
     let entry = result
         .nodes
         .iter()
-        .find(|(n, _)| n.as_str() == "effective")
+        .find(|(n, _)| n.to_string() == "effective")
         .expect("effective node")
         .1
         .as_ref()
@@ -3208,7 +3569,7 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
         let value = result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == name)
+            .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
             .as_ref()
@@ -3236,7 +3597,7 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
         let value = result
             .nodes
             .iter()
-            .find(|(n, _)| n.as_str() == name)
+            .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
             .as_ref()
@@ -3288,7 +3649,7 @@ fn struct_field_within_bounds_passes() {
     let (_, val) = result
         .consts
         .iter()
-        .find(|(n, _)| n.as_str() == "SAT")
+        .find(|(n, _)| n.to_string() == "SAT")
         .expect("SAT not found");
     matches!(val, Value::Struct { .. });
 }
@@ -3324,7 +3685,7 @@ node SAT: Spec = Spec(mass: @x);
     let (_, sat_result, _) = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == "SAT")
+        .find(|(n, _, _)| n.to_string() == "SAT")
         .expect("SAT not found");
     let err = sat_result.as_ref().unwrap_err();
     let NodeError::EvalFailed { message } = err else {
@@ -3349,7 +3710,7 @@ node R: Result = Burn(dv: 50.0 km/s);
     let (_, r_result, _) = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == "R")
+        .find(|(n, _, _)| n.to_string() == "R")
         .expect("R not found");
     let err = r_result.as_ref().unwrap_err();
     let NodeError::EvalFailed { message } = err else {
@@ -3429,8 +3790,8 @@ include bumper(v: @speed).{ out as doubled };
     let (_, v_result, _) = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == "v")
-        .expect("v not found");
+        .find(|(n, _, _)| n.to_string() == "bumper.v")
+        .expect("bumper.v not found");
     assert!(v_result.is_err(), "v should violate domain constraint");
 }
 

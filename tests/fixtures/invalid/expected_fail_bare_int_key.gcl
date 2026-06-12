@@ -1,0 +1,4 @@
+// #816: a bare integer is not a valid expected-fail key — range steps are
+// written `#N`, matching table slice labels.
+#[expected_fail(1)]
+assert r = for i: range(2) { i == 0 };

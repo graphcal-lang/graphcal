@@ -61,13 +61,6 @@ impl RuntimeDeclKey {
             Self::Resolved(name) => name.as_str(),
         }
     }
-
-    #[must_use]
-    pub(crate) fn to_decl_name(&self) -> DeclName {
-        match self {
-            Self::Resolved(name) => DeclName::from_atom(name.atom().clone()),
-        }
-    }
 }
 
 impl From<ResolvedName<namespace::Decl>> for RuntimeDeclKey {

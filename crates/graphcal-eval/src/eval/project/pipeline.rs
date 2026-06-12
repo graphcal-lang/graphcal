@@ -448,7 +448,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
 
             // Aggregate assertions from all dependency files, replacing the
             // assertion's original span with the root file's import statement span.
-            let mut all_assertions: Vec<(DeclName, AssertResult, Span)> = Vec::new();
+            let mut all_assertions: Vec<(ScopedName, AssertResult, Span)> = Vec::new();
             for dep_dag_id in &project.load_order {
                 if *dep_dag_id == project.root {
                     continue;
@@ -478,7 +478,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
                         Some(dt),
                         &compiled.tir.registry,
                     );
-                    let decl_name = DeclName::new(name.member());
+                    let decl_name = name.clone();
                     match cat {
                         DeclCategory::Const => {
                             all_consts.push((decl_name.clone(), value.clone()));

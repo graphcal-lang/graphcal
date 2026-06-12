@@ -4,7 +4,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
-use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey};
+use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
 use crate::syntax::dimension::Dimension;
 use crate::syntax::names::{
     IndexName, IndexVariantName, ResolvedName, ScopedName, StructTypeName, namespace,
@@ -382,18 +382,10 @@ struct AssertionIndexShape {
 }
 
 impl AssertionIndexShape {
-    const fn scalar() -> Self {
-        Self { axes: Vec::new() }
-    }
-
     fn from_bool_type(ty: &InferredType) -> Self {
-        let mut axes = Vec::new();
-        let mut current = ty;
-        while let InferredType::Indexed { element, index } = current {
-            axes.push(index.clone());
-            current = element;
+        Self {
+            axes: peel_index_axes(ty).0,
         }
-        Self { axes }
     }
 
     const fn is_indexed(&self) -> bool {
@@ -435,8 +427,29 @@ fn check_hir_assert_body(
             let expected_type = ctx.infer_hir(expected)?;
             let tolerance_type = ctx.infer_hir(tolerance)?;
 
-            let actual_dim = expect_scalar(&actual_type, registry, src, actual.span)?;
-            let expected_dim = expect_scalar(&expected_type, registry, src, expected.span)?;
+            // Element-wise broadcasting (#809): the assertion's index shape
+            // comes from `actual`; `expected` and `tolerance` are each scalar
+            // (broadcast to every key) or indexed by exactly the same axes.
+            let (actual_axes, actual_elem) = peel_index_axes(&actual_type);
+            let expected_elem = broadcast_operand_element(
+                &actual_axes,
+                &actual_type,
+                &expected_type,
+                expected.span,
+                registry,
+                src,
+            )?;
+            let tolerance_elem = broadcast_operand_element(
+                &actual_axes,
+                &actual_type,
+                &tolerance_type,
+                tolerance.span,
+                registry,
+                src,
+            )?;
+
+            let actual_dim = expect_scalar(actual_elem, registry, src, actual.span)?;
+            let expected_dim = expect_scalar(expected_elem, registry, src, expected.span)?;
             if actual_dim != expected_dim {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(&actual_dim),
@@ -449,10 +462,10 @@ fn check_hir_assert_body(
             }
 
             let tolerance_ok = if *is_relative {
-                tolerance_type.is_int_like()
-                    || matches!(&tolerance_type, InferredType::Scalar(d) if d.is_dimensionless())
+                tolerance_elem.is_int_like()
+                    || matches!(tolerance_elem, InferredType::Scalar(d) if d.is_dimensionless())
             } else {
-                let tolerance_dim = expect_scalar(&tolerance_type, registry, src, tolerance.span)?;
+                let tolerance_dim = expect_scalar(tolerance_elem, registry, src, tolerance.span)?;
                 tolerance_dim == actual_dim
             };
             if !tolerance_ok {
@@ -476,21 +489,95 @@ fn check_hir_assert_body(
                     span: tolerance.span.into(),
                 });
             }
-            Ok(AssertionIndexShape::scalar())
+
+            // A negative tolerance makes the assertion unsatisfiable (even an
+            // exact match fails `abs(delta) <= tol`), so a statically-known
+            // negative value is a compile error (#815). Tolerances computed
+            // at runtime are validated by the evaluator instead.
+            if let Some(value) = statically_known_tolerance(tolerance)
+                && value < 0.0
+            {
+                return Err(GraphcalError::NegativeTolerance {
+                    found: crate::registry::format::format_number(value),
+                    src: src.clone(),
+                    span: tolerance.span.into(),
+                });
+            }
+            Ok(AssertionIndexShape { axes: actual_axes })
         }
+    }
+}
+
+/// Peel the index axes off an inferred type, outermost first.
+fn peel_index_axes(ty: &InferredType) -> (Vec<InferredIndex>, &InferredType) {
+    let mut axes = Vec::new();
+    let mut current = ty;
+    while let InferredType::Indexed { element, index } = current {
+        axes.push(index.clone());
+        current = element;
+    }
+    (axes, current)
+}
+
+/// Validate that a tolerance-assertion operand broadcasts against `actual`'s
+/// axes (#809): it is either unindexed (applied to every key) or indexed by
+/// exactly the same axes in the same order. Returns the operand's element
+/// type.
+fn broadcast_operand_element<'a>(
+    actual_axes: &[InferredIndex],
+    actual_type: &InferredType,
+    operand_type: &'a InferredType,
+    operand_span: crate::syntax::span::Span,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<&'a InferredType, GraphcalError> {
+    let (operand_axes, operand_elem) = peel_index_axes(operand_type);
+    if !operand_axes.is_empty() && operand_axes != *actual_axes {
+        return Err(GraphcalError::IndexedShapeMismatch {
+            context: "tolerance assertion".to_string(),
+            lhs: format_inferred_type(actual_type, registry),
+            rhs: format_inferred_type(operand_type, registry),
+            src: src.clone(),
+            span: operand_span.into(),
+        });
+    }
+    Ok(operand_elem)
+}
+
+/// Structurally fold a tolerance expression to its written literal value
+/// when the sign is statically known: a numeric literal (`0.1`, `5`,
+/// `0.1 m` — unit scales are always positive, so the written value carries
+/// the sign), optionally under unary negation. Returns `None` for anything
+/// computed at runtime; those are sign-checked by the evaluator instead.
+fn statically_known_tolerance(expr: &crate::hir::Expr) -> Option<f64> {
+    match &expr.kind {
+        crate::hir::ExprKind::Number(n) => Some(*n),
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "tolerance literals are small integers"
+        )]
+        crate::hir::ExprKind::Integer(i) => Some(*i as f64),
+        crate::hir::ExprKind::UnitLiteral { value, .. } => Some(*value),
+        crate::hir::ExprKind::UnaryOp {
+            op: crate::syntax::ast::UnaryOp::Neg,
+            operand,
+        } => statically_known_tolerance(operand).map(|v| -v),
+        _ => None,
     }
 }
 
 fn expected_fail_key_span(key: &ExpectedFailKey) -> crate::syntax::span::Span {
     key.iter()
-        .map(|part| part.span)
+        .map(ExpectedFailKeyPart::span)
         .reduce(crate::syntax::span::Span::merge)
         .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0))
 }
 
-fn expected_fail_key_signature(key: &ExpectedFailKey) -> Vec<(IndexTypeRef, IndexVariantName)> {
+fn expected_fail_key_signature(
+    key: &ExpectedFailKey,
+) -> Vec<(Option<IndexTypeRef>, IndexVariantName)> {
     key.iter()
-        .map(|part| (part.index.clone(), part.variant.clone()))
+        .map(|part| (part.named_index().cloned(), part.variant()))
         .collect()
 }
 
@@ -509,13 +596,41 @@ fn validate_expected_fail_key(
     }
 
     for (part, expected_axis) in key.iter().zip(&shape.axes) {
-        if !part.index.matches_ref(expected_axis.type_ref()) {
-            return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
-                expected: expected_axis.name().to_string(),
-                found: part.index.display_name().to_string(),
-                src: src.clone(),
-                span: part.span.into(),
-            });
+        match part {
+            ExpectedFailKeyPart::Named { index, .. } => {
+                if !index.matches_ref(expected_axis.type_ref()) {
+                    return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
+                        expected: expected_axis.name().to_string(),
+                        found: part.display(),
+                        src: src.clone(),
+                        span: part.span().into(),
+                    });
+                }
+            }
+            ExpectedFailKeyPart::RangeStep { step, span } => {
+                let Some(range) = expected_axis.type_ref().nat_range_ref() else {
+                    return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
+                        expected: expected_axis.name().to_string(),
+                        found: part.display(),
+                        src: src.clone(),
+                        span: (*span).into(),
+                    });
+                };
+                // Bound-check `#N` against a statically known range size.
+                // Symbolic sizes are checked nowhere earlier; an out-of-range
+                // step there can never match at runtime, which surfaces as an
+                // "unexpected pass" — acceptable for the symbolic case.
+                if let Some(concrete) = range.concrete_index()
+                    && *step >= concrete.size_u64()
+                {
+                    return Err(GraphcalError::ExpectedFailRangeStepOutOfBounds {
+                        step: *step,
+                        size: concrete.size_u64(),
+                        src: src.clone(),
+                        span: (*span).into(),
+                    });
+                }
+            }
         }
     }
 

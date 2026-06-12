@@ -381,17 +381,26 @@ pub struct ResolvedLayerEntry {
 }
 
 /// One axis segment in a per-variant `#[expected_fail(...)]` key.
-///
-/// The `index` carrier is the semantic key used by runtime assertion checks.
-/// Before module-aware TIR resolution, `source_index_path` preserves the
-/// structured syntax path. After resolution, `index` carries the canonical owner
-/// used by runtime checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExpectedFailKeyPart {
-    pub index: IndexTypeRef,
-    pub variant: IndexVariantName,
-    pub source_index_path: Option<NamePath>,
-    pub span: Span,
+pub enum ExpectedFailKeyPart {
+    /// An `Index.Variant` / `module.Index.Variant` segment for a named axis.
+    ///
+    /// The `index` carrier is the semantic key used by runtime assertion
+    /// checks. Before module-aware TIR resolution, `source_index_path`
+    /// preserves the structured syntax path. After resolution, `index`
+    /// carries the canonical owner used by runtime checks.
+    Named {
+        index: IndexTypeRef,
+        variant: IndexVariantName,
+        source_index_path: Option<NamePath>,
+        span: Span,
+    },
+    /// A `#N` segment for a Nat range axis (#816).
+    ///
+    /// Range axes have no source-level index name, so the axis identity is
+    /// positional: the segment binds to the assertion's axis at the same
+    /// tuple position, validated at dim-check time.
+    RangeStep { step: u64, span: Span },
 }
 
 impl ExpectedFailKeyPart {
@@ -401,7 +410,7 @@ impl ExpectedFailKeyPart {
 
     #[must_use]
     pub fn unresolved(index_path: NamePath, variant: IndexVariantName, span: Span) -> Self {
-        Self {
+        Self::Named {
             index: IndexTypeRef::with_owner(
                 Self::unresolved_owner(),
                 IndexName::from_atom(index_path.leaf().clone()),
@@ -419,7 +428,7 @@ impl ExpectedFailKeyPart {
         variant: IndexVariantName,
         span: Span,
     ) -> Self {
-        Self {
+        Self::Named {
             index: IndexTypeRef::with_owner(owner, index),
             variant,
             source_index_path: None,
@@ -430,7 +439,7 @@ impl ExpectedFailKeyPart {
     #[must_use]
     pub fn resolved(resolved: ResolvedIndexVariant, span: Span) -> Self {
         let (index, variant) = resolved.into_parts();
-        Self {
+        Self::Named {
             index: IndexTypeRef::from_resolved(index),
             variant,
             source_index_path: None,
@@ -440,7 +449,73 @@ impl ExpectedFailKeyPart {
 
     #[must_use]
     pub fn with_resolved_variant(&self, resolved: ResolvedIndexVariant) -> Self {
-        Self::resolved(resolved, self.span)
+        Self::resolved(resolved, self.span())
+    }
+
+    /// The source span of this key segment.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Named { span, .. } | Self::RangeStep { span, .. } => *span,
+        }
+    }
+
+    /// The named index reference, when this segment targets a named axis.
+    #[must_use]
+    pub const fn named_index(&self) -> Option<&IndexTypeRef> {
+        match self {
+            Self::Named { index, .. } => Some(index),
+            Self::RangeStep { .. } => None,
+        }
+    }
+
+    /// The structured syntax path awaiting resolution, for named segments.
+    #[must_use]
+    pub const fn source_index_path(&self) -> Option<&NamePath> {
+        match self {
+            Self::Named {
+                source_index_path, ..
+            } => source_index_path.as_ref(),
+            Self::RangeStep { .. } => None,
+        }
+    }
+
+    /// The variant key this segment selects within its axis.
+    #[must_use]
+    pub fn variant(&self) -> IndexVariantName {
+        match self {
+            Self::Named { variant, .. } => variant.clone(),
+            Self::RangeStep { step, .. } => IndexVariantName::range_step(*step),
+        }
+    }
+
+    /// Whether this segment selects the given entry of an indexed value.
+    ///
+    /// Named segments require the entry's index identity to match; `#N`
+    /// segments match the `#N` entry of any Nat range axis (the axis itself
+    /// was bound positionally at dim-check time).
+    #[must_use]
+    pub fn matches_entry(&self, index: &IndexTypeRef, variant: &IndexVariantName) -> bool {
+        match self {
+            Self::Named {
+                index: expected,
+                variant: expected_variant,
+                ..
+            } => expected.matches_ref(index) && variant == expected_variant,
+            Self::RangeStep { step, .. } => {
+                matches!(index, IndexTypeRef::NatRange(_))
+                    && *variant == IndexVariantName::range_step(*step)
+            }
+        }
+    }
+
+    /// Render this segment for diagnostics: `Index.Variant` or `#N`.
+    #[must_use]
+    pub fn display(&self) -> String {
+        match self {
+            Self::Named { index, variant, .. } => format!("{}.{variant}", index.display_name()),
+            Self::RangeStep { step, .. } => format!("#{step}"),
+        }
     }
 }
 

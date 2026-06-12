@@ -116,6 +116,9 @@ fn format_attribute_arg(arg: &graphcal_compiler::syntax::ast::AttributeArg) -> R
                 .collect();
             RcDoc::intersperse(parts, RcDoc::text("."))
         }
+        graphcal_compiler::syntax::ast::AttributeArg::RangeStep { step, .. } => {
+            RcDoc::text(format!("#{step}"))
+        }
         graphcal_compiler::syntax::ast::AttributeArg::Group { elements, .. } => {
             let inner: Vec<RcDoc<'static>> = elements.iter().map(format_attribute_arg).collect();
             RcDoc::text("(")

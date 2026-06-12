@@ -1,0 +1,5 @@
+// #815: a literal negative relative tolerance is a compile error — the
+// assertion could never pass (even an exact match fails `abs(delta) <= tol`).
+param x: Dimensionless = 1.0;
+
+assert exact = @x ~= 1.0 +/- -5 %;

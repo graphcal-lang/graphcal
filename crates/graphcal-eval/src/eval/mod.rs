@@ -4,7 +4,7 @@ use graphcal_compiler::syntax::names::DeclName;
 
 mod display;
 mod project;
-mod runtime;
+pub(crate) mod runtime;
 #[cfg(test)]
 mod tests;
 mod types;

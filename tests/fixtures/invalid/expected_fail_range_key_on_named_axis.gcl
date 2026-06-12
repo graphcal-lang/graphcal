@@ -1,0 +1,7 @@
+// #816: a `#N` expected-fail key only binds to Nat range axes; using one
+// on a named-index axis is rejected.
+index Mode = { Boost, Cruise };
+node checks: Bool[Mode] = { Mode.Boost: false, Mode.Cruise: true };
+
+#[expected_fail(#0)]
+assert r = @checks;

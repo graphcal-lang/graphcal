@@ -1,0 +1,5 @@
+// #815: zero tolerance stays legal — exact-match semantics
+// (`abs(delta) <= 0` passes when actual equals expected).
+param x: Dimensionless = 1.0;
+
+assert exact = @x ~= 1.0 +/- 0.0;

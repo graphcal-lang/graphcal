@@ -53,8 +53,14 @@ param min_thrust: Force = 100.0 kN;
 
 assert all_stages_ok = @thrust > @min_thrust;
 // If First and Third fail:
-//   FAIL  (failed at Stage: First, Third)
+//   FAIL  (failed at Stage.First, Stage.Third)
 ```
+
+Comparisons broadcast element-wise over indexed operands: `T[I] op T[I]`
+zips the two collections per key, and `T[I] op scalar` applies the scalar
+to every key — both infer `Bool[I]`. A `for` comprehension yielding
+`Bool[I]` works the same way. Indexed operands must share the same axes in
+the same order; mismatched axes are a compile error (`D011`).
 
 ### Tolerance Assertions
 
@@ -80,6 +86,10 @@ All three operands are arbitrary expressions. They can reference `@param`,
 
 - `actual` and `expected` must have the **same dimension**.
 - `tolerance` must also have the **same dimension** as `actual` and `expected`.
+- `tolerance` must be **non-negative**. A literal negative tolerance is a
+  compile error (`A015`); a tolerance computed at runtime that turns out
+  negative makes the assertion report an `ERROR`. Zero tolerance is legal and
+  means exact-match semantics.
 
 The check passes when `abs(actual - expected) <= tolerance`.
 
@@ -104,7 +114,8 @@ assert name = <actual> ~= <expected> +/- <tolerance> %;
 The dimension rules change for relative tolerance:
 
 - `actual` and `expected` must have the **same dimension**.
-- `tolerance` must be **dimensionless** (or an integer literal).
+- `tolerance` must be **dimensionless** (or an integer literal), and
+  **non-negative** (same rule as absolute tolerance).
 
 The check passes when `abs(actual - expected) <= abs(expected) * tolerance / 100`.
 
@@ -132,6 +143,35 @@ assert efficiency = @eta ~= 0.85 +/- 5 %;
 assert velocity_approx = @velocity ~= 49.5 m/s +/- 5 %;
 // Passes if velocity is within [47.025, 51.975] m/s
 ```
+
+#### Indexed Tolerance Assertions
+
+Tolerance assertions broadcast element-wise over indexed operands. The
+assertion's index shape comes from `actual`; `expected` and `tolerance` are
+each either a scalar (applied to every key) or indexed by exactly the same
+axes in the same order (`D011` otherwise):
+
+```
+index Case = { A, B };
+
+node actual: Length[Case] = { Case.A: 1.0 m, Case.B: 2.0 m };
+node expected: Length[Case] = { Case.A: 1.0 m, Case.B: 2.5 m };
+node tol: Length[Case] = { Case.A: 0.01 m, Case.B: 0.6 m };
+
+// Scalar tolerance applied to every key:
+assert close = @actual ~= @expected +/- 0.1 m;
+//   FAIL  (failed at Case.B (actual 2, expected 2.5 +/- 0.1, off by 0.5))
+
+// Per-key tolerance over the same axes:
+assert per_key = @actual ~= @expected +/- @tol;
+
+// Relative tolerance works the same way (scalar or indexed, dimensionless):
+assert relative = @actual ~= @expected +/- 25 %;
+```
+
+Each failing key is reported with its own actual/expected/delta detail.
+Per-variant `#[expected_fail(Case.B)]` works on indexed tolerance assertions
+exactly as on indexed boolean ones.
 
 ## Attributes
 
@@ -259,6 +299,31 @@ index Phase = { Launch, Cruise };
 #[expected_fail((Mode.Normal, Phase.Cruise), (Mode.Boost, Phase.Launch))]
 assert within_limits = for m: Mode, p: Phase { @actual[m, p] < @threshold[m, p] };
 ```
+
+#### Nat Range Axes (`#N` Keys)
+
+Assertions indexed by Nat range axes (`for i: range(N) { ... }`) use `#N`
+keys, matching the `#N` slice-label syntax that `table` expressions use for
+range axes:
+
+```
+#[expected_fail(#1)]
+assert steps_ok = for i: range(3) { @residual[i] < @tolerance };
+```
+
+In multi-axis tuple keys, each component uses its axis's key form — named
+axes use `Index.Variant`, range axes use `#N` — in assertion axis order:
+
+```
+index Mode = { Normal, Boost };
+
+#[expected_fail((Mode.Boost, #2))]
+assert grid_ok = for m: Mode, i: range(4) { @value[m, i] < @limit };
+```
+
+The step must be in bounds for the axis: `#N` on a `range(size)` axis
+requires `N < size` (A016). A bare integer (`#[expected_fail(1)]`) is a
+parse error — range keys are always written with the `#` prefix.
 
 ### `#[lazy]`
 

@@ -487,7 +487,9 @@ fn validate_attributes(
                             AttributeArg::Path { segments, .. } if segments.len() == 1 => {
                                 segments.first()
                             }
-                            AttributeArg::Path { .. } | AttributeArg::Group { .. } => {
+                            AttributeArg::Path { .. }
+                            | AttributeArg::RangeStep { .. }
+                            | AttributeArg::Group { .. } => {
                                 return Err(GraphcalError::EvalError {
                                     message:
                                         "`#[assumes(...)]` arguments must be plain identifiers"

@@ -1,0 +1,15 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 313
+expression: rendered
+---
+`#[expected_fail(...)]` range step `#5` is out of bounds
+    Diagnostic severity: error
+Begin snippet for expected_fail_range_step_out_of_bounds.gcl starting at line 2, column 1
+
+snippet line 2: // size at check time.
+snippet line 3: #[expected_fail(#5)]
+    label at line 3, columns 17 to 18: step #5 on an axis of size 2
+snippet line 4: assert r = for i: range(2) { i == 0 };
+diagnostic help: range steps in expected-fail keys must satisfy `0 <= N < size` for a `range(size)` axis
+diagnostic code: graphcal::A016

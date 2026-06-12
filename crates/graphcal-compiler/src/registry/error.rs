@@ -221,6 +221,23 @@ pub enum GraphcalError {
         help: String,
     },
 
+    #[error("mismatched index axes in {context}: {lhs} vs {rhs}")]
+    #[diagnostic(
+        code(graphcal::D011),
+        help(
+            "element-wise operands must be indexed by the same axes in the same order; a scalar operand broadcasts to every key"
+        )
+    )]
+    IndexedShapeMismatch {
+        context: String,
+        lhs: String,
+        rhs: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("has type {rhs}")]
+        span: SourceSpan,
+    },
+
     #[error("type annotation mismatch: declared {declared}, inferred {inferred}")]
     #[diagnostic(
         code(graphcal::D002),
@@ -677,7 +694,7 @@ pub enum GraphcalError {
     },
 
     #[error(
-        "invalid argument in `#[expected_fail(...)]`: expected `Index.Variant`, `module.Index.Variant`, or grouped variants"
+        "invalid argument in `#[expected_fail(...)]`: expected `Index.Variant`, `module.Index.Variant`, `#N` (range axes), or grouped variants"
     )]
     #[diagnostic(code(graphcal::A009))]
     ExpectedFailInvalidArg {
@@ -703,7 +720,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::A011),
         help(
-            "use `#[expected_fail(Index.Variant, ...)]` or qualified `#[expected_fail(module.Index.Variant, ...)]` to specify which variants are expected to fail"
+            "use `#[expected_fail(Index.Variant, ...)]` (qualified `module.Index.Variant` also works) to specify which variants are expected to fail; for Nat range axes use `#[expected_fail(#N, ...)]`"
         )
     )]
     ExpectedFailAllOnIndexed {
@@ -749,6 +766,37 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("expected index `{expected}`, found `{found}`")]
+        span: SourceSpan,
+    },
+
+    #[error("`#[expected_fail(...)]` range step `#{step}` is out of bounds")]
+    #[diagnostic(
+        code(graphcal::A016),
+        help(
+            "range steps in expected-fail keys must satisfy `0 <= N < size` for a `range(size)` axis"
+        )
+    )]
+    ExpectedFailRangeStepOutOfBounds {
+        step: u64,
+        size: u64,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("step #{step} on an axis of size {size}")]
+        span: SourceSpan,
+    },
+
+    #[error("negative tolerance in tolerance assertion")]
+    #[diagnostic(
+        code(graphcal::A015),
+        help(
+            "the tolerance in `~= expected +/- tolerance` must be non-negative; use `0` for exact-match semantics"
+        )
+    )]
+    NegativeTolerance {
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("tolerance is {found}")]
         span: SourceSpan,
     },
 
@@ -1367,6 +1415,7 @@ impl GraphcalError {
             | Self::InternalError { src, .. }
             | Self::DimensionOverflow { src, .. }
             | Self::DimensionMismatch { src, .. }
+            | Self::IndexedShapeMismatch { src, .. }
             | Self::DimensionMismatchInAnnotation { src, .. }
             | Self::UnknownUnit { src, .. }
             | Self::UnknownDimension { src, .. }
@@ -1407,6 +1456,8 @@ impl GraphcalError {
             | Self::ExpectedFailDuplicateKey { src, .. }
             | Self::ExpectedFailKeyShapeMismatch { src, .. }
             | Self::ExpectedFailKeyIndexMismatch { src, .. }
+            | Self::ExpectedFailRangeStepOutOfBounds { src, .. }
+            | Self::NegativeTolerance { src, .. }
             | Self::ImportOutsideRoot { src, .. }
             | Self::RequiredParamNotProvided { src, .. }
             | Self::UnknownParamBinding { src, .. }

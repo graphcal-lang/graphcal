@@ -443,8 +443,14 @@ fn run_format(paths: &[PathBuf], check: bool) {
 fn print_text(result: &EvalResult) {
     use graphcal_eval::eval::Value;
 
-    // Build output blocks preserving source order.
-    let items = result.all.iter().map(|(name, r, _)| (name.as_str(), r));
+    // Build output blocks preserving source order. Names render their full
+    // alias-qualified path so multiple instantiations stay distinct (#813).
+    let rendered_names: Vec<(String, &Result<Value, graphcal_eval::eval::NodeError>)> = result
+        .all
+        .iter()
+        .map(|(name, r, _)| (name.to_string(), r))
+        .collect();
+    let items = rendered_names.iter().map(|(n, r)| (n.as_str(), *r));
     let blocks = build_output_blocks(items);
     let max_name_len = max_flat_name_len(&blocks);
 
@@ -498,18 +504,18 @@ fn print_text(result: &EvalResult) {
     if !result.assertions.is_empty() {
         println!();
         println!("Assertions:");
-        let max_assert_len = result
+        let assert_names: Vec<String> = result
             .assertions
             .iter()
-            .map(|(n, _, _)| n.as_str().len())
-            .max()
-            .unwrap_or(0);
-        for (name, assert_result, _) in &result.assertions {
+            .map(|(n, _, _)| n.to_string())
+            .collect();
+        let max_assert_len = assert_names.iter().map(String::len).max().unwrap_or(0);
+        for ((name, assert_result, _), name_str) in result.assertions.iter().zip(&assert_names) {
             let line = format_assertion_line(
-                name.as_str(),
+                name_str,
                 assert_result,
                 max_assert_len,
-                result.assumes_map.get(name.as_str()),
+                result.assumes_map.get(name),
             );
             if is_assert_failure(assert_result) {
                 eprintln!("{line}");
@@ -528,7 +534,7 @@ fn format_assertion_line(
     name: &str,
     result: &graphcal_eval::eval::AssertResult,
     name_width: usize,
-    affected: Option<&Vec<graphcal_compiler::syntax::names::DeclName>>,
+    affected: Option<&Vec<graphcal_compiler::syntax::names::ScopedName>>,
 ) -> String {
     use std::fmt::Write as _;
 
@@ -542,6 +548,7 @@ fn format_assertion_line(
         AssertResult::Fail { message } => {
             let mut line = format!("  {name:w$}  FAIL  ({message})");
             if let Some(affected) = affected {
+                let affected: Vec<String> = affected.iter().map(ToString::to_string).collect();
                 let _ = write!(
                     line,
                     "\n  {:w$}        affected: {}",
@@ -726,11 +733,9 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
                     AssertResult::Pass => serde_json::json!({"status": "pass"}),
                     AssertResult::Fail { message } => {
                         let mut obj = serde_json::json!({"status": "fail", "message": message});
-                        if let Some(affected) = result.assumes_map.get(n.as_str()) {
-                            let names: Vec<&str> = affected
-                                .iter()
-                                .map(graphcal_compiler::syntax::names::DeclName::as_str)
-                                .collect();
+                        if let Some(affected) = result.assumes_map.get(n) {
+                            let names: Vec<String> =
+                                affected.iter().map(ToString::to_string).collect();
                             obj["affected_nodes"] = serde_json::json!(names);
                         }
                         obj

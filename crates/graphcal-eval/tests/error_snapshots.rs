@@ -23,7 +23,7 @@ fn render_node_error(source: &str, name: &str, node_name: &str) -> String {
     let (_, node_result, _) = result
         .all
         .iter()
-        .find(|(n, _, _)| n.as_str() == node_name)
+        .find(|(n, _, _)| n.to_string() == node_name)
         .unwrap_or_else(|| panic!("node `{node_name}` not found"));
     match node_result {
         Err(NodeError::EvalFailed { message }) => message.clone(),
@@ -294,6 +294,59 @@ fn error_at_assert() {
 fn error_assert_not_bool() {
     let source = include_str!("../../../tests/fixtures/invalid/assert_not_bool.gcl");
     let rendered = render_error(source, "assert_not_bool.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_indexed_comparison_axis_mismatch() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/indexed_comparison_axis_mismatch.gcl");
+    let rendered = render_error(source, "indexed_comparison_axis_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_indexed_tolerance_axis_mismatch() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/indexed_tolerance_axis_mismatch.gcl");
+    let rendered = render_error(source, "indexed_tolerance_axis_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_expected_fail_range_step_out_of_bounds() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/expected_fail_range_step_out_of_bounds.gcl");
+    let rendered = render_error(source, "expected_fail_range_step_out_of_bounds.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_expected_fail_range_key_on_named_axis() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/expected_fail_range_key_on_named_axis.gcl");
+    let rendered = render_error(source, "expected_fail_range_key_on_named_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_expected_fail_bare_int_key() {
+    let source = include_str!("../../../tests/fixtures/invalid/expected_fail_bare_int_key.gcl");
+    let rendered = render_error(source, "expected_fail_bare_int_key.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_negative_tolerance() {
+    let source = include_str!("../../../tests/fixtures/invalid/negative_tolerance.gcl");
+    let rendered = render_error(source, "negative_tolerance.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_negative_tolerance_relative() {
+    let source = include_str!("../../../tests/fixtures/invalid/negative_tolerance_relative.gcl");
+    let rendered = render_error(source, "negative_tolerance_relative.gcl");
     insta::assert_snapshot!(rendered);
 }
 

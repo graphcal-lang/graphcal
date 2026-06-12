@@ -1,0 +1,12 @@
+// #812: a dag containing an `assert` can be invoked inline. The call site
+// is a fresh instantiation, so the dag's invariants are checked: a failing
+// assert fails the calling expression (no reporting surface exists in an
+// expression context), fault-isolated to the calling declaration.
+dag checked {
+    param v: Dimensionless;
+    pub node out: Dimensionless = @v * 2.0;
+    assert v_positive = @v > 0.0;
+}
+
+node y: Dimensionless = @checked(v: -3.0).out;
+node independent: Dimensionless = 1.0;

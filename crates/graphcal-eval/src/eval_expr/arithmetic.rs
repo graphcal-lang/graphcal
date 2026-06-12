@@ -84,11 +84,127 @@ pub(super) fn check_finite(
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
+/// Broadcast a comparison kernel element-wise over indexed operands (#809).
+///
+/// Indexed-vs-indexed operands zip per key (the dim checker guarantees
+/// matching axes; mismatches here are evaluation errors); indexed-vs-scalar
+/// broadcasts the scalar side to every key. Unindexed operands fall through
+/// to the kernel.
+fn broadcast_comparison(
+    l: &RuntimeValue,
+    r: &RuntimeValue,
+    ctx: &EvalContext<'_>,
+    span: Span,
+    kernel: &impl Fn(&RuntimeValue, &RuntimeValue) -> Result<RuntimeValue, GraphcalError>,
+) -> Result<RuntimeValue, GraphcalError> {
+    match (l, r) {
+        (
+            RuntimeValue::Indexed {
+                index_name: li,
+                entries: le,
+            },
+            RuntimeValue::Indexed {
+                index_name: ri,
+                entries: re,
+            },
+        ) => {
+            if !li.matches_ref(ri) || le.len() != re.len() {
+                return Err(ctx.eval_error(
+                    format!(
+                        "comparison operands have mismatched index axes: `{}` vs `{}`",
+                        li.display_name(),
+                        ri.display_name()
+                    ),
+                    span,
+                ));
+            }
+            let entries = le
+                .iter()
+                .map(|(variant, lv)| {
+                    let rv = re.get(variant).ok_or_else(|| {
+                        ctx.eval_error(
+                            format!(
+                                "comparison operand is missing entry `{}.{variant}`",
+                                ri.display_name()
+                            ),
+                            span,
+                        )
+                    })?;
+                    Ok((
+                        variant.clone(),
+                        broadcast_comparison(lv, rv, ctx, span, kernel)?,
+                    ))
+                })
+                .collect::<Result<_, GraphcalError>>()?;
+            Ok(RuntimeValue::Indexed {
+                index_name: li.clone(),
+                entries,
+            })
+        }
+        (
+            RuntimeValue::Indexed {
+                index_name,
+                entries,
+            },
+            scalar_side,
+        ) => {
+            let entries = entries
+                .iter()
+                .map(|(variant, lv)| {
+                    Ok((
+                        variant.clone(),
+                        broadcast_comparison(lv, scalar_side, ctx, span, kernel)?,
+                    ))
+                })
+                .collect::<Result<_, GraphcalError>>()?;
+            Ok(RuntimeValue::Indexed {
+                index_name: index_name.clone(),
+                entries,
+            })
+        }
+        (
+            scalar_side,
+            RuntimeValue::Indexed {
+                index_name,
+                entries,
+            },
+        ) => {
+            let entries = entries
+                .iter()
+                .map(|(variant, rv)| {
+                    Ok((
+                        variant.clone(),
+                        broadcast_comparison(scalar_side, rv, ctx, span, kernel)?,
+                    ))
+                })
+                .collect::<Result<_, GraphcalError>>()?;
+            Ok(RuntimeValue::Indexed {
+                index_name: index_name.clone(),
+                entries,
+            })
+        }
+        _ => kernel(l, r),
+    }
+}
+
 /// Equality kernel shared by both evaluators: same-typed value-level
 /// entities compare; mismatched operand types are an evaluation error.
 /// (The HIR evaluator previously returned `false` for mismatched types via
 /// a permissive structural comparison — the strict policy wins.)
+/// Indexed operands broadcast element-wise (#809).
 pub(super) fn eval_equality_values(
+    op: BinOp,
+    l: &RuntimeValue,
+    r: &RuntimeValue,
+    ctx: &EvalContext<'_>,
+    span: Span,
+) -> Result<RuntimeValue, GraphcalError> {
+    broadcast_comparison(l, r, ctx, span, &|l, r| {
+        eval_equality_elements(op, l, r, ctx, span)
+    })
+}
+
+fn eval_equality_elements(
     op: BinOp,
     l: &RuntimeValue,
     r: &RuntimeValue,
@@ -127,6 +243,7 @@ pub(super) fn eval_equality_values(
 /// Ordering kernel shared by both evaluators: Int, Datetime, or Scalar
 /// operands, dispatched through the typed [`OrderingOp`] subset so there is
 /// no "impossible operator" fallback.
+/// Indexed operands broadcast element-wise (#809).
 pub(super) fn eval_ordering_values(
     op: BinOp,
     l: &RuntimeValue,
@@ -136,7 +253,7 @@ pub(super) fn eval_ordering_values(
 ) -> Result<RuntimeValue, GraphcalError> {
     let ord_op = OrderingOp::from_binop(op)
         .ok_or_else(|| ctx.internal_error(format!("non-ordering op {op:?}"), span))?;
-    match (l, r) {
+    broadcast_comparison(l, r, ctx, span, &|l, r| match (l, r) {
         (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
             Ok(RuntimeValue::Bool(apply_ordering(ord_op, li, ri)))
         }
@@ -152,7 +269,7 @@ pub(super) fn eval_ordering_values(
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             Ok(RuntimeValue::Bool(eval_comparison(op, lv, rv, ctx, span)?))
         }
-    }
+    })
 }
 
 /// Restriction of [`BinOp`] to the four ordering comparison operators.

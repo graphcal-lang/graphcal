@@ -1,0 +1,6 @@
+// #815: a tolerance computed at runtime is sign-checked by the evaluator —
+// a negative value is an assertion ERROR, not a silent constant-false FAIL.
+param x: Dimensionless = 1.0;
+param tol: Dimensionless = -0.1;
+
+assert exact = @x ~= 1.0 +/- @tol;

@@ -534,18 +534,24 @@ pub enum AssertResult {
 }
 
 /// The result of evaluating a `.gcl` file.
+///
+/// Entries are keyed by [`ScopedName`]: a top-level declaration is a bare
+/// local name, while a declaration instantiated through `include ... as
+/// alias` keeps its alias-qualified path (`alias.decl`). Output boundaries
+/// (text, JSON, LSP) render the full path so multiple instantiations of the
+/// same dag never collapse onto one key (#813).
 #[derive(Debug)]
 pub struct EvalResult {
     /// Const values in source order (consts are compile-time and never fail at runtime).
-    pub consts: Vec<(DeclName, Value)>,
+    pub consts: Vec<(ScopedName, Value)>,
     /// Param values in source order (may contain per-node errors).
-    pub params: Vec<(DeclName, Result<Value, NodeError>)>,
+    pub params: Vec<(ScopedName, Result<Value, NodeError>)>,
     /// Node values in source order (may contain per-node errors).
-    pub nodes: Vec<(DeclName, Result<Value, NodeError>)>,
+    pub nodes: Vec<(ScopedName, Result<Value, NodeError>)>,
     /// All values in source order with their declaration type.
-    pub all: Vec<(DeclName, Result<Value, NodeError>, DeclType)>,
+    pub all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)>,
     /// Assertion results in source order: (name, result, span).
-    pub assertions: Vec<(DeclName, AssertResult, Span)>,
+    pub assertions: Vec<(ScopedName, AssertResult, Span)>,
     /// Evaluated plot specifications in source order.
     pub plots: Vec<PlotSpec>,
     /// Evaluated figure specifications in source order.
@@ -553,13 +559,13 @@ pub struct EvalResult {
     /// Evaluated layer specifications in source order.
     pub layers: Vec<LayerSpec>,
     /// Mapping from assert name to the list of declarations that assume it.
-    pub assumes_map: std::collections::HashMap<DeclName, Vec<DeclName>>,
+    pub assumes_map: std::collections::HashMap<ScopedName, Vec<ScopedName>>,
     /// Base dimension symbols for display (e.g., `BaseDimId::Prelude("Length") → "m"`).
     pub base_dim_symbols:
         std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     /// Domain constraints for params/nodes, for programmatic access (sweeping/sampling).
     pub domain_constraints: std::collections::HashMap<
-        DeclName,
+        ScopedName,
         graphcal_compiler::tir::typed::ResolvedDomainConstraint,
     >,
 }

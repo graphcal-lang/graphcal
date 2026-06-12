@@ -1,0 +1,4 @@
+// #816: `#N` expected-fail keys are bound-checked against the range axis
+// size at check time.
+#[expected_fail(#5)]
+assert r = for i: range(2) { i == 0 };

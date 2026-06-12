@@ -1,0 +1,15 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 322
+expression: rendered
+---
+`#[expected_fail(...)]` key does not belong to the assertion index
+    Diagnostic severity: error
+Begin snippet for expected_fail_range_key_on_named_axis.gcl starting at line 5, column 1
+
+snippet line 5: 
+snippet line 6: #[expected_fail(#0)]
+    label at line 6, columns 17 to 18: expected index `Mode`, found `#0`
+snippet line 7: assert r = @checks;
+diagnostic help: expected-fail keys must use the assertion's indexes in axis order
+diagnostic code: graphcal::A014

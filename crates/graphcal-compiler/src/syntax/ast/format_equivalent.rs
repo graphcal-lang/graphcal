@@ -230,6 +230,16 @@ impl FormatEquivalent for AttributeArg {
                 };
                 segments.format_equivalent(other_segments)
             }
+            Self::RangeStep { step, span: _ } => {
+                let Self::RangeStep {
+                    step: other_step,
+                    span: _,
+                } = other
+                else {
+                    return false;
+                };
+                step == other_step
+            }
             Self::Group { elements, span: _ } => {
                 let Self::Group {
                     elements: other_elements,

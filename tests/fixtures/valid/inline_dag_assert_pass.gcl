@@ -1,0 +1,13 @@
+// #812: inline invocation of an assert-carrying dag evaluates the dag's
+// asserts per instantiation; a passing assert produces no error and no
+// spurious reporting.
+dag checked {
+    param v: Dimensionless;
+    pub node out: Dimensionless = @v * 2.0;
+    assert v_positive = @v > 0.0;
+}
+
+node y: Dimensionless = @checked(v: 3.0).out;
+
+include checked(v: 4.0) as also_fine;
+node z: Dimensionless = @y + @also_fine.out;

@@ -1,0 +1,9 @@
+// #814: an assertion referencing a node whose evaluation failed reports
+// the dependency failure (with root cause and source-level names), not a
+// misleading "undefined graph reference" with internal qualified names.
+param zero: Dimensionless = 0.0;
+node e: Dimensionless = 1.0 / @zero;
+node fine: Dimensionless = 2.0;
+
+assert uses_e = @e > 0.0;
+assert uses_fine = @fine > 0.0;
