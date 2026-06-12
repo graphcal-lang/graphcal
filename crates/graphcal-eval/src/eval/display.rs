@@ -191,7 +191,7 @@ fn resolve_defining_expr<'a>(
                     matches!(
                         &arm.pattern,
                         MatchPattern::IndexLabel { variant: pat, .. }
-                            if *pat.value.variant() == variant
+                            if *pat.variant.variant() == variant
                     )
                 })
                 .map(|arm| &arm.body)
@@ -217,7 +217,7 @@ fn find_static_map_entry<'a>(
             matches!(
                 (key, arg),
                 (MapEntryKey::IndexVariant(k), IndexArg::Variant(a))
-                    if k.value.variant() == a.value.variant()
+                    if k.variant.variant() == a.variant.variant()
             )
         });
         all_match.then_some(&entry.value)
@@ -324,7 +324,7 @@ fn walk_indexed_keys<'a>(
 ) -> Option<&'a mut Value> {
     let (first, rest) = keys.split_first()?;
     let variant = match first {
-        MapEntryKey::IndexVariant(resolved) => resolved.value.variant(),
+        MapEntryKey::IndexVariant(resolved) => resolved.variant.variant(),
         MapEntryKey::NatRangeVariant { variant, .. } => &variant.value,
     };
     let value = entries.get_mut(variant)?;

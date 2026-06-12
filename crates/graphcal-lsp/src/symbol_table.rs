@@ -357,6 +357,22 @@ impl<'a> HirRefCollector<'a> {
         table.references.push(ReferenceInfo { span, target });
     }
 
+    /// Record references for an index-variant reference: the variant segment
+    /// targets the variant symbol, and the index segment (when one is written
+    /// — the `Maneuver` in `Maneuver.Departure`, or the axis token inside
+    /// `table[...]` for desugared table rows) targets the index declaration.
+    /// Keeping the two segments separate makes rename edits and goto-def
+    /// segment-precise instead of splicing whole qualified paths.
+    fn variant_reference(&self, variant: &hir::expr::IndexVariantRef, table: &mut SymbolTable) {
+        let target = self.variant_key(&variant.variant);
+        Self::reference(table, variant.variant_span, target);
+        if let Some(index_span) = variant.index_span {
+            let index = variant.variant.index();
+            let key = self.name_key(index.owner(), index.as_str());
+            Self::reference(table, index_span, key);
+        }
+    }
+
     fn walk(&mut self, expr: &hir::Expr, table: &mut SymbolTable) {
         graphcal_compiler::stack::with_stack_growth(|| self.walk_inner(expr, table));
     }
@@ -382,7 +398,6 @@ impl<'a> HirRefCollector<'a> {
                     hir::ConstRef::Constructor(name) => {
                         SymbolKey::Constructor(self.path_for(name.owner(), name.as_str()))
                     }
-                    hir::ConstRef::IndexVariant(variant) => self.variant_key(variant),
                     hir::ConstRef::Builtin(builtin) => {
                         SymbolKey::TopLevel(builtin.as_str().to_string())
                     }
@@ -412,8 +427,7 @@ impl<'a> HirRefCollector<'a> {
                 Self::reference(table, type_ref.span, target);
             }
             hir::ExprKind::VariantLiteral(variant) => {
-                let target = self.variant_key(&variant.value);
-                Self::reference(table, variant.span, target);
+                self.variant_reference(variant, table);
             }
             hir::ExprKind::BinOp { lhs, rhs, .. } => {
                 self.walk(lhs, table);
@@ -496,8 +510,7 @@ impl<'a> HirRefCollector<'a> {
                 for entry in entries {
                     for key in &entry.keys {
                         if let hir::expr::MapEntryKey::IndexVariant(variant) = key {
-                            let target = self.variant_key(&variant.value);
-                            Self::reference(table, variant.span, target);
+                            self.variant_reference(variant, table);
                         }
                     }
                     self.walk(&entry.value, table);
@@ -530,8 +543,7 @@ impl<'a> HirRefCollector<'a> {
                 for arg in args {
                     match arg {
                         hir::expr::IndexArg::Variant(variant) => {
-                            let target = self.variant_key(&variant.value);
-                            Self::reference(table, variant.span, target);
+                            self.variant_reference(variant, table);
                         }
                         hir::expr::IndexArg::Var(local) => {
                             if let Some(key) = self.locals.get(&local.value) {
@@ -635,8 +647,7 @@ impl<'a> HirRefCollector<'a> {
                             }
                         }
                         hir::expr::MatchPattern::IndexLabel { variant, .. } => {
-                            let target = self.variant_key(&variant.value);
-                            Self::reference(table, variant.span, target);
+                            self.variant_reference(variant, table);
                         }
                     }
                     self.walk(&arm.body, table);
@@ -1081,8 +1092,17 @@ pub fn build_from_ast(
         }
     }
 
-    // Sort references by offset for binary search.
-    table.references.sort_by_key(|r| r.span.offset());
+    // Sort references by offset for binary search, and drop duplicates:
+    // every row of a desugared `table[Axis] { ... }` records an index
+    // reference at the same axis-token span, but each occurrence should
+    // appear once in find-references/rename results.
+    table
+        .references
+        .sort_by_key(|r| (r.span.offset(), r.span.len()));
+    let mut seen = std::collections::HashSet::new();
+    table
+        .references
+        .retain(|r| seen.insert((r.span.offset(), r.span.len(), r.target.clone())));
     // Build the sorted `defs_by_name_span` index for O(log n) lookups and
     // precompute inlay-hint candidate positions.
     table.finalize(source);
@@ -2018,4 +2038,136 @@ param q: Int[I]
         );
     }
     // --- Inline DAG invocation LSP coverage (issue #451) ---
+
+    /// Issues #827/#828 repro: a table literal over a named index plus a
+    /// qualified `Index.Variant` access.
+    const TABLE_SOURCE: &str = "\
+pub index Maneuver = { Departure, Correction };
+param dv: Velocity[Maneuver] = table[Maneuver] {
+    Departure: 2.0 km/s;
+    Correction: 0.1 km/s;
+};
+node total: Velocity = @dv[Maneuver.Departure];
+";
+
+    fn table_for(source: &str) -> SymbolTable {
+        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+            .parse_file()
+            .unwrap();
+        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        build_for_buffer(&desugared, source)
+    }
+
+    fn slice(source: &str, span: Span) -> &str {
+        &source[span.offset()..span.offset() + span.len()]
+    }
+
+    /// Issue #827: row-key reference spans must cover exactly the variant
+    /// label, not a multi-line merge starting at the table-axis token.
+    #[test]
+    fn table_row_key_references_are_label_precise() {
+        let source = TABLE_SOURCE;
+        let table = table_for(source);
+        let departure_key = SymbolKey::Variant {
+            parent: SymbolPath::local("Maneuver"),
+            variant: "Departure".to_string(),
+        };
+        let refs = table.find_all_references(&departure_key);
+        assert!(!refs.is_empty(), "expected references to `Departure`");
+        for r in refs {
+            assert_eq!(
+                slice(source, r.span),
+                "Departure",
+                "reference span must cover exactly the variant identifier"
+            );
+        }
+    }
+
+    /// Issue #827: the cursor on a row key must resolve to *that* row's
+    /// variant — overlapping merged spans used to send `Departure` to
+    /// `Correction` and `Correction` to nothing.
+    #[test]
+    fn table_row_key_cursor_resolves_to_own_variant() {
+        let source = TABLE_SOURCE;
+        let table = table_for(source);
+        for variant in ["Departure", "Correction"] {
+            let row_offset = source.find(&format!("    {variant}:")).unwrap() + 4;
+            let reference = table
+                .find_reference_at(row_offset)
+                .unwrap_or_else(|| panic!("expected reference at `{variant}` row key"));
+            assert_eq!(
+                reference.target,
+                SymbolKey::Variant {
+                    parent: SymbolPath::local("Maneuver"),
+                    variant: variant.to_string(),
+                },
+                "row key must resolve to its own variant"
+            );
+        }
+    }
+
+    /// The table-axis token inside `table[...]` and the index segment of a
+    /// qualified `Index.Variant` path resolve to the index declaration.
+    #[test]
+    fn index_segments_resolve_to_index_declaration() {
+        let source = TABLE_SOURCE;
+        let table = table_for(source);
+        let axis_offset = source.find("table[Maneuver]").unwrap() + "table[".len();
+        let qualifier_offset = source.find("@dv[Maneuver.Departure]").unwrap() + "@dv[".len();
+        for offset in [axis_offset, qualifier_offset] {
+            let reference = table
+                .find_reference_at(offset)
+                .expect("expected index reference at index segment");
+            assert_eq!(
+                reference.target,
+                SymbolKey::TopLevel("Maneuver".to_string())
+            );
+        }
+    }
+
+    /// Issue #828: the reference recorded for `Maneuver.Departure` in an
+    /// index access must address only the `Departure` segment so rename
+    /// rewrites `@dv[Maneuver.Departure]` into `@dv[Maneuver.Begin]`.
+    #[test]
+    fn qualified_variant_reference_is_segment_precise() {
+        let source = TABLE_SOURCE;
+        let table = table_for(source);
+        let departure_offset = source.find("Maneuver.Departure").unwrap() + "Maneuver.".len();
+        let reference = table
+            .find_reference_at(departure_offset)
+            .expect("expected variant reference at `Departure` segment");
+        assert_eq!(
+            reference.target,
+            SymbolKey::Variant {
+                parent: SymbolPath::local("Maneuver"),
+                variant: "Departure".to_string(),
+            }
+        );
+        assert_eq!(slice(source, reference.span), "Departure");
+    }
+
+    /// Variant literals (`Season.Winter` in expression position) and match
+    /// patterns get the same segment-precise spans.
+    #[test]
+    fn variant_literal_and_match_pattern_references_are_segment_precise() {
+        let source = "\
+index Season = { Winter, Summer };
+node pick: Season = Season.Winter;
+node out: Dimensionless = match @pick { Season.Winter => 1.0, Season.Summer => 2.0 };
+";
+        let table = table_for(source);
+        let winter_key = SymbolKey::Variant {
+            parent: SymbolPath::local("Season"),
+            variant: "Winter".to_string(),
+        };
+        let refs = table.find_all_references(&winter_key);
+        assert_eq!(
+            refs.len(),
+            2,
+            "expected literal + match-pattern references to `Winter`"
+        );
+        for r in refs {
+            assert_eq!(slice(source, r.span), "Winter");
+        }
+    }
 }

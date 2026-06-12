@@ -559,6 +559,41 @@ impl Expr {
     }
 }
 
+/// A resolved index-variant reference with the source spans of its two
+/// written segments kept separate.
+///
+/// The index segment and the variant segment are not necessarily adjacent:
+/// table desugaring reuses the `table[Axis]` axis token's span as the index
+/// span of every row key, so a single merged span would cover unrelated
+/// source (and make different rows' spans contain each other). Keeping the
+/// segments separate lets diagnostics on contiguous `Index.Variant` paths
+/// use the whole written path ([`IndexVariantRef::path_span`]) while
+/// span-precise consumers (rename, find-references) address exactly the
+/// variant segment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexVariantRef {
+    /// The resolved index variant.
+    pub variant: ResolvedIndexVariant,
+    /// Span of the index path as written (`Maneuver` in `Maneuver.Departure`,
+    /// or the axis token inside `table[...]` for desugared table rows).
+    /// `None` when the variant is written without an index segment (a bare
+    /// label in a match pattern whose index is inferred).
+    pub index_span: Option<Span>,
+    /// Span of just the variant segment (the final path segment / row label).
+    pub variant_span: Span,
+}
+
+impl IndexVariantRef {
+    /// Whole-reference span for diagnostics on contiguous `Index.Variant`
+    /// paths. For desugared table rows the index segment lives inside
+    /// `table[...]`, so prefer [`Self::variant_span`] there.
+    #[must_use]
+    pub fn path_span(&self) -> Span {
+        self.index_span
+            .map_or(self.variant_span, |index| index.merge(self.variant_span))
+    }
+}
+
 /// Resolved expression shape.
 #[derive(Debug, Clone)]
 pub enum ExprKind {
@@ -644,7 +679,7 @@ pub enum ExprKind {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
     },
-    VariantLiteral(Spanned<ResolvedIndexVariant>),
+    VariantLiteral(IndexVariantRef),
     InlineDagRef {
         target: Spanned<DagId>,
         args: Vec<ParamBinding>,
@@ -852,7 +887,6 @@ pub enum TypeSystemRef {
 pub enum ConstRef {
     Decl(ResolvedName<namespace::Decl>),
     Constructor(ResolvedName<namespace::Constructor>),
-    IndexVariant(ResolvedIndexVariant),
     Builtin(BuiltinConst),
     TimeScale(TimeScale),
     GenericNatParam(super::types::GenericParamId),
@@ -908,7 +942,7 @@ pub struct MapEntry {
 /// A single resolved map key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MapEntryKey {
-    IndexVariant(Spanned<ResolvedIndexVariant>),
+    IndexVariant(IndexVariantRef),
     NatRangeVariant {
         size: u64,
         variant: Spanned<IndexVariantName>,
@@ -932,7 +966,7 @@ pub enum ForBindingIndex {
 /// A resolved index-access argument.
 #[derive(Debug, Clone)]
 pub enum IndexArg {
-    Variant(Spanned<ResolvedIndexVariant>),
+    Variant(IndexVariantRef),
     Var(Spanned<LocalId>),
     Expr(Box<Expr>),
 }
@@ -954,7 +988,7 @@ pub enum MatchPattern {
         span: Span,
     },
     IndexLabel {
-        variant: Spanned<ResolvedIndexVariant>,
+        variant: IndexVariantRef,
         span: Span,
     },
 }
@@ -1341,10 +1375,11 @@ impl<'a> ExprLowerer<'a> {
                     qualifier.span,
                     member.span,
                 )?;
-                return Ok(ExprKind::VariantLiteral(Spanned::new(
-                    resolved,
-                    qualifier.span.merge(member.span),
-                )));
+                return Ok(ExprKind::VariantLiteral(IndexVariantRef {
+                    variant: resolved,
+                    index_span: Some(qualifier.span),
+                    variant_span: member.span,
+                }));
             }
         }
 
@@ -1353,8 +1388,37 @@ impl<'a> ExprLowerer<'a> {
             qualifier.iter().map(|segment| segment.name.to_string()),
             member.name.to_string(),
         );
-        self.lower_const_ref(&scoped, span)
-            .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span)))
+        match self.lower_const_ref(&scoped, span) {
+            Ok(const_ref) => Ok(ExprKind::ConstRef(Spanned::new(const_ref, span))),
+            // A qualified path that is not a const-like declaration can still
+            // be an index variant (`m.Season.Winter`). Resolving it here keeps
+            // the segment spans of the written path available for the literal.
+            Err(const_err) => self
+                .resolve_variant_literal_path(path)
+                .ok_or(const_err)
+                .map(ExprKind::VariantLiteral),
+        }
+    }
+
+    /// Resolve a dotted path as an index-variant literal, keeping the index
+    /// and variant segment spans separate. Returns `None` when the path does
+    /// not name an index variant in scope.
+    fn resolve_variant_literal_path(&self, path: &IdentPath) -> Option<IndexVariantRef> {
+        let (qualifier, member) = path.split_last();
+        let (first, rest) = qualifier.split_first()?;
+        let index_span = rest
+            .iter()
+            .fold(first.span, |merged, segment| merged.merge(segment.span));
+        let resolved = self
+            .ctx
+            .resolver
+            .resolve_index_variant_path(self.ctx.owner, &path.to_name_path())
+            .ok()?;
+        Some(IndexVariantRef {
+            variant: resolved,
+            index_span: Some(index_span),
+            variant_span: member.span,
+        })
     }
 
     fn lower_generic_arg(&self, arg: &ast::GenericArg) -> Result<GenericArg, ExprLowerError> {
@@ -1449,14 +1513,6 @@ impl<'a> ExprLowerer<'a> {
             .resolve_constructor_path(self.ctx.owner, &path)
         {
             Ok(resolved) => return Ok(ConstRef::Constructor(resolved)),
-            Err(err) => first_error.get_or_insert(err),
-        };
-        match self
-            .ctx
-            .resolver
-            .resolve_index_variant_path(self.ctx.owner, &path)
-        {
-            Ok(resolved) => return Ok(ConstRef::IndexVariant(resolved)),
             Err(err) => first_error.get_or_insert(err),
         };
 
@@ -1615,10 +1671,11 @@ impl<'a> ExprLowerer<'a> {
                         },
                         err => err,
                     })?;
-                Ok(MapEntryKey::IndexVariant(Spanned::new(
+                Ok(MapEntryKey::IndexVariant(IndexVariantRef {
                     variant,
-                    key.index.span.merge(key.variant.span),
-                )))
+                    index_span: Some(key.index.span),
+                    variant_span: key.variant.span,
+                }))
             }
             crate::syntax::ast::MapEntryIndex::NatRange(size) => Ok(MapEntryKey::NatRangeVariant {
                 size: *size,
@@ -1661,10 +1718,11 @@ impl<'a> ExprLowerer<'a> {
                     index.span,
                     variant.span,
                 )?;
-                Ok(IndexArg::Variant(Spanned::new(
-                    resolved,
-                    index.span.merge(variant.span),
-                )))
+                Ok(IndexArg::Variant(IndexVariantRef {
+                    variant: resolved,
+                    index_span: Some(index.span),
+                    variant_span: variant.span,
+                }))
             }
             ast::IndexArg::Var(ident) => Ok(IndexArg::Var(Spanned::new(
                 self.lookup_local(&LocalName::from_atom(ident.name.clone()), ident.span)?,
@@ -1727,7 +1785,11 @@ impl<'a> ExprLowerer<'a> {
                     variant.span,
                 )?;
                 Ok(MatchPattern::IndexLabel {
-                    variant: Spanned::new(resolved, index.span.merge(variant.span)),
+                    variant: IndexVariantRef {
+                        variant: resolved,
+                        index_span: Some(index.span),
+                        variant_span: variant.span,
+                    },
                     span: *span,
                 })
             }
@@ -1752,8 +1814,17 @@ impl<'a> ExprLowerer<'a> {
                 .resolver
                 .resolve_index_variant_path(self.ctx.owner, &name_path)
         {
+            let (qualifier, member) = path.split_last();
+            let index_span = qualifier.split_first().map(|(first, rest)| {
+                rest.iter()
+                    .fold(first.span, |merged, segment| merged.merge(segment.span))
+            });
             return Ok(MatchPattern::IndexLabel {
-                variant: Spanned::new(variant, span),
+                variant: IndexVariantRef {
+                    variant,
+                    index_span,
+                    variant_span: member.span,
+                },
                 span,
             });
         }
@@ -1963,13 +2034,12 @@ mod tests {
     }
 
     #[test]
-    fn lowers_qualified_index_variant_const_ref_to_canonical_owner() {
+    fn lowers_qualified_index_variant_literal_to_canonical_owner() {
         let lib_id = DagId::root("lib");
         let main_id = DagId::root("main");
         let lib = desugared_source("pub index Phase = { Burn, Coast };");
-        let main = desugared_source(
-            "import lib as mission; node phase: Dimensionless = mission.Phase.Burn;",
-        );
+        let main_source = "import lib as mission; node phase: Dimensionless = mission.Phase.Burn;";
+        let main = desugared_source(main_source);
         let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
         let scope = GenericScope::new();
 
@@ -1979,15 +2049,21 @@ mod tests {
         )
         .unwrap();
 
-        let ExprKind::ConstRef(target) = expr.kind else {
-            panic!("expected const-like ref, got {expr:?}");
+        let ExprKind::VariantLiteral(variant) = expr.kind else {
+            panic!("expected variant literal, got {expr:?}");
         };
-        let ConstRef::IndexVariant(variant) = target.value else {
-            panic!("expected index variant, got {target:?}");
+        assert_eq!(variant.variant.index().owner(), &lib_id);
+        assert_eq!(variant.variant.index().as_str(), "Phase");
+        assert_eq!(variant.variant.variant().as_str(), "Burn");
+        // Segment spans address exactly the written path parts.
+        let slice = |span: crate::syntax::span::Span| {
+            &main_source[span.offset()..span.offset() + span.len()]
         };
-        assert_eq!(variant.index().owner(), &lib_id);
-        assert_eq!(variant.index().as_str(), "Phase");
-        assert_eq!(variant.variant().as_str(), "Burn");
+        assert_eq!(slice(variant.variant_span), "Burn");
+        assert_eq!(
+            slice(variant.index_span.expect("written index path")),
+            "mission.Phase"
+        );
     }
 
     #[test]

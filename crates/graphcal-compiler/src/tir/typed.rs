@@ -1848,13 +1848,13 @@ impl HirPolicyChecker<'_> {
 
     fn check_variant_literal(
         &self,
-        variant: &Spanned<crate::syntax::names::ResolvedIndexVariant>,
+        variant: &hir::expr::IndexVariantRef,
         check_pub_bind_literals: bool,
     ) -> Result<(), GraphcalError> {
         if !check_pub_bind_literals {
             return Ok(());
         }
-        let index = variant.value.index();
+        let index = variant.variant.index();
         if index.owner() != self.ctx.owner {
             return Ok(());
         }
@@ -1870,9 +1870,9 @@ impl HirPolicyChecker<'_> {
         if is_pub_bind {
             return Err(GraphcalError::PubIndexVariantLiteral {
                 index: index.as_str().to_string(),
-                variant: variant.value.variant().as_str().to_string(),
+                variant: variant.variant.variant().as_str().to_string(),
                 src: self.src.clone(),
-                span: variant.span.into(),
+                span: variant.path_span().into(),
             });
         }
         Ok(())
@@ -2246,16 +2246,15 @@ fn collect_resolved_collection_refs_from_expr_inner(
         | hir::ExprKind::TypeSystemRef(_)
         | hir::ExprKind::GraphRef(_)
         | hir::ExprKind::LocalRef(_)
+        | hir::ExprKind::ConstRef(_)
         | hir::ExprKind::UnitLiteral { .. } => Ok(()),
-        hir::ExprKind::ConstRef(target) => {
-            if let hir::ConstRef::IndexVariant(variant) = &target.value {
-                record_resolved_collection_index(variant.index(), ctx, src, target.span, refs)?;
-            }
-            Ok(())
-        }
-        hir::ExprKind::VariantLiteral(variant) => {
-            record_resolved_collection_index(variant.value.index(), ctx, src, variant.span, refs)
-        }
+        hir::ExprKind::VariantLiteral(variant) => record_resolved_collection_index(
+            variant.variant.index(),
+            ctx,
+            src,
+            variant.path_span(),
+            refs,
+        ),
         hir::ExprKind::BinOp { lhs, rhs, .. } => {
             collect_resolved_collection_refs_from_expr(lhs, ctx, src, refs)?;
             collect_resolved_collection_refs_from_expr(rhs, ctx, src, refs)
@@ -2295,10 +2294,10 @@ fn collect_resolved_collection_refs_from_expr_inner(
                     match key {
                         hir::expr::MapEntryKey::IndexVariant(variant) => {
                             record_resolved_collection_index(
-                                variant.value.index(),
+                                variant.variant.index(),
                                 ctx,
                                 src,
-                                variant.span,
+                                variant.variant_span,
                                 refs,
                             )?;
                         }
@@ -2326,10 +2325,10 @@ fn collect_resolved_collection_refs_from_expr_inner(
                 match arg {
                     hir::expr::IndexArg::Variant(variant) => {
                         record_resolved_collection_index(
-                            variant.value.index(),
+                            variant.variant.index(),
                             ctx,
                             src,
-                            variant.span,
+                            variant.path_span(),
                             refs,
                         )?;
                     }
@@ -2357,10 +2356,10 @@ fn collect_resolved_collection_refs_from_expr_inner(
             for arm in arms {
                 if let hir::expr::MatchPattern::IndexLabel { variant, span: _ } = &arm.pattern {
                     record_resolved_collection_index(
-                        variant.value.index(),
+                        variant.variant.index(),
                         ctx,
                         src,
-                        variant.span,
+                        variant.path_span(),
                         refs,
                     )?;
                 }

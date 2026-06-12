@@ -279,6 +279,49 @@ node t: Dimensionless = match @s { Idle => 1.0, Active => 2.0 };
         }
     }
 
+    /// Issues #827/#828: renaming an index variant must edit exactly the
+    /// variant identifier tokens — not table-axis-to-row-label merges and not
+    /// whole `Index.Variant` qualified paths.
+    #[test]
+    fn rename_index_variant_edits_are_segment_precise() {
+        let source = "\
+pub index Maneuver = { Departure, Correction };
+param dv: Velocity[Maneuver] = table[Maneuver] {
+    Departure: 2.0 km/s;
+    Correction: 0.1 km/s;
+};
+node total: Velocity = @dv[Maneuver.Departure];
+";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+
+        // Cursor on the `Departure` variant declaration.
+        let offset = source.find("Departure").unwrap();
+        let result = rename(&analysis, &uri, offset, "Begin").unwrap();
+        let edits = result.changes.unwrap();
+        let file_edits = edits.get(&uri).unwrap();
+        // Declaration + table row key + index-access segment.
+        assert_eq!(file_edits.len(), 3, "edits: {file_edits:?}");
+        for edit in file_edits {
+            let span_text: Vec<&str> = source
+                .lines()
+                .enumerate()
+                .filter_map(|(i, line)| {
+                    let i = u32::try_from(i).unwrap();
+                    (edit.range.start.line == i && edit.range.end.line == i).then(|| {
+                        &line
+                            [edit.range.start.character as usize..edit.range.end.character as usize]
+                    })
+                })
+                .collect();
+            assert_eq!(
+                span_text,
+                vec!["Departure"],
+                "each edit must replace exactly one single-line `Departure` token"
+            );
+        }
+    }
+
     #[test]
     fn is_valid_identifier_cases() {
         assert!(is_valid_identifier("x"));
