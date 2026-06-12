@@ -1,0 +1,8 @@
+// error: two imports define `mile` differently; units are file-global once
+// imported, so a silent last-write-wins merge would make `-> mile` ambiguous
+// (N010, #648 N6).
+import app.units_a as ua;
+import app.units_b as ub;
+
+param a: Length = 3218.688 m;
+node bad: Length = @a -> mile;

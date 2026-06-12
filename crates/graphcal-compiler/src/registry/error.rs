@@ -37,6 +37,21 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("conflicting definitions of unit `{name}` reach this file through imports")]
+    #[diagnostic(
+        code(graphcal::N010),
+        help(
+            "units are file-global once imported; two modules define `{name}` with different dimensions or scales, so references would be ambiguous — rename one of the definitions"
+        )
+    )]
+    ConflictingImportedUnit {
+        name: UnitName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("import brings in a conflicting `{name}`")]
+        span: SourceSpan,
+    },
+
     #[error("unknown graph reference `@{name}`")]
     #[diagnostic(
         code(graphcal::N002),
@@ -1448,6 +1463,7 @@ impl GraphcalError {
             | Self::OverrideUnknownParam { .. } => return None,
             Self::DuplicateName { src, .. }
             | Self::BuiltinNameShadowed { src, .. }
+            | Self::ConflictingImportedUnit { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }

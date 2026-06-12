@@ -111,6 +111,12 @@ User unit definitions on bare `Temperature` are rejected (`D014`): the common te
 
 Unit scale factors must be **positive and finite**. Static unit definitions such as `unit z: Length = 0.0 m;`, negative scales, and overflowing scales are rejected. Dynamic unit scales are checked at evaluation time with the same rule.
 
+### Unit Scoping
+
+Units form a single, file-global namespace: the prelude's units, the file's own definitions, and every `pub unit` reaching the file through imports all share it. Unit references are always bare names — `@a -> mile`, never `alias.mile` (`P017`) — regardless of how the defining module was imported.
+
+Because the namespace is flat, two imports that define the same unit name *differently* would make every reference ambiguous; that conflict is rejected at import time (`N010`). Importing the same definition through several paths (diamond imports) is fine.
+
 ### Dynamic Units
 
 A unit's scale factor can depend on runtime values (params or nodes) by using a parenthesized expression with `@`-references:

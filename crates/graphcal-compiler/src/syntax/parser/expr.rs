@@ -74,6 +74,15 @@ impl Parser<'_> {
                 ));
             }
             let target = self.parse_unit_expr()?;
+            // `-> alias.unit` reads like a module-qualified unit; give it a
+            // teaching diagnostic instead of a generic unexpected-token error
+            // (#648 N6).
+            if self.lexer.peek() == Some(&Token::Dot) {
+                return Err(ParseError::QualifiedUnitReference {
+                    src: self.named_source(),
+                    span: target.span.into(),
+                });
+            }
             let span = expr.span.merge(target.span);
             Ok(Expr::new(
                 ExprKind::Convert {

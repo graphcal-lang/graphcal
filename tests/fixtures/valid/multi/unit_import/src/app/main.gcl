@@ -1,0 +1,7 @@
+// Imported units are file-global: the bare name works as a conversion
+// target regardless of the import alias (#648 N6). Conflicting definitions
+// across imports are rejected (N010).
+import app.units as u;
+
+param a: Length = 3218.688 m;
+node b: Length = @a -> mile;
