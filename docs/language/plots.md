@@ -252,6 +252,50 @@ includable by consumer files (like `pub` on any other declaration) and says
 nothing about display. `#[hidden]` governs only the declaring file's own
 output when that file is the entry point.
 
+## Cross-File Plots
+
+A library plot never displays implicitly in a consumer's output — the
+consumer of a library cannot edit its code, so the consumer (not the library
+author) controls what is displayed. Naming a `pub plot` in an include's brace
+list is the display request:
+
+```gcl
+include pkg.engine(fuel: 500.0 kg).{ delta_v, thrust_curve, mass_breakdown as mb };
+```
+
+- A library plot must be `pub` to be includable — `pub` keeps its single
+  meaning (exported across the file boundary), exactly as for other
+  declarations.
+- An included plot evaluates against **its instance** — the include's
+  parameter bindings. Two instantiations of the same library may include the
+  same plot under different aliases, and both render.
+- Included plots enter the root namespace under their local alias and are
+  referenceable from root `figure`/`layer` declarations. Alias collisions
+  with root declarations are the usual duplicate-name error.
+- To include a plot **for composition only** (e.g. to layer it into a
+  consumer figure without standalone output), put `#[hidden]` on the include
+  item:
+
+```gcl
+include pkg.engine(fuel: 500.0 kg).{
+    thrust_curve,                    // displayed
+    #[hidden] mass_breakdown as mb,  // included for composition only
+};
+
+figure summary = { plots: [thrust_curve, mb] };
+```
+
+- `#[hidden]` on a non-plot include item is an error. An explicit include of
+  a library plot that is itself declared `#[hidden]` **does** display it: the
+  include is the consumer's explicit request, and the library author does not
+  control the consumer's output.
+- Requesting a plot via `import` is an error: plots are runtime sinks
+  evaluated against an instance, and `import` carries only compile-time
+  names.
+- Library plots that are *not* named in any brace list (including everything
+  behind a module-form `include ... as alias`) are simply not part of the
+  consumer's output.
+
 ## Figure Declarations
 
 A `figure` declaration groups multiple plots into a single combined chart with

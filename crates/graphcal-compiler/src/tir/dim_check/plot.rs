@@ -99,7 +99,9 @@ fn check_plot_references(
         .chain(dag.layers.iter().map(|l| ("layer", &l.name, &l.plot_names)));
     for (owner_kind, owner, plot_names) in owners {
         for (i, reference) in plot_names.iter().enumerate() {
-            if !dag.plots.iter().any(|p| p.name == reference.value) {
+            let is_known_plot = dag.plots.iter().any(|p| p.name == reference.value)
+                || dag.included_plots.iter().any(|p| p.name == reference.value);
+            if !is_known_plot {
                 let actual_kind = if dag.figures.iter().any(|f| f.name == reference.value) {
                     Some("figure")
                 } else if dag.layers.iter().any(|l| l.name == reference.value) {

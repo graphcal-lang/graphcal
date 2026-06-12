@@ -153,6 +153,28 @@ pub struct PlotEntry {
     pub displayed: bool,
 }
 
+/// A plot alias brought into this DAG by an include brace list (#847).
+///
+/// The plot itself is evaluated in its owning instance; this entry only
+/// makes the alias known to the DAG so figures/layers can reference it and
+/// duplicate-name checks see it.
+#[derive(Debug, Clone)]
+pub struct IncludedPlotEntry {
+    /// The local alias the plot is visible under.
+    pub name: ScopedName,
+    /// The include item's span.
+    pub span: Span,
+}
+
+/// A plot requested by an include brace list item (#847).
+#[derive(Debug, Clone)]
+pub struct RequestedPlot {
+    /// The local alias the plot enters the root namespace under.
+    pub alias: DeclName,
+    /// Whether the include item carried `#[hidden]` (composition-only).
+    pub hidden: bool,
+}
+
 /// A figure declaration with lowered fields.
 #[derive(Debug, Clone)]
 pub struct FigureEntry {
@@ -230,6 +252,8 @@ pub struct IR {
     pub figures: Vec<FigureEntry>,
     /// Layer declarations in source order.
     pub layers: Vec<LayerEntry>,
+    /// Plot aliases from include brace lists (#847).
+    pub included_plots: Vec<IncludedPlotEntry>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// Set of all assert names.
@@ -483,7 +507,7 @@ pub fn lower_to_builder_with_imported_value_decls(
     let type_anns = extract_type_annotations(ast);
 
     // Step 3: Build registry, augment deps, and construct IR
-    build_ir_from_resolved(
+    let (builder, mut unfrozen) = build_ir_from_resolved(
         ast,
         src,
         resolved,
@@ -494,7 +518,20 @@ pub fn lower_to_builder_with_imported_value_decls(
         dag_id,
         None,
         registry_seed,
-    )
+    )?;
+
+    // Plot aliases from include brace lists become known to this DAG so
+    // figures/layers can reference them (#847).
+    unfrozen.included_plots = imported_names
+        .plot_names
+        .iter()
+        .map(|(name, span)| IncludedPlotEntry {
+            name: name.clone(),
+            span: *span,
+        })
+        .collect();
+
+    Ok((builder, unfrozen))
 }
 
 /// Lower a `dag { ... }` body as if it were a standalone file.
@@ -769,6 +806,7 @@ fn build_ir_from_resolved(
                 span: entry.span,
             })
             .collect(),
+        included_plots: Vec::new(),
         source_order: resolved
             .source_order
             .into_iter()
@@ -812,6 +850,8 @@ pub struct UnfrozenIR {
     plots: Vec<UnfrozenPlotEntry>,
     figures: Vec<UnfrozenFigureEntry>,
     layers: Vec<UnfrozenLayerEntry>,
+    /// Plot aliases from include brace lists (#847).
+    pub included_plots: Vec<IncludedPlotEntry>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     assert_names: HashSet<ScopedName>,
@@ -1034,6 +1074,7 @@ impl UnfrozenIR {
             plots,
             figures,
             layers,
+            included_plots: self.included_plots,
             source_order: self.source_order,
             assert_names: self.assert_names,
             assumes_map: self.assumes_map,
@@ -1165,6 +1206,7 @@ impl UnfrozenIR {
         type_bindings: &HashMap<StructTypeName, StructTypeName>,
         dim_bindings: &HashMap<DimName, DimName>,
         import_item_attributes: &HashMap<DeclName, Vec<crate::desugar::desugared_ast::Attribute>>,
+        requested_plots: &HashMap<DeclName, RequestedPlot>,
         importer_src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
         /// Prefix a `ScopedName` if it is an unqualified member owned by
@@ -1299,8 +1341,15 @@ impl UnfrozenIR {
             self.source_order.push((prefixed, DeclCategory::Assert));
         }
 
-        // Merge plots
+        // Merge only the plots requested by the include's brace list (#847):
+        // display is a consumer-side opt-in, so unrequested dep plots do not
+        // travel with the instance. A requested plot enters the root
+        // namespace under its local alias, evaluating against this instance's
+        // bindings; `#[hidden]` on the include item keeps it composition-only.
         for mut entry in dep.plots {
+            let Some(requested) = requested_plots.get(entry.name.member()) else {
+                continue;
+            };
             for encoding in &mut entry.decl.encodings {
                 substitute_index_names(&mut encoding.value, index_bindings);
                 substitute_type_names_in_expr(&mut encoding.value, type_bindings);
@@ -1316,60 +1365,21 @@ impl UnfrozenIR {
                 substitute_type_names_in_expr(&mut prop.value, type_bindings);
                 prefix_expr_refs(&mut prop.value, prefix, dep_names);
             }
-            let prefixed = entry.name.with_prefix(prefix);
+            let local = ScopedName::local(requested.alias.as_str());
             self.plots.push(UnfrozenPlotEntry {
-                name: prefixed.clone(),
+                name: local.clone(),
                 decl: entry.decl,
                 span: entry.span,
-                is_pub: entry.is_pub,
-                displayed: entry.displayed,
+                // The alias is root-local; re-export requires its own `pub`
+                // include item, resolved at the import surface.
+                is_pub: false,
+                displayed: !requested.hidden,
             });
-            self.source_order.push((prefixed, DeclCategory::Plot));
+            self.source_order.push((local, DeclCategory::Plot));
         }
 
-        // Merge figures
-        for mut entry in dep.figures {
-            for field in &mut entry.decl.fields {
-                substitute_index_names(&mut field.value, index_bindings);
-                substitute_type_names_in_expr(&mut field.value, type_bindings);
-                prefix_expr_refs(&mut field.value, prefix, dep_names);
-            }
-            // Prefix plot names referenced by the figure
-            for plot_name in &mut entry.decl.plot_names {
-                if dep_names.contains(plot_name.value.member()) {
-                    plot_name.value = plot_name.value.with_prefix(prefix);
-                }
-            }
-            let prefixed = entry.name.with_prefix(prefix);
-            self.figures.push(UnfrozenFigureEntry {
-                name: prefixed.clone(),
-                decl: entry.decl,
-                span: entry.span,
-            });
-            self.source_order.push((prefixed, DeclCategory::Figure));
-        }
-
-        // Merge layers
-        for mut entry in dep.layers {
-            for field in &mut entry.decl.fields {
-                substitute_index_names(&mut field.value, index_bindings);
-                substitute_type_names_in_expr(&mut field.value, type_bindings);
-                prefix_expr_refs(&mut field.value, prefix, dep_names);
-            }
-            // Prefix plot names referenced by the layer
-            for plot_name in &mut entry.decl.plot_names {
-                if dep_names.contains(plot_name.value.member()) {
-                    plot_name.value = plot_name.value.with_prefix(prefix);
-                }
-            }
-            let prefixed = entry.name.with_prefix(prefix);
-            self.layers.push(UnfrozenLayerEntry {
-                name: prefixed.clone(),
-                decl: entry.decl,
-                span: entry.span,
-            });
-            self.source_order.push((prefixed, DeclCategory::Layer));
-        }
+        // Dep figures and layers do not merge: they cannot be requested by a
+        // brace list, and display is controlled by the consumer (#847).
 
         // Merge assumes_map and expected_fail
         for (assert_name, assumers) in dep.assumes_map {
@@ -3345,6 +3355,7 @@ mod tests {
                 "inst",
                 &HashMap::new(),
                 &dep_names,
+                &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),

@@ -292,6 +292,10 @@ pub struct ImportedValueNames {
     pub node_names: Vec<(ScopedName, Span)>,
     /// Imported assert names (for `#[assumes]` validation).
     pub assert_names: Vec<(DeclName, Span)>,
+    /// Plot aliases requested by include brace lists (#847). Registered in
+    /// the value namespace for collision checking and recorded on the DAG so
+    /// figures/layers can reference them.
+    pub plot_names: Vec<(ScopedName, Span)>,
 }
 
 /// The kind of a declaration (used for source-order tracking).

@@ -1008,6 +1008,9 @@ pub(crate) fn resolve_with_imported_values(
     for (name, span) in &imported.assert_names {
         names.insert(ScopedName::local(name.as_str()), *span);
     }
+    for (name, span) in &imported.plot_names {
+        names.insert(name.clone(), *span);
+    }
 
     // Collect local declarations
     let local = collect_local_declarations(file, src, &mut names)?;

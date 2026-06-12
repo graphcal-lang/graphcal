@@ -3702,3 +3702,186 @@ fn graph_imported_values_render_as_external_nodes() {
         "cross-file dataflow edge should be present:\n{stdout}"
     );
 }
+
+// --- Cross-file plots via include brace lists (#847) ---
+
+/// Build a two-file project: a library with a pub plot and a main file with
+/// the given contents. Returns (tempdir, main path).
+fn plot_include_project(main_source: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("lib.gcl"),
+        "pub index Step = { A, B };\n\
+         param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };\n\
+         pub plot lib_plot = {\n\
+             mark: line,\n\
+             encode: { x: for s: Step { @vals[s] }, y: for s: Step { @vals[s] } },\n\
+         };\n",
+    )
+    .unwrap();
+    let main = root_dir.join("main.gcl");
+    std::fs::write(&main, main_source).unwrap();
+    (dir, main)
+}
+
+fn plot_names(main: &Path) -> (Vec<String>, std::process::Output) {
+    let output = graphcal_bin()
+        .args(["eval", main.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
+    let names = json
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|f| f["name"].as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    (names, output)
+}
+
+#[test]
+fn include_brace_plot_renders_under_alias() {
+    let (_dir, main) = plot_include_project(
+        "include pkg.lib().{ lib_plot as lp };\n\
+         param own: Dimensionless = 5.0;\n",
+    );
+    let (names, output) = plot_names(&main);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(names, ["lp"], "included plot renders under its alias");
+}
+
+#[test]
+fn unrequested_library_plots_do_not_render() {
+    let (_dir, main) = plot_include_project(
+        "include pkg.lib().{ vals };\n\
+         param own: Dimensionless = 5.0;\n",
+    );
+    let (names, output) = plot_names(&main);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        names.is_empty(),
+        "library plots not named in the brace list must not render: {names:?}"
+    );
+}
+
+#[test]
+fn hidden_include_item_composes_without_standalone_output() {
+    let (_dir, main) = plot_include_project(
+        "include pkg.lib().{ #[hidden] lib_plot as lp };\n\
+         figure combo = { plots: [lp] };\n\
+         param own: Dimensionless = 5.0;\n",
+    );
+    let (names, output) = plot_names(&main);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        names,
+        ["combo"],
+        "#[hidden] include item must compose without standalone output"
+    );
+}
+
+#[test]
+fn import_of_plot_is_an_error() {
+    let (_dir, main) = plot_include_project(
+        "import pkg.lib.{ lib_plot };\n\
+         param own: Dimensionless = 5.0;\n",
+    );
+    let output = graphcal_bin()
+        .args(["check", main.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(!output.status.success(), "import of a plot must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot `import` plot"),
+        "expected the structured import-plot error: {stderr}"
+    );
+}
+
+#[test]
+fn instantiated_include_plot_evaluates_against_instance() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("eng.gcl"),
+        "param scale: Dimensionless = 1.0;\n\
+         pub node doubled: Dimensionless = @scale * 2.0;\n\
+         pub plot scaled_plot = { mark: point, encode: { x: @scale, y: @doubled } };\n",
+    )
+    .unwrap();
+    let main = root_dir.join("main.gcl");
+    std::fs::write(
+        &main,
+        "include pkg.eng(scale: 10.0).{ scaled_plot as sp };\n\
+         param own: Dimensionless = 5.0;\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", main.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    assert_eq!(json[0]["name"].as_str(), Some("sp"));
+    assert_eq!(
+        json[0]["spec"]["data"]["values"][0]["x"].as_f64(),
+        Some(10.0),
+        "included plot must evaluate against the instance's bindings: {stdout}"
+    );
+    assert_eq!(
+        json[0]["spec"]["data"]["values"][0]["y"].as_f64(),
+        Some(20.0)
+    );
+}
+
+#[test]
+fn hidden_on_non_plot_include_item_is_an_error() {
+    let (_dir, main) = plot_include_project(
+        "include pkg.lib().{ #[hidden] vals };\n\
+         param own: Dimensionless = 5.0;\n",
+    );
+    let output = graphcal_bin()
+        .args(["check", main.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("attribute `hidden` does not apply to include item"),
+        "expected A018: {stderr}"
+    );
+}

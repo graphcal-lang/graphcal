@@ -95,6 +95,34 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("cannot `import` plot `{name}`")]
+    #[diagnostic(
+        code(graphcal::M021),
+        help(
+            "plots are runtime sinks evaluated against an instance; request them through an include brace list instead: `include path(...).{{ {name} }}`"
+        )
+    )]
+    ImportPlotItem {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("plots cannot travel through `import`")]
+        span: SourceSpan,
+    },
+
+    #[error("attribute `hidden` does not apply to include item `{name}`")]
+    #[diagnostic(
+        code(graphcal::A018),
+        help("`#[hidden]` on an include item is only valid when the item names a plot")
+    )]
+    HiddenIncludeItemNotAPlot {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a plot item")]
+        span: SourceSpan,
+    },
+
     #[error("{owner_kind} `{owner}` references unknown plot `{name}`")]
     #[diagnostic(
         code(graphcal::N012),
@@ -1577,6 +1605,8 @@ impl GraphcalError {
             | Self::UnknownPlotReference { src, .. }
             | Self::CompositionReferencesNonPlot { src, .. }
             | Self::DuplicatePlotReference { src, .. }
+            | Self::ImportPlotItem { src, .. }
+            | Self::HiddenIncludeItemNotAPlot { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }
