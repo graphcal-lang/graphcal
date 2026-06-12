@@ -2653,6 +2653,57 @@ fn eval_plot_basic_standalone_figures() {
     assert_eq!(arr[1]["name"].as_str(), Some("my_bar"));
 }
 
+// --- Unit definitions referencing imported units (#822) ---
+
+#[test]
+fn eval_unit_def_from_module_import() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/multi/unit_def_from_import/src/app/main.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // halfmile = 0.5 u.mile, so 1609.344 m converts to 2 halfmile.
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains('b') && l.contains("2 halfmile")),
+        "expected `b = 2 halfmile` in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_unit_def_from_selective_import() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/multi/unit_def_from_import_selective/src/app/main.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains('b') && l.contains("2 halfmile")),
+        "expected `b = 2 halfmile` in output: {stdout}"
+    );
+}
+
 // --- Dynamic units ---
 
 #[test]

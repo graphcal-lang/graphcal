@@ -389,8 +389,17 @@ pub(crate) fn lower_to_builder(
         HashMap::new(),
         dag_id,
         None,
+        None,
     )
 }
+
+/// Hook that merges imported type-system declarations into the registry builder.
+///
+/// Invoked after the prelude is loaded but before the file's own
+/// declarations are registered, so local declarations (e.g. a `unit`
+/// definition referencing an imported unit) resolve against the imported
+/// entries.
+pub type RegistrySeed<'a> = &'a mut dyn FnMut(&mut RegistryBuilder) -> Result<(), GraphcalError>;
 
 /// Lower an AST with pre-evaluated imported values, returning a `RegistryBuilder`
 /// that can be further mutated before freezing.
@@ -413,6 +422,7 @@ pub fn lower_to_builder_with_imported_values(
     imported_names: &ImportedValueNames,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     dag_id: &crate::dag_id::DagId,
+    registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     let imported_decl_types = imported_values
         .iter()
@@ -426,6 +436,7 @@ pub fn lower_to_builder_with_imported_values(
         imported_decl_types,
         HashMap::new(),
         dag_id,
+        registry_seed,
     )
 }
 
@@ -443,6 +454,10 @@ pub fn lower_to_builder_with_imported_values(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "lowering threads imported value metadata plus the registry seed hook"
+)]
 pub fn lower_to_builder_with_imported_value_decls(
     ast: &File,
     src: &NamedSource<Arc<String>>,
@@ -451,6 +466,7 @@ pub fn lower_to_builder_with_imported_value_decls(
     imported_decl_types: HashMap<ScopedName, DeclaredType>,
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     dag_id: &crate::dag_id::DagId,
+    registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Step 1: Declaration collection with imported value names in scope
     let resolved = resolve_with_imported_values(ast, src, imported_names)?;
@@ -469,6 +485,7 @@ pub fn lower_to_builder_with_imported_value_decls(
         imported_value_sources,
         dag_id,
         None,
+        registry_seed,
     )
 }
 
@@ -521,6 +538,7 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls(
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
+    registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     let resolved = resolve_with_imported_values(dag_body, src, imported_names)?;
     let type_anns = extract_type_annotations(dag_body);
@@ -535,6 +553,7 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls(
         imported_value_sources,
         dag_id,
         parent_registry,
+        registry_seed,
     )
 }
 
@@ -570,6 +589,7 @@ pub fn lower_dag_body_to_ir(
         imported_value_sources,
         src,
         &dag_dag_id,
+        None,
     )?;
     unfrozen.freeze(builder.build(), &dag_dag_id, resolver, src)
 }
@@ -624,6 +644,7 @@ fn build_ir_from_resolved(
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     dag_id: &crate::dag_id::DagId,
     parent_registry: Option<&Registry>,
+    registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     // Build registry (prelude + user-declared dimensions/units/indexes/structs).
     // When a parent registry is provided (inline-dag bodies), its entries are
@@ -638,6 +659,12 @@ fn build_ir_from_resolved(
     })?;
     if let Some(parent) = parent_registry {
         builder.merge_from_registry(parent);
+    }
+    // Imported type-system declarations merge before the file's own so that
+    // local declarations (e.g. `unit halfmile: Length = 0.5 u.mile;`) resolve
+    // against them.
+    if let Some(seed) = registry_seed {
+        seed(&mut builder)?;
     }
     register_file_declarations(ast, &mut builder, src, dag_id)?;
 

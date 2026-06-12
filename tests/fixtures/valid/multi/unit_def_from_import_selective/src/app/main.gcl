@@ -1,0 +1,7 @@
+// A local `unit` definition can reference a selectively imported unit (#822).
+import app.units.{ mile };
+
+unit halfmile: Length = 0.5 mile;
+
+param a: Length = 1609.344 m;
+node b: Length = @a -> halfmile;

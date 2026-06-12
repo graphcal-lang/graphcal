@@ -126,6 +126,8 @@ Referencing an alias-imported unit by its bare name is an unknown-unit error (`D
 
 Because each alias scopes its own names, two modules may define the same unit name *differently* and both stay usable — `ua.mile` and `ub.mile` never collide. Selectively importing the same bare name from two modules is rejected as a duplicate import, like any other name clash.
 
+Local `unit` definitions can reference imported units in their bodies, with either import form: `unit halfmile: Length = 0.5 u.mile;` after `import app.units as u;`, or `unit halfmile: Length = 0.5 mile;` after `import app.units.{ mile };`.
+
 ### Dynamic Units
 
 A unit's scale factor can depend on runtime values (params or nodes) by using a parenthesized expression with `@`-references:
