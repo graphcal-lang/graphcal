@@ -341,6 +341,20 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("`->` has no effect in this position")]
+    #[diagnostic(
+        code(graphcal::D013),
+        help(
+            "a conversion only affects how a declaration's final value is displayed; move it to the top level of the declaration (or a selected `if`/`match` branch, constructor field, map entry, for-comprehension body, or scan/unfold init), or remove it"
+        )
+    )]
+    IneffectiveConversion {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this conversion's display target is discarded")]
+        span: SourceSpan,
+    },
+
     #[error("unknown struct type `{name}`")]
     #[diagnostic(
         code(graphcal::S002),
@@ -1442,6 +1456,7 @@ impl GraphcalError {
             | Self::NonLiteralExponent { src, .. }
             | Self::ConversionDimensionMismatch { src, .. }
             | Self::NestedConversion { src, .. }
+            | Self::IneffectiveConversion { src, .. }
             | Self::UnknownStructType { src, .. }
             | Self::UnknownField { src, .. }
             | Self::MissingFields { src, .. }

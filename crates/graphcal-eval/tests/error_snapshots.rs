@@ -145,6 +145,20 @@ fn error_unit_zero_exponent() {
 }
 
 #[test]
+fn error_convert_in_arithmetic() {
+    let source = include_str!("../../../tests/fixtures/invalid/convert_in_arithmetic.gcl");
+    let rendered = render_error(source, "convert_in_arithmetic.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_in_assert() {
+    let source = include_str!("../../../tests/fixtures/invalid/convert_in_assert.gcl");
+    let rendered = render_error(source, "convert_in_assert.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_convert_int_source() {
     let source = include_str!("../../../tests/fixtures/invalid/convert_int_source.gcl");
     let rendered = render_error(source, "convert_int_source.gcl");

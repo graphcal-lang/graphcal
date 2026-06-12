@@ -163,6 +163,8 @@ The conversion sets the value's *display* unit; values are always stored in SI i
 
 `->` is non-chaining: an expression carries at most one conversion target. Both the bare chain `@alt -> km -> m` (a parse error) and the parenthesized form `(@alt -> km) -> m` (a `D012` dimension-check error) are rejected — only the outermost target could ever take effect, so an inner conversion is either a typo or dead code.
 
+A conversion is only allowed where its display effect can land — the top level of a declaration body, an `if`/`match` branch, a constructor field initializer, a map-literal entry, a for-comprehension body, or a `scan`/`unfold` init. Anywhere else (arithmetic operands, function arguments, comparisons, conditions, assert bodies) the conversion would be silently inert, so it is rejected (`D013`).
+
 A conversion must also be *resolvable* at runtime: if the target's scale cannot be computed (for example, a [dynamic unit](#dynamic-units) whose scale expression evaluates to zero or a negative value), the declaration fails with a per-node error rather than silently falling back to the base unit.
 
 ## Dimension Inference

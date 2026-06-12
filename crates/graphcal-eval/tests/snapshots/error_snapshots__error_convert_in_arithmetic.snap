@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`->` has no effect in this position
+    Diagnostic severity: error
+Begin snippet for convert_in_arithmetic.gcl starting at line 3, column 1
+
+snippet line 3: param a: Length = 1500.0 m;
+snippet line 4: node bad: Length = (@a -> km) + 100.0 m;
+    label at line 4, columns 21 to 28: this conversion's display target is discarded
+diagnostic help: a conversion only affects how a declaration's final value is displayed; move it to the top level of the declaration (or a selected `if`/`match` branch, constructor field, map entry, for-comprehension body, or scan/unfold init), or remove it
+diagnostic code: graphcal::D013
