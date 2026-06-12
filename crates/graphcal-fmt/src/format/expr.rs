@@ -165,7 +165,7 @@ const fn op_str(op: BinOp) -> &'static str {
 /// Format the operand of `->`, parenthesizing a nested conversion.
 ///
 /// `(x -> u) -> v` parses but `x -> u -> v` does not (`->` is non-chaining),
-/// so stripping the parens would make the output unparseable. The shape is
+/// so stripping the parens would make the output unparsable. The shape is
 /// rejected by the dimension checker (D012), but the formatter must stay
 /// robust on everything the parser accepts.
 fn format_convert_operand(fmt: &mut Formatter<'_>, inner: &Expr) -> RcDoc<'static> {
