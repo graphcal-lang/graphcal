@@ -2673,6 +2673,47 @@ fn eval_plot_basic_standalone_figures() {
 }
 
 #[test]
+fn eval_plot_datetime_is_temporal_iso8601() {
+    // Datetime values must plot as ISO 8601 strings with temporal encoding,
+    // not nominal hifitime display strings (#846).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("dt.gcl");
+    std::fs::write(
+        &file,
+        "node t0: Datetime = datetime(\"2026-01-01T00:00:00Z\");\n\
+         pub plot dt = {\n\
+             mark: point,\n\
+             encode: { x: @t0, y: 1.0 },\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    let spec = &json[0]["spec"];
+    assert_eq!(
+        spec["encoding"]["x"]["type"].as_str(),
+        Some("temporal"),
+        "expected temporal x encoding for Datetime: {stdout}"
+    );
+    assert_eq!(
+        spec["data"]["values"][0]["x"].as_str(),
+        Some("2026-01-01T00:00:00Z"),
+        "expected RFC 3339 datetime string: {stdout}"
+    );
+}
+
+#[test]
 fn eval_plot_failure_reported_on_stderr() {
     // A plot skipped because a plotted node failed must be reported with the
     // plot name and root cause, not hidden behind "no plot declarations

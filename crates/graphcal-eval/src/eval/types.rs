@@ -477,6 +477,17 @@ fn format_epoch_in_timezone(
     Ok(zdt.strftime("%Y-%m-%dT%H:%M:%S%:z[%Q]").to_string())
 }
 
+/// Format a `hifitime::Epoch` as an RFC 3339 / ISO 8601 string in UTC
+/// (e.g. `"2026-01-01T00:00:00Z"`), for machine consumers such as
+/// Vega-Lite temporal data.
+///
+/// Falls back to the hifitime `Display` form for epochs outside jiff's
+/// representable range (beyond year ±9999).
+#[must_use]
+pub fn epoch_to_rfc3339(epoch: &hifitime::Epoch) -> String {
+    epoch_to_jiff_timestamp(epoch).map_or_else(|_| format!("{epoch}"), |ts| ts.to_string())
+}
+
 /// Convert a `hifitime::Epoch` to a `jiff::Timestamp`.
 fn epoch_to_jiff_timestamp(epoch: &hifitime::Epoch) -> Result<jiff::Timestamp, jiff::Error> {
     let unix_secs = epoch.to_unix_seconds();
@@ -744,10 +755,15 @@ pub enum PlotFieldValue {
     Numbers(Vec<f64>),
     /// A list of string labels (from evaluated label expressions/for-comprehensions).
     Labels(Vec<String>),
+    /// A list of datetime instants as RFC 3339 / ISO 8601 strings,
+    /// rendered with Vega-Lite temporal encoding (#846).
+    Datetimes(Vec<String>),
     /// A single string value (e.g., title).
     String(String),
     /// A single numeric value.
     Number(f64),
+    /// A single datetime instant as an RFC 3339 / ISO 8601 string (#846).
+    Datetime(String),
 }
 
 /// Top-level compile error that wraps both parse and eval errors.

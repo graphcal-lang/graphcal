@@ -1451,9 +1451,10 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> PlotFieldValue {
         RuntimeValue::Bool(b) => PlotFieldValue::String(b.to_string()),
         RuntimeValue::Label { variant, .. } => PlotFieldValue::String(variant.to_string()),
         RuntimeValue::Indexed { entries, .. } => {
-            // Try to interpret as a list of numbers or labels
+            // Try to interpret as a list of numbers, labels, or datetimes
             let mut numbers = Vec::new();
             let mut labels = Vec::new();
+            let mut datetimes = Vec::new();
             let mut all_numeric = true;
             for (_variant, entry_rv) in entries {
                 match entry_rv {
@@ -1467,6 +1468,10 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> PlotFieldValue {
                         labels.push(variant.to_string());
                         all_numeric = false;
                     }
+                    RuntimeValue::Datetime(epoch) => {
+                        datetimes.push(super::types::epoch_to_rfc3339(epoch));
+                        all_numeric = false;
+                    }
                     _ => {
                         all_numeric = false;
                     }
@@ -1474,6 +1479,8 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> PlotFieldValue {
             }
             if all_numeric && !numbers.is_empty() {
                 PlotFieldValue::Numbers(numbers)
+            } else if !datetimes.is_empty() {
+                PlotFieldValue::Datetimes(datetimes)
             } else if !labels.is_empty() {
                 PlotFieldValue::Labels(labels)
             } else {
@@ -1487,7 +1494,9 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> PlotFieldValue {
             }
         }
         RuntimeValue::Struct { .. } => PlotFieldValue::String("<struct>".to_string()),
-        RuntimeValue::Datetime(epoch) => PlotFieldValue::String(format!("{epoch}")),
+        RuntimeValue::Datetime(epoch) => {
+            PlotFieldValue::Datetime(super::types::epoch_to_rfc3339(epoch))
+        }
         RuntimeValue::RangeLabel { value, .. } => PlotFieldValue::Number(*value),
     }
 }

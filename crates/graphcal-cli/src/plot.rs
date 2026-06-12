@@ -298,6 +298,7 @@ const fn infer_vega_type(value: &PlotFieldValue) -> &'static str {
     match value {
         PlotFieldValue::Numbers(_) | PlotFieldValue::Number(_) => "quantitative",
         PlotFieldValue::Labels(_) | PlotFieldValue::String(_) => "nominal",
+        PlotFieldValue::Datetimes(_) | PlotFieldValue::Datetime(_) => "temporal",
     }
 }
 
@@ -305,9 +306,11 @@ const fn infer_vega_type(value: &PlotFieldValue) -> &'static str {
 fn field_value_to_json_array(value: &PlotFieldValue) -> Vec<JsonValue> {
     match value {
         PlotFieldValue::Numbers(nums) => nums.iter().copied().map(json_number).collect(),
-        PlotFieldValue::Labels(labels) => labels.iter().map(|s| json!(s)).collect(),
+        PlotFieldValue::Labels(labels) | PlotFieldValue::Datetimes(labels) => {
+            labels.iter().map(|s| json!(s)).collect()
+        }
         PlotFieldValue::Number(n) => vec![json_number(*n)],
-        PlotFieldValue::String(s) => vec![json!(s)],
+        PlotFieldValue::String(s) | PlotFieldValue::Datetime(s) => vec![json!(s)],
     }
 }
 
