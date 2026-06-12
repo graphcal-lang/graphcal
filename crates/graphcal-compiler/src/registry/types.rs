@@ -592,6 +592,33 @@ fn resolve_unit_dimension_impl(
     Ok(dim)
 }
 
+/// Format a dimension, preferring a registered named alias for compound forms.
+///
+/// A pure base dimension (`Length`) or `Dimensionless` keeps its canonical
+/// rendering. A compound dimension (`Length^2 * Mass / Time^2`) is replaced by
+/// a matching named dimension (`Energy`) when one is registered; if several
+/// names match, the lexicographically smallest is chosen for determinism.
+fn format_dimension_preferring_alias(
+    dimensions: &HashMap<DimName, Dimension>,
+    base_dim_names: &BTreeMap<BaseDimId, String>,
+    dim: &Dimension,
+) -> String {
+    let canonical = format!("{}", dim.display_with(base_dim_names));
+    // Base dimensions and Dimensionless render as a single bare name already;
+    // only compound renderings benefit from an alias.
+    let is_compound = canonical.contains([' ', '^', '*', '/']);
+    if is_compound
+        && let Some(alias) = dimensions
+            .iter()
+            .filter(|(_, d)| *d == dim)
+            .map(|(name, _)| name)
+            .min()
+    {
+        return alias.to_string();
+    }
+    canonical
+}
+
 // ---------------------------------------------------------------------------
 // Domain-specific registries (frozen / read-only)
 // ---------------------------------------------------------------------------
@@ -634,9 +661,12 @@ impl DimensionRegistry {
     /// Format a dimension as a human-readable string using registered base dimension names.
     ///
     /// Returns `"Dimensionless"` for dimensionless, or names like `"Length / Time"`.
+    /// When a compound dimension matches a named dimension alias (e.g. `Energy`
+    /// for `Length^2 * Mass / Time^2`), the alias is preferred so diagnostics
+    /// speak the user's vocabulary.
     #[must_use]
     pub fn format_dimension(&self, dim: &Dimension) -> String {
-        format!("{}", dim.display_with(&self.base_dim_names))
+        format_dimension_preferring_alias(&self.dimensions, &self.base_dim_names, dim)
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
@@ -1089,9 +1119,12 @@ impl RegistryBuilder {
     }
 
     /// Format a dimension as a human-readable string using registered base dimension names.
+    ///
+    /// Prefers a named dimension alias for compound dimensions, like
+    /// [`DimensionRegistry::format_dimension`].
     #[must_use]
     pub fn format_dimension(&self, dim: &Dimension) -> String {
-        format!("{}", dim.display_with(&self.base_dim_names))
+        format_dimension_preferring_alias(&self.dimensions, &self.base_dim_names, dim)
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.

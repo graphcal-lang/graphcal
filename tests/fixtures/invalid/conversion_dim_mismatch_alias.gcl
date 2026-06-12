@@ -1,0 +1,4 @@
+// error: conversion target has wrong dim; the diagnostic must render the
+// named alias (`Energy`), not the raw canonical form (Length^2 * Mass / Time^2).
+param a: Length = 1.0 m;
+node bad: Length = @a -> J;
