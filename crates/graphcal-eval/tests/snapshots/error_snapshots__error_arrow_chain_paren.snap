@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`->` cannot be applied to an expression that already has a display target
+    Diagnostic severity: error
+Begin snippet for arrow_chain_paren.gcl starting at line 3, column 1
+
+snippet line 3: param a: Length = 1500.0 m;
+snippet line 4: node bad: Length = (@a -> km) -> mm;
+    label at line 4, columns 21 to 28: the operand of this conversion is itself a conversion
+diagnostic help: an expression carries at most one `->` target; remove the inner conversion — only the outermost target takes effect
+diagnostic code: graphcal::D012

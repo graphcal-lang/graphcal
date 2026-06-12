@@ -131,6 +131,13 @@ fn error_conversion_dim_mismatch_alias() {
 }
 
 #[test]
+fn error_arrow_chain_paren() {
+    let source = include_str!("../../../tests/fixtures/invalid/arrow_chain_paren.gcl");
+    let rendered = render_error(source, "arrow_chain_paren.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_convert_int_source() {
     let source = include_str!("../../../tests/fixtures/invalid/convert_int_source.gcl");
     let rendered = render_error(source, "convert_int_source.gcl");

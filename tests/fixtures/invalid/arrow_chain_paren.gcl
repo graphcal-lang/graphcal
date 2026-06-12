@@ -1,0 +1,4 @@
+// error: `->` is non-chaining; parentheses must not smuggle a nested
+// conversion through (D012). Only the outermost target would take effect.
+param a: Length = 1500.0 m;
+node bad: Length = (@a -> km) -> mm;

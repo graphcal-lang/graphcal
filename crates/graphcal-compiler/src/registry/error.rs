@@ -327,6 +327,20 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("`->` cannot be applied to an expression that already has a display target")]
+    #[diagnostic(
+        code(graphcal::D012),
+        help(
+            "an expression carries at most one `->` target; remove the inner conversion — only the outermost target takes effect"
+        )
+    )]
+    NestedConversion {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("the operand of this conversion is itself a conversion")]
+        span: SourceSpan,
+    },
+
     #[error("unknown struct type `{name}`")]
     #[diagnostic(
         code(graphcal::S002),
@@ -1392,6 +1406,10 @@ impl GraphcalError {
     /// [`Self::ManifestError`]) and CLI override errors
     /// ([`Self::OverrideNotAParam`], [`Self::OverrideUnknownParam`]).
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive variant list; one arm per error variant"
+    )]
     pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
         let src = match self {
             Self::FileNotFound { .. }
@@ -1423,6 +1441,7 @@ impl GraphcalError {
             | Self::CyclicUnit { src, .. }
             | Self::NonLiteralExponent { src, .. }
             | Self::ConversionDimensionMismatch { src, .. }
+            | Self::NestedConversion { src, .. }
             | Self::UnknownStructType { src, .. }
             | Self::UnknownField { src, .. }
             | Self::MissingFields { src, .. }

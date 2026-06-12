@@ -87,6 +87,10 @@ node alt_m: Length = @altitude -> m;
 node time_h: Time = @duration -> hour;
 ```
 
+`->` is non-chaining: an expression carries at most one conversion target.
+`@x -> km -> m` is a parse error, and the parenthesized `(@x -> km) -> m` is
+rejected by the dimension checker (`D012`).
+
 ## Phantom Type Change (Explicit Reconstruction)
 
 There is no phantom-type cast operator. To change a phantom type parameter,
