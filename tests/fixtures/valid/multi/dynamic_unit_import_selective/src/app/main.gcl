@@ -1,0 +1,6 @@
+// Selective-import form of #823: the dep-resolved dynamic unit scale replaces
+// the unevaluable dynamic form at the import boundary.
+import app.fx.{ Money, USD, EUR };
+
+param mine: Money = 100.0 USD;
+node p: Money = @mine -> EUR;

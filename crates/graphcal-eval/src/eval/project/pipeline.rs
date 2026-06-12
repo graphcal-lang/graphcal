@@ -320,6 +320,7 @@ pub(in crate::eval::project) fn store_compiled_file_artifact(
             assertions: HashMap::new(),
             registry: compiled.tir.registry,
             pub_names,
+            resolved_dynamic_unit_scales: HashMap::new(),
             dag_tirs,
         },
     );
@@ -346,6 +347,14 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
     );
     let file_runtime_values = filter_local_runtime_values(&compiled.tir, &runtime_values);
     let top_level_consts = top_level_const_values(&compiled.tir, &plan.const_values);
+    // Dynamic-unit scales resolve against this file's final values here, so
+    // module importers can carry the units across as static scales.
+    let resolved_dynamic_unit_scales = super::super::runtime::export_dynamic_unit_scales(
+        &compiled.tir,
+        &plan,
+        &runtime_values,
+        file_src,
+    );
 
     // Capture dag TIRs so cross-file qualified inline calls can merge them
     // into the importer's TIR::dags under module-prefixed keys.
@@ -365,6 +374,7 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
                 .collect(),
             registry: compiled.tir.registry,
             pub_names,
+            resolved_dynamic_unit_scales,
             dag_tirs,
         },
     );

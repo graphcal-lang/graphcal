@@ -126,6 +126,8 @@ Referencing an alias-imported unit by its bare name is an unknown-unit error (`D
 
 Because each alias scopes its own names, two modules may define the same unit name *differently* and both stay usable — `ua.mile` and `ub.mile` never collide. Selectively importing the same bare name from two modules is rejected as a duplicate import, like any other name clash.
 
+Local `unit` definitions can reference imported units in their bodies, with either import form: `unit halfmile: Length = 0.5 u.mile;` after `import app.units as u;`, or `unit halfmile: Length = 0.5 mile;` after `import app.units.{ mile };`.
+
 ### Dynamic Units
 
 A unit's scale factor can depend on runtime values (params or nodes) by using a parenthesized expression with `@`-references:
@@ -141,6 +143,8 @@ unit EUR: Money = (@usd_per_eur) USD;
 Here, 1 EUR = `usd_per_eur` USD. The scale factor is evaluated at runtime, so overriding `usd_per_eur` (e.g., via `--set usd_per_eur=1.20`) changes all EUR-denominated values accordingly.
 
 Dynamic units behave identically to static units for dimension checking (compile-time). The scale is only resolved at evaluation time, after the referenced params have been computed.
+
+A `pub` dynamic unit is also usable across a module-import boundary (`fx.EUR` after `import app.fx as fx;`, or `EUR` after `import app.fx.{ EUR };`). The defining module's evaluation resolves the scale — the expression references that module's own params — and the importer carries the resolved value as a fixed scale. If the defining module cannot be evaluated standalone (e.g., it has required params), using its dynamic unit in an importer fails at evaluation time with a scale-resolution error.
 
 ### Using Units
 

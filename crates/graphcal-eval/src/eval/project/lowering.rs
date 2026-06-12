@@ -33,6 +33,20 @@ pub(in crate::eval::project) fn lower_and_finalize(
     // builder construction moves it.
     let saved_imported_values = ctx.imported_values.clone();
 
+    // Imported type-system declarations (selective imports and module-import
+    // registries) seed the registry builder before the file's own
+    // declarations register, so local unit/dim definitions can reference
+    // imported units and dimensions.
+    let mut registry_seed = |builder: &mut RegistryBuilder| {
+        seed_imported_type_system(
+            builder,
+            project,
+            &ctx.imported_type_system_names,
+            &ctx.extra_registry_builders,
+            evaluated_files,
+            file_src,
+        )
+    };
     let (mut builder, mut unfrozen) =
         graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
             file_ast,
@@ -40,31 +54,8 @@ pub(in crate::eval::project) fn lower_and_finalize(
             &ctx.imported_names,
             ctx.imported_values,
             file_dag_id,
+            Some(&mut registry_seed),
         )?;
-
-    // Register type-system declarations from selectively imported files.
-    for (dep_dag_id, names) in &ctx.imported_type_system_names {
-        let dep_loaded = &project.files[dep_dag_id];
-        graphcal_compiler::ir::lower::register_selected_declarations(
-            &dep_loaded.ast,
-            &mut builder,
-            &dep_loaded.named_source,
-            names,
-            dep_dag_id,
-        )?;
-    }
-
-    // Merge type-system declarations from module-imported registries (pub items only).
-    for (dep_registry, pub_names, unit_alias, import_span) in &ctx.extra_registry_builders {
-        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names, unit_alias)
-            .map_err(|conflict| {
-                CompileError::Eval(GraphcalError::ConflictingImportedUnit {
-                    name: conflict.name,
-                    src: file_src.clone(),
-                    span: (*import_span).into(),
-                })
-            })?;
-    }
 
     // Process every deferred DAG include (file-level instantiated, inline
     // DAG, qualified inline DAG) through one path: compile each source's
@@ -302,6 +293,16 @@ fn compile_loaded_dag_module_ir<'a>(
         declarations: self_imports.stripped_body,
     };
     let dag_ast = rewrite_qualified_refs_in_ast(&dag_ast, &ctx.module_map, &ctx.imported_names);
+    let mut registry_seed = |builder: &mut RegistryBuilder| {
+        seed_imported_type_system(
+            builder,
+            project,
+            &ctx.imported_type_system_names,
+            &ctx.extra_registry_builders,
+            evaluated_files,
+            file_src,
+        )
+    };
     let (mut builder, mut unfrozen) =
         graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_value_decls(
             dag_ast.as_ref(),
@@ -312,28 +313,8 @@ fn compile_loaded_dag_module_ir<'a>(
             self_imports.value_sources,
             file_src,
             &loaded_dag.dag_id,
+            Some(&mut registry_seed),
         )?;
-
-    for (dep_dag_id, names) in &ctx.imported_type_system_names {
-        let dep_loaded = &project.files[dep_dag_id];
-        graphcal_compiler::ir::lower::register_selected_declarations(
-            &dep_loaded.ast,
-            &mut builder,
-            &dep_loaded.named_source,
-            names,
-            dep_dag_id,
-        )?;
-    }
-    for (dep_registry, pub_names, unit_alias, import_span) in &ctx.extra_registry_builders {
-        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names, unit_alias)
-            .map_err(|conflict| {
-                CompileError::Eval(GraphcalError::ConflictingImportedUnit {
-                    name: conflict.name,
-                    src: file_src.clone(),
-                    span: (*import_span).into(),
-                })
-            })?;
-    }
 
     process_deferred_dag_includes(
         project,
@@ -620,6 +601,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                             &dep_imported.names,
                             dep_imported.values,
                             dep_dag_id,
+                            None,
                         )?;
                     let dep_registry = dep_builder.build();
                     (
@@ -728,6 +710,16 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                     );
 
                     let dag_dag_id = importer_dag_id.child(deferred.prefix.as_str());
+                    let mut registry_seed = |builder: &mut RegistryBuilder| {
+                        seed_imported_type_system(
+                            builder,
+                            project,
+                            &body_ctx.imported_type_system_names,
+                            &body_ctx.extra_registry_builders,
+                            evaluated_files,
+                            importer_src,
+                        )
+                    };
                     let (mut dag_builder, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_value_decls(
                         stripped_body.as_ref(),
                         None,
@@ -737,34 +729,8 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                         self_imports.value_sources,
                         importer_src,
                         &dag_dag_id,
+                        Some(&mut registry_seed),
                     )?;
-                    for (dep_dag_id, names) in &body_ctx.imported_type_system_names {
-                        let dep_loaded = &project.files[dep_dag_id];
-                        graphcal_compiler::ir::lower::register_selected_declarations(
-                            &dep_loaded.ast,
-                            &mut dag_builder,
-                            &dep_loaded.named_source,
-                            names,
-                            dep_dag_id,
-                        )?;
-                    }
-                    for (dep_registry, pub_names, unit_alias, import_span) in
-                        &body_ctx.extra_registry_builders
-                    {
-                        merge_registry_into_builder_pub_filtered(
-                            &mut dag_builder,
-                            dep_registry,
-                            pub_names,
-                            unit_alias,
-                        )
-                        .map_err(|conflict| {
-                            CompileError::Eval(GraphcalError::ConflictingImportedUnit {
-                                name: conflict.name,
-                                src: importer_src.clone(),
-                                span: (*import_span).into(),
-                            })
-                        })?;
-                    }
                     process_deferred_dag_includes(
                         project,
                         &dag_dag_id,
@@ -1021,23 +987,100 @@ pub(in crate::eval::project) fn merge_registry_into_builder(
     )
 }
 
+/// Merge imported type-system declarations into a registry builder: selective
+/// imports register the selected declarations from each dependency's AST, and
+/// module imports merge each dependency's `pub` registry entries under the
+/// import alias.
+///
+/// Runs as the registry-seed hook of file lowering — before the file's own
+/// declarations register — so local definitions (e.g. `unit halfmile: Length
+/// = 0.5 u.mile;`) resolve against the imported entries.
+fn seed_imported_type_system(
+    builder: &mut RegistryBuilder,
+    project: &crate::loader::LoadedProject,
+    imported_type_system_names: &HashMap<
+        graphcal_compiler::dag_id::DagId,
+        graphcal_compiler::ir::lower::SelectedDeclarations,
+    >,
+    extra_registry_builders: &[ModuleRegistryImport<'_>],
+    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    file_src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    for (dep_dag_id, names) in imported_type_system_names {
+        let dep_loaded = &project.files[dep_dag_id];
+        graphcal_compiler::ir::lower::register_selected_declarations(
+            &dep_loaded.ast,
+            builder,
+            &dep_loaded.named_source,
+            names,
+            dep_dag_id,
+        )?;
+        // A selectively imported dynamic unit re-lowered from the dep's AST
+        // carries a scale expression that references the dep's own params
+        // and cannot be evaluated in this file's context. Substitute the
+        // concrete scale from the dep's evaluation when available.
+        if let Some(dep_eval) = evaluated_files.get(dep_dag_id) {
+            replace_dynamic_units_with_resolved_scales(
+                builder,
+                names,
+                &dep_eval.resolved_dynamic_unit_scales,
+            );
+        }
+    }
+    for import in extra_registry_builders {
+        merge_registry_into_builder_pub_filtered(builder, import).map_err(|conflict| {
+            GraphcalError::ConflictingImportedUnit {
+                name: conflict.name,
+                src: file_src.clone(),
+                span: import.import_span.into(),
+            }
+        })?;
+    }
+    Ok(())
+}
+
+/// Overwrite selectively imported dynamic units with their dep-resolved
+/// static scales. Units without a resolved scale keep the dynamic form and
+/// surface the existing loud could-not-be-resolved error if actually used.
+fn replace_dynamic_units_with_resolved_scales(
+    builder: &mut RegistryBuilder,
+    names: &graphcal_compiler::ir::lower::SelectedDeclarations,
+    resolved_scales: &HashMap<
+        graphcal_compiler::syntax::names::UnitRef,
+        graphcal_compiler::registry::types::PositiveFiniteScale,
+    >,
+) {
+    use graphcal_compiler::registry::types::UnitScale;
+    for name in &names.default {
+        let unit_ref = graphcal_compiler::syntax::names::UnitRef::local(name.clone());
+        let Some(resolved) = resolved_scales.get(&unit_ref) else {
+            continue;
+        };
+        let Some(info) = builder.get_unit(&unit_ref) else {
+            continue;
+        };
+        if matches!(info.scale, UnitScale::Dynamic { .. }) {
+            let dim = info.dimension.clone();
+            builder.register_unit_dynamic(unit_ref, dim, UnitScale::Static(*resolved));
+        }
+    }
+}
+
 /// Merge type-system declarations from a dependency's frozen Registry into a
 /// builder, restricted to names listed in `pub_names`. Used for module imports
 /// where only public items should cross the boundary.
 pub(in crate::eval::project) fn merge_registry_into_builder_pub_filtered(
     builder: &mut RegistryBuilder,
-    dep_registry: &Registry,
-    pub_names: &HashSet<DeclName>,
-    unit_alias: &ModuleAliasName,
+    import: &ModuleRegistryImport<'_>,
 ) -> Result<(), UnitMergeConflict> {
     merge_registry_into_builder_filtered(
         builder,
-        dep_registry,
+        import.registry,
         &HashMap::new(),
         &HashMap::new(),
         &HashMap::new(),
-        Some(pub_names),
-        Some(unit_alias),
+        Some(import.pub_names),
+        Some((&import.unit_alias, import.resolved_dynamic_scales)),
     )
 }
 
@@ -1059,7 +1102,13 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
     pub_names: Option<&HashSet<DeclName>>,
-    unit_alias: Option<&ModuleAliasName>,
+    unit_alias: Option<(
+        &ModuleAliasName,
+        &HashMap<
+            graphcal_compiler::syntax::names::UnitRef,
+            graphcal_compiler::registry::types::PositiveFiniteScale,
+        >,
+    )>,
 ) -> Result<(), UnitMergeConflict> {
     // Import base dimension names (for display formatting).
     for (id, name) in dep_registry.dimensions.base_dim_names() {
@@ -1107,7 +1156,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
     // dep registry) is idempotent; a *different* definition under the same
     // reference is a conflict.
     for (name, dim, scale) in dep_registry.units.all_units() {
-        let target = if let Some(alias) = unit_alias {
+        let target = if let Some((alias, _)) = unit_alias {
             if name.is_qualified() {
                 continue;
             }
@@ -1121,13 +1170,29 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
             }
             name.clone()
         };
+        // A dynamic unit's scale expression references the dependency's own
+        // params and cannot be re-evaluated in the importer's context, so a
+        // module import carries the scale resolved by the dependency's
+        // evaluation instead. Without a resolved scale (the dependency is a
+        // library or runs under `check`), the dynamic form is kept and use
+        // surfaces the loud could-not-be-resolved error.
+        let merged_scale = match (scale, unit_alias) {
+            (
+                graphcal_compiler::registry::types::UnitScale::Dynamic { .. },
+                Some((_, resolved_scales)),
+            ) => resolved_scales.get(name).map_or_else(
+                || scale.clone(),
+                |resolved| graphcal_compiler::registry::types::UnitScale::Static(*resolved),
+            ),
+            _ => scale.clone(),
+        };
         if let Some(existing) = builder.get_unit(&target) {
-            if unit_definitions_compatible(existing, dim, scale) {
+            if unit_definitions_compatible(existing, dim, &merged_scale) {
                 continue;
             }
             return Err(UnitMergeConflict { name: target });
         }
-        builder.register_unit_dynamic(target, dim.clone(), scale.clone());
+        builder.register_unit_dynamic(target, dim.clone(), merged_scale);
     }
 
     // Import indexes — skip bound indexes (they are replaced by the importer's index).

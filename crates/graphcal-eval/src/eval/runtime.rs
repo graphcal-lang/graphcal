@@ -308,6 +308,34 @@ fn failed_runtime_dependencies(
         .unwrap_or_default()
 }
 
+/// Resolve the file's own dynamic-unit scales against its final runtime
+/// values, for export to module importers (see
+/// [`crate::eval_expr::resolve_exportable_dynamic_unit_scales`]).
+pub(super) fn export_dynamic_unit_scales(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    plan: &crate::exec_plan::ExecPlan,
+    values: &RuntimeValueMap,
+    src: &NamedSource<Arc<String>>,
+) -> HashMap<
+    graphcal_compiler::syntax::names::UnitRef,
+    graphcal_compiler::registry::types::PositiveFiniteScale,
+> {
+    let builtin_consts = builtin_constants();
+    let builtin_fns = builtin_functions();
+    let ctx = EvalContext {
+        builtin_consts,
+        builtin_fns,
+        registry: &tir.registry,
+        src,
+        unfold_context: None,
+        tir,
+        current_dag: Some(tir.root()),
+        root_values: Some(values),
+        struct_field_constraints: Some(&plan.struct_field_constraints),
+    };
+    crate::eval_expr::resolve_exportable_dynamic_unit_scales(values, &ctx)
+}
+
 /// Evaluate using TIR + `ExecPlan` (new linear pipeline).
 ///
 /// Runtime errors are contained per-node: if a node fails, independent nodes

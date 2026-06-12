@@ -1,0 +1,4 @@
+pub base dim Money;
+pub base unit USD: Money;
+param rate: Dimensionless = 1.08;
+pub unit EUR: Money = (@rate) USD;

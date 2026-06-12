@@ -1,0 +1,7 @@
+// A dynamic unit defined in another module is usable across a module-import
+// boundary (#823): the dependency's evaluation resolves the scale, and the
+// importer carries it as a static scale.
+import app.fx as fx;
+
+param mine: fx.Money = 100.0 fx.USD;
+node p: fx.Money = @mine -> fx.EUR;

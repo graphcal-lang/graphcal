@@ -205,6 +205,110 @@ mod tests {
     }
 
     #[test]
+    fn module_imported_unit_completes_as_qualified() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/app")).unwrap();
+        std::fs::write(
+            dir.path().join("graphcal.toml"),
+            "[package]\nname = \"app\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("src/app/units.gcl"),
+            "pub unit mile: Length = 1609.344 m;",
+        )
+        .unwrap();
+        let main_path = dir.path().join("src/app/main.gcl");
+        let main_text = "import app.units as u;\n\
+                         param a: Length = 3218.688 m;\n\
+                         node b: Length = @a -> u.mile;\n";
+        std::fs::write(&main_path, main_text).unwrap();
+        let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
+        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+
+        let offset = main_text.find("-> u.mile").unwrap() + 3;
+        let items = completion(&analysis, main_text, offset).unwrap_or_default();
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        eprintln!("LABELS: {labels:?}");
+        assert!(labels.contains(&"u.mile"));
+        assert!(!labels.contains(&"mile"));
+    }
+
+    #[test]
+    fn module_imported_dim_and_type_complete_as_qualified() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/app")).unwrap();
+        std::fs::write(
+            dir.path().join("graphcal.toml"),
+            "[package]\nname = \"app\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("src/app/lib.gcl"),
+            "pub dim Speed = Length / Time;\n\
+             pub type Point { Point(x: Dimensionless, y: Dimensionless) }\n\
+             pub index Axis = { X, Y };\n",
+        )
+        .unwrap();
+        let main_path = dir.path().join("src/app/main.gcl");
+        let main_text = "import app.lib as m;\nparam v: m.Speed = 3.0 m/s;\n";
+        std::fs::write(&main_path, main_text).unwrap();
+        let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
+        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+
+        // Cursor right after `: `, at the start of the type annotation.
+        let offset = main_text.find(": m.Speed").unwrap() + 2;
+        let items = completion(&analysis, main_text, offset).unwrap_or_default();
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        for expected in ["m.Speed", "m.Point", "m.Axis"] {
+            assert!(
+                labels.contains(&expected),
+                "type completion must offer the qualified `{expected}`: {labels:?}"
+            );
+        }
+        for bare in ["Speed", "Point", "Axis"] {
+            assert!(
+                !labels.contains(&bare),
+                "type completion must not offer the bare `{bare}`: {labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn module_imported_const_completes_as_qualified() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/app")).unwrap();
+        std::fs::write(
+            dir.path().join("graphcal.toml"),
+            "[package]\nname = \"app\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("src/app/lib.gcl"),
+            "pub const node g0: Dimensionless = 9.81;",
+        )
+        .unwrap();
+        let main_path = dir.path().join("src/app/main.gcl");
+        let main_text = "import app.lib as m;\nnode z: Dimensionless = 1.0 + 2.0;\n";
+        std::fs::write(&main_path, main_text).unwrap();
+        let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
+        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+
+        // Cursor in expression position, right after `1.0 + `.
+        let offset = main_text.find("+ 2.0").unwrap() + 2;
+        let items = completion(&analysis, main_text, offset).unwrap_or_default();
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels.contains(&"m.g0"),
+            "expression completion must offer the qualified `m.g0`: {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"g0"),
+            "expression completion must not offer the bare `g0`: {labels:?}"
+        );
+    }
+
+    #[test]
     fn imported_symbol_completion_uses_local_alias() {
         // Regression: completion items for imported symbols used the
         // defining file's spelling — `import helper.lib.{y as renamed};`

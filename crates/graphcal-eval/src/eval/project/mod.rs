@@ -9,7 +9,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Expr, ExprKind, ModulePath};
 use graphcal_compiler::syntax::names::{
-    DeclName, DimName, IndexName, ModuleAliasName, StructTypeName,
+    DeclName, DimName, IndexName, ModuleAliasName, StructTypeName, UnitRef,
 };
 use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Span;
@@ -24,7 +24,7 @@ use graphcal_compiler::ir::resolve::{DeclCategory, ImportedValueNames, ScopedNam
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::registry::types::{Registry, RegistryBuilder};
+use graphcal_compiler::registry::types::{PositiveFiniteScale, Registry, RegistryBuilder};
 
 use super::runtime::evaluate_plan;
 use super::types::{AssertResult, CompileError, EvalResult};
@@ -159,6 +159,13 @@ pub(in crate::eval::project) struct EvaluatedFile {
     /// Names of declarations marked `pub` in the source file.
     /// Used to enforce private-by-default visibility during imports.
     pub(in crate::eval::project) pub_names: HashSet<DeclName>,
+    /// Concrete scale factors for this file's own dynamic units, resolved
+    /// against the file's evaluated runtime values. Module importers convert
+    /// the dynamic units to static scales at registry-merge time — the scale
+    /// expression references this file's params and cannot be re-evaluated in
+    /// the importer's context. Empty when `runtime_available` is `false`.
+    pub(in crate::eval::project) resolved_dynamic_unit_scales:
+        HashMap<UnitRef, PositiveFiniteScale>,
     /// Compiled dag TIRs for each `dag { ... }` declared in this file.
     ///
     /// Keyed by bare dag name. Cloned into downstream importers' `TIR::dags`
@@ -281,13 +288,29 @@ pub(in crate::eval::project) struct ImportContext<'a> {
     >,
     pub(in crate::eval::project) module_map:
         HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
-    /// Registry + `pub_names` + module alias + import-statement span for
-    /// module-imported dependencies. The alias keys the dependency's `pub`
-    /// units in the importer's unit scope (`alias.unit`); the span localizes
-    /// merge-conflict diagnostics.
-    pub(in crate::eval::project) extra_registry_builders:
-        Vec<(&'a Registry, &'a HashSet<DeclName>, ModuleAliasName, Span)>,
+    /// Registry surfaces of module-imported dependencies, merged into the
+    /// importer's registry builder before its own declarations register.
+    pub(in crate::eval::project) extra_registry_builders: Vec<ModuleRegistryImport<'a>>,
     pub(in crate::eval::project) deferred_dag_includes: Vec<DeferredDagInclude>,
+}
+
+/// A module-imported dependency's registry surface, queued for merging into
+/// the importer's registry builder.
+pub(in crate::eval::project) struct ModuleRegistryImport<'a> {
+    /// The dependency's frozen registry.
+    pub(in crate::eval::project) registry: &'a Registry,
+    /// Names declared `pub` in the dependency — only these cross the boundary.
+    pub(in crate::eval::project) pub_names: &'a HashSet<DeclName>,
+    /// The import alias that keys the dependency's `pub` units in the
+    /// importer's unit scope (`alias.unit`).
+    pub(in crate::eval::project) unit_alias: ModuleAliasName,
+    /// Concrete scales for the dependency's dynamic units, resolved against
+    /// its evaluated runtime values. Dynamic units merge as static scales —
+    /// their scale expressions reference the dependency's own params and
+    /// cannot be re-evaluated in the importer's context.
+    pub(in crate::eval::project) resolved_dynamic_scales: &'a HashMap<UnitRef, PositiveFiniteScale>,
+    /// The import-statement span, localizing merge-conflict diagnostics.
+    pub(in crate::eval::project) import_span: Span,
 }
 
 /// Result of looking up a single selective import item in an `EvaluatedFile`.

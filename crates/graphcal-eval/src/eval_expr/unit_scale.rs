@@ -1,11 +1,53 @@
+use std::collections::HashMap;
+
 use graphcal_compiler::desugar::desugared_ast::{MulDivOp, UnitExpr};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::registry::types::UnitScale;
+use graphcal_compiler::registry::types::{PositiveFiniteScale, UnitScale};
+use graphcal_compiler::syntax::names::UnitRef;
 use graphcal_compiler::syntax::span::Span;
 
 use super::numeric;
 use super::{EvalContext, HirLocalValueMap, RuntimeValueMap, hir_eval::eval_hir_expr};
+
+/// Resolve the concrete scale factor of each of the file's own dynamic units
+/// against the file's final runtime values.
+///
+/// The resulting map is exported through the project pipeline so that
+/// module-importing files can use the dynamic units as static scales — the
+/// scale expression references this file's params and cannot be re-evaluated
+/// in the importer's context.
+///
+/// Units whose scale fails to resolve are omitted, preserving the laziness of
+/// dynamic-unit errors: an unused broken dynamic unit never surfaces, and a
+/// used one errors loudly at the importer's use site. Qualified (imported)
+/// units are skipped — their owning module exports its own resolved scales.
+pub fn resolve_exportable_dynamic_unit_scales(
+    values: &RuntimeValueMap,
+    ctx: &EvalContext<'_>,
+) -> HashMap<UnitRef, PositiveFiniteScale> {
+    let empty_locals = HirLocalValueMap::root();
+    ctx.registry
+        .units
+        .all_units()
+        .filter(|(name, _, _)| !name.is_qualified())
+        .filter_map(|(name, _dim, scale)| {
+            let UnitScale::Dynamic {
+                base_unit_scale, ..
+            } = scale
+            else {
+                return None;
+            };
+            let scale_hir = ctx.tir.root().semantic.dynamic_unit_scales.get(name)?;
+            let scale_val = eval_hir_expr(scale_hir, values, &empty_locals, ctx).ok()?;
+            let RuntimeValue::Scalar(scale_f64) = scale_val else {
+                return None;
+            };
+            let combined = PositiveFiniteScale::new(scale_f64 * base_unit_scale.get()).ok()?;
+            Some((name.clone(), combined))
+        })
+        .collect()
+}
 
 /// Build a scalar runtime value after validating that it is finite.
 pub(in crate::eval_expr) fn checked_finite_scalar(
