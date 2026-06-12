@@ -74,6 +74,27 @@ encode: {
 },
 ```
 
+### Channel Alignment
+
+All channels of one plot are flattened onto a single shared row set:
+
+- The row set is the cross product of the index axes of the channel with the
+  *widest* axis set. A two-variable comprehension like
+  `color: for p: P, t: T { ... }` drives one row per `P × T` cell.
+- Every other channel must range over a subset of those axes; its values are
+  broadcast across the axes it does not mention. A channel with no index (a
+  plain scalar) repeats on every row.
+- Channels ranging over unrelated indexes (e.g. `x: for s: Step { ... }` with
+  `y: for p: Pair { ... }`) have no meaningful row pairing and are rejected
+  with an error — rows are never silently padded or misaligned.
+- Values that cannot be represented in a plot (structs, or a mix of numbers
+  and labels within one channel) are errors. Index variant names are never
+  substituted for data.
+
+Booleans encode as the labels `"true"`/`"false"`, labels as their variant
+names, datetimes as ISO 8601 timestamps with a temporal axis, and numbers
+as quantitative data.
+
 ### Unit-Aware Axis Titles
 
 Graphcal auto-generates axis titles from dimensional metadata. When an

@@ -1254,8 +1254,8 @@ fn eval_plot_property(
     }
     let empty_locals = HirLocalValueMap::root();
     eval_hir_expr(expr, values, &empty_locals, ctx)
-        .map(|rv| runtime_to_plot_field_value(&rv))
         .map_err(|e| eval_failed_node_error(&e).to_string())
+        .and_then(|rv| runtime_to_plot_field_value(&rv))
 }
 
 /// Evaluate a plot declaration, producing a `PlotSpec`.
@@ -1287,20 +1287,34 @@ fn evaluate_plot(
         return Err(message);
     }
 
-    let mut encodings = Vec::new();
     let mut encoding_meta = Vec::new();
 
-    // Evaluate encoding channels
+    // Evaluate encoding channels to axes-aware data, then align them onto
+    // one shared row set (cross-product flattening with broadcasting); see
+    // `plot_data` for the rules (#840, #841).
+    let empty_locals = HirLocalValueMap::root();
+    let mut channel_data = Vec::new();
     for (channel, expr) in &lowered.encodings {
-        let field_value = eval_plot_property(expr, values, ctx)
-            .map_err(|e| format!("encoding channel `{channel}`: {e}"))?;
+        let data = if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &expr.kind {
+            super::plot_data::ChannelData::scalar_label(s.clone())
+        } else {
+            let rv = eval_hir_expr(expr, values, &empty_locals, ctx).map_err(|e| {
+                format!(
+                    "encoding channel `{channel}`: {}",
+                    eval_failed_node_error(&e)
+                )
+            })?;
+            super::plot_data::channel_data_from_runtime(&rv)
+                .map_err(|e| format!("encoding channel `{channel}`: {e}"))?
+        };
 
         // Extract axis metadata: dimension from graph refs, display unit from expression
         let meta = extract_encoding_axis_meta(expr, declared_types, ctx, values);
         encoding_meta.push((*channel, meta));
 
-        encodings.push((*channel, field_value));
+        channel_data.push((*channel, data));
     }
+    let encodings = super::plot_data::align_encoding_channels(&channel_data)?;
 
     // Evaluate mark properties (e.g., stroke_width, opacity)
     let mut mark_properties = Vec::new();
@@ -1431,8 +1445,10 @@ fn eval_composition_fields(
             properties.push((comp_prop, PlotFieldValue::String(s.clone())));
             continue;
         }
-        if let Ok(rv) = eval_hir_expr(&field.value, values, &empty_locals, ctx) {
-            properties.push((comp_prop, runtime_to_plot_field_value(&rv)));
+        if let Ok(rv) = eval_hir_expr(&field.value, values, &empty_locals, ctx)
+            && let Ok(field_value) = runtime_to_plot_field_value(&rv)
+        {
+            properties.push((comp_prop, field_value));
         }
     }
     let plot_names = plot_name_spans.iter().map(|p| p.value.clone()).collect();
@@ -1440,63 +1456,25 @@ fn eval_composition_fields(
 }
 
 /// Convert a `RuntimeValue` to a `PlotFieldValue`.
+///
+/// A value that cannot be represented in a plot (a struct, or an indexed
+/// value mixing kinds) is an error — never silently replaced by a
+/// placeholder or by index variant names (#840).
 #[expect(
     clippy::cast_precision_loss,
     reason = "plot data loss of precision from i64 to f64 is acceptable"
 )]
-fn runtime_to_plot_field_value(rv: &RuntimeValue) -> PlotFieldValue {
+fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, String> {
     match rv {
-        RuntimeValue::Scalar(v) => PlotFieldValue::Number(*v),
-        RuntimeValue::Int(i) => PlotFieldValue::Number(*i as f64),
-        RuntimeValue::Bool(b) => PlotFieldValue::String(b.to_string()),
-        RuntimeValue::Label { variant, .. } => PlotFieldValue::String(variant.to_string()),
-        RuntimeValue::Indexed { entries, .. } => {
-            // Try to interpret as a list of numbers, labels, or datetimes
-            let mut numbers = Vec::new();
-            let mut labels = Vec::new();
-            let mut datetimes = Vec::new();
-            let mut all_numeric = true;
-            for (_variant, entry_rv) in entries {
-                match entry_rv {
-                    RuntimeValue::Scalar(v) => numbers.push(*v),
-                    RuntimeValue::Int(i) => numbers.push(*i as f64),
-                    // A range-index loop variable surfacing as the entry value
-                    // (e.g. `x: for t: T { t }`) is numeric data, exactly like
-                    // the top-level RangeLabel arm below (#839).
-                    RuntimeValue::RangeLabel { value, .. } => numbers.push(*value),
-                    RuntimeValue::Label { variant, .. } => {
-                        labels.push(variant.to_string());
-                        all_numeric = false;
-                    }
-                    RuntimeValue::Datetime(epoch) => {
-                        datetimes.push(super::types::epoch_to_rfc3339(epoch));
-                        all_numeric = false;
-                    }
-                    _ => {
-                        all_numeric = false;
-                    }
-                }
-            }
-            if all_numeric && !numbers.is_empty() {
-                PlotFieldValue::Numbers(numbers)
-            } else if !datetimes.is_empty() {
-                PlotFieldValue::Datetimes(datetimes)
-            } else if !labels.is_empty() {
-                PlotFieldValue::Labels(labels)
-            } else {
-                // Fallback: extract variant names as labels
-                PlotFieldValue::Labels(
-                    entries
-                        .keys()
-                        .map(graphcal_compiler::syntax::names::IndexVariantName::to_string)
-                        .collect(),
-                )
-            }
-        }
-        RuntimeValue::Struct { .. } => PlotFieldValue::String("<struct>".to_string()),
-        RuntimeValue::Datetime(epoch) => {
-            PlotFieldValue::Datetime(super::types::epoch_to_rfc3339(epoch))
-        }
-        RuntimeValue::RangeLabel { value, .. } => PlotFieldValue::Number(*value),
+        RuntimeValue::Scalar(v) => Ok(PlotFieldValue::Number(*v)),
+        RuntimeValue::Int(i) => Ok(PlotFieldValue::Number(*i as f64)),
+        RuntimeValue::Bool(b) => Ok(PlotFieldValue::String(b.to_string())),
+        RuntimeValue::Label { variant, .. } => Ok(PlotFieldValue::String(variant.to_string())),
+        RuntimeValue::Indexed { .. } => super::plot_data::flatten_to_field_value(rv),
+        RuntimeValue::Struct { .. } => Err(format!("{} cannot be plotted", rv.kind())),
+        RuntimeValue::Datetime(epoch) => Ok(PlotFieldValue::Datetime(
+            super::types::epoch_to_rfc3339(epoch),
+        )),
+        RuntimeValue::RangeLabel { value, .. } => Ok(PlotFieldValue::Number(*value)),
     }
 }

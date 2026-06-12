@@ -2524,6 +2524,111 @@ fn eval_plot_heatmap_json() {
         stdout.contains("\"mark\": \"rect\""),
         "expected rect mark for heatmap: {stdout}"
     );
+
+    // The 2D color comprehension drives a Subsystem × OpMode cross product;
+    // the 1D x/y channels broadcast across the axis they do not mention
+    // (#840).
+    let json = parse_plot_json_stdout(&stdout);
+    let spec = &json[0]["spec"];
+    let values = spec["data"]["values"]
+        .as_array()
+        .expect("expected data values array");
+    assert_eq!(values.len(), 9, "expected 3×3 heat-map cells: {stdout}");
+    assert_eq!(values[0]["x"].as_str(), Some("Safe"));
+    assert_eq!(values[0]["y"].as_str(), Some("Comms"));
+    assert_eq!(values[0]["color"].as_f64(), Some(2.0));
+    assert_eq!(values[8]["x"].as_str(), Some("Science"));
+    assert_eq!(values[8]["y"].as_str(), Some("Payload"));
+    assert_eq!(values[8]["color"].as_f64(), Some(35.0));
+    assert_eq!(
+        spec["encoding"]["color"]["type"].as_str(),
+        Some("quantitative"),
+        "color carries the cell values: {stdout}"
+    );
+}
+
+#[test]
+fn eval_plot_mismatched_channel_axes_is_an_error() {
+    // Channels over unrelated indexes have no meaningful row pairing; they
+    // must fail loudly instead of zipping to the longest channel (#841).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("mismatch.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B, C, D };\n\
+         pub index Pair = { L, R };\n\
+         param values: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0, Step.C: 4.0, Step.D: 8.0 };\n\
+         param twos: Dimensionless[Pair] = { Pair.L: 10.0, Pair.R: 20.0 };\n\
+         pub plot mismatch = {\n\
+             mark: line,\n\
+             encode: {\n\
+                 x: for s: Step { @values[s] },\n\
+                 y: for p: Pair { @twos[p] },\n\
+             },\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        !output.status.success(),
+        "mismatched channel axes must fail the run"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("plot `mismatch` not rendered")
+            && stderr.contains("incompatible index axes"),
+        "expected an axes mismatch report: {stderr}"
+    );
+    // Stdout keeps the JSON contract: an empty array, no misaligned rows.
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    assert_eq!(json.as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn eval_plot_indexed_bools_encode_like_scalar_bools() {
+    // Indexed Bool entries must encode as "true"/"false" labels, never as
+    // index variant names (#840).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("flags.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B, C };\n\
+         param values: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0, Step.C: 3.0 };\n\
+         node flags: Bool[Step] = for s: Step { @values[s] > 1.5 };\n\
+         pub plot p = {\n\
+             mark: point,\n\
+             encode: { x: for s: Step { @values[s] }, y: for s: Step { @flags[s] } },\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    let values = json[0]["spec"]["data"]["values"]
+        .as_array()
+        .expect("expected data values array");
+    let ys: Vec<&str> = values.iter().map(|v| v["y"].as_str().unwrap()).collect();
+    assert_eq!(
+        ys,
+        ["false", "true", "true"],
+        "expected bool labels: {stdout}"
+    );
 }
 
 #[test]

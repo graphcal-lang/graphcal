@@ -271,9 +271,10 @@ fn handle_eval(
                 let rendered = plot::build_figures(&result.plots, &result.figures, &result.layers);
                 // Plots that failed to evaluate are reported on stderr —
                 // outside the stdout JSON contract — so the root cause is
-                // never hidden in --plot mode (#842).
+                // never hidden in --plot mode (#842), and they fail the run
+                // (exit code 1) like any other evaluation error.
                 for err in &result.plot_errors {
-                    eprintln!("warning: plot `{}` not rendered: {}", err.name, err.message);
+                    eprintln!("error: plot `{}` not rendered: {}", err.name, err.message);
                 }
                 let no_plot_decls = result.plots.is_empty()
                     && result.plot_errors.is_empty()
@@ -326,7 +327,8 @@ fn handle_eval(
                 .assertions
                 .iter()
                 .any(|(_, r, _)| is_assert_failure(r));
-            if has_eval_errors || has_assert_failures {
+            let has_plot_errors = plot_output.is_some() && !result.plot_errors.is_empty();
+            if has_eval_errors || has_assert_failures || has_plot_errors {
                 process::exit(1);
             }
         }
