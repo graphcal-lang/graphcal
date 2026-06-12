@@ -136,7 +136,7 @@ pub fn format_unit_expr_inline(unit_expr: &UnitExpr) -> RcDoc<'static> {
             (_, MulDivOp::Mul) => docs.push(RcDoc::text(" * ")),
             (_, MulDivOp::Div) => docs.push(RcDoc::text("/")),
         }
-        let mut term = RcDoc::text(item.name.value.as_str().to_string());
+        let mut term = RcDoc::text(item.name.value.to_string());
         if let Some(power) = item.power {
             term = term.append(RcDoc::text(format_power(power)));
         }

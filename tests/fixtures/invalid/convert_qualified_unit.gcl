@@ -1,4 +1,4 @@
-// error: unit references cannot be module-qualified (P017, #648 N6);
-// units are file-global once imported.
+// error: `u` is not a module alias in this file, so `u.mile` cannot resolve
+// (D003). Qualified unit references require `import <module> as u;`.
 param a: Length = 3218.688 m;
 node bad: Length = @a -> u.mile;

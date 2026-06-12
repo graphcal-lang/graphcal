@@ -632,18 +632,19 @@ signed_integer
 
 (* --- Unit expressions --- *)
 (* Used in unit declarations, unit literals, and conversion targets.
-   Unit expressions share dim_expr's structure and exponent grammar; the one
-   deliberate difference is the term name: dims are module-scoped ident_paths,
-   while units form a single file-global namespace, so unit_term takes a bare
-   IDENT (qualified unit references are rejected with P017; conflicting
-   imported definitions with N010). *)
+   Unit expressions share dim_expr's structure and exponent grammar. Unit
+   references follow the same scoping rules as every other imported category:
+   a bare IDENT names a local declaration, a selective import, or a prelude
+   unit; `IDENT "." IDENT` names a `pub` unit through a module-import alias
+   (`u.mile`). Module aliases are single segments, so deeper paths are
+   rejected with P017. *)
 unit_expr
    = [ "1", "/" ], unit_term, { ( "*" | "/" ), unit_term };
 (* The optional `1/` prefix is the reciprocal shorthand (e.g. `1/min`); the
    literal `1` numerator contributes nothing and only `1` is allowed there. *)
 
 unit_term
-   = IDENT, [ "^", exponent ]
+   = IDENT, [ ".", IDENT ], [ "^", exponent ]
    | "(", unit_expr, ")", [ "^", exponent ];
 
 (* ================================================================== *)

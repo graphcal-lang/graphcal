@@ -201,7 +201,7 @@ fn parse_derived_unit() {
                 matches!(&def.scale_expr.kind, ExprKind::Number(n) if (*n - 1000.0).abs() < f64::EPSILON)
             );
             assert_eq!(def.unit_expr.terms.len(), 1);
-            assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "m");
+            assert_eq!(def.unit_expr.terms[0].name.value.to_string(), "m");
         }
         _ => panic!("expected unit"),
     }
@@ -220,11 +220,11 @@ fn parse_compound_unit_decl() {
                 matches!(&def.scale_expr.kind, ExprKind::Number(n) if (*n - 1.0).abs() < f64::EPSILON)
             );
             assert_eq!(def.unit_expr.terms.len(), 3);
-            assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "kg");
+            assert_eq!(def.unit_expr.terms[0].name.value.to_string(), "kg");
             assert_eq!(def.unit_expr.terms[1].op, MulDivOp::Mul);
-            assert_eq!(def.unit_expr.terms[1].name.value.as_str(), "m");
+            assert_eq!(def.unit_expr.terms[1].name.value.to_string(), "m");
             assert_eq!(def.unit_expr.terms[2].op, MulDivOp::Div);
-            assert_eq!(def.unit_expr.terms[2].name.value.as_str(), "s");
+            assert_eq!(def.unit_expr.terms[2].name.value.to_string(), "s");
             assert_eq!(def.unit_expr.terms[2].power, Some(Rational::from_int(2)));
         }
         _ => panic!("expected unit"),
@@ -253,7 +253,7 @@ fn parse_unit_decl_with_paren_expr() {
                 }
                 other => panic!("expected BinOp, got {other:?}"),
             }
-            assert_eq!(def.unit_expr.terms[0].name.value.as_str(), "rad");
+            assert_eq!(def.unit_expr.terms[0].name.value.to_string(), "rad");
         }
         _ => panic!("expected unit"),
     }

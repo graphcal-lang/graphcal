@@ -156,14 +156,14 @@ pub fn format_unit_expr_canonical(expr: &crate::syntax::ast::UnitExpr) -> String
 mod tests {
     use super::*;
     use crate::syntax::ast::{MulDivOp, UnitExpr, UnitExprItem};
-    use crate::syntax::names::UnitName;
+    use crate::syntax::names::{UnitName, UnitRef};
     use crate::syntax::span::Span;
     use crate::syntax::span::Spanned;
 
     fn unit_term(op: MulDivOp, name: &str, power: Option<i32>) -> UnitExprItem {
         UnitExprItem {
             op,
-            name: Spanned::new(UnitName::new(name), Span::new(0, 0)),
+            name: Spanned::new(UnitRef::local(UnitName::new(name)), Span::new(0, 0)),
             power: power.map(Rational::from_int),
         }
     }

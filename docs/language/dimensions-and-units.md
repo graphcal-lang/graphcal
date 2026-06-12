@@ -113,9 +113,18 @@ Unit scale factors must be **positive and finite**. Static unit definitions such
 
 ### Unit Scoping
 
-Units form a single, file-global namespace: the prelude's units, the file's own definitions, and every `pub unit` reaching the file through imports all share it. Unit references are always bare names — `@a -> mile`, never `alias.mile` (`P017`) — regardless of how the defining module was imported.
+Units follow the same scoping rules as every other imported category. A *bare* reference (`@a -> mile`) resolves against the file's own unit scope: the prelude's units, the file's own declarations, and selectively imported units (`import app.units.{ mile };`). A module imported with an alias exposes its `pub` units under that alias — `import app.units as u;` makes the unit available as `u.mile`, and only as `u.mile`:
 
-Because the namespace is flat, two imports that define the same unit name *differently* would make every reference ambiguous; that conflict is rejected at import time (`N010`). Importing the same definition through several paths (diamond imports) is fine.
+```
+import app.units as u;            // defines `pub unit mile: Length = 1609.344 m;`
+
+param a: Length = 3218.688 m;
+node b: Length = @a -> u.mile;    // 2 u.mile
+```
+
+Referencing an alias-imported unit by its bare name is an unknown-unit error (`D003`). Module aliases are single segments, so a unit reference is at most `alias.unit`; deeper paths are rejected at parse time (`P017`).
+
+Because each alias scopes its own names, two modules may define the same unit name *differently* and both stay usable — `ua.mile` and `ub.mile` never collide. Selectively importing the same bare name from two modules is rejected as a duplicate import, like any other name clash.
 
 ### Dynamic Units
 

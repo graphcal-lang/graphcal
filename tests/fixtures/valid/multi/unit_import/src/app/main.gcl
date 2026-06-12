@@ -1,7 +1,9 @@
-// Imported units are file-global: the bare name works as a conversion
-// target regardless of the import alias (#648 N6). Conflicting definitions
-// across imports are rejected (N010).
+// Units follow the same scoping rules as every other imported category:
+// a module imported with an alias exposes its `pub` units as `alias.unit`.
+// The bare name `mile` would be an unknown unit here (D003); only a local
+// declaration, a selective import (`import app.units.{ mile };`), or a
+// prelude unit resolves bare.
 import app.units as u;
 
 param a: Length = 3218.688 m;
-node b: Length = @a -> mile;
+node b: Length = @a -> u.mile;

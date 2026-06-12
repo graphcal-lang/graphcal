@@ -3,8 +3,9 @@ use crate::syntax::ast::{
     IndexExpr, MulDivOp, NatExpr, TypeExpr, TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::syntax::dimension::Rational;
-use crate::syntax::names::{GenericParamName, UnitName};
+use crate::syntax::names::{GenericParamName, ModuleAliasName, UnitName, UnitRef};
 use crate::syntax::span::Span;
+use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
@@ -389,7 +390,9 @@ impl Parser<'_> {
 
     /// Parse a unit expression:
     ///   `unit_term (("*" | "/") unit_term)*`
-    /// where `unit_term` is `IDENT ["^" INTEGER]` or `"(" unit_expr ")" ["^" INTEGER]`.
+    /// where `unit_term` is `IDENT ["." IDENT] ["^" INTEGER]` or
+    /// `"(" unit_expr ")" ["^" INTEGER]`. The optional dotted qualifier is a
+    /// module alias (`u.mile`); deeper paths are rejected (P017).
     ///
     /// Parenthesized groups are flattened into the term list (operator
     /// combination and power distribution), so the AST stays flat.
@@ -498,7 +501,33 @@ impl Parser<'_> {
             let ident = self.parse_any_ident()?;
             let start_span = ident.span;
             let mut end_span = ident.span;
-            let name = ident.into_spanned::<UnitName>();
+            let name = if self.lexer.peek() == Some(&Token::Dot)
+                && matches!(self.lexer.peek_second(), Some(&Token::Ident))
+            {
+                self.expect(Token::Dot)?;
+                let leaf = self.parse_any_ident()?;
+                // Unit references are at most `alias.unit`: module aliases are
+                // single segments, so a deeper path can never resolve.
+                if self.lexer.peek() == Some(&Token::Dot)
+                    && matches!(self.lexer.peek_second(), Some(&Token::Ident))
+                {
+                    return Err(ParseError::UnitReferenceTooDeep {
+                        src: self.named_source(),
+                        span: start_span.merge(leaf.span).into(),
+                    });
+                }
+                let span = start_span.merge(leaf.span);
+                end_span = leaf.span;
+                Spanned::new(
+                    UnitRef::qualified(
+                        ModuleAliasName::from_atom(ident.name),
+                        UnitName::from_atom(leaf.name),
+                    ),
+                    span,
+                )
+            } else {
+                ident.into_spanned::<UnitRef>()
+            };
             let power = self.parse_term_power(&mut end_span)?;
             Ok((
                 vec![UnitExprItem {

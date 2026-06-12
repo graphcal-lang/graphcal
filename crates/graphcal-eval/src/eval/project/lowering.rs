@@ -55,16 +55,15 @@ pub(in crate::eval::project) fn lower_and_finalize(
     }
 
     // Merge type-system declarations from module-imported registries (pub items only).
-    for (dep_registry, pub_names, import_span) in &ctx.extra_registry_builders {
-        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names).map_err(
-            |conflict| {
+    for (dep_registry, pub_names, unit_alias, import_span) in &ctx.extra_registry_builders {
+        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names, unit_alias)
+            .map_err(|conflict| {
                 CompileError::Eval(GraphcalError::ConflictingImportedUnit {
                     name: conflict.name,
                     src: file_src.clone(),
                     span: (*import_span).into(),
                 })
-            },
-        )?;
+            })?;
     }
 
     // Process every deferred DAG include (file-level instantiated, inline
@@ -325,16 +324,15 @@ fn compile_loaded_dag_module_ir<'a>(
             dep_dag_id,
         )?;
     }
-    for (dep_registry, pub_names, import_span) in &ctx.extra_registry_builders {
-        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names).map_err(
-            |conflict| {
+    for (dep_registry, pub_names, unit_alias, import_span) in &ctx.extra_registry_builders {
+        merge_registry_into_builder_pub_filtered(&mut builder, dep_registry, pub_names, unit_alias)
+            .map_err(|conflict| {
                 CompileError::Eval(GraphcalError::ConflictingImportedUnit {
                     name: conflict.name,
                     src: file_src.clone(),
                     span: (*import_span).into(),
                 })
-            },
-        )?;
+            })?;
     }
 
     process_deferred_dag_includes(
@@ -750,12 +748,14 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                             dep_dag_id,
                         )?;
                     }
-                    for (dep_registry, pub_names, import_span) in &body_ctx.extra_registry_builders
+                    for (dep_registry, pub_names, unit_alias, import_span) in
+                        &body_ctx.extra_registry_builders
                     {
                         merge_registry_into_builder_pub_filtered(
                             &mut dag_builder,
                             dep_registry,
                             pub_names,
+                            unit_alias,
                         )
                         .map_err(|conflict| {
                             CompileError::Eval(GraphcalError::ConflictingImportedUnit {
@@ -1017,6 +1017,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder(
         type_bindings,
         dim_bindings,
         None,
+        None,
     )
 }
 
@@ -1027,6 +1028,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder_pub_filtered(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
     pub_names: &HashSet<DeclName>,
+    unit_alias: &ModuleAliasName,
 ) -> Result<(), UnitMergeConflict> {
     merge_registry_into_builder_filtered(
         builder,
@@ -1035,17 +1037,19 @@ pub(in crate::eval::project) fn merge_registry_into_builder_pub_filtered(
         &HashMap::new(),
         &HashMap::new(),
         Some(pub_names),
+        Some(unit_alias),
     )
 }
 
-/// A unit name reached the importing file with two different definitions.
+/// A unit reference reached the importing file with two different definitions.
 ///
-/// Units are file-global once imported, so a silent last-write-wins merge
-/// would make `-> mile` resolve to whichever import happened to land last
-/// (#648 N6). The conflict is surfaced as a loud error instead.
+/// Includes inline the dependency's body into the importer, so the bodies of
+/// two included modules share one unit scope; a silent last-write-wins merge
+/// would make their references resolve to whichever include happened to land
+/// last. The conflict is surfaced as a loud error instead.
 #[derive(Debug)]
 pub(in crate::eval::project) struct UnitMergeConflict {
-    pub name: graphcal_compiler::syntax::names::UnitName,
+    pub name: graphcal_compiler::syntax::names::UnitRef,
 }
 
 pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
@@ -1055,6 +1059,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
     pub_names: Option<&HashSet<DeclName>>,
+    unit_alias: Option<&ModuleAliasName>,
 ) -> Result<(), UnitMergeConflict> {
     // Import base dimension names (for display formatting).
     for (id, name) in dep_registry.dimensions.base_dim_names() {
@@ -1086,22 +1091,43 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
         builder.set_base_dim_symbol(id.clone(), symbol.clone());
     }
 
-    // Import units. Re-merging an identical definition (diamond imports,
-    // prelude units present in every dep registry) is idempotent; a
-    // *different* definition under the same name is a conflict.
+    // Import units.
+    //
+    // Module imports (`unit_alias` present) expose only the dependency's own
+    // `pub` units, re-keyed under the import alias (`alias.unit`); the
+    // dependency's alias-qualified imports and non-pub units stay internal to
+    // it, and nothing lands in the importer's bare unit scope. Bare names in
+    // the importer come only from its own declarations, selective imports,
+    // and the prelude.
+    //
+    // Include merges (`unit_alias` absent) copy the dependency's full unit
+    // scope unchanged because the dependency's body is inlined into the
+    // importer and its unit references must keep resolving. Re-merging an
+    // identical definition (diamond includes, prelude units present in every
+    // dep registry) is idempotent; a *different* definition under the same
+    // reference is a conflict.
     for (name, dim, scale) in dep_registry.units.all_units() {
-        if pub_names.is_some_and(|visible| !visible.contains(name.as_str())) {
-            continue;
-        }
-        if let Some(existing) = builder.get_unit(name.as_str()) {
+        let target = if let Some(alias) = unit_alias {
+            if name.is_qualified() {
+                continue;
+            }
+            if pub_names.is_some_and(|visible| !visible.contains(name.name().as_str())) {
+                continue;
+            }
+            graphcal_compiler::syntax::names::UnitRef::qualified(alias.clone(), name.name().clone())
+        } else {
+            if pub_names.is_some_and(|visible| !visible.contains(name.name().as_str())) {
+                continue;
+            }
+            name.clone()
+        };
+        if let Some(existing) = builder.get_unit(&target) {
             if unit_definitions_compatible(existing, dim, scale) {
                 continue;
             }
-            return Err(UnitMergeConflict {
-                name: (*name).clone(),
-            });
+            return Err(UnitMergeConflict { name: target });
         }
-        builder.register_unit_dynamic((*name).clone(), dim.clone(), scale.clone());
+        builder.register_unit_dynamic(target, dim.clone(), scale.clone());
     }
 
     // Import indexes — skip bound indexes (they are replaced by the importer's index).

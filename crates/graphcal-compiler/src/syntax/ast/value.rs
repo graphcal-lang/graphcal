@@ -4,7 +4,7 @@ use crate::syntax::ast::common::{Ident, ModulePath};
 use crate::syntax::dimension::Rational;
 use crate::syntax::names::{
     ConstructorName, DeclName, FieldName, IndexName, IndexVariantName, LocalName, NamePath,
-    ScopedName, UnitName,
+    ScopedName, UnitRef,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Phase, Raw};
@@ -436,7 +436,7 @@ pub struct UnitExpr {
 pub struct UnitExprItem {
     /// `Mul` for the first term and for `*`, `Div` for `/`.
     pub op: MulDivOp,
-    pub name: Spanned<UnitName>,
+    pub name: Spanned<UnitRef>,
     /// `None` means exponent 1. Rational exponents (`^(1/2)`) are kept exact.
     pub power: Option<Rational>,
 }

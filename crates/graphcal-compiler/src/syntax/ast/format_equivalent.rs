@@ -106,6 +106,7 @@ format_equivalent_via_eq!(
     crate::syntax::names::LocalName,
     NamePath,
     ModuleAliasName,
+    crate::syntax::names::UnitRef,
     // Closed enums with no payload spans.
     crate::syntax::ast::BinOp,
     crate::syntax::ast::UnaryOp,

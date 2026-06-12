@@ -9,7 +9,7 @@ use crate::desugar::desugared_ast::{
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational, RationalError};
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
-    StructTypeName, UnitName,
+    StructTypeName, UnitRef,
 };
 // ---------------------------------------------------------------------------
 // Data types
@@ -482,9 +482,9 @@ impl NatRangeIndex {
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnitResolveError {
     /// A unit name in the expression is not registered.
-    UnknownUnit(UnitName),
+    UnknownUnit(UnitRef),
     /// A unit in the expression has a runtime-dependent scale.
-    DynamicScale(UnitName),
+    DynamicScale(UnitRef),
     /// Dimension exponent arithmetic overflowed.
     Overflow(RationalError),
 }
@@ -554,13 +554,13 @@ pub fn pow_scale(scale: f64, exp: Rational) -> f64 {
 
 /// Shared implementation for resolving a `UnitExpr` to its dimension and static scale factor.
 fn resolve_unit_expr_impl(
-    units: &HashMap<UnitName, UnitInfo>,
+    units: &HashMap<UnitRef, UnitInfo>,
     expr: &UnitExpr,
 ) -> Result<(Dimension, f64), UnitResolveError> {
     let mut dim = Dimension::dimensionless();
     let mut scale = 1.0_f64;
     for item in &expr.terms {
-        let Some(info) = units.get(item.name.value.as_str()) else {
+        let Some(info) = units.get(&item.name.value) else {
             return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
         };
         let exp = item.power.unwrap_or(Rational::ONE);
@@ -587,12 +587,12 @@ fn resolve_unit_expr_impl(
 ///
 /// Works for both static and dynamic units.
 fn resolve_unit_dimension_impl(
-    units: &HashMap<UnitName, UnitInfo>,
+    units: &HashMap<UnitRef, UnitInfo>,
     expr: &UnitExpr,
 ) -> Result<Dimension, UnitResolveError> {
     let mut dim = Dimension::dimensionless();
     for item in &expr.terms {
-        let Some(info) = units.get(item.name.value.as_str()) else {
+        let Some(info) = units.get(&item.name.value) else {
             return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
         };
         let exp = item.power.unwrap_or(Rational::ONE);
@@ -705,18 +705,18 @@ impl DimensionRegistry {
 /// Unit registry: maps unit names to `UnitInfo` (dimension + scale).
 #[derive(Debug, Clone)]
 pub struct UnitRegistry {
-    units: HashMap<UnitName, UnitInfo>,
+    units: HashMap<UnitRef, UnitInfo>,
 }
 
 impl UnitRegistry {
-    /// Look up a unit by name.
+    /// Look up a unit by reference (bare or module-alias-qualified).
     #[must_use]
-    pub fn get_unit(&self, name: &str) -> Option<&UnitInfo> {
+    pub fn get_unit(&self, name: &UnitRef) -> Option<&UnitInfo> {
         self.units.get(name)
     }
 
-    /// Iterate over all units: (name, dimension, scale).
-    pub fn all_units(&self) -> impl Iterator<Item = (&UnitName, &Dimension, &UnitScale)> {
+    /// Iterate over all units: (reference, dimension, scale).
+    pub fn all_units(&self) -> impl Iterator<Item = (&UnitRef, &Dimension, &UnitScale)> {
         self.units
             .iter()
             .map(|(name, info)| (name, &info.dimension, &info.scale))
@@ -873,7 +873,7 @@ pub struct RegistryBuilder {
     base_dim_symbols: BTreeMap<BaseDimId, String>,
 
     dimensions: HashMap<DimName, Dimension>,
-    units: HashMap<UnitName, UnitInfo>,
+    units: HashMap<UnitRef, UnitInfo>,
     types: HashMap<StructTypeName, TypeDef>,
     ctors: HashMap<ConstructorName, StructTypeName>,
     indexes: HashMap<IndexName, IndexDef>,
@@ -1039,12 +1039,12 @@ impl RegistryBuilder {
     /// Register a named unit with its dimension and SI scale factor.
     pub fn register_unit(
         &mut self,
-        name: UnitName,
+        name: impl Into<UnitRef>,
         dimension: Dimension,
         scale: PositiveFiniteScale,
     ) {
         self.units.insert(
-            name,
+            name.into(),
             UnitInfo {
                 dimension,
                 scale: UnitScale::Static(scale),
@@ -1055,11 +1055,12 @@ impl RegistryBuilder {
     /// Register a named unit with a dynamic scale factor.
     pub fn register_unit_dynamic(
         &mut self,
-        name: UnitName,
+        name: impl Into<UnitRef>,
         dimension: Dimension,
         scale: UnitScale,
     ) {
-        self.units.insert(name, UnitInfo { dimension, scale });
+        self.units
+            .insert(name.into(), UnitInfo { dimension, scale });
     }
 
     /// Register a type definition.
@@ -1115,12 +1116,12 @@ impl RegistryBuilder {
 
     /// Look up a unit by name.
     #[must_use]
-    pub fn get_unit(&self, name: &str) -> Option<&UnitInfo> {
+    pub fn get_unit(&self, name: &UnitRef) -> Option<&UnitInfo> {
         self.units.get(name)
     }
 
-    /// Iterate over all units: (name, dimension, scale).
-    pub fn all_units(&self) -> impl Iterator<Item = (&UnitName, &Dimension, &UnitScale)> {
+    /// Iterate over all units: (reference, dimension, scale).
+    pub fn all_units(&self) -> impl Iterator<Item = (&UnitRef, &Dimension, &UnitScale)> {
         self.units
             .iter()
             .map(|(name, info)| (name, &info.dimension, &info.scale))
@@ -1213,7 +1214,7 @@ mod tests {
     use crate::registry::prelude::load_prelude;
     use crate::syntax::ast::{DimExprItem, DimTerm, UnitExprItem};
     use crate::syntax::dimension::BaseDimId;
-    use crate::syntax::names::NamePath;
+    use crate::syntax::names::{NamePath, UnitName};
     use crate::syntax::span::Span;
     use crate::syntax::span::Spanned;
 
@@ -1258,8 +1259,8 @@ mod tests {
         }
     }
 
-    fn make_unit_name(name: &str) -> Spanned<UnitName> {
-        Spanned::new(UnitName::new(name), Span::new(0, 0))
+    fn make_unit_name(name: &str) -> Spanned<UnitRef> {
+        Spanned::new(UnitRef::local(UnitName::new(name)), Span::new(0, 0))
     }
 
     #[test]
@@ -1290,7 +1291,7 @@ mod tests {
     #[test]
     fn registry_base_units() {
         let r = make_registry();
-        let m = r.units.get_unit("m").unwrap();
+        let m = r.units.get_unit(&UnitRef::local("m")).unwrap();
         assert_eq!(m.dimension, Dimension::base(length_id()));
         assert!((m.scale.as_static().unwrap() - 1.0).abs() < f64::EPSILON);
     }
@@ -1298,7 +1299,7 @@ mod tests {
     #[test]
     fn registry_derived_units() {
         let r = make_registry();
-        let km = r.units.get_unit("km").unwrap();
+        let km = r.units.get_unit(&UnitRef::local("km")).unwrap();
         assert_eq!(km.dimension, Dimension::base(length_id()));
         assert!((km.scale.as_static().unwrap() - 1000.0).abs() < f64::EPSILON);
     }

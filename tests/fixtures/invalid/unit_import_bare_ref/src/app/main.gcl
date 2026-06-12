@@ -1,0 +1,7 @@
+// error: a module import does not put `mile` in the bare unit scope (D003);
+// reference it as `u.mile`, or import it selectively with
+// `import app.units.{ mile };`.
+import app.units as u;
+
+param a: Length = 3218.688 m;
+node bad: Length = @a -> mile;
