@@ -430,7 +430,7 @@ fn run_analysis(uri: &Url, text: &str) -> AnalysisResult {
             // Full success: symbol table from AST + TIR enrichment.
             let mut symbol_table =
                 symbol_table::build_from_ast(root_ast, text, &project.root, &module_resolver);
-            symbol_table::enrich_from_tir(&mut symbol_table, &tir);
+            symbol_table::enrich_from_tir(&mut symbol_table, &tir, &project.root);
 
             let imported_definitions =
                 collect_imported_definitions(uri, &project, Some(&tir), &module_resolver);
@@ -814,7 +814,7 @@ fn collect_imported_definitions(
                     module_resolver,
                 );
                 if let Some(tir) = tir {
-                    symbol_table::enrich_from_tir(&mut table, tir);
+                    symbol_table::enrich_from_tir(&mut table, tir, dag_id);
                 }
                 let uri = Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| {
                     // Url::from_file_path only fails for non-absolute paths.
@@ -1938,6 +1938,58 @@ node bad: Mass = mass + length;
                 panic!("expected `{needle}` to resolve to an imported definition");
             };
             assert_eq!(imported.uri, lib_uri, "`{needle}` should jump to lib.gcl");
+        }
+    }
+
+    /// Issue #831: imported symbols hover with the same type fidelity as
+    /// local ones — the project TIR is already computed; the type must be
+    /// read off the dependency's own `DagTIR`, not the root's.
+    #[test]
+    fn imported_definitions_carry_resolved_types() {
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"gotom\"\n"),
+            (
+                "src/gotom/lib.gcl",
+                "pub const node g0: Acceleration = 9.80665 m/s^2;\n",
+            ),
+            (
+                "src/gotom/main.gcl",
+                "import gotom.lib.{g0};\n\
+                 import gotom.lib as m;\n\
+                 node g: Acceleration = @g0;\n\
+                 node g2: Acceleration = @m.g0;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/gotom/main.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        for key in [
+            SymbolKey::TopLevel("g0".to_string()),
+            SymbolKey::Qualified {
+                module: vec!["m".to_string()],
+                name: "g0".to_string(),
+            },
+        ] {
+            let imported = analysis
+                .imported_definitions
+                .get(&key)
+                .unwrap_or_else(|| panic!("expected imported definition for {key:?}"));
+            let type_description = imported
+                .definition
+                .type_description
+                .as_deref()
+                .unwrap_or_else(|| panic!("expected a type description for {key:?}"));
+            assert!(
+                type_description.contains("Acceleration"),
+                "expected resolved type for {key:?}, got `{type_description}`"
+            );
         }
     }
 

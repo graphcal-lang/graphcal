@@ -1763,45 +1763,55 @@ fn extract_constraints(type_expr: &TypeExpr) -> &[DomainBound] {
 }
 
 /// Enrich a symbol table with type information from a TIR.
+///
+/// `dag_id` selects which DAG's resolved declaration types to use — the
+/// analyzed file's own id for the root table, the dependency's id for an
+/// imported file's table. Using the root unconditionally left every
+/// imported declaration without a type (`(unknown type)` hover, #831):
+/// the type information lives on the dep's merged [`DagTIR`], not the
+/// root's.
 #[expect(
     clippy::too_many_lines,
     reason = "linear match over all symbol categories"
 )]
-pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR) {
+pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
     let registry = &tir.registry;
-    let root = tir.root();
 
-    // Build a map from declaration name to its AST TypeExpr constraints.
-    let mut decl_constraints: HashMap<String, &[DomainBound]> = HashMap::new();
-    for e in &root.params {
-        let constraints = extract_constraints(&e.type_ann);
-        if !constraints.is_empty() {
-            decl_constraints.insert(e.name.to_string(), constraints);
+    if let Some(dag) = tir.dags.get(dag_id) {
+        // Build a map from declaration name to its AST TypeExpr constraints.
+        let mut decl_constraints: HashMap<String, &[DomainBound]> = HashMap::new();
+        for e in &dag.params {
+            let constraints = extract_constraints(&e.type_ann);
+            if !constraints.is_empty() {
+                decl_constraints.insert(e.name.to_string(), constraints);
+            }
         }
-    }
-    for e in &root.nodes {
-        let constraints = extract_constraints(&e.type_ann);
-        if !constraints.is_empty() {
-            decl_constraints.insert(e.name.to_string(), constraints);
+        for e in &dag.nodes {
+            let constraints = extract_constraints(&e.type_ann);
+            if !constraints.is_empty() {
+                decl_constraints.insert(e.name.to_string(), constraints);
+            }
         }
-    }
-    for e in &root.consts {
-        let constraints = extract_constraints(&e.type_ann);
-        if !constraints.is_empty() {
-            decl_constraints.insert(e.name.to_string(), constraints);
+        for e in &dag.consts {
+            let constraints = extract_constraints(&e.type_ann);
+            if !constraints.is_empty() {
+                decl_constraints.insert(e.name.to_string(), constraints);
+            }
         }
-    }
 
-    // Enrich param/node/const declarations with resolved types + constraints.
-    for (name, resolved_type) in &root.resolved_decl_types {
-        let name_str = name.to_string();
-        let key = SymbolKey::TopLevel(name_str.clone());
-        if let Some(def) = table.definitions.get_mut(&key) {
-            let type_desc = decl_constraints.get(&name_str).map_or_else(
-                || resolved_type.format(registry),
-                |constraints| format_type_with_constraints(resolved_type, constraints, registry),
-            );
-            def.type_description = Some(type_desc);
+        // Enrich param/node/const declarations with resolved types + constraints.
+        for (name, resolved_type) in &dag.resolved_decl_types {
+            let name_str = name.to_string();
+            let key = SymbolKey::TopLevel(name_str.clone());
+            if let Some(def) = table.definitions.get_mut(&key) {
+                let type_desc = decl_constraints.get(&name_str).map_or_else(
+                    || resolved_type.format(registry),
+                    |constraints| {
+                        format_type_with_constraints(resolved_type, constraints, registry)
+                    },
+                );
+                def.type_description = Some(type_desc);
+            }
         }
     }
 
