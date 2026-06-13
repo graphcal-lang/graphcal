@@ -43,7 +43,7 @@ use crate::syntax::names::{ResolvedName, ScopedName, namespace};
 /// A fully-resolved type expression.
 ///
 /// Unlike the raw AST `TypeExpr`, every name here has been classified as a
-/// concrete dimension, struct, generic dim param, or generic index param.
+/// concrete dimension, struct, generic dim param, or index generic argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedTypeExpr {
     /// `Dimensionless`
@@ -54,8 +54,11 @@ pub enum ResolvedTypeExpr {
     Int,
     /// A datetime instant in a specific time scale (e.g., `Datetime` = UTC, `Datetime<TT>`).
     Datetime(TimeScale),
-    /// A label of a named index (e.g., `Maneuver` in `m: Maneuver`).
-    Label(ResolvedName<namespace::Index>, Span),
+    /// An index argument to a generic type parameter constrained as `Index`.
+    ///
+    /// This is not a standalone value type and must not appear as a resolved
+    /// declaration annotation.
+    IndexArg(ResolvedIndex),
     /// A concrete scalar dimension, e.g. `Length * Time^-2`
     Scalar(Dimension),
     /// A non-generic struct type name, e.g. `TransferResult`.
@@ -97,7 +100,7 @@ impl ResolvedTypeExpr {
                     format!("Datetime<{scale}>")
                 }
             }
-            Self::Label(index, _) => format!("Label({})", index.as_str()),
+            Self::IndexArg(index) => format!("index {}", format_resolved_index(index)),
             Self::Scalar(dim) => {
                 let formatted = registry.dimensions.format_dimension(dim);
                 if formatted.is_empty() {
@@ -120,17 +123,18 @@ impl ResolvedTypeExpr {
             }
             Self::Indexed { base, indexes } => {
                 let base_str = base.format(registry);
-                let idx_strs: Vec<String> = indexes
-                    .iter()
-                    .map(|i| match i {
-                        ResolvedIndex::Concrete(name, _) => name.as_str().to_string(),
-                        ResolvedIndex::GenericParam(name, _) => name.to_string(),
-                        ResolvedIndex::NatExpr(form, _) => form.format(),
-                    })
-                    .collect();
+                let idx_strs: Vec<String> = indexes.iter().map(format_resolved_index).collect();
                 format!("{base_str}[{}]", idx_strs.join(", "))
             }
         }
+    }
+}
+
+fn format_resolved_index(index: &ResolvedIndex) -> String {
+    match index {
+        ResolvedIndex::Concrete(name, _) => name.as_str().to_string(),
+        ResolvedIndex::GenericParam(name, _) => name.to_string(),
+        ResolvedIndex::NatExpr(form, _) => format!("range({})", form.format()),
     }
 }
 
@@ -314,6 +318,17 @@ pub enum ResolvedIndex {
     /// Examples: `3` → constant form, `N` → single-variable form, `N + 1` → linear,
     /// `M * N` → polynomial.
     NatExpr(NatPolyForm, Span),
+}
+
+impl ResolvedIndex {
+    #[must_use]
+    pub fn format_for_diagnostic(&self) -> String {
+        match self {
+            Self::Concrete(name, _) => name.as_str().to_string(),
+            Self::GenericParam(name, _) => name.to_string(),
+            Self::NatExpr(form, _) => format!("range({})", form.format()),
+        }
+    }
 }
 
 /// Canonical type-system definitions keyed by [`ResolvedName`] identities.
@@ -1329,7 +1344,7 @@ fn collect_struct_type_defs_from_resolved_type(
         | ResolvedTypeExpr::Bool
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)
-        | ResolvedTypeExpr::Label(_, _)
+        | ResolvedTypeExpr::IndexArg(_)
         | ResolvedTypeExpr::Scalar(_)
         | ResolvedTypeExpr::GenericDimParam(_, _)
         | ResolvedTypeExpr::GenericTypeParam(_, _)
@@ -2189,7 +2204,7 @@ fn collect_resolved_collection_indexes_from_type(
     refs: &mut ResolvedCollectionRefs,
 ) -> Result<(), GraphcalError> {
     match resolved_type {
-        ResolvedTypeExpr::Label(index, span) => {
+        ResolvedTypeExpr::IndexArg(ResolvedIndex::Concrete(index, span)) => {
             record_resolved_collection_index(index, ctx, src, *span, refs)
         }
         ResolvedTypeExpr::Indexed { base, indexes } => {
@@ -2211,6 +2226,7 @@ fn collect_resolved_collection_indexes_from_type(
         | ResolvedTypeExpr::Bool
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)
+        | ResolvedTypeExpr::IndexArg(_)
         | ResolvedTypeExpr::Scalar(_)
         | ResolvedTypeExpr::Struct(_, _)
         | ResolvedTypeExpr::GenericDimParam(_, _)
@@ -3016,16 +3032,21 @@ pub fn resolved_to_declared_type(
     resolved: &ResolvedTypeExpr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::registry::declared_type::DeclaredType, GraphcalError> {
-    use crate::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
+    use crate::registry::declared_type::{DeclaredType, StructTypeRef};
 
     match resolved {
         ResolvedTypeExpr::Dimensionless => Ok(DeclaredType::Scalar(Dimension::dimensionless())),
         ResolvedTypeExpr::Bool => Ok(DeclaredType::Bool),
         ResolvedTypeExpr::Int => Ok(DeclaredType::Int),
         ResolvedTypeExpr::Datetime(scale) => Ok(DeclaredType::Datetime(*scale)),
-        ResolvedTypeExpr::Label(index, _) => Ok(DeclaredType::Label(IndexTypeRef::from_resolved(
-            index.clone(),
-        ))),
+        ResolvedTypeExpr::IndexArg(index) => Err(GraphcalError::EvalError {
+            message: format!(
+                "index `{}` cannot be used as a value type",
+                format_resolved_index(index)
+            ),
+            src: src.clone(),
+            span: resolved_type_expr_span(resolved).into(),
+        }),
         ResolvedTypeExpr::Scalar(dim) => Ok(DeclaredType::Scalar(dim.clone())),
         ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(
             StructTypeRef::from_resolved(name.clone()),
@@ -3036,7 +3057,7 @@ pub fn resolved_to_declared_type(
         } => {
             let mut declared_args = Vec::with_capacity(type_args.len());
             for arg in type_args {
-                declared_args.push(resolved_to_declared_type(arg, src)?);
+                declared_args.push(resolved_type_arg_to_declared_type(arg, src)?);
             }
             Ok(DeclaredType::Struct(
                 StructTypeRef::from_resolved(name.clone()),
@@ -3104,6 +3125,108 @@ pub fn resolved_to_declared_type(
             }
             Ok(result)
         }
+    }
+}
+
+fn resolved_type_arg_to_declared_type(
+    resolved: &ResolvedTypeExpr,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::registry::declared_type::DeclaredType, GraphcalError> {
+    match resolved {
+        ResolvedTypeExpr::IndexArg(index) => resolved_index_to_declared_arg(index, src),
+        _ => resolved_to_declared_type(resolved, src),
+    }
+}
+
+fn resolved_type_expr_span(resolved: &ResolvedTypeExpr) -> Span {
+    match resolved {
+        ResolvedTypeExpr::Dimensionless
+        | ResolvedTypeExpr::Bool
+        | ResolvedTypeExpr::Int
+        | ResolvedTypeExpr::Datetime(_)
+        | ResolvedTypeExpr::Scalar(_) => Span::new(0, 0),
+        ResolvedTypeExpr::IndexArg(index) => resolved_index_span(index),
+        ResolvedTypeExpr::Struct(_, span)
+        | ResolvedTypeExpr::GenericDimParam(_, span)
+        | ResolvedTypeExpr::GenericTypeParam(_, span)
+        | ResolvedTypeExpr::GenericDimExpr { span, .. }
+        | ResolvedTypeExpr::GenericStruct { span, .. } => *span,
+        ResolvedTypeExpr::Indexed { base, .. } => resolved_type_expr_span(base),
+    }
+}
+
+const fn resolved_index_span(index: &ResolvedIndex) -> Span {
+    match index {
+        ResolvedIndex::Concrete(_, span)
+        | ResolvedIndex::GenericParam(_, span)
+        | ResolvedIndex::NatExpr(_, span) => *span,
+    }
+}
+
+fn resolved_index_to_declared_arg(
+    index: &ResolvedIndex,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::registry::declared_type::DeclaredType, GraphcalError> {
+    let reference = match index {
+        ResolvedIndex::Concrete(name, _) => IndexTypeRef::from_resolved(name.clone()),
+        ResolvedIndex::NatExpr(form, span) => IndexTypeRef::from_nat_range_form(form.clone())
+            .map_err(|err| GraphcalError::EvalError {
+                message: err.to_string(),
+                src: src.clone(),
+                span: (*span).into(),
+            })?,
+        ResolvedIndex::GenericParam(name, span) => {
+            return Err(GraphcalError::EvalError {
+                message: format!("generic index parameter `{name}` is not bound"),
+                src: src.clone(),
+                span: (*span).into(),
+            });
+        }
+    };
+    Ok(crate::registry::declared_type::DeclaredType::IndexArg(
+        reference,
+    ))
+}
+
+fn resolved_index_to_inferred(
+    index: &ResolvedIndex,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::tir::dim_check::InferredIndex, GraphcalError> {
+    let reference = match index {
+        ResolvedIndex::Concrete(name, _) => IndexTypeRef::from_resolved(name.clone()),
+        ResolvedIndex::NatExpr(form, span) => IndexTypeRef::from_nat_range_form(form.clone())
+            .map_err(|err| GraphcalError::EvalError {
+                message: err.to_string(),
+                src: src.clone(),
+                span: (*span).into(),
+            })?,
+        ResolvedIndex::GenericParam(name, span) => {
+            return Err(GraphcalError::EvalError {
+                message: format!("generic index parameter `{name}` is not bound"),
+                src: src.clone(),
+                span: (*span).into(),
+            });
+        }
+    };
+    Ok(crate::tir::dim_check::InferredIndex::from_ref(reference))
+}
+
+fn resolved_index_matches_inferred(
+    expected: &ResolvedIndex,
+    actual: &crate::tir::dim_check::InferredIndex,
+) -> bool {
+    match expected {
+        ResolvedIndex::Concrete(name, _) => actual.matches_resolved(name),
+        ResolvedIndex::GenericParam(_, _) => false,
+        ResolvedIndex::NatExpr(form, _) => actual.nat_range_form().as_ref() == Some(form),
+    }
+}
+
+fn resolved_index_display_name(index: &ResolvedIndex) -> IndexName {
+    match index {
+        ResolvedIndex::Concrete(name, _) => name.to_unowned_def_name(),
+        ResolvedIndex::GenericParam(name, _) => IndexName::from_atom(name.atom().clone()),
+        ResolvedIndex::NatExpr(form, _) => IndexName::new(format!("range({})", form.format())),
     }
 }
 
@@ -3420,19 +3543,19 @@ pub fn unify_resolved_type(
             Ok(())
         }
 
-        ResolvedTypeExpr::Label(expected_index, _) => {
-            let InferredType::Label(actual_index) = actual else {
+        ResolvedTypeExpr::IndexArg(expected_index) => {
+            let InferredType::NamedIndex(actual_index) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: format!("Label({})", expected_index.as_str()),
+                    expected: format!("index {}", format_resolved_index(expected_index)),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
-                    help: format!("expected a label of index `{}`", expected_index.as_str()),
+                    help: "expected an index generic argument".to_string(),
                     src: src.clone(),
                     span: span.into(),
                 });
             };
-            if !actual_index.matches_resolved(expected_index) {
+            if !resolved_index_matches_inferred(expected_index, actual_index) {
                 return Err(GraphcalError::IndexMismatch {
-                    expected: expected_index.to_unowned_def_name(),
+                    expected: resolved_index_display_name(expected_index),
                     found: actual_index.name(),
                     src: src.clone(),
                     span: span.into(),
@@ -3705,9 +3828,9 @@ pub fn substitute_resolved_type_with_types(
         ResolvedTypeExpr::Bool => Ok(InferredType::Bool),
         ResolvedTypeExpr::Int => Ok(InferredType::Int),
         ResolvedTypeExpr::Datetime(scale) => Ok(InferredType::Datetime(*scale)),
-        ResolvedTypeExpr::Label(index, _) => Ok(InferredType::Label(
-            crate::tir::dim_check::InferredIndex::from_resolved(index.clone()),
-        )),
+        ResolvedTypeExpr::IndexArg(index) => {
+            resolved_index_to_inferred(index, src).map(InferredType::NamedIndex)
+        }
         ResolvedTypeExpr::Scalar(dim) => Ok(InferredType::Scalar(dim.clone())),
         ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(
             crate::tir::dim_check::InferredStructType::from_resolved(name.clone()),
@@ -4027,10 +4150,14 @@ fn resolve_hir_type_expr_inner(
     match &type_ann.kind {
         hir::TypeExprKind::Builtin(builtin) => Ok(resolve_hir_builtin_type(*builtin)),
         hir::TypeExprKind::DimExpr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),
-        hir::TypeExprKind::Label(index) => {
-            hir_index_name(&index.value, index.span, ctx)?;
-            Ok(ResolvedTypeExpr::Label(index.value.clone(), index.span))
-        }
+        hir::TypeExprKind::Index(index) => Err(GraphcalError::EvalError {
+            message: format!(
+                "index `{}` cannot be used as a type",
+                format_hir_index_ref(index)
+            ),
+            src: ctx.src.clone(),
+            span: hir_index_ref_span(index).into(),
+        }),
         hir::TypeExprKind::Struct(name) => {
             hir_struct_type_def(&name.value, name.span, ctx)?;
             Ok(ResolvedTypeExpr::Struct(name.value.clone(), name.span))
@@ -4052,6 +4179,43 @@ fn resolve_hir_type_expr_inner(
                 base: Box::new(resolved_base),
                 indexes: resolved_indexes,
             })
+        }
+    }
+}
+
+const fn hir_index_ref_span(index: &hir::IndexRef) -> Span {
+    match index {
+        hir::IndexRef::Concrete(name) => name.span,
+        hir::IndexRef::GenericParam(param) => param.span,
+        hir::IndexRef::NatExpr(nat_expr) => nat_expr.span(),
+    }
+}
+
+fn format_hir_index_ref(index: &hir::IndexRef) -> String {
+    match index {
+        hir::IndexRef::Concrete(name) => name.value.as_str().to_string(),
+        hir::IndexRef::GenericParam(param) => param.value.name.to_string(),
+        hir::IndexRef::NatExpr(nat_expr) => format!("range({})", format_hir_nat_expr(nat_expr)),
+    }
+}
+
+fn format_hir_nat_expr(nat_expr: &hir::NatExpr) -> String {
+    match nat_expr {
+        hir::NatExpr::Literal(n, _) => n.to_string(),
+        hir::NatExpr::Param(param) => param.value.name.to_string(),
+        hir::NatExpr::Add(lhs, rhs, _) => {
+            format!(
+                "{} + {}",
+                format_hir_nat_expr(lhs),
+                format_hir_nat_expr(rhs)
+            )
+        }
+        hir::NatExpr::Mul(lhs, rhs, _) => {
+            format!(
+                "{} * {}",
+                format_hir_nat_expr(lhs),
+                format_hir_nat_expr(rhs)
+            )
         }
     }
 }
@@ -4278,10 +4442,10 @@ fn resolve_hir_type_application(
         ctx.src,
     )?;
 
-    let mut resolved_args = type_args
-        .iter()
-        .map(|arg| resolve_hir_type_expr_inner(arg, ctx))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut resolved_args = Vec::with_capacity(type_def.generic_params.len());
+    for (param, arg) in type_def.generic_params.iter().zip(type_args) {
+        resolved_args.push(resolve_hir_type_arg_for_param(param, arg, ctx)?);
+    }
 
     for param in type_def.generic_params.iter().skip(type_args.len()) {
         let default_expr = param
@@ -4296,7 +4460,7 @@ fn resolve_hir_type_application(
                 span: type_ann.span.into(),
             })?;
         let default_hir = lower_type_generic_default(default_expr, &name.value, type_def, ctx)?;
-        resolved_args.push(resolve_hir_type_expr_inner(&default_hir, ctx)?);
+        resolved_args.push(resolve_hir_type_arg_for_param(param, &default_hir, ctx)?);
     }
 
     Ok(ResolvedTypeExpr::GenericStruct {
@@ -4304,6 +4468,39 @@ fn resolve_hir_type_application(
         type_args: resolved_args,
         span: type_ann.span,
     })
+}
+
+fn resolve_hir_type_arg_for_param(
+    param: &crate::registry::types::TypeGenericParam,
+    arg: &hir::TypeExpr,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    match param.constraint {
+        TypeGenericConstraint::Index => match &arg.kind {
+            hir::TypeExprKind::Index(index) => {
+                resolve_hir_index_ref(index, ctx).map(ResolvedTypeExpr::IndexArg)
+            }
+            _ => Err(GraphcalError::EvalError {
+                message: format!(
+                    "generic parameter `{}` expects an Index argument",
+                    param.name
+                ),
+                src: ctx.src.clone(),
+                span: arg.span.into(),
+            }),
+        },
+        TypeGenericConstraint::Nat => Err(GraphcalError::EvalError {
+            message: format!(
+                "generic parameter `{}` expects a Nat argument, got a type argument",
+                param.name
+            ),
+            src: ctx.src.clone(),
+            span: arg.span.into(),
+        }),
+        TypeGenericConstraint::Dim | TypeGenericConstraint::Unconstrained => {
+            resolve_hir_type_expr_inner(arg, ctx)
+        }
+    }
 }
 
 fn lower_type_generic_default(
@@ -4638,9 +4835,15 @@ fn resolve_type_expr_inner(
             })
         }
 
-        TypeExprKind::DimExpr(dim_expr) => {
-            resolve_dim_expr(dim_expr, registry, owner, dim_params, src, module_ctx)
-        }
+        TypeExprKind::DimExpr(dim_expr) => resolve_dim_expr(
+            dim_expr,
+            registry,
+            owner,
+            dim_params,
+            index_params,
+            src,
+            module_ctx,
+        ),
 
         TypeExprKind::TypeApplication { name, type_args } => resolve_type_application(
             type_ann,
@@ -4658,7 +4861,7 @@ fn resolve_type_expr_inner(
 }
 
 /// Resolve a dimension expression to either a [`ResolvedTypeExpr::Scalar`],
-/// [`ResolvedTypeExpr::GenericDimExpr`], [`ResolvedTypeExpr::Label`],
+/// [`ResolvedTypeExpr::GenericDimExpr`], [`ResolvedTypeExpr::IndexArg`],
 /// [`ResolvedTypeExpr::Struct`], or [`ResolvedTypeExpr::GenericDimParam`].
 ///
 /// A single-term, no-power expression is first checked against named indexes,
@@ -4669,6 +4872,7 @@ fn resolve_dim_expr(
     registry: &Registry,
     owner: &crate::dag_id::DagId,
     dim_params: &[GenericParamName],
+    index_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
@@ -4684,7 +4888,17 @@ fn resolve_dim_expr(
             src,
             module_ctx,
         )? {
-            return Ok(ResolvedTypeExpr::Label(index, term.span));
+            return Ok(ResolvedTypeExpr::IndexArg(ResolvedIndex::Concrete(
+                index, term.span,
+            )));
+        }
+        if let Some(atom) = term.name.value.as_bare()
+            && let Some(gp) = index_params.iter().find(|p| p.as_str() == atom.as_str())
+        {
+            return Ok(ResolvedTypeExpr::IndexArg(ResolvedIndex::GenericParam(
+                gp.clone(),
+                term.span,
+            )));
         }
         if let Some((type_name, _)) = resolve_struct_type_path(
             &term.name.value,
@@ -4882,10 +5096,10 @@ fn resolve_type_application(
         type_ann.span,
         src,
     )?;
-    // Resolve each explicit type argument, then fill in defaults
     let mut resolved_args = Vec::with_capacity(type_def.generic_params.len());
-    for arg in type_args {
-        let resolved = resolve_type_expr_inner(
+    for (param, arg) in type_def.generic_params.iter().zip(type_args) {
+        let resolved = resolve_type_arg_for_param(
+            param,
             arg,
             registry,
             owner,
@@ -4912,7 +5126,8 @@ fn resolve_type_application(
             })?;
         let default_ctx = module_ctx
             .map(|ctx| ModuleTypeContext::new(type_name.owner(), ctx.resolver, ctx.types));
-        let resolved = resolve_type_expr_inner(
+        let resolved = resolve_type_arg_for_param(
+            param,
             default_expr,
             registry,
             type_name.owner(),
@@ -4929,6 +5144,73 @@ fn resolve_type_application(
         type_args: resolved_args,
         span: type_ann.span,
     })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "passes full type resolution context from resolve_type_application"
+)]
+fn resolve_type_arg_for_param(
+    param: &crate::registry::types::TypeGenericParam,
+    arg: &TypeExpr,
+    registry: &Registry,
+    owner: &crate::dag_id::DagId,
+    dim_params: &[GenericParamName],
+    index_params: &[GenericParamName],
+    nat_params: &[GenericParamName],
+    src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let resolved = resolve_type_expr_inner(
+        arg,
+        registry,
+        owner,
+        dim_params,
+        index_params,
+        nat_params,
+        src,
+        module_ctx,
+    )?;
+    match (param.constraint, &resolved) {
+        (TypeGenericConstraint::Index, ResolvedTypeExpr::IndexArg(_)) => Ok(resolved),
+        (TypeGenericConstraint::Index, _) => Err(GraphcalError::EvalError {
+            message: format!(
+                "generic parameter `{}` expects an Index argument",
+                param.name
+            ),
+            src: src.clone(),
+            span: arg.span.into(),
+        }),
+        (TypeGenericConstraint::Nat, _) => Err(GraphcalError::EvalError {
+            message: format!(
+                "generic parameter `{}` expects a Nat argument, got a type argument",
+                param.name
+            ),
+            src: src.clone(),
+            span: arg.span.into(),
+        }),
+        (TypeGenericConstraint::Dim, ResolvedTypeExpr::IndexArg(index)) => {
+            Err(GraphcalError::EvalError {
+                message: format!(
+                    "index `{}` cannot be used as a Dim argument",
+                    format_resolved_index(index)
+                ),
+                src: src.clone(),
+                span: arg.span.into(),
+            })
+        }
+        (TypeGenericConstraint::Unconstrained, ResolvedTypeExpr::IndexArg(index)) => {
+            Err(GraphcalError::EvalError {
+                message: format!(
+                    "index `{}` cannot be used as a Type argument",
+                    format_resolved_index(index)
+                ),
+                src: src.clone(),
+                span: arg.span.into(),
+            })
+        }
+        (TypeGenericConstraint::Dim | TypeGenericConstraint::Unconstrained, _) => Ok(resolved),
+    }
 }
 
 #[cfg(test)]

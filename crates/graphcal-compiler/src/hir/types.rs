@@ -95,8 +95,12 @@ pub enum TypeExprKind {
     Builtin(BuiltinType),
     /// A scalar dimension expression.
     DimExpr(DimExpr),
-    /// A label type for a concrete index.
-    Label(Spanned<ResolvedName<namespace::Index>>),
+    /// An index name in a type-expression syntactic slot.
+    ///
+    /// This is not a value type. It is accepted only where the surrounding
+    /// generic parameter expects an `Index` argument; declaration annotations
+    /// reject it before TIR construction.
+    Index(IndexRef),
     /// A user-defined non-generic struct/tagged-union type.
     Struct(Spanned<ResolvedName<namespace::StructType>>),
     /// A generic type parameter (`F: Type`).

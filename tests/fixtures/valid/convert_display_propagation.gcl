@@ -5,8 +5,11 @@
 pub type S {
     S(a: Length),
 }
+pub type K {
+    Big,
+    Small,
+}
 pub index R = { A, B };
-pub index K = { Big, Small };
 
 dag mydag {
     param x: Length;
@@ -33,10 +36,10 @@ node const_read: Length = @c;
 param flag: Bool = true;
 node branch_read: Length = if @flag { @a -> km } else { @a -> cm };
 
-param k: K = K.Big;
+param k: K = Big;
 node arm_read: Length = match @k {
-    K.Big => @a -> km,
-    K.Small => @a -> mm,
+    Big => @a -> km,
+    Small => @a -> mm,
 };
 
 param t: Datetime = datetime("2026-01-15T12:00:00Z");

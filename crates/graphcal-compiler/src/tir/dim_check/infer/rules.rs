@@ -139,6 +139,27 @@ pub(super) fn binop_rule(
         // (#809): `T[I] == T[I]` and `T[I] == scalar` infer `Bool[I]`.
         BinOp::Eq | BinOp::Ne => {
             let (axes, lhs_elem, rhs_elem) = comparison_axes(lhs, rhs, registry, src)?;
+            if matches!(lhs_elem, InferredType::NamedIndex(_))
+                || matches!(rhs_elem, InferredType::NamedIndex(_))
+            {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "value expression".to_string(),
+                    found: if matches!(lhs_elem, InferredType::NamedIndex(_)) {
+                        format_inferred_type(lhs_elem, registry)
+                    } else {
+                        format_inferred_type(rhs_elem, registry)
+                    },
+                    help: "named index labels are not values; use `match` for index case analysis"
+                        .to_string(),
+                    src: src.clone(),
+                    span: if matches!(lhs_elem, InferredType::NamedIndex(_)) {
+                        lhs.span
+                    } else {
+                        rhs.span
+                    }
+                    .into(),
+                });
+            }
             if lhs_elem == rhs_elem || (lhs_elem.is_int_like() && rhs_elem.is_int_like()) {
                 return Ok(bool_with_axes(&axes));
             }

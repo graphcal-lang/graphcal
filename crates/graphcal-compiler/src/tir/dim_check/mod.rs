@@ -226,8 +226,11 @@ pub enum InferredType {
     Fin(NatLinearForm),
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
-    /// A label of a named index (e.g., `Maneuver.Departure` has type `Label(Maneuver)`).
-    Label(InferredIndex),
+    /// A named index identity in an index-only position.
+    ///
+    /// This is used for named-index loop variables and `Index` generic
+    /// arguments. It is intentionally not a Graphcal value type.
+    NamedIndex(InferredIndex),
     /// A struct type, optionally with concrete type arguments for generic structs.
     Struct(InferredStructType, Vec<Self>),
     Indexed {
@@ -1064,8 +1067,8 @@ fn check_domain_constraint_targets_dag(
         let type_kind = match strip_indexed(resolved) {
             crate::tir::typed::ResolvedTypeExpr::Bool => "Bool".to_string(),
             crate::tir::typed::ResolvedTypeExpr::Datetime(_) => "Datetime".to_string(),
-            crate::tir::typed::ResolvedTypeExpr::Label(idx, _) => {
-                format!("Label({})", idx.as_str())
+            crate::tir::typed::ResolvedTypeExpr::IndexArg(index) => {
+                format!("index {}", index.format_for_diagnostic())
             }
             crate::tir::typed::ResolvedTypeExpr::Struct(struct_name, _)
             | crate::tir::typed::ResolvedTypeExpr::GenericStruct {
@@ -1164,9 +1167,9 @@ fn field_constraint_target_kind(
         // dim is what carries the constraint).
         TypeExprKind::Dimensionless | TypeExprKind::Int | TypeExprKind::Indexed { .. } => None,
         TypeExprKind::DimExpr(dim_expr) => {
-            // A bare single-name DimExpr could be a struct, an index label, or a
+            // A bare single-name DimExpr could be a struct, an index name, or a
             // dimension. The registry distinguishes them: dim → constraint-
-            // compatible scalar; struct → reject; index → reject as a label.
+            // compatible scalar; struct → reject; index → reject as an index.
             if dim_expr.terms.len() == 1
                 && dim_expr.terms[0].term.power.is_none()
                 && let Some(item) = dim_expr.terms.first()
@@ -1187,7 +1190,7 @@ fn field_constraint_target_kind(
                 } else if registry.types.get_type(name).is_some() {
                     Some(format!("struct `{name}`"))
                 } else if registry.indexes.get_index(name).is_some() {
-                    Some(format!("Label({name})"))
+                    Some(format!("index `{name}`"))
                 } else {
                     // Generic dim param or unknown name — skip; an unknown name
                     // would already error in type resolution.

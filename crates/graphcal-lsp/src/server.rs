@@ -2341,7 +2341,12 @@ node momentum: Force * Time = @mass * @velocity;
                 "import proj.a as a;\n\
                  import proj.b as b;\n\n\
                  const node from_a: Dimensionless = a.bias;\n\
-                 node phase: a.Phase = a.Phase.Burn;\n\
+                 node phase_score: Dimensionless[a.Phase] = for phase: a.Phase {\n\
+                     match phase {\n\
+                         a.Phase.Burn => a.bias,\n\
+                         a.Phase.Coast => b.bias,\n\
+                     }\n\
+                 };\n\
                  node item: a.Item = a.Pick(distance: a.bias);\n",
             ),
         ]);
@@ -2361,7 +2366,7 @@ node momentum: Force * Time = @mass * @velocity;
 
         for (needle, token_prefix) in [
             ("a.bias", "a."),
-            ("a.Phase =", "a."),
+            ("a.Phase]", "a."),
             ("a.Phase.Burn", "a.Phase."),
             ("a.Item", "a."),
             ("a.Pick", "a."),

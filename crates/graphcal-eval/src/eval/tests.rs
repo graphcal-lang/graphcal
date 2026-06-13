@@ -125,7 +125,7 @@ fn eval_uses_hir_builtin_dispatch_after_syntax_mutation() {
 
 #[test]
 fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
-    let source = "index Phase = { Burn };\nnode y: Dimensionless[Phase] = for p: Phase { if p == Phase.Burn { 1.0 } else { 0.0 } };";
+    let source = "index Phase = { Burn };\nnode y: Dimensionless[Phase] = for p: Phase { match p { Phase.Burn => 1.0 } };";
     let mut tir = compile_to_tir(source, "test.gcl").unwrap();
     assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
@@ -327,7 +327,10 @@ fn expected_fail_mixed_named_and_range_tuple_key() {
          #[expected_fail((Mode.Boost, #1))]\n\
          assert m = for m: Mode {\n\
              for i: range(2) {\n\
-                 if m == Mode.Boost && i == 1 { false } else { true }\n\
+                 match m {\n\
+                     Mode.Boost => if i == 1 { false } else { true },\n\
+                     Mode.Cruise => true,\n\
+                 }\n\
              }\n\
          };",
     )
@@ -2145,7 +2148,11 @@ fn project_variant_literal_uses_resolved_owner_with_same_leaf_indexes() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node phase: a.Phase = a.Phase.Burn;\n",
+         node series: Dimensionless[a.Phase] = {\n\
+             a.Phase.Burn: 1.0,\n\
+             a.Phase.Coast: 2.0,\n\
+         };\n\
+         node burn: Dimensionless = @series[a.Phase.Burn];\n",
     );
 
     compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -2156,15 +2163,17 @@ fn project_label_match_uses_resolved_owner_with_same_leaf_indexes() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node phase: a.Phase = a.Phase.Burn;\n\
-         node code: Dimensionless = match @phase {\n\
-             a.Phase.Burn => 1.0,\n\
-             a.Phase.Coast => 2.0,\n\
-         };\n",
+         node code: Dimensionless[a.Phase] = for p: a.Phase {\n\
+             match p {\n\
+                 a.Phase.Burn => 1.0,\n\
+                 a.Phase.Coast => 2.0,\n\
+             }\n\
+         };\n\
+         node burn_code: Dimensionless = @code[a.Phase.Burn];\n",
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
-    assert!((find_value(&result, "code") - 1.0).abs() < f64::EPSILON);
+    assert!((find_value(&result, "burn_code") - 1.0).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -2172,10 +2181,11 @@ fn project_label_match_rejects_same_leaf_wrong_owner_pattern() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node phase: a.Phase = a.Phase.Burn;\n\
-         node code: Dimensionless = match @phase {\n\
-             a.Phase.Burn => 1.0,\n\
-             b.Phase.Warm => 2.0,\n\
+         node code: Dimensionless[a.Phase] = for p: a.Phase {\n\
+             match p {\n\
+                 a.Phase.Burn => 1.0,\n\
+                 b.Phase.Warm => 2.0,\n\
+             }\n\
          };\n",
     );
 
@@ -2253,11 +2263,13 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
              pub node burn: Dimensionless = @series[Phase.Burn];\n\
              pub node echoed: Dimensionless[Phase] = for p: Phase { @series[p] };\n\
          }\n\
-         node literal_a: a.Phase = a.Phase.Burn;\n\
-         node literal_b: b.Phase = b.Phase.Burn;\n\
          node map_a: Dimensionless[a.Phase] = {\n\
              a.Phase.Burn: 10.0,\n\
              a.Phase.Coast: 20.0,\n\
+         };\n\
+         node map_b: Dimensionless[b.Phase] = {\n\
+             b.Phase.Burn: 1.0,\n\
+             b.Phase.Coast: 2.0,\n\
          };\n\
          node table_a: Dimensionless[Phase] = table[Phase] {\n\
              Burn: 3.0;\n\
@@ -2296,31 +2308,13 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
             .cloned()
             .unwrap_or_else(|| panic!("expected declared index for `{name}`"))
     };
-    let owner_of_label = |name: &str| {
-        let value = result
-            .nodes
-            .iter()
-            .find(|(n, _)| n.to_string() == name)
-            .unwrap_or_else(|| panic!("node `{name}` not found"))
-            .1
-            .as_ref()
-            .unwrap_or_else(|e| panic!("node `{name}` failed: {e}"));
-        let Value::Label { index_name, .. } = value else {
-            panic!("expected label value for `{name}`, got {value:?}");
-        };
-        index_name
-            .declared_resolved()
-            .cloned()
-            .unwrap_or_else(|| panic!("expected declared index for `{name}`"))
-    };
 
     let a_owner = owner_of_indexed("map_a");
-    let b_owner = owner_of_label("literal_b");
+    let b_owner = owner_of_indexed("map_b");
     assert_ne!(a_owner, b_owner);
     assert_eq!(owner_of_indexed("table_a"), a_owner);
     assert_eq!(owner_of_indexed("for_a"), a_owner);
     assert_eq!(owner_of_indexed("scan_a"), a_owner);
-    assert_eq!(owner_of_label("literal_a"), a_owner);
 }
 
 #[test]
@@ -2432,10 +2426,11 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let (_dir, root) = write_same_leaf_same_variant_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node phase: a.Phase = a.Phase.Burn;\n\
-         node code: Dimensionless = match @phase {\n\
-             a.Phase.Burn => 1.0,\n\
-             a.Phase.Coast => 2.0,\n\
+         node code: Dimensionless[a.Phase] = for p: a.Phase {\n\
+             match p {\n\
+                 a.Phase.Burn => 1.0,\n\
+                 a.Phase.Coast => 2.0,\n\
+             }\n\
          };\n",
     );
 
@@ -2445,15 +2440,20 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         .resolved_decl_key_for_local(&graphcal_compiler::syntax::names::ScopedName::local("code"))
         .expect("code decl key");
     let expr = &tir.root().semantic.expressions.nodes[&expr_key];
+    let graphcal_compiler::hir::ExprKind::ForComp { bindings, body } = &expr.kind else {
+        panic!("expected `code` to be a for-comprehension, got {expr:?}");
+    };
+    let [binding] = bindings.as_slice() else {
+        panic!("expected one for-comprehension binding, got {bindings:?}");
+    };
+    let match_expr = body;
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::names::IndexName::new("Phase"),
     );
-    let values = HashMap::from([(
-        crate::decl_key::RuntimeDeclKey::for_local_decl(
-            tir.root(),
-            &graphcal_compiler::syntax::names::ScopedName::local("phase"),
-        ),
+    let values = HashMap::new();
+    let local_values = crate::eval_expr::HirLocalValueMap::from_bindings(vec![(
+        binding.local.id,
         crate::eval_expr::RuntimeValue::Label {
             index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
                 b_owner,
@@ -2461,7 +2461,6 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             variant: graphcal_compiler::syntax::names::IndexVariantName::new("Burn"),
         },
     )]);
-    let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
@@ -2477,7 +2476,8 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         struct_field_constraints: None,
     };
 
-    let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    let err =
+        crate::eval_expr::eval_hir_expr(match_expr, &values, &local_values, &ctx).unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("no match arm for label"), "{message}");
@@ -3556,8 +3556,6 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
         &root,
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node phase_a: a.Phase = a.Phase.Burn;\n\
-         node phase_b: b.Phase = b.Phase.Burn;\n\
          node series_a: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
          node series_b: Dimensionless[b.Phase] = for p: b.Phase { 2.0 };\n",
     )
@@ -3565,35 +3563,7 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
 
-    let label_index_owner = |name: &str| {
-        let value = result
-            .nodes
-            .iter()
-            .find(|(n, _)| n.to_string() == name)
-            .unwrap_or_else(|| panic!("value `{name}` not found"))
-            .1
-            .as_ref()
-            .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"));
-        let Value::Label {
-            index_name,
-            variant,
-        } = value
-        else {
-            panic!("expected label value for `{name}`, got {value:?}");
-        };
-        assert_eq!(index_name.display_name().as_str(), "Phase");
-        assert_eq!(variant.as_str(), "Burn");
-        index_name
-            .declared_resolved()
-            .cloned()
-            .unwrap_or_else(|| panic!("expected declared index for `{name}`"))
-    };
-
-    let phase_a_owner = label_index_owner("phase_a");
-    let other_phase_owner = label_index_owner("phase_b");
-    assert_ne!(phase_a_owner, other_phase_owner);
-
-    for (name, expected_owner) in [("series_a", phase_a_owner), ("series_b", other_phase_owner)] {
+    let indexed_owner = |name: &str| {
         let value = result
             .nodes
             .iter()
@@ -3611,9 +3581,14 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
             panic!("expected indexed value for `{name}`, got {value:?}");
         };
         assert_eq!(index_name.display_name().as_str(), "Phase");
-        assert_eq!(index_name.declared_resolved(), Some(&expected_owner));
         assert_eq!(entries.len(), 2);
-    }
+        index_name
+            .declared_resolved()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected declared index for `{name}`"))
+    };
+
+    assert_ne!(indexed_owner("series_a"), indexed_owner("series_b"));
 }
 
 #[test]

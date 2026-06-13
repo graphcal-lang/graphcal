@@ -171,8 +171,6 @@ fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
         &root,
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node phase_a: a.Phase = a.Phase.Burn;\n\
-         node phase_b: b.Phase = b.Phase.Burn;\n\
          node series_a: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
          node series_b: Dimensionless[b.Phase] = for p: b.Phase { 2.0 };\n",
     )
@@ -188,8 +186,6 @@ fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("phase_a"), "stdout: {stdout}");
-    assert!(stdout.contains("Phase.Burn"), "stdout: {stdout}");
     assert!(stdout.contains("series_a[Burn]"), "stdout: {stdout}");
     assert!(stdout.contains("series_b[Coast]"), "stdout: {stdout}");
 
@@ -204,8 +200,6 @@ fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
-    assert_eq!(json["node"]["phase_a"]["index"].as_str(), Some("Phase"));
-    assert_eq!(json["node"]["phase_b"]["index"].as_str(), Some("Phase"));
     assert_eq!(json["node"]["series_a"]["index"].as_str(), Some("Phase"));
     assert_eq!(json["node"]["series_b"]["index"].as_str(), Some("Phase"));
 }

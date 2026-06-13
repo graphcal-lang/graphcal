@@ -3,7 +3,7 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 assertion_line: 642
 expression: formatted
 ---
-// variant_comparison.gcl -- Comparing loop variables to index variant literals
+// variant_comparison.gcl -- Variant-specific scaling without label equality
 pub index Maneuver = { Departure, Correction, Insertion };
 
 param delta_v: Velocity[Maneuver] = {

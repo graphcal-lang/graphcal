@@ -215,8 +215,10 @@ fn hir_dim_check_uses_lowered_builtin_function_not_mutated_syntax_callee() {
 
 #[test]
 fn hir_dim_check_uses_lexical_local_ids_not_mutated_syntax_names() {
-    let (mut tir, src) =
-        module_aware_tir("index Phase = { Burn };\nnode y: Phase[Phase] = for p: Phase { p };");
+    let (mut tir, src) = module_aware_tir(
+        "index Phase = { Burn };\n\
+         node y: Dimensionless[Phase] = for p: Phase { match p { Phase.Burn => 1.0 } };",
+    );
     assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
         crate::hir::ExprKind::StringLiteral("not the semantic HIR".to_string());

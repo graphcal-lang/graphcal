@@ -297,8 +297,11 @@ pub enum DeclaredType {
     Int,
     /// A datetime instant in a specific time scale. `Datetime(UTC)` is the default for civil use.
     Datetime(TimeScale),
-    /// A label of a named index (e.g., `Maneuver.Departure` has type `Label(Maneuver)`).
-    Label(IndexTypeRef),
+    /// An index argument captured inside a generic struct instantiation.
+    ///
+    /// This is not a standalone value type; it is carried only as metadata for
+    /// generic type parameters constrained as `Index`.
+    IndexArg(IndexTypeRef),
     /// A struct type, optionally with concrete type arguments for generic structs.
     Struct(StructTypeRef, Vec<Self>),
     Indexed {
@@ -322,7 +325,7 @@ impl DeclaredType {
                     format!("Datetime<{scale}>")
                 }
             }
-            Self::Label(index) => format!("Label({index})"),
+            Self::IndexArg(index) => format!("index {index}"),
             Self::Struct(name, args) => {
                 if args.is_empty() {
                     name.to_string()

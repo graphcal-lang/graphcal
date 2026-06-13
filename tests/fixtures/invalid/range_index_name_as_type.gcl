@@ -1,0 +1,4 @@
+// Error: a range index name is not a value type.
+index Step = linspace(0.0 s, 1.0 s, step: 1.0 s);
+
+node x: Step = 0.0 s;

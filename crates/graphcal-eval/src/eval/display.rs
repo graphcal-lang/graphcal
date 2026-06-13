@@ -3,9 +3,11 @@
 
 use graphcal_compiler::hir::ExprKind;
 use graphcal_compiler::hir::expr::{ConstRef, IndexArg, MapEntry, MapEntryKey, MatchPattern};
+use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::names::{IndexVariantName, ResolvedName, namespace};
+use graphcal_compiler::tir::typed::ResolvedConstructorTarget;
 use indexmap::IndexMap;
 
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
@@ -183,22 +185,51 @@ fn resolve_defining_expr<'a>(
         }
         ExprKind::Match { scrutinee, arms } => {
             let scrut = eval_hir_expr(scrutinee, values, &HirLocalValueMap::root(), ctx).ok();
-            let Some(RuntimeValue::Label { variant, .. }) = scrut else {
-                return Ok(None);
-            };
-            arms.iter()
-                .find(|arm| {
-                    matches!(
-                        &arm.pattern,
-                        MatchPattern::IndexLabel { variant: pat, .. }
-                            if *pat.variant.variant() == variant
-                    )
-                })
-                .map(|arm| &arm.body)
+            match scrut {
+                Some(RuntimeValue::Label { variant, .. }) => arms
+                    .iter()
+                    .find(|arm| {
+                        matches!(
+                            &arm.pattern,
+                            MatchPattern::IndexLabel { variant: pat, .. }
+                                if *pat.variant.variant() == variant
+                        )
+                    })
+                    .map(|arm| &arm.body),
+                Some(RuntimeValue::Struct { type_name, .. }) => arms
+                    .iter()
+                    .find(|arm| match &arm.pattern {
+                        MatchPattern::Constructor { constructor, .. } => {
+                            constructor_target(ctx, &constructor.value).is_some_and(|target| {
+                                runtime_struct_matches_resolved_constructor(&type_name, target)
+                            })
+                        }
+                        MatchPattern::IndexLabel { .. } => false,
+                    })
+                    .map(|arm| &arm.body),
+                _ => return Ok(None),
+            }
         }
         _ => None,
     };
     Ok(resolved)
+}
+
+fn constructor_target<'a>(
+    ctx: &'a EvalContext<'_>,
+    constructor: &ResolvedName<namespace::Constructor>,
+) -> Option<&'a ResolvedConstructorTarget> {
+    ctx.current_dag
+        .map(|dag| &dag.semantic.constructor_refs)
+        .and_then(|refs| refs.constructor_defs.get(constructor))
+}
+
+fn runtime_struct_matches_resolved_constructor(
+    scrutinee_type: &StructTypeRef,
+    target: &ResolvedConstructorTarget,
+) -> bool {
+    scrutinee_type.name().as_str() == target.variant.name.as_str()
+        && scrutinee_type.resolved() == &target.owning_type
 }
 
 /// Find the map-literal entry selected by statically known index variants.

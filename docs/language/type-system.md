@@ -15,7 +15,6 @@ Graphcal's type system is organized into three levels:
 ```
 Level 1: Primitive  = Scalar(Dim) | Int | Bool | Datetime(TimeScale)
 Level 2: ValueType  = Primitive
-                    | Label(IndexName)
                     | Struct(name, fields: [ValueType])
                     | Union(name, members: [Type])
 Level 3: DeclType   = ValueType
@@ -23,9 +22,8 @@ Level 3: DeclType   = ValueType
 ```
 
 - **Primitive** — An indivisible atomic datum.
-- **ValueType** — A single logical value. Primitives plus algebraic compositions (labels, structs, union types). This is the type of one value: you can store it in a node, pass it through a DAG parameter, or use it inside expressions.
+- **ValueType** — A single logical value. Primitives plus algebraic compositions (structs and union types). This is the type of one value: you can store it in a node, pass it through a DAG parameter, or use it inside expressions.
 - **DeclType** — What can appear in type annotations of `param`, `node`, `const node`, and DAG parameter/output declarations. Either a ValueType or an indexed collection of ValueTypes.
-- **Label(IndexName)** — The type of named index labels (e.g., `Maneuver.Departure`). Labels are real values that can be stored, compared, matched, and passed through DAG params/nodes.
 
 ### DAG Correspondence
 
@@ -286,8 +284,8 @@ An index declares a finite, ordered set of labels usable as collection axes in `
 
 A named index declares a finite set of labels usable as a collection axis. The `index` keyword declares:
 
-1. An **expression-level type**: `Maneuver.Departure` has type `Label(Maneuver)` — a dedicated type kind, distinct from union types. Labels exist only within expressions, not in declaration type annotations.
-2. An **axis marker**: `Maneuver` can be used in `T[Maneuver]` to create indexed types.
+1. An **axis marker**: `Maneuver` can be used in `T[Maneuver]` to create indexed types.
+2. A closed set of **index labels**: `Maneuver.Departure` identifies one position on that axis.
 
 ```
 index Maneuver = { Departure, Correction, Insertion };
@@ -295,14 +293,13 @@ index Maneuver = { Departure, Correction, Insertion };
 
 Named index labels use qualified syntax (`Maneuver.Departure`), distinguishing them from union type members which use bare syntax (`Nominal`). This reflects a genuine semantic difference: labels identify positions within a collection axis, while union type members are constructors of a sum type.
 
-Named index labels are proper runtime values within expressions:
+Named index labels are not ValueType values. They cannot be stored in nodes or params, compared with `==`, passed through DAG parameters, or used in constructor payloads. Labels appear only in index positions and index-pattern positions:
 
-- Use in DAG block parameters: `param m: Maneuver` works.
-- Use as DAG block node types: `node result: Maneuver` works.
-- Store in nodes: `node x: Maneuver = Maneuver.Departure` works.
-- Compare: `m == Maneuver.Departure` works.
-- Pattern match: `match m { Maneuver.Departure => ..., ... }` works.
-- Use in constructor payloads: `type Config { Config(phase: Phase, maneuver: Maneuver) }` works.
+- Indexed type axes: `Velocity[Maneuver]`
+- Element access: `@delta_v[Maneuver.Departure]`
+- Map and table keys: `{ Maneuver.Departure: 2.46 km/s, ... }`
+- `for` bindings and index access through their loop variables: `for m: Maneuver { @delta_v[m] }`
+- `match` patterns over named-index loop variables: `match m { Maneuver.Departure => ..., ... }`
 
 A fieldless tagged union (e.g., `type Foo { A, B }`) is NOT automatically an index. The `index` keyword explicitly marks an enumeration as usable in `T[I]`, preventing accidental use of marker types as collection axes.
 
@@ -320,15 +317,15 @@ Range index labels are scalar values, not union type members. The loop variable 
 
 | Capability | Named index (`Maneuver`) | Range index (`TimeStep`) |
 |-----------|--------------------------|--------------------------|
-| Loop variable type | `Label(Maneuver)` (ValueType) | `Scalar(Dim)` (Primitive) |
+| Loop variable type | index case variable (not a ValueType) | `Scalar(Dim)` (Primitive) |
 | Indexing: `@x[m]` | Yes | Yes |
 | Map literal key | Yes | No (range labels are implicit) |
-| Equality comparison | Yes (as Label) | Yes (as Scalar) |
+| Equality comparison | No; use `match` | Yes (as Scalar) |
 | Pattern matching | Yes (qualified: `Maneuver.X => ...`) | No |
 | Arithmetic | No (not a scalar) | Yes |
-| Pass to DAG param | Yes | Yes (as scalar) |
+| Pass to DAG param | No | Yes (as scalar) |
 
-Both loop variable types are runtime values -- named index labels are `Label` values (expression-level), range index labels are scalar values (Primitive).
+Range-index loop variables are scalar values. Named-index loop variables are index case variables: they can select an indexed entry and drive exhaustive `match`, but they are not values.
 
 ### Construction of Indexed Values
 
@@ -609,15 +606,15 @@ MemberName                                        // unit type (no fields)
 - Use explicit `field: @node_name` when passing graph nodes.
 - The result type is the struct/union type.
 
-### Variant Literal
+### Index Label
 
 ```
 IndexName.VariantName
 ```
 
 - References a specific label of a named index.
-- The result type is `Label(IndexName)`.
-- Named index labels are ValueType values and can be used anywhere a value is expected.
+- This is not a value expression and has no ValueType.
+- It is legal only in index positions, such as element access, map/table keys, `#[expected_fail(...)]` keys, include index bindings, and named-index `match` patterns.
 
 ### Match Expression
 
@@ -628,11 +625,11 @@ match scrutinee {
 }
 ```
 
-- `scrutinee` must be a union type or a named-index `Label` type.
+- `scrutinee` must be a union-typed value expression or a named-index loop variable.
 - `match` is for exhaustive case analysis over closed finite alternatives. Use `if` for ordinary boolean predicates and comparisons.
 - All members/labels must be covered (exhaustiveness check).
 - For union type scrutinees, arms use constructor patterns (bare or module-qualified) and can bind fields explicitly with `field: variable` or `field: _`.
-- For `Label` scrutinees, arms use qualified index-label patterns (`Index.Label` or `module.Index.Label`) and cannot bind fields (labels are fieldless).
+- For named-index loop variables, arms use qualified index-label patterns (`Index.Label` or `module.Index.Label`) and cannot bind fields.
 - All arm expressions must have the same type.
 - The result type is the common type of the arms.
 
@@ -663,7 +660,7 @@ for v1: Index1, v2: Index2 { body_expr }
 ```
 
 - `var` is bound to each label of the index in turn.
-- For named indexes, the loop variable has the `Label(IndexName)` type.
+- For named indexes, the loop variable is an index case variable. It is valid in index access (`@x[var]`) and named-index `match`, but not as a ValueType value.
 - For range indexes, the loop variable has `Scalar(Dim)` type.
 - `body_expr` is evaluated for each binding; its type is `T`.
 - The result type is `T[IndexName]` (or `T[Index1, Index2]` for multiple bindings).
@@ -792,14 +789,13 @@ Two types are equivalent if:
 - **Int**: Both are `Int`.
 - **Bool**: Both are `Bool`.
 - **Datetime**: Same time scale. `Datetime<UTC>` and `Datetime<TT>` are different types.
-- **Labels**: Same index name. `Label(Maneuver)` and `Label(Phase)` are different types.
 - **Structs**: Same struct name and all type arguments are equivalent.
 - **Union types**: Same type name and same members.
 - **Indexed**: Same element type, same indexes in the same order. `T[I, J]` and `T[J, I]` are different types.
 
 There is no subtyping. `Length` is not assignable to `Dimensionless`, and `Vec3<Length, ECI>` is not assignable to `Vec3<Length, Unframed>` even if both have the same fields.
 
-Cross-index label equality is a type error: `m == p` where `m: Maneuver` and `p: Phase` does not compile because they are different `Label` types.
+Named index labels do not participate in value type equivalence. They are index positions and patterns, not ValueTypes. Use `match` over a named-index loop variable for case analysis.
 
 ## Complete Entity Map
 
@@ -811,7 +807,7 @@ Cross-index label equality is a type error: `m == p` where `m: Maneuver` and `p:
 | Datetime value | ValueType | Yes | Yes | Yes | Yes |
 | Struct instance | ValueType | Yes | Yes | Yes | Yes |
 | Union type member | ValueType | Yes | Yes | Yes | Yes |
-| Named index label | Label(IndexName) (expression-level) | Yes | Yes | Yes | Yes |
+| Named index label | No | No | No | No | Index positions and match patterns |
 | Indexed value | DeclType | Yes | Yes | Yes | Via `for` |
 | Range index label | Scalar(Dim) | Yes | Yes (as scalar) | Yes (as scalar) | Indexing, arithmetic |
 | Function | No | No | No | No | Calling only |
@@ -819,4 +815,4 @@ Cross-index label equality is a type error: `m == p` where `m: Maneuver` and `p:
 | Unit | No (compile-time) | No | No | No | In literals only |
 | Index | No (compile-time) | No | As generic `<I: Index>` | As generic | No |
 
-Named index labels have a dedicated `Label(IndexName)` type kind, distinct from union type members. Labels use qualified syntax (`Maneuver.Departure`) while union type members use bare syntax (`Nominal`).
+Named index labels use qualified syntax (`Maneuver.Departure`) while union type members use bare syntax (`Nominal`). Labels belong to the index universe; union members belong to the value/type universe.
