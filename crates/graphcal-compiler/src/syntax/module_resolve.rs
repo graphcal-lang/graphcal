@@ -82,6 +82,20 @@ pub enum DeclSymbolKind {
     Dag,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ExclusiveNameKind {
+    Value,
+    Dimension,
+    StructType,
+    Index,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExclusiveNameBinding {
+    kind: ExclusiveNameKind,
+    span: Span,
+}
+
 impl DeclSymbolKind {
     /// Returns whether this declaration can be referenced from const-like
     /// expression positions.
@@ -159,6 +173,7 @@ impl<Ns: NameNamespace> ModuleSymbol<Ns> {
 trait ModuleSymbolLookup<Ns: NameNamespace> {
     fn resolved(&self) -> &ResolvedName<Ns>;
     fn visibility(&self) -> SymbolVisibility;
+    fn span(&self) -> Span;
 }
 
 impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ModuleSymbol<Ns> {
@@ -168,6 +183,10 @@ impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ModuleSymbol<Ns> {
 
     fn visibility(&self) -> SymbolVisibility {
         self.visibility()
+    }
+
+    fn span(&self) -> Span {
+        self.span()
     }
 }
 
@@ -225,6 +244,10 @@ impl ModuleSymbolLookup<namespace::Decl> for ModuleDeclSymbol {
     fn visibility(&self) -> SymbolVisibility {
         self.visibility()
     }
+
+    fn span(&self) -> Span {
+        self.span()
+    }
 }
 
 /// Index symbol plus the variants declared by that index.
@@ -267,6 +290,10 @@ impl ModuleSymbolLookup<namespace::Index> for ModuleIndexSymbol {
 
     fn visibility(&self) -> SymbolVisibility {
         self.visibility()
+    }
+
+    fn span(&self) -> Span {
+        self.span()
     }
 }
 
@@ -360,89 +387,74 @@ impl ModuleSymbols {
         &mut self,
         declarations: &[ast::Declaration],
     ) -> Result<(), ModuleResolveError> {
+        let mut exclusive_names = HashMap::new();
         for decl in declarations {
             match &decl.kind {
-                ast::DeclKind::Param(p) => self.insert_decl(
+                ast::DeclKind::Param(p) => self.insert_value_decl(
+                    &mut exclusive_names,
                     &p.name,
                     SymbolVisibility::PublicBind,
-                    namespace::Decl::DISPLAY_NAME,
                     DeclSymbolKind::Param,
                 )?,
-                ast::DeclKind::Node(n) => self.insert_decl(
+                ast::DeclKind::Node(n) => self.insert_value_decl(
+                    &mut exclusive_names,
                     &n.name,
                     SymbolVisibility::from(n.visibility),
-                    namespace::Decl::DISPLAY_NAME,
                     DeclSymbolKind::Node,
                 )?,
-                ast::DeclKind::ConstNode(c) => self.insert_decl(
+                ast::DeclKind::ConstNode(c) => self.insert_value_decl(
+                    &mut exclusive_names,
                     &c.name,
                     SymbolVisibility::from(c.visibility),
-                    namespace::Decl::DISPLAY_NAME,
                     DeclSymbolKind::Const,
                 )?,
-                ast::DeclKind::Assert(a) => self.insert_decl(
+                ast::DeclKind::Assert(a) => self.insert_value_decl(
+                    &mut exclusive_names,
                     &a.name,
                     SymbolVisibility::from(a.visibility),
-                    namespace::Decl::DISPLAY_NAME,
                     DeclSymbolKind::Assert,
                 )?,
-                ast::DeclKind::Plot(p) => self.insert_decl(
+                ast::DeclKind::Plot(p) => self.insert_value_decl(
+                    &mut exclusive_names,
                     &p.name,
                     SymbolVisibility::from(p.visibility),
-                    namespace::Decl::DISPLAY_NAME,
                     DeclSymbolKind::Plot,
                 )?,
-                ast::DeclKind::Figure(f) => self.insert_decl(
+                ast::DeclKind::Figure(f) => self.insert_value_decl(
+                    &mut exclusive_names,
                     &f.name,
                     SymbolVisibility::from(f.visibility),
-                    namespace::Decl::DISPLAY_NAME,
                     DeclSymbolKind::Figure,
                 )?,
-                ast::DeclKind::Layer(l) => self.insert_decl(
+                ast::DeclKind::Layer(l) => self.insert_value_decl(
+                    &mut exclusive_names,
                     &l.name,
                     SymbolVisibility::from(l.visibility),
-                    namespace::Decl::DISPLAY_NAME,
                     DeclSymbolKind::Layer,
                 )?,
-                ast::DeclKind::Dag(d) => self.insert_decl(
+                ast::DeclKind::Dag(d) => self.insert_value_decl(
+                    &mut exclusive_names,
                     &d.name,
                     SymbolVisibility::from(d.visibility),
-                    namespace::Decl::DISPLAY_NAME,
                     DeclSymbolKind::Dag,
                 )?,
-                ast::DeclKind::BaseDimension(d) => self.insert_dimension(
+                ast::DeclKind::BaseDimension(d) => self.insert_dimension_decl(
+                    &mut exclusive_names,
                     &d.name,
                     SymbolVisibility::from(d.visibility),
-                    namespace::Dim::DISPLAY_NAME,
                 )?,
-                ast::DeclKind::Dimension(d) => self.insert_dimension(
+                ast::DeclKind::Dimension(d) => self.insert_dimension_decl(
+                    &mut exclusive_names,
                     &d.name,
                     SymbolVisibility::from(d.visibility),
-                    namespace::Dim::DISPLAY_NAME,
                 )?,
                 ast::DeclKind::Unit(u) => self.insert_unit(
                     &u.name,
                     SymbolVisibility::from(u.visibility),
                     namespace::Unit::DISPLAY_NAME,
                 )?,
-                ast::DeclKind::Type(t) => {
-                    let visibility = SymbolVisibility::from(t.visibility);
-                    self.insert_struct_type(
-                        &t.name,
-                        visibility,
-                        namespace::StructType::DISPLAY_NAME,
-                    )?;
-                    if let ast::TypeDeclBody::Constructors(members) = &t.body {
-                        for member in members {
-                            self.insert_constructor(
-                                &member.name,
-                                visibility,
-                                namespace::Constructor::DISPLAY_NAME,
-                            )?;
-                        }
-                    }
-                }
-                ast::DeclKind::Index(i) => self.insert_index(i)?,
+                ast::DeclKind::Type(t) => self.insert_type_decl(&mut exclusive_names, t)?,
+                ast::DeclKind::Index(i) => self.insert_index_decl(&mut exclusive_names, i)?,
                 ast::DeclKind::Import(_) | ast::DeclKind::Include(_) => {}
                 #[expect(
                     clippy::uninhabited_references,
@@ -452,6 +464,104 @@ impl ModuleSymbols {
             }
         }
         Ok(())
+    }
+
+    fn insert_value_decl(
+        &mut self,
+        exclusive_names: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+        name: &Spanned<DeclName>,
+        visibility: SymbolVisibility,
+        kind: DeclSymbolKind,
+    ) -> Result<(), ModuleResolveError> {
+        self.insert_exclusive_name(
+            exclusive_names,
+            name.value.atom(),
+            ExclusiveNameKind::Value,
+            name.span,
+        )?;
+        self.insert_decl(name, visibility, namespace::Decl::DISPLAY_NAME, kind)
+    }
+
+    fn insert_dimension_decl(
+        &mut self,
+        exclusive_names: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+        name: &Spanned<DimName>,
+        visibility: SymbolVisibility,
+    ) -> Result<(), ModuleResolveError> {
+        self.insert_exclusive_name(
+            exclusive_names,
+            name.value.atom(),
+            ExclusiveNameKind::Dimension,
+            name.span,
+        )?;
+        self.insert_dimension(name, visibility, namespace::Dim::DISPLAY_NAME)
+    }
+
+    fn insert_type_decl(
+        &mut self,
+        exclusive_names: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+        type_decl: &ast::TypeDecl,
+    ) -> Result<(), ModuleResolveError> {
+        let visibility = SymbolVisibility::from(type_decl.visibility);
+        self.insert_exclusive_name(
+            exclusive_names,
+            type_decl.name.value.atom(),
+            ExclusiveNameKind::StructType,
+            type_decl.name.span,
+        )?;
+        self.insert_struct_type(
+            &type_decl.name,
+            visibility,
+            namespace::StructType::DISPLAY_NAME,
+        )?;
+        if let ast::TypeDeclBody::Constructors(members) = &type_decl.body {
+            for member in members {
+                self.insert_constructor(
+                    &member.name,
+                    visibility,
+                    namespace::Constructor::DISPLAY_NAME,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn insert_index_decl(
+        &mut self,
+        exclusive_names: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+        index: &ast::IndexDecl,
+    ) -> Result<(), ModuleResolveError> {
+        self.insert_exclusive_name(
+            exclusive_names,
+            index.name.value.atom(),
+            ExclusiveNameKind::Index,
+            index.name.span,
+        )?;
+        self.insert_index(index)
+    }
+
+    fn insert_exclusive_name(
+        &self,
+        occupied: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+        atom: &NameAtom,
+        kind: ExclusiveNameKind,
+        span: Span,
+    ) -> Result<(), ModuleResolveError> {
+        match occupied.get(atom) {
+            Some(first) if first.kind != kind => Err(ModuleResolveError::DuplicateSymbol {
+                owner: self.owner.clone(),
+                namespace: "name",
+                name: atom.to_string(),
+                first: first.span,
+                duplicate: span,
+            }),
+            _ => {
+                occupied
+                    .entry(atom.clone())
+                    .or_insert(ExclusiveNameBinding { kind, span });
+                Ok(())
+            }
+        }
     }
 
     fn insert_decl(
@@ -692,6 +802,10 @@ impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ImportedSymbol<Ns> {
     fn visibility(&self) -> SymbolVisibility {
         self.visibility()
     }
+
+    fn span(&self) -> Span {
+        self.span()
+    }
 }
 
 /// Import scope for a single module.
@@ -866,6 +980,7 @@ impl ModuleResolver {
         self.module_symbols(target)?;
 
         let additions = self.import_additions(path, kind, target, access)?;
+        self.check_import_exclusive_name_collisions(owner, &additions)?;
         let scope =
             self.scopes
                 .get_mut(owner)
@@ -1157,6 +1272,51 @@ impl ModuleResolver {
                 .collect::<Result<Vec<_>, _>>()
                 .map(|chunks| chunks.into_iter().flatten().collect()),
         }
+    }
+
+    fn check_import_exclusive_name_collisions(
+        &self,
+        owner: &DagId,
+        additions: &[ImportAddition],
+    ) -> Result<(), ModuleResolveError> {
+        let local = self.module_symbols(owner)?;
+        let scope = self.module_scope(owner)?;
+        let mut occupied = HashMap::new();
+
+        seed_exclusive_names(&mut occupied, &local.decls, ExclusiveNameKind::Value);
+        seed_exclusive_names(
+            &mut occupied,
+            &local.dimensions,
+            ExclusiveNameKind::Dimension,
+        );
+        seed_exclusive_names(
+            &mut occupied,
+            &local.struct_types,
+            ExclusiveNameKind::StructType,
+        );
+        seed_exclusive_names(&mut occupied, &local.indexes, ExclusiveNameKind::Index);
+        seed_exclusive_names(
+            &mut occupied,
+            &scope.selected_decls,
+            ExclusiveNameKind::Value,
+        );
+        seed_exclusive_names(
+            &mut occupied,
+            &scope.selected_dimensions,
+            ExclusiveNameKind::Dimension,
+        );
+        seed_exclusive_names(
+            &mut occupied,
+            &scope.selected_struct_types,
+            ExclusiveNameKind::StructType,
+        );
+        seed_exclusive_names(
+            &mut occupied,
+            &scope.selected_indexes,
+            ExclusiveNameKind::Index,
+        );
+
+        check_import_addition_exclusive_names(owner, &mut occupied, additions)
     }
 
     #[expect(
@@ -1615,6 +1775,88 @@ fn insert_module_alias(
     Ok(())
 }
 
+fn seed_exclusive_names<Ns, S>(
+    occupied: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+    symbols: &HashMap<NameDef<Ns>, S>,
+    kind: ExclusiveNameKind,
+) where
+    Ns: NameNamespace,
+    S: ModuleSymbolLookup<Ns>,
+{
+    for (name, symbol) in symbols {
+        occupied.insert(
+            name.atom().clone(),
+            ExclusiveNameBinding {
+                kind,
+                span: symbol.span(),
+            },
+        );
+    }
+}
+
+fn check_import_addition_exclusive_names(
+    owner: &DagId,
+    occupied: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+    additions: &[ImportAddition],
+) -> Result<(), ModuleResolveError> {
+    for addition in additions {
+        match addition {
+            ImportAddition::Decl { local, .. } => register_import_exclusive_name(
+                owner,
+                occupied,
+                local.value.atom(),
+                ExclusiveNameKind::Value,
+                local.span,
+            )?,
+            ImportAddition::Dimension { local, .. } => register_import_exclusive_name(
+                owner,
+                occupied,
+                local.value.atom(),
+                ExclusiveNameKind::Dimension,
+                local.span,
+            )?,
+            ImportAddition::StructType { local, .. } => register_import_exclusive_name(
+                owner,
+                occupied,
+                local.value.atom(),
+                ExclusiveNameKind::StructType,
+                local.span,
+            )?,
+            ImportAddition::Index { local, .. } => register_import_exclusive_name(
+                owner,
+                occupied,
+                local.value.atom(),
+                ExclusiveNameKind::Index,
+                local.span,
+            )?,
+            ImportAddition::ModuleAlias { .. }
+            | ImportAddition::Unit { .. }
+            | ImportAddition::Constructor { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn register_import_exclusive_name(
+    owner: &DagId,
+    occupied: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+    atom: &NameAtom,
+    kind: ExclusiveNameKind,
+    span: Span,
+) -> Result<(), ModuleResolveError> {
+    if let Some(first) = occupied.get(atom) {
+        return Err(ModuleResolveError::DuplicateImportName {
+            owner: owner.clone(),
+            namespace: "name",
+            name: atom.to_string(),
+            first: first.span,
+            duplicate: span,
+        });
+    }
+    occupied.insert(atom.clone(), ExclusiveNameBinding { kind, span });
+    Ok(())
+}
+
 fn insert_imported_symbol<Ns: NameNamespace>(
     owner: &DagId,
     map: &mut HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
@@ -1775,6 +2017,16 @@ mod tests {
             .expect("source should contain an import")
     }
 
+    fn imports(file: &ast::File) -> Vec<(&ModulePath, &ImportKind)> {
+        file.declarations
+            .iter()
+            .filter_map(|decl| match &decl.kind {
+                ast::DeclKind::Import(import) => Some((&import.path, &import.kind)),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn first_include(file: &ast::File) -> (&ModulePath, &ImportKind) {
         file.declarations
             .iter()
@@ -1816,6 +2068,94 @@ mod tests {
                 _ => None,
             })
             .expect("source should contain a dag")
+    }
+
+    #[test]
+    fn local_type_index_name_collision_is_rejected() {
+        let owner = DagId::root("main");
+        let file = desugared_source("type M { Mk(v: Dimensionless) }\npub index M = { A, B };");
+
+        let err = ModuleSymbols::from_declarations(owner.clone(), &file.declarations).unwrap_err();
+
+        assert!(matches!(
+            err,
+            ModuleResolveError::DuplicateSymbol {
+                owner: err_owner,
+                namespace: "name",
+                name,
+                ..
+            } if err_owner == owner && name == "M"
+        ));
+    }
+
+    #[test]
+    fn local_dimension_type_name_collision_is_rejected() {
+        let owner = DagId::root("main");
+        let file = desugared_source("dim M = Length;\ntype M { Mk(v: Dimensionless) }");
+
+        let err = ModuleSymbols::from_declarations(owner.clone(), &file.declarations).unwrap_err();
+
+        assert!(matches!(
+            err,
+            ModuleResolveError::DuplicateSymbol {
+                owner: err_owner,
+                namespace: "name",
+                name,
+                ..
+            } if err_owner == owner && name == "M"
+        ));
+    }
+
+    #[test]
+    fn same_named_type_and_constructor_remain_distinct() {
+        let owner = DagId::root("main");
+        let file = desugared_source("type T { T }");
+
+        let symbols = ModuleSymbols::from_declarations(owner, &file.declarations).unwrap();
+
+        assert!(symbols.struct_types().contains_key("T"));
+        assert!(symbols.constructors().contains_key("T"));
+    }
+
+    #[test]
+    fn selective_import_cross_universe_name_collision_is_rejected() {
+        let type_lib_id = DagId::root("type_lib");
+        let index_lib_id = DagId::root("index_lib");
+        let main_id = DagId::root("main");
+        let type_lib = desugared_source("pub type M { Mk(v: Dimensionless) }");
+        let index_lib = desugared_source("pub index M = { A, B };");
+        let main = desugared_source(
+            "import type_lib.{ type M };
+             import index_lib.{ M };",
+        );
+        let imports = imports(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(type_lib_id.clone(), &type_lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(index_lib_id.clone(), &index_lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, imports[0].0, imports[0].1, &type_lib_id)
+            .unwrap();
+        let err = resolver
+            .register_import(&main_id, imports[1].0, imports[1].1, &index_lib_id)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ModuleResolveError::DuplicateImportName {
+                owner,
+                namespace: "name",
+                name,
+                ..
+            } if owner == main_id && name == "M"
+        ));
     }
 
     #[test]

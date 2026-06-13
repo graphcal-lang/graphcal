@@ -40,6 +40,13 @@ fn error_duplicate_name() {
 }
 
 #[test]
+fn error_cross_universe_name_collision() {
+    let source = include_str!("../../../tests/fixtures/invalid/cross_universe_name_collision.gcl");
+    let rendered = render_error(source, "cross_universe_name_collision.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_unknown_graph_ref() {
     let source = include_str!("../../../tests/fixtures/invalid/unknown_ref.gcl");
     let rendered = render_error(source, "unknown_ref.gcl");

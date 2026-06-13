@@ -21,7 +21,7 @@ use crate::registry::resolve_types::{
     ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
 };
 use crate::syntax::attribute::AttributeName;
-use crate::syntax::names::DeclName;
+use crate::syntax::names::{DeclName, NameAtom};
 use crate::syntax::span::Span;
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
@@ -54,6 +54,34 @@ fn register_value_namespace_name(
     }
     value_names.insert(scoped_name, span);
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExclusiveUniverse {
+    Type,
+    Index,
+    Value,
+}
+
+type ExclusiveUniverseBinding = (ExclusiveUniverse, Span);
+
+fn register_exclusive_universe_name(
+    occupied: &mut HashMap<NameAtom, ExclusiveUniverseBinding>,
+    atom: &NameAtom,
+    universe: ExclusiveUniverse,
+    span: Span,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    occupied
+        .insert(atom.clone(), (universe, span))
+        .map_or(Ok(()), |first| {
+            Err(GraphcalError::DuplicateName {
+                name: atom.to_string(),
+                src: src.clone(),
+                duplicate: span.into(),
+                first: first.1.into(),
+            })
+        })
 }
 
 fn check_builtin_name_shadowing(
@@ -95,6 +123,56 @@ fn check_builtin_name_shadowing(
 
 fn is_builtin_type_name(name: &str) -> bool {
     PRELUDE_DIMENSION_NAMES.contains(&name) || PRELUDE_BUILTIN_TYPE_NAMES.contains(&name)
+}
+
+fn check_exclusive_universe_collisions(
+    file: &File,
+    src: &NamedSource<Arc<String>>,
+    names: &HashMap<ScopedName, Span>,
+) -> Result<(), GraphcalError> {
+    let mut occupied = names
+        .iter()
+        .filter(|(name, _)| !name.is_qualified())
+        .map(|(name, span)| {
+            (
+                DeclName::new(name.member()).into_atom(),
+                (ExclusiveUniverse::Value, *span),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    for (atom, universe, span) in file
+        .declarations
+        .iter()
+        .filter_map(|decl| exclusive_universe_decl(&decl.kind))
+    {
+        register_exclusive_universe_name(&mut occupied, atom, universe, span, src)?;
+    }
+
+    Ok(())
+}
+
+fn exclusive_universe_decl(decl: &DeclKind) -> Option<(&NameAtom, ExclusiveUniverse, Span)> {
+    match decl {
+        DeclKind::Param(p) => Some((p.name.value.atom(), ExclusiveUniverse::Value, p.name.span)),
+        DeclKind::Node(n) => Some((n.name.value.atom(), ExclusiveUniverse::Value, n.name.span)),
+        DeclKind::ConstNode(c) => {
+            Some((c.name.value.atom(), ExclusiveUniverse::Value, c.name.span))
+        }
+        DeclKind::Assert(a) => Some((a.name.value.atom(), ExclusiveUniverse::Value, a.name.span)),
+        DeclKind::Plot(p) => Some((p.name.value.atom(), ExclusiveUniverse::Value, p.name.span)),
+        DeclKind::Figure(f) => Some((f.name.value.atom(), ExclusiveUniverse::Value, f.name.span)),
+        DeclKind::Layer(l) => Some((l.name.value.atom(), ExclusiveUniverse::Value, l.name.span)),
+        DeclKind::Dag(d) => Some((d.name.value.atom(), ExclusiveUniverse::Value, d.name.span)),
+        DeclKind::BaseDimension(d) => {
+            Some((d.name.value.atom(), ExclusiveUniverse::Type, d.name.span))
+        }
+        DeclKind::Dimension(d) => Some((d.name.value.atom(), ExclusiveUniverse::Type, d.name.span)),
+        DeclKind::Type(t) => Some((t.name.value.atom(), ExclusiveUniverse::Type, t.name.span)),
+        DeclKind::Index(i) => Some((i.name.value.atom(), ExclusiveUniverse::Index, i.name.span)),
+        DeclKind::Unit(_) | DeclKind::Import(_) | DeclKind::Include(_) => None,
+        DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+    }
 }
 
 fn check_value_namespace_collisions(
@@ -211,6 +289,7 @@ fn collect_local_declarations(
     let mut assert_names: HashSet<DeclName> = HashSet::new();
 
     check_builtin_name_shadowing(file, src)?;
+    check_exclusive_universe_collisions(file, src, names)?;
     check_value_namespace_collisions(file, src, names)?;
 
     // Collect names of all visible declarations. Explicit `pub`/`pub(bind)`

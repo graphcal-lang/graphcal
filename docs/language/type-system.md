@@ -39,6 +39,28 @@ The stratification connects directly to the computation model:
 
 The `for` comprehension expands a single declaration into multiple DAG nodes. Each node is independently evaluable (modulo data dependencies), making indexed values naturally parallelizable. This also explains why arithmetic on indexed values requires explicit `for`: you are defining the computation for each individual DAG node, not operating on the collection as a whole.
 
+## Name Universes
+
+Graphcal keeps three declaration universes exclusive inside one scope:
+
+- **Type universe**: algebraic types and dimensions.
+- **Index universe**: named and range indexes.
+- **Value universe**: `param`, `node`, `const node`, `assert`, plot, figure,
+  layer, and `dag` declarations.
+
+A leaf name can be declared in only one of those universes in the same scope.
+For example, `type M { Mk }` and `index M = { A }` are a duplicate-name error,
+as are `dim M = Length;` with either `type M { ... }` or `index M = { ... }`.
+
+Constructors live in their own constructor namespace. This is why a record-like
+declaration can still use the conventional `type T { T(...) }` spelling: the
+type name and its constructor name do not compete in type, index, or value
+positions.
+
+Units are referenced only in unit syntax, such as unit literals and conversion
+targets. A unit name can match a type, index, or value leaf without changing
+which declaration a type, index, or value position resolves.
+
 ## Type Kinds
 
 ### Primitives (Level 1)

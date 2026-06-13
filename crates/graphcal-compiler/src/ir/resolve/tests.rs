@@ -81,6 +81,55 @@ fn resolve_duplicate_name() {
 }
 
 #[test]
+fn resolve_rejects_type_index_name_collision() {
+    let err =
+        parse_and_resolve("type M { Mk(v: Dimensionless) }\npub index M = { A, B };").unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::DuplicateName { ref name, .. } if name == "M"
+    ));
+}
+
+#[test]
+fn resolve_rejects_dimension_index_name_collision() {
+    let err = parse_and_resolve("dim M = Length;\npub index M = { A, B };").unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::DuplicateName { ref name, .. } if name == "M"
+    ));
+}
+
+#[test]
+fn resolve_rejects_dimension_type_name_collision() {
+    let err = parse_and_resolve("dim M = Length;\ntype M { Mk(v: Dimensionless) }").unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::DuplicateName { ref name, .. } if name == "M"
+    ));
+}
+
+#[test]
+fn resolve_rejects_value_index_name_collision() {
+    let err =
+        parse_and_resolve("param M: Dimensionless = 1.0;\npub index M = { A, B };").unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::DuplicateName { ref name, .. } if name == "M"
+    ));
+}
+
+#[test]
+fn resolve_allows_index_name_matching_prelude_unit_name() {
+    let tir = compile_to_tir(
+        "pub index s = { A };
+         param sample: Time[s] = { s.A: 1.0 s };",
+    )
+    .unwrap();
+
+    assert_eq!(tir.root().params.len(), 1);
+}
+
+#[test]
 fn resolve_rejects_builtin_dimension_shadowing() {
     let err = parse_and_resolve("dim Velocity = Length / Time;").unwrap_err();
     assert!(matches!(err, GraphcalError::BuiltinNameShadowed { name, .. } if name == "Velocity"));
