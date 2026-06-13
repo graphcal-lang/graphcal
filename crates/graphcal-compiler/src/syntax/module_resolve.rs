@@ -828,6 +828,63 @@ impl ModuleScope {
     }
 }
 
+/// Surface category for diagnostics that cross namespace boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceNameKind {
+    Value,
+    Dimension,
+    Unit,
+    Type,
+    Index,
+    IndexLabel,
+    Constructor,
+    DefaultImportItem,
+}
+
+impl std::fmt::Display for SurfaceNameKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            Self::Value => "a value",
+            Self::Dimension => "a dimension",
+            Self::Unit => "a unit",
+            Self::Type => "a type",
+            Self::Index => "an index",
+            Self::IndexLabel => "an index label",
+            Self::Constructor => "a constructor",
+            Self::DefaultImportItem => "a default import item",
+        };
+        f.write_str(text)
+    }
+}
+
+trait ResolvableNamespace: NameNamespace {
+    const SURFACE_KIND: SurfaceNameKind;
+}
+
+impl ResolvableNamespace for namespace::Decl {
+    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Value;
+}
+
+impl ResolvableNamespace for namespace::Dim {
+    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Dimension;
+}
+
+impl ResolvableNamespace for namespace::Unit {
+    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Unit;
+}
+
+impl ResolvableNamespace for namespace::StructType {
+    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Type;
+}
+
+impl ResolvableNamespace for namespace::Index {
+    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Index;
+}
+
+impl ResolvableNamespace for namespace::Constructor {
+    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Constructor;
+}
+
 #[derive(Debug, Clone)]
 enum ImportAddition {
     ModuleAlias {
@@ -1360,11 +1417,23 @@ impl ModuleResolver {
                         namespace: namespace::StructType::DISPLAY_NAME,
                         name: source_atom.to_string(),
                     }),
-                    ExportLookup::Missing => Err(ModuleResolveError::UnknownName {
-                        owner: target.clone(),
-                        namespace: namespace::StructType::DISPLAY_NAME,
-                        name: source_atom.to_string(),
-                    }),
+                    ExportLookup::Missing => {
+                        if let Some(actual) =
+                            self.exported_surface_kind_for_import(target, source_atom, access)?
+                        {
+                            return Err(ModuleResolveError::WrongUniverseName {
+                                owner: target.clone(),
+                                name: source_atom.to_string(),
+                                expected: SurfaceNameKind::Type,
+                                actual,
+                            });
+                        }
+                        Err(ModuleResolveError::UnknownName {
+                            owner: target.clone(),
+                            namespace: namespace::StructType::DISPLAY_NAME,
+                            name: source_atom.to_string(),
+                        })
+                    }
                 }
             }
             ImportItemNamespace::Default => {
@@ -1459,6 +1528,15 @@ impl ModuleResolver {
                         namespace: "default import namespace",
                         name: source_atom.to_string(),
                     })
+                } else if let Some(actual) =
+                    self.exported_surface_kind_for_import(target, source_atom, access)?
+                {
+                    Err(ModuleResolveError::WrongUniverseName {
+                        owner: target.clone(),
+                        name: source_atom.to_string(),
+                        expected: SurfaceNameKind::DefaultImportItem,
+                        actual,
+                    })
                 } else {
                     Err(ModuleResolveError::UnknownName {
                         owner: target.clone(),
@@ -1479,7 +1557,7 @@ impl ModuleResolver {
         selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
     ) -> Result<ExportLookup<Ns>, ModuleResolveError>
     where
-        Ns: NameNamespace,
+        Ns: ResolvableNamespace,
         S: ModuleSymbolLookup<Ns>,
     {
         let target_symbols = self.module_symbols(target)?;
@@ -1496,6 +1574,47 @@ impl ModuleResolver {
         ))
     }
 
+    fn exported_surface_kind_for_import(
+        &self,
+        target: &DagId,
+        atom: &NameAtom,
+        access: ModuleAccess,
+    ) -> Result<Option<SurfaceNameKind>, ModuleResolveError> {
+        macro_rules! probe {
+            ($kind:expr, $local:expr, $selected:expr) => {
+                match self.exported_symbol_for_import(target, atom, access, $local, $selected)? {
+                    ExportLookup::Public(_) | ExportLookup::Private => return Ok(Some($kind)),
+                    ExportLookup::Missing => {}
+                }
+            };
+        }
+
+        probe!(SurfaceNameKind::Value, ModuleSymbols::decls, |scope| &scope
+            .selected_decls);
+        probe!(
+            SurfaceNameKind::Dimension,
+            ModuleSymbols::dimensions,
+            |scope| &scope.selected_dimensions
+        );
+        probe!(SurfaceNameKind::Unit, ModuleSymbols::units, |scope| &scope
+            .selected_units);
+        probe!(
+            SurfaceNameKind::Type,
+            ModuleSymbols::struct_types,
+            |scope| &scope.selected_struct_types
+        );
+        probe!(SurfaceNameKind::Index, ModuleSymbols::indexes, |scope| {
+            &scope.selected_indexes
+        });
+        probe!(
+            SurfaceNameKind::Constructor,
+            ModuleSymbols::constructors,
+            |scope| &scope.selected_constructors
+        );
+
+        Ok(None)
+    }
+
     fn resolve_symbol_path<Ns, S>(
         &self,
         owner: &DagId,
@@ -1504,7 +1623,7 @@ impl ModuleResolver {
         selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
     ) -> Result<ResolvedName<Ns>, ModuleResolveError>
     where
-        Ns: NameNamespace,
+        Ns: ResolvableNamespace,
         S: ModuleSymbolLookup<Ns>,
     {
         if let Some(atom) = path.as_bare() {
@@ -1516,6 +1635,14 @@ impl ModuleResolver {
             if let Some(imported) = selected_symbols(scope).get(atom.as_str()) {
                 return Ok(imported.resolved().clone());
             }
+            if let Some(actual) = self.visible_surface_kind_for_bare_name(owner, atom)? {
+                return Err(ModuleResolveError::WrongUniverseName {
+                    owner: owner.clone(),
+                    name: atom.to_string(),
+                    expected: Ns::SURFACE_KIND,
+                    actual,
+                });
+            }
             return Err(ModuleResolveError::UnknownName {
                 owner: owner.clone(),
                 namespace: Ns::DISPLAY_NAME,
@@ -1524,7 +1651,24 @@ impl ModuleResolver {
         }
 
         let (qualifier, leaf) = path.split_last();
-        let target_ref = self.resolve_module_qualifier(owner, qualifier)?;
+        let target_ref = match self.resolve_module_qualifier(owner, qualifier) {
+            Ok(target_ref) => target_ref,
+            Err(
+                err @ (ModuleResolveError::UnknownModuleAlias { .. }
+                | ModuleResolveError::UnknownModule { .. }),
+            ) => {
+                if let Some(actual) = self.visible_index_variant_path_kind(owner, path)? {
+                    return Err(ModuleResolveError::WrongUniverseName {
+                        owner: owner.clone(),
+                        name: path.display_path(),
+                        expected: Ns::SURFACE_KIND,
+                        actual,
+                    });
+                }
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        };
         let target = self.module_symbols(&target_ref.owner)?;
         if let Some(symbol) = local_symbols(target).get(leaf.as_str()) {
             if target_ref.access.requires_public() && !symbol.visibility().is_public() {
@@ -1549,11 +1693,77 @@ impl ModuleResolver {
             return Ok(imported.resolved().clone());
         }
 
+        if let Some(actual) =
+            self.visible_surface_kind_for_qualified_leaf(&target_ref, leaf, path)?
+        {
+            return Err(ModuleResolveError::WrongUniverseName {
+                owner: target_ref.owner,
+                name: path.display_path(),
+                expected: Ns::SURFACE_KIND,
+                actual,
+            });
+        }
+
         Err(ModuleResolveError::UnknownName {
             owner: target_ref.owner,
             namespace: Ns::DISPLAY_NAME,
             name: leaf.to_string(),
         })
+    }
+
+    fn visible_surface_kind_for_bare_name(
+        &self,
+        owner: &DagId,
+        atom: &NameAtom,
+    ) -> Result<Option<SurfaceNameKind>, ModuleResolveError> {
+        let local = self.module_symbols(owner)?;
+        if let Some(kind) = surface_kind_in_local_symbols(local, atom, false) {
+            return Ok(Some(kind));
+        }
+        let scope = self.module_scope(owner)?;
+        Ok(surface_kind_in_scope(scope, atom, false))
+    }
+
+    fn visible_surface_kind_for_qualified_leaf(
+        &self,
+        target_ref: &ResolvedModuleQualifier,
+        leaf: &NameAtom,
+        path: &NamePath,
+    ) -> Result<Option<SurfaceNameKind>, ModuleResolveError> {
+        if let Some(kind) = self.visible_index_variant_path_kind(&target_ref.owner, path)? {
+            return Ok(Some(kind));
+        }
+
+        let target = self.module_symbols(&target_ref.owner)?;
+        if let Some(kind) =
+            surface_kind_in_local_symbols(target, leaf, target_ref.access.requires_public())
+        {
+            return Ok(Some(kind));
+        }
+        let target_scope = self.module_scope(&target_ref.owner)?;
+        Ok(surface_kind_in_scope(
+            target_scope,
+            leaf,
+            target_ref.access.requires_public(),
+        ))
+    }
+
+    fn visible_index_variant_path_kind(
+        &self,
+        owner: &DagId,
+        path: &NamePath,
+    ) -> Result<Option<SurfaceNameKind>, ModuleResolveError> {
+        match self.resolve_index_variant_path(owner, path) {
+            Ok(_) => Ok(Some(SurfaceNameKind::IndexLabel)),
+            Err(
+                ModuleResolveError::UnknownName { .. }
+                | ModuleResolveError::UnknownIndexVariant { .. }
+                | ModuleResolveError::ExpectedIndexVariantPath { .. }
+                | ModuleResolveError::UnknownModuleAlias { .. }
+                | ModuleResolveError::UnknownModule { .. },
+            ) => Ok(None),
+            Err(err) => Err(err),
+        }
     }
 
     fn resolve_module_qualifier(
@@ -1775,6 +1985,54 @@ fn insert_module_alias(
     Ok(())
 }
 
+fn surface_kind_in_local_symbols(
+    symbols: &ModuleSymbols,
+    atom: &NameAtom,
+    requires_public: bool,
+) -> Option<SurfaceNameKind> {
+    macro_rules! probe {
+        ($map:expr, $kind:expr) => {
+            if let Some(symbol) = $map.get(atom.as_str())
+                && (!requires_public || symbol.visibility().is_public())
+            {
+                return Some($kind);
+            }
+        };
+    }
+
+    probe!(symbols.decls, SurfaceNameKind::Value);
+    probe!(symbols.dimensions, SurfaceNameKind::Dimension);
+    probe!(symbols.units, SurfaceNameKind::Unit);
+    probe!(symbols.struct_types, SurfaceNameKind::Type);
+    probe!(symbols.indexes, SurfaceNameKind::Index);
+    probe!(symbols.constructors, SurfaceNameKind::Constructor);
+    None
+}
+
+fn surface_kind_in_scope(
+    scope: &ModuleScope,
+    atom: &NameAtom,
+    requires_public: bool,
+) -> Option<SurfaceNameKind> {
+    macro_rules! probe {
+        ($map:expr, $kind:expr) => {
+            if let Some(symbol) = $map.get(atom.as_str())
+                && (!requires_public || symbol.visibility().is_public())
+            {
+                return Some($kind);
+            }
+        };
+    }
+
+    probe!(scope.selected_decls, SurfaceNameKind::Value);
+    probe!(scope.selected_dimensions, SurfaceNameKind::Dimension);
+    probe!(scope.selected_units, SurfaceNameKind::Unit);
+    probe!(scope.selected_struct_types, SurfaceNameKind::Type);
+    probe!(scope.selected_indexes, SurfaceNameKind::Index);
+    probe!(scope.selected_constructors, SurfaceNameKind::Constructor);
+    None
+}
+
 fn seed_exclusive_names<Ns, S>(
     occupied: &mut HashMap<NameAtom, ExclusiveNameBinding>,
     symbols: &HashMap<NameDef<Ns>, S>,
@@ -1964,6 +2222,14 @@ pub enum ModuleResolveError {
         namespace: &'static str,
         name: String,
     },
+    /// A name exists, but in a semantic universe that is not valid here.
+    #[error("in module `{owner}`, `{name}` is {actual}, not {expected}")]
+    WrongUniverseName {
+        owner: DagId,
+        name: String,
+        expected: SurfaceNameKind,
+        actual: SurfaceNameKind,
+    },
     /// A name exists but has the wrong declaration kind for the use site.
     #[error("expected {expected} declaration `{name}`, found {actual}")]
     UnexpectedDeclKind {
@@ -1988,7 +2254,7 @@ pub enum ModuleResolveError {
         variant: IndexVariantName,
     },
     /// A bare variant exists on more than one visible index.
-    #[error("ambiguous variant `{variant}` in module `{owner}`")]
+    #[error("ambiguous index label `{variant}` in module `{owner}`; qualify it with an index name")]
     AmbiguousIndexVariant {
         owner: DagId,
         variant: IndexVariantName,
@@ -2253,11 +2519,74 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             err,
-            ModuleResolveError::UnknownName {
+            ModuleResolveError::WrongUniverseName {
                 owner,
-                namespace: "ConstructorName",
                 name,
+                expected: SurfaceNameKind::Constructor,
+                actual: SurfaceNameKind::Type,
             } if owner == child_id && name == "TransferResult"
+        ));
+    }
+
+    #[test]
+    fn type_marker_importing_index_reports_wrong_universe() {
+        let lib_id = DagId::root("lib");
+        let main_id = DagId::root("main");
+        let lib = desugared_source("pub index M = { A };");
+        let main = desugared_source("import lib.{ type M };");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+
+        let err = resolver
+            .register_import(&main_id, import_path, import_kind, &lib_id)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ModuleResolveError::WrongUniverseName {
+                owner,
+                name,
+                expected: SurfaceNameKind::Type,
+                actual: SurfaceNameKind::Index,
+            } if owner == lib_id && name == "M"
+        ));
+    }
+
+    #[test]
+    fn default_importing_type_reports_wrong_universe() {
+        let lib_id = DagId::root("lib");
+        let main_id = DagId::root("main");
+        let lib = desugared_source("pub type Foo { MkFoo }");
+        let main = desugared_source("import lib.{ Foo };");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+
+        let err = resolver
+            .register_import(&main_id, import_path, import_kind, &lib_id)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ModuleResolveError::WrongUniverseName {
+                owner,
+                name,
+                expected: SurfaceNameKind::DefaultImportItem,
+                actual: SurfaceNameKind::Type,
+            } if owner == lib_id && name == "Foo"
         ));
     }
 

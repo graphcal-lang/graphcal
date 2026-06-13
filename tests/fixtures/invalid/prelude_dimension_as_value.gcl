@@ -1,0 +1,2 @@
+// Error: prelude dimensions are type-system names, not values.
+node x: Dimensionless = Length;

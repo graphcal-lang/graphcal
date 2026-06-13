@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension `Length` cannot be used as a value
+    Diagnostic severity: error
+Begin snippet for prelude_dimension_as_value.gcl starting at line 1, column 1
+
+snippet line 1: // Error: prelude dimensions are type-system names, not values.
+snippet line 2: node x: Dimensionless = Length;
+    label at line 2, columns 25 to 30: error here
+diagnostic code: graphcal::E001

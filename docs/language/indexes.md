@@ -426,7 +426,9 @@ param values: Velocity[4] = for i: range(4) { 1.0 m/s };
 node diffs: Velocity[3] = for i: range(3) { @values[i + 1] - @values[i] };
 ```
 
-The compiler statically verifies bounds when possible.
+The compiler statically verifies bounds when possible. Constant integer
+expressions such as `@values[5]` or `@values[0 - 1]` are rejected by
+`graphcal check` when the target nat-range size is known.
 
 Expression-based indexing supports:
 
