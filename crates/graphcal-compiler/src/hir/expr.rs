@@ -882,6 +882,27 @@ pub enum TypeSystemRef {
     IndexVariant(ResolvedIndexVariant),
 }
 
+impl TypeSystemRef {
+    #[must_use]
+    pub fn surface_description(&self) -> String {
+        match self {
+            Self::Type(name) => format!("type `{}`", name.as_str()),
+            Self::Dimension(name) => format!("dimension `{}`", name.as_str()),
+            Self::Index(name) => format!("index `{}`", name.as_str()),
+            Self::IndexVariant(variant) => format!(
+                "index label `{}.{}`",
+                variant.index().as_str(),
+                variant.variant()
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn value_position_error(&self) -> String {
+        format!("{} cannot be used as a value", self.surface_description())
+    }
+}
+
 /// Resolved constant-like expression target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstRef {
@@ -1316,7 +1337,9 @@ impl<'a> ExprLowerer<'a> {
                 fields: Vec::new(),
             });
         }
-        if let Some(type_system_ref) = self.resolve_bare_type_system_name(&path, &ident.name) {
+        if let Some(type_system_ref) =
+            self.resolve_bare_type_system_name(&path, &ident.name, span)?
+        {
             return Ok(ExprKind::TypeSystemRef(Spanned::new(type_system_ref, span)));
         }
         self.lower_const_ref(&ScopedName::local(ident.name.as_str()), span)
@@ -1332,33 +1355,40 @@ impl<'a> ExprLowerer<'a> {
         &self,
         path: &NamePath,
         name: &NameAtom,
-    ) -> Option<TypeSystemRef> {
+        span: Span,
+    ) -> Result<Option<TypeSystemRef>, ExprLowerError> {
         if let Ok(struct_type) = self
             .ctx
             .resolver
             .resolve_struct_type_path(self.ctx.owner, path)
         {
-            return Some(TypeSystemRef::Type(struct_type));
+            return Ok(Some(TypeSystemRef::Type(struct_type)));
         }
         if let Ok(dimension) = self
             .ctx
             .resolver
             .resolve_dimension_path(self.ctx.owner, path)
         {
-            return Some(TypeSystemRef::Dimension(dimension));
+            return Ok(Some(TypeSystemRef::Dimension(dimension)));
+        }
+        if let Some(prelude) = self.ctx.prelude
+            && let Some(dimension) = prelude.resolve_dimension_path(path)
+        {
+            return Ok(Some(TypeSystemRef::Dimension(dimension)));
         }
         if let Ok(index) = self.ctx.resolver.resolve_index_path(self.ctx.owner, path) {
-            return Some(TypeSystemRef::Index(index));
+            return Ok(Some(TypeSystemRef::Index(index)));
         }
         let variant_name = IndexVariantName::from_atom(name.clone());
-        if let Ok(variant) = self
+        match self
             .ctx
             .resolver
             .resolve_bare_index_variant(self.ctx.owner, &variant_name)
         {
-            return Some(TypeSystemRef::IndexVariant(variant));
+            Ok(variant) => Ok(Some(TypeSystemRef::IndexVariant(variant))),
+            Err(ModuleResolveError::UnknownName { .. }) => Ok(None),
+            Err(source) => Err(ExprLowerError::ModuleResolve { source, span }),
         }
-        None
     }
 
     /// Resolve a dotted reference path (`a.b`, `a.b.c`, ...) in value position.

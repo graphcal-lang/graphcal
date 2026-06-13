@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+index 5 out of bounds for range(3)
+    Diagnostic severity: error
+Begin snippet for nat_range_constant_index_out_of_bounds.gcl starting at line 3, column 1
+
+snippet line 3: 
+snippet line 4: node a: Dimensionless = @v[5];
+    label at line 4, column 28: error here
+diagnostic code: graphcal::E001

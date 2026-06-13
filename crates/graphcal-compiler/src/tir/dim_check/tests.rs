@@ -1062,6 +1062,101 @@ param bad: Dimensionless = @x[Stage.First];";
     );
 }
 
+#[test]
+fn check_nat_range_constant_index_out_of_bounds() {
+    let source = "\
+param v: Dimensionless[3] = table[3] { 1.0; 2.0; 3.0; };
+node bad: Dimensionless = @v[5];";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("index 5 out of bounds for range(3)")),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_nat_range_constant_index_negative() {
+    let source = "\
+param v: Dimensionless[3] = table[3] { 1.0; 2.0; 3.0; };
+node bad: Dimensionless = @v[0 - 1];";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("index expression evaluated to negative value: -1")),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_ambiguous_bare_index_label_surfaces_resolver_error() {
+    let source = "\
+pub index M = { A };
+pub index P = { A };
+node x: Dimensionless = A;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("ambiguous index label `A`")),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_prelude_dimension_in_value_position_is_not_unknown_local() {
+    let source = "node x: Dimensionless = Length;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::EvalError { message, .. } if message == "dimension `Length` cannot be used as a value"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_value_name_in_type_position_reports_wrong_universe() {
+    let source = "\
+node a: Dimensionless = 1.0;
+node b: a = 1.0;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("`a` is a value, not a type")),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_index_label_in_type_position_reports_wrong_universe() {
+    let source = "\
+pub index M = { A };
+param x: M.A = 1.0;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("`M.A` is an index label, not a type")),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_constructor_name_in_type_position_reports_wrong_universe() {
+    let source = "\
+type Pos { MkPos(v: Dimensionless) }
+param p: MkPos = 1.0;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("`MkPos` is a constructor, not a type")),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_index_as_type_application_head_reports_wrong_universe() {
+    let source = "\
+pub index M = { A };
+param x: M<Length> = 1.0;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("`M` is an index, not a type")),
+        "got: {err:?}"
+    );
+}
+
 // --- Error propagation through if/else sub-expressions ---
 
 #[test]
@@ -1258,6 +1353,20 @@ node w: Dimensionless[5] = for i: range(5) { @v[i] };";
     assert!(
         msg.contains("index out of bounds"),
         "expected bounds error, got: {msg}"
+    );
+}
+
+#[test]
+fn scalar_range_loop_var_cannot_index_named_indexed_value() {
+    let source = "\
+pub index Phase = { A };
+pub index TimeStep = linspace(0.0 s, 1.0 s, step: 1.0 s);
+param v: Dimensionless[Phase] = { Phase.A: 1.0 };
+node w: Dimensionless[TimeStep] = for t: TimeStep { @v[t] };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("range-index loop variable cannot index into non-range index `Phase`")),
+        "got: {err:?}"
     );
 }
 

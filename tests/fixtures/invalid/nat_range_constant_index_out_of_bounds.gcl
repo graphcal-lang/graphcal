@@ -1,0 +1,4 @@
+// Error: constant nat-range index expressions are checked statically.
+param v: Dimensionless[3] = table[3] { 1.0; 2.0; 3.0; };
+
+node a: Dimensionless = @v[5];

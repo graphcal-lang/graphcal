@@ -264,6 +264,35 @@ fn error_index_mismatch() {
 }
 
 #[test]
+fn error_nat_range_constant_index_out_of_bounds() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/nat_range_constant_index_out_of_bounds.gcl");
+    let rendered = render_error(source, "nat_range_constant_index_out_of_bounds.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_ambiguous_bare_index_label() {
+    let source = include_str!("../../../tests/fixtures/invalid/ambiguous_bare_index_label.gcl");
+    let rendered = render_error(source, "ambiguous_bare_index_label.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_prelude_dimension_as_value() {
+    let source = include_str!("../../../tests/fixtures/invalid/prelude_dimension_as_value.gcl");
+    let rendered = render_error(source, "prelude_dimension_as_value.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_index_label_as_type() {
+    let source = include_str!("../../../tests/fixtures/invalid/index_label_as_type.gcl");
+    let rendered = render_error(source, "index_label_as_type.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_non_literal_exponent() {
     let source = include_str!("../../../tests/fixtures/invalid/non_literal_exponent.gcl");
     let rendered = render_error(source, "non_literal_exponent.gcl");

@@ -14,7 +14,7 @@ use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
-use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
+use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver, SurfaceNameKind};
 use crate::syntax::names::{
     DimName, GenericParamName, NameAtom, NamePath, ResolvedName, TimeScaleName, namespace,
 };
@@ -107,7 +107,10 @@ impl PreludeTypeScope {
         )
     }
 
-    fn resolve_dimension_path(&self, path: &NamePath) -> Option<ResolvedName<namespace::Dim>> {
+    pub(crate) fn resolve_dimension_path(
+        &self,
+        path: &NamePath,
+    ) -> Option<ResolvedName<namespace::Dim>> {
         let atom = path.as_bare()?;
         self.dimensions
             .contains(atom.as_str())
@@ -399,6 +402,12 @@ fn lower_dim_expr_as_type(
                 Err(HirLowerError::UnknownTypePath { path, span }),
                 |source| Err(HirLowerError::ModuleResolve { source, span }),
             ),
+            Err(HirLowerError::ModuleResolve { source, span }) => {
+                Err(HirLowerError::ModuleResolve {
+                    source: type_position_wrong_universe(source),
+                    span,
+                })
+            }
             Err(err) => Err(err),
         },
     }
@@ -662,8 +671,27 @@ enum LookupCandidate<T> {
 fn resolve_optional<T>(result: Result<T, ModuleResolveError>) -> LookupCandidate<T> {
     match result {
         Ok(value) => LookupCandidate::Found(value),
-        Err(ModuleResolveError::UnknownName { .. }) => LookupCandidate::Absent,
+        Err(
+            ModuleResolveError::UnknownName { .. } | ModuleResolveError::WrongUniverseName { .. },
+        ) => LookupCandidate::Absent,
         Err(err) => LookupCandidate::Error(err),
+    }
+}
+
+fn type_position_wrong_universe(source: ModuleResolveError) -> ModuleResolveError {
+    match source {
+        ModuleResolveError::WrongUniverseName {
+            owner,
+            name,
+            actual,
+            ..
+        } => ModuleResolveError::WrongUniverseName {
+            owner,
+            name,
+            expected: SurfaceNameKind::Type,
+            actual,
+        },
+        other => other,
     }
 }
 

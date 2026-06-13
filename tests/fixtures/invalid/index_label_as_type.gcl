@@ -1,0 +1,4 @@
+// Error: index labels are not type annotations.
+pub index M = { A };
+
+param x: M.A = 1.0;

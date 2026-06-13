@@ -1,0 +1,5 @@
+// Error: bare index labels must not lose ambiguity diagnostics.
+pub index M = { A };
+pub index P = { A };
+
+node x: Dimensionless = A;

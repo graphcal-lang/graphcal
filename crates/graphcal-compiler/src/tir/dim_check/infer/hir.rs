@@ -130,10 +130,8 @@ fn infer_hir_type_inner(
             });
         }
         hir::ExprKind::TypeSystemRef(name) => {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: "a value expression".to_string(),
-                found: format!("type-system name `{:?}`", name.value),
-                help: "type-system names can only be used in include/import bindings".to_string(),
+            return Err(GraphcalError::EvalError {
+                message: name.value.value_position_error(),
                 src: src.clone(),
                 span: name.span.into(),
             });
@@ -1447,8 +1445,8 @@ fn infer_hir_index_access(
                         if !idx_def.is_range() {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
-                                    "`#{}` is not a range-index loop variable",
-                                    local.value.index()
+                                    "range-index loop variable cannot index into non-range index `{}`",
+                                    index.name()
                                 ),
                                 src: src.clone(),
                                 span: local.span.into(),
@@ -1549,7 +1547,9 @@ fn infer_hir_index_access(
                     });
                 };
                 match expr_type {
-                    InferredType::Int => {}
+                    InferredType::Int => {
+                        check_constant_nat_range_index(index_expr, &index_form, src)?;
+                    }
                     InferredType::Fin(ref fin_bound) => {
                         if !fin_bound.is_leq(&index_form) {
                             return Err(GraphcalError::EvalError {
@@ -1562,6 +1562,7 @@ fn infer_hir_index_access(
                                 span: index_expr.span.into(),
                             });
                         }
+                        check_constant_nat_range_index(index_expr, &index_form, src)?;
                     }
                     _ => {
                         return Err(GraphcalError::EvalError {
@@ -1579,6 +1580,38 @@ fn infer_hir_index_access(
         current = *element;
     }
     Ok(current)
+}
+
+fn check_constant_nat_range_index(
+    index_expr: &hir::Expr,
+    index_form: &NatLinearForm,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let Some(index) = try_const_int(index_expr) else {
+        return Ok(());
+    };
+    if !index_form.is_constant() {
+        return Ok(());
+    }
+    let size = index_form.constant();
+    let Ok(index_u64) = u64::try_from(index) else {
+        return Err(GraphcalError::EvalError {
+            message: format!("index expression evaluated to negative value: {index}"),
+            src: src.clone(),
+            span: index_expr.span.into(),
+        });
+    };
+    if index_u64 >= size {
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "index {index} out of bounds for range({})",
+                index_form.format()
+            ),
+            src: src.clone(),
+            span: index_expr.span.into(),
+        });
+    }
+    Ok(())
 }
 
 /// Reject `(expr -> u) -> v` and its timezone-display analogues (#648 B2).
