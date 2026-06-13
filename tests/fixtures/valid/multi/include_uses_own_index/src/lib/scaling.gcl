@@ -1,0 +1,15 @@
+// scaling.gcl -- a library that declares and uses its OWN index, without
+// requiring the consumer to bind it (#851). `Step` is a concrete index the
+// library owns; an instantiated include must inline it without forcing a
+// binding. The bodies below exercise every index-using position: a `for`
+// comprehension, a map literal with variant-literal keys, variant-literal
+// index access, and a `sum` aggregation.
+param scale: Dimensionless = 1.0;
+pub index Step = { A, B };
+param vals: Dimensionless[Step] = {
+    Step.A: 1.0,
+    Step.B: 2.0,
+};
+pub node scaled: Dimensionless[Step] = for s: Step { @vals[s] * @scale };
+pub node first: Dimensionless = @vals[Step.A] * @scale;
+pub node total: Dimensionless = sum(for s: Step { @scaled[s] });

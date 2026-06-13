@@ -289,6 +289,24 @@ impl LoadedProject {
             }
         }
 
+        for dag_id in &self.load_order {
+            let loaded = &self.files[dag_id];
+            link_instantiated_include_indexes(
+                &mut resolver,
+                &loaded.dag_id,
+                &loaded.ast.declarations,
+                &loaded.resolved_imports,
+            )?;
+            for inline in &loaded.inline_dags {
+                link_instantiated_include_indexes(
+                    &mut resolver,
+                    &inline.dag_id,
+                    &inline.body,
+                    &inline.resolved_imports,
+                )?;
+            }
+        }
+
         Ok(resolver)
     }
 }
@@ -336,6 +354,51 @@ fn add_instantiated_include_modules(
             continue;
         };
         resolver.add_module(owner.child(prefix.as_str()), target_decls)?;
+    }
+    Ok(())
+}
+
+/// Make each instantiated include's own indexes resolvable by their bare names
+/// inside the importing module.
+///
+/// The synthetic include modules created by [`add_instantiated_include_modules`]
+/// already hold the dependency's index declarations. This pass copies those
+/// indexes into the importer's symbol table (skipping any the include binds or
+/// overrides) so the inlined dependency bodies — `for s: Step`, `T[Step]`,
+/// `Step.A` — resolve against the importer's merged registry. See
+/// [`graphcal_compiler::syntax::module_resolve::ModuleResolver::inline_instantiated_include_indexes`].
+fn link_instantiated_include_indexes(
+    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    owner: &DagId,
+    declarations: &[Declaration],
+    resolved_imports: &impl ResolvedModuleLookup,
+) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+    for decl in declarations {
+        let DeclKind::Include(include) = &decl.kind else {
+            continue;
+        };
+        let Some(prefix) = instantiated_include_prefix(include) else {
+            continue;
+        };
+        if resolved_imports
+            .resolved_target(&ModulePathKey::from_path(&include.path))
+            .is_none()
+        {
+            continue;
+        }
+        let synthetic = owner.child(prefix.as_str());
+        if resolver.modules().get(&synthetic).is_none() {
+            // The synthetic module is only present when the include target
+            // resolved to declarations; skip silently otherwise (a missing
+            // target is already reported elsewhere).
+            continue;
+        }
+        let bound: HashSet<&str> = include
+            .param_bindings
+            .iter()
+            .map(|binding| binding.name.name.as_str())
+            .collect();
+        resolver.inline_instantiated_include_indexes(owner, &synthetic, &bound)?;
     }
     Ok(())
 }
