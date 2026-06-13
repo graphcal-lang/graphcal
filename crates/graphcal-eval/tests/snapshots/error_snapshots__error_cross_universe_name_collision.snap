@@ -1,0 +1,15 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+duplicate name `M`
+    Diagnostic severity: error
+Begin snippet for cross_universe_name_collision.gcl starting at line 1, column 1
+
+snippet line 1: // Cross-universe name collision: M is both a type and an index.
+snippet line 2: type M { Mk(v: Dimensionless) }
+    label at line 2, column 6: first defined here
+snippet line 3: pub index M = { A, B };
+    label at line 3, column 11: duplicate definition here
+diagnostic help: each name must be unique within a file
+diagnostic code: graphcal::N001
