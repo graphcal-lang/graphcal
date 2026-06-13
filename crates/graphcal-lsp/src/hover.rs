@@ -69,7 +69,7 @@ fn format_hover(def: &DefinitionInfo) -> String {
         SymbolCategory::Index => {
             let desc = def.type_description.as_deref().unwrap_or("...");
             format!(
-                "```graphcal\n{vis}index {} = {desc}\n```\n(named index labels are first-class value variants)",
+                "```graphcal\n{vis}index {} = {desc}\n```\n(named index labels are index positions for access, keys, and match patterns)",
                 def.name
             )
         }

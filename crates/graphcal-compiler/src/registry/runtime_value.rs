@@ -78,7 +78,10 @@ pub enum RuntimeValue {
     Scalar(f64),
     Bool(bool),
     Int(i64),
-    /// A label of a named index (e.g., `Maneuver.Departure`).
+    /// Internal carrier for a named-index loop case.
+    ///
+    /// The type checker prevents this from escaping as a user value; evaluation
+    /// uses it only for index access and `match` dispatch.
     Label {
         index_name: IndexTypeRef,
         variant: IndexVariantName,

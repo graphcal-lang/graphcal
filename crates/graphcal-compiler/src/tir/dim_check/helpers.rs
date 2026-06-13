@@ -29,7 +29,7 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
         (DeclaredType::Bool, InferredType::Bool) => true,
         (DeclaredType::Int, inferred) if inferred.is_int_like() => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
-        (DeclaredType::Label(d), InferredType::Label(i)) => i.matches_ref(d),
+        (DeclaredType::IndexArg(d), InferredType::NamedIndex(i)) => i.matches_ref(d),
         (DeclaredType::Struct(d, d_args), InferredType::Struct(i, i_args)) => {
             i.matches_ref(d)
                 && d_args.len() == i_args.len()
@@ -66,8 +66,8 @@ pub(super) fn resolved_type_matches_inferred(
             expected == actual
         }
         (ResolvedTypeExpr::Scalar(expected), InferredType::Scalar(actual)) => expected == actual,
-        (ResolvedTypeExpr::Label(expected, _), InferredType::Label(actual)) => {
-            actual.matches_resolved(expected)
+        (ResolvedTypeExpr::IndexArg(expected), InferredType::NamedIndex(actual)) => {
+            resolved_index_matches_inferred(expected, actual)
         }
         (ResolvedTypeExpr::Struct(expected, _), InferredType::Struct(actual, args)) => {
             actual.matches_resolved(expected) && args.is_empty()
@@ -166,7 +166,7 @@ impl From<&InferredType> for DeclaredType {
             InferredType::Bool => Self::Bool,
             InferredType::Int | InferredType::Fin(_) => Self::Int,
             InferredType::Datetime(scale) => Self::Datetime(*scale),
-            InferredType::Label(index) => Self::Label(index.type_ref().clone()),
+            InferredType::NamedIndex(index) => Self::IndexArg(index.type_ref().clone()),
             InferredType::Struct(n, args) => {
                 Self::Struct(n.type_ref().clone(), args.iter().map(Self::from).collect())
             }
@@ -185,7 +185,9 @@ impl From<&DeclaredType> for InferredType {
             DeclaredType::Bool => Self::Bool,
             DeclaredType::Int => Self::Int,
             DeclaredType::Datetime(scale) => Self::Datetime(*scale),
-            DeclaredType::Label(index) => Self::Label(InferredIndex::from_ref(index.clone())),
+            DeclaredType::IndexArg(index) => {
+                Self::NamedIndex(InferredIndex::from_ref(index.clone()))
+            }
             DeclaredType::Struct(n, args) => Self::Struct(
                 InferredStructType::from_ref(n.clone()),
                 args.iter().map(Self::from).collect(),
@@ -209,7 +211,7 @@ pub fn expect_scalar(
         InferredType::Bool => "a Bool value",
         InferredType::Int | InferredType::Fin(_) => "an Int value",
         InferredType::Datetime(_) => "a Datetime value",
-        InferredType::Label(_) => "an index label",
+        InferredType::NamedIndex(_) => "a named-index loop variable",
         InferredType::Struct(..) => "a struct",
         InferredType::Indexed { .. } => "an indexed value",
     };

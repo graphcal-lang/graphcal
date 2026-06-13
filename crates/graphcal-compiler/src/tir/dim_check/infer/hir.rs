@@ -139,9 +139,16 @@ fn infer_hir_type_inner(
             });
         }
         hir::ExprKind::UnitLiteral { unit, .. } => infer_hir_unit_literal(unit, registry, src)?,
-        hir::ExprKind::VariantLiteral(variant) => InferredType::Label(
-            InferredIndex::from_resolved(variant.variant.index().clone()),
-        ),
+        hir::ExprKind::VariantLiteral(variant) => {
+            return Err(GraphcalError::EvalError {
+                message: format!(
+                    "index label `{}` cannot be used as a value",
+                    variant.variant
+                ),
+                src: src.clone(),
+                span: variant.path_span().into(),
+            });
+        }
         hir::ExprKind::GraphRef(target) => {
             infer_resolved_decl_ref_type(&target.value, target.span, declared_types, dag, src)?
         }
@@ -1316,7 +1323,7 @@ fn infer_hir_for_comp(
                 match &idx_def.kind {
                     crate::registry::types::IndexKind::Named { .. }
                     | crate::registry::types::IndexKind::RequiredNamed => {
-                        InferredType::Label(index_identity)
+                        InferredType::NamedIndex(index_identity)
                     }
                     crate::registry::types::IndexKind::Range(data) => {
                         InferredType::Scalar(data.dimension.clone())
@@ -1420,7 +1427,7 @@ fn infer_hir_index_access(
                     });
                 };
                 match var_type {
-                    InferredType::Label(label_index) => {
+                    InferredType::NamedIndex(label_index) => {
                         if label_index != &index {
                             return Err(GraphcalError::IndexMismatch {
                                 expected: index.name(),
@@ -1734,7 +1741,7 @@ fn generic_substitutions(
                 }
             },
             TypeGenericConstraint::Index => match arg {
-                InferredType::Label(index) => {
+                InferredType::NamedIndex(index) => {
                     subs.indexes
                         .insert(param.name.clone(), index.type_ref().clone());
                 }
@@ -1915,9 +1922,9 @@ fn infer_hir_generic_type_arg(
         hir::TypeExprKind::DimExpr(dim_expr) => {
             infer_hir_dim_expr_arg(dim_expr, registry, src).map(InferredType::Scalar)
         }
-        hir::TypeExprKind::Label(index) => Ok(InferredType::Label(InferredIndex::from_resolved(
-            index.value.clone(),
-        ))),
+        hir::TypeExprKind::Index(index) => Ok(InferredType::NamedIndex(
+            inferred_index_from_type_arg(index, src)?,
+        )),
         hir::TypeExprKind::Struct(name) => Ok(InferredType::Struct(
             InferredStructType::from_resolved(name.value.clone()),
             vec![],
@@ -1967,6 +1974,29 @@ fn infer_hir_generic_type_arg(
                 };
             }
             Ok(result)
+        }
+    }
+}
+
+fn inferred_index_from_type_arg(
+    index: &hir::IndexRef,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredIndex, GraphcalError> {
+    match index {
+        hir::IndexRef::Concrete(name) => Ok(InferredIndex::from_resolved(name.value.clone())),
+        hir::IndexRef::GenericParam(param) => Err(GraphcalError::EvalError {
+            message: format!(
+                "generic index parameter `{}` is not bound at this constructor call site",
+                param.value.name
+            ),
+            src: src.clone(),
+            span: param.span.into(),
+        }),
+        hir::IndexRef::NatExpr(nat_expr) => {
+            let form = hir_nat_to_linear_form(nat_expr)
+                .map_err(|err| nat_overflow_error(err, src, nat_expr.span()))?;
+            InferredIndex::from_nat_range_form(form)
+                .map_err(|err| nat_range_error(err, src, nat_expr.span()))
         }
     }
 }
@@ -2842,7 +2872,7 @@ fn infer_hir_match(
         src,
     )?;
     match &scrutinee_type {
-        InferredType::Label(index_identity) => {
+        InferredType::NamedIndex(index_identity) => {
             let index_def = super::index_def_for_inferred(index_identity, Some(dag), registry)
                 .ok_or_else(|| GraphcalError::UnknownIndex {
                     name: index_identity.name(),

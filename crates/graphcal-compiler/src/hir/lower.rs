@@ -420,10 +420,9 @@ fn lower_single_term_nominal_type(
 
     match resolve_optional(ctx.resolver.resolve_index_path(ctx.owner, path)) {
         LookupCandidate::Found(index) => {
-            return Ok(NominalTypeLookup::Found(TypeExprKind::Label(Spanned::new(
-                index,
-                item.term.name.span,
-            ))));
+            return Ok(NominalTypeLookup::Found(TypeExprKind::Index(
+                IndexRef::Concrete(Spanned::new(index, item.term.name.span)),
+            )));
         }
         LookupCandidate::Absent => {}
         LookupCandidate::Error(source) => {
@@ -453,7 +452,12 @@ fn lower_single_term_nominal_type(
                 )));
             }
             GenericConstraint::Dim => return Ok(NominalTypeLookup::Absent { deferred_error }),
-            GenericConstraint::Index | GenericConstraint::Nat => {
+            GenericConstraint::Index => {
+                return Ok(NominalTypeLookup::Found(TypeExprKind::Index(
+                    IndexRef::GenericParam(binding.spanned_id(item.term.name.span)),
+                )));
+            }
+            GenericConstraint::Nat => {
                 return Err(HirLowerError::GenericConstraintMismatch {
                     name: GenericParamName::from_atom(atom.clone()),
                     actual: binding.constraint,

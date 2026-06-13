@@ -1,0 +1,4 @@
+// Error: named index labels are index positions, not values.
+index Maneuver = { A, B };
+
+node x: Dimensionless = Maneuver.A;

@@ -695,9 +695,11 @@ impl<'a> HirRefCollector<'a> {
                     }
                 }
             }
-            hir::TypeExprKind::Label(name) => {
-                let key = self.name_key(name.value.owner(), name.value.as_str());
-                Self::reference(table, name.span, key);
+            hir::TypeExprKind::Index(index) => {
+                if let hir::IndexRef::Concrete(name) = index {
+                    let key = self.name_key(name.value.owner(), name.value.as_str());
+                    Self::reference(table, name.span, key);
+                }
             }
             hir::TypeExprKind::Struct(name) => {
                 let key = self.name_key(name.value.owner(), name.value.as_str());

@@ -16,6 +16,10 @@ index Maneuver = { Departure, Correction, Insertion };
 
 Labels conventionally use `PascalCase` and are namespaced by the index: `Maneuver.Departure`.
 
+Named labels identify positions on an index axis. They are not values: use them
+in index access, map/table keys, expected-fail keys, include index bindings, and
+`match` patterns over named-index loop variables.
+
 !!! note "No empty indexes"
     A finite index must declare **at least one variant** — `index Empty = {};` is rejected by the parser. The same goes for `linspace` ranges (`start > end`, `step <= 0`, non-finite bounds, and zero-step cardinalities are invalid) and nat ranges (`range(0)` is invalid). This is a deliberate design choice (issue #580): with no empty case ever reachable, aggregation builtins never face the "what is `mean` of nothing?" question, indexed values always have at least one element, and there are no NaN traps to remember. Model the absence at the boundary (e.g., guard with a separate `Bool` flag or split the dag) rather than collapsing the index to zero variants.
 
@@ -465,7 +469,7 @@ This declares a range index `Step` constrained to have dimension `Time`. The imp
 
 ### Using Required Indexes
 
-Required indexes are used exactly like concrete indexes — in type annotations, `for` comprehensions, index access, `match`, and map/table literals:
+Required indexes are used exactly like concrete indexes — as axes in type annotations, `for` comprehensions, index access, `match`, and map/table literals:
 
 ```
 pub(bind) index Phase;

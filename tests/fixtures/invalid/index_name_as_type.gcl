@@ -1,0 +1,4 @@
+// Error: an index name is not a value type.
+index Maneuver = { A, B };
+
+node x: Maneuver = 1.0;

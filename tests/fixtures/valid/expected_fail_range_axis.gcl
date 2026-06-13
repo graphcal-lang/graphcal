@@ -9,5 +9,10 @@ index Mode = { Boost, Cruise };
 // in assertion axis order.
 #[expected_fail((Mode.Boost, #1))]
 assert mixed = for m: Mode {
-    for i: range(2) { if m == Mode.Boost && i == 1 { false } else { true } }
+    for i: range(2) {
+        match m {
+            Mode.Boost => if i == 1 { false } else { true },
+            Mode.Cruise => true,
+        }
+    }
 };

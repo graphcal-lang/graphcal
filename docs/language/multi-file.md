@@ -161,14 +161,15 @@ import collide.a as a;
 import collide.b as b;
 
 const node gain: Dimensionless = a.bias;
-node phase: a.Phase = a.Phase.Burn;
+node phase_score: Dimensionless[a.Phase] = for phase: a.Phase {
+    match phase {
+        a.Phase.Burn => 1.0,
+        a.Phase.Coast => 2.0,
+    }
+};
 node result: a.Item = a.Pick(distance: 2.0 m);
 node span: Length = 2.0 a.mile;
 node span_miles: Length = @span -> a.mile;
-node code: Dimensionless = match @phase {
-    a.Phase.Burn => 1.0,
-    a.Phase.Coast => 2.0,
-};
 ```
 
 The compiler resolves those paths to the canonical exported item; it does not
@@ -625,7 +626,8 @@ error `V004`:
 pub(bind) index Phase = { Design, Test };
 // ERROR: variant literal `Phase.Design` of `pub(bind) index` cannot be
 //        used in the defining file
-pub node cost: Dimensionless = if @mode == Phase.Design { 1.0 } else { 2.0 };
+param phase_cost: Dimensionless[Phase];
+pub node cost: Dimensionless = @phase_cost[Phase.Design];
 ```
 
 ### Include overrides must reconcile (`V005`)

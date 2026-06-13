@@ -1,0 +1,8 @@
+// Error: `F: Type` cannot be instantiated with an index.
+index Maneuver = { A, B };
+
+type Box<F: Type> {
+    Box(value: Dimensionless),
+}
+
+node x: Box<Maneuver> = Box<Maneuver>(value: 1.0);

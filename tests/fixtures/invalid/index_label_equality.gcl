@@ -1,0 +1,4 @@
+// Error: named index loop variables are matched, not compared as values.
+index Maneuver = { A, B };
+
+node x: Bool[Maneuver] = for m: Maneuver { m == m };

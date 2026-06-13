@@ -1,0 +1,8 @@
+// Error: constructor payloads take values, not named index labels.
+index Maneuver = { A, B };
+
+type Wrapper {
+    Wrapper(value: Dimensionless),
+}
+
+node x: Wrapper = Wrapper(value: Maneuver.A);
