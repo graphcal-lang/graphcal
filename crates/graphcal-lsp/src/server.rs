@@ -730,7 +730,8 @@ const INLAY_HINT_MAX_LEN: usize = 80;
 /// - Scalar: `"9.81 [m/s^2]"` or `"3.14159"` (dimensionless)
 /// - Bool: `"true"` / `"false"`
 /// - Int: `"42"`
-/// - Struct: `"LowThrust { thrust: 0.5 [N], duration: 3600 [s] }"`
+/// - Constructor value: `"LowThrust(thrust: 0.5 [N], duration: 3600 [s])"`
+/// - Unit constructor value: `"Nominal"`
 /// - Indexed: `"{ Departure: 4.92 [km/s], Correction: 0.24 [km/s], ... }"`
 fn format_value_inline(
     value: &Value,
@@ -757,11 +758,11 @@ fn format_value_inline_with_budget(
             type_name, fields, ..
         } => {
             if fields.is_empty() {
-                return format!("{type_name} {{}}");
+                return type_name.as_str().to_string();
             }
             let entries: Vec<(&str, &Value)> =
                 fields.iter().map(|(k, v)| (k.as_str(), v)).collect();
-            format_braced_entries(&format!("{type_name} "), &entries, symbols, max_len)
+            format_parenthesized_entries(type_name.as_str(), &entries, symbols, max_len)
         }
         Value::Indexed { entries, .. } => {
             if entries.is_empty() {
@@ -799,13 +800,40 @@ fn format_entries<K>(
     symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
-    let mut result = format!("{prefix}{{ ");
-    let suffix = " }";
-    let ellipsis = "... }";
+    format_delimited_entries(
+        EntryListLayout {
+            prefix,
+            open: "{ ",
+            close: " }",
+            ellipsis: "... }",
+        },
+        entries,
+        render_key,
+        symbols,
+        max_len,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct EntryListLayout<'a> {
+    prefix: &'a str,
+    open: &'a str,
+    close: &'a str,
+    ellipsis: &'a str,
+}
+
+fn format_delimited_entries<K>(
+    layout: EntryListLayout<'_>,
+    entries: &[(K, &Value)],
+    render_key: impl Fn(&K) -> String,
+    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+    max_len: usize,
+) -> String {
+    let mut result = format!("{}{}", layout.prefix, layout.open);
     let total = entries.len();
 
     for (i, (key, val)) in entries.iter().enumerate() {
-        let remaining_budget = max_len.saturating_sub(result.len() + suffix.len());
+        let remaining_budget = max_len.saturating_sub(result.len() + layout.close.len());
         let entry_str = format!(
             "{}: {}",
             render_key(key),
@@ -815,8 +843,8 @@ fn format_entries<K>(
         let separator = if i + 1 < total { ", " } else { "" };
         let needed = entry_str.len() + separator.len();
 
-        if i > 0 && result.len() + needed + suffix.len() > max_len {
-            result.push_str(ellipsis);
+        if i > 0 && result.len() + needed + layout.close.len() > max_len {
+            result.push_str(layout.ellipsis);
             return result;
         }
 
@@ -826,17 +854,28 @@ fn format_entries<K>(
         }
     }
 
-    result.push_str(suffix);
+    result.push_str(layout.close);
     result
 }
 
-fn format_braced_entries(
+fn format_parenthesized_entries(
     prefix: &str,
     entries: &[(&str, &Value)],
     symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
-    format_entries(prefix, entries, |k| (*k).to_string(), symbols, max_len)
+    format_delimited_entries(
+        EntryListLayout {
+            prefix,
+            open: "(",
+            close: ")",
+            ellipsis: "...)",
+        },
+        entries,
+        |k| (*k).to_string(),
+        symbols,
+        max_len,
+    )
 }
 
 /// Recursively flatten nested `Indexed` values into a list of `(key_path, leaf_value)` pairs.
@@ -1501,7 +1540,7 @@ mod tests {
         let val = test_struct(StructTypeName::new("TransferResult"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
-            "TransferResult { dv1: 100, dv2: 200 }"
+            "TransferResult(dv1: 100, dv2: 200)"
         );
     }
 
@@ -1509,7 +1548,7 @@ mod tests {
     fn format_struct_empty_fields() {
         let symbols = empty_symbols();
         let val = test_struct(StructTypeName::new("Nominal"), IndexMap::new());
-        assert_eq!(format_value_inline(&val, &symbols), "Nominal {}");
+        assert_eq!(format_value_inline(&val, &symbols), "Nominal");
     }
 
     #[test]
@@ -1518,10 +1557,56 @@ mod tests {
         let mut fields = IndexMap::new();
         fields.insert(FieldName::new("thrust"), scalar(0.5));
         fields.insert(FieldName::new("duration"), scalar(3600.0));
-        let val = test_struct(StructTypeName::new("ManeuverKind"), fields);
+        let val = test_struct(StructTypeName::new("LowThrust"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
-            "ManeuverKind { thrust: 0.5, duration: 3600 }"
+            "LowThrust(thrust: 0.5, duration: 3600)"
+        );
+    }
+
+    #[test]
+    fn inlay_hints_use_constructor_call_syntax_for_algebraic_values() {
+        let text = include_str!("../../../tests/fixtures/valid/tagged_union.gcl");
+        let analysis = run_analysis(&untitled_uri(), text, &[]);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics
+        );
+
+        let hints = crate::inlay_hints::inlay_hints(
+            &analysis,
+            Range::new(
+                tower_lsp::lsp_types::Position::new(0, 0),
+                tower_lsp::lsp_types::Position::new(u32::MAX, u32::MAX),
+            ),
+        )
+        .expect("expected inlay hints for tagged_union fixture");
+        let labels: Vec<String> = hints
+            .into_iter()
+            .filter_map(|hint| match hint.label {
+                tower_lsp::lsp_types::InlayHintLabel::String(label) => Some(label),
+                tower_lsp::lsp_types::InlayHintLabel::LabelParts(_) => None,
+            })
+            .collect();
+
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.contains("= LowThrust(thrust: 0.5 [N], duration: 3600 [s])")),
+            "expected constructor-call hint for `maneuver`, got: {labels:?}"
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.contains("= TransferResult(dv1: 100 [m/s], dv2: 200 [m/s])")),
+            "expected constructor-call hint for `transfer`, got: {labels:?}"
+        );
+        assert!(
+            !labels
+                .iter()
+                .any(|label| label.contains("LowThrust {") || label.contains("TransferResult {")),
+            "constructor hints must not use brace syntax: {labels:?}"
         );
     }
 
@@ -1570,7 +1655,7 @@ mod tests {
         let mut entries = IndexMap::new();
         entries.insert(IndexVariantName::new("A"), struct_val);
         let val = test_indexed(IndexName::new("Idx"), entries);
-        assert_eq!(format_value_inline(&val, &symbols), "{ A: Point { x: 1 } }");
+        assert_eq!(format_value_inline(&val, &symbols), "{ A: Point(x: 1) }");
     }
 
     #[test]
