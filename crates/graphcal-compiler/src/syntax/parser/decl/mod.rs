@@ -113,8 +113,13 @@ impl Parser<'_> {
         // values, not a bindable surface; `param` already plays that role.
         // `pub` on `node` is legal and controls projection visibility from
         // inline-dag call sites.
+        let is_node_decl = match self.lexer.peek() {
+            Some(Token::Node) => true,
+            Some(Token::Const) => matches!(self.lexer.peek_second(), Some(Token::Node)),
+            _ => false,
+        };
         if visibility == BindableVisibility::PublicBind
-            && matches!(self.lexer.peek(), Some(Token::Node | Token::Const))
+            && is_node_decl
             && let Some(vis_span) = visibility_span
         {
             return Err(self.unexpected_token(
@@ -124,7 +129,7 @@ impl Parser<'_> {
             ));
         }
 
-        let expected = "`param`, `node`, `const node`, `base dim`, `dim`, `unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
+        let expected = "`param`, `node`, `const node`, `base dim`, `dim`, `unit`, `const unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
 
         // Value-declaration paths (`param`, `node`, `const node`) can be
         // either a single declaration or a multi-decl (issue #481). We
@@ -164,20 +169,38 @@ impl Parser<'_> {
                             visibility_span,
                         );
                     }
-                    // `const unit` was parsed identically to plain `unit`:
-                    // the AST had no constness and the formatter silently
-                    // rewrote the source. The form is removed; `unit` with a
-                    // static scale is already compile-time constant.
+                    Some(Token::Unit) => {
+                        // `const unit`: single declaration only (no multi-decl sugar).
+                        let mut decl = self.parse_const_unit(const_span)?;
+                        if visibility == BindableVisibility::PublicBind
+                            && let Some(vis_span) = visibility_span
+                        {
+                            return Err(self.unexpected_token(
+                                "`pub` (`pub(bind)` is only valid on bindable declaration kinds: `dim`, `type`, and `index`)",
+                                "`pub(bind)`",
+                                vis_span,
+                            ));
+                        }
+                        set_decl_visibility(&mut decl, visibility);
+                        if let Some(ps) = visibility_span {
+                            decl.span = ps.merge(decl.span);
+                        }
+                        if let Some(first_attr) = attributes.first() {
+                            decl.span = first_attr.span.merge(decl.span);
+                        }
+                        decl.attributes = attributes;
+                        return Ok(decl);
+                    }
                     Some(_) => {
                         let (tok, span) = self.advance()?;
                         return Err(self.unexpected_token(
-                            "`node` after `const`",
+                            "`node` or `unit` after `const`",
                             &tok.to_string(),
                             span,
                         ));
                     }
                     None => {
-                        return Err(self.unexpected_eof("`node` after `const`"));
+                        return Err(self.unexpected_eof("`node` or `unit` after `const`"));
                     }
                 }
             }

@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+graph reference `@rate` not allowed in const unit scale
+    Diagnostic severity: error
+Begin snippet for const_unit_graph_ref.gcl starting at line 3, column 1
+
+snippet line 3: param rate: Dimensionless = 1.08;
+snippet line 4: const unit EUR: Money = (@rate) USD;
+    label at line 4, columns 27 to 30: @ reference not allowed in a const unit
+diagnostic help: `const unit` scales are compile-time constants; use plain `unit` for runtime-dependent units
+diagnostic code: graphcal::D017

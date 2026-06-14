@@ -495,10 +495,29 @@ pub struct DimDecl {
     pub definition: Option<DimExpr>,
 }
 
-/// Unit declaration: `unit km: Length = 1000 m;` or `base unit m: Length;`.
+/// Whether a unit is allowed in compile-time (`const`) contexts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitConstness {
+    /// A compile-time unit: prelude units, `base unit`, or `const unit`.
+    Const,
+    /// A runtime unit declared with plain `unit`; its scale may depend on params or nodes.
+    Dynamic,
+}
+
+impl UnitConstness {
+    /// Returns `true` for units that may appear in `const node` bodies.
+    #[must_use]
+    pub const fn is_const(self) -> bool {
+        matches!(self, Self::Const)
+    }
+}
+
+/// Unit declaration: `const unit km: Length = 1000 m;`, `unit EUR: Money = (@rate) USD;`,
+/// or `base unit m: Length;`.
 #[derive(Debug, Clone)]
 pub struct UnitDecl<P: Phase = Raw> {
     pub visibility: Visibility,
+    pub constness: UnitConstness,
     pub name: Spanned<UnitName>,
     /// The dimension this unit measures.
     pub dim_type: DimExpr,

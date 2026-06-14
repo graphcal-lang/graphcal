@@ -133,7 +133,7 @@ fn forward_ref_derived_dimension() {
 #[test]
 fn forward_ref_unit() {
     let source = r"
-        unit km_custom: Length = 1000 m_base;
+        const unit km_custom: Length = 1000 m_base;
         base unit m_base: Length;
         const node dist: Length = 5.0 km_custom;
     ";

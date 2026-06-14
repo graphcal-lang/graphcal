@@ -1,7 +1,7 @@
 use crate::syntax::ast::{
     AttributeArg, BindableVisibility, DeclKind, ExprKind, GenericConstraint, ImportItemNamespace,
     ImportKind, IndexDeclKind, MulDivOp, TypeDecl, TypeDeclBody, TypeExprKind, UnionMember,
-    Visibility,
+    UnitConstness, Visibility,
 };
 use crate::syntax::dimension::Rational;
 use crate::syntax::parser::Parser;
@@ -171,6 +171,7 @@ fn parse_base_unit() {
     let file = Parser::new("base unit m: Length;").parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Unit(u) => {
+            assert_eq!(u.constness, UnitConstness::Const);
             assert_eq!(u.name.value.as_str(), "m");
             assert_eq!(
                 u.dim_type.terms[0].term.name.value.leaf().as_str(),
@@ -195,6 +196,7 @@ fn parse_derived_unit() {
         .unwrap();
     match &file.declarations[0].kind {
         DeclKind::Unit(u) => {
+            assert_eq!(u.constness, UnitConstness::Dynamic);
             assert_eq!(u.name.value.as_str(), "km");
             let def = u.definition.as_ref().unwrap();
             assert!(
@@ -1590,27 +1592,29 @@ fn parse_layer_without_trailing_comma_after_last_field() {
 }
 
 #[test]
-fn const_unit_form_is_rejected() {
-    // `const unit` used to parse identically to plain `unit`: the AST had
-    // no constness marker, so the formatter silently rewrote user source.
-    // The form is removed from the grammar; spell it `unit`.
-    let err = Parser::new("const unit hr: Time = 3600.0 s;")
+fn parse_const_unit() {
+    let file = Parser::new("const unit hr: Time = 3600.0 s;")
         .parse_file()
-        .unwrap_err();
-    assert!(
-        matches!(
-            err,
-            crate::syntax::parser::ParseError::UnexpectedToken { .. }
-        ),
-        "expected UnexpectedToken, got {err:?}"
-    );
+        .unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Unit(u) => {
+            assert_eq!(u.constness, UnitConstness::Const);
+            assert_eq!(u.name.value.as_str(), "hr");
+            assert!(u.definition.is_some());
+        }
+        other => panic!("expected const unit, got {other:?}"),
+    }
 }
 
 #[test]
-fn plain_unit_decl_still_parses() {
-    Parser::new("unit hr: Time = 3600.0 s;")
+fn plain_unit_decl_still_parses_as_dynamic_unit() {
+    let file = Parser::new("unit hr: Time = 3600.0 s;")
         .parse_file()
         .unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Unit(u) => assert_eq!(u.constness, UnitConstness::Dynamic),
+        other => panic!("expected unit, got {other:?}"),
+    }
 }
 
 // --- Duplicate plot/figure/layer fields are parse errors (#844) ---

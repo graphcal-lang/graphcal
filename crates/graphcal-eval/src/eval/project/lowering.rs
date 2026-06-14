@@ -998,7 +998,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder(
 /// import alias.
 ///
 /// Runs as the registry-seed hook of file lowering — before the file's own
-/// declarations register — so local definitions (e.g. `unit halfmile: Length
+/// declarations register — so local definitions (e.g. `const unit halfmile: Length
 /// = 0.5 u.mile;`) resolve against the imported entries.
 fn seed_imported_type_system(
     builder: &mut RegistryBuilder,
@@ -1066,7 +1066,13 @@ fn replace_dynamic_units_with_resolved_scales(
         };
         if matches!(info.scale, UnitScale::Dynamic { .. }) {
             let dim = info.dimension.clone();
-            builder.register_unit_dynamic(unit_ref, dim, UnitScale::Static(*resolved));
+            let constness = info.constness;
+            builder.register_unit_with_scale(
+                unit_ref,
+                dim,
+                UnitScale::Static(*resolved),
+                constness,
+            );
         }
     }
 }
@@ -1191,13 +1197,17 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
             ),
             _ => scale.clone(),
         };
+        let constness = dep_registry.units.get_unit(name).map_or(
+            graphcal_compiler::syntax::ast::UnitConstness::Dynamic,
+            |info| info.constness,
+        );
         if let Some(existing) = builder.get_unit(&target) {
-            if unit_definitions_compatible(existing, dim, &merged_scale) {
+            if unit_definitions_compatible(existing, dim, &merged_scale, constness) {
                 continue;
             }
             return Err(UnitMergeConflict { name: target });
         }
-        builder.register_unit_dynamic(target, dim.clone(), merged_scale);
+        builder.register_unit_with_scale(target, dim.clone(), merged_scale, constness);
     }
 
     // Import indexes — skip bound indexes (they are replaced by the importer's index).
@@ -1239,9 +1249,10 @@ fn unit_definitions_compatible(
     existing: &graphcal_compiler::registry::types::UnitInfo,
     dim: &graphcal_compiler::syntax::dimension::Dimension,
     scale: &graphcal_compiler::registry::types::UnitScale,
+    constness: graphcal_compiler::syntax::ast::UnitConstness,
 ) -> bool {
     use graphcal_compiler::registry::types::UnitScale;
-    if existing.dimension != *dim {
+    if existing.dimension != *dim || existing.constness != constness {
         return false;
     }
     match (&existing.scale, scale) {

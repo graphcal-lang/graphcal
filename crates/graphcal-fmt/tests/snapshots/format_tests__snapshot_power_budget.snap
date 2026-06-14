@@ -6,7 +6,7 @@ expression: formatted
 //
 // A realistic power budget with many subsystems, operating modes,
 // and multi-dimensional tables with computed (non-literal) cell expressions.
-unit Wh: Energy = 3600 J;
+const unit Wh: Energy = 3600 J;
 
 // --- Subsystems (12 variants) ---
 pub index Subsystem = {

@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::desugar::desugared_ast::{
     DagDecl, DimExpr, Expr, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
 };
+use crate::syntax::ast::UnitConstness;
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational, RationalError};
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
@@ -69,7 +70,7 @@ impl std::fmt::Display for PositiveFiniteScale {
 /// How a unit's scale factor is determined.
 #[derive(Debug, Clone)]
 pub enum UnitScale {
-    /// Scale factor known at compile time (e.g., `unit km: Length = 1000 m;`).
+    /// Scale factor known at compile time (e.g., `const unit km: Length = 1000 m;`).
     Static(PositiveFiniteScale),
     /// Scale factor depends on runtime values (e.g., `unit EUR: Money = (@rate) USD;`).
     ///
@@ -111,6 +112,8 @@ impl UnitScale {
 pub struct UnitInfo {
     /// The dimension this unit measures.
     pub dimension: Dimension,
+    /// Whether this unit may appear in compile-time (`const`) contexts.
+    pub constness: UnitConstness,
     /// Scale factor to convert 1 of this unit to base SI units.
     /// e.g., km -> `Static(1000.0)` (1 km = 1000 m)
     pub scale: UnitScale,
@@ -1026,7 +1029,7 @@ impl RegistryBuilder {
     /// Record an SI symbol for an existing base dimension.
     ///
     /// Used when the first base unit for a user-defined dimension is declared
-    /// (e.g., `unit bit: Information;` records `"bit"` as the symbol).
+    /// (e.g., `base unit bit: Information;` records `"bit"` as the symbol).
     pub fn set_base_dim_symbol(&mut self, id: BaseDimId, symbol: String) {
         self.base_dim_symbols.entry(id).or_insert(symbol);
     }
@@ -1047,20 +1050,38 @@ impl RegistryBuilder {
             name.into(),
             UnitInfo {
                 dimension,
+                constness: UnitConstness::Const,
                 scale: UnitScale::Static(scale),
             },
         );
     }
 
-    /// Register a named unit with a dynamic scale factor.
+    /// Register a named unit with an explicitly specified scale and constness.
+    pub fn register_unit_with_scale(
+        &mut self,
+        name: impl Into<UnitRef>,
+        dimension: Dimension,
+        scale: UnitScale,
+        constness: UnitConstness,
+    ) {
+        self.units.insert(
+            name.into(),
+            UnitInfo {
+                dimension,
+                constness,
+                scale,
+            },
+        );
+    }
+
+    /// Register a named runtime unit with a static or dynamic scale factor.
     pub fn register_unit_dynamic(
         &mut self,
         name: impl Into<UnitRef>,
         dimension: Dimension,
         scale: UnitScale,
     ) {
-        self.units
-            .insert(name.into(), UnitInfo { dimension, scale });
+        self.register_unit_with_scale(name, dimension, scale, UnitConstness::Dynamic);
     }
 
     /// Register a type definition.

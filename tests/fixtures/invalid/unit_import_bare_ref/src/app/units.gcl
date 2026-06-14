@@ -1,1 +1,1 @@
-pub unit mile: Length = 1609.344 m;
+pub const unit mile: Length = 1609.344 m;

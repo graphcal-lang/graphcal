@@ -113,6 +113,7 @@ format_equivalent_via_eq!(
     crate::syntax::ast::MulDivOp,
     crate::syntax::ast::Visibility,
     crate::syntax::ast::BindableVisibility,
+    crate::syntax::ast::UnitConstness,
     crate::syntax::ast::MarkType,
     crate::syntax::ast::EncodingChannel,
     crate::syntax::ast::MultiSlotKind,
@@ -522,17 +523,20 @@ impl FormatEquivalent for UnitDecl {
     fn format_equivalent(&self, other: &Self) -> bool {
         let Self {
             visibility,
+            constness,
             name,
             dim_type,
             definition,
         } = self;
         let Self {
             visibility: other_visibility,
+            constness: other_constness,
             name: other_name,
             dim_type: other_dim_type,
             definition: other_definition,
         } = other;
         visibility.format_equivalent(other_visibility)
+            && constness.format_equivalent(other_constness)
             && name.format_equivalent(other_name)
             && dim_type.format_equivalent(other_dim_type)
             && definition.format_equivalent(other_definition)

@@ -773,7 +773,7 @@ fn resolve_pub_bind_index_with_private_dim_fires_v003() {
 fn resolve_pub_unit_with_private_dim_fires_v003() {
     let source = r"
         dim Currency = Length;
-        pub unit usd: Currency = 1.0 m;
+        pub const unit usd: Currency = 1.0 m;
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(

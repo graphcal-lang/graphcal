@@ -780,7 +780,7 @@ fn build_ir_from_resolved(
         builder.merge_from_registry(parent);
     }
     // Imported type-system declarations merge before the file's own so that
-    // local declarations (e.g. `unit halfmile: Length = 0.5 u.mile;`) resolve
+    // local declarations (e.g. `const unit halfmile: Length = 0.5 u.mile;`) resolve
     // against them.
     if let Some(seed) = registry_seed {
         seed(&mut builder)?;
@@ -2537,7 +2537,7 @@ fn topo_sort_derived_dims<'a>(
 
 /// Topologically sort unit declarations by their inter-dependencies.
 ///
-/// A unit depends on other units through its `definition.unit_expr` (e.g., `unit km: Length = 1000 m;`
+/// A unit depends on other units through its `definition.unit_expr` (e.g., `const unit km: Length = 1000 m;`
 /// depends on `m`). Dependencies on units already in the registry are satisfied and
 /// do not create graph edges.
 fn topo_sort_units<'a>(
@@ -2710,6 +2710,22 @@ fn register_unit_decl(
         });
     }
     let scale = if let Some(def) = &u.definition {
+        if u.constness.is_const() {
+            if let Some(graph_ref) = first_graph_ref(&def.scale_expr) {
+                return Err(GraphcalError::GraphRefInConstUnit {
+                    name: graph_ref.value,
+                    src: src.clone(),
+                    span: graph_ref.span.into(),
+                });
+            }
+            if let Some(unit_name) = first_non_const_unit_ref(registry, &def.unit_expr) {
+                return Err(GraphcalError::NonConstUnitInConst {
+                    name: unit_name.value.clone(),
+                    src: src.clone(),
+                    span: unit_name.span.into(),
+                });
+            }
+        }
         if contains_graph_ref(&def.scale_expr) {
             // Dynamic unit: scale depends on runtime values (e.g., `(@rate) USD`).
             // Resolve the base unit's dimension and static scale factor.
@@ -2719,7 +2735,9 @@ fn register_unit_decl(
                 base_unit_scale: base_scale,
             }
         } else {
-            // Static unit: scale is a compile-time constant.
+            // Static scale value. A plain `unit` with no `@` still remains a
+            // runtime unit for const-context policy; `const unit` is the
+            // surface marker that makes it available to `const node`.
             let (_unit_dim, base_scale) = registry
                 .resolve_unit_expr(&def.unit_expr)
                 .map_err(|err| unit_resolve_to_graphcal(err, src, def.span))?;
@@ -2750,7 +2768,7 @@ fn register_unit_decl(
     // If this is a base unit (scale=1, no definition) for a single
     // base dimension, record the unit name as the SI symbol for
     // that dimension. This handles user-defined dimensions like
-    // `unit bit: Information;` → symbol "bit" for Information.
+    // `base unit bit: Information;` → symbol "bit" for Information.
     if u.definition.is_none() {
         // Check if this dimension is a single base dimension
         let mut iter = dim.iter();
@@ -2761,8 +2779,41 @@ fn register_unit_decl(
             registry.set_base_dim_symbol(id.clone(), u.name.value.to_string());
         }
     }
-    registry.register_unit_dynamic(u.name.value.clone(), dim, scale);
+    registry.register_unit_with_scale(u.name.value.clone(), dim, scale, u.constness);
     Ok(())
+}
+
+fn first_graph_ref(expr: &Expr) -> Option<Spanned<ScopedName>> {
+    struct FirstGraphRef(Option<Spanned<ScopedName>>);
+
+    impl ExprVisitor<crate::syntax::phase::Desugared> for FirstGraphRef {
+        type Error = std::convert::Infallible;
+
+        fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+            if self.0.is_none()
+                && let ExprKind::GraphRef(name) = &expr.kind
+            {
+                self.0 = Some(name.clone());
+            }
+            Ok(())
+        }
+    }
+
+    let mut visitor = FirstGraphRef(None);
+    let _ = visitor.visit_expr(expr);
+    visitor.0
+}
+
+fn first_non_const_unit_ref<'a>(
+    registry: &RegistryBuilder,
+    unit_expr: &'a crate::desugar::desugared_ast::UnitExpr,
+) -> Option<&'a Spanned<crate::syntax::names::UnitRef>> {
+    unit_expr.terms.iter().find_map(|term| {
+        registry
+            .get_unit(&term.name.value)
+            .is_some_and(|info| !info.constness.is_const())
+            .then_some(&term.name)
+    })
 }
 
 /// Resolve the static scale factor of the base unit expression in a unit definition.

@@ -243,7 +243,7 @@ mod tests {
         )
         .unwrap();
         let main_path = dir.path().join("src/app/main.gcl");
-        let main_text = "unit mile: Length = 1609.344 m;\n\
+        let main_text = "const unit mile: Length = 1609.344 m;\n\
                          param a: Length = 1500.0 m;\n\
                          node b: Length = @a -> km;\n";
         std::fs::write(&main_path, main_text).unwrap();
@@ -277,7 +277,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.path().join("src/app/units.gcl"),
-            "pub unit mile: Length = 1609.344 m;",
+            "pub const unit mile: Length = 1609.344 m;",
         )
         .unwrap();
         let main_path = dir.path().join("src/app/main.gcl");

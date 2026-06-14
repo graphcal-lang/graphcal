@@ -7,7 +7,7 @@ param a: Length = 4.0 m;
 node r: RootLen = sqrt(@a);
 node disp: RootLen = @r -> m^(1/2);
 
-unit rootcm: RootLen = 0.1 m^(1/2);
+const unit rootcm: RootLen = 0.1 m^(1/2);
 node disp2: RootLen = @r -> rootcm;
 
 node back: Length = @r * @r;
