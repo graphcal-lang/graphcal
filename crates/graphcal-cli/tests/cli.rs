@@ -2325,7 +2325,7 @@ fn eval_instantiated_import_selective() {
 }
 
 #[test]
-fn eval_instantiated_include_resolves_librarys_own_unbound_index() {
+fn eval_instantiated_include_resolves_libraries_own_unbound_index() {
     // #851: an instantiated include of a library that declares and uses its
     // own index must resolve the inlined `for s: Step` / `Dimensionless[Step]`
     // / `Step.A` bodies without the consumer binding `Step`. Binding is an
