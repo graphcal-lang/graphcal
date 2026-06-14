@@ -2324,6 +2324,39 @@ fn eval_instantiated_import_selective() {
     );
 }
 
+#[test]
+fn eval_instantiated_include_resolves_libraries_own_unbound_index() {
+    // #851: an instantiated include of a library that declares and uses its
+    // own index must resolve the inlined `for s: Step` / `Dimensionless[Step]`
+    // / `Step.A` bodies without the consumer binding `Step`. Binding is an
+    // override mechanism, not a requirement.
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/multi/include_uses_own_index/src/lib/main.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "instantiated include of a library's own index should evaluate: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let has = |needle: &str| {
+        assert!(
+            stdout.lines().any(|l| l.contains(needle)),
+            "expected `{needle}` in output:\n{stdout}"
+        );
+    };
+    // scale=10 applied to vals {A:1, B:2}; first = vals[A]*scale; total = sum.
+    has("s.scaled[A] = 10");
+    has("s.scaled[B] = 20");
+    has("s.first     = 10");
+    has("s.total     = 30");
+}
+
 // --- Partial overrides CLI tests ---
 
 #[test]

@@ -9,7 +9,7 @@
 //! a module alias in the current module scope. The result of a successful lookup
 //! carries the canonical [`DagId`] owner, not the textual alias.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 
@@ -1023,6 +1023,65 @@ impl ModuleResolver {
         target: &DagId,
     ) -> Result<(), ModuleResolveError> {
         self.register_import_with_access(owner, path, kind, target, ModuleAccess::PublicOnly)
+    }
+
+    /// Make an instantiated include's own indexes resolvable in the importer.
+    ///
+    /// An instantiated `include` inlines the dependency's declaration bodies
+    /// into the importer (see `ir::lower::merge_dependency`). Those bodies
+    /// reference the dependency's own indexes by their bare names (`for s:
+    /// Step`, `T[Step]`, `Step.A`), which are not bound to any importer symbol.
+    /// The dependency's declarations live in the synthetic include module
+    /// `source`; copy each of its index symbols — re-homed onto the importer so
+    /// they resolve against the flat merged registry that backs the importer's
+    /// declarations — into the importer's own symbol table, variants included.
+    ///
+    /// Indexes named in `bound` (the include's index bindings/overrides) are
+    /// skipped: a bound index is rewritten to the importer's replacement before
+    /// resolution, so the dependency's original name must not shadow it.
+    /// Indexes already declared in the importer are likewise left untouched.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModuleResolveError::UnknownModule`] if either module is absent
+    /// from the resolver.
+    pub fn inline_instantiated_include_indexes(
+        &mut self,
+        importer: &DagId,
+        source: &DagId,
+        bound: &HashSet<&str>,
+    ) -> Result<(), ModuleResolveError> {
+        let source_symbols =
+            self.modules
+                .get(source)
+                .ok_or_else(|| ModuleResolveError::UnknownModule {
+                    owner: source.clone(),
+                })?;
+        let injected: Vec<ModuleIndexSymbol> = source_symbols
+            .indexes
+            .iter()
+            .filter(|(name, _)| !bound.contains(name.as_str()))
+            .map(|(name, symbol)| ModuleIndexSymbol {
+                symbol: ModuleSymbol::new(
+                    importer,
+                    name.clone(),
+                    symbol.visibility(),
+                    symbol.span(),
+                ),
+                variants: symbol.variants().clone(),
+            })
+            .collect();
+        let target =
+            self.modules
+                .get_mut(importer)
+                .ok_or_else(|| ModuleResolveError::UnknownModule {
+                    owner: importer.clone(),
+                })?;
+        for symbol in injected {
+            let name = IndexName::from_atom(symbol.resolved().atom().clone());
+            target.indexes.entry(name).or_insert(symbol);
+        }
+        Ok(())
     }
 
     fn register_import_with_access(

@@ -1,0 +1,6 @@
+// main.gcl -- instantiated include overriding only `scale`. The library's own
+// `Step` index is left unbound: binding is an override mechanism, not a
+// requirement, so the inlined `for s: Step` / `Dimensionless[Step]` bodies
+// must resolve against the importer.
+include lib.scaling(scale: 10.0) as s;
+param own: Dimensionless = 5.0;
