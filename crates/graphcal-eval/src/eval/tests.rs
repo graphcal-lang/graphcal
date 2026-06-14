@@ -2704,6 +2704,45 @@ fn project_include_overrides_index_with_param_binding_ok() {
 }
 
 #[test]
+fn merged_dependency_body_error_renders_against_dependency_source() {
+    // #868: a dimension mismatch introduced by an instantiated include's
+    // dimension rebinding lives in the *dependency* body, which keeps the
+    // dependency file's byte offsets. The D002 diagnostic must render against
+    // the dependency source (`lib.gcl`) with an in-bounds span — before the
+    // fix it was rendered against the importer (`main.gcl`), yielding an
+    // out-of-bounds label.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/invalid/multi/merged_dep_body_dim_mismatch/src/lib/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
+    match result {
+        Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation {
+            declared,
+            inferred,
+            src,
+            span,
+        })) => {
+            assert_eq!(declared, "Mass");
+            assert_eq!(inferred, "Velocity");
+            assert!(
+                src.name().ends_with("lib.gcl"),
+                "diagnostic must name the dependency file, got `{}`",
+                src.name()
+            );
+            // The span must index into the source it renders against.
+            let len = src.inner().len();
+            assert!(
+                span.offset() + span.len() <= len,
+                "span (offset {}, len {}) is out of bounds for `{}` of length {len}",
+                span.offset(),
+                span.len(),
+                src.name(),
+            );
+        }
+        other => panic!("expected D002 against the dependency source, got {other:?}"),
+    }
+}
+
+#[test]
 fn project_pub_include_leaks_private_type_v006() {
     // V006: `pub include` re-exports container's `origin` decl whose
     // signature (post-substitution) names `PrivateInner`, which is a

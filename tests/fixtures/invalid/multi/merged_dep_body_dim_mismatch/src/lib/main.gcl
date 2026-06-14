@@ -1,0 +1,7 @@
+// main.gcl -- rebinds `Speed` to `Mass`, so the merged dependency body
+// `v: Mass = 10.0 m/s` becomes a dimension mismatch that exists only in the
+// instantiated context. The D002 diagnostic must render against lib.gcl (the
+// dependency) with an in-bounds span, not against this importer.
+include lib.lib(Speed: Mass).{ v };
+
+node result: Mass = @v;

@@ -844,6 +844,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
             &deferred.import_item_attributes,
             &deferred.requested_plots,
             importer_src,
+            &dep_src,
         )?;
 
         // ---- 6. Add selective aliases -------------------------------------

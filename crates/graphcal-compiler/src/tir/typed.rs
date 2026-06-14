@@ -1201,6 +1201,9 @@ fn type_resolve_dag(
     let mut resolved_decl_types = HashMap::new();
     let no_generic_params: &[GenericParamName] = &[];
 
+    // A merged dependency declaration's type annotation keeps the dependency
+    // file's offsets, so resolution errors must render against its own source
+    // rather than the importer's `src` (#868).
     for entry in &consts {
         let resolved = resolve_type_expr_inner(
             &entry.type_ann,
@@ -1209,7 +1212,7 @@ fn type_resolve_dag(
             no_generic_params,
             no_generic_params,
             no_generic_params,
-            src,
+            entry.src.resolve(src),
             Some(module_ctx),
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
@@ -1222,7 +1225,7 @@ fn type_resolve_dag(
             no_generic_params,
             no_generic_params,
             no_generic_params,
-            src,
+            entry.src.resolve(src),
             Some(module_ctx),
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
@@ -1235,7 +1238,7 @@ fn type_resolve_dag(
             no_generic_params,
             no_generic_params,
             no_generic_params,
-            src,
+            entry.src.resolve(src),
             Some(module_ctx),
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
@@ -1493,17 +1496,21 @@ fn lower_resolved_expressions(
     let mut exprs = ResolvedExpressions::default();
     let mut domain_bounds = HashMap::new();
 
+    // Domain-bound and key errors for a merged dependency body must render
+    // against the dependency's own source, not the importer's `src` (#868).
     for entry in consts {
-        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
-        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src)?;
+        let body_src = entry.src.resolve(src);
+        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, body_src)?;
+        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, body_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
         exprs.consts.insert(key, entry.expr.clone());
     }
     for entry in params {
-        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
-        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src)?;
+        let body_src = entry.src.resolve(src);
+        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, body_src)?;
+        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, body_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
@@ -1513,15 +1520,17 @@ fn lower_resolved_expressions(
         exprs.param_defaults.insert(key, expr.clone());
     }
     for entry in nodes {
-        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
-        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, src)?;
+        let body_src = entry.src.resolve(src);
+        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, body_src)?;
+        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, body_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
         exprs.nodes.insert(key, entry.expr.clone());
     }
     for entry in asserts {
-        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, src)?;
+        let key =
+            decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, entry.src.resolve(src))?;
         exprs.asserts.insert(key, entry.body.clone());
     }
 
@@ -2056,13 +2065,14 @@ fn collect_resolved_dag_dependencies(
     let mut resolved = ResolvedDagDependencies::default();
 
     for entry in consts {
+        let body_src = entry.src.resolve(src);
         let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
             internal_error(
                 format!(
                     "could not build canonical declaration key for `{}`",
                     entry.name
                 ),
-                src,
+                body_src,
                 entry.span,
             )
         })?;
@@ -2072,7 +2082,7 @@ fn collect_resolved_dag_dependencies(
                     "missing HIR expression for const declaration `{}`",
                     entry.name
                 ),
-                src,
+                body_src,
                 entry.span,
             )
         })?;
@@ -2084,7 +2094,7 @@ fn collect_resolved_dag_dependencies(
             let kind = ctx
                 .resolver
                 .decl_symbol_kind(graph_ref)
-                .map_err(|err| module_resolve_error(&err, src, entry.span))?;
+                .map_err(|err| module_resolve_error(&err, body_src, entry.span))?;
             if kind.is_const() {
                 deps.const_refs.insert(graph_ref.clone());
             }
@@ -2099,7 +2109,7 @@ fn collect_resolved_dag_dependencies(
                     "could not build canonical declaration key for `{}`",
                     entry.name
                 ),
-                src,
+                entry.src.resolve(src),
                 entry.span,
             )
         })?;
@@ -2111,13 +2121,14 @@ fn collect_resolved_dag_dependencies(
     }
 
     for entry in nodes {
+        let body_src = entry.src.resolve(src);
         let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
             internal_error(
                 format!(
                     "could not build canonical declaration key for `{}`",
                     entry.name
                 ),
-                src,
+                body_src,
                 entry.span,
             )
         })?;
@@ -2127,7 +2138,7 @@ fn collect_resolved_dag_dependencies(
                     "missing HIR expression for node declaration `{}`",
                     entry.name
                 ),
-                src,
+                body_src,
                 entry.span,
             )
         })?;

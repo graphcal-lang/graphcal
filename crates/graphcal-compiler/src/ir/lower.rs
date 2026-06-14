@@ -61,6 +61,61 @@ pub struct LoweredPlotField {
     pub value: crate::hir::Expr,
 }
 
+/// Where a merged declaration body's spans index into (#868).
+///
+/// A declaration written in the file being compiled spans into that file's
+/// own [`NamedSource`], which every lowering/type stage already threads as its
+/// ambient `src` — those entries carry [`BodySource::own`]. An instantiated
+/// `include` merges a dependency's declaration bodies into the importer's IR
+/// (`merge_dependency`); those bodies keep the *dependency's* byte offsets, so
+/// they carry [`BodySource::dependency`] naming the dependency file. Rendering
+/// a diagnostic for such a body against the importer's source produces an
+/// out-of-bounds (or simply wrong) label; [`BodySource::resolve`] hands back
+/// the correct source to anchor against.
+#[derive(Debug, Clone, Default)]
+pub struct BodySource(Option<NamedSource<Arc<String>>>);
+
+impl BodySource {
+    /// The declaration belongs to the file being compiled; its span indexes
+    /// into the ambient `src` threaded through the pipeline.
+    #[must_use]
+    pub const fn own() -> Self {
+        Self(None)
+    }
+
+    /// The declaration was merged from a dependency body whose spans index
+    /// into `src`.
+    #[must_use]
+    pub const fn dependency(src: NamedSource<Arc<String>>) -> Self {
+        Self(Some(src))
+    }
+
+    /// Resolve the source the span should render against, falling back to the
+    /// ambient `default` source for declarations native to the compiled file.
+    #[must_use]
+    pub fn resolve<'a>(
+        &'a self,
+        default: &'a NamedSource<Arc<String>>,
+    ) -> &'a NamedSource<Arc<String>> {
+        self.0.as_ref().unwrap_or(default)
+    }
+
+    /// Carry an already-merged provenance forward, or attribute a still-native
+    /// body to `dep_src` as it crosses one merge boundary (#868).
+    ///
+    /// A dependency's own declarations carry [`BodySource::own`] until they are
+    /// merged, at which point their spans become foreign to the importer and
+    /// must name `dep_src`. A body already tagged with a deeper dependency
+    /// source (a transitively-merged include) keeps that attribution.
+    #[must_use]
+    pub fn or_dependency(self, dep_src: &NamedSource<Arc<String>>) -> Self {
+        match self.0 {
+            Some(_) => self,
+            None => Self::dependency(dep_src.clone()),
+        }
+    }
+}
+
 /// A const declaration with type annotation and lowered body.
 #[derive(Debug, Clone)]
 pub struct ConstEntry {
@@ -68,6 +123,11 @@ pub struct ConstEntry {
     pub type_ann: TypeExpr,
     pub expr: crate::hir::Expr,
     pub span: Span,
+    /// Provenance of this declaration's `span` (#868). `None` means the span
+    /// indexes into the IR's own file source; `Some` carries the source of a
+    /// dependency body merged in by an instantiated include, so diagnostics
+    /// anchored on the span render against the right file.
+    pub src: BodySource,
 }
 
 /// A param declaration with type annotation and lowered default.
@@ -77,6 +137,8 @@ pub struct ParamEntry {
     pub type_ann: TypeExpr,
     pub default_expr: Option<crate::hir::Expr>,
     pub span: Span,
+    /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
+    pub src: BodySource,
 }
 
 /// A node declaration with type annotation and lowered body.
@@ -86,6 +148,8 @@ pub struct NodeEntry {
     pub type_ann: TypeExpr,
     pub expr: crate::hir::Expr,
     pub span: Span,
+    /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
+    pub src: BodySource,
 }
 
 /// An assert declaration with lowered body.
@@ -94,6 +158,8 @@ pub struct AssertEntry {
     pub name: ScopedName,
     pub body: crate::hir::AssertBody,
     pub span: Span,
+    /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
+    pub src: BodySource,
 }
 
 /// A const declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -106,6 +172,8 @@ pub struct UnfrozenConstEntry {
     pub type_ann: TypeExpr,
     pub expr: Expr,
     pub span: Span,
+    /// Source provenance of `span`; see [`BodySource`] (#868).
+    pub src: BodySource,
 }
 
 /// A param declaration awaiting default lowering at [`UnfrozenIR::freeze`].
@@ -115,6 +183,8 @@ pub struct UnfrozenParamEntry {
     pub type_ann: TypeExpr,
     pub default_expr: Option<Expr>,
     pub span: Span,
+    /// Source provenance of `span`; see [`BodySource`] (#868).
+    pub src: BodySource,
 }
 
 /// A node declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -124,6 +194,8 @@ pub struct UnfrozenNodeEntry {
     pub type_ann: TypeExpr,
     pub expr: Expr,
     pub span: Span,
+    /// Source provenance of `span`; see [`BodySource`] (#868).
+    pub src: BodySource,
 }
 
 /// An assert declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -132,6 +204,8 @@ pub struct UnfrozenAssertEntry {
     pub name: ScopedName,
     pub body: AssertBody,
     pub span: Span,
+    /// Source provenance of `span`; see [`BodySource`] (#868).
+    pub src: BodySource,
 }
 
 /// A plot declaration with lowered body.
@@ -728,6 +802,7 @@ fn build_ir_from_resolved(
                 type_ann,
                 expr: entry.expr,
                 span: entry.span,
+                src: BodySource::own(),
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -742,6 +817,7 @@ fn build_ir_from_resolved(
                 type_ann,
                 default_expr: entry.default_expr,
                 span: entry.span,
+                src: BodySource::own(),
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -756,6 +832,7 @@ fn build_ir_from_resolved(
                 type_ann,
                 expr: entry.expr,
                 span: entry.span,
+                src: BodySource::own(),
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -771,6 +848,7 @@ fn build_ir_from_resolved(
                 name: ScopedName::local(entry.name),
                 body: entry.body,
                 span: entry.span,
+                src: BodySource::own(),
             })
             .collect(),
         plots: resolved
@@ -931,9 +1009,13 @@ impl UnfrozenIR {
         let expr_ctx = crate::hir::ExprLoweringContext::new(owner, resolver, &generic_scope)
             .with_prelude(&prelude)
             .with_decl_bindings(&decl_bindings);
-        let lower = |expr: &Expr| {
-            crate::hir::lower_expr(expr, expr_ctx)
-                .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src))
+        // A merged dependency body keeps the dependency file's byte offsets, so
+        // a lowering error must render against that body's own source rather
+        // than the importer's `src` (#868); `BodySource::resolve` selects it.
+        let lower_in = |expr: &Expr, body_src: &NamedSource<Arc<String>>| {
+            crate::hir::lower_expr(expr, expr_ctx).map_err(|err| {
+                crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
+            })
         };
 
         let consts = self
@@ -943,8 +1025,9 @@ impl UnfrozenIR {
                 Ok(ConstEntry {
                     name: entry.name.clone(),
                     type_ann: entry.type_ann.clone(),
-                    expr: lower(&entry.expr)?,
+                    expr: lower_in(&entry.expr, entry.src.resolve(src))?,
                     span: entry.span,
+                    src: entry.src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -955,8 +1038,13 @@ impl UnfrozenIR {
                 Ok(ParamEntry {
                     name: entry.name.clone(),
                     type_ann: entry.type_ann.clone(),
-                    default_expr: entry.default_expr.as_ref().map(&lower).transpose()?,
+                    default_expr: entry
+                        .default_expr
+                        .as_ref()
+                        .map(|expr| lower_in(expr, entry.src.resolve(src)))
+                        .transpose()?,
                     span: entry.span,
+                    src: entry.src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -967,8 +1055,9 @@ impl UnfrozenIR {
                 Ok(NodeEntry {
                     name: entry.name.clone(),
                     type_ann: entry.type_ann.clone(),
-                    expr: lower(&entry.expr)?,
+                    expr: lower_in(&entry.expr, entry.src.resolve(src))?,
                     span: entry.span,
+                    src: entry.src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -976,12 +1065,14 @@ impl UnfrozenIR {
             .asserts
             .iter()
             .map(|entry| {
+                let body_src = entry.src.resolve(src);
                 Ok(AssertEntry {
                     name: entry.name.clone(),
                     body: crate::hir::lower_assert_body(&entry.body, expr_ctx).map_err(|err| {
-                        crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src)
+                        crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
                     })?,
                     span: entry.span,
+                    src: entry.src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1118,6 +1209,9 @@ impl UnfrozenIR {
             type_ann,
             expr,
             span,
+            // Alias bodies are synthesized from the importer's include
+            // statement, so their span belongs to the importer's source.
+            src: BodySource::own(),
         });
         self.source_order.push((name, DeclCategory::Const));
     }
@@ -1131,6 +1225,9 @@ impl UnfrozenIR {
             type_ann,
             expr,
             span,
+            // Alias bodies are synthesized from the importer's include
+            // statement, so their span belongs to the importer's source.
+            src: BodySource::own(),
         });
         self.source_order.push((name, DeclCategory::Node));
     }
@@ -1188,6 +1285,12 @@ impl UnfrozenIR {
     ///
     /// `dep_names` is the set of all declaration names in the dependency (before
     /// prefixing), used to determine which references should be rewritten.
+    ///
+    /// `dep_src` is the dependency body's [`NamedSource`]: merged declarations
+    /// keep the dependency file's byte offsets, so each is tagged with it (via
+    /// [`BodySource::or_dependency`]) for diagnostics raised at the importer's
+    /// freeze/TIR boundary (#868). For inline-DAG includes the body shares the
+    /// importer's source, so `dep_src` equals `importer_src` there.
     #[expect(
         clippy::too_many_lines,
         reason = "single logical operation: prefix and merge all declaration kinds"
@@ -1208,6 +1311,7 @@ impl UnfrozenIR {
         import_item_attributes: &HashMap<DeclName, Vec<crate::desugar::desugared_ast::Attribute>>,
         requested_plots: &HashMap<DeclName, RequestedPlot>,
         importer_src: &NamedSource<Arc<String>>,
+        dep_src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
         /// Prefix a `ScopedName` if it is an unqualified member owned by
         /// the dependency.
@@ -1257,6 +1361,7 @@ impl UnfrozenIR {
                 type_ann: entry.type_ann,
                 expr: entry.expr,
                 span: entry.span,
+                src: entry.src.or_dependency(dep_src),
             });
             self.source_order.push((prefixed, DeclCategory::Const));
         }
@@ -1266,7 +1371,10 @@ impl UnfrozenIR {
             let prefixed = entry.name.with_prefix(prefix);
             if let Some(binding_expr) = bindings.get(entry.name.member()) {
                 // Use the binding expression (from the importer's scope, no prefixing needed
-                // for refs that belong to the importer — only dep-internal refs get prefixed)
+                // for refs that belong to the importer — only dep-internal refs get prefixed).
+                // The declared type (the diagnostic anchor for an annotation
+                // mismatch) still belongs to the dependency, so the entry keeps
+                // dependency provenance below (#868).
                 entry.default_expr = Some(binding_expr.clone());
             } else if let Some(ref mut expr) = entry.default_expr {
                 // Keep default, but substitute index names and prefix internal refs
@@ -1284,6 +1392,7 @@ impl UnfrozenIR {
                 type_ann: entry.type_ann,
                 default_expr: entry.default_expr,
                 span: entry.span,
+                src: entry.src.or_dependency(dep_src),
             });
             self.source_order.push((prefixed, DeclCategory::Param));
         }
@@ -1302,6 +1411,7 @@ impl UnfrozenIR {
                 type_ann: entry.type_ann,
                 expr: entry.expr,
                 span: entry.span,
+                src: entry.src.or_dependency(dep_src),
             });
             self.source_order.push((prefixed, DeclCategory::Node));
         }
@@ -1336,6 +1446,7 @@ impl UnfrozenIR {
                 name: prefixed.clone(),
                 body: entry.body,
                 span: entry.span,
+                src: entry.src.or_dependency(dep_src),
             });
             self.assert_names.insert(prefixed.clone());
             self.source_order.push((prefixed, DeclCategory::Assert));
@@ -3361,6 +3472,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &importer_src,
+                &dep_src,
             )
             .unwrap();
 
