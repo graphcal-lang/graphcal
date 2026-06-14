@@ -1,0 +1,6 @@
+// lib.gcl -- valid on its own: `Speed` is Length/Time and the body 10 m/s
+// matches. The mismatch only appears once an instantiated include rebinds
+// `Speed` to an incompatible dimension (#868).
+pub dim Speed = Length / Time;
+
+pub const node v: Speed = 10.0 m/s;

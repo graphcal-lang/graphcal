@@ -253,6 +253,7 @@ impl InferredType {
 /// (declared types, the locals scope, TIR, registry, builtins, source)
 /// so individual helpers take a single `&DimCheckContext` instead of
 /// six positional arguments.
+#[derive(Clone, Copy)]
 struct DimCheckContext<'a> {
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
     dag: Option<&'a crate::tir::typed::DagTIR>,
@@ -260,6 +261,20 @@ struct DimCheckContext<'a> {
     registry: &'a Registry,
     builtin_fns: &'a HashMap<&'a str, crate::registry::builtins::BuiltinFunction>,
     src: &'a NamedSource<Arc<String>>,
+}
+
+impl<'a> DimCheckContext<'a> {
+    /// Re-anchor diagnostics on `body_src`, the source a particular
+    /// declaration's spans index into (#868). A declaration merged in from an
+    /// instantiated dependency keeps that dependency file's offsets, so its
+    /// checks must render against the dependency source rather than the
+    /// importer's ambient `src`.
+    const fn for_body(self, body_src: &'a NamedSource<Arc<String>>) -> Self {
+        Self {
+            src: body_src,
+            ..self
+        }
+    }
 }
 
 impl DimCheckContext<'_> {
@@ -872,38 +887,47 @@ fn check_dimensions_dag(
         src,
     };
 
+    // Declarations merged in from instantiated dependencies keep the
+    // dependency file's spans, so each is checked against its own source (#868).
     for entry in &dag.consts {
-        check_decl_expr_type(&ctx, &entry.name, &entry.type_ann.span)?;
+        let entry_ctx = ctx.for_body(entry.src.resolve(src));
+        check_decl_expr_type(&entry_ctx, &entry.name, &entry.type_ann.span)?;
     }
     for entry in &dag.nodes {
-        check_decl_expr_type(&ctx, &entry.name, &entry.type_ann.span)?;
+        let entry_ctx = ctx.for_body(entry.src.resolve(src));
+        check_decl_expr_type(&entry_ctx, &entry.name, &entry.type_ann.span)?;
     }
     for entry in &dag.params {
         let Some(_value_expr) = entry.default_expr.as_ref() else {
             continue;
         };
-        check_decl_expr_type(&ctx, &entry.name, &entry.type_ann.span)?;
+        let entry_ctx = ctx.for_body(entry.src.resolve(src));
+        check_decl_expr_type(&entry_ctx, &entry.name, &entry.type_ann.span)?;
     }
 
     for entry in &dag.asserts {
-        let body = ctx.hir_assert_body(&entry.name, entry.span)?;
-        let shape = check_hir_assert_body(&ctx, body, entry.span)?;
+        let body_src = entry.src.resolve(src);
+        let entry_ctx = ctx.for_body(body_src);
+        let body = entry_ctx.hir_assert_body(&entry.name, entry.span)?;
+        let shape = check_hir_assert_body(&entry_ctx, body, entry.span)?;
         if let Some(expected_fail) = dag.expected_fail.get(&entry.name) {
-            validate_expected_fail(expected_fail, &shape, src, entry.span)?;
+            validate_expected_fail(expected_fail, &shape, body_src, entry.span)?;
         }
         // Assertion results are never displayed with units, so no position
         // inside an assert body is display-effective.
         match body {
-            crate::hir::expr::AssertBody::Expr(e) => check_ineffective_conversions(e, false, src)?,
+            crate::hir::expr::AssertBody::Expr(e) => {
+                check_ineffective_conversions(e, false, body_src)?;
+            }
             crate::hir::expr::AssertBody::Tolerance {
                 actual,
                 expected,
                 tolerance,
                 ..
             } => {
-                check_ineffective_conversions(actual, false, src)?;
-                check_ineffective_conversions(expected, false, src)?;
-                check_ineffective_conversions(tolerance, false, src)?;
+                check_ineffective_conversions(actual, false, body_src)?;
+                check_ineffective_conversions(expected, false, body_src)?;
+                check_ineffective_conversions(tolerance, false, body_src)?;
             }
         }
     }
@@ -943,20 +967,23 @@ fn check_domain_constraint_dimensions_dag(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
+    // A merged dependency declaration's domain bounds keep the dependency
+    // file's spans, so they are checked against that body's source (#868).
     let decl_iter = dag
         .consts
         .iter()
-        .map(|e| &e.name)
-        .chain(dag.params.iter().map(|e| &e.name))
-        .chain(dag.nodes.iter().map(|e| &e.name));
+        .map(|e| (&e.name, &e.src))
+        .chain(dag.params.iter().map(|e| (&e.name, &e.src)))
+        .chain(dag.nodes.iter().map(|e| (&e.name, &e.src)));
 
-    for name in decl_iter {
+    for (name, body_provenance) in decl_iter {
         let bounds = dag
             .resolved_decl_key_for_local(name)
             .and_then(|key| dag.semantic.domain_bounds.get(&key));
         let Some(bounds) = bounds else {
             continue;
         };
+        let body_src = body_provenance.resolve(src);
 
         let resolved = dag.resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);
@@ -980,9 +1007,9 @@ fn check_domain_constraint_dimensions_dag(
                 tir,
                 registry,
                 builtin_fns,
-                src,
+                body_src,
             )?;
-            check_one_bound(name, bound, &inferred, &expected, registry, src)?;
+            check_one_bound(name, bound, &inferred, &expected, registry, body_src)?;
         }
     }
 
