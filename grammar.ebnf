@@ -270,14 +270,16 @@ dimension_decl
    | "dim", IDENT, "=", dim_expr, ";";
 
 (* --- unit --- *)
-(* Two forms:
+(* Three forms:
    1. Base unit (no body):     base unit m: Length;
-   2. Derived unit:            unit km: Length = 1000 m;
+   2. Const unit:              const unit km: Length = 1000 m;
+   3. Runtime unit:            unit EUR: Money = (@rate) USD;
    The no-body form requires the `base` prefix; plain `unit X: Dim;`
-   is a parse error. *)
+   is a parse error. `const node` bodies may only use prelude/base/const
+   units. *)
 unit_decl
    = "base", "unit", IDENT, ":", dim_expr, ";"
-   | "unit", IDENT, ":", dim_expr, "=", unit_def, ";";
+   | [ "const" ], "unit", IDENT, ":", dim_expr, "=", unit_def, ";";
 
 unit_def
    = unit_scale, unit_expr;
@@ -286,8 +288,10 @@ unit_scale
    = NUMBER
    | "(", expr, ")";
 
-(* The parenthesized form is evaluated at compile time. Only constant
-   expressions are allowed: numbers, PI, E, and arithmetic operators. *)
+(* In `const unit`, the scale expression is evaluated at compile time and
+   must not contain `@` references. In plain `unit`, a parenthesized scale
+   may contain `@` references and is then evaluated at runtime; a plain unit
+   with a static-looking body is still not usable from `const node`. *)
 (* --- type --- *)
 (* Two forms of type declaration:
    1. Required type (no body):  type Element;     (must be bound via include)

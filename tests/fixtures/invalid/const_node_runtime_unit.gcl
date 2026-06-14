@@ -1,0 +1,2 @@
+unit mile: Length = 1609.344 m;
+const node distance: Length = 1.0 mile;

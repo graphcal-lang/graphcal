@@ -222,6 +222,36 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("graph reference `@{name}` not allowed in const unit scale")]
+    #[diagnostic(
+        code(graphcal::D017),
+        help(
+            "`const unit` scales are compile-time constants; use plain `unit` for runtime-dependent units"
+        )
+    )]
+    GraphRefInConstUnit {
+        name: ScopedName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("@ reference not allowed in a const unit")]
+        span: SourceSpan,
+    },
+
+    #[error("non-const unit `{name}` not allowed in const expression")]
+    #[diagnostic(
+        code(graphcal::D018),
+        help(
+            "`const node` bodies and `const unit` definitions can only use prelude units, `base unit`, or `const unit` declarations; use `node` or plain `unit` for runtime-unit calculations"
+        )
+    )]
+    NonConstUnitInConst {
+        name: UnitRef,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unit is not const")]
+        span: SourceSpan,
+    },
+
     #[error("graph reference `@{name}` not allowed in function body")]
     #[diagnostic(code(graphcal::F001))]
     GraphRefInFn {
@@ -1611,6 +1641,8 @@ impl GraphcalError {
             | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }
             | Self::GraphRefInConst { src, .. }
+            | Self::GraphRefInConstUnit { src, .. }
+            | Self::NonConstUnitInConst { src, .. }
             | Self::GraphRefInFn { src, .. }
             | Self::RecursiveFunction { src, .. }
             | Self::WrongArity { src, .. }

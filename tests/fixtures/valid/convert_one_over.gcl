@@ -4,6 +4,6 @@
 param f: Frequency = 2.0 Hz;
 node per_minute: Frequency = @f -> 1/min;
 node per_minute_pow: Frequency = @f -> min^-1;
-unit per_min: Frequency = (1.0 / 60.0) 1/s;
+const unit per_min: Frequency = (1.0 / 60.0) 1/s;
 node via_decl: Frequency = @f -> per_min;
 assert same = @per_minute == @per_minute_pow;

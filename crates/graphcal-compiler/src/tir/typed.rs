@@ -1090,7 +1090,13 @@ fn type_resolve_impl(
     )?;
     lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut root_dag.semantic);
     augment_runtime_deps_for_dynamic_units(&mut root_dag.semantic);
-    check_hir_body_policies(&root_dag.semantic, &ir.pub_names, module_ctx, src)?;
+    check_hir_body_policies(
+        &root_dag.semantic,
+        &ir.registry,
+        &ir.pub_names,
+        module_ctx,
+        src,
+    )?;
     let mut dags = DagRegistry::new();
     dags.insert(root_dag_id.clone(), root_dag);
     Ok(TIR {
@@ -1151,7 +1157,7 @@ fn type_resolve_single_impl(
     )?;
     lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut dag.semantic);
     augment_runtime_deps_for_dynamic_units(&mut dag.semantic);
-    check_hir_body_policies(&dag.semantic, &ir.pub_names, module_ctx, src)?;
+    check_hir_body_policies(&dag.semantic, &ir.registry, &ir.pub_names, module_ctx, src)?;
     Ok(dag)
 }
 
@@ -1663,7 +1669,7 @@ struct LoweredDagExpressions {
 ///
 /// Walks every lowered body of one DAG and enforces:
 /// - const bodies must not `@`-reference runtime declarations (E020-style
-///   [`GraphcalError::GraphRefInConst`]);
+///   [`GraphcalError::GraphRefInConst`]) or use runtime units in literals / conversion targets;
 /// - no body may `@`-reference an assert declaration
 ///   ([`GraphcalError::GraphRefToAssert`]);
 /// - A10(c) / V004: bodies of non-bindable kinds owned by this module must
@@ -1672,16 +1678,24 @@ struct LoweredDagExpressions {
 ///   sink kinds (assert/plot/figure/layer) are checked only when `pub`.
 fn check_hir_body_policies(
     semantic: &DagSemanticBody,
+    registry: &Registry,
     pub_names: &std::collections::HashSet<DeclName>,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let checker = HirPolicyChecker { ctx, src };
+    let checker = HirPolicyChecker { registry, ctx, src };
     let local = |key: &ResolvedName<namespace::Decl>| key.owner() == ctx.owner;
     let is_pub = |leaf: &str| pub_names.contains(&DeclName::new(leaf));
 
     for (key, expr) in &semantic.expressions.consts {
         checker.check_expr(expr, true, local(key))?;
+    }
+    for (key, bounds) in &semantic.domain_bounds {
+        if semantic.expressions.consts.contains_key(key) {
+            for bound in bounds {
+                checker.check_expr(&bound.value, true, local(key))?;
+            }
+        }
     }
     for (key, expr) in &semantic.expressions.nodes {
         checker.check_expr(expr, false, local(key))?;
@@ -1731,6 +1745,7 @@ fn check_hir_body_policies(
 }
 
 struct HirPolicyChecker<'a> {
+    registry: &'a Registry,
     ctx: ModuleTypeContext<'a>,
     src: &'a NamedSource<Arc<String>>,
 }
@@ -1764,8 +1779,8 @@ impl HirPolicyChecker<'_> {
             | hir::ExprKind::StringLiteral(_)
             | hir::ExprKind::TypeSystemRef(_)
             | hir::ExprKind::ConstRef(_)
-            | hir::ExprKind::LocalRef(_)
-            | hir::ExprKind::UnitLiteral { .. } => Ok(()),
+            | hir::ExprKind::LocalRef(_) => Ok(()),
+            hir::ExprKind::UnitLiteral { unit, .. } => self.check_const_unit_expr(unit, const_body),
             hir::ExprKind::GraphRef(target) => {
                 // Use the whole `@name` span (the reference Spanned covers
                 // only the name) so the label includes the sigil.
@@ -1779,9 +1794,15 @@ impl HirPolicyChecker<'_> {
                 recurse(rhs)
             }
             hir::ExprKind::UnaryOp { operand, .. }
-            | hir::ExprKind::Convert { expr: operand, .. }
             | hir::ExprKind::DisplayTimezone { expr: operand, .. }
             | hir::ExprKind::FieldAccess { expr: operand, .. } => recurse(operand),
+            hir::ExprKind::Convert {
+                expr: operand,
+                target,
+            } => {
+                self.check_const_unit_expr(target, const_body)?;
+                recurse(operand)
+            }
             hir::ExprKind::FnCall { args, .. } => args.iter().try_for_each(recurse),
             hir::ExprKind::If {
                 condition,
@@ -1845,6 +1866,30 @@ impl HirPolicyChecker<'_> {
                 args.iter().try_for_each(|arg| recurse(&arg.value))
             }
         }
+    }
+
+    fn check_const_unit_expr(
+        &self,
+        unit: &crate::desugar::desugared_ast::UnitExpr,
+        const_body: bool,
+    ) -> Result<(), GraphcalError> {
+        if !const_body {
+            return Ok(());
+        }
+        for term in &unit.terms {
+            let Some(info) = self.registry.units.get_unit(&term.name.value) else {
+                // Unknown units get their own diagnostics from dimension checking.
+                continue;
+            };
+            if !info.constness.is_const() {
+                return Err(GraphcalError::NonConstUnitInConst {
+                    name: term.name.value.clone(),
+                    src: self.src.clone(),
+                    span: term.name.span.into(),
+                });
+            }
+        }
+        Ok(())
     }
 
     fn check_graph_ref(

@@ -173,6 +173,7 @@ impl From<UnitDecl<Raw>> for UnitDecl<Desugared> {
     fn from(u: UnitDecl<Raw>) -> Self {
         Self {
             visibility: u.visibility,
+            constness: u.constness,
             name: u.name,
             dim_type: u.dim_type,
             definition: u.definition.map(Into::into),

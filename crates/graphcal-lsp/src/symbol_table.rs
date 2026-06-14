@@ -1866,8 +1866,13 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                         UnitScale::Static(s) => format!("{s}"),
                         UnitScale::Dynamic { .. } => "dynamic".to_string(),
                     };
+                    let timing = if unit_info.constness.is_const() {
+                        "const"
+                    } else {
+                        "runtime"
+                    };
                     def_mut.type_description = Some(format!(
-                        "{}, scale = {scale_str}",
+                        "{}, {timing}, scale = {scale_str}",
                         registry.dimensions.format_dimension(&unit_info.dimension),
                     ));
                 }

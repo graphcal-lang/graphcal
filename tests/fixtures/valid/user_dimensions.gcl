@@ -1,8 +1,8 @@
 // User-defined base dim
 pub base dim Information;
 base unit bit: Information;
-unit byte: Information = 8.0 bit;
-unit kB: Information = 1000.0 byte;
+const unit byte: Information = 8.0 bit;
+const unit kB: Information = 1000.0 byte;
 
 pub dim Bandwidth = Information / Time;
 

@@ -190,9 +190,16 @@ fn format_base_dimension() {
 
 #[test]
 fn format_unit_decl() {
-    let source = "unit km: Length = 1000 m;\n";
+    let source = "unit EUR: Money = (@rate) USD;\n";
     let formatted = format_source(source).unwrap();
-    assert_eq!(formatted, "unit km: Length = 1000 m;\n");
+    assert_eq!(formatted, "unit EUR: Money = (@rate) USD;\n");
+}
+
+#[test]
+fn format_const_unit_decl() {
+    let source = "const unit km: Length = 1000 m;\n";
+    let formatted = format_source(source).unwrap();
+    assert_eq!(formatted, "const unit km: Length = 1000 m;\n");
 }
 
 #[test]

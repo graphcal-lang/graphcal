@@ -58,7 +58,7 @@ fn overflowing_unit_literal_is_rejected() {
 #[test]
 fn zero_static_unit_scale_is_rejected() {
     assert_rejected_or_decl_error(
-        "unit z: Length = 0.0 m;\nnode x: Length = 1.0 z;",
+        "const unit z: Length = 0.0 m;\nnode x: Length = 1.0 z;",
         "x",
         "BUG: zero static unit scale accepted",
     );
@@ -67,7 +67,7 @@ fn zero_static_unit_scale_is_rejected() {
 #[test]
 fn negative_static_unit_scale_is_rejected() {
     assert_rejected_or_decl_error(
-        "unit neg_m: Length = (-1.0) m;\nnode x: Length = 1.0 neg_m;",
+        "const unit neg_m: Length = (-1.0) m;\nnode x: Length = 1.0 neg_m;",
         "x",
         "BUG: negative static unit scale accepted",
     );
@@ -76,7 +76,7 @@ fn negative_static_unit_scale_is_rejected() {
 #[test]
 fn non_finite_static_unit_scale_is_rejected() {
     assert_rejected_or_decl_error(
-        "unit huge_m: Length = 1e999 m;\nnode x: Length = 1.0 huge_m;",
+        "const unit huge_m: Length = 1e999 m;\nnode x: Length = 1.0 huge_m;",
         "x",
         "BUG: non-finite static unit scale accepted",
     );

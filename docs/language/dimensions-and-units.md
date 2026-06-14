@@ -98,25 +98,25 @@ Units are value-level scaling factors tied to a specific dimension. They define 
 ### Defining Custom Units
 
 ```
-unit mile: Length = 1609.344 m;
-unit knot: Velocity = 0.514444 m/s;
+const unit mile: Length = 1609.344 m;
+const unit knot: Velocity = 0.514444 m/s;
 base unit bit: Information;         // canonical unit for a user-defined dimension
-unit byte: Information = 8.0 bit;
-unit kB: Information = 1000.0 byte;
+const unit byte: Information = 8.0 bit;
+const unit kB: Information = 1000.0 byte;
 ```
 
-A `base unit` declaration (`base unit bit: Information;` with no `= ...`) defines the canonical unit for a user-defined base dimension. Non-base units must always carry an `= ...` body.
+A `base unit` declaration (`base unit bit: Information;` with no `= ...`) defines the canonical unit for a user-defined base dimension. Non-base units must always carry an `= ...` body. Use `const unit` for compile-time scales and plain `unit` for runtime-dependent scales. The keyword determines constness: even a plain `unit` with a static-looking body is not usable from a `const node`. A `const unit` scale cannot contain `@` references, and `const node` bodies may only use prelude units, `base unit`, and `const unit` declarations.
 
-User unit definitions on bare `Temperature` are rejected (`D014`): the common temperature units (°C, °F) are *affine* scales with an offset, which a multiplicative `unit` definition cannot express — `unit C: Temperature = 1.0 K;` would print `300 K` as a meaningless `300 C`. Keep absolute temperatures in `K`, or model offsets explicitly in expressions. Compound dimensions involving Temperature (e.g. `Temperature / Time`) still accept unit definitions, since offsets cancel in differences and rates.
+User unit definitions on bare `Temperature` are rejected (`D014`): the common temperature units (°C, °F) are *affine* scales with an offset, which a multiplicative unit definition cannot express — `const unit C: Temperature = 1.0 K;` would print `300 K` as a meaningless `300 C`. Keep absolute temperatures in `K`, or model offsets explicitly in expressions. Compound dimensions involving Temperature (e.g. `Temperature / Time`) still accept unit definitions, since offsets cancel in differences and rates.
 
-Unit scale factors must be **positive and finite**. Static unit definitions such as `unit z: Length = 0.0 m;`, negative scales, and overflowing scales are rejected. Dynamic unit scales are checked at evaluation time with the same rule.
+Unit scale factors must be **positive and finite**. Static unit definitions such as `const unit z: Length = 0.0 m;`, negative scales, and overflowing scales are rejected. Dynamic unit scales are checked at evaluation time with the same rule.
 
 ### Unit Scoping
 
 Units follow the same scoping rules as every other imported category. A *bare* reference (`@a -> mile`) resolves against the file's own unit scope: the prelude's units, the file's own declarations, and selectively imported units (`import app.units.{ mile };`). A module imported with an alias exposes its `pub` units under that alias — `import app.units as u;` makes the unit available as `u.mile`, and only as `u.mile`:
 
 ```
-import app.units as u;            // defines `pub unit mile: Length = 1609.344 m;`
+import app.units as u;            // defines `pub const unit mile: Length = 1609.344 m;`
 
 param a: Length = 3218.688 m;
 node b: Length = @a -> u.mile;    // 2 u.mile
@@ -126,7 +126,7 @@ Referencing an alias-imported unit by its bare name is an unknown-unit error (`D
 
 Because each alias scopes its own names, two modules may define the same unit name *differently* and both stay usable — `ua.mile` and `ub.mile` never collide. Selectively importing the same bare name from two modules is rejected as a duplicate import, like any other name clash.
 
-Local `unit` definitions can reference imported units in their bodies, with either import form: `unit halfmile: Length = 0.5 u.mile;` after `import app.units as u;`, or `unit halfmile: Length = 0.5 mile;` after `import app.units.{ mile };`.
+Local `const unit` definitions can reference imported const units in their bodies, with either import form: `const unit halfmile: Length = 0.5 u.mile;` after `import app.units as u;`, or `const unit halfmile: Length = 0.5 mile;` after `import app.units.{ mile };`.
 
 ### Dynamic Units
 

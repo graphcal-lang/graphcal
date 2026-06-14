@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+non-const unit `mile` not allowed in const expression
+    Diagnostic severity: error
+Begin snippet for const_node_runtime_unit.gcl starting at line 1, column 1
+
+snippet line 1: unit mile: Length = 1609.344 m;
+snippet line 2: const node distance: Length = 1.0 mile;
+    label at line 2, columns 35 to 38: unit is not const
+diagnostic help: `const node` bodies and `const unit` definitions can only use prelude units, `base unit`, or `const unit` declarations; use `node` or plain `unit` for runtime-unit calculations
+diagnostic code: graphcal::D018

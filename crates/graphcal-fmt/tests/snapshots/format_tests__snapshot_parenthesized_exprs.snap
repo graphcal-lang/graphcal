@@ -1,6 +1,5 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 487
 expression: formatted
 ---
 // parenthesized_exprs.gcl -- Test parenthesized dim and unit expressions
@@ -21,9 +20,9 @@ pub dim HeatFlux = Mass / Time^3;
 // Capacitance uses nested grouping: A^2 * s^4 / (kg * m^2)
 pub dim Capacitance = ElectricCurrent^2 * Time^4 / Mass / Length^2;
 
-unit V: Voltage = 1.0 kg * m^2/A/s^3;
-unit ohm: Resistance = 1.0 V/A;
-unit F: Capacitance = 1.0 A^2 * s^4/kg/m^2;
+const unit V: Voltage = 1.0 kg * m^2/A/s^3;
+const unit ohm: Resistance = 1.0 V/A;
+const unit F: Capacitance = 1.0 A^2 * s^4/kg/m^2;
 
 // --- Parenthesized unit expressions in arithmetic ---
 param panel_area: Area = 2.5 m^2;

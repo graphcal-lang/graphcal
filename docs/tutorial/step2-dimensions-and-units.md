@@ -82,12 +82,12 @@ const node speed_of_light: Velocity = 299792458.0 m/s;
 
 ## Defining Custom Units
 
-You can define your own units:
+Use `const unit` for custom units whose scale is known at compile time:
 
 ```
-unit mile: Length = 1609.344 m;
-unit hour: Time = 3600.0 s;
-unit mph: Velocity = 1.0 mile / hour;
+const unit mile: Length = 1609.344 m;
+const unit hour: Time = 3600.0 s;
+const unit mph: Velocity = 1.0 mile / hour;
 ```
 
 ## Unit Conversion
@@ -120,8 +120,8 @@ You can define entirely new base dimensions for domain-specific quantities:
 ```
 base dim Information;
 base unit bit: Information;
-unit byte: Information = 8.0 bit;
-unit kB: Information = 1000.0 byte;
+const unit byte: Information = 8.0 bit;
+const unit kB: Information = 1000.0 byte;
 
 dim Bandwidth = Information / Time;
 
@@ -136,7 +136,7 @@ A `base dim Information;` declaration creates a new base dimension.
 
 - **`dim`** declarations for derived and custom base dimensions
 - **Unit annotations** on numeric literals (`1200.0 kg`)
-- **`unit`** declarations for custom units
+- **`const unit`** declarations for compile-time custom units, and `unit` for runtime-dependent scales
 - **`->`** operator for unit conversion
 - **Compile-time dimension checking** catches unit mismatches
 

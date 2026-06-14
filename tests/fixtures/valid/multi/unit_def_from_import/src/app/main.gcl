@@ -1,9 +1,9 @@
-// A local `unit` definition can reference a module-imported unit (#822):
+// A local `const unit` definition can reference a module-imported unit (#822):
 // imported type-system declarations merge into the registry before the
 // file's own declarations are resolved.
 import app.units as u;
 
-unit halfmile: Length = 0.5 u.mile;
+const unit halfmile: Length = 0.5 u.mile;
 
 param a: Length = 1609.344 m;
 node b: Length = @a -> halfmile;

@@ -1198,6 +1198,78 @@ node bad: Dimensionless = if true { 0.0 } else { 1.0 foobar };";
     );
 }
 
+// --- Unit constness policies ---
+
+#[test]
+fn const_unit_rejects_graph_ref_scale() {
+    let source = "\
+base dim Money;
+base unit USD: Money;
+param rate: Dimensionless = 1.08;
+const unit EUR: Money = (@rate) USD;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::GraphRefInConstUnit { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn const_unit_rejects_runtime_unit_reference() {
+    let source = "\
+unit mile: Length = 1609.344 m;
+const unit double_mile: Length = 2.0 mile;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::NonConstUnitInConst { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn const_node_rejects_runtime_unit_literal() {
+    let source = "\
+unit mile: Length = 1609.344 m;
+const node distance: Length = 1.0 mile;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::NonConstUnitInConst { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn const_node_rejects_runtime_unit_in_domain_bound() {
+    let source = "\
+unit mile: Length = 1609.344 m;
+const node distance: Length(min: 1.0 mile) = 1609.344 m;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::NonConstUnitInConst { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn const_node_accepts_const_unit_literal() {
+    let source = "\
+const unit mile: Length = 1609.344 m;
+const node distance: Length = 1.0 mile;";
+    check(source).unwrap();
+}
+
+#[test]
+fn const_node_rejects_runtime_conversion_target() {
+    let source = "\
+unit mile: Length = 1609.344 m;
+const node distance: Length = 1609.344 m -> mile;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::NonConstUnitInConst { .. }),
+        "got: {err:?}"
+    );
+}
+
 // --- Error propagation through convert sub-expression ---
 
 #[test]

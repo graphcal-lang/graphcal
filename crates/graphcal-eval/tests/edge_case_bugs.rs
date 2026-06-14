@@ -629,7 +629,7 @@ fn unit_scale_km_squared() {
     // 1 km^2 = 1e6 m^2
     // A value of 5.0 km^2 should be 5e6 m^2 internally
     let source = r#"
-unit km2: Area = 1e6 m^2;
+const unit km2: Area = 1e6 m^2;
 param x: Area = 5.0 km2;
 "#;
     let result = compile_and_eval(source).unwrap();

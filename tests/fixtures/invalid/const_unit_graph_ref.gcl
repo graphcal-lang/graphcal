@@ -1,0 +1,4 @@
+base dim Money;
+base unit USD: Money;
+param rate: Dimensionless = 1.08;
+const unit EUR: Money = (@rate) USD;

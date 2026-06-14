@@ -68,6 +68,20 @@ fn error_at_in_const() {
 }
 
 #[test]
+fn error_const_unit_graph_ref() {
+    let source = include_str!("../../../tests/fixtures/invalid/const_unit_graph_ref.gcl");
+    let rendered = render_error(source, "const_unit_graph_ref.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_const_node_runtime_unit() {
+    let source = include_str!("../../../tests/fixtures/invalid/const_node_runtime_unit.gcl");
+    let rendered = render_error(source, "const_node_runtime_unit.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_runtime_cycle() {
     let source = include_str!("../../../tests/fixtures/invalid/cycle.gcl");
     let rendered = render_error(source, "cycle.gcl");

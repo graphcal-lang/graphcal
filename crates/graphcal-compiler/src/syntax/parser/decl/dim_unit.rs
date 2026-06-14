@@ -1,5 +1,5 @@
 use crate::syntax::ast::{
-    BaseDimDecl, BindableVisibility, DeclKind, Declaration, DimDecl, Visibility,
+    BaseDimDecl, BindableVisibility, DeclKind, Declaration, DimDecl, UnitConstness, Visibility,
 };
 use crate::syntax::names::{DimName, UnitName};
 use crate::syntax::token::Token;
@@ -58,11 +58,28 @@ impl Parser<'_> {
 
     /// Parse `unit Name: Dim = scale unit_expr;`.
     ///
-    /// The no-body form `unit Name: Dim;` is now rejected — use
+    /// The no-body form `unit Name: Dim;` is rejected — use
     /// `base unit Name: Dim;` (parsed via `parse_base_unit_decl`).
     pub(super) fn parse_unit_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Unit)?;
-        self.parse_unit_decl_inner(start_span, /*require_definition=*/ true)
+        self.parse_unit_decl_inner(
+            start_span,
+            UnitConstness::Dynamic,
+            /*require_definition=*/ true,
+        )
+    }
+
+    /// Parse `const unit Name: Dim = scale unit_expr;`.
+    pub(super) fn parse_const_unit(
+        &mut self,
+        const_span: crate::syntax::span::Span,
+    ) -> Result<Declaration, ParseError> {
+        self.expect(Token::Unit)?;
+        self.parse_unit_decl_inner(
+            const_span,
+            UnitConstness::Const,
+            /*require_definition=*/ true,
+        )
     }
 
     /// Parse `base unit Name: Dim;` — a base unit in its dimension.
@@ -71,12 +88,17 @@ impl Parser<'_> {
         base_span: crate::syntax::span::Span,
     ) -> Result<Declaration, ParseError> {
         self.expect(Token::Unit)?;
-        self.parse_unit_decl_inner(base_span, /*require_definition=*/ false)
+        self.parse_unit_decl_inner(
+            base_span,
+            UnitConstness::Const,
+            /*require_definition=*/ false,
+        )
     }
 
     fn parse_unit_decl_inner(
         &mut self,
         start_span: crate::syntax::span::Span,
+        constness: UnitConstness,
         require_definition: bool,
     ) -> Result<Declaration, ParseError> {
         let name = self.parse_any_ident()?.into_spanned::<UnitName>();
@@ -92,7 +114,7 @@ impl Parser<'_> {
         };
 
         if require_definition && definition.is_none() {
-            // Non-base / non-const unit without a body: disallowed after A4.
+            // Non-base units need a scale body; use `base unit` for a canonical unit.
             let err_span = name.span;
             return Err(self.unexpected_token(
                 "`=` followed by a unit definition (use `base unit` for a no-body declaration)",
@@ -107,6 +129,7 @@ impl Parser<'_> {
             attributes: vec![],
             kind: DeclKind::Unit(crate::syntax::ast::UnitDecl {
                 visibility: Visibility::Private,
+                constness,
                 name,
                 dim_type,
                 definition,

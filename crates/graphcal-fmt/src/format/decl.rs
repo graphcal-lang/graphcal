@@ -3,7 +3,7 @@ use graphcal_compiler::syntax::ast::{
     Encoding, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl, IncludeDecl,
     IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis, MultiSlotKind,
     NodeDecl, ParamBinding, ParamDecl, PlotDecl, TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr,
-    UnitDecl, UnitDef, Visibility,
+    UnitConstness, UnitDecl, UnitDef, Visibility,
 };
 use pretty::RcDoc;
 
@@ -192,12 +192,12 @@ fn format_dim_decl(d: &DimDecl) -> RcDoc<'static> {
     }
 }
 
-/// `unit name: Dim = scale unit_expr;` or `base unit name: Dim;`.
+/// `const unit name: Dim = scale unit_expr;`, `unit name: Dim = ...`, or `base unit name: Dim;`.
 fn format_unit_decl(fmt: &mut Formatter<'_>, d: &UnitDecl) -> RcDoc<'static> {
-    let head = if d.definition.is_none() {
-        RcDoc::text("base unit ")
-    } else {
-        RcDoc::text("unit ")
+    let head = match (&d.definition, d.constness) {
+        (None, _) => RcDoc::text("base unit "),
+        (Some(_), UnitConstness::Const) => RcDoc::text("const unit "),
+        (Some(_), UnitConstness::Dynamic) => RcDoc::text("unit "),
     };
     let mut doc = head
         .append(RcDoc::text(d.name.value.as_str().to_string()))
