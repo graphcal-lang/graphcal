@@ -579,6 +579,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "graphcal-package"
+version = "0.0.1-alpha.14"
+dependencies = [
+ "thiserror",
+ "toml-spanner",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
