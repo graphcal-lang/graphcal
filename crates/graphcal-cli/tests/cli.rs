@@ -32,41 +32,58 @@ fn write_temp_file(root: &Path, rel: &str, source: &str) -> PathBuf {
     path
 }
 
-fn git(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("failed to run git");
-    assert!(
-        output.status.success(),
-        "git {:?} failed\nstdout: {}\nstderr: {}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
+fn commit_git_repo(root: &Path, message: &str) -> String {
+    let repo = gix::open(root).unwrap();
+    let tree_id = write_tree_object(&repo, root);
+    let parents = repo
+        .head_id()
+        .map(|id| vec![id.detach()])
+        .unwrap_or_default();
+    let signature =
+        gix::actor::SignatureRef::from_bytes(b"Graphcal Test <graphcal@example.invalid> 0 +0000")
+            .unwrap();
+    repo.commit_as(signature, signature, "HEAD", message, tree_id, parents)
+        .unwrap()
+        .detach()
+        .to_hex()
+        .to_string()
 }
 
-fn commit_git_repo(root: &Path, message: &str) -> String {
-    git(root, &["add", "."]);
-    git(
-        root,
-        &[
-            "-c",
-            "user.name=Graphcal Test",
-            "-c",
-            "user.email=graphcal@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "--quiet",
-            "-m",
-            message,
-        ],
-    );
-    git(root, &["rev-parse", "HEAD"])
+fn write_tree_object(repo: &gix::Repository, root: &Path) -> gix::hash::ObjectId {
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(root).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let filename = entry.file_name();
+        if filename == ".git" {
+            continue;
+        }
+        let file_type = entry.file_type().unwrap();
+        let (mode, oid) = if file_type.is_dir() {
+            (
+                gix::objs::tree::EntryKind::Tree.into(),
+                write_tree_object(repo, &path),
+            )
+        } else if file_type.is_file() {
+            (
+                gix::objs::tree::EntryKind::Blob.into(),
+                repo.write_blob(std::fs::read(path).unwrap())
+                    .unwrap()
+                    .detach(),
+            )
+        } else {
+            panic!("unsupported test fixture entry `{}`", path.display());
+        };
+        entries.push(gix::objs::tree::Entry {
+            mode,
+            filename: filename.to_string_lossy().into_owned().into(),
+            oid,
+        });
+    }
+    entries.sort();
+    repo.write_object(gix::objs::Tree { entries })
+        .unwrap()
+        .detach()
 }
 
 fn init_git_package(
@@ -82,12 +99,7 @@ fn init_git_package(
     )
     .unwrap();
     std::fs::write(root.join(format!("src/{package}/lib.gcl")), module_source).unwrap();
-    Command::new("git")
-        .arg("init")
-        .arg("--quiet")
-        .arg(root)
-        .output()
-        .expect("failed to run git init");
+    gix::init(root).unwrap();
     commit_git_repo(root, "initial")
 }
 

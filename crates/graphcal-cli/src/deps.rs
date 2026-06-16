@@ -1,10 +1,11 @@
 //! Imperative shell for `graphcal deps` commands.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error as StdError;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::sync::atomic::AtomicBool;
 
 use graphcal_eval::loader::discover_project_root;
 use graphcal_io::RealFileSystem;
@@ -17,6 +18,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 const CACHE_ENV: &str = "GRAPHCAL_CACHE_DIR";
+const FETCHED_COMMIT_REF: &str = "refs/remotes/origin/graphcal-lock";
+
+type BoxError = Box<dyn StdError + Send + Sync>;
 
 /// Result of a successful `graphcal deps lock` run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,16 +240,7 @@ impl LockResolver {
                 source,
             })?;
         let tmp_path = tmp.path().to_path_buf();
-        git(["init", "--quiet"], Some(&tmp_path))?;
-        git(["remote", "add", "origin", url.as_str()], Some(&tmp_path))?;
-        git(
-            ["fetch", "--quiet", "--depth=1", "origin", rev.as_str()],
-            Some(&tmp_path),
-        )?;
-        git(
-            ["checkout", "--quiet", "--detach", rev.as_str()],
-            Some(&tmp_path),
-        )?;
+        materialize_git_revision(url, rev, &tmp_path)?;
         let sha256 = hash_source_tree(&tmp_path)?;
         std::fs::rename(&tmp_path, &path).map_err(|source| DepsError::Rename {
             from: tmp_path,
@@ -254,6 +249,86 @@ impl LockResolver {
         })?;
 
         Ok(MaterializedGit { root: path, sha256 })
+    }
+}
+
+fn materialize_git_revision(
+    url: &GitUrl,
+    rev: &GitCommitHash,
+    path: &Path,
+) -> Result<(), DepsError> {
+    let commit_id = gix::hash::ObjectId::from_hex(rev.as_str().as_bytes()).map_err(|source| {
+        DepsError::GitMaterialize {
+            url: url.as_str().to_string(),
+            rev: rev.as_str().to_string(),
+            source: Box::new(source),
+        }
+    })?;
+    let fetch_refspec = format!("+{}:{FETCHED_COMMIT_REF}", rev.as_str());
+    let should_interrupt = AtomicBool::new(false);
+    let mut prepare_fetch = gix::clone::PrepareFetch::new(
+        url.as_str(),
+        path,
+        gix::create::Kind::WithWorktree,
+        gix::create::Options::default(),
+        gix::open::Options::isolated().strict_config(true),
+    )
+    .map_err(|source| git_materialize_error(url, rev, source))?
+    .configure_remote(move |remote| {
+        remote
+            .with_refspecs([fetch_refspec.as_str()], gix::remote::Direction::Fetch)
+            .map(|remote| remote.with_fetch_tags(gix::remote::fetch::Tags::None))
+            .map_err(|source| Box::new(source) as BoxError)
+    });
+    let (repo, _) = prepare_fetch
+        .fetch_only(gix::progress::Discard, &should_interrupt)
+        .map_err(|source| git_materialize_error(url, rev, source))?;
+
+    checkout_git_commit(&repo, commit_id).map_err(|source| DepsError::GitMaterialize {
+        url: url.as_str().to_string(),
+        rev: rev.as_str().to_string(),
+        source,
+    })
+}
+
+fn checkout_git_commit(
+    repo: &gix::Repository,
+    commit_id: gix::hash::ObjectId,
+) -> Result<(), BoxError> {
+    let workdir = repo.workdir().ok_or_else(|| {
+        Box::new(std::io::Error::other(
+            "gix clone unexpectedly produced a bare repository",
+        )) as BoxError
+    })?;
+    let commit = repo.find_commit(commit_id)?;
+    let tree_id = commit.tree_id()?.detach();
+    let mut index = repo.index_from_tree(&tree_id)?;
+    let mut checkout_options =
+        repo.checkout_options(gix::worktree::stack::state::attributes::Source::IdMapping)?;
+    checkout_options.destination_is_initially_empty = true;
+
+    gix::worktree::state::checkout(
+        &mut index,
+        workdir,
+        repo.objects.clone().into_arc()?,
+        &gix::progress::Discard,
+        &gix::progress::Discard,
+        &AtomicBool::new(false),
+        checkout_options,
+    )?;
+    index.write(gix::index::write::Options::default())?;
+    Ok(())
+}
+
+fn git_materialize_error(
+    url: &GitUrl,
+    rev: &GitCommitHash,
+    source: impl StdError + Send + Sync + 'static,
+) -> DepsError {
+    DepsError::GitMaterialize {
+        url: url.as_str().to_string(),
+        rev: rev.as_str().to_string(),
+        source: Box::new(source),
     }
 }
 
@@ -392,26 +467,6 @@ fn normalize_relative_path(path: &Path) -> String {
     out
 }
 
-fn git<I, S>(args: I, cwd: Option<&Path>) -> Result<(), DepsError>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let mut command = Command::new("git");
-    if let Some(cwd) = cwd {
-        command.arg("-C").arg(cwd);
-    }
-    command.args(args);
-    let output = command.output().map_err(DepsError::GitSpawn)?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(DepsError::GitFailed {
-        status: output.status.code(),
-        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-    })
-}
-
 fn hex_string(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -505,12 +560,13 @@ pub enum DepsError {
     /// Generated package id was invalid.
     #[error(transparent)]
     PackageId(graphcal_package::PackageInstanceIdError),
-    /// Git process could not start.
-    #[error("could not run git: {0}")]
-    GitSpawn(std::io::Error),
-    /// Git command failed.
-    #[error("git failed with status {status:?}: {stderr}")]
-    GitFailed { status: Option<i32>, stderr: String },
+    /// Git materialization failed.
+    #[error("could not materialize Git dependency `{url}` at `{rev}`: {source}")]
+    GitMaterialize {
+        url: String,
+        rev: String,
+        source: BoxError,
+    },
     /// Recursive dependency cycle.
     #[error("dependency cycle while resolving package `{package}`")]
     DependencyCycle { package: PackageInstanceId },
