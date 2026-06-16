@@ -569,6 +569,7 @@ version = "0.0.1-alpha.14"
 dependencies = [
  "graphcal-compiler",
  "graphcal-io",
+ "graphcal-package",
  "hifitime",
  "indexmap",
  "insta",
@@ -577,6 +578,7 @@ dependencies = [
  "petgraph",
  "proptest",
  "rand 0.10.1",
+ "sha2",
  "tempfile",
  "thiserror",
 ]

@@ -89,13 +89,15 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     let dep_rev = create_git_package(
         &dep_repo,
         "units",
-        "pub param unit_scale: Dimensionless = 1.0;\n",
+        "pub const node one: Dimensionless = 1.0;\n",
     );
     let project = dir.path().join("mission");
     std::fs::create_dir_all(project.join("src/mission")).unwrap();
+    let main = project.join("src/mission/main.gcl");
     std::fs::write(
-        project.join("src/mission/main.gcl"),
-        "param dry: kg = 1.0;\n",
+        &main,
+        "import units_v1.lib.{ one };\n\
+         node two: Dimensionless = @one + 1.0;\n",
     )
     .unwrap();
     std::fs::write(
@@ -145,6 +147,40 @@ fn deps_lock_writes_deterministic_git_lockfile() {
         !lock.contains(cache.to_str().unwrap()),
         "lock must not serialize cache paths:\n{lock}"
     );
+
+    let check = graphcal_bin()
+        .args([
+            "check",
+            main.to_str().unwrap(),
+            "--root",
+            project.to_str().unwrap(),
+        ])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        check.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let eval = graphcal_bin()
+        .args([
+            "eval",
+            main.to_str().unwrap(),
+            "--root",
+            project.to_str().unwrap(),
+        ])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        eval.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&eval.stderr)
+    );
+    let stdout = String::from_utf8(eval.stdout).unwrap();
+    assert!(stdout.contains("two = 2"), "stdout: {stdout}");
 
     let second = graphcal_bin()
         .args(["deps", "lock", "--root", project.to_str().unwrap()])
