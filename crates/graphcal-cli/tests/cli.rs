@@ -32,6 +32,170 @@ fn write_temp_file(root: &Path, rel: &str, source: &str) -> PathBuf {
     path
 }
 
+fn git(repo: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("failed to run git");
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout: {}\nstderr: {}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn create_git_package(root: &Path, package: &str, module_source: &str) -> String {
+    std::fs::create_dir_all(root.join(format!("src/{package}"))).unwrap();
+    std::fs::write(
+        root.join("graphcal.toml"),
+        format!("[package]\nname = \"{package}\"\n"),
+    )
+    .unwrap();
+    std::fs::write(root.join(format!("src/{package}/lib.gcl")), module_source).unwrap();
+    Command::new("git")
+        .arg("init")
+        .arg("--quiet")
+        .arg(root)
+        .output()
+        .expect("failed to run git init");
+    git(root, &["add", "."]);
+    git(
+        root,
+        &[
+            "-c",
+            "user.name=Graphcal Test",
+            "-c",
+            "user.email=graphcal@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            "initial",
+        ],
+    );
+    git(root, &["rev-parse", "HEAD"])
+}
+
+#[test]
+fn deps_lock_writes_deterministic_git_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("units-repo");
+    let dep_rev = create_git_package(
+        &dep_repo,
+        "units",
+        "pub param unit_scale: Dimensionless = 1.0;\n",
+    );
+    let project = dir.path().join("mission");
+    std::fs::create_dir_all(project.join("src/mission")).unwrap();
+    std::fs::write(
+        project.join("src/mission/main.gcl"),
+        "param dry: kg = 1.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("graphcal.toml"),
+        format!(
+            "[package]\n\
+             name = \"mission\"\n\
+             source_dir = \"src\"\n\n\
+             [dependencies]\n\
+             units_v1 = {{ package = \"units\", git = \"file://{}\", rev = \"{dep_rev}\" }}\n",
+            dep_repo.display()
+        ),
+    )
+    .unwrap();
+    let cache = dir.path().join("cache");
+
+    let output = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("wrote"), "stdout: {stdout}");
+
+    let lock = std::fs::read_to_string(project.join("graphcal.lock")).unwrap();
+    assert!(lock.contains("lock_version = 1"), "lock:\n{lock}");
+    assert!(lock.contains("root = \"pkg-mission\""), "lock:\n{lock}");
+    assert!(
+        lock.contains("units_v1 = \"pkg-units-"),
+        "dependency edge missing:\n{lock}"
+    );
+    assert!(
+        lock.contains(&format!("requested_rev = \"{dep_rev}\"")),
+        "requested_rev missing:\n{lock}"
+    );
+    assert!(
+        lock.contains(&format!("commit = \"{dep_rev}\"")),
+        "commit missing:\n{lock}"
+    );
+    assert!(lock.contains("tree_hashes = { sha256 = \""));
+    assert!(
+        !lock.contains(cache.to_str().unwrap()),
+        "lock must not serialize cache paths:\n{lock}"
+    );
+
+    let second = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        second.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let stdout = String::from_utf8(second.stdout).unwrap();
+    assert!(stdout.contains("up to date"), "stdout: {stdout}");
+}
+
+#[test]
+fn deps_lock_rejects_floating_git_refs() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("mission");
+    std::fs::create_dir_all(project.join("src/mission")).unwrap();
+    std::fs::write(
+        project.join("src/mission/main.gcl"),
+        "param dry: kg = 1.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("graphcal.toml"),
+        "[package]\n\
+         name = \"mission\"\n\n\
+         [dependencies]\n\
+         units = { git = \"https://github.com/acme/units.git\", branch = \"main\" }\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", dir.path().join("cache"))
+        .output()
+        .expect("failed to run graphcal");
+    assert!(!output.status.success(), "floating refs must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported dependency field `branch`"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !project.join("graphcal.lock").exists(),
+        "failed lock command must not write graphcal.lock"
+    );
+}
+
 #[test]
 fn eval_rocket_text_output() {
     let output = graphcal_bin()

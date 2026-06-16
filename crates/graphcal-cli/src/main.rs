@@ -8,6 +8,7 @@
     reason = "CLI binary; stdout/stderr are the user-facing output channels"
 )]
 
+mod deps;
 mod display;
 mod json_input;
 mod overrides;
@@ -107,8 +108,23 @@ enum Commands {
         #[arg(long)]
         root: Option<PathBuf>,
     },
+    /// Manage package dependencies
+    Deps {
+        #[command(subcommand)]
+        command: DepsCommands,
+    },
     /// Start the Language Server Protocol (LSP) server
     Lsp,
+}
+
+#[derive(Subcommand)]
+enum DepsCommands {
+    /// Resolve Git dependencies and write graphcal.lock
+    Lock {
+        /// Project root directory (overrides automatic graphcal.toml detection)
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
 }
 
 #[derive(ValueEnum, Clone)]
@@ -187,6 +203,11 @@ fn run_command(cli: Cli) {
         Commands::Graph { file, format, root } => {
             run_graph(&file, &format, root.as_deref());
         }
+        Commands::Deps { command } => match command {
+            DepsCommands::Lock { root } => {
+                run_deps_lock(root.as_deref());
+            }
+        },
         Commands::Lsp => {
             #[expect(
                 clippy::expect_used,
@@ -221,6 +242,22 @@ fn run_command(cli: Cli) {
                 root.as_deref(),
                 plot_output.as_ref(),
             );
+        }
+    }
+}
+
+fn run_deps_lock(root: Option<&Path>) {
+    match deps::lock(root) {
+        Ok(outcome) => {
+            if outcome.changed {
+                println!("wrote {}", outcome.lockfile_path.display());
+            } else {
+                println!("up to date: {}", outcome.lockfile_path.display());
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::exit(2);
         }
     }
 }
