@@ -294,7 +294,9 @@ mod tests {
         assert_eq!(rev1.package().unwrap().as_str(), "pkg-units-rev1");
         assert_eq!(rev1.to_string(), "pkg-units-rev1:src.units.si");
         assert_eq!(
-            rev1.segments().map(|s| s.as_ref()).collect::<Vec<_>>(),
+            rev1.segments()
+                .map(std::convert::AsRef::as_ref)
+                .collect::<Vec<_>>(),
             ["src", "units", "si"]
         );
     }

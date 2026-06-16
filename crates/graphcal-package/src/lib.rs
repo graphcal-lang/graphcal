@@ -418,14 +418,14 @@ fn parse_dependency_spec(
     let git = table
         .get("git")
         .and_then(Item::as_str)
-        .ok_or_else(|| ManifestError::MissingField {
+        .ok_or(ManifestError::MissingField {
             field: "[dependencies].<name>.git",
         })
         .and_then(|url| GitUrl::new(url).map_err(ManifestError::GitUrl))?;
     let rev = table
         .get("rev")
         .and_then(Item::as_str)
-        .ok_or_else(|| ManifestError::MissingField {
+        .ok_or(ManifestError::MissingField {
             field: "[dependencies].<name>.rev",
         })
         .and_then(|rev| GitCommitHash::new(rev).map_err(ManifestError::GitRev))?;
@@ -789,7 +789,7 @@ pub fn validate_lock_against_manifests(
     active_stdlib_version: &str,
 ) -> Result<(), LockValidationError> {
     let graph = lockfile.package_graph(active_graphcal_version, active_stdlib_version)?;
-    for package in lockfile.packages.iter() {
+    for package in &lockfile.packages {
         let Some(manifest) = manifests.get(&package.id) else {
             continue;
         };
@@ -848,7 +848,7 @@ pub struct PackageGraph {
 impl PackageGraph {
     /// Root package instance id.
     #[must_use]
-    pub fn root(&self) -> &PackageInstanceId {
+    pub const fn root(&self) -> &PackageInstanceId {
         &self.root
     }
 
@@ -1058,12 +1058,13 @@ fn parse_locked_package(
         table.get("source_dir"),
         "package.source_dir",
     )?)?;
-    let source_table = table
-        .get("source")
-        .and_then(Item::as_table)
-        .ok_or_else(|| LockfileParseError::MissingField {
-            field: "package.source",
-        })?;
+    let source_table =
+        table
+            .get("source")
+            .and_then(Item::as_table)
+            .ok_or(LockfileParseError::MissingField {
+                field: "package.source",
+            })?;
     let source = parse_package_source(source_table)?;
     let dependencies = table
         .get("dependencies")

@@ -139,6 +139,10 @@ fn find_cached_file(root: &Path, suffix: &Path) -> Option<PathBuf> {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end CLI scenario keeps setup, command, and assertions together"
+)]
 fn deps_lock_writes_deterministic_git_lockfile() {
     let dir = tempfile::tempdir().unwrap();
     let dep_repo = dir.path().join("units-repo");
@@ -379,6 +383,10 @@ fn package_consumers_reject_cached_source_hash_mismatch() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "contextual dependency graph scenario is clearer as one integration test"
+)]
 fn deps_lock_supports_contextual_transitive_resolution() {
     let dir = tempfile::tempdir().unwrap();
     let units_repo = dir.path().join("units-repo");

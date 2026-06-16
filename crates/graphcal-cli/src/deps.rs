@@ -42,14 +42,14 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
     })?;
 
     let resolver = LockResolver::new(cache);
-    let resolved = resolver.resolve_root(&root)?;
+    let lock = resolver.resolve_root(&root)?;
     let lockfile = Lockfile {
         lock_version: LOCK_VERSION,
         created_by: "graphcal".to_string(),
         graphcal_version: env!("CARGO_PKG_VERSION").to_string(),
         stdlib_version: STDLIB_VERSION.to_string(),
-        root: resolved.root,
-        packages: resolved.packages,
+        root: lock.root,
+        packages: lock.packages,
     };
 
     let graph = lockfile.package_graph(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)?;
@@ -122,7 +122,7 @@ struct LockResolver {
 }
 
 impl LockResolver {
-    fn new(cache_dir: PathBuf) -> Self {
+    const fn new(cache_dir: PathBuf) -> Self {
         Self { cache_dir }
     }
 
@@ -136,7 +136,6 @@ impl LockResolver {
             PackageSource::Path {
                 path: ".".to_string(),
             },
-            root.to_path_buf(),
             &mut state,
         )?;
         state.insert(root_package);
@@ -153,7 +152,6 @@ impl LockResolver {
         id: PackageInstanceId,
         manifest: PackageManifest,
         source: PackageSource,
-        package_root: PathBuf,
         state: &mut ResolveState,
     ) -> Result<LockedPackage, DepsError> {
         if let Some(existing) = state.packages.get(&id) {
@@ -177,7 +175,6 @@ impl LockResolver {
             source,
             dependencies,
         };
-        let _ = package_root;
         Ok(package)
     }
 
@@ -208,8 +205,7 @@ impl LockResolver {
                 sha256: materialized.sha256,
             },
         };
-        let package =
-            self.resolve_package(id.clone(), manifest, source, materialized.root, state)?;
+        let package = self.resolve_package(id.clone(), manifest, source, state)?;
         state.insert(package);
         Ok(ResolvedDependency { id })
     }
