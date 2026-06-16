@@ -39,6 +39,7 @@ delta_v    = 3778.220768 m/s
 - **Safety-oriented numerics.** Non-finite literals, invalid unit scales, empty indexes, and out-of-range numeric conversions are rejected instead of silently producing `NaN`, `inf`, or saturated integers.
 - **Reactive by design.** `param`, `node`, and `const node` declarations form a DAG that evaluates in dependency order. Override any input from the CLI and dependents recompute automatically.
 - **Git-friendly.** Plain text `.gcl` files diff and merge cleanly. No binary spreadsheets, no hidden state.
+- **Locked Git dependencies.** Exact-rev package dependencies are resolved into a deterministic `graphcal.lock` with package-instance identities, so multiple revisions of the same package can coexist without global name collisions.
 - **Algebraic types and generics.** Structs, tagged unions with `match`, and generic types with phantom parameters for things like reference frames (`Vec3<Length, Eci>` vs `Vec3<Length, Body>`).
 - **Indexed values.** First-class index sets, `for` comprehensions, aggregations (`sum`, `mean`, ...), and `unfold` for time-series and recurrences.
 - **Reusable computation.** `dag` blocks parameterize sub-graphs and instantiate them as expressions or via `include`; inline DAG bodies use explicit `import`/`include` edges just like file DAGs. Multi-file projects compose with module-qualified type/index/constructor paths and a two-axis (`pub` / `pub(bind)`) visibility system.
@@ -68,9 +69,12 @@ graphcal eval analysis.gcl --plot browser
 
 # Export the dependency graph as Graphviz DOT (experimental)
 graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
+
+# Prepare exact-rev Git dependencies for a package project
+graphcal deps lock --root mission
 ```
 
-See the [CLI reference](https://graphcal-lang.github.io/graphcal/cli-reference/) for the full surface, including `format`, `check`, `graph`, and `lsp`.
+See the [CLI reference](https://graphcal-lang.github.io/graphcal/cli-reference/) for the full surface, including `format`, `check`, `deps lock`, `graph`, and `lsp`.
 
 ## Editor Support
 
@@ -89,8 +93,8 @@ The full tutorial, language reference, and CLI/editor guides are available in th
 - **[Tutorial](https://graphcal-lang.github.io/graphcal/tutorial/)** -- learn Graphcal step by step
 - **[Language Reference](https://graphcal-lang.github.io/graphcal/language/)** -- every feature, formally
 - **[Built-in Reference](https://graphcal-lang.github.io/graphcal/language/built-ins/)** -- constants, math, type conversions, aggregations, prelude dimensions and units
-- **[Multi-file Projects](https://graphcal-lang.github.io/graphcal/language/multi-file/)** -- `import`, `include`, and the `pub(bind)` visibility model
-- **[CLI Reference](https://graphcal-lang.github.io/graphcal/cli-reference/)** -- `eval`, `format`, `check`, `lsp`
+- **[Multi-file Projects](https://graphcal-lang.github.io/graphcal/language/multi-file/)** -- `import`, `include`, package dependencies, and the `pub(bind)` visibility model
+- **[CLI Reference](https://graphcal-lang.github.io/graphcal/cli-reference/)** -- `eval`, `format`, `check`, `deps lock`, `lsp`
 
 The [`docs/`](docs/) directory contains the Zensical source for the site. You can serve it locally with `zensical serve` and open `http://localhost:8000`.
 
@@ -110,6 +114,7 @@ Track progress and discussion on [GitHub Issues](https://github.com/graphcal-lan
 graphcal/
   crates/
     graphcal-compiler/  # lexer (logos) + parser + AST + HIR + IR + TIR + registry
+    graphcal-package/   # pure package manifest, lockfile, and package graph model
     graphcal-eval/      # const eval, runtime eval, project loader, exec plan
     graphcal-fmt/       # code formatter
     graphcal-io/        # filesystem abstraction (real, in-memory, overlay)

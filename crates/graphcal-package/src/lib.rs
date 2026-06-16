@@ -1387,6 +1387,30 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
     }
 
     #[test]
+    fn lockfile_rejects_graphcal_and_stdlib_version_mismatches() {
+        let lock = lockfile(vec![package(
+            "pkg-mission",
+            "mission",
+            path_source(),
+            BTreeMap::new(),
+        )]);
+
+        let graphcal_err = lock.validate("0.0.0", STDLIB_VERSION).unwrap_err();
+        assert!(matches!(
+            graphcal_err,
+            LockValidationError::GraphcalVersionMismatch { .. }
+        ));
+
+        let stdlib_err = lock
+            .validate(GRAPHCAL_VERSION, "stdlib-mismatch")
+            .unwrap_err();
+        assert!(matches!(
+            stdlib_err,
+            LockValidationError::StdlibVersionMismatch { .. }
+        ));
+    }
+
+    #[test]
     fn lockfile_rejects_missing_edge_targets() {
         let mut root_deps = BTreeMap::new();
         root_deps.insert(dep("orbital"), id("pkg-missing"));

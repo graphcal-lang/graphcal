@@ -85,7 +85,7 @@ The language has a layered type system:
 
     ---
 
-    `import` declarations, aliasing, circular detection.
+    `import` declarations, package dependencies, aliasing, circular detection.
 
     [:octicons-arrow-right-24: Multi-file](multi-file.md)
 
