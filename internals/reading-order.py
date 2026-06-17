@@ -40,12 +40,16 @@ CHECKLIST = Path(__file__).resolve().parent / "codebase-reading-checklist.md"
 CRATE_ORDER = [
     "graphcal-compiler",
     "graphcal-io",
+    "graphcal-package",
     "graphcal-eval",
     "graphcal-fmt",
     "graphcal-lsp",
     "graphcal-cli",
 ]
 CRATE_NAMES = {c.replace("-", "_"): c for c in CRATE_ORDER}
+# The CLI package exposes a library target named `graphcal` in addition to the
+# binary target rooted at `main.rs`, so binary/tests can import `graphcal::...`.
+CRATE_NAMES["graphcal"] = "graphcal-cli"
 
 # Current checklist order, used as a tie-break so the output stays close to
 # the curated pedagogy wherever the dependency graph allows it.
@@ -142,6 +146,10 @@ def parse_file(path: Path) -> tuple[list[list[str]], list[list[str]], list[str]]
     # strip block/line comments crudely
     text = re.sub(r"//[^\n]*", "", text)
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    # miette diagnostic codes use paths like `code(graphcal::D001)`, but these
+    # are stable error-code identifiers rather than Rust imports.
+    text = re.sub(r"code\s*\(\s*graphcal::[A-Za-z0-9_:]+\s*\)", "code(...)", text)
+    text = re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
     paths: list[list[str]] = []
     pub_uses: list[list[str]] = []
     mods: list[str] = []
@@ -192,6 +200,8 @@ def main() -> None:
         mp = module_path(f)
         if mp is not None:
             mod_to_file[mp] = f
+            if crate_of(f) == "graphcal-cli" and (f.name == "lib.rs" or mp[1:] == ("format",)):
+                mod_to_file[("graphcal", *mp[1:])] = f
             file_to_mod[f] = mp
 
     parsed = {f: parse_file(ROOT / f) for f in files}

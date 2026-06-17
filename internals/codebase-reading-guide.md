@@ -372,15 +372,16 @@ display units before they appear in `EvalResult`.
 
 ## 2. Workspace Map
 
-The workspace contains six Rust crates:
+The workspace contains seven Rust crates:
 
 ```text
-graphcal-cli       binary: CLI shell
+graphcal-cli       binary/library: CLI shell
 graphcal-lsp       binary/library: Language Server Protocol
 graphcal-eval      evaluation, project orchestration, loader
 graphcal-compiler  syntax, HIR, registry, IR, TIR
 graphcal-fmt       formatter
 graphcal-io        filesystem abstraction
+graphcal-package   pure package manifest/lockfile domain model
 ```
 
 The important dependency direction is:
@@ -388,6 +389,11 @@ The important dependency direction is:
 ```text
 graphcal-cli
   -> graphcal-eval
+  -> graphcal-fmt
+  -> graphcal-io
+  -> graphcal-package
+
+graphcal-eval
   -> graphcal-compiler
   -> graphcal-io
 
@@ -397,28 +403,36 @@ graphcal-lsp
 
 graphcal-fmt
   -> graphcal-compiler
+
+graphcal-package   # no Graphcal-internal crate dependencies
 ```
 
 ### 2.1 `graphcal-compiler`
 
 The compiler crate owns the functional core through TIR.
 
-| Path                       | Purpose                                                       |
-| -------------------------- | ------------------------------------------------------------- |
-| `syntax/ast.rs`            | Phase-parameterized AST definitions                           |
-| `syntax/phase.rs`          | `Raw`, `Desugared`, sugar/path slots, `never`                 |
-| `syntax/names.rs`          | `NameAtom`, typed name newtypes, paths, resolved names        |
-| `syntax/nat.rs`            | Normalized type-level Nat polynomial forms                    |
-| `dag_id.rs`                | Filesystem-independent DAG identity                           |
-| `syntax/parser/`           | Parser for declarations, expressions, types, tables           |
-| `syntax/module_resolve.rs` | Owner-qualified module symbol tables and path resolution      |
-| `desugar/`                 | Phase walker and the `Desugared` AST alias module             |
-| `hir/`                     | The single resolution stage; resolved type/value expressions  |
-| `ir/lower.rs`              | IR assembly, `UnfrozenIR::freeze` lowering boundary           |
-| `ir/resolve/`              | Declaration-shell collection and validation                   |
-| `registry/`                | Dimensions, units, indexes, types, values, built-ins          |
-| `tir/typed.rs`             | `TIR`, `DagTIR`, `DagSemanticBody`, resolved type expressions |
-| `tir/dim_check/`           | Dimension/type inference and checking                         |
+| Path                          | Purpose                                                       |
+| ----------------------------- | ------------------------------------------------------------- |
+| `syntax/ast.rs`               | Phase-parameterized AST aggregate and re-exports              |
+| `syntax/ast/common.rs`        | Shared AST nodes and typed common fields                      |
+| `syntax/ast/value.rs`         | Expression/value AST definitions                              |
+| `syntax/ast/decl.rs`          | Declaration AST definitions                                   |
+| `syntax/ast/plot_props.rs`    | Typed plot/figure/layer property keys and values              |
+| `syntax/ast/format_equivalent.rs` | Surface-equivalence checks used by formatting/tooling     |
+| `syntax/phase.rs`             | `Raw`, `Desugared`, sugar/path slots, `never`                 |
+| `syntax/names.rs`             | `NameAtom`, typed name newtypes, paths, resolved names        |
+| `syntax/nat.rs`               | Normalized type-level Nat polynomial forms                    |
+| `dag_id.rs`                   | Filesystem-independent DAG identity                           |
+| `syntax/parser/`              | Parser for declarations, expressions, types, tables           |
+| `syntax/module_resolve.rs`    | Owner-qualified module symbol tables and path resolution      |
+| `desugar/`                    | Phase walker and the `Desugared` AST alias module             |
+| `hir/`                        | The single resolution stage; resolved type/value expressions  |
+| `ir/lower.rs`                 | IR assembly, `UnfrozenIR::freeze` lowering boundary           |
+| `ir/resolve/`                 | Declaration-shell collection and validation                   |
+| `registry/`                   | Dimensions, units, indexes, types, values, built-ins          |
+| `tir/typed.rs`                | `TIR`, `DagTIR`, `DagSemanticBody`, resolved type expressions |
+| `tir/dim_check/`              | Dimension/type inference and checking                         |
+| `tir/dim_check/plot.rs`       | Plot/figure/layer dimension validation                        |
 
 ### 2.2 `graphcal-eval`
 
@@ -435,6 +449,7 @@ compilation, and expression evaluation.
 | `domain_check.rs`       | Runtime and compile-time domain validation                    |
 | `eval/runtime.rs`       | Evaluation loop                                               |
 | `eval/display.rs`       | Display-unit extraction and attachment                        |
+| `eval/plot_data.rs`     | Runtime plot/figure/layer data extraction                     |
 | `eval/types.rs`         | Public `EvalResult`, `Value`, plot/assert result types        |
 | `eval_expr/`            | HIR expression evaluation kernels by expression family        |
 | `eval_expr/numeric.rs`  | Shared checked numeric helpers for expression evaluation      |
@@ -442,6 +457,7 @@ compilation, and expression evaluation.
 | `eval_expr/aggregations.rs` | Aggregation built-ins such as sum/mean/min/max/count     |
 | `eval_expr/conversions.rs` | Unit/type conversion helpers                              |
 | `eval_expr/hir_eval.rs` | HIR expression evaluator with canonical references            |
+| `graph_ir/`             | Dependency-graph export model and DOT rendering               |
 
 The public API is re-exported from `eval/mod.rs`, including
 `compile_and_eval_project`, `compile_to_tir_project`, and
@@ -459,27 +475,51 @@ Implementations include real, in-memory, and overlay filesystems. The loader
 uses this crate so tests and editor integrations can run deterministically
 without direct disk coupling.
 
-### 2.5 `graphcal-cli`
+### 2.5 `graphcal-package`
 
-The CLI is the imperative shell around the library pipeline.
+`graphcal-package` is a pure package-management domain crate. It has no Git,
+filesystem, cache, or CLI I/O; callers provide manifest text, lockfile text,
+source metadata, and materialized dependency manifests.
+
+The crate owns typed package identifiers (`PackageName`, `DependencyName`,
+`PackageInstanceId`, `GitCommitHash`, `GitUrl`), manifest parsing for
+`graphcal.toml`, lockfile parsing/serialization for `graphcal.lock`, and
+validation of the locked package graph. Keep credentials, cache paths, and Git
+commands outside this crate; it should remain the functional core for package
+resolution.
+
+### 2.6 `graphcal-cli`
+
+The CLI is the imperative shell around the library pipeline and package
+management commands. The package has both a binary target (`main.rs`) and a small
+library target (`lib.rs`) so tests and the binary can share pure format-discovery
+helpers.
 
 Subcommands:
 
-| Command  | Purpose                                 |
-| -------- | --------------------------------------- |
-| `eval`   | Compile and evaluate a `.gcl` file      |
-| `check`  | Parse and type-check without evaluation |
-| `format` | Format files or check formatting        |
-| `lsp`    | Start the language server               |
+| Command  | Purpose                                      |
+| -------- | -------------------------------------------- |
+| `eval`   | Compile and evaluate a `.gcl` file           |
+| `check`  | Parse and type-check without evaluation      |
+| `format` | Format files or check formatting             |
+| `graph`  | Export a dependency graph                    |
+| `deps`   | Manage package dependencies / lockfiles      |
+| `lsp`    | Start the language server                    |
 
 Key files:
 
 - `main.rs` owns command dispatch and exit-code behavior.
+- `lib.rs` exposes the reusable CLI library surface.
+- `format.rs` discovers `.gcl` files and classifies format status without printing.
+- `deps.rs` is the imperative shell for `graphcal deps lock`: root discovery,
+  Git/cache materialization, tree hashing, and writing `graphcal.lock` around
+  `graphcal-package`'s pure model.
+- `json_input.rs` reads bounded JSON input for params.
 - `overrides.rs` parses `--set` and `--input` parameter overrides.
 - `display.rs` renders text output.
 - `plot.rs` renders plot/figure/layer output.
 
-### 2.6 `graphcal-lsp`
+### 2.7 `graphcal-lsp`
 
 The LSP consumes compiler/evaluator APIs and adds editor-facing analysis:
 
@@ -507,7 +547,7 @@ required indexes is not evaluated standalone, so diagnostics avoid surfacing
 unbound input errors for files intended to be consumed through parameterized
 includes.
 
-### 2.7 Editors and Grammars
+### 2.8 Editors and Grammars
 
 Syntax/editor surfaces live outside the Rust workspace:
 
@@ -828,6 +868,13 @@ Project lowering then builds the `ModuleResolver` from the loaded graph, builds 
 lowers dependencies before dependents, performs those semantic merge steps, and
 evaluates the requested root.
 
+Package locking is adjacent to, not part of, this compile/eval pipeline. The
+`graphcal deps lock` shell materializes Git dependencies and writes
+`graphcal.lock`; the pure package facts and lock graph validation live in
+`graphcal-package`. The loader/project compiler should consume already-resolved
+filesystem/module inputs rather than run Git or parse lockfile conventions in
+the compiler core.
+
 ## 6. Errors
 
 Errors use `miette` diagnostics with source snippets, spans, labels, and codes.
@@ -883,6 +930,8 @@ Fixture categories are enforced by
 
 Important test locations:
 
+- `crates/graphcal-package/src/lib.rs` (manifest/lockfile/package-graph unit tests)
+- `crates/graphcal-eval/src/graph_ir/` (graph export unit tests)
 - `crates/graphcal-eval/tests/error_snapshots.rs`
 - `crates/graphcal-eval/tests/edge_case_bugs.rs`
 - `crates/graphcal-eval/tests/phase0_regressions.rs`
@@ -895,6 +944,7 @@ Useful commands:
 ```bash
 cargo test --workspace
 cargo test -p graphcal-compiler
+cargo test -p graphcal-package
 cargo insta review
 just lint
 ```
@@ -915,6 +965,7 @@ just lint
 | `TypeNameRef` identity carriers  | `registry/declared_type.rs`            | Preserve declared index/struct owners through runtime/public values |
 | Nat range identity carriers      | `syntax/nat.rs`, `registry/declared_type.rs` | Keep concrete/symbolic Nat ranges typed, not fake resolved names    |
 | Trait-based I/O                  | `graphcal-io`                          | Deterministic tests and editor integration                          |
+| Package identifier newtypes      | `graphcal-package`                     | Keep package/alias/instance/Git identities typed                    |
 | Visitor pattern                  | `syntax/visitor.rs`                    | Centralized AST traversal                                           |
 | `BTreeSet` in dep values         | IR/TIR deps                            | Deterministic graph construction                                    |
 | `IndexMap` in output-facing maps | eval/display output                    | Stable user-facing order                                            |
@@ -932,44 +983,57 @@ For a first pass, read in pipeline order:
 1. `crates/graphcal-compiler/src/syntax/token.rs`
 2. `crates/graphcal-compiler/src/syntax/names.rs`
 3. `crates/graphcal-compiler/src/syntax/nat.rs`
-4. `crates/graphcal-compiler/src/syntax/ast.rs`
-5. `crates/graphcal-compiler/src/syntax/phase.rs`
-6. `crates/graphcal-compiler/src/syntax/lexer.rs`
-7. `crates/graphcal-compiler/src/syntax/parser/expr.rs`
-8. `crates/graphcal-compiler/src/syntax/parser/type_expr.rs`
-9. `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
-10. `crates/graphcal-compiler/src/desugar/convert.rs`
-11. `crates/graphcal-compiler/src/syntax/desugar.rs`
-12. `crates/graphcal-compiler/src/syntax/module_resolve.rs`
-13. `crates/graphcal-compiler/src/hir/types.rs`
-14. `crates/graphcal-compiler/src/hir/lower.rs`
-15. `crates/graphcal-compiler/src/hir/expr.rs`
-16. `crates/graphcal-compiler/src/ir/resolve/mod.rs`
-17. `crates/graphcal-compiler/src/ir/lower.rs`
-18. `crates/graphcal-compiler/src/registry/types.rs`
-19. `crates/graphcal-compiler/src/registry/declared_type.rs`
-20. `crates/graphcal-compiler/src/dag_id.rs`
-21. `crates/graphcal-eval/src/loader.rs`
-22. `crates/graphcal-eval/src/eval/project/pipeline.rs`
-23. `crates/graphcal-eval/src/eval/project/lowering.rs`
-24. `crates/graphcal-compiler/src/tir/typed.rs`
-25. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
-26. `crates/graphcal-eval/src/inline_dag.rs`
-27. `crates/graphcal-eval/src/exec_plan.rs`
-28. `crates/graphcal-eval/src/decl_key.rs`
-29. `crates/graphcal-eval/src/eval/runtime.rs`
-30. `crates/graphcal-eval/src/eval_expr/mod.rs`
-31. `crates/graphcal-eval/src/eval_expr/numeric.rs`
-32. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
-33. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
-34. `crates/graphcal-eval/src/eval_expr/conversions.rs`
-35. `crates/graphcal-eval/src/eval_expr/collections.rs`
-36. `crates/graphcal-eval/src/eval_expr/control.rs`
-37. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
-38. `crates/graphcal-eval/src/eval_expr/functions.rs`
-39. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
-40. `crates/graphcal-eval/src/eval/types.rs`
-41. `crates/graphcal-cli/src/main.rs`
+4. `crates/graphcal-compiler/src/syntax/phase.rs`
+5. `crates/graphcal-compiler/src/syntax/ast/common.rs`
+6. `crates/graphcal-compiler/src/syntax/ast/value.rs`
+7. `crates/graphcal-compiler/src/syntax/ast/decl.rs`
+8. `crates/graphcal-compiler/src/syntax/ast/plot_props.rs`
+9. `crates/graphcal-compiler/src/syntax/ast.rs`
+10. `crates/graphcal-compiler/src/syntax/lexer.rs`
+11. `crates/graphcal-compiler/src/syntax/parser/expr.rs`
+12. `crates/graphcal-compiler/src/syntax/parser/type_expr.rs`
+13. `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
+14. `crates/graphcal-compiler/src/desugar/convert.rs`
+15. `crates/graphcal-compiler/src/syntax/desugar.rs`
+16. `crates/graphcal-compiler/src/syntax/module_resolve.rs`
+17. `crates/graphcal-compiler/src/hir/types.rs`
+18. `crates/graphcal-compiler/src/hir/lower.rs`
+19. `crates/graphcal-compiler/src/hir/expr.rs`
+20. `crates/graphcal-compiler/src/ir/resolve/mod.rs`
+21. `crates/graphcal-compiler/src/ir/lower.rs`
+22. `crates/graphcal-compiler/src/registry/types.rs`
+23. `crates/graphcal-compiler/src/registry/declared_type.rs`
+24. `crates/graphcal-compiler/src/dag_id.rs`
+25. `crates/graphcal-compiler/src/tir/typed.rs`
+26. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
+27. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+28. `crates/graphcal-io/src/lib.rs`
+29. `crates/graphcal-eval/src/loader.rs`
+30. `crates/graphcal-eval/src/eval/project/pipeline.rs`
+31. `crates/graphcal-eval/src/eval/project/lowering.rs`
+32. `crates/graphcal-eval/src/inline_dag.rs`
+33. `crates/graphcal-eval/src/exec_plan.rs`
+34. `crates/graphcal-eval/src/decl_key.rs`
+35. `crates/graphcal-eval/src/eval/runtime.rs`
+36. `crates/graphcal-eval/src/eval_expr/mod.rs`
+37. `crates/graphcal-eval/src/eval_expr/numeric.rs`
+38. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
+39. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
+40. `crates/graphcal-eval/src/eval_expr/conversions.rs`
+41. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
+42. `crates/graphcal-eval/src/eval_expr/functions.rs`
+43. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
+44. `crates/graphcal-eval/src/eval/types.rs`
+45. `crates/graphcal-eval/src/eval/plot_data.rs`
+46. `crates/graphcal-eval/src/graph_ir/mod.rs`
+47. `crates/graphcal-package/src/lib.rs`
+48. `crates/graphcal-cli/src/main.rs`
+49. `crates/graphcal-cli/src/deps.rs`
+50. `crates/graphcal-lsp/src/server.rs`
+51. `crates/graphcal-fmt/src/lib.rs`
 
-After that, read `graphcal-lsp` and `graphcal-fmt` as consumers of the
-compiler/evaluator APIs.
+For an exhaustive dependency-ordered checklist, use
+`internals/codebase-reading-checklist.md`. After the core pipeline, read
+`graphcal-lsp` and `graphcal-fmt` as consumers of the compiler/evaluator APIs,
+and read `graphcal-package` with `graphcal-cli/src/deps.rs` when focusing on
+package locking.
