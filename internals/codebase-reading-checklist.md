@@ -29,18 +29,15 @@ Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 - [ ] `crates/graphcal-compiler/src/syntax/lexer.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/nat.rs`
 
-## Stage 2 - Core AST
+## Stage 2 - Core AST leaves and traversal
 
 - [ ] `crates/graphcal-compiler/src/syntax/ast/common.rs`
 - [ ] `crates/graphcal-compiler/src/stack.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/value.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/decl.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/ast.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/visitor.rs`
 
 ## Stage 3 - Parser and surface desugaring
-
-Note: `decl/multi.rs` and `decl/mod.rs` are mutually dependent; `decl/multi.rs` also pulls in `syntax/desugar.rs`, which is why it sits between the decl parsers.
 
 - [ ] `crates/graphcal-compiler/src/syntax/parser/mod.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/parser/compound.rs`
@@ -57,9 +54,6 @@ Note: `decl/multi.rs` and `decl/mod.rs` are mutually dependent; `decl/multi.rs` 
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/figure.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/tests.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/desugar.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/parser/decl/multi.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
 
 ## Stage 4 - Desugared AST phase
 
@@ -97,9 +91,9 @@ Note: `hir/types.rs`, `registry/builtins.rs`, `hir/lower.rs`, `hir/expr.rs`, and
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/builtins.rs`
 - [ ] `crates/graphcal-compiler/src/hir/diagnostics.rs`
 
-## Stage 8 - IR lowering, TIR, and dimension checking
+## Stage 8 - IR lowering, TIR, dimension checking, and late surface helpers
 
-Note: `tir/typed.rs`, `tir/dim_check/helpers.rs`, and `tir/dim_check/mod.rs` are mutually dependent.
+Note: `tir/typed.rs`, `tir/dim_check/helpers.rs`, and `tir/dim_check/mod.rs` are mutually dependent. `decl/multi.rs` and `decl/mod.rs` are also mutually dependent and appear here because their actual imports depend on AST aggregate/re-export files that sort after the core checker files.
 
 - [ ] `crates/graphcal-compiler/src/ir/lower.rs`
 - [ ] `crates/graphcal-compiler/src/tir/typed.rs`
@@ -110,17 +104,28 @@ Note: `tir/typed.rs`, `tir/dim_check/helpers.rs`, and `tir/dim_check/mod.rs` are
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/ast/format_equivalent.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/ast/plot_props.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/ast.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/parser/decl/multi.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
+- [ ] `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
 
 ## Stage 9 - Filesystem abstraction (`graphcal-io`)
 
-Note: all four files are mutually dependent; `lib.rs` comes first because it defines the `FileSystem` trait the others implement.
+Note: all four files are mutually dependent; `lib.rs` comes last because it re-exports and ties together the implementations.
 
-- [ ] `crates/graphcal-io/src/lib.rs`
 - [ ] `crates/graphcal-io/src/in_memory_fs.rs`
 - [ ] `crates/graphcal-io/src/real_fs.rs`
 - [ ] `crates/graphcal-io/src/overlay_fs.rs`
+- [ ] `crates/graphcal-io/src/lib.rs`
 
-## Stage 10 - Runtime values and expression evaluator
+## Stage 10 - Package domain model (`graphcal-package`)
+
+- [ ] `crates/graphcal-package/src/lib.rs`
+
+## Stage 11 - Runtime values and expression evaluator
 
 Note: `eval_expr/arithmetic.rs`, `eval_expr/unit_scale.rs`, `eval_expr/hir_eval.rs`, and `eval_expr/mod.rs` form a mutually dependent group.
 
@@ -138,13 +143,14 @@ Note: `eval_expr/arithmetic.rs`, `eval_expr/unit_scale.rs`, `eval_expr/hir_eval.
 - [ ] `crates/graphcal-eval/src/exec_plan.rs`
 - [ ] `crates/graphcal-eval/src/import_surface.rs`
 
-## Stage 11 - Project loading and runtime orchestration
+## Stage 12 - Project loading and runtime orchestration
 
-Note: `eval/types.rs`, `eval/display.rs`, `loader.rs`, `eval/runtime.rs`, `eval/project/mod.rs`, and `eval/mod.rs` form a mutually dependent group.
+Note: `eval/types.rs`, `eval/display.rs`, `loader.rs`, `eval/plot_data.rs`, `eval/runtime.rs`, `eval/project/mod.rs`, and `eval/mod.rs` form a mutually dependent group.
 
 - [ ] `crates/graphcal-eval/src/eval/types.rs`
 - [ ] `crates/graphcal-eval/src/eval/display.rs`
 - [ ] `crates/graphcal-eval/src/loader.rs`
+- [ ] `crates/graphcal-eval/src/eval/plot_data.rs`
 - [ ] `crates/graphcal-eval/src/eval/runtime.rs`
 - [ ] `crates/graphcal-eval/src/eval/project/mod.rs`
 - [ ] `crates/graphcal-eval/src/eval/mod.rs`
@@ -153,8 +159,10 @@ Note: `eval/types.rs`, `eval/display.rs`, `loader.rs`, `eval/runtime.rs`, `eval/
 - [ ] `crates/graphcal-eval/src/eval/project/imports.rs`
 - [ ] `crates/graphcal-eval/src/eval/project/pipeline.rs`
 - [ ] `crates/graphcal-eval/src/eval/tests.rs`
+- [ ] `crates/graphcal-eval/src/graph_ir/mod.rs`
+- [ ] `crates/graphcal-eval/src/graph_ir/dot.rs`
 
-## Stage 12 - Formatter (`graphcal-fmt`)
+## Stage 13 - Formatter (`graphcal-fmt`)
 
 Note: `format/type_expr.rs`, `format/expr.rs`, `format/decl.rs`, and `format/mod.rs` form a mutually dependent group.
 
@@ -164,16 +172,29 @@ Note: `format/type_expr.rs`, `format/expr.rs`, `format/decl.rs`, and `format/mod
 - [ ] `crates/graphcal-fmt/src/format/mod.rs`
 - [ ] `crates/graphcal-fmt/src/lib.rs`
 
-## Stage 13 - Language server (`graphcal-lsp`)
+## Stage 14 - LSP prelude and CLI shell
 
-Note: the feature modules from `resolve.rs` onward and `server.rs` are mutually dependent (each feature references `server::Backend`); the features come first because `server.rs` orchestrates them all.
+Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent group. `main.rs` consumes the `graphcal` library target's `format` module as well as binary-local modules, so the CLI package is ordered as one shell group here.
 
 - [ ] `crates/graphcal-lsp/src/lib.rs`
 - [ ] `crates/graphcal-lsp/src/convert.rs`
 - [ ] `crates/graphcal-lsp/src/cursor_context.rs`
 - [ ] `crates/graphcal-lsp/src/symbol_table.rs`
-- [ ] `crates/graphcal-lsp/src/diagnostics.rs`
 - [ ] `crates/graphcal-lsp/src/formatting.rs`
+- [ ] `crates/graphcal-cli/src/display.rs`
+- [ ] `crates/graphcal-cli/src/plot.rs`
+- [ ] `crates/graphcal-cli/src/deps.rs`
+- [ ] `crates/graphcal-cli/src/format.rs`
+- [ ] `crates/graphcal-cli/src/json_input.rs`
+- [ ] `crates/graphcal-cli/src/overrides.rs`
+- [ ] `crates/graphcal-cli/src/main.rs`
+- [ ] `crates/graphcal-cli/src/lib.rs`
+
+## Stage 15 - Language server (`graphcal-lsp`)
+
+Note: the feature modules from `resolve.rs` onward and `server.rs` are mutually dependent (each feature references `server::Backend`); the features come first because `server.rs` orchestrates them all.
+
+- [ ] `crates/graphcal-lsp/src/diagnostics.rs`
 - [ ] `crates/graphcal-lsp/src/resolve.rs`
 - [ ] `crates/graphcal-lsp/src/completion.rs`
 - [ ] `crates/graphcal-lsp/src/signature_help.rs`
@@ -187,17 +208,7 @@ Note: the feature modules from `resolve.rs` onward and `server.rs` are mutually 
 - [ ] `crates/graphcal-lsp/src/hover.rs`
 - [ ] `crates/graphcal-lsp/src/server.rs`
 
-## Stage 14 - CLI shell
-
-Note: `json_input.rs`, `display.rs`, `overrides.rs`, and `main.rs` form a mutually dependent group; `plot.rs` consumes items defined in `main.rs`.
-
-- [ ] `crates/graphcal-cli/src/json_input.rs`
-- [ ] `crates/graphcal-cli/src/display.rs`
-- [ ] `crates/graphcal-cli/src/overrides.rs`
-- [ ] `crates/graphcal-cli/src/main.rs`
-- [ ] `crates/graphcal-cli/src/plot.rs`
-
-## Stage 15 - Integration tests
+## Stage 16 - Integration tests
 
 - [ ] `crates/graphcal-eval/tests/declaration_order.rs`
 - [ ] `crates/graphcal-eval/tests/edge_case_bugs.rs`
