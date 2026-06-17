@@ -515,6 +515,100 @@ source_dir = "lib"
 Now `import myproject.helpers` resolves to
 `<project_root>/lib/myproject/helpers.gcl`.
 
+## Package Dependencies
+
+A real package may depend on other Graphcal packages fetched from Git. The MVP
+supports source-only Git dependencies pinned to exact commits:
+
+```toml
+[package]
+name = "mission"
+source_dir = "src"
+
+[dependencies]
+orbital = {
+    git = "https://github.com/acme/orbital.git",
+    rev = "0123456789abcdef0123456789abcdef01234567",
+}
+```
+
+Rules:
+
+- `rev` is required and must be a full 40-character commit hash.
+- Branches, tags, version ranges, `latest`, registries, archives, publishing,
+  and implicit package discovery inside a Git repository are not part of this
+  MVP.
+- Public Git repositories are expected to work with ordinary HTTPS or SSH Git
+  URLs. Private repositories require whatever credentials the underlying Git
+  fetch implementation can obtain in the current environment, so support is
+  environment-dependent. For example, SSH may work when an SSH key/agent is
+  available, while HTTPS may fail unless a compatible credential helper or
+  non-interactive credential provider is configured. Graphcal manifests must not
+  embed credentials in dependency URLs.
+- The dependency table key is the source-visible dependency name used in
+  `import` and `include` paths.
+- If `package` is omitted, the fetched package's `[package].name` must match
+  the dependency key.
+- If `package` is present, the dependency key is a local alias and `package`
+  names the fetched package's real package name.
+
+```toml
+[dependencies]
+units_v1 = { package = "units", git = "https://github.com/acme/units.git", rev = "1111111111111111111111111111111111111111" }
+units_v2 = { package = "units", git = "https://github.com/acme/units.git", rev = "2222222222222222222222222222222222222222" }
+```
+
+Source resolves those aliases explicitly:
+
+```graphcal
+import units_v1.si.{m as m_v1};
+import units_v2.si.{m as m_v2};
+```
+
+Run `graphcal deps lock` before checking or evaluating a package with
+dependencies. The command writes `graphcal.lock`, a deterministic,
+tool-maintained lockfile that records package instances, exact Git commits,
+source tree hashes, direct dependency edges, and the Graphcal/standard-library
+versions used for resolution. The lockfile records dependency graph edges
+between package instances; it is not a flat "one version per package name" map,
+so multiple revisions of the same package can coexist.
+
+`graphcal check`, `graphcal eval`, `graphcal graph`, and the LSP read only the
+lockfile and locally materialized cache entries. They do not fetch dependencies
+or update `graphcal.lock`; if the lockfile is missing, stale, version-mismatched,
+or points at a missing or hash-mismatched cached source, they fail and ask you
+to run `graphcal deps lock`.
+
+### Dependency Visibility
+
+Dependency names are local to the package instance currently being compiled.
+When package `mission` imports `orbital.constants`, Graphcal interprets the
+first segment in `mission`'s direct dependency namespace:
+
+```text
+current package: pkg-mission
+first segment: orbital
+mission.dependencies[orbital] = pkg-orbital
+remaining path: constants
+=> pkg-orbital/src/orbital/constants.gcl
+```
+
+A package may resolve only its own package name and its own direct dependency
+aliases. Transitive dependencies are not implicitly visible. If `mission`
+depends on `orbital`, and `orbital` depends on `units`, source in `mission`
+cannot write `import units...` unless `mission` also declares a direct `units`
+dependency or alias. `orbital` may still expose values, dimensions, units,
+types, indexes, or DAGs derived from `units` through its public API; `mission`
+then names those through `orbital`, preserving their original package-instance
+identity.
+
+Package-defined dimensions, units, types, indexes, and algebraic types are
+nominal by package instance. Two locked package instances with the same package
+name and same source spelling are distinct if their Git commit, source identity,
+or dependency graph differs. Standard-library dimensions and units are the
+exception: they are singleton identities tied to the active Graphcal toolchain
+and standard-library version recorded in `graphcal.lock`.
+
 ## Stdlib Reservation: `graphcal` and `std`
 
 The first segments `graphcal` and `std` are reserved for Graphcal's

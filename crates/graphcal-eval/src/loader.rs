@@ -1,8 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use miette::NamedSource;
+use sha2::{Digest, Sha256};
 
 use crate::eval::CompileError;
 use graphcal_compiler::dag_id::DagId;
@@ -11,6 +13,11 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, ImportKind, IncludeDecl, ModulePath};
 use graphcal_compiler::syntax::phase::Phase;
 use graphcal_io::{FileSystemReader, RealFileSystem};
+use graphcal_package::{
+    GitCommitHash, GitUrl, LockedPackage, PackageGraph, PackageInstanceId, PackageManifest,
+    PackageSource, STDLIB_VERSION, parse_lockfile_str, parse_manifest_str,
+    validate_lock_against_manifests,
+};
 
 /// Span-free identity for an `import`/`include` path.
 ///
@@ -532,6 +539,17 @@ pub fn load_project<F: FileSystemReader>(
     // single rule: to import across files, you must live in a real package.
     let manifest: Option<graphcal_compiler::registry::manifest::Manifest> =
         load_manifest_for_root(&project_root, &root_canonical, fs)?;
+    if manifest.is_some() {
+        let package_manifest = load_package_manifest_for_root(&project_root, fs)?;
+        if !package_manifest.dependencies.is_empty() {
+            return load_locked_package_project(
+                &root_canonical,
+                &project_root,
+                package_manifest,
+                fs,
+            );
+        }
+    }
 
     load_file_dfs(
         &root_canonical,
@@ -551,6 +569,675 @@ pub fn load_project<F: FileSystemReader>(
         root: root_dag_id,
         load_order,
     })
+}
+
+fn load_package_manifest_for_root<F: FileSystemReader>(
+    project_root: &Path,
+    fs: &F,
+) -> Result<PackageManifest, CompileError> {
+    let path = project_root.join("graphcal.toml");
+    let content = fs.read_to_string(&path).map_err(|e| {
+        CompileError::Eval(GraphcalError::ManifestError {
+            message: e.to_string(),
+        })
+    })?;
+    parse_manifest_str(&content).map_err(|e| {
+        CompileError::Eval(GraphcalError::ManifestError {
+            message: e.to_string(),
+        })
+    })
+}
+
+fn load_locked_package_project<F: FileSystemReader>(
+    root_canonical: &Path,
+    project_root: &Path,
+    root_manifest: PackageManifest,
+    fs: &F,
+) -> Result<LoadedProject, CompileError> {
+    let context = PackageLoadContext::from_lockfile(project_root, root_manifest, fs)?;
+    let root_package = context.graph.root().clone();
+
+    let mut files: HashMap<DagId, LoadedFile> = HashMap::new();
+    let mut path_to_dag_id: HashMap<(PackageInstanceId, PathBuf), DagId> = HashMap::new();
+    let mut load_order: Vec<DagId> = Vec::new();
+    let mut loading: HashSet<(PackageInstanceId, PathBuf)> = HashSet::new();
+    let mut stack: Vec<String> = Vec::new();
+
+    load_package_file_dfs(
+        root_canonical,
+        &root_package,
+        &context,
+        &mut files,
+        &mut path_to_dag_id,
+        &mut load_order,
+        &mut loading,
+        &mut stack,
+    )?;
+
+    let root_dag_id = path_to_dag_id[&(root_package, root_canonical.to_path_buf())].clone();
+    Ok(LoadedProject {
+        files,
+        root: root_dag_id,
+        load_order,
+    })
+}
+
+struct PackageLoadContext {
+    graph: PackageGraph,
+    roots: BTreeMap<PackageInstanceId, PathBuf>,
+}
+
+impl PackageLoadContext {
+    fn from_lockfile<F: FileSystemReader>(
+        project_root: &Path,
+        root_manifest: PackageManifest,
+        fs: &F,
+    ) -> Result<Self, CompileError> {
+        let lockfile_path = project_root.join("graphcal.lock");
+        let lockfile_text = fs.read_to_string(&lockfile_path).map_err(|e| {
+            CompileError::Eval(GraphcalError::ManifestError {
+                message: format!(
+                    "package dependencies require graphcal.lock; run `graphcal deps lock`: {e}"
+                ),
+            })
+        })?;
+        let lockfile = parse_lockfile_str(&lockfile_text).map_err(|e| {
+            CompileError::Eval(GraphcalError::ManifestError {
+                message: e.to_string(),
+            })
+        })?;
+        let graph = lockfile
+            .package_graph(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
+            .map_err(|e| {
+                CompileError::Eval(GraphcalError::ManifestError {
+                    message: e.to_string(),
+                })
+            })?;
+        let cache_dir = cache_dir()
+            .map_err(|e| CompileError::Eval(GraphcalError::ManifestError { message: e }))?;
+        let mut roots = BTreeMap::new();
+        let mut manifests = BTreeMap::new();
+        for package in &lockfile.packages {
+            let root = source_root(project_root, &cache_dir, package)?;
+            verify_locked_source(&root, package)?;
+            let manifest = read_package_manifest_from_path(&root)?;
+            manifests.insert(package.id.clone(), manifest);
+            roots.insert(package.id.clone(), root);
+        }
+        manifests.insert(lockfile.root.clone(), root_manifest);
+        validate_lock_against_manifests(
+            &lockfile,
+            &manifests,
+            env!("CARGO_PKG_VERSION"),
+            STDLIB_VERSION,
+        )
+        .map_err(|e| {
+            CompileError::Eval(GraphcalError::ManifestError {
+                message: e.to_string(),
+            })
+        })?;
+        Ok(Self { graph, roots })
+    }
+
+    fn root_for(&self, package: &PackageInstanceId) -> Result<&Path, CompileError> {
+        self.roots
+            .get(package)
+            .map(PathBuf::as_path)
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::ManifestError {
+                    message: format!("lockfile package `{package}` has no source root"),
+                })
+            })
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "package-aware DFS state mirrors the legacy project loader"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "DFS body keeps package resolution and parsing in one traversal"
+)]
+fn load_package_file_dfs(
+    canonical_path: &Path,
+    package_id: &PackageInstanceId,
+    context: &PackageLoadContext,
+    files: &mut HashMap<DagId, LoadedFile>,
+    path_to_dag_id: &mut HashMap<(PackageInstanceId, PathBuf), DagId>,
+    load_order: &mut Vec<DagId>,
+    loading: &mut HashSet<(PackageInstanceId, PathBuf)>,
+    stack: &mut Vec<String>,
+) -> Result<(), CompileError> {
+    let path_key = (package_id.clone(), canonical_path.to_path_buf());
+    if path_to_dag_id.contains_key(&path_key) {
+        return Ok(());
+    }
+
+    let display_name = format!("{package_id}:{}", canonical_path.display());
+    if !loading.insert(path_key.clone()) {
+        stack.push(display_name);
+        let cycle_str = stack.join(" -> ");
+        return Err(CompileError::Eval(GraphcalError::CircularImport {
+            cycle: cycle_str,
+        }));
+    }
+    stack.push(display_name.clone());
+
+    let source_str =
+        std::fs::read_to_string(canonical_path).map_err(|_| io_not_found(canonical_path))?;
+    let source = Arc::new(source_str);
+    let named_source =
+        graphcal_compiler::syntax::named_source(display_name.as_str(), Arc::clone(&source));
+    let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, &display_name)
+        .parse_file()?;
+    let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+    let dag_names = collect_inline_dag_names(&ast.declarations);
+    let package_root = context.root_for(package_id)?;
+    let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_stem = canonical_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let mut resolved_imports_paths: HashMap<ModulePathKey, (PackageInstanceId, PathBuf)> =
+        HashMap::new();
+
+    for decl in &ast.declarations {
+        let path = match &decl.kind {
+            DeclKind::Import(import_decl) => &import_decl.path,
+            DeclKind::Include(include_decl) => &include_decl.path,
+            _ => continue,
+        };
+        if path.segments.len() == 1 && dag_names.contains(path.segments[0].name.as_str()) {
+            continue;
+        }
+        if path.segments.len() == 1 && path.segments[0].name == file_stem {
+            continue;
+        }
+        let resolved =
+            resolve_package_import_path(path, package_id, context, &named_source, parent_dir)?;
+        if resolved.path == canonical_path && resolved.package == *package_id {
+            resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved.into_key());
+            continue;
+        }
+        load_package_file_dfs(
+            &resolved.path,
+            &resolved.package,
+            context,
+            files,
+            path_to_dag_id,
+            load_order,
+            loading,
+            stack,
+        )?;
+        resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved.into_key());
+    }
+
+    for path in inline_dag_dependency_paths(&ast.declarations) {
+        if path.segments.len() == 1 && dag_names.contains(path.segments[0].name.as_str()) {
+            continue;
+        }
+        if path.segments.len() == 1 && path.segments[0].name == file_stem {
+            continue;
+        }
+        let Ok(resolved) =
+            resolve_package_import_path(path, package_id, context, &named_source, parent_dir)
+        else {
+            continue;
+        };
+        if resolved.path == canonical_path && resolved.package == *package_id {
+            continue;
+        }
+        load_package_file_dfs(
+            &resolved.path,
+            &resolved.package,
+            context,
+            files,
+            path_to_dag_id,
+            load_order,
+            loading,
+            stack,
+        )?;
+    }
+
+    let relative_path = canonical_path
+        .strip_prefix(package_root)
+        .unwrap_or(canonical_path);
+    let dag_id = package_dag_id(package_id, relative_path, &named_source)?;
+    let resolved_imports: HashMap<ModulePathKey, DagId> = resolved_imports_paths
+        .iter()
+        .map(|(key, (dep_package, canonical))| {
+            let dep_dag_id = if dep_package == package_id && canonical == canonical_path {
+                dag_id.clone()
+            } else {
+                path_to_dag_id[&(dep_package.clone(), canonical.clone())].clone()
+            };
+            (key.clone(), dep_dag_id)
+        })
+        .collect();
+    let same_file_dag_ids = collect_inline_dag_ids(&ast.declarations, &dag_id);
+    let inline_context = PackageInlineLiftContext {
+        context,
+        package_id,
+        file_dag_id: &dag_id,
+        same_file_dag_ids: &same_file_dag_ids,
+        canonical_path,
+        src: &named_source,
+        file_stem,
+    };
+    let inline_dags = lift_package_inline_dags(&ast, &dag_id, &inline_context);
+
+    load_order.push(dag_id.clone());
+    loading.remove(&path_key);
+    stack.pop();
+
+    path_to_dag_id.insert(path_key, dag_id.clone());
+    files.insert(
+        dag_id.clone(),
+        LoadedFile {
+            path: canonical_path.to_path_buf(),
+            dag_id,
+            source,
+            ast,
+            named_source,
+            resolved_imports,
+            inline_dags,
+        },
+    );
+    Ok(())
+}
+
+fn package_dag_id(
+    package_id: &PackageInstanceId,
+    relative_path: &Path,
+    src: &NamedSource<Arc<String>>,
+) -> Result<DagId, CompileError> {
+    let module_id = DagId::from_relative_path(relative_path).map_err(|e| {
+        CompileError::Eval(GraphcalError::EvalError {
+            message: format!("invalid module path `{}`: {e}", relative_path.display()),
+            src: src.clone(),
+            span: graphcal_compiler::syntax::span::Span::new(0, 0).into(),
+        })
+    })?;
+    Ok(DagId::in_package(package_id.as_str(), module_id))
+}
+
+struct PackageResolvedPath {
+    package: PackageInstanceId,
+    path: PathBuf,
+}
+
+impl PackageResolvedPath {
+    fn into_key(self) -> (PackageInstanceId, PathBuf) {
+        (self.package, self.path)
+    }
+}
+
+fn resolve_package_import_path(
+    import_path: &ModulePath,
+    current_package: &PackageInstanceId,
+    context: &PackageLoadContext,
+    src: &NamedSource<Arc<String>>,
+    _parent_dir: &Path,
+) -> Result<PackageResolvedPath, CompileError> {
+    let segments = import_path
+        .segments
+        .iter()
+        .map(|segment| segment.name.to_string())
+        .collect::<Vec<_>>();
+    if matches!(
+        segments.first().map(String::as_str),
+        Some("graphcal" | "std")
+    ) {
+        return Err(CompileError::Eval(GraphcalError::StdlibNotImplemented {
+            path: import_path.display_path(),
+            src: src.clone(),
+            span: import_path.span.into(),
+        }));
+    }
+    let resolved = context
+        .graph
+        .resolve_module_path(current_package, &segments)
+        .map_err(|e| {
+            CompileError::Eval(GraphcalError::EvalError {
+                message: format!("{e}; run `graphcal deps lock` after changing dependencies"),
+                src: src.clone(),
+                span: import_path.span.into(),
+            })
+        })?;
+    let package = context.graph.package(&resolved.package).ok_or_else(|| {
+        CompileError::Eval(GraphcalError::ManifestError {
+            message: format!("lockfile package `{}` is missing", resolved.package),
+        })
+    })?;
+    let root = context.root_for(&resolved.package)?;
+    let canonical =
+        package_module_path(root, package, &resolved.module_segments, src, import_path)?;
+    Ok(PackageResolvedPath {
+        package: resolved.package,
+        path: canonical,
+    })
+}
+
+fn package_module_path(
+    package_root: &Path,
+    package: &LockedPackage,
+    module_segments: &[String],
+    src: &NamedSource<Arc<String>>,
+    import_path: &ModulePath,
+) -> Result<PathBuf, CompileError> {
+    let mut file_path = package_root
+        .join(&package.source_dir)
+        .join(package.name.as_str());
+    for segment in module_segments {
+        file_path = file_path.join(segment);
+    }
+    file_path.set_extension("gcl");
+    if let Ok(canonical) = std::fs::canonicalize(&file_path) {
+        return ensure_package_path(canonical, package_root, import_path, src);
+    }
+
+    if !module_segments.is_empty() {
+        let mut parent_path = package_root
+            .join(&package.source_dir)
+            .join(package.name.as_str());
+        for segment in &module_segments[..module_segments.len() - 1] {
+            parent_path = parent_path.join(segment);
+        }
+        parent_path.set_extension("gcl");
+        if let Ok(canonical) = std::fs::canonicalize(&parent_path) {
+            return ensure_package_path(canonical, package_root, import_path, src);
+        }
+    }
+
+    Err(CompileError::Eval(GraphcalError::ImportFileNotFound {
+        path: import_path.display_path(),
+        src: src.clone(),
+        span: import_path.span.into(),
+    }))
+}
+
+fn ensure_package_path(
+    canonical: PathBuf,
+    package_root: &Path,
+    import_path: &ModulePath,
+    src: &NamedSource<Arc<String>>,
+) -> Result<PathBuf, CompileError> {
+    if canonical.starts_with(package_root) {
+        Ok(canonical)
+    } else {
+        Err(CompileError::Eval(GraphcalError::ImportOutsideRoot {
+            path: import_path.display_path(),
+            src: src.clone(),
+            span: import_path.span.into(),
+        }))
+    }
+}
+
+fn source_root(
+    project_root: &Path,
+    cache_dir: &Path,
+    package: &LockedPackage,
+) -> Result<PathBuf, CompileError> {
+    match &package.source {
+        PackageSource::Path { path } => {
+            let root = project_root.join(path);
+            std::fs::canonicalize(&root).map_err(|e| {
+                CompileError::Eval(GraphcalError::ManifestError {
+                    message: format!(
+                        "could not canonicalize locked path source `{}`: {e}",
+                        root.display()
+                    ),
+                })
+            })
+        }
+        PackageSource::Git { url, commit, .. } => {
+            let root = cache_dir.join("git").join(cache_key(url, commit));
+            std::fs::canonicalize(&root).map_err(|e| {
+                CompileError::Eval(GraphcalError::ManifestError {
+                    message: format!(
+                        "locked Git package `{}` is not materialized at `{}`; run `graphcal deps lock`: {e}",
+                        package.id,
+                        root.display()
+                    ),
+                })
+            })
+        }
+    }
+}
+
+fn verify_locked_source(root: &Path, package: &LockedPackage) -> Result<(), CompileError> {
+    let PackageSource::Git { tree_hashes, .. } = &package.source else {
+        return Ok(());
+    };
+    let actual = hash_source_tree(root)?;
+    if actual == tree_hashes.sha256 {
+        Ok(())
+    } else {
+        Err(CompileError::Eval(GraphcalError::ManifestError {
+            message: format!(
+                "cached package `{}` hash mismatch; expected {}, got {}; run `graphcal deps lock`",
+                package.id, tree_hashes.sha256, actual
+            ),
+        }))
+    }
+}
+
+fn read_package_manifest_from_path(root: &Path) -> Result<PackageManifest, CompileError> {
+    let manifest_path = root.join("graphcal.toml");
+    let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
+        CompileError::Eval(GraphcalError::ManifestError {
+            message: format!("could not read `{}`: {e}", manifest_path.display()),
+        })
+    })?;
+    parse_manifest_str(&content).map_err(|e| {
+        CompileError::Eval(GraphcalError::ManifestError {
+            message: e.to_string(),
+        })
+    })
+}
+
+fn cache_dir() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("GRAPHCAL_CACHE_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(path) = std::env::var_os("XDG_CACHE_HOME") {
+        return Ok(PathBuf::from(path).join("graphcal"));
+    }
+    std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join(".cache").join("graphcal"))
+        .ok_or_else(|| {
+            "could not determine Graphcal cache directory; set GRAPHCAL_CACHE_DIR".to_string()
+        })
+}
+
+fn cache_key(url: &GitUrl, rev: &GitCommitHash) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"git\0");
+    hasher.update(url.as_str().as_bytes());
+    hasher.update([0]);
+    hasher.update(rev.as_str().as_bytes());
+    hex_string(&hasher.finalize())
+}
+
+fn hash_source_tree(root: &Path) -> Result<String, CompileError> {
+    let manifest = read_package_manifest_from_path(root)?;
+    let mut files = BTreeMap::new();
+    collect_hash_files(root, Path::new("graphcal.toml"), &mut files)?;
+    collect_hash_files(root, &manifest.source_dir, &mut files)?;
+
+    let mut hasher = Sha256::new();
+    for (relative, path) in files {
+        hasher.update(relative.as_bytes());
+        hasher.update([0]);
+        let bytes = std::fs::read(&path).map_err(|e| {
+            CompileError::Eval(GraphcalError::ManifestError {
+                message: format!("could not read `{}`: {e}", path.display()),
+            })
+        })?;
+        hasher.update(bytes.len().to_string().as_bytes());
+        hasher.update([0]);
+        hasher.update(bytes);
+        hasher.update([0]);
+    }
+    Ok(hex_string(&hasher.finalize()))
+}
+
+fn collect_hash_files(
+    root: &Path,
+    relative: &Path,
+    files: &mut BTreeMap<String, PathBuf>,
+) -> Result<(), CompileError> {
+    if relative.components().any(
+        |c| matches!(c, std::path::Component::Normal(name) if name == std::ffi::OsStr::new(".git")),
+    ) {
+        return Ok(());
+    }
+    let path = root.join(relative);
+    let metadata = std::fs::metadata(&path).map_err(|e| {
+        CompileError::Eval(GraphcalError::ManifestError {
+            message: format!("could not inspect `{}`: {e}", path.display()),
+        })
+    })?;
+    if metadata.is_file() {
+        files.insert(normalize_relative_path(relative), path);
+        return Ok(());
+    }
+    if metadata.is_dir() {
+        for entry in std::fs::read_dir(&path).map_err(|e| {
+            CompileError::Eval(GraphcalError::ManifestError {
+                message: format!("could not read directory `{}`: {e}", path.display()),
+            })
+        })? {
+            let entry = entry.map_err(|e| {
+                CompileError::Eval(GraphcalError::ManifestError {
+                    message: format!("could not read directory `{}`: {e}", path.display()),
+                })
+            })?;
+            collect_hash_files(root, &relative.join(entry.file_name()), files)?;
+        }
+        return Ok(());
+    }
+    Err(CompileError::Eval(GraphcalError::ManifestError {
+        message: format!("unsupported source entry `{}`", path.display()),
+    }))
+}
+
+fn normalize_relative_path(path: &Path) -> String {
+    let mut out = String::new();
+    for component in path.components() {
+        let std::path::Component::Normal(part) = component else {
+            continue;
+        };
+        if !out.is_empty() {
+            out.push('/');
+        }
+        out.push_str(&part.to_string_lossy());
+    }
+    out
+}
+
+fn hex_string(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+struct PackageInlineLiftContext<'a> {
+    context: &'a PackageLoadContext,
+    package_id: &'a PackageInstanceId,
+    file_dag_id: &'a DagId,
+    same_file_dag_ids: &'a HashSet<DagId>,
+    canonical_path: &'a Path,
+    src: &'a NamedSource<Arc<String>>,
+    file_stem: &'a str,
+}
+
+fn lift_package_inline_dags(
+    ast: &File,
+    self_dag_id: &DagId,
+    context: &PackageInlineLiftContext<'_>,
+) -> Vec<LoadedDag> {
+    let mut out = Vec::new();
+    lift_package_inline_dags_from_declarations(&ast.declarations, self_dag_id, context, &mut out);
+    out
+}
+
+fn lift_package_inline_dags_from_declarations(
+    declarations: &[Declaration],
+    lexical_parent_id: &DagId,
+    context: &PackageInlineLiftContext<'_>,
+    out: &mut Vec<LoadedDag>,
+) {
+    for decl in declarations {
+        let DeclKind::Dag(dag) = &decl.kind else {
+            continue;
+        };
+        let name = dag.name.value.to_string();
+        let dag_id = lexical_parent_id.child(name.as_str());
+        let resolved_imports = resolve_package_inline_body_imports(&dag.body, &dag_id, context);
+        out.push(LoadedDag {
+            dag_id: dag_id.clone(),
+            parent_dag_id: context.file_dag_id.clone(),
+            name,
+            body: dag.body.clone(),
+            resolved_imports,
+        });
+        lift_package_inline_dags_from_declarations(&dag.body, &dag_id, context, out);
+    }
+}
+
+fn resolve_package_inline_body_imports(
+    body: &[Declaration],
+    lexical_parent_id: &DagId,
+    context: &PackageInlineLiftContext<'_>,
+) -> HashMap<ModulePathKey, InlineBodyImportResolution> {
+    body.iter()
+        .filter_map(|body_decl| match &body_decl.kind {
+            DeclKind::Import(import_decl) => Some(&import_decl.path),
+            DeclKind::Include(include_decl) => Some(&include_decl.path),
+            _ => None,
+        })
+        .map(|path| {
+            let key = ModulePathKey::from_path(path);
+            let resolution = resolve_package_inline_body_import(path, lexical_parent_id, context);
+            (key, resolution)
+        })
+        .collect()
+}
+
+fn resolve_package_inline_body_import(
+    path: &ModulePath,
+    lexical_parent_id: &DagId,
+    context: &PackageInlineLiftContext<'_>,
+) -> InlineBodyImportResolution {
+    if let Some(target) =
+        resolve_same_file_inline_dag_path(path, lexical_parent_id, context.same_file_dag_ids)
+    {
+        return InlineBodyImportResolution::Resolved(target);
+    }
+    if path.segments.len() == 1 && path.segments[0].name == context.file_stem {
+        return InlineBodyImportResolution::Resolved(context.file_dag_id.clone());
+    }
+    let Ok(resolved) = resolve_package_import_path(
+        path,
+        context.package_id,
+        context.context,
+        context.src,
+        context
+            .canonical_path
+            .parent()
+            .unwrap_or_else(|| Path::new(".")),
+    ) else {
+        return InlineBodyImportResolution::Unresolved;
+    };
+    if resolved.path == context.canonical_path && resolved.package == *context.package_id {
+        InlineBodyImportResolution::Resolved(context.file_dag_id.clone())
+    } else {
+        InlineBodyImportResolution::Unresolved
+    }
 }
 
 /// DFS helper: load a single file and recurse into its `import` declarations.

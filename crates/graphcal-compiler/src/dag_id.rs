@@ -13,6 +13,46 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
+/// Opaque package-instance component of a [`DagId`].
+///
+/// This is separate from module path segments so the compiler can distinguish
+/// the same source spelling loaded from different locked package instances
+/// without parsing package identity out of a joined module string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DagPackageId(Arc<str>);
+
+impl DagPackageId {
+    /// Borrow the opaque package instance id.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for DagPackageId {
+    fn from(value: &str) -> Self {
+        Self(Arc::from(value))
+    }
+}
+
+impl From<String> for DagPackageId {
+    fn from(value: String) -> Self {
+        Self(Arc::from(value))
+    }
+}
+
+impl From<Arc<str>> for DagPackageId {
+    fn from(value: Arc<str>) -> Self {
+        Self(value)
+    }
+}
+
+impl fmt::Display for DagPackageId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// An abstract identifier for a DAG in the compiler pipeline.
 ///
 /// Segments form a hierarchical name: for example, a file at `helpers/math.gcl`
@@ -26,6 +66,9 @@ use thiserror::Error;
 /// The compiler never interprets these segments as filesystem paths.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DagId {
+    /// Locked package instance that owns this DAG, when loaded from a package
+    /// graph. Single-file and legacy project loads have no package component.
+    package: Option<DagPackageId>,
     /// The first segment. Always present.
     head: Arc<str>,
     /// Remaining segments after `head`. Empty for a root (single-segment) id.
@@ -57,6 +100,7 @@ impl DagId {
         tail: impl IntoIterator<Item = impl Into<Arc<str>>>,
     ) -> Self {
         Self {
+            package: None,
             head: head.into(),
             tail: tail.into_iter().map(Into::into).collect(),
         }
@@ -65,9 +109,26 @@ impl DagId {
     /// Create a single-segment (root) `DagId`.
     pub fn root(name: impl Into<Arc<str>>) -> Self {
         Self {
+            package: None,
             head: name.into(),
             tail: Arc::from([] as [Arc<str>; 0]),
         }
+    }
+
+    /// Attach an opaque locked package instance to an existing module id.
+    #[must_use]
+    pub fn in_package(package: impl Into<DagPackageId>, module: Self) -> Self {
+        Self {
+            package: Some(package.into()),
+            head: module.head,
+            tail: module.tail,
+        }
+    }
+
+    /// The package instance that owns this DAG, if it came from a package graph.
+    #[must_use]
+    pub const fn package(&self) -> Option<&DagPackageId> {
+        self.package.as_ref()
     }
 
     /// Create a child `DagId` by appending a segment (e.g., for a nested `dag` block).
@@ -76,6 +137,7 @@ impl DagId {
         let mut tail: Vec<Arc<str>> = self.tail.to_vec();
         tail.push(name.into());
         Self {
+            package: self.package.clone(),
             head: Arc::clone(&self.head),
             tail: tail.into(),
         }
@@ -89,6 +151,7 @@ impl DagId {
             return None;
         }
         Some(Self {
+            package: self.package.clone(),
             head: Arc::clone(&self.head),
             tail: self.tail[..self.tail.len() - 1].into(),
         })
@@ -116,6 +179,9 @@ impl DagId {
     #[must_use]
     pub fn is_descendant_of(&self, ancestor: &Self) -> bool {
         if self.segment_count() <= ancestor.segment_count() {
+            return false;
+        }
+        if self.package != ancestor.package {
             return false;
         }
         self.segments()
@@ -152,12 +218,19 @@ impl DagId {
         let mut segments = segments.into_iter();
         let head = segments.next().ok_or(DagIdPathError::Empty)?;
         let tail: Arc<[Arc<str>]> = segments.collect::<Vec<_>>().into();
-        Ok(Self { head, tail })
+        Ok(Self {
+            package: None,
+            head,
+            tail,
+        })
     }
 }
 
 impl fmt::Display for DagId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(package) = &self.package {
+            write!(f, "{package}:")?;
+        }
         f.write_str(&self.head)?;
         for seg in self.tail.iter() {
             f.write_str(".")?;
@@ -212,6 +285,32 @@ mod tests {
     }
 
     #[test]
+    fn package_identity_is_structural() {
+        let module = DagId::new("src", ["units", "si"]);
+        let rev1 = DagId::in_package("pkg-units-rev1", module.clone());
+        let rev2 = DagId::in_package("pkg-units-rev2", module);
+
+        assert_ne!(rev1, rev2);
+        assert_eq!(rev1.package().unwrap().as_str(), "pkg-units-rev1");
+        assert_eq!(rev1.to_string(), "pkg-units-rev1:src.units.si");
+        assert_eq!(
+            rev1.segments()
+                .map(std::convert::AsRef::as_ref)
+                .collect::<Vec<_>>(),
+            ["src", "units", "si"]
+        );
+    }
+
+    #[test]
+    fn child_and_parent_preserve_package_identity() {
+        let root = DagId::in_package("pkg-lib", DagId::root("lib"));
+        let child = root.child("helper");
+
+        assert_eq!(child.package(), root.package());
+        assert_eq!(child.parent(), Some(root));
+    }
+
+    #[test]
     fn is_descendant_of_matches_nested_blocks_only() {
         let file = DagId::new("helpers", ["math"]);
         let child = file.child("double_speed");
@@ -221,6 +320,9 @@ mod tests {
         assert!(!file.is_descendant_of(&file));
         assert!(!file.is_descendant_of(&child));
         assert!(!DagId::new("helpers", ["other"]).is_descendant_of(&file));
+        assert!(
+            !DagId::in_package("pkg-a", child).is_descendant_of(&DagId::in_package("pkg-b", file))
+        );
     }
 
     #[test]

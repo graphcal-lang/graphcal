@@ -25,7 +25,62 @@ graphcal [OPTIONS] <COMMAND>
 | [`format`](#graphcal-format) | Format `.gcl` files |
 | [`check`](#graphcal-check) | Check `.gcl` files for errors without evaluation |
 | [`graph`](#graphcal-graph) | Export the dependency graph of a `.gcl` file (experimental) |
+| [`deps lock`](#graphcal-deps-lock) | Resolve exact-rev Git dependencies and write `graphcal.lock` |
 | [`lsp`](#graphcal-lsp) | Start the LSP server |
+
+---
+
+## `graphcal deps lock`
+
+Resolve a package's exact-rev Git dependencies, materialize them in the local
+Graphcal cache, verify their source hashes, and write `graphcal.lock`.
+
+```bash
+graphcal deps lock [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--root <ROOT>` | Project root directory (overrides automatic `graphcal.toml` detection) |
+
+`graphcal deps lock` is the only public package-management command in the MVP.
+It reads `[dependencies]` from `graphcal.toml`, accepts only Git dependencies
+with a full commit-hash `rev`, fetches any missing sources, records a
+graph-shaped package-instance lockfile, and writes nothing when the deterministic
+lockfile contents are already up to date.
+
+Dependency-consuming commands (`check`, `eval`, `graph`, and the LSP) are
+read-only with respect to packages: they read `graphcal.lock` and cached
+sources, but they do not fetch, create, or update lockfile entries. If the
+lockfile is missing, stale, uses a different Graphcal or standard-library
+version, or references a missing or hash-mismatched cache entry, they fail and
+ask you to run `graphcal deps lock`.
+
+Private Git repositories are supported only when the underlying Git fetch can
+obtain credentials from the current environment. This is intentionally not a
+portable guarantee: SSH may work with a configured key/agent, while HTTPS may
+fail unless a compatible credential helper or non-interactive credential
+provider is available. Do not place credentials directly in `git` URLs in
+`graphcal.toml`.
+
+**Examples:**
+
+```bash
+# Resolve dependencies from the discovered project root
+$ graphcal deps lock
+wrote /path/to/project/graphcal.lock
+```
+
+```bash
+# Resolve dependencies for an explicit project root
+$ graphcal deps lock --root mission
+up to date: /path/to/mission/graphcal.lock
+```
+
+See [Package Dependencies](language/multi-file.md#package-dependencies) for
+manifest syntax and source-resolution rules.
 
 ---
 

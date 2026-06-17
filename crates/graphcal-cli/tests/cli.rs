@@ -32,6 +32,588 @@ fn write_temp_file(root: &Path, rel: &str, source: &str) -> PathBuf {
     path
 }
 
+fn commit_git_repo(root: &Path, message: &str) -> String {
+    let repo = gix::open(root).unwrap();
+    let tree_id = write_tree_object(&repo, root);
+    let parents = repo
+        .head_id()
+        .map(|id| vec![id.detach()])
+        .unwrap_or_default();
+    let signature =
+        gix::actor::SignatureRef::from_bytes(b"Graphcal Test <graphcal@example.invalid> 0 +0000")
+            .unwrap();
+    repo.commit_as(signature, signature, "HEAD", message, tree_id, parents)
+        .unwrap()
+        .detach()
+        .to_hex()
+        .to_string()
+}
+
+fn write_tree_object(repo: &gix::Repository, root: &Path) -> gix::hash::ObjectId {
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(root).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let filename = entry.file_name();
+        if filename == ".git" {
+            continue;
+        }
+        let file_type = entry.file_type().unwrap();
+        let (mode, oid) = if file_type.is_dir() {
+            (
+                gix::objs::tree::EntryKind::Tree.into(),
+                write_tree_object(repo, &path),
+            )
+        } else if file_type.is_file() {
+            (
+                gix::objs::tree::EntryKind::Blob.into(),
+                repo.write_blob(std::fs::read(path).unwrap())
+                    .unwrap()
+                    .detach(),
+            )
+        } else {
+            panic!("unsupported test fixture entry `{}`", path.display());
+        };
+        entries.push(gix::objs::tree::Entry {
+            mode,
+            filename: filename.to_string_lossy().into_owned().into(),
+            oid,
+        });
+    }
+    entries.sort();
+    repo.write_object(gix::objs::Tree { entries })
+        .unwrap()
+        .detach()
+}
+
+fn init_git_package(
+    root: &Path,
+    package: &str,
+    manifest_tail: &str,
+    module_source: &str,
+) -> String {
+    std::fs::create_dir_all(root.join(format!("src/{package}"))).unwrap();
+    std::fs::write(
+        root.join("graphcal.toml"),
+        format!("[package]\nname = \"{package}\"\n{manifest_tail}"),
+    )
+    .unwrap();
+    std::fs::write(root.join(format!("src/{package}/lib.gcl")), module_source).unwrap();
+    gix::init(root).unwrap();
+    commit_git_repo(root, "initial")
+}
+
+fn create_git_package(root: &Path, package: &str, module_source: &str) -> String {
+    init_git_package(root, package, "", module_source)
+}
+
+fn update_git_package_module(
+    root: &Path,
+    package: &str,
+    module_source: &str,
+    message: &str,
+) -> String {
+    std::fs::write(root.join(format!("src/{package}/lib.gcl")), module_source).unwrap();
+    commit_git_repo(root, message)
+}
+
+fn write_package_project(root: &Path, manifest_dependencies: &str, main_source: &str) -> PathBuf {
+    std::fs::create_dir_all(root.join("src/mission")).unwrap();
+    let main = root.join("src/mission/main.gcl");
+    std::fs::write(&main, main_source).unwrap();
+    std::fs::write(
+        root.join("graphcal.toml"),
+        format!(
+            "[package]\n\
+             name = \"mission\"\n\
+             source_dir = \"src\"\n\
+             {manifest_dependencies}"
+        ),
+    )
+    .unwrap();
+    main
+}
+
+fn find_cached_file(root: &Path, suffix: &Path) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(root).ok()? {
+        let entry = entry.ok()?;
+        let path = entry.path();
+        if path.ends_with(suffix) {
+            return Some(path);
+        }
+        if path.is_dir()
+            && let Some(found) = find_cached_file(&path, suffix)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end CLI scenario keeps setup, command, and assertions together"
+)]
+fn deps_lock_writes_deterministic_git_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("units-repo");
+    let dep_rev = create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let project = dir.path().join("mission");
+    std::fs::create_dir_all(project.join("src/mission")).unwrap();
+    let main = project.join("src/mission/main.gcl");
+    std::fs::write(
+        &main,
+        "import units_v1.lib.{ one };\n\
+         node two: Dimensionless = @one + 1.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("graphcal.toml"),
+        format!(
+            "[package]\n\
+             name = \"mission\"\n\
+             source_dir = \"src\"\n\n\
+             [dependencies]\n\
+             units_v1 = {{ package = \"units\", git = \"file://{}\", rev = \"{dep_rev}\" }}\n",
+            dep_repo.display()
+        ),
+    )
+    .unwrap();
+    let cache = dir.path().join("cache");
+
+    let output = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("wrote"), "stdout: {stdout}");
+
+    let lock = std::fs::read_to_string(project.join("graphcal.lock")).unwrap();
+    assert!(lock.contains("lock_version = 1"), "lock:\n{lock}");
+    assert!(lock.contains("root = \"pkg-mission\""), "lock:\n{lock}");
+    assert!(
+        lock.contains("units_v1 = \"pkg-units-"),
+        "dependency edge missing:\n{lock}"
+    );
+    assert!(
+        lock.contains(&format!("requested_rev = \"{dep_rev}\"")),
+        "requested_rev missing:\n{lock}"
+    );
+    assert!(
+        lock.contains(&format!("commit = \"{dep_rev}\"")),
+        "commit missing:\n{lock}"
+    );
+    assert!(lock.contains("tree_hashes = { sha256 = \""));
+    assert!(
+        !lock.contains(cache.to_str().unwrap()),
+        "lock must not serialize cache paths:\n{lock}"
+    );
+
+    let check = graphcal_bin()
+        .args([
+            "check",
+            main.to_str().unwrap(),
+            "--root",
+            project.to_str().unwrap(),
+        ])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        check.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let eval = graphcal_bin()
+        .args([
+            "eval",
+            main.to_str().unwrap(),
+            "--root",
+            project.to_str().unwrap(),
+        ])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        eval.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&eval.stderr)
+    );
+    let stdout = String::from_utf8(eval.stdout).unwrap();
+    assert!(stdout.contains("two = 2"), "stdout: {stdout}");
+
+    let second = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        second.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let stdout = String::from_utf8(second.stdout).unwrap();
+    assert!(stdout.contains("up to date"), "stdout: {stdout}");
+}
+
+#[test]
+fn deps_lock_rejects_floating_git_refs() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("mission");
+    std::fs::create_dir_all(project.join("src/mission")).unwrap();
+    std::fs::write(
+        project.join("src/mission/main.gcl"),
+        "param dry: kg = 1.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("graphcal.toml"),
+        "[package]\n\
+         name = \"mission\"\n\n\
+         [dependencies]\n\
+         units = { git = \"https://github.com/acme/units.git\", branch = \"main\" }\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", dir.path().join("cache"))
+        .output()
+        .expect("failed to run graphcal");
+    assert!(!output.status.success(), "floating refs must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported dependency field `branch`"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !project.join("graphcal.lock").exists(),
+        "failed lock command must not write graphcal.lock"
+    );
+}
+
+#[test]
+fn package_consumers_fail_without_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("units-repo");
+    let dep_rev = create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let project = dir.path().join("mission");
+    let main = write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\n\
+             units = {{ git = \"file://{}\", rev = \"{dep_rev}\" }}\n",
+            dep_repo.display()
+        ),
+        "import units.lib.{ one };\n\
+         node two: Dimensionless = @one + 1.0;\n",
+    );
+    let cache = dir.path().join("cache");
+
+    let output = graphcal_bin()
+        .args([
+            "check",
+            main.to_str().unwrap(),
+            "--root",
+            project.to_str().unwrap(),
+        ])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(!output.status.success(), "missing lockfile must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("graphcal deps lock"), "stderr: {stderr}");
+    assert!(!project.join("graphcal.lock").exists());
+    assert!(!cache.exists(), "consumer command must not create cache");
+}
+
+#[test]
+fn package_consumers_reject_cached_source_hash_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("units-repo");
+    let dep_rev = create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let project = dir.path().join("mission");
+    let main = write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\n\
+             units = {{ git = \"file://{}\", rev = \"{dep_rev}\" }}\n",
+            dep_repo.display()
+        ),
+        "import units.lib.{ one };\n\
+         node two: Dimensionless = @one + 1.0;\n",
+    );
+    let cache = dir.path().join("cache");
+    let lock = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        lock.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&lock.stderr)
+    );
+
+    let cached_lib = find_cached_file(&cache, Path::new("src/units/lib.gcl")).unwrap();
+    std::fs::write(cached_lib, "pub const node one: Dimensionless = 99.0;\n").unwrap();
+
+    let output = graphcal_bin()
+        .args([
+            "check",
+            main.to_str().unwrap(),
+            "--root",
+            project.to_str().unwrap(),
+        ])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(!output.status.success(), "hash mismatch must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("hash mismatch"), "stderr: {stderr}");
+    assert!(stderr.contains("graphcal deps lock"), "stderr: {stderr}");
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "contextual dependency graph scenario is clearer as one integration test"
+)]
+fn deps_lock_supports_contextual_transitive_resolution() {
+    let dir = tempfile::tempdir().unwrap();
+    let units_repo = dir.path().join("units-repo");
+    let units_rev1 = create_git_package(
+        &units_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let units_rev2 = update_git_package_module(
+        &units_repo,
+        "units",
+        "pub const node one: Dimensionless = 2.0;\n",
+        "second",
+    );
+    let orbital_repo = dir.path().join("orbital-repo");
+    let orbital_rev = init_git_package(
+        &orbital_repo,
+        "orbital",
+        &format!(
+            "\n[dependencies]\n\
+             units = {{ git = \"file://{}\", rev = \"{units_rev1}\" }}\n",
+            units_repo.display()
+        ),
+        "import units.lib.{ one as units_one };\n\
+         pub const node one: Dimensionless = @units_one;\n",
+    );
+    let thermal_repo = dir.path().join("thermal-repo");
+    let thermal_rev = init_git_package(
+        &thermal_repo,
+        "thermal",
+        &format!(
+            "\n[dependencies]\n\
+             units = {{ git = \"file://{}\", rev = \"{units_rev2}\" }}\n",
+            units_repo.display()
+        ),
+        "import units.lib.{ one as units_one };\n\
+         pub const node one: Dimensionless = @units_one;\n",
+    );
+    let project = dir.path().join("mission");
+    let main = write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\n\
+             orbital = {{ git = \"file://{}\", rev = \"{orbital_rev}\" }}\n\
+             thermal = {{ git = \"file://{}\", rev = \"{thermal_rev}\" }}\n",
+            orbital_repo.display(),
+            thermal_repo.display()
+        ),
+        "import orbital.lib.{ one as orbital_one };\n\
+         import thermal.lib.{ one as thermal_one };\n\
+         node sum: Dimensionless = @orbital_one + @thermal_one;\n",
+    );
+    let cache = dir.path().join("cache");
+
+    let lock = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        lock.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&lock.stderr)
+    );
+    let lock_text = std::fs::read_to_string(project.join("graphcal.lock")).unwrap();
+    assert!(
+        lock_text.contains("units = \"pkg-units-"),
+        "transitive units edge missing:\n{lock_text}"
+    );
+
+    let eval = graphcal_bin()
+        .args([
+            "eval",
+            main.to_str().unwrap(),
+            "--root",
+            project.to_str().unwrap(),
+        ])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        eval.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&eval.stderr)
+    );
+    let stdout = String::from_utf8(eval.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("sum") && line.contains("= 3")),
+        "stdout: {stdout}"
+    );
+
+    let bad_main = project.join("src/mission/bad.gcl");
+    std::fs::write(
+        &bad_main,
+        "import units.lib.{ one };\n\
+         node x: Dimensionless = @one;\n",
+    )
+    .unwrap();
+    let bad = graphcal_bin()
+        .args([
+            "check",
+            bad_main.to_str().unwrap(),
+            "--root",
+            project.to_str().unwrap(),
+        ])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !bad.status.success(),
+        "implicit transitive import must fail"
+    );
+    let stderr = String::from_utf8_lossy(&bad.stderr);
+    assert!(
+        stderr.contains("unknown dependency `units`"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn package_instance_identities_distinguish_aliases_and_revisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let units_repo = dir.path().join("units-repo");
+    let units_rev1 = create_git_package(
+        &units_repo,
+        "units",
+        "pub base dim Money;\n\
+         pub base unit USD: Money;\n\
+         pub const node price: Money = 1.0 USD;\n",
+    );
+    let units_rev2 = update_git_package_module(
+        &units_repo,
+        "units",
+        "pub base dim Money;\n\
+         pub base unit USD: Money;\n\
+         pub const node price: Money = 1.0 USD;\n\
+         // same API, different locked package instance\n",
+        "second",
+    );
+    let project = dir.path().join("mission");
+    let main = write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\n\
+             units_a = {{ package = \"units\", git = \"file://{}\", rev = \"{units_rev1}\" }}\n\
+             units_b = {{ package = \"units\", git = \"file://{}\", rev = \"{units_rev1}\" }}\n\
+             units_v2 = {{ package = \"units\", git = \"file://{}\", rev = \"{units_rev2}\" }}\n",
+            units_repo.display(),
+            units_repo.display(),
+            units_repo.display()
+        ),
+        "import units_a.lib.{ Money as MoneyA, price as price_a };\n\
+         import units_b.lib.{ price as price_b };\n\
+         import units_v2.lib.{ Money as MoneyV2, price as price_v2 };\n\
+         node shared_sum: MoneyA = @price_a + @price_b;\n\
+         node keep_v2: MoneyV2 = @price_v2;\n",
+    );
+    let cache = dir.path().join("cache");
+    let lock = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        lock.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&lock.stderr)
+    );
+    let check = graphcal_bin()
+        .args([
+            "check",
+            main.to_str().unwrap(),
+            "--root",
+            project.to_str().unwrap(),
+        ])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        check.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let bad_main = project.join("src/mission/bad_money.gcl");
+    std::fs::write(
+        &bad_main,
+        "import units_a.lib.{ Money as MoneyA, price as price_a };\n\
+         import units_v2.lib.{ price as price_v2 };\n\
+         node bad_sum: MoneyA = @price_a + @price_v2;\n",
+    )
+    .unwrap();
+    let bad = graphcal_bin()
+        .args([
+            "check",
+            bad_main.to_str().unwrap(),
+            "--root",
+            project.to_str().unwrap(),
+        ])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !bad.status.success(),
+        "different package instances must keep package-defined dimensions distinct"
+    );
+    let stderr = String::from_utf8_lossy(&bad.stderr);
+    assert!(
+        stderr.contains("dimension") || stderr.contains("Dimension"),
+        "stderr: {stderr}"
+    );
+}
+
 #[test]
 fn eval_rocket_text_output() {
     let output = graphcal_bin()
