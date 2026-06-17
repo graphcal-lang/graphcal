@@ -58,6 +58,13 @@ lockfile is missing, stale, uses a different Graphcal or standard-library
 version, or references a missing or hash-mismatched cache entry, they fail and
 ask you to run `graphcal deps lock`.
 
+Private Git repositories are supported only when the underlying Git fetch can
+obtain credentials from the current environment. This is intentionally not a
+portable guarantee: SSH may work with a configured key/agent, while HTTPS may
+fail unless a compatible credential helper or non-interactive credential
+provider is available. Do not place credentials directly in `git` URLs in
+`graphcal.toml`.
+
 **Examples:**
 
 ```bash

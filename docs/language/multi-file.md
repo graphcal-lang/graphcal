@@ -538,6 +538,13 @@ Rules:
 - Branches, tags, version ranges, `latest`, registries, archives, publishing,
   and implicit package discovery inside a Git repository are not part of this
   MVP.
+- Public Git repositories are expected to work with ordinary HTTPS or SSH Git
+  URLs. Private repositories require whatever credentials the underlying Git
+  fetch implementation can obtain in the current environment, so support is
+  environment-dependent. For example, SSH may work when an SSH key/agent is
+  available, while HTTPS may fail unless a compatible credential helper or
+  non-interactive credential provider is configured. Graphcal manifests must not
+  embed credentials in dependency URLs.
 - The dependency table key is the source-visible dependency name used in
   `import` and `include` paths.
 - If `package` is omitted, the fetched package's `[package].name` must match
