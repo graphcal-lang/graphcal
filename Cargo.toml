@@ -79,6 +79,9 @@ unimplemented = { level = "warn", priority = 1 }
 unreachable = { level = "warn", priority = 1 }
 unwrap_used = { level = "warn", priority = 1 }
 
+[profile.release]
+overflow-checks = true
+
 [workspace.lints.rust]
 # missing-docs = "warn"
 unsafe-code = "warn"
