@@ -233,13 +233,21 @@ pub(super) fn align_encoding_channels(
             let mut digits = vec![0usize; row_axes.len()];
             let mut rest = row;
             for (i, axis) in row_axes.iter().enumerate().rev() {
-                digits[i] = rest % axis.variants.len();
-                rest /= axis.variants.len();
+                let axis_len = axis.variants.len();
+                digits[i] = rest
+                    .checked_rem(axis_len)
+                    .ok_or_else(|| "plot axis must contain at least one variant".to_string())?;
+                rest = rest
+                    .checked_div(axis_len)
+                    .ok_or_else(|| "plot axis must contain at least one variant".to_string())?;
             }
             // Project the row onto this channel's own axes.
             let mut idx = 0usize;
             for (axis, pos) in data.axes.iter().zip(&positions) {
-                idx = idx * axis.variants.len() + digits[*pos];
+                idx = idx
+                    .checked_mul(axis.variants.len())
+                    .and_then(|base| base.checked_add(digits[*pos]))
+                    .ok_or_else(|| "plot row index overflowed usize".to_string())?;
             }
             values.push(data.values[idx].clone());
         }

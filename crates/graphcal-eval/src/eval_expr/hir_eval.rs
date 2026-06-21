@@ -258,13 +258,23 @@ fn eval_hir_binop(
             }
             match (&l, &r) {
                 (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) if op == BinOp::Sub => {
-                    return Ok(RuntimeValue::Scalar((*le - *re).to_seconds()));
+                    #[expect(
+                        clippy::arithmetic_side_effects,
+                        reason = "hifitime exposes Epoch subtraction for datetime differences"
+                    )]
+                    {
+                        return Ok(RuntimeValue::Scalar((*le - *re).to_seconds()));
+                    }
                 }
                 (RuntimeValue::Datetime(_), RuntimeValue::Datetime(_)) => {
                     return Err(ctx.eval_error("cannot add two datetimes", span));
                 }
                 (RuntimeValue::Datetime(e), RuntimeValue::Scalar(secs)) => {
                     let duration = hifitime::Duration::from_seconds(*secs);
+                    #[expect(
+                        clippy::arithmetic_side_effects,
+                        reason = "hifitime exposes Epoch +/- Duration for datetime arithmetic"
+                    )]
                     return match op {
                         BinOp::Add => Ok(RuntimeValue::Datetime(*e + duration)),
                         BinOp::Sub => Ok(RuntimeValue::Datetime(*e - duration)),
@@ -276,7 +286,13 @@ fn eval_hir_binop(
                 }
                 (RuntimeValue::Scalar(secs), RuntimeValue::Datetime(e)) if op == BinOp::Add => {
                     let duration = hifitime::Duration::from_seconds(*secs);
-                    return Ok(RuntimeValue::Datetime(*e + duration));
+                    #[expect(
+                        clippy::arithmetic_side_effects,
+                        reason = "hifitime exposes Epoch + Duration for datetime arithmetic"
+                    )]
+                    {
+                        return Ok(RuntimeValue::Datetime(*e + duration));
+                    }
                 }
                 (RuntimeValue::Scalar(_), RuntimeValue::Datetime(_)) => {
                     return Err(ctx.eval_error("cannot subtract a Datetime from a scalar", span));
@@ -423,6 +439,10 @@ fn eval_hir_fn_call(
                 }
                 graphcal_compiler::registry::resolve_types::DatetimeExtractFn::DayOfYear => {
                     let start = hifitime::Epoch::from_gregorian_utc_at_midnight(year, 1, 1);
+                    #[expect(
+                        clippy::arithmetic_side_effects,
+                        reason = "hifitime exposes Epoch subtraction for elapsed-day calculation"
+                    )]
                     let doy = (epoch - start).to_seconds().div_euclid(86400.0);
                     if !doy.is_finite() || !(0.0..366.0).contains(&doy) {
                         return Err(ctx.eval_error(
@@ -433,9 +453,10 @@ fn eval_hir_fn_call(
                         ));
                     }
                     #[expect(clippy::cast_possible_truncation, reason = "bounds-checked above")]
-                    {
-                        doy as i64 + 1
-                    }
+                    let day_index = doy as i64;
+                    day_index.checked_add(1).ok_or_else(|| {
+                        ctx.eval_error("day_of_year() overflowed i64", args[0].span)
+                    })?
                 }
             };
             Ok(RuntimeValue::Int(result))
@@ -1234,11 +1255,12 @@ fn eval_hir_unfold(
         if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(&self_key) {
             *entries = std::mem::take(&mut result_entries);
         }
+        let previous_step_index = i.saturating_sub(1);
         scan_locals.bind(
             prev.id,
             RuntimeValue::RangeLabel {
-                step_index: i - 1,
-                value: range_data.step_value(i - 1),
+                step_index: previous_step_index,
+                value: range_data.step_value(previous_step_index),
             },
         );
         scan_locals.bind(

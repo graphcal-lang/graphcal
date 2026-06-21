@@ -1,4 +1,5 @@
 //! Graphcal evaluation engine
+#![warn(clippy::arithmetic_side_effects)]
 #![expect(
     clippy::result_large_err,
     reason = "GraphcalError is inherently large and only constructed on the error path"

@@ -1,3 +1,5 @@
+#![warn(clippy::arithmetic_side_effects)]
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 

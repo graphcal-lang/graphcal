@@ -312,10 +312,13 @@ pub(super) fn binop_rule(
             }
             let lhs_dim = expect_scalar(lhs_type, registry, src, lhs.span)?;
             let rhs_dim = expect_scalar(rhs_type, registry, src, rhs.span)?;
-            let dim = (lhs_dim * rhs_dim).map_err(|_| GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: expr_span.into(),
-            })?;
+            let dim =
+                lhs_dim
+                    .checked_mul(&rhs_dim)
+                    .map_err(|_| GraphcalError::DimensionOverflow {
+                        src: src.clone(),
+                        span: expr_span.into(),
+                    })?;
             Ok(InferredType::Scalar(dim))
         }
         BinOp::Div => {
@@ -324,10 +327,13 @@ pub(super) fn binop_rule(
             }
             let lhs_dim = expect_scalar(lhs_type, registry, src, lhs.span)?;
             let rhs_dim = expect_scalar(rhs_type, registry, src, rhs.span)?;
-            let dim = (lhs_dim / rhs_dim).map_err(|_| GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: expr_span.into(),
-            })?;
+            let dim =
+                lhs_dim
+                    .checked_div(&rhs_dim)
+                    .map_err(|_| GraphcalError::DimensionOverflow {
+                        src: src.clone(),
+                        span: expr_span.into(),
+                    })?;
             Ok(InferredType::Scalar(dim))
         }
         BinOp::Mod => {

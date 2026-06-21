@@ -110,7 +110,7 @@ fn attach_display_units_depth<'a>(
             if depth > 0
                 && let Some(src_expr) = resolve_defining_expr(expr, ctx, values, depth)?
             {
-                attach_display_units_depth(value, src_expr, ctx, values, depth - 1)?;
+                attach_display_units_depth(value, src_expr, ctx, values, depth.saturating_sub(1))?;
             }
         }
     }
@@ -148,7 +148,8 @@ fn resolve_defining_expr<'a>(
         },
         ExprKind::InlineDagRef { output, .. } => decl_expr(&output.value),
         ExprKind::FieldAccess { expr: inner, field } => {
-            let Some(ctor) = resolve_defining_expr(inner, ctx, values, depth - 1)? else {
+            let Some(ctor) = resolve_defining_expr(inner, ctx, values, depth.saturating_sub(1))?
+            else {
                 return Ok(None);
             };
             let ExprKind::ConstructorCall { fields, .. } = &ctor.kind else {
@@ -160,7 +161,9 @@ fn resolve_defining_expr<'a>(
                 .map(|init| &init.value)
         }
         ExprKind::IndexAccess { expr: inner, args } => {
-            let Some(map_expr) = resolve_defining_expr(inner, ctx, values, depth - 1)? else {
+            let Some(map_expr) =
+                resolve_defining_expr(inner, ctx, values, depth.saturating_sub(1))?
+            else {
                 return Ok(None);
             };
             let ExprKind::MapLiteral { entries } = &map_expr.kind else {
