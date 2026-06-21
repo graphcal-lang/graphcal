@@ -10,8 +10,9 @@ pub(super) fn datetime_with_timezone(
     let zdt = tz.to_zoned(civil_dt)?;
     let ts = zdt.timestamp();
     #[expect(
+        clippy::arithmetic_side_effects,
         clippy::cast_precision_loss,
-        reason = "unix seconds for reasonable dates fit within f64 mantissa precision"
+        reason = "hifitime exposes Epoch + Duration for this validated timestamp conversion"
     )]
     let epoch = hifitime::Epoch::from_unix_seconds(ts.as_second() as f64)
         + hifitime::Duration::from_nanoseconds(f64::from(ts.subsec_nanosecond()));

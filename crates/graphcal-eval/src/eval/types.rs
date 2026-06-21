@@ -428,7 +428,10 @@ fn default_unit_label(
             first = false;
         } else {
             result.push('/');
-            push_unit_factor(&mut result, id, -exp, symbols);
+            let Ok(positive_exp) = exp.checked_neg() else {
+                return None;
+            };
+            push_unit_factor(&mut result, id, positive_exp, symbols);
         }
     }
 

@@ -87,6 +87,14 @@ impl Rational {
     pub const fn is_integer(self) -> bool {
         self.den == 1
     }
+
+    /// Negate this rational exponent, returning an error if the numerator overflows.
+    pub const fn checked_neg(self) -> Result<Self, RationalError> {
+        let Some(num) = self.num.checked_neg() else {
+            return Err(RationalError::Overflow);
+        };
+        Ok(Self { num, den: self.den })
+    }
 }
 
 /// Error from `Rational` construction or arithmetic.
@@ -150,11 +158,13 @@ impl std::ops::Sub for Rational {
 
 impl std::ops::Neg for Rational {
     type Output = Self;
+    #[expect(
+        clippy::expect_used,
+        reason = "Rational values are normalized from valid i32 exponents; negation overflow is impossible"
+    )]
     fn neg(self) -> Self {
-        Self {
-            num: -self.num,
-            den: self.den,
-        }
+        self.checked_neg()
+            .expect("valid Rational exponent negation should not overflow")
     }
 }
 
@@ -395,6 +405,16 @@ enum CombineOp {
 }
 
 impl Dimension {
+    /// Multiply two dimensions, returning an error if exponent arithmetic overflows.
+    pub fn checked_mul(self, other: &Self) -> Result<Self, RationalError> {
+        self.combine(other, CombineOp::Add)
+    }
+
+    /// Divide two dimensions, returning an error if exponent arithmetic overflows.
+    pub fn checked_div(self, other: &Self) -> Result<Self, RationalError> {
+        self.combine(other, CombineOp::Sub)
+    }
+
     /// Combine two dimensions by adding or subtracting exponents.
     fn combine(self, other: &Self, op: CombineOp) -> Result<Self, RationalError> {
         let mut exponents = self.exponents;
@@ -416,7 +436,7 @@ impl std::ops::Mul for Dimension {
     type Output = Result<Self, RationalError>;
     /// Multiply two dimensions (add exponents).
     fn mul(self, other: Self) -> Self::Output {
-        self.combine(&other, CombineOp::Add)
+        self.checked_mul(&other)
     }
 }
 
@@ -424,21 +444,21 @@ impl std::ops::Div for Dimension {
     type Output = Result<Self, RationalError>;
     /// Divide two dimensions (subtract exponents).
     fn div(self, other: Self) -> Self::Output {
-        self.combine(&other, CombineOp::Sub)
+        self.checked_div(&other)
     }
 }
 
 impl std::ops::Mul for &Dimension {
     type Output = Result<Dimension, RationalError>;
     fn mul(self, other: Self) -> Self::Output {
-        self.clone().combine(other, CombineOp::Add)
+        self.clone().checked_mul(other)
     }
 }
 
 impl std::ops::Div for &Dimension {
     type Output = Result<Dimension, RationalError>;
     fn div(self, other: Self) -> Self::Output {
-        self.clone().combine(other, CombineOp::Sub)
+        self.clone().checked_div(other)
     }
 }
 

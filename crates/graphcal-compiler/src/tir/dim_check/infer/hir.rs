@@ -2075,16 +2075,18 @@ fn infer_hir_dim_expr_arg(
             })?;
             match item.op {
                 crate::desugar::desugared_ast::MulDivOp::Mul => {
-                    (acc * powered).map_err(|_| GraphcalError::DimensionOverflow {
-                        src: src.clone(),
-                        span: span.into(),
-                    })
+                    acc.checked_mul(&powered)
+                        .map_err(|_| GraphcalError::DimensionOverflow {
+                            src: src.clone(),
+                            span: span.into(),
+                        })
                 }
                 crate::desugar::desugared_ast::MulDivOp::Div => {
-                    (acc / powered).map_err(|_| GraphcalError::DimensionOverflow {
-                        src: src.clone(),
-                        span: span.into(),
-                    })
+                    acc.checked_div(&powered)
+                        .map_err(|_| GraphcalError::DimensionOverflow {
+                            src: src.clone(),
+                            span: span.into(),
+                        })
                 }
             }
         })

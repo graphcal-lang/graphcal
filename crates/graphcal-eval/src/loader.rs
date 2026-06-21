@@ -937,11 +937,11 @@ fn package_module_path(
         return ensure_package_path(canonical, package_root, import_path, src);
     }
 
-    if !module_segments.is_empty() {
+    if let Some((_last, parent_segments)) = module_segments.split_last() {
         let mut parent_path = package_root
             .join(&package.source_dir)
             .join(package.name.as_str());
-        for segment in &module_segments[..module_segments.len() - 1] {
+        for segment in parent_segments {
             parent_path = parent_path.join(segment);
         }
         parent_path.set_extension("gcl");
@@ -1138,7 +1138,7 @@ fn normalize_relative_path(path: &Path) -> String {
 }
 
 fn hex_string(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
         let _ = write!(out, "{byte:02x}");
     }
@@ -2003,9 +2003,11 @@ fn resolve_module_path<F: FileSystemReader>(
         // Fallback: 2+ segments — try the parent file. E.g. for
         // `nasa.rocket.velocity`, try `nasa/rocket.gcl` and expect
         // `velocity` to be a DAG defined inside it.
-        if segments.len() >= 2 {
+        if segments.len() >= 2
+            && let Some((_last, parent_segments)) = segments.split_last()
+        {
             let mut parent_path = project_root.join(&m.source_dir);
-            for seg in &segments[..segments.len() - 1] {
+            for seg in parent_segments {
                 parent_path = parent_path.join(seg.name.as_str());
             }
             parent_path.set_extension("gcl");

@@ -232,7 +232,13 @@ fn topo_order_for_dag_body_resolved(
          outgoing: &mut HashMap<ResolvedDeclKey, Vec<ResolvedDeclKey>>| {
             if let (Some(out), Some(deg)) = (outgoing.get_mut(from), incoming.get_mut(to)) {
                 out.push(to.clone());
-                *deg += 1;
+                #[expect(
+                    clippy::arithmetic_side_effects,
+                    reason = "in-degree cannot overflow without an impossible in-memory edge count"
+                )]
+                {
+                    *deg += 1;
+                }
             }
         };
 
@@ -256,7 +262,13 @@ fn topo_order_for_dag_body_resolved(
         if let Some(succs) = outgoing.remove(&key) {
             for succ in succs {
                 if let Some(deg) = incoming.get_mut(&succ) {
-                    *deg -= 1;
+                    #[expect(
+                        clippy::arithmetic_side_effects,
+                        reason = "Kahn traversal only decrements positive in-degree counters"
+                    )]
+                    {
+                        *deg -= 1;
+                    }
                     if *deg == 0 {
                         ready.insert(succ);
                     }
