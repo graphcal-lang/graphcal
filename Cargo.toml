@@ -45,6 +45,8 @@ tabled = "0.21.0"
 tempfile = "3.25.0"
 thiserror = "2.0.18"
 tokio = { version = "1", features = ["full"] }
+toml = "1.1.2"
+# TODO: Remove this workspace dependency once graphcal-package no longer uses toml-spanner.
 toml-spanner = "1.0.0"
 tower-lsp = "0.20"
 walkdir = "2.5.0"

@@ -1,15 +1,12 @@
 //! Parsing and validation of `graphcal.toml` manifest files.
 
-use std::path::{Path, PathBuf};
+use std::{path::PathBuf, str::FromStr};
 
 use thiserror::Error;
 
 /// Errors that can occur when parsing a manifest file.
 #[derive(Debug, Clone, Error)]
 pub enum ManifestError {
-    #[error("failed to read graphcal.toml: {message}")]
-    IoError { message: String },
-
     #[error("invalid TOML in graphcal.toml: {message}")]
     TomlParseError { message: String },
 
@@ -26,77 +23,96 @@ pub enum ManifestError {
     InvalidSourceDir { dir: String },
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct RawManifest {
+    package: Option<RawPackage>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawPackage {
+    name: Option<String>,
+    source_dir: Option<String>,
+}
+
 /// The parsed `graphcal.toml` manifest.
 #[derive(Debug, Clone)]
 pub struct Manifest {
     /// The package name (required, `lower_snake_case`).
-    pub package_name: String,
+    package_name: String,
     /// The source directory relative to the project root (defaults to `"src"`).
-    pub source_dir: PathBuf,
+    source_dir: PathBuf,
 }
 
-/// Parse a `graphcal.toml` manifest from a file path.
-///
-/// # Errors
-///
-/// Returns a [`ManifestError`] if the file cannot be read, contains invalid TOML,
-/// or is missing required fields.
-pub fn parse_manifest(path: &Path) -> Result<Manifest, ManifestError> {
-    let content = std::fs::read_to_string(path).map_err(|e| ManifestError::IoError {
-        message: e.to_string(),
-    })?;
+impl Manifest {
+    /// Construct a validated manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ManifestError`] if the package name or source directory is invalid.
+    pub fn new(package_name: String, source_dir: PathBuf) -> Result<Self, ManifestError> {
+        if !is_valid_package_name(&package_name) {
+            return Err(ManifestError::InvalidPackageName { name: package_name });
+        }
 
-    parse_manifest_str(&content)
+        let escapes_root = source_dir.is_absolute()
+            || source_dir.components().any(|c| {
+                !matches!(
+                    c,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            });
+        if escapes_root {
+            return Err(ManifestError::InvalidSourceDir {
+                dir: source_dir.display().to_string(),
+            });
+        }
+
+        Ok(Self {
+            package_name,
+            source_dir,
+        })
+    }
+
+    /// The package name.
+    pub fn package_name(&self) -> &str {
+        &self.package_name
+    }
+
+    /// The source directory relative to the project root.
+    pub fn source_dir(&self) -> &std::path::Path {
+        &self.source_dir
+    }
 }
 
-/// Parse manifest from a TOML string.
-///
-/// This is the I/O-free entry point — the caller is responsible for reading the
-/// file contents. [`parse_manifest`] is a convenience wrapper that reads from disk.
-///
-/// # Errors
-///
-/// Returns a [`ManifestError`] if the content is invalid TOML or missing required fields.
-pub fn parse_manifest_str(content: &str) -> Result<Manifest, ManifestError> {
-    let arena = toml_spanner::Arena::new();
-    let root = toml_spanner::parse(content, &arena).map_err(|e| ManifestError::TomlParseError {
-        message: e.to_string(),
-    })?;
+impl TryFrom<RawManifest> for Manifest {
+    type Error = ManifestError;
 
-    // Extract [package].name (required).
-    let name = root["package"]["name"]
-        .as_str()
-        .ok_or(ManifestError::MissingPackageName)?;
+    fn try_from(raw: RawManifest) -> Result<Self, Self::Error> {
+        // Extract [package].name (required).
+        let package = raw.package.ok_or(ManifestError::MissingPackageName)?;
+        let name = package.name.ok_or(ManifestError::MissingPackageName)?;
 
-    if !is_valid_package_name(name) {
-        return Err(ManifestError::InvalidPackageName {
-            name: name.to_string(),
-        });
+        // Extract source_dir (optional, defaults to "src"). The package name two
+        // lines above is strictly validated; the source dir gets the same
+        // treatment — a manifest must not be able to point module resolution
+        // outside the project root via an absolute path or `..` components.
+        let source_dir = PathBuf::from(package.source_dir.unwrap_or_else(|| "src".to_string()));
+
+        Self::new(name, source_dir)
     }
+}
 
-    // Extract source_dir (optional, defaults to "src"). The package name two
-    // lines above is strictly validated; the source dir gets the same
-    // treatment — a manifest must not be able to point module resolution
-    // outside the project root via an absolute path or `..` components.
-    let source_dir_str = root["package"]["source_dir"].as_str().unwrap_or("src");
-    let source_dir = PathBuf::from(source_dir_str);
-    let escapes_root = source_dir.is_absolute()
-        || source_dir.components().any(|c| {
-            !matches!(
-                c,
-                std::path::Component::Normal(_) | std::path::Component::CurDir
-            )
-        });
-    if escapes_root {
-        return Err(ManifestError::InvalidSourceDir {
-            dir: source_dir_str.to_string(),
-        });
+impl FromStr for Manifest {
+    type Err = ManifestError;
+
+    fn from_str(content: &str) -> Result<Self, Self::Err> {
+        let raw =
+            toml::from_str::<RawManifest>(content).map_err(|e| ManifestError::TomlParseError {
+                message: e.to_string(),
+            })?;
+
+        Self::try_from(raw)
     }
-
-    Ok(Manifest {
-        package_name: name.to_string(),
-        source_dir,
-    })
 }
 
 /// A valid package name follows `lower_snake_case` rules.
@@ -111,36 +127,39 @@ fn is_valid_package_name(s: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn parse(content: &str) -> Result<Manifest, ManifestError> {
+        content.parse()
+    }
+
     #[test]
     fn parse_minimal_manifest() {
-        let manifest = parse_manifest_str("[package]\nname = \"my_package\"\n").unwrap();
-        assert_eq!(manifest.package_name, "my_package");
-        assert_eq!(manifest.source_dir, PathBuf::from("src"));
+        let manifest = parse("[package]\nname = \"my_package\"\n").unwrap();
+        assert_eq!(manifest.package_name(), "my_package");
+        assert_eq!(manifest.source_dir(), PathBuf::from("src"));
     }
 
     #[test]
     fn parse_manifest_with_custom_source_dir() {
-        let manifest =
-            parse_manifest_str("[package]\nname = \"my_package\"\nsource_dir = \"lib\"\n").unwrap();
-        assert_eq!(manifest.package_name, "my_package");
-        assert_eq!(manifest.source_dir, PathBuf::from("lib"));
+        let manifest = parse("[package]\nname = \"my_package\"\nsource_dir = \"lib\"\n").unwrap();
+        assert_eq!(manifest.package_name(), "my_package");
+        assert_eq!(manifest.source_dir(), PathBuf::from("lib"));
     }
 
     #[test]
     fn missing_package_section() {
-        let result = parse_manifest_str("");
+        let result = parse("");
         assert!(matches!(result, Err(ManifestError::MissingPackageName)));
     }
 
     #[test]
     fn missing_package_name() {
-        let result = parse_manifest_str("[package]\nsource_dir = \"src\"\n");
+        let result = parse("[package]\nsource_dir = \"src\"\n");
         assert!(matches!(result, Err(ManifestError::MissingPackageName)));
     }
 
     #[test]
     fn invalid_package_name_uppercase() {
-        let result = parse_manifest_str("[package]\nname = \"MyPackage\"\n");
+        let result = parse("[package]\nname = \"MyPackage\"\n");
         assert!(matches!(
             result,
             Err(ManifestError::InvalidPackageName { .. })
@@ -149,7 +168,7 @@ mod tests {
 
     #[test]
     fn invalid_package_name_hyphen() {
-        let result = parse_manifest_str("[package]\nname = \"my-package\"\n");
+        let result = parse("[package]\nname = \"my-package\"\n");
         assert!(matches!(
             result,
             Err(ManifestError::InvalidPackageName { .. })
@@ -176,14 +195,14 @@ mod tests {
 
     #[test]
     fn invalid_toml() {
-        let result = parse_manifest_str("this is not valid toml [[[");
+        let result = parse("this is not valid toml [[[");
         assert!(matches!(result, Err(ManifestError::TomlParseError { .. })));
     }
 
     #[test]
     fn empty_manifest_is_missing_package() {
         // An empty file (current marker behavior) has no [package] section.
-        let result = parse_manifest_str("");
+        let result = parse("");
         assert!(matches!(result, Err(ManifestError::MissingPackageName)));
     }
 
@@ -194,10 +213,7 @@ mod tests {
         for dir in ["../elsewhere", "/etc", "a/../../b", "./../x"] {
             let toml = format!("[package]\nname = \"pkg\"\nsource_dir = \"{dir}\"\n");
             assert!(
-                matches!(
-                    parse_manifest_str(&toml),
-                    Err(ManifestError::InvalidSourceDir { .. })
-                ),
+                matches!(parse(&toml), Err(ManifestError::InvalidSourceDir { .. })),
                 "source_dir `{dir}` must be rejected"
             );
         }
@@ -206,7 +222,10 @@ mod tests {
     #[test]
     fn relative_source_dir_is_accepted() {
         let toml = "[package]\nname = \"pkg\"\nsource_dir = \"lib/nested\"\n";
-        let manifest = parse_manifest_str(toml).unwrap();
-        assert_eq!(manifest.source_dir, std::path::PathBuf::from("lib/nested"));
+        let manifest = parse(toml).unwrap();
+        assert_eq!(
+            manifest.source_dir(),
+            std::path::PathBuf::from("lib/nested")
+        );
     }
 }
