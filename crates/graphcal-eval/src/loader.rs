@@ -193,7 +193,7 @@ impl LoadedProject {
     /// `.gcl` source path.
     pub fn from_source(source: &str, name: &str) -> Result<Self, CompileError> {
         let source = Arc::new(source.to_string());
-        let named_source = graphcal_compiler::syntax::named_source(name, Arc::clone(&source));
+        let named_source = NamedSource::new(name, Arc::clone(&source));
         let raw_ast =
             graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
         let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
@@ -727,8 +727,7 @@ fn load_package_file_dfs(
     let source_str =
         std::fs::read_to_string(canonical_path).map_err(|_| io_not_found(canonical_path))?;
     let source = Arc::new(source_str);
-    let named_source =
-        graphcal_compiler::syntax::named_source(display_name.as_str(), Arc::clone(&source));
+    let named_source = NamedSource::new(display_name.as_str(), Arc::clone(&source));
     let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, &display_name)
         .parse_file()?;
     let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
@@ -1292,7 +1291,7 @@ fn load_file_dfs<F: FileSystemReader>(
     // and basename ambiguity (two `lib.gcl`s in different packages) cannot
     // arise. The CLI's miette renderer trims this for display anyway.
     let name = display_name.as_str();
-    let named_source = graphcal_compiler::syntax::named_source(name, Arc::clone(&source));
+    let named_source = NamedSource::new(name, Arc::clone(&source));
     let raw_ast =
         graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
     let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);

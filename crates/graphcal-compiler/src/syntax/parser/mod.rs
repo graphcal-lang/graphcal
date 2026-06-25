@@ -386,7 +386,7 @@ impl<'src> Parser<'src> {
     }
 
     pub(super) fn named_source(&self) -> NamedSource<Arc<String>> {
-        crate::syntax::named_source(&self.source_name, Arc::clone(&self.source))
+        NamedSource::new(self.source_name.clone(), Arc::clone(&self.source))
     }
 
     pub(super) fn unexpected_token(&self, expected: &str, found: &str, span: Span) -> ParseError {

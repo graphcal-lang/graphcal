@@ -575,7 +575,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
     }
 
     // Should not reach here — root file should have returned above.
-    let internal_src = graphcal_compiler::syntax::named_source("internal", String::new());
+    let internal_src = NamedSource::new("internal", Arc::new(String::new()));
     Err(CompileError::Eval(GraphcalError::EvalError {
         message: "internal: root file not found in load_order".to_string(),
         src: internal_src,
@@ -691,7 +691,7 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
         )?;
     }
 
-    let internal_src = graphcal_compiler::syntax::named_source("internal", String::new());
+    let internal_src = NamedSource::new("internal", Arc::new(String::new()));
     Err(CompileError::Eval(GraphcalError::EvalError {
         message: "internal: root file not found in load_order".to_string(),
         src: internal_src,

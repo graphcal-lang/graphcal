@@ -1382,7 +1382,7 @@ mod tests {
             .insert(DeclName::new("g0"), RuntimeValue::Scalar(9.80665));
         dep.pub_names.insert(DeclName::new("g0"));
 
-        let src = graphcal_compiler::syntax::named_source("test.gcl", String::new());
+        let src = NamedSource::new("test.gcl", Arc::new(String::new()));
         let mut imported_names = ImportedValueNames::default();
         let mut imported_values = HashMap::new();
 
@@ -1435,7 +1435,7 @@ mod tests {
             ),
             span: Span::new(0, 3),
         };
-        let src = graphcal_compiler::syntax::named_source("test.gcl", String::new());
+        let src = NamedSource::new("test.gcl", Arc::new(String::new()));
         let mut imported_names = ImportedValueNames::default();
         let mut imported_values = HashMap::new();
 
