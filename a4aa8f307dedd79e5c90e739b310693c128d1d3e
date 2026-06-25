@@ -1,0 +1,1 @@
+{"vetted_at":"2026-06-25T05:48:01Z","vetted_by":{"name":"Shunichiro Nomura","email":"nomura@space.t.u-tokyo.ac.jp"},"commit":"7966a44f84d69b011c4dbd9a16381e7ccdc56cee","path":"crates/graphcal-compiler/src/desugar/mod.rs"}
