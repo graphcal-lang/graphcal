@@ -159,28 +159,20 @@ impl FromStr for TimeScale {
     type Err = ParseTimeScaleError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Try matching against all variants
-        let variants = [
-            Self::UTC,
-            Self::TAI,
-            Self::TT,
-            Self::TDB,
-            Self::ET,
-            Self::GPST,
-            Self::GST,
-            Self::BDT,
-            Self::QZSST,
-        ];
-
-        for variant in variants {
-            if variant.name() == s {
-                return Ok(variant);
-            }
+        match s {
+            "UTC" => Ok(Self::UTC),
+            "TAI" => Ok(Self::TAI),
+            "TT" => Ok(Self::TT),
+            "TDB" => Ok(Self::TDB),
+            "ET" => Ok(Self::ET),
+            "GPST" => Ok(Self::GPST),
+            "GST" => Ok(Self::GST),
+            "BDT" => Ok(Self::BDT),
+            "QZSST" => Ok(Self::QZSST),
+            _ => Err(ParseTimeScaleError {
+                input: s.to_string(),
+            }),
         }
-
-        Err(ParseTimeScaleError {
-            input: s.to_string(),
-        })
     }
 }
 
