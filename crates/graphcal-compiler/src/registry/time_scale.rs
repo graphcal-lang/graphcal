@@ -1,14 +1,16 @@
 //! Time scale definitions for the `Datetime` primitive type.
 //!
-//! Maps Graphcal's `TimeScale` enum to `hifitime::TimeScale`.
+//! Maps Graphcal's `TimeScale` enum to supported `hifitime::TimeScale` variants.
 //! UTC is the default for civil use; aerospace users opt into TAI, TT, TDB, etc.
 
 use std::fmt;
 use std::str::FromStr;
 
+use thiserror::Error;
+
 /// Time scales supported by Graphcal.
 ///
-/// Each variant maps 1:1 to a [`hifitime::TimeScale`] variant.
+/// Each variant maps to a supported [`hifitime::TimeScale`] variant.
 /// `UTC` is the default for civil datetime values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimeScale {
@@ -77,20 +79,39 @@ impl TimeScale {
     }
 
     /// Convert from `hifitime::TimeScale`.
-    #[must_use]
-    pub const fn from_hifitime(ts: hifitime::TimeScale) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `ts` is a `hifitime` time scale that Graphcal does
+    /// not support.
+    pub const fn from_hifitime(
+        ts: hifitime::TimeScale,
+    ) -> Result<Self, UnsupportedHifitimeTimeScaleError> {
         match ts {
-            hifitime::TimeScale::TAI => Self::TAI,
-            hifitime::TimeScale::TT => Self::TT,
-            hifitime::TimeScale::TDB => Self::TDB,
-            hifitime::TimeScale::ET => Self::ET,
-            hifitime::TimeScale::GPST => Self::GPST,
-            hifitime::TimeScale::GST => Self::GST,
-            hifitime::TimeScale::BDT => Self::BDT,
-            hifitime::TimeScale::QZSST => Self::QZSST,
-            // hifitime::TimeScale is non_exhaustive; UTC and unknown variants map to UTC
-            _ => Self::UTC,
+            hifitime::TimeScale::UTC => Ok(Self::UTC),
+            hifitime::TimeScale::TAI => Ok(Self::TAI),
+            hifitime::TimeScale::TT => Ok(Self::TT),
+            hifitime::TimeScale::TDB => Ok(Self::TDB),
+            hifitime::TimeScale::ET => Ok(Self::ET),
+            hifitime::TimeScale::GPST => Ok(Self::GPST),
+            hifitime::TimeScale::GST => Ok(Self::GST),
+            hifitime::TimeScale::BDT => Ok(Self::BDT),
+            hifitime::TimeScale::QZSST => Ok(Self::QZSST),
+            _ => Err(UnsupportedHifitimeTimeScaleError(ts)),
         }
+    }
+}
+
+/// Error returned when converting an unsupported `hifitime` time scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("unsupported hifitime time scale `{0:?}`")]
+pub struct UnsupportedHifitimeTimeScaleError(pub hifitime::TimeScale);
+
+impl TryFrom<hifitime::TimeScale> for TimeScale {
+    type Error = UnsupportedHifitimeTimeScaleError;
+
+    fn try_from(ts: hifitime::TimeScale) -> Result<Self, Self::Error> {
+        Self::from_hifitime(ts)
     }
 }
 
@@ -215,9 +236,15 @@ mod tests {
         ];
         for scale in &scales {
             let hf = scale.to_hifitime();
-            let back = TimeScale::from_hifitime(hf);
+            let back = TimeScale::from_hifitime(hf).unwrap();
             assert_eq!(*scale, back);
         }
+    }
+
+    #[test]
+    fn unsupported_hifitime_scale_is_error() {
+        let err = TimeScale::from_hifitime(hifitime::TimeScale::TCG).unwrap_err();
+        assert_eq!(err.0, hifitime::TimeScale::TCG);
     }
 
     #[test]
