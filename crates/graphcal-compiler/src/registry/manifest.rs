@@ -20,7 +20,7 @@ pub enum ManifestError {
         "invalid source_dir '{dir}': must be a relative path inside the \
          project root (no absolute paths or `..` components)"
     )]
-    InvalidSourceDir { dir: String },
+    InvalidSourceDir { dir: PathBuf },
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -62,9 +62,7 @@ impl Manifest {
                 )
             });
         if escapes_root {
-            return Err(ManifestError::InvalidSourceDir {
-                dir: source_dir.display().to_string(),
-            });
+            return Err(ManifestError::InvalidSourceDir { dir: source_dir });
         }
 
         Ok(Self {
