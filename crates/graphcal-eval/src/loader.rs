@@ -1877,7 +1877,8 @@ fn load_manifest_for_root<F: FileSystemReader>(
             message: e.to_string(),
         })
     })?;
-    let parsed = graphcal_compiler::registry::manifest::parse_manifest_str(&manifest_content)
+    let parsed = manifest_content
+        .parse::<graphcal_compiler::registry::manifest::Manifest>()
         .map_err(|e| {
             CompileError::Eval(GraphcalError::ManifestError {
                 message: e.to_string(),
@@ -1901,11 +1902,11 @@ fn root_in_package_namespace<F: FileSystemReader>(
     fs: &F,
 ) -> bool {
     let pkg_dir = project_root
-        .join(&manifest.source_dir)
-        .join(&manifest.package_name);
+        .join(manifest.source_dir())
+        .join(manifest.package_name());
     let pkg_file = project_root
-        .join(&manifest.source_dir)
-        .join(format!("{}.gcl", manifest.package_name));
+        .join(manifest.source_dir())
+        .join(format!("{}.gcl", manifest.package_name()));
 
     if let Ok(canon_pkg_dir) = fs.canonicalize(&pkg_dir)
         && root_canonical.starts_with(&canon_pkg_dir)
@@ -1979,17 +1980,17 @@ fn resolve_module_path<F: FileSystemReader>(
     // manifest but outside `<source_dir>/<pkg>/`).
     if let Some(m) = manifest {
         // Real package: first segment must match the package name.
-        if !segments.is_empty() && segments[0].name != m.package_name {
+        if !segments.is_empty() && segments[0].name != m.package_name() {
             return Err(CompileError::Eval(GraphcalError::PackageNameMismatch {
                 path_first: segments[0].name.to_string(),
-                package_name: m.package_name.clone(),
+                package_name: m.package_name().to_string(),
                 src: src.clone(),
                 span: span.into(),
             }));
         }
 
         // Build path: <project_root>/<source_dir>/seg0/seg1/.../segN.gcl
-        let mut file_path = project_root.join(&m.source_dir);
+        let mut file_path = project_root.join(m.source_dir());
         for seg in segments {
             file_path = file_path.join(seg.name.as_str());
         }
@@ -2005,7 +2006,7 @@ fn resolve_module_path<F: FileSystemReader>(
         if segments.len() >= 2
             && let Some((_last, parent_segments)) = segments.split_last()
         {
-            let mut parent_path = project_root.join(&m.source_dir);
+            let mut parent_path = project_root.join(m.source_dir());
             for seg in parent_segments {
                 parent_path = parent_path.join(seg.name.as_str());
             }
