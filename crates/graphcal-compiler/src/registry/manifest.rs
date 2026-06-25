@@ -72,11 +72,13 @@ impl Manifest {
     }
 
     /// The package name.
+    #[must_use]
     pub fn package_name(&self) -> &str {
         &self.package_name
     }
 
     /// The source directory relative to the project root.
+    #[must_use]
     pub fn source_dir(&self) -> &std::path::Path {
         &self.source_dir
     }
