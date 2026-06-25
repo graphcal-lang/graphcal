@@ -102,7 +102,21 @@ impl TimeScale {
     }
 }
 
+/// Error returned when parsing an unknown Graphcal time scale name from text.
+///
+/// This is a source/user-input boundary error: the input string is not one of
+/// Graphcal's supported time scale names.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("unknown time scale `{input}`; expected one of: {}", TimeScale::ALL_NAMES.join(", "))]
+pub struct ParseTimeScaleError {
+    /// The unrecognized input string.
+    pub input: String,
+}
+
 /// Error returned when converting an unsupported `hifitime` time scale.
+///
+/// This is an external-library boundary error: `hifitime` recognized the value
+/// as a valid time scale, but Graphcal does not support that time scale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("unsupported hifitime time scale `{0:?}`")]
 pub struct UnsupportedHifitimeTimeScaleError(pub hifitime::TimeScale);
@@ -140,26 +154,6 @@ impl fmt::Display for TimeScale {
         f.write_str(self.name())
     }
 }
-
-/// Error returned when parsing an unknown time scale name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseTimeScaleError {
-    /// The unrecognized input string.
-    pub input: String,
-}
-
-impl fmt::Display for ParseTimeScaleError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "unknown time scale `{}`; expected one of: {}",
-            self.input,
-            TimeScale::ALL_NAMES.join(", ")
-        )
-    }
-}
-
-impl std::error::Error for ParseTimeScaleError {}
 
 impl FromStr for TimeScale {
     type Err = ParseTimeScaleError;
