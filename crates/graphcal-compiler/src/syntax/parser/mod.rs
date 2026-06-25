@@ -16,6 +16,18 @@ mod expr;
 mod table;
 mod type_expr;
 
+/// Build a [`NamedSource`] from `(name, source)` for parser diagnostics.
+///
+/// The source is shared through `Arc` so diagnostics built from the same file
+/// do not re-copy it.
+#[must_use]
+fn named_source<N: Into<String>, S: Into<Arc<String>>>(
+    name: N,
+    source: S,
+) -> NamedSource<Arc<String>> {
+    NamedSource::new(name.into(), source.into())
+}
+
 /// Rich parse error with miette diagnostics.
 #[derive(Debug, Clone, Error, Diagnostic)]
 pub enum ParseError {
@@ -386,7 +398,7 @@ impl<'src> Parser<'src> {
     }
 
     pub(super) fn named_source(&self) -> NamedSource<Arc<String>> {
-        crate::syntax::named_source(&self.source_name, Arc::clone(&self.source))
+        named_source(&self.source_name, Arc::clone(&self.source))
     }
 
     pub(super) fn unexpected_token(&self, expected: &str, found: &str, span: Span) -> ParseError {
