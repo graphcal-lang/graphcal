@@ -1,14 +1,16 @@
 //! Time scale definitions for the `Datetime` primitive type.
 //!
-//! Maps Graphcal's `TimeScale` enum to `hifitime::TimeScale`.
+//! Maps Graphcal's `TimeScale` enum to supported `hifitime::TimeScale` variants.
 //! UTC is the default for civil use; aerospace users opt into TAI, TT, TDB, etc.
 
 use std::fmt;
 use std::str::FromStr;
 
+use thiserror::Error;
+
 /// Time scales supported by Graphcal.
 ///
-/// Each variant maps 1:1 to a [`hifitime::TimeScale`] variant.
+/// Each variant maps to a supported [`hifitime::TimeScale`] variant.
 /// `UTC` is the default for civil datetime values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimeScale {
@@ -77,20 +79,53 @@ impl TimeScale {
     }
 
     /// Convert from `hifitime::TimeScale`.
-    #[must_use]
-    pub const fn from_hifitime(ts: hifitime::TimeScale) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `ts` is a `hifitime` time scale that Graphcal does
+    /// not support.
+    pub const fn from_hifitime(
+        ts: hifitime::TimeScale,
+    ) -> Result<Self, UnsupportedHifitimeTimeScaleError> {
         match ts {
-            hifitime::TimeScale::TAI => Self::TAI,
-            hifitime::TimeScale::TT => Self::TT,
-            hifitime::TimeScale::TDB => Self::TDB,
-            hifitime::TimeScale::ET => Self::ET,
-            hifitime::TimeScale::GPST => Self::GPST,
-            hifitime::TimeScale::GST => Self::GST,
-            hifitime::TimeScale::BDT => Self::BDT,
-            hifitime::TimeScale::QZSST => Self::QZSST,
-            // hifitime::TimeScale is non_exhaustive; UTC and unknown variants map to UTC
-            _ => Self::UTC,
+            hifitime::TimeScale::UTC => Ok(Self::UTC),
+            hifitime::TimeScale::TAI => Ok(Self::TAI),
+            hifitime::TimeScale::TT => Ok(Self::TT),
+            hifitime::TimeScale::TDB => Ok(Self::TDB),
+            hifitime::TimeScale::ET => Ok(Self::ET),
+            hifitime::TimeScale::GPST => Ok(Self::GPST),
+            hifitime::TimeScale::GST => Ok(Self::GST),
+            hifitime::TimeScale::BDT => Ok(Self::BDT),
+            hifitime::TimeScale::QZSST => Ok(Self::QZSST),
+            _ => Err(UnsupportedHifitimeTimeScaleError(ts)),
         }
+    }
+}
+
+/// Error returned when parsing an unknown Graphcal time scale name from text.
+///
+/// This is a source/user-input boundary error: the input string is not one of
+/// Graphcal's supported time scale names.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("unknown time scale `{input}`; expected one of: {}", TimeScale::ALL_NAMES.join(", "))]
+pub struct ParseTimeScaleError {
+    /// The unrecognized input string.
+    pub input: String,
+}
+
+/// Error returned when converting an unsupported `hifitime` time scale.
+///
+/// This is an external-library boundary error: `hifitime` recognized the value
+/// as a valid time scale, but Graphcal does not support that time scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("unsupported hifitime time scale `{0:?}`")]
+pub struct UnsupportedHifitimeTimeScaleError(pub hifitime::TimeScale);
+
+impl TryFrom<hifitime::TimeScale> for TimeScale {
+    type Error = UnsupportedHifitimeTimeScaleError;
+
+    fn try_from(ts: hifitime::TimeScale) -> Result<Self, Self::Error> {
+        Self::from_hifitime(ts)
     }
 }
 
@@ -120,52 +155,24 @@ impl fmt::Display for TimeScale {
     }
 }
 
-/// Error returned when parsing an unknown time scale name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseTimeScaleError {
-    /// The unrecognized input string.
-    pub input: String,
-}
-
-impl fmt::Display for ParseTimeScaleError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "unknown time scale `{}`; expected one of: {}",
-            self.input,
-            TimeScale::ALL_NAMES.join(", ")
-        )
-    }
-}
-
-impl std::error::Error for ParseTimeScaleError {}
-
 impl FromStr for TimeScale {
     type Err = ParseTimeScaleError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Try matching against all variants
-        let variants = [
-            Self::UTC,
-            Self::TAI,
-            Self::TT,
-            Self::TDB,
-            Self::ET,
-            Self::GPST,
-            Self::GST,
-            Self::BDT,
-            Self::QZSST,
-        ];
-
-        for variant in variants {
-            if variant.name() == s {
-                return Ok(variant);
-            }
+        match s {
+            "UTC" => Ok(Self::UTC),
+            "TAI" => Ok(Self::TAI),
+            "TT" => Ok(Self::TT),
+            "TDB" => Ok(Self::TDB),
+            "ET" => Ok(Self::ET),
+            "GPST" => Ok(Self::GPST),
+            "GST" => Ok(Self::GST),
+            "BDT" => Ok(Self::BDT),
+            "QZSST" => Ok(Self::QZSST),
+            _ => Err(ParseTimeScaleError {
+                input: s.to_string(),
+            }),
         }
-
-        Err(ParseTimeScaleError {
-            input: s.to_string(),
-        })
     }
 }
 
@@ -215,9 +222,15 @@ mod tests {
         ];
         for scale in &scales {
             let hf = scale.to_hifitime();
-            let back = TimeScale::from_hifitime(hf);
+            let back = TimeScale::from_hifitime(hf).unwrap();
             assert_eq!(*scale, back);
         }
+    }
+
+    #[test]
+    fn unsupported_hifitime_scale_is_error() {
+        let err = TimeScale::from_hifitime(hifitime::TimeScale::TCG).unwrap_err();
+        assert_eq!(err.0, hifitime::TimeScale::TCG);
     }
 
     #[test]
