@@ -45,6 +45,8 @@ The compiler is the language's first user — its own implementation must hold i
 
 Treat the compiler as a functional core (parser → AST → IR → TIR → eval plan) with imperative shells at the I/O edges (file loader, LSP server, CLI). The core holds typed values and pure functions over them; the shell handles disk reads, process spawns, network calls, and any necessary serialization. A flat string that exists _only_ because the shell uses one (e.g., `HashMap<DeclName, …>` lookups) is acceptable transitionally, but it is a _boundary_ concern — not a license to spread the convention upstream.
 
+The conceptual source-file ordering is maintained in `internals/codebase-reading-checklist.md` as a topologically sorted list in library-consumer order; update that checklist when refactors change the dependency graph. A file should only consume upstream files (ones that come before it in that list), and should be implemented as a library whose API makes invalid or wrong use impossible wherever practical, rather than relying on downstream consumers to call it correctly. This rule makes it easy to review the codebase in topological order because we can focus on making each file correct as a library implementation before tackling its consumers, rather than reasoning about a tightly-coupled codebase as a whole.
+
 ### When you reach for a string
 
 Stop. Ask yourself:
