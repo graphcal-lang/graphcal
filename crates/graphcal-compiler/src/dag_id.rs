@@ -181,12 +181,6 @@ impl DagId {
         &self.segments
     }
 
-    /// Number of segments — always at least 1.
-    #[must_use]
-    pub const fn segment_count(&self) -> usize {
-        self.segments.len()
-    }
-
     /// The last segment (leaf name). Always present.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -197,7 +191,7 @@ impl DagId {
     /// block nested — at any depth — inside the DAG identified by `ancestor`).
     #[must_use]
     pub fn is_descendant_of(&self, ancestor: &Self) -> bool {
-        if self.segment_count() <= ancestor.segment_count() {
+        if self.segments().len() <= ancestor.segments().len() {
             return false;
         }
         if self.package != ancestor.package {
