@@ -40,20 +40,29 @@ impl Rational {
     ///
     /// Returns `Err` if `den` is zero.
     pub fn try_new(num: i32, den: i32) -> Result<Self, RationalError> {
+        Self::try_new_i64(i64::from(num), i64::from(den))
+    }
+
+    /// Normalize `num / den` in `i64` with GCD reduction, then narrow back to `i32`.
+    ///
+    /// Returns `Err(RationalError::Overflow)` if the reduced result does not fit
+    /// in `i32`, and `Err(RationalError::ZeroDenominator)` if `den` is zero.
+    fn try_new_i64(num: i64, den: i64) -> Result<Self, RationalError> {
         if den == 0 {
             return Err(RationalError::ZeroDenominator);
         }
         if num == 0 {
             return Ok(Self::ZERO);
         }
-        let g = gcd(num.unsigned_abs(), den.unsigned_abs()).cast_signed();
-        let (n, d) = (num / g, den / g);
-        // Normalize sign: denominator is always positive
+        let g = gcd64(num.unsigned_abs(), den.unsigned_abs()).cast_signed();
+        let (mut n, mut d) = (num / g, den / g);
         if d < 0 {
-            Ok(Self { num: -n, den: -d })
-        } else {
-            Ok(Self { num: n, den: d })
+            n = n.checked_neg().ok_or(RationalError::Overflow)?;
+            d = d.checked_neg().ok_or(RationalError::Overflow)?;
         }
+        let num = i32::try_from(n).map_err(|_| RationalError::Overflow)?;
+        let den = i32::try_from(d).map_err(|_| RationalError::Overflow)?;
+        Ok(Self { num, den })
     }
 
     /// Create a rational from an integer.
@@ -111,28 +120,6 @@ pub enum RationalError {
     Overflow,
 }
 
-/// Compute `num / den` in `i64` with GCD reduction, then narrow back to `i32`.
-///
-/// Returns `Err(RationalError::Overflow)` if the reduced result does not fit
-/// in `i32`, and `Err(RationalError::ZeroDenominator)` if `den` is zero.
-fn reduce_i64(num: i64, den: i64) -> Result<(i32, i32), RationalError> {
-    if den == 0 {
-        return Err(RationalError::ZeroDenominator);
-    }
-    if num == 0 {
-        return Ok((0, 1));
-    }
-    let g = gcd64(num.unsigned_abs(), den.unsigned_abs()).cast_signed();
-    let (mut n, mut d) = (num / g, den / g);
-    if d < 0 {
-        n = -n;
-        d = -d;
-    }
-    let num = i32::try_from(n).map_err(|_| RationalError::Overflow)?;
-    let den = i32::try_from(d).map_err(|_| RationalError::Overflow)?;
-    Ok((num, den))
-}
-
 impl std::ops::Add for Rational {
     type Output = Result<Self, RationalError>;
     fn add(self, rhs: Self) -> Self::Output {
@@ -140,8 +127,7 @@ impl std::ops::Add for Rational {
         let num =
             i64::from(self.num) * i64::from(rhs.den) + i64::from(rhs.num) * i64::from(self.den);
         let den = i64::from(self.den) * i64::from(rhs.den);
-        let (n, d) = reduce_i64(num, den)?;
-        Ok(Self { num: n, den: d })
+        Self::try_new_i64(num, den)
     }
 }
 
@@ -151,8 +137,7 @@ impl std::ops::Sub for Rational {
         let num =
             i64::from(self.num) * i64::from(rhs.den) - i64::from(rhs.num) * i64::from(self.den);
         let den = i64::from(self.den) * i64::from(rhs.den);
-        let (n, d) = reduce_i64(num, den)?;
-        Ok(Self { num: n, den: d })
+        Self::try_new_i64(num, den)
     }
 }
 
@@ -173,13 +158,8 @@ impl std::ops::Mul for Rational {
     fn mul(self, rhs: Self) -> Self::Output {
         let num = i64::from(self.num) * i64::from(rhs.num);
         let den = i64::from(self.den) * i64::from(rhs.den);
-        let (n, d) = reduce_i64(num, den)?;
-        Ok(Self { num: n, den: d })
+        Self::try_new_i64(num, den)
     }
-}
-
-fn gcd(a: u32, b: u32) -> u32 {
-    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 fn gcd64(a: u64, b: u64) -> u64 {
@@ -762,7 +742,10 @@ mod tests {
                 prop_assert!(r.den() > 0, "den must be positive, got {}", r.den());
                 // gcd(|num|, den) == 1 (reduced form)
                 if r.num() != 0 {
-                    let g = gcd(r.num().unsigned_abs(), r.den().unsigned_abs());
+                    let g = gcd64(
+                        u64::from(r.num().unsigned_abs()),
+                        u64::from(r.den().unsigned_abs()),
+                    );
                     prop_assert_eq!(g, 1, "not reduced: {}/{}", r.num(), r.den());
                 } else {
                     prop_assert_eq!(r.den(), 1, "zero should have den=1, got {}", r.den());
