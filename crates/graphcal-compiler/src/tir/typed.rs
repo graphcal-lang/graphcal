@@ -26,7 +26,7 @@ pub use crate::syntax::nat::{NatLinearForm, NatPolyForm};
 use crate::syntax::span::{Span, Spanned};
 
 use crate::ir::lower::IR;
-use crate::ir::resolve::{DeclCategory, ExpectedFail};
+use crate::ir::resolve::{DeclCategory, ExpectedFail, ParsedExpectedFail};
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
@@ -2926,7 +2926,7 @@ fn scoped_name_to_name_path(name: &ScopedName) -> Option<NamePath> {
 }
 
 fn resolve_expected_fail_keys(
-    expected_fail: HashMap<ScopedName, ExpectedFail>,
+    expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ScopedName, ExpectedFail>, GraphcalError> {
@@ -2940,21 +2940,29 @@ fn resolve_expected_fail_keys(
                         .into_iter()
                         .map(|key| {
                             key.into_iter()
-                                .map(|part| {
-                                    let Some(index_path) = part.source_index_path().cloned() else {
-                                        return Ok(part);
-                                    };
-                                    let resolved = ctx
-                                        .resolver
-                                        .resolve_index_variant_parts(
-                                            ctx.owner,
-                                            &index_path,
-                                            &part.variant(),
-                                        )
-                                        .map_err(|err| {
-                                            module_resolve_error(&err, src, part.span())
-                                        })?;
-                                    Ok(part.with_resolved_variant(resolved))
+                                .map(|part| match part {
+                                    crate::registry::resolve_types::ExpectedFailKeyPart::Named {
+                                        index,
+                                        variant,
+                                        span,
+                                    } => {
+                                        let resolved = ctx
+                                            .resolver
+                                            .resolve_index_variant_parts(ctx.owner, &index, &variant)
+                                            .map_err(|err| module_resolve_error(&err, src, span))?;
+                                        Ok(crate::registry::resolve_types::ExpectedFailKeyPart::resolved(
+                                            resolved, span,
+                                        ))
+                                    }
+                                    crate::registry::resolve_types::ExpectedFailKeyPart::RangeStep {
+                                        step,
+                                        span,
+                                    } => Ok(
+                                        crate::registry::resolve_types::ExpectedFailKeyPart::RangeStep {
+                                            step,
+                                            span,
+                                        },
+                                    ),
                                 })
                                 .collect::<Result<_, GraphcalError>>()
                         })
@@ -2994,7 +3002,7 @@ impl DagTIRSeed {
         source_order: Vec<(ScopedName, DeclCategory)>,
         assert_names: std::collections::HashSet<ScopedName>,
         assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
-        expected_fail: HashMap<ScopedName, ExpectedFail>,
+        expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
         imported_values: HashMap<
             ScopedName,
             (
