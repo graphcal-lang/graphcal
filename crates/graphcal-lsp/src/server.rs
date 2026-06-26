@@ -1500,7 +1500,7 @@ mod tests {
     }
 
     fn test_owner() -> graphcal_compiler::dag_id::DagId {
-        graphcal_compiler::dag_id::DagId::root("<lsp-format-test>")
+        graphcal_compiler::dag_id::DagId::root_in_package("test", "<lsp-format-test>")
     }
 
     fn test_struct(type_name: StructTypeName, fields: IndexMap<FieldName, Value>) -> Value {

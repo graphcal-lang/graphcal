@@ -409,7 +409,7 @@ pub enum ExpectedFailKeyPart {
 
 impl ExpectedFailKeyPart {
     fn unresolved_owner() -> DagId {
-        DagId::root("<expected-fail-unresolved>")
+        DagId::root_in_package("<expected-fail-unresolved>", "<expected-fail-unresolved>")
     }
 
     #[must_use]

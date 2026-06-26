@@ -2397,7 +2397,7 @@ mod tests {
 
     #[test]
     fn local_type_index_name_collision_is_rejected() {
-        let owner = DagId::root("main");
+        let owner = DagId::root_in_package("test", "main");
         let file = desugared_source("type M { Mk(v: Dimensionless) }\npub index M = { A, B };");
 
         let err = ModuleSymbols::from_declarations(owner.clone(), &file.declarations).unwrap_err();
@@ -2415,7 +2415,7 @@ mod tests {
 
     #[test]
     fn local_dimension_type_name_collision_is_rejected() {
-        let owner = DagId::root("main");
+        let owner = DagId::root_in_package("test", "main");
         let file = desugared_source("dim M = Length;\ntype M { Mk(v: Dimensionless) }");
 
         let err = ModuleSymbols::from_declarations(owner.clone(), &file.declarations).unwrap_err();
@@ -2433,7 +2433,7 @@ mod tests {
 
     #[test]
     fn same_named_type_and_constructor_remain_distinct() {
-        let owner = DagId::root("main");
+        let owner = DagId::root_in_package("test", "main");
         let file = desugared_source("type T { T }");
 
         let symbols = ModuleSymbols::from_declarations(owner, &file.declarations).unwrap();
@@ -2444,9 +2444,9 @@ mod tests {
 
     #[test]
     fn selective_import_cross_universe_name_collision_is_rejected() {
-        let type_lib_id = DagId::root("type_lib");
-        let index_lib_id = DagId::root("index_lib");
-        let main_id = DagId::root("main");
+        let type_lib_id = DagId::root_in_package("test", "type_lib");
+        let index_lib_id = DagId::root_in_package("test", "index_lib");
+        let main_id = DagId::root_in_package("test", "main");
         let type_lib = desugared_source("pub type M { Mk(v: Dimensionless) }");
         let index_lib = desugared_source("pub index M = { A, B };");
         let main = desugared_source(
@@ -2485,8 +2485,8 @@ mod tests {
 
     #[test]
     fn resolves_qualified_index_variant_to_canonical_owner() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub index Phase = { Burn, Coast };");
         let main = desugared_source("import lib as physics;");
         let (import_path, import_kind) = first_import(&main);
@@ -2513,8 +2513,8 @@ mod tests {
 
     #[test]
     fn selective_type_alias_resolves_to_original_owner_and_leaf() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub type Vec3 { Vec3 }");
         let main = desugared_source("import lib.{ type Vec3 as Vector };");
         let (import_path, import_kind) = first_import(&main);
@@ -2540,7 +2540,7 @@ mod tests {
 
     #[test]
     fn type_import_in_child_dag_does_not_import_same_named_constructor() {
-        let main_id = DagId::root("main");
+        let main_id = DagId::root_in_package("test", "main");
         let child_id = main_id.child("build_transfer");
         let main = desugared_source(
             "pub type TransferResult { TransferResult }
@@ -2589,8 +2589,8 @@ mod tests {
 
     #[test]
     fn type_marker_importing_index_reports_wrong_universe() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub index M = { A };");
         let main = desugared_source("import lib.{ type M };");
         let (import_path, import_kind) = first_import(&main);
@@ -2620,8 +2620,8 @@ mod tests {
 
     #[test]
     fn default_importing_type_reports_wrong_universe() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub type Foo { MkFoo }");
         let main = desugared_source("import lib.{ Foo };");
         let (import_path, import_kind) = first_import(&main);
@@ -2651,8 +2651,8 @@ mod tests {
 
     #[test]
     fn qualified_private_type_is_rejected() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("type Secret { Secret }");
         let main = desugared_source("import lib as hidden;");
         let (import_path, import_kind) = first_import(&main);
@@ -2684,8 +2684,8 @@ mod tests {
 
     #[test]
     fn include_selective_private_decl_is_rejected() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("node hidden: Dimensionless = 1.0;");
         let main = desugared_source("include lib().{ hidden };");
         let (include_path, include_kind) = first_include(&main);
@@ -2714,9 +2714,9 @@ mod tests {
 
     #[test]
     fn qualified_private_dag_path_is_rejected() {
-        let lib_id = DagId::root("lib");
+        let lib_id = DagId::root_in_package("test", "lib");
         let helper_id = lib_id.child("helper");
-        let main_id = DagId::root("main");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source(
             "dag helper {
                 pub node shown: Dimensionless = 1.0;
@@ -2758,9 +2758,9 @@ mod tests {
         // Regression: `resolve_symbol_path` resolved the qualifier without
         // the dag-visibility check that `resolve_module_path` enforces, so
         // `lib.helper.shown` resolved even though `helper` is a private dag.
-        let lib_id = DagId::root("lib");
+        let lib_id = DagId::root_in_package("test", "lib");
         let helper_id = lib_id.child("helper");
-        let main_id = DagId::root("main");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source(
             "dag helper {
                 pub node shown: Dimensionless = 1.0;
@@ -2802,8 +2802,8 @@ mod tests {
 
     #[test]
     fn qualified_constructor_resolves_to_canonical_owner() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub type BurnKind { Impulsive, Coast }");
         let main = desugared_source("import lib as mission;");
         let (import_path, import_kind) = first_import(&main);
@@ -2829,9 +2829,9 @@ mod tests {
 
     #[test]
     fn selective_pub_reexport_resolves_to_original_owner() {
-        let leaf_id = DagId::root("leaf");
-        let middle_id = DagId::root("middle");
-        let main_id = DagId::root("main");
+        let leaf_id = DagId::root_in_package("test", "leaf");
+        let middle_id = DagId::root_in_package("test", "middle");
+        let main_id = DagId::root_in_package("test", "main");
         let leaf = desugared_source("pub dim Acceleration = Length / Time^2;");
         let middle = desugared_source("import leaf.{ pub Acceleration };");
         let main = desugared_source("import middle.{ Acceleration };");

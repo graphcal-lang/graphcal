@@ -44,7 +44,7 @@ pub const PRELUDE_UNIT_NAMES: &[&str] = &[
 /// Canonical synthetic owner for Graphcal prelude symbols.
 #[must_use]
 pub fn prelude_dag_id() -> DagId {
-    DagId::root(PRELUDE_DAG_ID_SEGMENT)
+    DagId::root_in_package(PRELUDE_DAG_ID_SEGMENT, PRELUDE_DAG_ID_SEGMENT)
 }
 
 /// Base dimension IDs returned by `load_base_dimensions`.

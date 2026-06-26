@@ -854,7 +854,7 @@ impl TIR {
     /// [`Self::lookup_call_target`] on it always returns `None`.
     #[must_use]
     pub fn empty_for_eval_helpers(registry: Registry) -> Self {
-        let root_dag_id = crate::dag_id::DagId::root("<eval-helper>");
+        let root_dag_id = crate::dag_id::DagId::root_in_package("<eval-helper>", "<eval-helper>");
         let mut dags = DagRegistry::new();
         dags.insert(
             root_dag_id.clone(),
@@ -4808,7 +4808,7 @@ pub fn resolve_type_expr(
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let owner = crate::dag_id::DagId::root("<type-resolution>");
+    let owner = crate::dag_id::DagId::root_in_package("<type-resolution>", "<type-resolution>");
     resolve_type_expr_inner(
         type_ann,
         registry,
@@ -5890,7 +5890,7 @@ mod tests {
 
         let src = make_src();
         let registry = make_registry();
-        let owner = crate::dag_id::DagId::root("a");
+        let owner = crate::dag_id::DagId::root_in_package("test", "a");
         let resolved_index = ResolvedName::from_def(owner, IndexName::new("Phase"));
         let generic = GenericParamName::new("I");
         let resolved_type = ResolvedTypeExpr::Indexed {
@@ -5960,7 +5960,7 @@ mod tests {
 
     #[test]
     fn convert_struct() {
-        let owner = crate::dag_id::DagId::root("test");
+        let owner = crate::dag_id::DagId::root_in_package("test", "test");
         let resolved = ResolvedName::from_def(owner, StructTypeName::new("Foo"));
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Struct(resolved.clone(), Span::new(0, 0)),
@@ -5975,7 +5975,7 @@ mod tests {
 
     #[test]
     fn convert_indexed() {
-        let owner = crate::dag_id::DagId::root("test");
+        let owner = crate::dag_id::DagId::root_in_package("test", "test");
         let resolved_index = ResolvedName::from_def(owner, IndexName::new("M"));
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Indexed {

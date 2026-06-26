@@ -2104,8 +2104,8 @@ mod tests {
 
     #[test]
     fn lowers_qualified_index_variant_literal_to_canonical_owner() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub index Phase = { Burn, Coast };");
         let main_source = "import lib as mission; node phase: Dimensionless = mission.Phase.Burn;";
         let main = desugared_source(main_source);
@@ -2137,8 +2137,8 @@ mod tests {
 
     #[test]
     fn lowers_qualified_nullary_constructor_const_ref_to_canonical_owner() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub type BurnKind { Impulsive, Coast }");
         let main = desugared_source(
             "import lib as mission; node burn: Dimensionless = mission.Impulsive;",
@@ -2164,7 +2164,7 @@ mod tests {
 
     #[test]
     fn lowers_for_locals_to_lexical_ids() {
-        let owner = DagId::root("main");
+        let owner = DagId::root_in_package("test", "main");
         let file = desugared_source(
             "index Phase = { Burn }; node x: Dimensionless[Phase] = for p: Phase { p };",
         );
@@ -2194,8 +2194,8 @@ mod tests {
 
     #[test]
     fn lowers_qualified_constructor_match_pattern_and_binding() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib =
             desugared_source("pub type BurnKind { Impulsive(delta_v: Dimensionless), Coast }");
         let main = desugared_source(
@@ -2238,8 +2238,8 @@ mod tests {
 
     #[test]
     fn collects_canonical_decl_dependencies_from_hir_expr() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib =
             desugared_source("pub const node C: Dimensionless = 1.0; param p: Dimensionless;");
         let main = desugared_source(
@@ -2271,7 +2271,7 @@ mod tests {
 
     #[test]
     fn const_ref_to_runtime_decl_is_rejected_by_decl_kind() {
-        let owner = DagId::root("main");
+        let owner = DagId::root_in_package("test", "main");
         let file = desugared_source("param p: Dimensionless; node x: Dimensionless = p;");
         let mut resolver = ModuleResolver::default();
         resolver

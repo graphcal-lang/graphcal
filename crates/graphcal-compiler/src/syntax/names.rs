@@ -1097,7 +1097,7 @@ mod tests {
     fn resolved_name_carries_canonical_owner_and_leaf() {
         let name = DeclName::new("dry_mass");
         let resolved = ResolvedName::<namespace::Decl>::from_def(
-            crate::dag_id::DagId::new("helpers", ["mass"]),
+            crate::dag_id::DagId::new_in_package("test", "helpers", ["mass"]),
             name,
         );
 
@@ -1110,7 +1110,7 @@ mod tests {
     #[test]
     fn resolved_index_variant_carries_resolved_index_owner() {
         let index = ResolvedName::<namespace::Index>::from_def(
-            crate::dag_id::DagId::root("mission"),
+            crate::dag_id::DagId::root_in_package("test", "mission"),
             IndexName::new("Phase"),
         );
         let variant = ResolvedIndexVariant::new(index, IndexVariantName::new("Burn"));

@@ -3671,7 +3671,7 @@ mod tests {
                 nodes: vec![],
                 asserts: vec![],
             },
-            &crate::dag_id::DagId::root("dep"),
+            &crate::dag_id::DagId::root_in_package("test", "dep"),
         )
         .unwrap();
         // Simulate the loader having pre-evaluated `import lib as mission;`
@@ -3698,7 +3698,7 @@ mod tests {
                 nodes: vec![],
                 asserts: vec![],
             },
-            &crate::dag_id::DagId::root("main"),
+            &crate::dag_id::DagId::root_in_package("test", "main"),
         )
         .unwrap();
 
@@ -3718,7 +3718,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
-                &crate::dag_id::DagId::root("main"),
+                &crate::dag_id::DagId::root_in_package("test", "main"),
                 &importer_src,
                 &dep_src,
             )

@@ -121,9 +121,9 @@ mod tests {
 
     #[test]
     fn renders_clusters_external_nodes_and_edges() {
-        let root_dag = DagId::root("main");
+        let root_dag = DagId::root_in_package("test", "main");
         let child_dag = root_dag.child("scale");
-        let dep_dag = DagId::root("lib");
+        let dep_dag = DagId::root_in_package("test", "lib");
 
         let ir = GraphIr {
             root: GraphCluster {

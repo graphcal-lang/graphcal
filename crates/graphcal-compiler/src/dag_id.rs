@@ -102,18 +102,6 @@ pub enum DagIdPathError {
 }
 
 impl DagId {
-    /// Create a `DagId` in the default synthetic package from a leading segment
-    /// and any further segments.
-    ///
-    /// Production loaders should prefer [`DagId::new_in_package`] so the
-    /// package identity comes from the project model.
-    pub fn new(
-        head: impl Into<Arc<str>>,
-        tail: impl IntoIterator<Item = impl Into<Arc<str>>>,
-    ) -> Self {
-        Self::new_in_package(DagPackageId::new("<synthetic>"), head, tail)
-    }
-
     /// Create a `DagId` from an explicit package, a leading segment, and any
     /// further segments.
     ///
@@ -129,13 +117,6 @@ impl DagId {
             head: head.into(),
             tail: tail.into_iter().map(Into::into).collect(),
         }
-    }
-
-    /// Create a single-segment (root) `DagId` in the default synthetic package.
-    ///
-    /// Production loaders should prefer [`DagId::root_in_package`].
-    pub fn root(name: impl Into<Arc<str>>) -> Self {
-        Self::root_in_package(DagPackageId::new("<synthetic>"), name)
     }
 
     /// Create a single-segment (root) `DagId` in an explicit package.
@@ -339,27 +320,27 @@ mod tests {
 
     #[test]
     fn child_appends_segment() {
-        let parent = DagId::new("helpers", ["math"]);
+        let parent = DagId::new_in_package("test", "helpers", ["math"]);
         let child = parent.child("double_speed");
         assert_eq!(child.to_string(), "helpers.math.double_speed");
     }
 
     #[test]
     fn parent_drops_last_segment() {
-        let id = DagId::new("helpers", ["math", "double_speed"]);
+        let id = DagId::new_in_package("test", "helpers", ["math", "double_speed"]);
         let parent = id.parent().unwrap();
         assert_eq!(parent.to_string(), "helpers.math");
     }
 
     #[test]
     fn parent_of_root_is_none() {
-        let id = DagId::root("main");
+        let id = DagId::root_in_package("test", "main");
         assert!(id.parent().is_none());
     }
 
     #[test]
     fn package_identity_is_structural() {
-        let module = DagId::new("src", ["units", "si"]);
+        let module = DagId::new_in_package("test", "src", ["units", "si"]);
         let rev1 = DagId::in_package("pkg-units-rev1", module.clone());
         let rev2 = DagId::in_package("pkg-units-rev2", module);
 
@@ -385,14 +366,14 @@ mod tests {
 
     #[test]
     fn is_descendant_of_matches_nested_blocks_only() {
-        let file = DagId::new("helpers", ["math"]);
+        let file = DagId::new_in_package("test", "helpers", ["math"]);
         let child = file.child("double_speed");
         let grandchild = child.child("inner");
         assert!(child.is_descendant_of(&file));
         assert!(grandchild.is_descendant_of(&file));
         assert!(!file.is_descendant_of(&file));
         assert!(!file.is_descendant_of(&child));
-        assert!(!DagId::new("helpers", ["other"]).is_descendant_of(&file));
+        assert!(!DagId::new_in_package("test", "helpers", ["other"]).is_descendant_of(&file));
         assert!(
             !DagId::in_package("pkg-a", child).is_descendant_of(&DagId::in_package("pkg-b", file))
         );
@@ -400,19 +381,19 @@ mod tests {
 
     #[test]
     fn name_returns_last_segment() {
-        let id = DagId::new("helpers", ["math", "double_speed"]);
+        let id = DagId::new_in_package("test", "helpers", ["math", "double_speed"]);
         assert_eq!(id.name(), "double_speed");
     }
 
     #[test]
     fn name_of_root_returns_head() {
-        let id = DagId::root("main");
+        let id = DagId::root_in_package("test", "main");
         assert_eq!(id.name(), "main");
     }
 
     #[test]
     fn display_joins_with_dot() {
-        let id = DagId::new("a", ["b", "c"]);
+        let id = DagId::new_in_package("test", "a", ["b", "c"]);
         assert_eq!(id.to_string(), "a.b.c");
     }
 }
