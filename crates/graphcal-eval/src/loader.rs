@@ -2075,6 +2075,7 @@ mod tests {
     use super::*;
     use std::fs;
 
+    use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_io::RealFileSystem;
 
     fn fs() -> RealFileSystem {
@@ -2127,8 +2128,8 @@ mod tests {
         assert_eq!(project.files.len(), 2);
         assert_eq!(project.load_order.len(), 2);
         // helper.lib should be loaded before main (topological order)
-        let lib_dag_id = DagId::new_in_package("helper", "src", ["helper", "lib"]);
-        let main_dag_id = DagId::new_in_package("helper", "src", ["helper", "main"]);
+        let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
+        let main_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "main"]));
         assert_eq!(project.load_order[0], lib_dag_id);
         assert_eq!(project.load_order[1], main_dag_id);
         assert_eq!(project.root.package(), &DagPackageId::new("helper"));
@@ -2143,7 +2144,7 @@ mod tests {
         ]);
         let project = load_project(&dir.path().join("src/helper/main.gcl"), None, &fs()).unwrap();
         let resolver = project.build_module_resolver().unwrap();
-        let lib_dag_id = DagId::new_in_package("helper", "src", ["helper", "lib"]);
+        let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
 
         let resolved_variant = resolver
             .resolve_index_variant_path(&project.root, &name_path(&["lib", "Phase", "Burn"]))
@@ -2291,7 +2292,7 @@ dag calc {
         assert_eq!(root_file.source.as_str(), overlay_source);
 
         // Helper.lib file should use disk content
-        let lib_dag_id = DagId::new_in_package("helper", "src", ["helper", "lib"]);
+        let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
         let lib_file = &project.files[&lib_dag_id];
         assert_eq!(lib_file.source.as_str(), "param y: Dimensionless = 2.0;");
     }
@@ -2342,7 +2343,7 @@ dag calc {
         let project = load_project(&dir.path().join("graph/a.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 4);
         // d should appear first in load order
-        let d_dag_id = DagId::new_in_package("graph", "graph", ["d"]);
+        let d_dag_id = DagId::new("graph", NonEmpty::new("graph", vec!["d"]));
         assert_eq!(project.load_order[0], d_dag_id);
     }
 

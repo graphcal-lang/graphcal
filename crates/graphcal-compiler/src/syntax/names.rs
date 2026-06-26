@@ -1097,7 +1097,10 @@ mod tests {
     fn resolved_name_carries_canonical_owner_and_leaf() {
         let name = DeclName::new("dry_mass");
         let resolved = ResolvedName::<namespace::Decl>::from_def(
-            crate::dag_id::DagId::new_in_package("test", "helpers", ["mass"]),
+            crate::dag_id::DagId::new(
+                "test",
+                crate::syntax::non_empty::NonEmpty::new("helpers", vec!["mass"]),
+            ),
             name,
         );
 

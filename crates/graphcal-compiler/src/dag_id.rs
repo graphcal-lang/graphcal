@@ -101,20 +101,25 @@ pub enum DagIdPathError {
     MissingGclExtension,
 }
 
+impl From<NonEmpty<String>> for NonEmpty<Arc<str>> {
+    fn from(value: NonEmpty<String>) -> Self {
+        value.map(Arc::<str>::from)
+    }
+}
+
+impl<'a> From<NonEmpty<&'a str>> for NonEmpty<Arc<str>> {
+    fn from(value: NonEmpty<&'a str>) -> Self {
+        value.map(Arc::<str>::from)
+    }
+}
+
 impl DagId {
-    /// Create a `DagId` from an explicit package, a leading segment, and any
-    /// further segments.
-    ///
-    /// The `head` argument enforces non-emptiness at the type level: every
-    /// `DagId` is guaranteed to have at least one segment.
-    pub fn new_in_package(
-        package: impl Into<DagPackageId>,
-        head: impl Into<Arc<str>>,
-        tail: impl IntoIterator<Item = impl Into<Arc<str>>>,
-    ) -> Self {
+    /// Create a `DagId` from an explicit package and non-empty hierarchical
+    /// segments.
+    pub fn new(package: impl Into<DagPackageId>, segments: impl Into<NonEmpty<Arc<str>>>) -> Self {
         Self {
             package: package.into(),
-            segments: NonEmpty::new(head.into(), tail.into_iter().map(Into::into).collect()),
+            segments: segments.into(),
         }
     }
 
@@ -127,8 +132,9 @@ impl DagId {
     }
 
     /// Attach an explicit package identity to an existing module id.
+    #[cfg(test)]
     #[must_use]
-    pub fn in_package(package: impl Into<DagPackageId>, module: Self) -> Self {
+    fn in_package(package: impl Into<DagPackageId>, module: Self) -> Self {
         Self {
             package: package.into(),
             segments: module.segments,
@@ -316,14 +322,17 @@ mod tests {
 
     #[test]
     fn child_appends_segment() {
-        let parent = DagId::new_in_package("test", "helpers", ["math"]);
+        let parent = DagId::new("test", NonEmpty::new("helpers", vec!["math"]));
         let child = parent.child("double_speed");
         assert_eq!(child.to_string(), "helpers.math.double_speed");
     }
 
     #[test]
     fn parent_drops_last_segment() {
-        let id = DagId::new_in_package("test", "helpers", ["math", "double_speed"]);
+        let id = DagId::new(
+            "test",
+            NonEmpty::new("helpers", vec!["math", "double_speed"]),
+        );
         let parent = id.parent().unwrap();
         assert_eq!(parent.to_string(), "helpers.math");
     }
@@ -336,7 +345,7 @@ mod tests {
 
     #[test]
     fn package_identity_is_structural() {
-        let module = DagId::new_in_package("test", "src", ["units", "si"]);
+        let module = DagId::new("test", NonEmpty::new("src", vec!["units", "si"]));
         let rev1 = DagId::in_package("pkg-units-rev1", module.clone());
         let rev2 = DagId::in_package("pkg-units-rev2", module);
 
@@ -362,14 +371,16 @@ mod tests {
 
     #[test]
     fn is_descendant_of_matches_nested_blocks_only() {
-        let file = DagId::new_in_package("test", "helpers", ["math"]);
+        let file = DagId::new("test", NonEmpty::new("helpers", vec!["math"]));
         let child = file.child("double_speed");
         let grandchild = child.child("inner");
         assert!(child.is_descendant_of(&file));
         assert!(grandchild.is_descendant_of(&file));
         assert!(!file.is_descendant_of(&file));
         assert!(!file.is_descendant_of(&child));
-        assert!(!DagId::new_in_package("test", "helpers", ["other"]).is_descendant_of(&file));
+        assert!(
+            !DagId::new("test", NonEmpty::new("helpers", vec!["other"])).is_descendant_of(&file)
+        );
         assert!(
             !DagId::in_package("pkg-a", child).is_descendant_of(&DagId::in_package("pkg-b", file))
         );
@@ -377,7 +388,10 @@ mod tests {
 
     #[test]
     fn name_returns_last_segment() {
-        let id = DagId::new_in_package("test", "helpers", ["math", "double_speed"]);
+        let id = DagId::new(
+            "test",
+            NonEmpty::new("helpers", vec!["math", "double_speed"]),
+        );
         assert_eq!(id.name(), "double_speed");
     }
 
@@ -389,7 +403,7 @@ mod tests {
 
     #[test]
     fn display_joins_with_dot() {
-        let id = DagId::new_in_package("test", "a", ["b", "c"]);
+        let id = DagId::new("test", NonEmpty::new("a", vec!["b", "c"]));
         assert_eq!(id.to_string(), "a.b.c");
     }
 }
