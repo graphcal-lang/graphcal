@@ -7,7 +7,7 @@ use miette::NamedSource;
 use sha2::{Digest, Sha256};
 
 use crate::eval::CompileError;
-use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, ImportKind, IncludeDecl, ModulePath};
@@ -198,7 +198,7 @@ impl LoadedProject {
             graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
         let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
         let path = PathBuf::from(name);
-        let dag_id = DagId::from_relative_path(&path).map_err(|e| {
+        let dag_id = DagId::from_virtual_relative_path(&path).map_err(|e| {
             CompileError::Eval(
                 graphcal_compiler::registry::error::GraphcalError::EvalError {
                     message: format!("invalid source name `{name}`: {e}"),
@@ -539,7 +539,7 @@ pub fn load_project<F: FileSystemReader>(
     // single rule: to import across files, you must live in a real package.
     let manifest: Option<graphcal_compiler::registry::manifest::Manifest> =
         load_manifest_for_root(&project_root, &root_canonical, fs)?;
-    if manifest.is_some() {
+    let package_id = if manifest.is_some() {
         let package_manifest = load_package_manifest_for_root(&project_root, fs)?;
         if !package_manifest.dependencies.is_empty() {
             return load_locked_package_project(
@@ -549,11 +549,15 @@ pub fn load_project<F: FileSystemReader>(
                 fs,
             );
         }
-    }
+        DagPackageId::new(package_manifest.name.as_str())
+    } else {
+        virtual_package_id_for_path(&root_canonical)?
+    };
 
     load_file_dfs(
         &root_canonical,
         &project_root,
+        &package_id,
         &mut files,
         &mut path_to_dag_id,
         &mut load_order,
@@ -693,7 +697,7 @@ impl PackageLoadContext {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "package-aware DFS state mirrors the legacy project loader"
+    reason = "package-aware DFS state mirrors the single-package project loader"
 )]
 #[expect(
     clippy::too_many_lines,
@@ -851,14 +855,13 @@ fn package_dag_id(
     relative_path: &Path,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagId, CompileError> {
-    let module_id = DagId::from_relative_path(relative_path).map_err(|e| {
+    DagId::from_relative_path(package_id.as_str(), relative_path).map_err(|e| {
         CompileError::Eval(GraphcalError::EvalError {
             message: format!("invalid module path `{}`: {e}", relative_path.display()),
             src: src.clone(),
             span: graphcal_compiler::syntax::span::Span::new(0, 0).into(),
         })
-    })?;
-    Ok(DagId::in_package(package_id.as_str(), module_id))
+    })
 }
 
 struct PackageResolvedPath {
@@ -1254,6 +1257,7 @@ fn resolve_package_inline_body_import(
 fn load_file_dfs<F: FileSystemReader>(
     canonical_path: &Path,
     project_root: &Path,
+    package_id: &DagPackageId,
     files: &mut HashMap<DagId, LoadedFile>,
     path_to_dag_id: &mut HashMap<PathBuf, DagId>,
     load_order: &mut Vec<DagId>,
@@ -1349,6 +1353,7 @@ fn load_file_dfs<F: FileSystemReader>(
         load_file_dfs(
             &import_canonical,
             project_root,
+            package_id,
             files,
             path_to_dag_id,
             load_order,
@@ -1394,6 +1399,7 @@ fn load_file_dfs<F: FileSystemReader>(
         load_file_dfs(
             &import_canonical,
             project_root,
+            package_id,
             files,
             path_to_dag_id,
             load_order,
@@ -1408,7 +1414,7 @@ fn load_file_dfs<F: FileSystemReader>(
     let relative_path = canonical_path
         .strip_prefix(project_root)
         .unwrap_or(canonical_path);
-    let dag_id = DagId::from_relative_path(relative_path).map_err(|e| {
+    let dag_id = DagId::from_relative_path(package_id.clone(), relative_path).map_err(|e| {
         CompileError::Eval(
             graphcal_compiler::registry::error::GraphcalError::EvalError {
                 message: format!("invalid module path `{}`: {e}", relative_path.display()),
@@ -2038,6 +2044,25 @@ fn resolve_module_path<F: FileSystemReader>(
     ))
 }
 
+fn virtual_package_id_for_path(path: &Path) -> Result<DagPackageId, CompileError> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            CompileError::Eval(GraphcalError::InvalidSourcePath {
+                path: path.display().to_string(),
+                reason: "source path has no UTF-8 file name".to_string(),
+            })
+        })?;
+    let stem = file_name.strip_suffix(".gcl").ok_or_else(|| {
+        CompileError::Eval(GraphcalError::InvalidSourcePath {
+            path: path.display().to_string(),
+            reason: "source path must end with `.gcl`".to_string(),
+        })
+    })?;
+    Ok(DagPackageId::new(stem))
+}
+
 /// Helper to create a `FileNotFound` error (used for the root file itself).
 fn io_not_found(path: &Path) -> CompileError {
     CompileError::Eval(GraphcalError::FileNotFound {
@@ -2085,6 +2110,7 @@ mod tests {
         let project = load_project(&dir.path().join("standalone.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 1);
         assert_eq!(project.load_order.len(), 1);
+        assert_eq!(project.root.package(), &DagPackageId::new("standalone"));
     }
 
     #[test]
@@ -2101,10 +2127,11 @@ mod tests {
         assert_eq!(project.files.len(), 2);
         assert_eq!(project.load_order.len(), 2);
         // helper.lib should be loaded before main (topological order)
-        let lib_dag_id = DagId::new("src", ["helper", "lib"]);
-        let main_dag_id = DagId::new("src", ["helper", "main"]);
+        let lib_dag_id = DagId::new_in_package("helper", "src", ["helper", "lib"]);
+        let main_dag_id = DagId::new_in_package("helper", "src", ["helper", "main"]);
         assert_eq!(project.load_order[0], lib_dag_id);
         assert_eq!(project.load_order[1], main_dag_id);
+        assert_eq!(project.root.package(), &DagPackageId::new("helper"));
     }
 
     #[test]
@@ -2116,7 +2143,7 @@ mod tests {
         ]);
         let project = load_project(&dir.path().join("src/helper/main.gcl"), None, &fs()).unwrap();
         let resolver = project.build_module_resolver().unwrap();
-        let lib_dag_id = DagId::new("src", ["helper", "lib"]);
+        let lib_dag_id = DagId::new_in_package("helper", "src", ["helper", "lib"]);
 
         let resolved_variant = resolver
             .resolve_index_variant_path(&project.root, &name_path(&["lib", "Phase", "Burn"]))
@@ -2185,6 +2212,7 @@ mod tests {
         assert_eq!(project.load_order.len(), 1);
         let root_file = &project.files[&project.root];
         assert_eq!(root_file.source.as_str(), source);
+        assert_eq!(project.root.package(), &DagPackageId::new("test"));
     }
 
     #[test]
@@ -2263,7 +2291,7 @@ dag calc {
         assert_eq!(root_file.source.as_str(), overlay_source);
 
         // Helper.lib file should use disk content
-        let lib_dag_id = DagId::new("src", ["helper", "lib"]);
+        let lib_dag_id = DagId::new_in_package("helper", "src", ["helper", "lib"]);
         let lib_file = &project.files[&lib_dag_id];
         assert_eq!(lib_file.source.as_str(), "param y: Dimensionless = 2.0;");
     }
@@ -2314,7 +2342,7 @@ dag calc {
         let project = load_project(&dir.path().join("graph/a.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 4);
         // d should appear first in load order
-        let d_dag_id = DagId::new("graph", ["d"]);
+        let d_dag_id = DagId::new_in_package("graph", "graph", ["d"]);
         assert_eq!(project.load_order[0], d_dag_id);
     }
 

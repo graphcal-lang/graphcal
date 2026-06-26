@@ -341,7 +341,7 @@ mod tests {
     }
 
     fn test_owner() -> graphcal_compiler::dag_id::DagId {
-        graphcal_compiler::dag_id::DagId::root("<cli-display-test>")
+        graphcal_compiler::dag_id::DagId::root_in_package("test", "<cli-display-test>")
     }
 
     fn indexed_1d(name: &str, pairs: &[(&str, Value)]) -> Value {

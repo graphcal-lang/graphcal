@@ -695,6 +695,13 @@ pub enum GraphcalError {
     #[diagnostic(code(graphcal::M000), help("check that the file path is correct"))]
     FileNotFound { path: String },
 
+    #[error("invalid source path `{path}`: {reason}")]
+    #[diagnostic(
+        code(graphcal::M000),
+        help("Graphcal source files must be UTF-8 `.gcl` files")
+    )]
+    InvalidSourcePath { path: String, reason: String },
+
     #[error("circular import detected: {cycle}")]
     #[diagnostic(
         code(graphcal::M001),
@@ -1611,8 +1618,8 @@ impl GraphcalError {
     ///
     /// Returns `None` for the handful of variants that represent errors
     /// without a source location: file-system errors before parsing
-    /// ([`Self::FileNotFound`], [`Self::CircularImport`],
-    /// [`Self::ManifestError`]) and CLI override errors
+    /// ([`Self::FileNotFound`], [`Self::InvalidSourcePath`],
+    /// [`Self::CircularImport`], [`Self::ManifestError`]) and CLI override errors
     /// ([`Self::OverrideNotAParam`], [`Self::OverrideUnknownParam`]).
     #[must_use]
     #[expect(
@@ -1622,6 +1629,7 @@ impl GraphcalError {
     pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
         let src = match self {
             Self::FileNotFound { .. }
+            | Self::InvalidSourcePath { .. }
             | Self::CircularImport { .. }
             | Self::ManifestError { .. }
             | Self::OverrideNotAParam { .. }

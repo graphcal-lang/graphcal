@@ -5600,7 +5600,8 @@ mod tests {
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let ir = crate::ir::lower::lower(&file, &src)?;
         let parent_dag_id =
-            crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+            crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl"))
+                .unwrap();
         let mut resolver = ModuleResolver::default();
         resolver
             .add_module(parent_dag_id.clone(), &file.declarations)
@@ -5725,7 +5726,8 @@ mod tests {
         let file = desugared;
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let dag_id =
-            crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+            crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl"))
+                .unwrap();
         let ir = crate::ir::lower::lower(&file, &src).unwrap();
         let mut resolver = ModuleResolver::default();
         resolver

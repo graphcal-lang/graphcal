@@ -414,7 +414,7 @@ pub struct ImportedValueSource {
 /// Returns a [`GraphcalError`] if declaration collection or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
 pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalError> {
-    let dag_id = crate::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()))
+    let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(src.name()))
         .map_err(|e| GraphcalError::EvalError {
             message: format!("invalid source name `{}`: {e}", src.name()),
             src: src.clone(),

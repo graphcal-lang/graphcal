@@ -1000,9 +1000,10 @@ mod tests {
         let file = desugared;
         let src = make_src(source);
         let ir = lower(&file, &src).unwrap();
-        let dag_id =
-            graphcal_compiler::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl"))
-                .unwrap();
+        let dag_id = graphcal_compiler::dag_id::DagId::from_virtual_relative_path(
+            std::path::Path::new("test.gcl"),
+        )
+        .unwrap();
         let mut resolver = ModuleResolver::default();
         resolver
             .add_module(dag_id.clone(), &file.declarations)
@@ -1022,8 +1023,10 @@ mod tests {
     }
 
     fn test_dag_id() -> graphcal_compiler::dag_id::DagId {
-        graphcal_compiler::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl"))
-            .unwrap()
+        graphcal_compiler::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(
+            "test.gcl",
+        ))
+        .unwrap()
     }
 
     fn resolved_key(name: &str) -> RuntimeDeclKey {

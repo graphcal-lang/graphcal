@@ -1,9 +1,14 @@
 //! [`DagId`]: an abstract, filesystem-independent identifier for a DAG (module).
 //!
-//! Every file and every `dag` block gets a unique `DagId`. File-based DAGs
-//! derive their segments from the relative path (e.g., `helpers/math.gcl` →
-//! `["helpers", "math"]`), while inline `dag` blocks append their name as an
-//! additional segment (e.g., `["helpers", "math", "double_speed"]`).
+//! Every file and every `dag` block gets a unique package-qualified `DagId`.
+//! File-based DAGs derive their segments from the loader-provided module path
+//! (e.g., `helpers/math.gcl` → `["helpers", "math"]`), while inline `dag`
+//! blocks append their name as an additional segment (e.g.,
+//! `["helpers", "math", "double_speed"]`).
+//!
+//! Package identity is intentionally opaque in the compiler core. Loaders erase
+//! whether a package came from a lockfile, manifest-backed project, virtual
+//! single-file project, or test harness before constructing a `DagId`.
 //!
 //! This keeps filesystem concerns (`PathBuf`) in the loader (imperative shell)
 //! and gives the compiler/evaluator (functional core) an opaque identity type.
@@ -13,16 +18,23 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-/// Opaque package-instance component of a [`DagId`].
+/// Opaque package component of a [`DagId`].
 ///
 /// This is separate from module path segments so the compiler can distinguish
-/// the same source spelling loaded from different locked package instances
-/// without parsing package identity out of a joined module string.
+/// the same source spelling loaded from different package instances without
+/// parsing package identity out of a joined module string. The compiler core
+/// deliberately cannot inspect where the package id came from.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DagPackageId(Arc<str>);
 
 impl DagPackageId {
-    /// Borrow the opaque package instance id.
+    /// Construct an opaque package id.
+    #[must_use]
+    pub fn new(value: impl Into<Arc<str>>) -> Self {
+        Self(value.into())
+    }
+
+    /// Borrow the opaque package id payload.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -31,19 +43,19 @@ impl DagPackageId {
 
 impl From<&str> for DagPackageId {
     fn from(value: &str) -> Self {
-        Self(Arc::from(value))
+        Self::new(value)
     }
 }
 
 impl From<String> for DagPackageId {
     fn from(value: String) -> Self {
-        Self(Arc::from(value))
+        Self::new(value)
     }
 }
 
 impl From<Arc<str>> for DagPackageId {
     fn from(value: Arc<str>) -> Self {
-        Self(value)
+        Self::new(value)
     }
 }
 
@@ -66,9 +78,8 @@ impl fmt::Display for DagPackageId {
 /// The compiler never interprets these segments as filesystem paths.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DagId {
-    /// Locked package instance that owns this DAG, when loaded from a package
-    /// graph. Single-file and legacy project loads have no package component.
-    package: Option<DagPackageId>,
+    /// Opaque package that owns this DAG. Every DAG belongs to exactly one package.
+    package: DagPackageId,
     /// The first segment. Always present.
     head: Arc<str>,
     /// Remaining segments after `head`. Empty for a root (single-segment) id.
@@ -91,44 +102,65 @@ pub enum DagIdPathError {
 }
 
 impl DagId {
-    /// Create a `DagId` from a leading segment and any further segments.
+    /// Create a `DagId` in the default synthetic package from a leading segment
+    /// and any further segments.
     ///
-    /// The `head` argument enforces non-emptiness at the type level: every
-    /// `DagId` is guaranteed to have at least one segment.
+    /// Production loaders should prefer [`DagId::new_in_package`] so the
+    /// package identity comes from the project model.
     pub fn new(
         head: impl Into<Arc<str>>,
         tail: impl IntoIterator<Item = impl Into<Arc<str>>>,
     ) -> Self {
+        Self::new_in_package(DagPackageId::new("<synthetic>"), head, tail)
+    }
+
+    /// Create a `DagId` from an explicit package, a leading segment, and any
+    /// further segments.
+    ///
+    /// The `head` argument enforces non-emptiness at the type level: every
+    /// `DagId` is guaranteed to have at least one segment.
+    pub fn new_in_package(
+        package: impl Into<DagPackageId>,
+        head: impl Into<Arc<str>>,
+        tail: impl IntoIterator<Item = impl Into<Arc<str>>>,
+    ) -> Self {
         Self {
-            package: None,
+            package: package.into(),
             head: head.into(),
             tail: tail.into_iter().map(Into::into).collect(),
         }
     }
 
-    /// Create a single-segment (root) `DagId`.
+    /// Create a single-segment (root) `DagId` in the default synthetic package.
+    ///
+    /// Production loaders should prefer [`DagId::root_in_package`].
     pub fn root(name: impl Into<Arc<str>>) -> Self {
+        Self::root_in_package(DagPackageId::new("<synthetic>"), name)
+    }
+
+    /// Create a single-segment (root) `DagId` in an explicit package.
+    pub fn root_in_package(package: impl Into<DagPackageId>, name: impl Into<Arc<str>>) -> Self {
         Self {
-            package: None,
+            package: package.into(),
             head: name.into(),
             tail: Arc::from([] as [Arc<str>; 0]),
         }
     }
 
-    /// Attach an opaque locked package instance to an existing module id.
+    /// Attach an explicit package identity to an existing module id.
     #[must_use]
     pub fn in_package(package: impl Into<DagPackageId>, module: Self) -> Self {
         Self {
-            package: Some(package.into()),
+            package: package.into(),
             head: module.head,
             tail: module.tail,
         }
     }
 
-    /// The package instance that owns this DAG, if it came from a package graph.
+    /// The package that owns this DAG.
     #[must_use]
-    pub const fn package(&self) -> Option<&DagPackageId> {
-        self.package.as_ref()
+    pub const fn package(&self) -> &DagPackageId {
+        &self.package
     }
 
     /// Create a child `DagId` by appending a segment (e.g., for a nested `dag` block).
@@ -189,16 +221,35 @@ impl DagId {
             .all(|(a, b)| a == b)
     }
 
-    /// Create a `DagId` from a relative file path, stripping the `.gcl` extension.
+    /// Create a package-qualified `DagId` from a relative file path, stripping
+    /// the `.gcl` extension and using the file stem as the package id.
     ///
-    /// This is the only place where filesystem paths are converted into `DagId`s.
-    /// It belongs at the loader (imperative shell) boundary.
+    /// This is intended for single-file source paths where no project loader is
+    /// available to provide a richer package identity.
     ///
     /// # Errors
     ///
     /// Returns [`DagIdPathError`] if `path` has no components, contains a
     /// non-UTF-8 component, or does not end with `.gcl`.
-    pub fn from_relative_path(path: &std::path::Path) -> Result<Self, DagIdPathError> {
+    pub fn from_virtual_relative_path(path: &std::path::Path) -> Result<Self, DagIdPathError> {
+        let package = virtual_package_from_path(path)?;
+        Self::from_relative_path(package, path)
+    }
+
+    /// Create a package-qualified `DagId` from a relative file path, stripping
+    /// the `.gcl` extension.
+    ///
+    /// This is the only place where filesystem paths are converted into `DagId`
+    /// segments. It belongs at the loader (imperative shell) boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DagIdPathError`] if `path` has no components, contains a
+    /// non-UTF-8 component, or does not end with `.gcl`.
+    pub fn from_relative_path(
+        package: impl Into<DagPackageId>,
+        path: &std::path::Path,
+    ) -> Result<Self, DagIdPathError> {
         let mut segments: Vec<Arc<str>> = path
             .components()
             .map(|c| {
@@ -219,18 +270,29 @@ impl DagId {
         let head = segments.next().ok_or(DagIdPathError::Empty)?;
         let tail: Arc<[Arc<str>]> = segments.collect::<Vec<_>>().into();
         Ok(Self {
-            package: None,
+            package: package.into(),
             head,
             tail,
         })
     }
 }
 
+fn virtual_package_from_path(path: &std::path::Path) -> Result<DagPackageId, DagIdPathError> {
+    let file_name = path
+        .components()
+        .next_back()
+        .ok_or(DagIdPathError::Empty)?
+        .as_os_str()
+        .to_str()
+        .ok_or(DagIdPathError::NonUtf8Component)?;
+    let stem = file_name
+        .strip_suffix(".gcl")
+        .ok_or(DagIdPathError::MissingGclExtension)?;
+    Ok(DagPackageId::new(stem))
+}
+
 impl fmt::Display for DagId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(package) = &self.package {
-            write!(f, "{package}:")?;
-        }
         f.write_str(&self.head)?;
         for seg in self.tail.iter() {
             f.write_str(".")?;
@@ -246,21 +308,32 @@ mod tests {
 
     #[test]
     fn from_relative_path_strips_gcl() {
-        let id = DagId::from_relative_path(std::path::Path::new("helpers/math.gcl")).unwrap();
+        let id =
+            DagId::from_relative_path("math", std::path::Path::new("helpers/math.gcl")).unwrap();
         let segs: Vec<&str> = id.segments().map(|s| &**s).collect();
         assert_eq!(segs, ["helpers", "math"]);
+        assert_eq!(id.package(), &DagPackageId::new("math"));
+        assert_eq!(id.to_string(), "helpers.math");
+    }
+
+    #[test]
+    fn from_virtual_relative_path_uses_file_stem_as_package() {
+        let id =
+            DagId::from_virtual_relative_path(std::path::Path::new("helpers/math.gcl")).unwrap();
+        assert_eq!(id.package(), &DagPackageId::new("math"));
         assert_eq!(id.to_string(), "helpers.math");
     }
 
     #[test]
     fn from_relative_path_rejects_empty_path() {
-        let err = DagId::from_relative_path(std::path::Path::new("")).unwrap_err();
+        let err = DagId::from_relative_path("empty", std::path::Path::new("")).unwrap_err();
         assert_eq!(err, DagIdPathError::Empty);
     }
 
     #[test]
     fn from_relative_path_rejects_path_without_gcl_extension() {
-        let err = DagId::from_relative_path(std::path::Path::new("helpers/math")).unwrap_err();
+        let err =
+            DagId::from_relative_path("math", std::path::Path::new("helpers/math")).unwrap_err();
         assert_eq!(err, DagIdPathError::MissingGclExtension);
     }
 
@@ -291,8 +364,8 @@ mod tests {
         let rev2 = DagId::in_package("pkg-units-rev2", module);
 
         assert_ne!(rev1, rev2);
-        assert_eq!(rev1.package().unwrap().as_str(), "pkg-units-rev1");
-        assert_eq!(rev1.to_string(), "pkg-units-rev1:src.units.si");
+        assert_eq!(rev1.package().as_str(), "pkg-units-rev1");
+        assert_eq!(rev1.to_string(), "src.units.si");
         assert_eq!(
             rev1.segments()
                 .map(std::convert::AsRef::as_ref)
@@ -303,7 +376,7 @@ mod tests {
 
     #[test]
     fn child_and_parent_preserve_package_identity() {
-        let root = DagId::in_package("pkg-lib", DagId::root("lib"));
+        let root = DagId::root_in_package("pkg-lib", "lib");
         let child = root.child("helper");
 
         assert_eq!(child.package(), root.package());

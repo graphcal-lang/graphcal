@@ -21,7 +21,7 @@ fn compile_to_tir(source: &str) -> Result<crate::tir::typed::TIR, GraphcalError>
     let file = parse_and_desugar(source);
     let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
     let dag_id =
-        crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+        crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
     let ir = crate::ir::lower::lower(&file, &src)?;
     let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
     resolver
