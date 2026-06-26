@@ -19,7 +19,8 @@ use crate::desugar::desugared_ast::{
     TypeExpr,
 };
 use crate::ir::resolve::{
-    DeclCategory, ExpectedFail, ImportedValueNames, ResolvedFile, resolve_with_imported_values,
+    DeclCategory, ExpectedFail, ImportedValueNames, ParsedExpectedFail, ResolvedFile,
+    resolve_with_imported_values,
 };
 use crate::ir::resolve::{ImportedNames, resolve_with_imports};
 use crate::registry::declared_type::DeclaredType;
@@ -367,7 +368,7 @@ pub struct IR {
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
-    pub expected_fail: HashMap<ScopedName, ExpectedFail>,
+    pub expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
     /// Pre-evaluated values imported from dependency files.
     /// These are injected directly into the execution plan rather than compiled.
     /// Each entry carries the runtime value and its declared type (for `dim_check`).
@@ -414,7 +415,7 @@ pub struct ImportedValueSource {
 /// Returns a [`GraphcalError`] if declaration collection or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
 pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalError> {
-    let dag_id = crate::dag_id::DagId::from_relative_path(std::path::Path::new(src.name()))
+    let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(src.name()))
         .map_err(|e| GraphcalError::EvalError {
             message: format!("invalid source name `{}`: {e}", src.name()),
             src: src.clone(),
@@ -1006,7 +1007,7 @@ pub struct UnfrozenIR {
     // Key-lookup only, order irrelevant.
     assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     // Key-lookup only, order irrelevant.
-    expected_fail: HashMap<ScopedName, ExpectedFail>,
+    expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
     // Key-lookup only, order irrelevant.
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     // Key-lookup only, order irrelevant.
@@ -1717,8 +1718,10 @@ impl UnfrozenIR {
                                 // `#N` range segments never name an index, so
                                 // they cannot reference an overridden one.
                                 !key.iter().any(|part| {
-                                    part.named_index().is_some_and(|index| {
-                                        index_bindings.contains_key(index.display_name().as_str())
+                                    part.index_path().is_some_and(|index_path| {
+                                        index_bindings.contains_key(&IndexName::from_atom(
+                                            index_path.leaf().clone(),
+                                        ))
                                     })
                                 })
                             })
@@ -3671,7 +3674,7 @@ mod tests {
                 nodes: vec![],
                 asserts: vec![],
             },
-            &crate::dag_id::DagId::root("dep"),
+            &crate::dag_id::DagId::root_in_package("test", "dep"),
         )
         .unwrap();
         // Simulate the loader having pre-evaluated `import lib as mission;`
@@ -3698,7 +3701,7 @@ mod tests {
                 nodes: vec![],
                 asserts: vec![],
             },
-            &crate::dag_id::DagId::root("main"),
+            &crate::dag_id::DagId::root_in_package("test", "main"),
         )
         .unwrap();
 
@@ -3718,7 +3721,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
-                &crate::dag_id::DagId::root("main"),
+                &crate::dag_id::DagId::root_in_package("test", "main"),
                 &importer_src,
                 &dep_src,
             )

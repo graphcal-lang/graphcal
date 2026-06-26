@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use crate::desugar::desugared_ast::AttributeArg;
 use crate::registry::error::GraphcalError;
-use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
+use crate::registry::resolve_types::{
+    ExpectedFail, ExpectedFailKeyPart, ParsedExpectedFail, ParsedExpectedFailKey,
+    ParsedExpectedFailKeyPart,
+};
 use crate::syntax::names::{IndexVariantName, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
@@ -17,12 +20,12 @@ use miette::NamedSource;
 pub fn parse_expected_fail_args(
     args: &[AttributeArg],
     src: &NamedSource<Arc<String>>,
-) -> Result<ExpectedFail, GraphcalError> {
+) -> Result<ParsedExpectedFail, GraphcalError> {
     if args.is_empty() {
         return Ok(ExpectedFail::All);
     }
 
-    let keys: Vec<ExpectedFailKey> = args
+    let keys: Vec<ParsedExpectedFailKey> = args
         .iter()
         .map(|arg| match arg {
             AttributeArg::Path { segments, span } => {
@@ -33,7 +36,7 @@ pub fn parse_expected_fail_args(
                 span: *span,
             }]),
             AttributeArg::Group { elements, span } => {
-                let key: Result<ExpectedFailKey, GraphcalError> = elements
+                let key: Result<ParsedExpectedFailKey, GraphcalError> = elements
                     .iter()
                     .map(|elem| match elem {
                         AttributeArg::Path {
@@ -74,7 +77,7 @@ fn expected_fail_key_part_from_segments(
     segments: &NonEmpty<crate::syntax::ast::Ident>,
     span: Span,
     src: &NamedSource<Arc<String>>,
-) -> Result<ExpectedFailKeyPart, GraphcalError> {
+) -> Result<ParsedExpectedFailKeyPart, GraphcalError> {
     if segments.len() < 2 {
         return Err(GraphcalError::ExpectedFailInvalidArg {
             src: src.clone(),
@@ -92,5 +95,5 @@ fn expected_fail_key_part_from_segments(
         }
     })?);
     let variant = IndexVariantName::from_atom(segments.last().name.clone());
-    Ok(ExpectedFailKeyPart::unresolved(index_path, variant, span))
+    Ok(ExpectedFailKeyPart::parsed(index_path, variant, span))
 }

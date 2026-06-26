@@ -27,7 +27,8 @@ use crate::syntax::span::Span;
 // Re-export types and constants from graphcal-registry's resolve_types module.
 pub use crate::registry::resolve_types::{
     DeclCategory, ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart, ImportedValueNames,
-    ResolvedFile, is_aggregation_fn, is_time_scale_name,
+    ParsedExpectedFail, ParsedExpectedFailKey, ParsedExpectedFailKeyPart, ResolvedFile,
+    is_aggregation_fn, is_time_scale_name,
 };
 pub use crate::syntax::names::ScopedName;
 
@@ -500,7 +501,7 @@ fn collect_local_declarations(
 /// Result of attribute validation.
 struct ValidatedAttributes {
     assumes_map: HashMap<DeclName, Vec<DeclName>>,
-    expected_fail_map: HashMap<DeclName, ExpectedFail>,
+    expected_fail_map: HashMap<DeclName, ParsedExpectedFail>,
     /// Plot names carrying `#[hidden]`: evaluated and referenceable from
     /// figures/layers, but excluded from standalone output (#847).
     hidden_plots: HashSet<DeclName>,
@@ -514,7 +515,7 @@ fn validate_attributes(
     assert_names: &HashSet<DeclName>,
 ) -> Result<ValidatedAttributes, GraphcalError> {
     let mut assumes_map: HashMap<DeclName, Vec<DeclName>> = HashMap::new();
-    let mut expected_fail_map: HashMap<DeclName, ExpectedFail> = HashMap::new();
+    let mut expected_fail_map: HashMap<DeclName, ParsedExpectedFail> = HashMap::new();
     let mut hidden_plots: HashSet<DeclName> = HashSet::new();
 
     for decl in &file.declarations {

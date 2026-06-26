@@ -26,7 +26,7 @@ pub use crate::syntax::nat::{NatLinearForm, NatPolyForm};
 use crate::syntax::span::{Span, Spanned};
 
 use crate::ir::lower::IR;
-use crate::ir::resolve::{DeclCategory, ExpectedFail};
+use crate::ir::resolve::{DeclCategory, ExpectedFail, ParsedExpectedFail};
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
@@ -844,49 +844,6 @@ impl TIR {
             id = id.child(seg.name.as_str());
         }
         Some(id)
-    }
-
-    /// Construct a minimal `TIR` for callers that need a context to satisfy
-    /// the eval pipeline's invariants but never look up an inline DAG.
-    ///
-    /// Currently used by display-only unit-scale resolution. The returned
-    /// TIR has a synthetic root id and empty per-DAG content; calling
-    /// [`Self::lookup_call_target`] on it always returns `None`.
-    #[must_use]
-    pub fn empty_for_eval_helpers(registry: Registry) -> Self {
-        let root_dag_id = crate::dag_id::DagId::root("<eval-helper>");
-        let mut dags = DagRegistry::new();
-        dags.insert(
-            root_dag_id.clone(),
-            DagTIR {
-                dag_id: root_dag_id.clone(),
-                consts: Vec::new(),
-                params: Vec::new(),
-                nodes: Vec::new(),
-                asserts: Vec::new(),
-                plots: Vec::new(),
-                figures: Vec::new(),
-                layers: Vec::new(),
-                included_plots: Vec::new(),
-                semantic: DagSemanticBody::default(),
-                source_order: Vec::new(),
-                assert_names: std::collections::HashSet::new(),
-                assumes_map: HashMap::new(),
-                expected_fail: HashMap::new(),
-                resolved_decl_types: HashMap::new(),
-                domain_constraints: HashMap::new(),
-                imported_values: HashMap::new(),
-                imported_decl_types: HashMap::new(),
-                imported_value_sources: HashMap::new(),
-                pub_nodes: std::collections::HashSet::new(),
-            },
-        );
-        Self {
-            registry,
-            root_dag_id,
-            dags,
-            module_aliases: HashMap::new(),
-        }
     }
 }
 
@@ -2969,7 +2926,7 @@ fn scoped_name_to_name_path(name: &ScopedName) -> Option<NamePath> {
 }
 
 fn resolve_expected_fail_keys(
-    expected_fail: HashMap<ScopedName, ExpectedFail>,
+    expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ScopedName, ExpectedFail>, GraphcalError> {
@@ -2983,21 +2940,29 @@ fn resolve_expected_fail_keys(
                         .into_iter()
                         .map(|key| {
                             key.into_iter()
-                                .map(|part| {
-                                    let Some(index_path) = part.source_index_path().cloned() else {
-                                        return Ok(part);
-                                    };
-                                    let resolved = ctx
-                                        .resolver
-                                        .resolve_index_variant_parts(
-                                            ctx.owner,
-                                            &index_path,
-                                            &part.variant(),
-                                        )
-                                        .map_err(|err| {
-                                            module_resolve_error(&err, src, part.span())
-                                        })?;
-                                    Ok(part.with_resolved_variant(resolved))
+                                .map(|part| match part {
+                                    crate::registry::resolve_types::ExpectedFailKeyPart::Named {
+                                        index,
+                                        variant,
+                                        span,
+                                    } => {
+                                        let resolved = ctx
+                                            .resolver
+                                            .resolve_index_variant_parts(ctx.owner, &index, &variant)
+                                            .map_err(|err| module_resolve_error(&err, src, span))?;
+                                        Ok(crate::registry::resolve_types::ExpectedFailKeyPart::resolved(
+                                            resolved, span,
+                                        ))
+                                    }
+                                    crate::registry::resolve_types::ExpectedFailKeyPart::RangeStep {
+                                        step,
+                                        span,
+                                    } => Ok(
+                                        crate::registry::resolve_types::ExpectedFailKeyPart::RangeStep {
+                                            step,
+                                            span,
+                                        },
+                                    ),
                                 })
                                 .collect::<Result<_, GraphcalError>>()
                         })
@@ -3037,7 +3002,7 @@ impl DagTIRSeed {
         source_order: Vec<(ScopedName, DeclCategory)>,
         assert_names: std::collections::HashSet<ScopedName>,
         assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
-        expected_fail: HashMap<ScopedName, ExpectedFail>,
+        expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
         imported_values: HashMap<
             ScopedName,
             (
@@ -4791,7 +4756,12 @@ fn resolve_dimension_path(
     Ok(registry.dimensions.get_dimension(text).cloned())
 }
 
-/// Resolve a `TypeExpr` into a `ResolvedTypeExpr`.
+/// Resolve a `TypeExpr` into a `ResolvedTypeExpr` for tests that do not need a
+/// module-aware path context.
+///
+/// Production callers should use [`resolve_type_expr_with_modules`] so the
+/// owner comes from the loaded project/module model instead of a synthetic
+/// test owner.
 ///
 /// `dim_params` and `index_params` are the generic parameters in scope (empty
 /// for top-level declarations, non-empty inside function signatures).
@@ -4800,7 +4770,8 @@ fn resolve_dimension_path(
 ///
 /// Returns a [`GraphcalError`] if a name cannot be resolved (not a known
 /// dimension, struct, index, or in-scope generic parameter).
-pub fn resolve_type_expr(
+#[cfg(test)]
+fn resolve_type_expr(
     type_ann: &TypeExpr,
     registry: &Registry,
     dim_params: &[GenericParamName],
@@ -4808,7 +4779,7 @@ pub fn resolve_type_expr(
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let owner = crate::dag_id::DagId::root("<type-resolution>");
+    let owner = crate::dag_id::DagId::root_in_package("test", "type_resolution");
     resolve_type_expr_inner(
         type_ann,
         registry,
@@ -5600,7 +5571,8 @@ mod tests {
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let ir = crate::ir::lower::lower(&file, &src)?;
         let parent_dag_id =
-            crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+            crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl"))
+                .unwrap();
         let mut resolver = ModuleResolver::default();
         resolver
             .add_module(parent_dag_id.clone(), &file.declarations)
@@ -5725,7 +5697,8 @@ mod tests {
         let file = desugared;
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let dag_id =
-            crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+            crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl"))
+                .unwrap();
         let ir = crate::ir::lower::lower(&file, &src).unwrap();
         let mut resolver = ModuleResolver::default();
         resolver
@@ -5888,7 +5861,7 @@ mod tests {
 
         let src = make_src();
         let registry = make_registry();
-        let owner = crate::dag_id::DagId::root("a");
+        let owner = crate::dag_id::DagId::root_in_package("test", "a");
         let resolved_index = ResolvedName::from_def(owner, IndexName::new("Phase"));
         let generic = GenericParamName::new("I");
         let resolved_type = ResolvedTypeExpr::Indexed {
@@ -5958,7 +5931,7 @@ mod tests {
 
     #[test]
     fn convert_struct() {
-        let owner = crate::dag_id::DagId::root("test");
+        let owner = crate::dag_id::DagId::root_in_package("test", "test");
         let resolved = ResolvedName::from_def(owner, StructTypeName::new("Foo"));
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Struct(resolved.clone(), Span::new(0, 0)),
@@ -5973,7 +5946,7 @@ mod tests {
 
     #[test]
     fn convert_indexed() {
-        let owner = crate::dag_id::DagId::root("test");
+        let owner = crate::dag_id::DagId::root_in_package("test", "test");
         let resolved_index = ResolvedName::from_def(owner, IndexName::new("M"));
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Indexed {

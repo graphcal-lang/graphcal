@@ -620,13 +620,19 @@ HIR is the first layer where references are intended to be truly semantic:
 ### 3.3 DAG Identity
 
 `dag_id.rs` defines `DagId`, the canonical identity for file roots and
-inline DAGs. It is a non-empty sequence of segments, not a path string.
+inline DAGs. It is an opaque package identity plus a non-empty sequence of
+module segments, not a path string. Virtual single-file projects,
+manifest-backed packages, locked dependency instances, and synthetic test
+contexts all receive package ids at the loader/test boundary; there is no
+package-less DAG, and the compiler core does not inspect the package id's
+origin.
 
 Examples:
 
-- `helpers/math.gcl` becomes `DagId(["helpers", "math"])`.
+- `helpers/math.gcl` in package `math` becomes
+  `DagId(package = "math", segments = ["helpers", "math"])`.
 - `dag burn { ... }` inside that file becomes
-  `DagId(["helpers", "math", "burn"])`.
+  `DagId(package = "math", segments = ["helpers", "math", "burn"])`.
 
 Filesystem paths are converted to `DagId` at loader boundaries. Compiler and
 evaluator internals should use `DagId` rather than `PathBuf` when referring to

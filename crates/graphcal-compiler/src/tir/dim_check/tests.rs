@@ -10,7 +10,7 @@ fn make_src(source: &str) -> NamedSource<Arc<String>> {
 }
 
 fn test_dag_id() -> crate::dag_id::DagId {
-    crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap()
+    crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap()
 }
 
 fn test_index_ref(name: &str) -> IndexTypeRef {
@@ -76,7 +76,7 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     let file = desugared;
     let src = make_src(source);
     let dag_id =
-        crate::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl")).unwrap();
+        crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
     let ir = crate::ir::lower::lower(&file, &src).unwrap();
     let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
     resolver

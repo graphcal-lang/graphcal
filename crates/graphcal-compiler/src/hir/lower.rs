@@ -738,8 +738,8 @@ mod tests {
 
     #[test]
     fn lowers_qualified_type_level_paths_to_canonical_owners() {
-        let lib_id = DagId::root("lib");
-        let main_id = DagId::root("main");
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source(
             "pub base dim Length; pub index Phase = { Burn }; pub type Vec3<D: Dim> { Vec3(x: D) }",
         );
@@ -799,7 +799,7 @@ mod tests {
 
     #[test]
     fn lowers_generic_scope_references_to_lexical_ids() {
-        let owner_id = DagId::root("main");
+        let owner_id = DagId::root_in_package("test", "main");
         let file = desugared_source(
             "type Series<D: Dim, I: Index, N: Nat, F: Type> { Series(value: F, samples: D[I, N]) }",
         );

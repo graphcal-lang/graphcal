@@ -267,7 +267,7 @@ mod tests {
 
     fn indexed(index: &str, entries: Vec<(&str, RuntimeValue)>) -> RuntimeValue {
         RuntimeValue::indexed_with_owner(
-            DagId::root("main"),
+            DagId::root_in_package("test", "main"),
             IndexName::new(index),
             entries
                 .into_iter()
@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn rejects_struct_values() {
         let err = channel_data_from_runtime(&RuntimeValue::struct_with_owner(
-            DagId::root("main"),
+            DagId::root_in_package("test", "main"),
             graphcal_compiler::syntax::names::StructTypeName::new("Vec2"),
             IndexMap::new(),
         ))

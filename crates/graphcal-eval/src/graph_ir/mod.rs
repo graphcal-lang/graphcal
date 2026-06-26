@@ -192,9 +192,10 @@ mod tests {
         let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let ir = lower(&file, &src).unwrap();
-        let dag_id =
-            graphcal_compiler::dag_id::DagId::from_relative_path(std::path::Path::new("test.gcl"))
-                .unwrap();
+        let dag_id = graphcal_compiler::dag_id::DagId::from_virtual_relative_path(
+            std::path::Path::new("test.gcl"),
+        )
+        .unwrap();
         let mut resolver = ModuleResolver::default();
         resolver
             .add_module(dag_id.clone(), &file.declarations)
@@ -225,7 +226,10 @@ mod tests {
 
     fn node_id(name: &str) -> GraphNodeId {
         ResolvedName::from_def(
-            graphcal_compiler::dag_id::DagId::root("test"),
+            graphcal_compiler::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(
+                "test.gcl",
+            ))
+            .unwrap(),
             graphcal_compiler::syntax::names::DeclName::new(name),
         )
     }

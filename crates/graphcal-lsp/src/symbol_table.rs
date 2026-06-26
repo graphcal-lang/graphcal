@@ -177,7 +177,7 @@ pub fn build_for_buffer(
         }
     }
 
-    let dag_id = DagId::root("buffer");
+    let dag_id = DagId::root_in_package("test", "buffer");
     let mut resolver = ModuleResolver::default();
     add_modules(&mut resolver, &dag_id, &ast.declarations);
     build_from_ast(ast, source, &dag_id, &resolver)

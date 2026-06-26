@@ -1980,7 +1980,7 @@ fn project_struct_field_constraints_preserve_same_leaf_struct_owner() {
     assert!(
         constraints
             .keys()
-            .all(|key| key.owning_type.resolved().owner().segment_count() >= 1)
+            .all(|key| !key.owning_type.resolved().owner().segments().is_empty())
     );
 }
 

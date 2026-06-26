@@ -386,17 +386,15 @@ pub struct ResolvedLayerEntry {
 
 /// One axis segment in a per-variant `#[expected_fail(...)]` key.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExpectedFailKeyPart {
+pub enum ExpectedFailKeyPart<I = IndexTypeRef> {
     /// An `Index.Variant` / `module.Index.Variant` segment for a named axis.
     ///
-    /// The `index` carrier is the semantic key used by runtime assertion
-    /// checks. Before module-aware TIR resolution, `source_index_path`
-    /// preserves the structured syntax path. After resolution, `index`
-    /// carries the canonical owner used by runtime checks.
+    /// Before module-aware TIR resolution, `index` is the source [`NamePath`]
+    /// written in the attribute. After resolution, `index` is the semantic
+    /// [`IndexTypeRef`] used by runtime assertion checks.
     Named {
-        index: IndexTypeRef,
+        index: I,
         variant: IndexVariantName,
-        source_index_path: Option<NamePath>,
         span: Span,
     },
     /// A `#N` segment for a Nat range axis (#816).
@@ -407,24 +405,46 @@ pub enum ExpectedFailKeyPart {
     RangeStep { step: u64, span: Span },
 }
 
-impl ExpectedFailKeyPart {
-    fn unresolved_owner() -> DagId {
-        DagId::root("<expected-fail-unresolved>")
+impl<I> ExpectedFailKeyPart<I> {
+    /// The source span of this key segment.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Named { span, .. } | Self::RangeStep { span, .. } => *span,
+        }
     }
 
+    /// The variant key this segment selects within its axis.
     #[must_use]
-    pub fn unresolved(index_path: NamePath, variant: IndexVariantName, span: Span) -> Self {
+    pub fn variant(&self) -> IndexVariantName {
+        match self {
+            Self::Named { variant, .. } => variant.clone(),
+            Self::RangeStep { step, .. } => IndexVariantName::range_step(*step),
+        }
+    }
+}
+
+impl ExpectedFailKeyPart<NamePath> {
+    #[must_use]
+    pub const fn parsed(index_path: NamePath, variant: IndexVariantName, span: Span) -> Self {
         Self::Named {
-            index: IndexTypeRef::with_owner(
-                Self::unresolved_owner(),
-                IndexName::from_atom(index_path.leaf().clone()),
-            ),
+            index: index_path,
             variant,
-            source_index_path: Some(index_path),
             span,
         }
     }
 
+    /// The parsed index path, when this segment targets a named axis.
+    #[must_use]
+    pub const fn index_path(&self) -> Option<&NamePath> {
+        match self {
+            Self::Named { index, .. } => Some(index),
+            Self::RangeStep { .. } => None,
+        }
+    }
+}
+
+impl ExpectedFailKeyPart<IndexTypeRef> {
     #[must_use]
     pub fn with_owner(
         owner: DagId,
@@ -435,7 +455,6 @@ impl ExpectedFailKeyPart {
         Self::Named {
             index: IndexTypeRef::with_owner(owner, index),
             variant,
-            source_index_path: None,
             span,
         }
     }
@@ -446,21 +465,7 @@ impl ExpectedFailKeyPart {
         Self::Named {
             index: IndexTypeRef::from_resolved(index),
             variant,
-            source_index_path: None,
             span,
-        }
-    }
-
-    #[must_use]
-    pub fn with_resolved_variant(&self, resolved: ResolvedIndexVariant) -> Self {
-        Self::resolved(resolved, self.span())
-    }
-
-    /// The source span of this key segment.
-    #[must_use]
-    pub const fn span(&self) -> Span {
-        match self {
-            Self::Named { span, .. } | Self::RangeStep { span, .. } => *span,
         }
     }
 
@@ -470,26 +475,6 @@ impl ExpectedFailKeyPart {
         match self {
             Self::Named { index, .. } => Some(index),
             Self::RangeStep { .. } => None,
-        }
-    }
-
-    /// The structured syntax path awaiting resolution, for named segments.
-    #[must_use]
-    pub const fn source_index_path(&self) -> Option<&NamePath> {
-        match self {
-            Self::Named {
-                source_index_path, ..
-            } => source_index_path.as_ref(),
-            Self::RangeStep { .. } => None,
-        }
-    }
-
-    /// The variant key this segment selects within its axis.
-    #[must_use]
-    pub fn variant(&self) -> IndexVariantName {
-        match self {
-            Self::Named { variant, .. } => variant.clone(),
-            Self::RangeStep { step, .. } => IndexVariantName::range_step(*step),
         }
     }
 
@@ -527,15 +512,22 @@ impl ExpectedFailKeyPart {
 ///
 /// - Length 1 for single-index assertions: `[Mode.Boost]`
 /// - Length >1 for multi-index assertions: `[(Mode.Boost, Phase.Launch)]`
-pub type ExpectedFailKey = Vec<ExpectedFailKeyPart>;
+pub type ExpectedFailKey<I = IndexTypeRef> = Vec<ExpectedFailKeyPart<I>>;
+
+pub type ParsedExpectedFailKeyPart = ExpectedFailKeyPart<NamePath>;
+pub type ParsedExpectedFailKey = ExpectedFailKey<NamePath>;
+pub type ParsedExpectedFail = ExpectedFail<NamePath>;
+pub type ResolvedExpectedFailKeyPart = ExpectedFailKeyPart<IndexTypeRef>;
+pub type ResolvedExpectedFailKey = ExpectedFailKey<IndexTypeRef>;
+pub type ResolvedExpectedFail = ExpectedFail<IndexTypeRef>;
 
 /// Describes how an assertion is expected to fail.
 #[derive(Debug, Clone)]
-pub enum ExpectedFail {
+pub enum ExpectedFail<I = IndexTypeRef> {
     /// The entire assertion is expected to fail: `#[expected_fail]`.
     All,
     /// Specific index keys are expected to fail: `#[expected_fail(Index.Variant, ...)]`.
-    Variants(Vec<ExpectedFailKey>),
+    Variants(Vec<ExpectedFailKey<I>>),
 }
 
 /// The result of declaration collection: declarations separated by category.
@@ -564,7 +556,7 @@ pub struct ResolvedFile {
     pub assumes_map: HashMap<DeclName, Vec<DeclName>>,
     /// Mapping from assert name to its expected-fail configuration.
     /// Built from `#[expected_fail]` / `#[expected_fail(...)]` attributes.
-    pub expected_fail: HashMap<DeclName, ExpectedFail>,
+    pub expected_fail: HashMap<DeclName, ParsedExpectedFail>,
     /// Plot names carrying `#[hidden]`: evaluated and referenceable from
     /// figures/layers, but excluded from standalone output (#847).
     pub hidden_plots: HashSet<DeclName>,
