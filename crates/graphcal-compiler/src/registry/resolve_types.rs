@@ -426,7 +426,7 @@ impl<I> ExpectedFailKeyPart<I> {
 
 impl ExpectedFailKeyPart<NamePath> {
     #[must_use]
-    pub fn parsed(index_path: NamePath, variant: IndexVariantName, span: Span) -> Self {
+    pub const fn parsed(index_path: NamePath, variant: IndexVariantName, span: Span) -> Self {
         Self::Named {
             index: index_path,
             variant,
