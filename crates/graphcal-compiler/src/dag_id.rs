@@ -18,6 +18,8 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
+use crate::syntax::non_empty::NonEmpty;
+
 /// Opaque package component of a [`DagId`].
 ///
 /// This is separate from module path segments so the compiler can distinguish
@@ -71,19 +73,17 @@ impl fmt::Display for DagPackageId {
 /// has segments `["helpers", "math"]`, and an inline `dag double_speed` within
 /// it has segments `["helpers", "math", "double_speed"]`.
 ///
-/// Non-emptiness is encoded structurally as a `head` segment plus an
-/// optional tail, so [`DagId::name`] (the leaf segment) is total — there is
-/// no value of this type that has zero segments.
+/// Non-emptiness is encoded structurally with [`NonEmpty`], so [`DagId::name`]
+/// (the leaf segment) is total — there is no value of this type that has zero
+/// segments.
 ///
 /// The compiler never interprets these segments as filesystem paths.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DagId {
     /// Opaque package that owns this DAG. Every DAG belongs to exactly one package.
     package: DagPackageId,
-    /// The first segment. Always present.
-    head: Arc<str>,
-    /// Remaining segments after `head`. Empty for a root (single-segment) id.
-    tail: Arc<[Arc<str>]>,
+    /// Hierarchical module/DAG segments. Always non-empty.
+    segments: NonEmpty<Arc<str>>,
 }
 
 /// Returned by [`DagId::from_relative_path`] when the path is not a valid
@@ -114,8 +114,7 @@ impl DagId {
     ) -> Self {
         Self {
             package: package.into(),
-            head: head.into(),
-            tail: tail.into_iter().map(Into::into).collect(),
+            segments: NonEmpty::new(head.into(), tail.into_iter().map(Into::into).collect()),
         }
     }
 
@@ -123,8 +122,7 @@ impl DagId {
     pub fn root_in_package(package: impl Into<DagPackageId>, name: impl Into<Arc<str>>) -> Self {
         Self {
             package: package.into(),
-            head: name.into(),
-            tail: Arc::from([] as [Arc<str>; 0]),
+            segments: NonEmpty::singleton(name.into()),
         }
     }
 
@@ -133,8 +131,7 @@ impl DagId {
     pub fn in_package(package: impl Into<DagPackageId>, module: Self) -> Self {
         Self {
             package: package.into(),
-            head: module.head,
-            tail: module.tail,
+            segments: module.segments,
         }
     }
 
@@ -147,12 +144,11 @@ impl DagId {
     /// Create a child `DagId` by appending a segment (e.g., for a nested `dag` block).
     #[must_use]
     pub fn child(&self, name: impl Into<Arc<str>>) -> Self {
-        let mut tail: Vec<Arc<str>> = self.tail.to_vec();
-        tail.push(name.into());
+        let mut segments = self.segments.clone();
+        segments.push(name.into());
         Self {
             package: self.package.clone(),
-            head: Arc::clone(&self.head),
-            tail: tail.into(),
+            segments,
         }
     }
 
@@ -160,31 +156,34 @@ impl DagId {
     /// this is a root (single-segment) identifier.
     #[must_use]
     pub fn parent(&self) -> Option<Self> {
-        if self.tail.is_empty() {
+        if self.segments.len() == 1 {
             return None;
         }
+        let parent_segments = &self.segments.as_slice()[..self.segments.len() - 1];
         Some(Self {
             package: self.package.clone(),
-            head: Arc::clone(&self.head),
-            tail: self.tail[..self.tail.len() - 1].into(),
+            segments: NonEmpty::new(
+                Arc::clone(&parent_segments[0]),
+                parent_segments[1..].to_vec(),
+            ),
         })
     }
 
     /// The segments of this identifier as an iterator (head first, then tail).
     pub fn segments(&self) -> impl Iterator<Item = &Arc<str>> {
-        std::iter::once(&self.head).chain(self.tail.iter())
+        self.segments.iter()
     }
 
     /// Number of segments — always at least 1.
     #[must_use]
     pub fn segment_count(&self) -> usize {
-        1 + self.tail.len()
+        self.segments.len()
     }
 
     /// The last segment (leaf name). Always present.
     #[must_use]
     pub fn name(&self) -> &str {
-        self.tail.last().map_or(&self.head, |s| s)
+        self.segments.last().as_ref()
     }
 
     /// True if `self` is a strict descendant of `ancestor` (an inline `dag`
@@ -247,13 +246,9 @@ impl DagId {
             .map(Arc::<str>::from)
             .ok_or(DagIdPathError::MissingGclExtension)?;
 
-        let mut segments = segments.into_iter();
-        let head = segments.next().ok_or(DagIdPathError::Empty)?;
-        let tail: Arc<[Arc<str>]> = segments.collect::<Vec<_>>().into();
         Ok(Self {
             package: package.into(),
-            head,
-            tail,
+            segments: NonEmpty::try_from_vec(segments).map_err(|_| DagIdPathError::Empty)?,
         })
     }
 }
@@ -274,10 +269,11 @@ fn virtual_package_from_path(path: &std::path::Path) -> Result<DagPackageId, Dag
 
 impl fmt::Display for DagId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.head)?;
-        for seg in self.tail.iter() {
-            f.write_str(".")?;
-            f.write_str(seg)?;
+        for (i, seg) in self.segments.iter().enumerate() {
+            if i > 0 {
+                f.write_str(".")?;
+            }
+            f.write_str(seg.as_ref())?;
         }
         Ok(())
     }
