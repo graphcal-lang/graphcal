@@ -467,6 +467,18 @@ impl<'a> ModuleTypeContext<'a> {
     pub const fn owner(self) -> &'a crate::dag_id::DagId {
         self.owner
     }
+
+    #[must_use]
+    const fn with_owner<'b>(self, owner: &'b crate::dag_id::DagId) -> ModuleTypeContext<'b>
+    where
+        'a: 'b,
+    {
+        ModuleTypeContext {
+            owner,
+            resolver: self.resolver,
+            types: self.types,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1211,41 +1223,44 @@ fn type_resolve_dag(
     // file's offsets, so resolution errors must render against its own source
     // rather than the importer's `src` (#868).
     for entry in &consts {
+        let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
         let resolved = resolve_type_expr_inner(
             &entry.type_ann,
             registry,
-            dag_id,
+            &entry.type_resolution_owner,
             no_generic_params,
             no_generic_params,
             no_generic_params,
             entry.src.resolve(src),
-            Some(module_ctx),
+            Some(entry_ctx),
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
     for entry in &params {
+        let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
         let resolved = resolve_type_expr_inner(
             &entry.type_ann,
             registry,
-            dag_id,
+            &entry.type_resolution_owner,
             no_generic_params,
             no_generic_params,
             no_generic_params,
             entry.src.resolve(src),
-            Some(module_ctx),
+            Some(entry_ctx),
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
     for entry in &nodes {
+        let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
         let resolved = resolve_type_expr_inner(
             &entry.type_ann,
             registry,
-            dag_id,
+            &entry.type_resolution_owner,
             no_generic_params,
             no_generic_params,
             no_generic_params,
             entry.src.resolve(src),
-            Some(module_ctx),
+            Some(entry_ctx),
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
@@ -1496,9 +1511,15 @@ fn lower_resolved_expressions(
         imported_value_sources,
         src,
     )?;
-    let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
-        .with_prelude(&prelude)
-        .with_decl_bindings(&decl_bindings);
+    let lower_bounds_in = |type_ann: &crate::desugar::desugared_ast::TypeExpr,
+                           resolution_owner: &crate::dag_id::DagId,
+                           body_src: &NamedSource<Arc<String>>| {
+        let expr_ctx =
+            hir::ExprLoweringContext::new(resolution_owner, ctx.resolver, &generic_scope)
+                .with_prelude(&prelude)
+                .with_decl_bindings(&decl_bindings);
+        lower_domain_bounds(type_ann, expr_ctx, body_src)
+    };
     let mut exprs = ResolvedExpressions::default();
     let mut domain_bounds = HashMap::new();
 
@@ -1507,7 +1528,7 @@ fn lower_resolved_expressions(
     for entry in consts {
         let body_src = entry.src.resolve(src);
         let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, body_src)?;
-        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, body_src)?;
+        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, body_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
@@ -1516,7 +1537,7 @@ fn lower_resolved_expressions(
     for entry in params {
         let body_src = entry.src.resolve(src);
         let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, body_src)?;
-        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, body_src)?;
+        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, body_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
@@ -1528,7 +1549,7 @@ fn lower_resolved_expressions(
     for entry in nodes {
         let body_src = entry.src.resolve(src);
         let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, body_src)?;
-        let bounds = lower_domain_bounds(&entry.type_ann, expr_ctx, body_src)?;
+        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, body_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }

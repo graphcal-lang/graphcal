@@ -2979,6 +2979,93 @@ node difference: Dimensionless = @included - @called;
 }
 
 #[test]
+fn inline_dag_include_selected_adt_output_uses_producer_scope() {
+    let (_dir, root) = setup_inline_semantics_project(
+        &[
+            (
+                "src/sem/lib.gcl",
+                "\
+pub type Payload {
+    Payload(x: Dimensionless),
+}
+
+pub dag make_payload {
+    import sem.lib.{ type Payload, Payload };
+
+    pub node out: Payload = Payload(x: 1.0);
+}
+",
+            ),
+            (
+                "src/sem/main.gcl",
+                "include sem.lib.make_payload().{ out };\n",
+            ),
+        ],
+        "src/sem/main.gcl",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn inline_dag_include_adt_param_default_uses_producer_scope() {
+    let (_dir, root) = setup_inline_semantics_project(
+        &[
+            (
+                "src/sem/lib.gcl",
+                "\
+pub type Payload {
+    Payload(x: Dimensionless),
+}
+
+pub dag use_default {
+    import sem.lib.{ type Payload, Payload };
+
+    param p: Payload = Payload(x: 1.0);
+    pub node y: Dimensionless = @p.x;
+}
+",
+            ),
+            ("src/sem/main.gcl", "include sem.lib.use_default().{ y };\n"),
+        ],
+        "src/sem/main.gcl",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let y = find_value(&result, "y");
+    assert!((y - 1.0).abs() < 1e-10, "y = {y}");
+}
+
+#[test]
+fn consumer_still_needs_import_for_explicit_adt_names() {
+    let (_dir, root) = setup_inline_semantics_project(
+        &[
+            (
+                "src/sem/lib.gcl",
+                "\
+pub type Payload {
+    Payload(x: Dimensionless),
+}
+",
+            ),
+            (
+                "src/sem/main.gcl",
+                "\
+import sem.lib;
+node p: Payload = Payload(x: 1.0);
+",
+            ),
+        ],
+        "src/sem/main.gcl",
+    );
+
+    assert!(
+        compile_to_tir_project(&root, None, &fs()).is_err(),
+        "consumer-written Payload names must still require an import"
+    );
+}
+
+#[test]
 fn inline_dag_basic_selective() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/valid/inline_dag_basic/main.gcl");

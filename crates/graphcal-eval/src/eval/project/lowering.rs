@@ -589,141 +589,145 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
 
     for deferred in deferred_dag_includes {
         // ---- 1. Resolve source body + lower to IR ------------------------
-        let (dep_unfrozen, dep_registry, dep_src, body_for_leakage_check, body_decls_for_aliases) =
-            match &deferred.source {
-                DeferredDagSource::File { dep_dag_id } => {
-                    let dep_loaded = &project.files[dep_dag_id];
-                    let dep_src = &dep_loaded.named_source;
-                    let dep_imported =
-                        build_dep_imported_values(project, dep_dag_id, evaluated_files)?;
-                    let (dep_builder, dep_unfrozen) =
-                        graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
-                            &dep_loaded.ast,
-                            dep_src,
-                            &dep_imported.names,
-                            dep_imported.values,
-                            dep_dag_id,
-                            None,
-                        )?;
-                    let dep_registry = dep_builder.build();
-                    (
-                        dep_unfrozen,
-                        dep_registry,
-                        dep_src.clone(),
+        let (
+            dep_unfrozen,
+            dep_registry,
+            dep_src,
+            dep_resolution_owner,
+            body_for_leakage_check,
+            body_decls_for_aliases,
+        ) = match &deferred.source {
+            DeferredDagSource::File { dep_dag_id } => {
+                let dep_loaded = &project.files[dep_dag_id];
+                let dep_src = &dep_loaded.named_source;
+                let dep_imported = build_dep_imported_values(project, dep_dag_id, evaluated_files)?;
+                let (dep_builder, dep_unfrozen) =
+                    graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
                         &dep_loaded.ast,
-                        dep_loaded.ast.declarations.as_slice(),
-                    )
-                }
-                DeferredDagSource::InlineDag {
-                    dag_body,
-                    dag_imported_names,
-                    dag_id,
-                    parent_dag_id,
-                } => {
-                    let parent_loaded = &project.files[parent_dag_id];
-                    let loaded_inline = parent_loaded
-                        .inline_dags
-                        .iter()
-                        .find(|d| &d.dag_id == dag_id);
-                    let parent_values =
-                        crate::inline_dag::classify_value_decls_in_ast(&parent_loaded.ast);
-                    let parent_resolved_imports =
-                        loaded_inline.map_or(&empty_resolved, |d| &d.resolved_imports);
-                    let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
-                        &dag_body.declarations,
-                        parent_dag_id,
-                        &parent_loaded.ast,
-                        &parent_values,
-                        parent_resolved_imports,
-                        importer_src,
+                        dep_src,
+                        &dep_imported.names,
+                        dep_imported.values,
+                        dep_dag_id,
+                        None,
                     )?;
+                let dep_registry = dep_builder.build();
+                (
+                    dep_unfrozen,
+                    dep_registry,
+                    dep_src.clone(),
+                    dep_dag_id.clone(),
+                    &dep_loaded.ast,
+                    dep_loaded.ast.declarations.as_slice(),
+                )
+            }
+            DeferredDagSource::InlineDag {
+                dag_body,
+                dag_imported_names,
+                dag_id,
+                parent_dag_id,
+            } => {
+                let parent_loaded = &project.files[parent_dag_id];
+                let loaded_inline = parent_loaded
+                    .inline_dags
+                    .iter()
+                    .find(|d| &d.dag_id == dag_id);
+                let parent_values =
+                    crate::inline_dag::classify_value_decls_in_ast(&parent_loaded.ast);
+                let parent_resolved_imports =
+                    loaded_inline.map_or(&empty_resolved, |d| &d.resolved_imports);
+                let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
+                    &dag_body.declarations,
+                    parent_dag_id,
+                    &parent_loaded.ast,
+                    &parent_values,
+                    parent_resolved_imports,
+                    importer_src,
+                )?;
 
-                    let mut body_ctx = ImportContext {
-                        imported_names: dag_imported_names.clone(),
-                        imported_values: HashMap::new(),
-                        imported_source_order: Vec::new(),
-                        imported_type_system_names: HashMap::new(),
-                        module_map: HashMap::new(),
-                        extra_registry_builders: Vec::new(),
-                        deferred_dag_includes: Vec::new(),
-                        included_plot_specs: Vec::new(),
-                    };
-                    if let Some(loaded_inline) = loaded_inline {
-                        process_dag_body_import_declarations(
-                            project,
-                            loaded_inline,
-                            importer_src,
-                            evaluated_files,
-                            &mut body_ctx,
-                        )?;
-                        process_dag_body_include_declarations(
-                            project,
-                            loaded_inline,
-                            importer_src,
-                            evaluated_files,
-                            &mut body_ctx,
-                        )?;
-                    }
-                    extend_imported_value_names(&mut body_ctx.imported_names, self_imports.names);
+                let mut body_ctx = ImportContext {
+                    imported_names: dag_imported_names.clone(),
+                    imported_values: HashMap::new(),
+                    imported_source_order: Vec::new(),
+                    imported_type_system_names: HashMap::new(),
+                    module_map: HashMap::new(),
+                    extra_registry_builders: Vec::new(),
+                    deferred_dag_includes: Vec::new(),
+                    included_plot_specs: Vec::new(),
+                };
+                if let Some(loaded_inline) = loaded_inline {
+                    process_dag_body_import_declarations(
+                        project,
+                        loaded_inline,
+                        importer_src,
+                        evaluated_files,
+                        &mut body_ctx,
+                    )?;
+                    process_dag_body_include_declarations(
+                        project,
+                        loaded_inline,
+                        importer_src,
+                        evaluated_files,
+                        &mut body_ctx,
+                    )?;
+                }
+                extend_imported_value_names(&mut body_ctx.imported_names, self_imports.names);
 
-                    let mut imported_values = body_ctx.imported_values;
-                    let mut imported_decl_types: HashMap<ScopedName, DeclaredType> =
-                        imported_values
-                            .iter()
-                            .map(|(name, (_value, ty))| (name.clone(), ty.clone()))
-                            .collect();
-                    imported_decl_types.extend(self_imports.decl_types);
-                    // For cross-file includes (parent != importer), fetch the
-                    // parent's artifact values and declared types for each
-                    // self-imported name. Same-file includes leave these
-                    // empty — the parent isn't in `evaluated_files`
-                    // yet, and the merged refs land on names already present
-                    // in the importer's own decls.
-                    if parent_dag_id != importer_file_dag_id
-                        && let Some(parent_eval) = evaluated_files.get(parent_dag_id)
-                    {
-                        for (local_name, source) in &self_imports.value_sources {
-                            if &source.dag_id != parent_dag_id {
-                                continue;
-                            }
-                            let Some(value) = parent_eval.const_values.get(&source.source_name)
-                            else {
-                                continue;
-                            };
-                            let parent_key = ScopedName::local(source.source_name.as_str());
-                            let Some(dt) = parent_eval.declared_types.get(&parent_key) else {
-                                continue;
-                            };
-                            imported_values.insert(local_name.clone(), (value.clone(), dt.clone()));
-                            // For cross-file the alias has no importer-side
-                            // decl, so install the parent's actual declared
-                            // type (overrides the placeholder from
-                            // classify_value_decls_in_ast).
-                            imported_decl_types.insert(local_name.clone(), dt.clone());
+                let mut imported_values = body_ctx.imported_values;
+                let mut imported_decl_types: HashMap<ScopedName, DeclaredType> = imported_values
+                    .iter()
+                    .map(|(name, (_value, ty))| (name.clone(), ty.clone()))
+                    .collect();
+                imported_decl_types.extend(self_imports.decl_types);
+                // For cross-file includes (parent != importer), fetch the
+                // parent's artifact values and declared types for each
+                // self-imported name. Same-file includes leave these
+                // empty — the parent isn't in `evaluated_files`
+                // yet, and the merged refs land on names already present
+                // in the importer's own decls.
+                if parent_dag_id != importer_file_dag_id
+                    && let Some(parent_eval) = evaluated_files.get(parent_dag_id)
+                {
+                    for (local_name, source) in &self_imports.value_sources {
+                        if &source.dag_id != parent_dag_id {
+                            continue;
                         }
+                        let Some(value) = parent_eval.const_values.get(&source.source_name) else {
+                            continue;
+                        };
+                        let parent_key = ScopedName::local(source.source_name.as_str());
+                        let Some(dt) = parent_eval.declared_types.get(&parent_key) else {
+                            continue;
+                        };
+                        imported_values.insert(local_name.clone(), (value.clone(), dt.clone()));
+                        // For cross-file the alias has no importer-side
+                        // decl, so install the parent's actual declared
+                        // type (overrides the placeholder from
+                        // classify_value_decls_in_ast).
+                        imported_decl_types.insert(local_name.clone(), dt.clone());
                     }
+                }
 
-                    let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
-                        declarations: self_imports.stripped_body,
-                    };
-                    let stripped_body = rewrite_qualified_refs_in_ast(
-                        &stripped_body,
-                        &body_ctx.module_map,
-                        &body_ctx.imported_names,
-                    );
+                let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
+                    declarations: self_imports.stripped_body,
+                };
+                let stripped_body = rewrite_qualified_refs_in_ast(
+                    &stripped_body,
+                    &body_ctx.module_map,
+                    &body_ctx.imported_names,
+                );
 
-                    let dag_dag_id = importer_dag_id.child(deferred.prefix.as_str());
-                    let mut registry_seed = |builder: &mut RegistryBuilder| {
-                        seed_imported_type_system(
-                            builder,
-                            project,
-                            &body_ctx.imported_type_system_names,
-                            &body_ctx.extra_registry_builders,
-                            evaluated_files,
-                            importer_src,
-                        )
-                    };
-                    let (mut dag_builder, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_value_decls(
+                let dag_dag_id = importer_dag_id.child(deferred.prefix.as_str());
+                let mut registry_seed = |builder: &mut RegistryBuilder| {
+                    seed_imported_type_system(
+                        builder,
+                        project,
+                        &body_ctx.imported_type_system_names,
+                        &body_ctx.extra_registry_builders,
+                        evaluated_files,
+                        importer_src,
+                    )
+                };
+                let (mut dag_builder, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_value_decls(
                         stripped_body.as_ref(),
                         None,
                         &body_ctx.imported_names,
@@ -734,27 +738,29 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                         &dag_dag_id,
                         Some(&mut registry_seed),
                     )?;
-                    process_deferred_dag_includes(
-                        project,
-                        &dag_dag_id,
-                        importer_file_dag_id,
-                        &body_ctx.deferred_dag_includes,
-                        evaluated_files,
-                        importer_src,
-                        stripped_body.as_ref(),
-                        &mut dag_builder,
-                        &mut dag_unfrozen,
-                    )?;
-                    let dag_registry = dag_builder.build();
-                    (
-                        dag_unfrozen,
-                        dag_registry,
-                        importer_src.clone(),
-                        dag_body,
-                        dag_body.declarations.as_slice(),
-                    )
-                }
-            };
+                dag_unfrozen.retarget_existing_resolution_owners(dag_id);
+                process_deferred_dag_includes(
+                    project,
+                    &dag_dag_id,
+                    importer_file_dag_id,
+                    &body_ctx.deferred_dag_includes,
+                    evaluated_files,
+                    importer_src,
+                    stripped_body.as_ref(),
+                    &mut dag_builder,
+                    &mut dag_unfrozen,
+                )?;
+                let dag_registry = dag_builder.build();
+                (
+                    dag_unfrozen,
+                    dag_registry,
+                    importer_src.clone(),
+                    dag_id.clone(),
+                    dag_body,
+                    dag_body.declarations.as_slice(),
+                )
+            }
+        };
 
         // ---- 2. Merge dep registry into importer's --------------------
         merge_registry_into_builder(
@@ -843,6 +849,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
             &deferred.dim_bindings,
             &deferred.import_item_attributes,
             &deferred.requested_plots,
+            importer_dag_id,
             importer_src,
             &dep_src,
         )?;
@@ -857,6 +864,10 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                     index: &deferred.index_bindings,
                     r#type: &deferred.type_bindings,
                     dim: &deferred.dim_bindings,
+                },
+                &AliasResolutionOwners {
+                    r#type: &dep_resolution_owner,
+                    body: importer_dag_id,
                 },
                 deferred.import_span,
                 unfrozen,
@@ -875,6 +886,11 @@ pub(in crate::eval::project) struct AliasSubstitutions<'a> {
     pub dim: &'a HashMap<DimName, DimName>,
 }
 
+struct AliasResolutionOwners<'a> {
+    r#type: &'a graphcal_compiler::dag_id::DagId,
+    body: &'a graphcal_compiler::dag_id::DagId,
+}
+
 /// Add `local_name = @prefix::orig_name` aliases (const or graph) for each
 /// selected item, rewriting the type annotation through `subs` so it lands
 /// in the importer's merged registry.
@@ -888,9 +904,16 @@ fn add_selective_aliases_inner(
     selective: &[ImportAlias],
     prefix: &ModuleAliasName,
     subs: &AliasSubstitutions<'_>,
+    owners: &AliasResolutionOwners<'_>,
     import_span: Span,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) {
+    let alias_type_resolution_owner =
+        if subs.index.is_empty() && subs.r#type.is_empty() && subs.dim.is_empty() {
+            owners.r#type.clone()
+        } else {
+            owners.body.clone()
+        };
     for alias in selective {
         let orig_name = alias.original.as_str();
         let local_name = alias.local.as_str();
@@ -956,14 +979,18 @@ fn add_selective_aliases_inner(
             unfrozen.add_const_alias(
                 ScopedName::local(local_name),
                 type_ann,
+                alias_type_resolution_owner.clone(),
                 alias_expr,
+                owners.body.clone(),
                 import_span,
             );
         } else {
             unfrozen.add_node_alias(
                 ScopedName::local(local_name),
                 type_ann,
+                alias_type_resolution_owner.clone(),
                 alias_expr,
+                owners.body.clone(),
                 import_span,
             );
         }
