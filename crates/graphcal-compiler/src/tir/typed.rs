@@ -4748,7 +4748,12 @@ fn resolve_dimension_path(
     Ok(registry.dimensions.get_dimension(text).cloned())
 }
 
-/// Resolve a `TypeExpr` into a `ResolvedTypeExpr`.
+/// Resolve a `TypeExpr` into a `ResolvedTypeExpr` for tests that do not need a
+/// module-aware path context.
+///
+/// Production callers should use [`resolve_type_expr_with_modules`] so the
+/// owner comes from the loaded project/module model instead of a synthetic
+/// test owner.
 ///
 /// `dim_params` and `index_params` are the generic parameters in scope (empty
 /// for top-level declarations, non-empty inside function signatures).
@@ -4757,7 +4762,8 @@ fn resolve_dimension_path(
 ///
 /// Returns a [`GraphcalError`] if a name cannot be resolved (not a known
 /// dimension, struct, index, or in-scope generic parameter).
-pub fn resolve_type_expr(
+#[cfg(test)]
+fn resolve_type_expr(
     type_ann: &TypeExpr,
     registry: &Registry,
     dim_params: &[GenericParamName],
@@ -4765,7 +4771,7 @@ pub fn resolve_type_expr(
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let owner = crate::dag_id::DagId::root_in_package("<type-resolution>", "<type-resolution>");
+    let owner = crate::dag_id::DagId::root_in_package("test", "type_resolution");
     resolve_type_expr_inner(
         type_ann,
         registry,
