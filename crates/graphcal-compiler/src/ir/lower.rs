@@ -32,7 +32,7 @@ use crate::registry::types::{
 };
 use crate::syntax::dimension::Rational;
 use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, IndexName, NameAtom, ScopedName, StructTypeName,
+    ConstructorName, DeclName, DimName, IndexName, NameAtom, NamePath, ScopedName, StructTypeName,
 };
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
@@ -121,6 +121,10 @@ impl BodySource {
 pub struct ConstEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
+    /// Module scope used to resolve this declaration's type annotation and
+    /// domain-bound expressions. Merged include outputs keep the producer's
+    /// scope so consumers do not need imports for names they never wrote.
+    pub type_resolution_owner: crate::dag_id::DagId,
     pub expr: crate::hir::Expr,
     pub span: Span,
     /// Provenance of this declaration's `span` (#868). `None` means the span
@@ -135,6 +139,9 @@ pub struct ConstEntry {
 pub struct ParamEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
+    /// Module scope used to resolve this parameter's type annotation and
+    /// domain-bound expressions.
+    pub type_resolution_owner: crate::dag_id::DagId,
     pub default_expr: Option<crate::hir::Expr>,
     pub span: Span,
     /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
@@ -146,6 +153,9 @@ pub struct ParamEntry {
 pub struct NodeEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
+    /// Module scope used to resolve this node's type annotation and
+    /// domain-bound expressions.
+    pub type_resolution_owner: crate::dag_id::DagId,
     pub expr: crate::hir::Expr,
     pub span: Span,
     /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
@@ -170,7 +180,11 @@ pub struct AssertEntry {
 pub struct UnfrozenConstEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
+    /// Module scope for the declaration signature (type annotation and domain bounds).
+    pub type_resolution_owner: crate::dag_id::DagId,
     pub expr: Expr,
+    /// Module scope for the declaration body expression.
+    pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
     /// Source provenance of `span`; see [`BodySource`] (#868).
     pub src: BodySource,
@@ -181,7 +195,13 @@ pub struct UnfrozenConstEntry {
 pub struct UnfrozenParamEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
+    /// Module scope for the parameter signature (type annotation and domain bounds).
+    pub type_resolution_owner: crate::dag_id::DagId,
     pub default_expr: Option<Expr>,
+    /// Module scope for the default expression when present. Include-time
+    /// param bindings are importer-written expressions, so this can differ
+    /// from `type_resolution_owner`.
+    pub default_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
     /// Source provenance of `span`; see [`BodySource`] (#868).
     pub src: BodySource,
@@ -192,7 +212,11 @@ pub struct UnfrozenParamEntry {
 pub struct UnfrozenNodeEntry {
     pub name: ScopedName,
     pub type_ann: TypeExpr,
+    /// Module scope for the declaration signature (type annotation and domain bounds).
+    pub type_resolution_owner: crate::dag_id::DagId,
     pub expr: Expr,
+    /// Module scope for the declaration body expression.
+    pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
     /// Source provenance of `span`; see [`BodySource`] (#868).
     pub src: BodySource,
@@ -203,6 +227,8 @@ pub struct UnfrozenNodeEntry {
 pub struct UnfrozenAssertEntry {
     pub name: ScopedName,
     pub body: AssertBody,
+    /// Module scope for the assertion body expression(s).
+    pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
     /// Source provenance of `span`; see [`BodySource`] (#868).
     pub src: BodySource,
@@ -278,6 +304,8 @@ pub struct LayerEntry {
 pub struct UnfrozenPlotEntry {
     pub name: ScopedName,
     pub decl: PlotDecl,
+    /// Module scope for plot field expressions.
+    pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
     /// Whether this plot is `pub` (visible in standalone output).
     pub is_pub: bool,
@@ -290,6 +318,8 @@ pub struct UnfrozenPlotEntry {
 pub struct UnfrozenFigureEntry {
     pub name: ScopedName,
     pub decl: FigureDecl,
+    /// Module scope for figure field expressions.
+    pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
 }
 
@@ -298,6 +328,8 @@ pub struct UnfrozenFigureEntry {
 pub struct UnfrozenLayerEntry {
     pub name: ScopedName,
     pub decl: LayerDecl,
+    /// Module scope for layer field expressions.
+    pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
 }
 
@@ -741,6 +773,34 @@ fn take_type_ann(
         })
 }
 
+fn scoped_name_to_name_path(
+    name: &ScopedName,
+    src: &NamedSource<Arc<String>>,
+) -> Result<NamePath, GraphcalError> {
+    let span = Span::new(0, 0);
+    let qualifier = name
+        .qualifier()
+        .iter()
+        .map(|segment| {
+            NameAtom::parse(segment.as_ref()).map_err(|err| GraphcalError::InternalError {
+                message: format!("invalid scoped-name segment `{segment}`: {err}"),
+                src: src.clone(),
+                span: span.into(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let leaf = NameAtom::parse(name.member()).map_err(|err| GraphcalError::InternalError {
+        message: format!("invalid scoped-name member `{}`: {err}", name.member()),
+        src: src.clone(),
+        span: span.into(),
+    })?;
+    Ok(if qualifier.is_empty() {
+        NamePath::local(leaf)
+    } else {
+        NamePath::qualified_path(qualifier, leaf)
+    })
+}
+
 /// Shared implementation for `lower_to_builder` and `lower_to_builder_with_imported_values`.
 ///
 /// Builds the registry, augments runtime deps for dynamic units, pairs resolved
@@ -800,7 +860,9 @@ fn build_ir_from_resolved(
             Ok(UnfrozenConstEntry {
                 name: ScopedName::from(decl_name),
                 type_ann,
+                type_resolution_owner: dag_id.clone(),
                 expr: entry.expr,
+                body_resolution_owner: dag_id.clone(),
                 span: entry.span,
                 src: BodySource::own(),
             })
@@ -815,7 +877,9 @@ fn build_ir_from_resolved(
             Ok(UnfrozenParamEntry {
                 name: ScopedName::from(decl_name),
                 type_ann,
+                type_resolution_owner: dag_id.clone(),
                 default_expr: entry.default_expr,
+                default_resolution_owner: dag_id.clone(),
                 span: entry.span,
                 src: BodySource::own(),
             })
@@ -830,7 +894,9 @@ fn build_ir_from_resolved(
             Ok(UnfrozenNodeEntry {
                 name: ScopedName::from(decl_name),
                 type_ann,
+                type_resolution_owner: dag_id.clone(),
                 expr: entry.expr,
+                body_resolution_owner: dag_id.clone(),
                 span: entry.span,
                 src: BodySource::own(),
             })
@@ -847,6 +913,7 @@ fn build_ir_from_resolved(
             .map(|entry| UnfrozenAssertEntry {
                 name: ScopedName::local(entry.name),
                 body: entry.body,
+                body_resolution_owner: dag_id.clone(),
                 span: entry.span,
                 src: BodySource::own(),
             })
@@ -860,6 +927,7 @@ fn build_ir_from_resolved(
                 UnfrozenPlotEntry {
                     name: ScopedName::local(entry.name),
                     decl: entry.decl,
+                    body_resolution_owner: dag_id.clone(),
                     span: entry.span,
                     is_pub,
                     displayed,
@@ -872,6 +940,7 @@ fn build_ir_from_resolved(
             .map(|entry| UnfrozenFigureEntry {
                 name: ScopedName::local(entry.name),
                 decl: entry.decl,
+                body_resolution_owner: dag_id.clone(),
                 span: entry.span,
             })
             .collect(),
@@ -881,6 +950,7 @@ fn build_ir_from_resolved(
             .map(|entry| UnfrozenLayerEntry {
                 name: ScopedName::local(entry.name),
                 decl: entry.decl,
+                body_resolution_owner: dag_id.clone(),
                 span: entry.span,
             })
             .collect(),
@@ -994,6 +1064,20 @@ impl UnfrozenIR {
                 })?;
             decl_bindings.insert(name.clone(), canonical);
         }
+        for name in self.imported_values.keys() {
+            let path = scoped_name_to_name_path(name, src)?;
+            let canonical = resolver
+                .resolve_decl_path(owner, &path)
+                .unwrap_or_else(|_| {
+                    crate::hir::diagnostics::resolved_decl_key(owner, name).unwrap_or_else(|| {
+                        crate::syntax::names::ResolvedName::from_def(
+                            owner.clone(),
+                            DeclName::new(name.member()),
+                        )
+                    })
+                });
+            decl_bindings.insert(name.clone(), canonical);
+        }
         for (name, source) in &self.imported_value_sources {
             decl_bindings.insert(
                 name.clone(),
@@ -1006,13 +1090,16 @@ impl UnfrozenIR {
 
         let generic_scope = crate::hir::GenericScope::new();
         let prelude = crate::hir::PreludeTypeScope::graphcal();
-        let expr_ctx = crate::hir::ExprLoweringContext::new(owner, resolver, &generic_scope)
-            .with_prelude(&prelude)
-            .with_decl_bindings(&decl_bindings);
         // A merged dependency body keeps the dependency file's byte offsets, so
         // a lowering error must render against that body's own source rather
         // than the importer's `src` (#868); `BodySource::resolve` selects it.
-        let lower_in = |expr: &Expr, body_src: &NamedSource<Arc<String>>| {
+        let lower_in = |expr: &Expr,
+                        resolution_owner: &crate::dag_id::DagId,
+                        body_src: &NamedSource<Arc<String>>| {
+            let expr_ctx =
+                crate::hir::ExprLoweringContext::new(resolution_owner, resolver, &generic_scope)
+                    .with_prelude(&prelude)
+                    .with_decl_bindings(&decl_bindings);
             crate::hir::lower_expr(expr, expr_ctx).map_err(|err| {
                 crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
             })
@@ -1025,7 +1112,12 @@ impl UnfrozenIR {
                 Ok(ConstEntry {
                     name: entry.name.clone(),
                     type_ann: entry.type_ann.clone(),
-                    expr: lower_in(&entry.expr, entry.src.resolve(src))?,
+                    type_resolution_owner: entry.type_resolution_owner.clone(),
+                    expr: lower_in(
+                        &entry.expr,
+                        &entry.body_resolution_owner,
+                        entry.src.resolve(src),
+                    )?,
                     span: entry.span,
                     src: entry.src.clone(),
                 })
@@ -1038,10 +1130,17 @@ impl UnfrozenIR {
                 Ok(ParamEntry {
                     name: entry.name.clone(),
                     type_ann: entry.type_ann.clone(),
+                    type_resolution_owner: entry.type_resolution_owner.clone(),
                     default_expr: entry
                         .default_expr
                         .as_ref()
-                        .map(|expr| lower_in(expr, entry.src.resolve(src)))
+                        .map(|expr| {
+                            lower_in(
+                                expr,
+                                &entry.default_resolution_owner,
+                                entry.src.resolve(src),
+                            )
+                        })
                         .transpose()?,
                     span: entry.span,
                     src: entry.src.clone(),
@@ -1055,7 +1154,12 @@ impl UnfrozenIR {
                 Ok(NodeEntry {
                     name: entry.name.clone(),
                     type_ann: entry.type_ann.clone(),
-                    expr: lower_in(&entry.expr, entry.src.resolve(src))?,
+                    type_resolution_owner: entry.type_resolution_owner.clone(),
+                    expr: lower_in(
+                        &entry.expr,
+                        &entry.body_resolution_owner,
+                        entry.src.resolve(src),
+                    )?,
                     span: entry.span,
                     src: entry.src.clone(),
                 })
@@ -1068,9 +1172,18 @@ impl UnfrozenIR {
                 let body_src = entry.src.resolve(src);
                 Ok(AssertEntry {
                     name: entry.name.clone(),
-                    body: crate::hir::lower_assert_body(&entry.body, expr_ctx).map_err(|err| {
-                        crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
-                    })?,
+                    body: {
+                        let expr_ctx = crate::hir::ExprLoweringContext::new(
+                            &entry.body_resolution_owner,
+                            resolver,
+                            &generic_scope,
+                        )
+                        .with_prelude(&prelude)
+                        .with_decl_bindings(&decl_bindings);
+                        crate::hir::lower_assert_body(&entry.body, expr_ctx).map_err(|err| {
+                            crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
+                        })?
+                    },
                     span: entry.span,
                     src: entry.src.clone(),
                 })
@@ -1080,7 +1193,13 @@ impl UnfrozenIR {
         // Plots and figure/layer fields are best-effort at evaluation time:
         // an expression that fails to lower leaves the body incomplete (the
         // runtime skips it) instead of failing the compile.
-        let lower_optional = |expr: &Expr| crate::hir::lower_expr(expr, expr_ctx).ok();
+        let lower_optional = |expr: &Expr, resolution_owner: &crate::dag_id::DagId| {
+            let expr_ctx =
+                crate::hir::ExprLoweringContext::new(resolution_owner, resolver, &generic_scope)
+                    .with_prelude(&prelude)
+                    .with_decl_bindings(&decl_bindings);
+            crate::hir::lower_expr(expr, expr_ctx).ok()
+        };
         let plots = self
             .plots
             .iter()
@@ -1088,13 +1207,13 @@ impl UnfrozenIR {
                 let mut body = LoweredPlotBody::default();
                 let mut complete = true;
                 for encoding in &entry.decl.encodings {
-                    match lower_optional(&encoding.value) {
+                    match lower_optional(&encoding.value, &entry.body_resolution_owner) {
                         Some(lowered) => body.encodings.push((encoding.channel, lowered)),
                         None => complete = false,
                     }
                 }
                 for field in &entry.decl.mark.properties {
-                    match lower_optional(&field.value) {
+                    match lower_optional(&field.value, &entry.body_resolution_owner) {
                         Some(lowered) => body.mark_properties.push(LoweredPlotField {
                             name: field.name.value.clone(),
                             name_span: field.name.span,
@@ -1104,7 +1223,7 @@ impl UnfrozenIR {
                     }
                 }
                 for field in &entry.decl.properties {
-                    match lower_optional(&field.value) {
+                    match lower_optional(&field.value, &entry.body_resolution_owner) {
                         Some(lowered) => body.properties.push(LoweredPlotField {
                             name: field.name.value.clone(),
                             name_span: field.name.span,
@@ -1123,14 +1242,15 @@ impl UnfrozenIR {
                 }
             })
             .collect();
-        let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField]| {
+        let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
+                            resolution_owner: &crate::dag_id::DagId| {
             fields
                 .iter()
                 .filter_map(|field| {
                     Some(LoweredPlotField {
                         name: field.name.value.clone(),
                         name_span: field.name.span,
-                        value: lower_optional(&field.value)?,
+                        value: lower_optional(&field.value, resolution_owner)?,
                     })
                 })
                 .collect::<Vec<_>>()
@@ -1141,7 +1261,7 @@ impl UnfrozenIR {
             .map(|entry| FigureEntry {
                 name: entry.name.clone(),
                 plot_names: entry.decl.plot_names.clone(),
-                fields: lower_fields(&entry.decl.fields),
+                fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
                 span: entry.span,
             })
             .collect();
@@ -1151,7 +1271,7 @@ impl UnfrozenIR {
             .map(|entry| LayerEntry {
                 name: entry.name.clone(),
                 plot_names: entry.decl.plot_names.clone(),
-                fields: lower_fields(&entry.decl.fields),
+                fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
                 span: entry.span,
             })
             .collect();
@@ -1194,6 +1314,41 @@ impl UnfrozenIR {
         }
     }
 
+    /// Retarget the resolution scope of declarations already present in this
+    /// unfrozen IR.
+    ///
+    /// Inline DAG include instances are lowered under an instance owner so
+    /// merged declaration keys stay unique, but their source bodies must still
+    /// resolve type-system names and constructors in the DAG's definition
+    /// scope. Call this before merging nested includes so later nested entries
+    /// keep their own producer scopes.
+    pub fn retarget_existing_resolution_owners(&mut self, owner: &crate::dag_id::DagId) {
+        for entry in &mut self.consts {
+            entry.type_resolution_owner = owner.clone();
+            entry.body_resolution_owner = owner.clone();
+        }
+        for entry in &mut self.params {
+            entry.type_resolution_owner = owner.clone();
+            entry.default_resolution_owner = owner.clone();
+        }
+        for entry in &mut self.nodes {
+            entry.type_resolution_owner = owner.clone();
+            entry.body_resolution_owner = owner.clone();
+        }
+        for entry in &mut self.asserts {
+            entry.body_resolution_owner = owner.clone();
+        }
+        for entry in &mut self.plots {
+            entry.body_resolution_owner = owner.clone();
+        }
+        for entry in &mut self.figures {
+            entry.body_resolution_owner = owner.clone();
+        }
+        for entry in &mut self.layers {
+            entry.body_resolution_owner = owner.clone();
+        }
+    }
+
     /// Add a const alias: a synthetic const declaration that references another const.
     ///
     /// Used for selective instantiated imports where `delta_v` aliases `prefix.delta_v`.
@@ -1201,13 +1356,17 @@ impl UnfrozenIR {
         &mut self,
         name: ScopedName,
         type_ann: TypeExpr,
+        type_resolution_owner: crate::dag_id::DagId,
         expr: Expr,
+        body_resolution_owner: crate::dag_id::DagId,
         span: Span,
     ) {
         self.consts.push(UnfrozenConstEntry {
             name: name.clone(),
             type_ann,
+            type_resolution_owner,
             expr,
+            body_resolution_owner,
             span,
             // Alias bodies are synthesized from the importer's include
             // statement, so their span belongs to the importer's source.
@@ -1219,11 +1378,21 @@ impl UnfrozenIR {
     /// Add a node alias: a synthetic node declaration that references another node/param.
     ///
     /// Used for selective instantiated imports where `delta_v` aliases `prefix.delta_v`.
-    pub fn add_node_alias(&mut self, name: ScopedName, type_ann: TypeExpr, expr: Expr, span: Span) {
+    pub fn add_node_alias(
+        &mut self,
+        name: ScopedName,
+        type_ann: TypeExpr,
+        type_resolution_owner: crate::dag_id::DagId,
+        expr: Expr,
+        body_resolution_owner: crate::dag_id::DagId,
+        span: Span,
+    ) {
         self.nodes.push(UnfrozenNodeEntry {
             name: name.clone(),
             type_ann,
+            type_resolution_owner,
             expr,
+            body_resolution_owner,
             span,
             // Alias bodies are synthesized from the importer's include
             // statement, so their span belongs to the importer's source.
@@ -1310,6 +1479,7 @@ impl UnfrozenIR {
         dim_bindings: &HashMap<DimName, DimName>,
         import_item_attributes: &HashMap<DeclName, Vec<crate::desugar::desugared_ast::Attribute>>,
         requested_plots: &HashMap<DeclName, RequestedPlot>,
+        importer_owner: &crate::dag_id::DagId,
         importer_src: &NamedSource<Arc<String>>,
         dep_src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
@@ -1328,6 +1498,20 @@ impl UnfrozenIR {
                 d.clone()
             }
         }
+
+        // Include-time type-system bindings rewrite selected producer names
+        // to importer-side identifiers. Keep those rewritten bodies/signatures
+        // in the importer scope; otherwise preserve producer scope so an
+        // include consumer need not import constructors/types it never names.
+        let type_system_bindings_present =
+            !index_bindings.is_empty() || !type_bindings.is_empty() || !dim_bindings.is_empty();
+        let merge_resolution_owner = |producer_owner: crate::dag_id::DagId| {
+            if type_system_bindings_present {
+                importer_owner.clone()
+            } else {
+                producer_owner
+            }
+        };
 
         let mut all_dep_names = dep_names.clone();
         all_dep_names.extend(
@@ -1359,7 +1543,9 @@ impl UnfrozenIR {
             self.consts.push(UnfrozenConstEntry {
                 name: prefixed.clone(),
                 type_ann: entry.type_ann,
+                type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 expr: entry.expr,
+                body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
                 src: entry.src.or_dependency(dep_src),
             });
@@ -1369,28 +1555,34 @@ impl UnfrozenIR {
         // Merge params — replace defaults with bindings where provided
         for mut entry in dep.params {
             let prefixed = entry.name.with_prefix(prefix);
-            if let Some(binding_expr) = bindings.get(entry.name.member()) {
-                // Use the binding expression (from the importer's scope, no prefixing needed
-                // for refs that belong to the importer — only dep-internal refs get prefixed).
-                // The declared type (the diagnostic anchor for an annotation
-                // mismatch) still belongs to the dependency, so the entry keeps
-                // dependency provenance below (#868).
-                entry.default_expr = Some(binding_expr.clone());
-            } else if let Some(ref mut expr) = entry.default_expr {
-                // Keep default, but substitute index names and prefix internal refs
-                substitute_index_names(expr, index_bindings);
-                substitute_type_names_in_expr(expr, type_bindings);
-                prefix_expr_refs(expr, prefix, dep_names);
-            } else {
-                // Required param without binding — stays None, caught later in exec_plan
-            }
+            let default_resolution_owner =
+                if let Some(binding_expr) = bindings.get(entry.name.member()) {
+                    // Use the binding expression (from the importer's scope, no prefixing needed
+                    // for refs that belong to the importer — only dep-internal refs get prefixed).
+                    // The declared type (the diagnostic anchor for an annotation
+                    // mismatch) still belongs to the dependency, so the entry keeps
+                    // dependency provenance below (#868).
+                    entry.default_expr = Some(binding_expr.clone());
+                    importer_owner.clone()
+                } else if let Some(ref mut expr) = entry.default_expr {
+                    // Keep default, but substitute index names and prefix internal refs
+                    substitute_index_names(expr, index_bindings);
+                    substitute_type_names_in_expr(expr, type_bindings);
+                    prefix_expr_refs(expr, prefix, dep_names);
+                    merge_resolution_owner(entry.default_resolution_owner)
+                } else {
+                    // Required param without binding — stays None, caught later in exec_plan
+                    merge_resolution_owner(entry.default_resolution_owner)
+                };
             substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             self.params.push(UnfrozenParamEntry {
                 name: prefixed.clone(),
                 type_ann: entry.type_ann,
+                type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 default_expr: entry.default_expr,
+                default_resolution_owner,
                 span: entry.span,
                 src: entry.src.or_dependency(dep_src),
             });
@@ -1409,7 +1601,9 @@ impl UnfrozenIR {
             self.nodes.push(UnfrozenNodeEntry {
                 name: prefixed.clone(),
                 type_ann: entry.type_ann,
+                type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 expr: entry.expr,
+                body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
                 src: entry.src.or_dependency(dep_src),
             });
@@ -1445,6 +1639,7 @@ impl UnfrozenIR {
             self.asserts.push(UnfrozenAssertEntry {
                 name: prefixed.clone(),
                 body: entry.body,
+                body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
                 src: entry.src.or_dependency(dep_src),
             });
@@ -1480,6 +1675,7 @@ impl UnfrozenIR {
             self.plots.push(UnfrozenPlotEntry {
                 name: local.clone(),
                 decl: entry.decl,
+                body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
                 // The alias is root-local; re-export requires its own `pub`
                 // include item, resolved at the import surface.
@@ -3522,6 +3718,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::dag_id::DagId::root("main"),
                 &importer_src,
                 &dep_src,
             )
