@@ -650,7 +650,12 @@ pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo>
     static FN_SIGS: LazyLock<HashMap<String, FnSignatureInfo>> = LazyLock::new(|| {
         let mut sigs = HashMap::new();
         for (name, f) in builtin_functions() {
-            let (params, ret) = builtin_signature_parts(&f.dim_sig);
+            let (params, ret) = builtin_signature_parts(&f.dim_sig).unwrap_or_else(|err| {
+                (
+                    vec![format!("<invalid builtin signature: {err}>")],
+                    "<invalid>".to_string(),
+                )
+            });
             let params_str = params.join(", ");
             let label = format!("fn {name}({params_str}) -> {ret}");
             sigs.insert(
@@ -671,54 +676,56 @@ pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo>
 /// Builtin signatures are defined only in terms of prelude dimensions, so no
 /// per-file registry is needed here. A user-defined base dimension in this path
 /// would be an internal bug in builtin construction.
-fn format_dim_display(dim: &Dimension) -> String {
+fn format_dim_display(dim: &Dimension) -> std::result::Result<String, String> {
     if dim.is_dimensionless() {
-        return "Dimensionless".to_string();
+        return Ok("Dimensionless".to_string());
     }
-    let parts: Vec<String> = dim
+    let parts = dim
         .iter()
         .map(|(id, exp)| {
-            let name = builtin_base_dim_name(id);
-            if *exp == Rational::ONE {
+            let name = builtin_base_dim_name(id)?;
+            Ok(if *exp == Rational::ONE {
                 name.to_string()
             } else {
                 format!("{name}^{exp}")
-            }
+            })
         })
-        .collect();
-    parts.join(" * ")
+        .collect::<std::result::Result<Vec<_>, String>>()?;
+    Ok(parts.join(" * "))
 }
 
-fn builtin_base_dim_name(id: &BaseDimId) -> &str {
+fn builtin_base_dim_name(id: &BaseDimId) -> std::result::Result<&str, String> {
     match id {
-        BaseDimId::Prelude(name) => name.as_str(),
-        BaseDimId::UserDefined { .. } => {
-            panic!("builtin signature unexpectedly referenced user-defined dimension {id:?}")
-        }
+        BaseDimId::Prelude(name) => Ok(name.as_str()),
+        BaseDimId::UserDefined { .. } => Err(format!(
+            "builtin signature unexpectedly referenced user-defined dimension {id:?}"
+        )),
     }
 }
 
 /// Generate human-readable parameter and return type strings for a builtin function.
-fn builtin_signature_parts(sig: &DimSignature) -> (Vec<String>, String) {
+fn builtin_signature_parts(
+    sig: &DimSignature,
+) -> std::result::Result<(Vec<String>, String), String> {
     let params: Vec<String> = sig
         .params
         .iter()
         .map(|p| {
             let type_str = match &p.dim {
-                ParamDim::Fixed(dim) => format_dim_display(dim),
+                ParamDim::Fixed(dim) => format_dim_display(dim)?,
                 ParamDim::Bind(var) | ParamDim::Ref(var) => var.to_string(),
             };
-            format!("{}: {type_str}", p.name)
+            Ok(format!("{}: {type_str}", p.name))
         })
-        .collect();
+        .collect::<std::result::Result<_, String>>()?;
 
     let ret = match &sig.result {
-        ResultDim::Fixed(dim) => format_dim_display(dim),
+        ResultDim::Fixed(dim) => format_dim_display(dim)?,
         ResultDim::Var(name) => name.to_string(),
         ResultDim::VarPow(name, power) => format!("{name}^({power})"),
     };
 
-    (params, ret)
+    Ok((params, ret))
 }
 
 /// Format all successfully evaluated values into display strings.

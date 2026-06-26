@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use miette::NamedSource;
+use thiserror::Error;
 
 use crate::desugar::desugared_ast::{MulDivOp, TypeExpr, TypeExprKind};
 use crate::hir;
@@ -16,7 +17,7 @@ use crate::hir::diagnostics::{
     expr_lower_error_to_graphcal, hir_lower_error_to_graphcal, resolved_decl_key,
 };
 pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
-use crate::syntax::dimension::{Dimension, Rational};
+use crate::syntax::dimension::{Dimension, Rational, RationalError};
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, ModuleAliasName,
     NameAtom, NamePath, StructTypeName,
@@ -31,7 +32,8 @@ use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{
-    IndexDef, Registry, RegistryBuilder, TypeDef, TypeGenericConstraint, UnionMemberDef,
+    IndexDef, Registry, RegistryBuildError, RegistryBuilder, TypeDef, TypeGenericConstraint,
+    UnionMemberDef,
 };
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
 use crate::syntax::names::{ResolvedName, ScopedName, namespace};
@@ -353,19 +355,28 @@ pub struct ModuleTypeRegistry {
     constructors: HashMap<ResolvedName<namespace::Constructor>, ModuleConstructorDef>,
 }
 
+/// Error from constructing the module type registry's prelude entries.
+#[derive(Debug, Error)]
+pub enum PreludeTypeRegistryError {
+    /// Built-in dimension exponent arithmetic failed.
+    #[error(transparent)]
+    Rational(#[from] RationalError),
+    /// The prelude registry violated a registry construction invariant.
+    #[error(transparent)]
+    RegistryBuild(#[from] RegistryBuildError),
+}
+
 impl ModuleTypeRegistry {
     /// Insert canonical Graphcal prelude dimensions under the synthetic prelude owner.
     ///
     /// # Errors
     ///
-    /// Returns a rational arithmetic error only if the built-in prelude itself
-    /// fails to construct, which would be a compiler bug.
-    pub fn insert_graphcal_prelude(
-        &mut self,
-    ) -> Result<(), crate::syntax::dimension::RationalError> {
+    /// Returns an error only if the built-in prelude itself fails to construct,
+    /// which would be a compiler bug.
+    pub fn insert_graphcal_prelude(&mut self) -> Result<(), PreludeTypeRegistryError> {
         let mut builder = RegistryBuilder::new();
         crate::registry::prelude::load_prelude(&mut builder)?;
-        let registry = builder.build();
+        let registry = builder.try_build()?;
         let owner = crate::registry::prelude::prelude_dag_id();
         for name in crate::registry::prelude::PRELUDE_DIMENSION_NAMES {
             if let Some(dim) = registry.dimensions.get_dimension(name) {
@@ -5272,7 +5283,7 @@ mod tests {
     fn make_registry() -> Registry {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        b.build()
+        b.try_build().unwrap()
     }
 
     fn make_dim_term_name(
@@ -5327,7 +5338,7 @@ mod tests {
                 }],
             },
         });
-        b.build()
+        b.try_build().unwrap()
     }
 
     fn make_registry_with_index() -> Registry {
@@ -5342,7 +5353,7 @@ mod tests {
                 ],
             },
         });
-        b.build()
+        b.try_build().unwrap()
     }
 
     fn make_src() -> NamedSource<Arc<String>> {

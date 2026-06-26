@@ -1368,7 +1368,9 @@ mod tests {
             declared_types: HashMap::new(),
             assertions: HashMap::new(),
             plots: HashMap::new(),
-            registry: graphcal_compiler::registry::types::RegistryBuilder::new().build(),
+            registry: graphcal_compiler::registry::types::RegistryBuilder::new()
+                .try_build()
+                .unwrap(),
             pub_names: HashSet::new(),
             resolved_dynamic_unit_scales: HashMap::new(),
             dag_tirs: HashMap::new(),

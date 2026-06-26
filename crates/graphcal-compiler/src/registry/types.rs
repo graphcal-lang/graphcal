@@ -7,7 +7,9 @@ use crate::desugar::desugared_ast::{
     DagDecl, DimExpr, Expr, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
 };
 use crate::syntax::ast::UnitConstness;
-use crate::syntax::dimension::{BaseDimId, Dimension, Rational, RationalError};
+use crate::syntax::dimension::{
+    BaseDimId, Dimension, MissingBaseDimensionName, Rational, RationalError,
+};
 use crate::syntax::names::{
     ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
     StructTypeName, UnitRef,
@@ -618,8 +620,8 @@ fn format_dimension_preferring_alias(
     dimensions: &HashMap<DimName, Dimension>,
     base_dim_names: &BTreeMap<BaseDimId, String>,
     dim: &Dimension,
-) -> String {
-    let canonical = format!("{}", dim.display_with(base_dim_names));
+) -> Result<String, MissingBaseDimensionName> {
+    let canonical = dim.try_format_with(base_dim_names)?;
     // Base dimensions and Dimensionless render as a single bare name already;
     // only compound renderings benefit from an alias.
     let is_compound = canonical.contains([' ', '^', '*', '/']);
@@ -630,22 +632,52 @@ fn format_dimension_preferring_alias(
             .map(|(name, _)| name)
             .min()
     {
-        return alias.to_string();
+        return Ok(alias.to_string());
     }
-    canonical
+    Ok(canonical)
+}
+
+#[expect(
+    clippy::unreachable,
+    reason = "RegistryBuilder::try_build validates base-dimension display metadata before Registry construction"
+)]
+fn format_dimension_preferring_alias_after_validation(
+    dimensions: &HashMap<DimName, Dimension>,
+    base_dim_names: &BTreeMap<BaseDimId, String>,
+    dim: &Dimension,
+) -> String {
+    match format_dimension_preferring_alias(dimensions, base_dim_names, dim) {
+        Ok(formatted) => formatted,
+        Err(err) => unreachable!("validated registry lost base dimension display metadata: {err}"),
+    }
 }
 
 fn assert_base_dim_names_cover(
     base_dim_names: &BTreeMap<BaseDimId, String>,
     dim: &Dimension,
-    context: &str,
-) {
+    context: impl Into<String>,
+) -> Result<(), RegistryBuildError> {
+    let context = context.into();
     for (id, _) in dim.iter() {
-        assert!(
-            base_dim_names.contains_key(id),
-            "registry invariant violation: {context} references base dimension {id:?} without a registered display name"
-        );
+        if !base_dim_names.contains_key(id) {
+            return Err(RegistryBuildError::MissingBaseDimensionName {
+                context,
+                id: id.clone(),
+            });
+        }
     }
+    Ok(())
+}
+
+/// Error returned when freezing a [`RegistryBuilder`] would violate registry invariants.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum RegistryBuildError {
+    /// A dimension or unit references a base dimension whose display name was
+    /// not registered.
+    #[error(
+        "registry invariant violation: {context} references base dimension {id:?} without a registered display name"
+    )]
+    MissingBaseDimensionName { context: String, id: BaseDimId },
 }
 
 // ---------------------------------------------------------------------------
@@ -695,7 +727,11 @@ impl DimensionRegistry {
     /// speak the user's vocabulary.
     #[must_use]
     pub fn format_dimension(&self, dim: &Dimension) -> String {
-        format_dimension_preferring_alias(&self.dimensions, &self.base_dim_names, dim)
+        format_dimension_preferring_alias_after_validation(
+            &self.dimensions,
+            &self.base_dim_names,
+            dim,
+        )
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
@@ -837,7 +873,7 @@ impl IndexRegistry {
 
 /// The frozen, read-only aggregate of all domain registries.
 ///
-/// Produced by [`RegistryBuilder::build`]. All fields are public so that
+/// Produced by [`RegistryBuilder::try_build`]. All fields are public so that
 /// consumers can access individual domain registries directly.
 #[derive(Debug, Clone)]
 pub struct Registry {
@@ -881,7 +917,7 @@ impl DagRegistry {
 
 /// Mutable builder for constructing a [`Registry`].
 ///
-/// Used during IR lowering and prelude loading. Call [`build()`](Self::build)
+/// Used during IR lowering and prelude loading. Call [`try_build()`](Self::try_build)
 /// to produce an immutable [`Registry`].
 #[derive(Debug, Default)]
 pub struct RegistryBuilder {
@@ -910,16 +946,13 @@ impl RegistryBuilder {
 
     /// Freeze the builder into an immutable [`Registry`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if a registered dimension or unit references a base dimension that
-    /// has no registered display name. This indicates an internal registry
-    /// construction bug: all semantic base-dimension IDs must be paired with
-    /// explicit presentation metadata before formatting is possible.
-    #[must_use]
-    pub fn build(self) -> Registry {
-        self.assert_base_dim_name_invariant();
-        Registry {
+    /// Returns [`RegistryBuildError`] if a registered dimension or unit
+    /// references a base dimension that has no registered display name.
+    pub fn try_build(self) -> Result<Registry, RegistryBuildError> {
+        self.assert_base_dim_name_invariant()?;
+        Ok(Registry {
             dimensions: DimensionRegistry {
                 base_dim_names: self.base_dim_names,
                 base_dim_symbols: self.base_dim_symbols,
@@ -935,20 +968,21 @@ impl RegistryBuilder {
                 nat_ranges: self.nat_ranges,
             },
             dags: DagRegistry { dags: self.dags },
-        }
+        })
     }
 
-    fn assert_base_dim_name_invariant(&self) {
+    fn assert_base_dim_name_invariant(&self) -> Result<(), RegistryBuildError> {
         for (name, dim) in &self.dimensions {
-            assert_base_dim_names_cover(&self.base_dim_names, dim, &format!("dimension `{name}`"));
+            assert_base_dim_names_cover(&self.base_dim_names, dim, format!("dimension `{name}`"))?;
         }
         for (name, info) in &self.units {
             assert_base_dim_names_cover(
                 &self.base_dim_names,
                 &info.dimension,
-                &format!("unit `{name}`"),
-            );
+                format!("unit `{name}`"),
+            )?;
         }
+        Ok(())
     }
 
     /// Register a `dag` declaration body keyed by the declaration's name.
@@ -1218,7 +1252,11 @@ impl RegistryBuilder {
     /// [`DimensionRegistry::format_dimension`].
     #[must_use]
     pub fn format_dimension(&self, dim: &Dimension) -> String {
-        format_dimension_preferring_alias(&self.dimensions, &self.base_dim_names, dim)
+        format_dimension_preferring_alias_after_validation(
+            &self.dimensions,
+            &self.base_dim_names,
+            dim,
+        )
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
@@ -1287,7 +1325,7 @@ mod tests {
     fn make_registry() -> Registry {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        b.build()
+        b.try_build().unwrap()
     }
 
     fn make_dim_term_name(name: &str) -> Spanned<NamePath> {
@@ -1467,7 +1505,7 @@ mod tests {
                 }],
             },
         });
-        let r = b.build();
+        let r = b.try_build().unwrap();
         let velocity_dim = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         let def = r.types.get_type("TransferResult").unwrap();
         assert_eq!(def.name.as_str(), "TransferResult");
@@ -1496,7 +1534,7 @@ mod tests {
                 ],
             },
         });
-        let r = b.build();
+        let r = b.try_build().unwrap();
         let def = r.indexes.get_index("Maneuver").unwrap();
         assert_eq!(def.name.as_str(), "Maneuver");
         let variants = def.variants();
@@ -1506,12 +1544,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "registry invariant violation")]
-    fn registry_build_panics_when_dimension_base_name_is_missing() {
+    fn registry_try_build_reports_missing_dimension_base_name() {
         let mut b = RegistryBuilder::new();
         b.register_dimension(DimName::new("Broken"), Dimension::base(length_id()));
 
-        let _ = b.build();
+        let err = b.try_build().unwrap_err();
+        assert_eq!(
+            err,
+            RegistryBuildError::MissingBaseDimensionName {
+                context: "dimension `Broken`".to_string(),
+                id: length_id(),
+            }
+        );
     }
 
     #[test]
@@ -1524,7 +1568,7 @@ mod tests {
         };
         let id = b.register_base_dimension(DimName::new("Information"), info_id.clone());
         assert_eq!(id, info_id);
-        let r = b.build();
+        let r = b.try_build().unwrap();
         // Should be retrievable
         let dim = r.dimensions.get_dimension("Information").unwrap();
         assert_eq!(*dim, Dimension::base(id.clone()));
@@ -1543,7 +1587,7 @@ mod tests {
             BaseDimId::Prelude("Length".to_string()),
             "m".to_string(),
         );
-        let r = b.build();
+        let r = b.try_build().unwrap();
         assert_eq!(
             r.dimensions.base_dim_symbols().get(&id),
             Some(&"m".to_string())
@@ -1561,7 +1605,7 @@ mod tests {
         b.set_base_dim_symbol(id.clone(), "bit".to_string());
         // Second call should not overwrite
         b.set_base_dim_symbol(id.clone(), "byte".to_string());
-        let r = b.build();
+        let r = b.try_build().unwrap();
         assert_eq!(
             r.dimensions.base_dim_symbols().get(&id),
             Some(&"bit".to_string())

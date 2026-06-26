@@ -283,27 +283,34 @@ impl Dimension {
     /// Format this dimension using named base dimensions for display.
     ///
     /// The `names` map must provide a `BaseDimId → name` mapping for every
-    /// base dimension in `self`; missing entries violate the registry invariant.
-    #[must_use]
-    pub const fn display_with<'a>(
-        &'a self,
-        names: &'a BTreeMap<BaseDimId, String>,
-    ) -> DimensionDisplay<'a> {
-        DimensionDisplay { dim: self, names }
+    /// base dimension in `self`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingBaseDimensionName`] when `names` does not contain an
+    /// entry for a base dimension referenced by `self`.
+    pub fn try_format_with(
+        &self,
+        names: &BTreeMap<BaseDimId, String>,
+    ) -> Result<String, MissingBaseDimensionName> {
+        if self.is_dimensionless() {
+            return Ok("Dimensionless".to_string());
+        }
+        self.format_exponents(names, " * ", " / ")
     }
 
-    /// Write the dimension's exponents to a [`fmt::Write`] sink.
+    /// Format the dimension's exponents.
     ///
     /// `mul_sep` is placed between positive-exponent terms (e.g., `"*"` or `" * "`).
     /// `div_sep` is placed before each negative-exponent term when positive terms exist
     /// (e.g., `"/"` or `" / "`).
-    fn write_exponents(
+    fn format_exponents(
         &self,
-        w: &mut impl fmt::Write,
         names: &BTreeMap<BaseDimId, String>,
         mul_sep: &str,
         div_sep: &str,
-    ) -> fmt::Result {
+    ) -> Result<String, MissingBaseDimensionName> {
+        let mut out = String::new();
         let mut first = true;
 
         // Positive exponents (numerator)
@@ -312,14 +319,10 @@ impl Dimension {
                 continue;
             }
             if !first {
-                w.write_str(mul_sep)?;
+                out.push_str(mul_sep);
             }
             first = false;
-            let name = registered_base_dim_name(names, id);
-            write!(w, "{name}")?;
-            if exp != Rational::ONE {
-                write!(w, "^{exp}")?;
-            }
+            push_dim_factor(&mut out, registered_base_dim_name(names, id)?, exp);
         }
 
         // Negative exponents (denominator)
@@ -327,47 +330,45 @@ impl Dimension {
             if exp.num() >= 0 {
                 continue;
             }
-            let name = registered_base_dim_name(names, id);
+            let name = registered_base_dim_name(names, id)?;
             if first {
                 // Only negative exponents (e.g., Frequency = s^-1)
-                write!(w, "{name}^{exp}")?;
+                push_dim_factor(&mut out, name, exp);
                 first = false;
             } else {
-                w.write_str(div_sep)?;
-                write!(w, "{name}")?;
+                out.push_str(div_sep);
                 let pos_exp = -exp;
-                if pos_exp != Rational::ONE {
-                    write!(w, "^{pos_exp}")?;
-                }
+                push_dim_factor(&mut out, name, pos_exp);
             }
         }
 
-        Ok(())
+        Ok(out)
     }
 }
 
-fn registered_base_dim_name<'a>(names: &'a BTreeMap<BaseDimId, String>, id: &BaseDimId) -> &'a str {
-    match names.get(id) {
-        Some(name) => name.as_str(),
-        None => panic!(
-            "missing display name for base dimension {id:?}; registry invariant was violated"
-        ),
-    }
-}
-
-/// A wrapper for displaying a `Dimension` with named base dimensions.
-pub struct DimensionDisplay<'a> {
-    dim: &'a Dimension,
+fn registered_base_dim_name<'a>(
     names: &'a BTreeMap<BaseDimId, String>,
+    id: &BaseDimId,
+) -> Result<&'a str, MissingBaseDimensionName> {
+    names
+        .get(id)
+        .map(String::as_str)
+        .ok_or_else(|| MissingBaseDimensionName { id: id.clone() })
 }
 
-impl fmt::Display for DimensionDisplay<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.dim.is_dimensionless() {
-            return write!(f, "Dimensionless");
-        }
-        self.dim.write_exponents(f, self.names, " * ", " / ")
+fn push_dim_factor(out: &mut String, name: &str, exp: Rational) {
+    out.push_str(name);
+    if exp != Rational::ONE {
+        out.push('^');
+        out.push_str(&exp.to_string());
     }
+}
+
+/// A base dimension referenced by a [`Dimension`] had no registered display name.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("missing display name for base dimension {id:?}")]
+pub struct MissingBaseDimensionName {
+    pub id: BaseDimId,
 }
 
 /// Whether to add or subtract exponents when combining dimensions.
@@ -604,31 +605,30 @@ mod tests {
     fn dimension_display_simple() {
         let names = test_names();
         assert_eq!(
-            format!("{}", Dimension::dimensionless().display_with(&names)),
+            Dimension::dimensionless().try_format_with(&names).unwrap(),
             "Dimensionless"
         );
         assert_eq!(
-            format!("{}", Dimension::base(length()).display_with(&names)),
+            Dimension::base(length()).try_format_with(&names).unwrap(),
             "Length"
         );
     }
 
     #[test]
-    #[should_panic(expected = "missing display name for base dimension")]
-    fn dimension_display_panics_when_base_name_is_missing() {
+    fn dimension_display_reports_missing_base_name() {
         let names = BTreeMap::new();
 
-        let _ = format!("{}", Dimension::base(length()).display_with(&names));
+        assert_eq!(
+            Dimension::base(length()).try_format_with(&names),
+            Err(MissingBaseDimensionName { id: length() })
+        );
     }
 
     #[test]
     fn dimension_display_velocity() {
         let names = test_names();
         let velocity = (Dimension::base(length()) / Dimension::base(time())).unwrap();
-        assert_eq!(
-            format!("{}", velocity.display_with(&names)),
-            "Length / Time"
-        );
+        assert_eq!(velocity.try_format_with(&names).unwrap(), "Length / Time");
     }
 
     #[test]
@@ -638,7 +638,7 @@ mod tests {
             / Dimension::base(time()).pow_int(2).unwrap())
         .unwrap();
         assert_eq!(
-            format!("{}", force.display_with(&names)),
+            force.try_format_with(&names).unwrap(),
             "Length * Mass / Time^2"
         );
     }
@@ -647,7 +647,7 @@ mod tests {
     fn dimension_display_area() {
         let names = test_names();
         let area = Dimension::base(length()).pow_int(2).unwrap();
-        assert_eq!(format!("{}", area.display_with(&names)), "Length^2");
+        assert_eq!(area.try_format_with(&names).unwrap(), "Length^2");
     }
 
     #[test]
@@ -655,7 +655,7 @@ mod tests {
         let names = test_names();
         // Frequency = Time^-1 (only negative exponent)
         let freq = (Dimension::dimensionless() / Dimension::base(time())).unwrap();
-        assert_eq!(format!("{}", freq.display_with(&names)), "Time^-1");
+        assert_eq!(freq.try_format_with(&names).unwrap(), "Time^-1");
     }
 
     #[test]
@@ -676,7 +676,7 @@ mod tests {
         let mut names = test_names();
         names.insert(info_id, "Information".to_string());
         assert_eq!(
-            format!("{}", bandwidth.display_with(&names)),
+            bandwidth.try_format_with(&names).unwrap(),
             "Information / Time"
         );
     }

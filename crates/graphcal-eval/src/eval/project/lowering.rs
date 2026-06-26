@@ -87,7 +87,10 @@ pub(in crate::eval::project) fn lower_and_finalize(
     let module_resolver = project
         .build_module_resolver()
         .map_err(|err| module_resolve_compile_error(err, file_src))?;
-    let ir = unfrozen.freeze(builder.build(), file_dag_id, &module_resolver, file_src)?;
+    let registry = builder
+        .try_build()
+        .map_err(|err| registry_build_compile_error(&err, file_src))?;
+    let ir = unfrozen.freeze(registry, file_dag_id, &module_resolver, file_src)?;
 
     // Type-resolve top-level decls; then compile each inline dag body
     // explicitly (loader supplies the per-file self-import set and the
@@ -330,12 +333,21 @@ fn compile_loaded_dag_module_ir<'a>(
         &mut unfrozen,
     )?;
 
-    Ok(unfrozen.freeze(
-        builder.build(),
-        &loaded_dag.dag_id,
-        module_resolver,
-        file_src,
-    )?)
+    let registry = builder
+        .try_build()
+        .map_err(|err| registry_build_compile_error(&err, file_src))?;
+    Ok(unfrozen.freeze(registry, &loaded_dag.dag_id, module_resolver, file_src)?)
+}
+
+fn registry_build_compile_error(
+    err: &graphcal_compiler::registry::types::RegistryBuildError,
+    src: &NamedSource<Arc<String>>,
+) -> CompileError {
+    CompileError::Eval(GraphcalError::InternalError {
+        message: format!("registry build failed: {err}"),
+        src: src.clone(),
+        span: Span::new(0, 0).into(),
+    })
 }
 
 fn extend_imported_value_names(target: &mut ImportedValueNames, source: ImportedValueNames) {
@@ -610,7 +622,9 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                         dep_dag_id,
                         None,
                     )?;
-                let dep_registry = dep_builder.build();
+                let dep_registry = dep_builder
+                    .try_build()
+                    .map_err(|err| registry_build_compile_error(&err, dep_src))?;
                 (
                     dep_unfrozen,
                     dep_registry,
@@ -750,7 +764,9 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
                     &mut dag_builder,
                     &mut dag_unfrozen,
                 )?;
-                let dag_registry = dag_builder.build();
+                let dag_registry = dag_builder
+                    .try_build()
+                    .map_err(|err| registry_build_compile_error(&err, importer_src))?;
                 (
                     dag_unfrozen,
                     dag_registry,
