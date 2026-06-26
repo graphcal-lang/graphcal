@@ -176,7 +176,7 @@ impl DagId {
 
     /// Number of segments — always at least 1.
     #[must_use]
-    pub fn segment_count(&self) -> usize {
+    pub const fn segment_count(&self) -> usize {
         self.segments.len()
     }
 
