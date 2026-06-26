@@ -26,6 +26,7 @@ use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
+use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::syntax::names::ScopedName;
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
@@ -665,23 +666,36 @@ pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo>
     &FN_SIGS
 }
 
-/// Format a dimension for display in builtin signatures (no registry needed).
-fn format_dim_display(dim: &graphcal_compiler::syntax::dimension::Dimension) -> String {
+/// Format a dimension for display in builtin signatures.
+///
+/// Builtin signatures are defined only in terms of prelude dimensions, so no
+/// per-file registry is needed here. A user-defined base dimension in this path
+/// would be an internal bug in builtin construction.
+fn format_dim_display(dim: &Dimension) -> String {
     if dim.is_dimensionless() {
         return "Dimensionless".to_string();
     }
     let parts: Vec<String> = dim
         .iter()
         .map(|(id, exp)| {
-            let name = id.fallback_symbol();
-            if *exp == graphcal_compiler::syntax::dimension::Rational::ONE {
-                name
+            let name = builtin_base_dim_name(id);
+            if *exp == Rational::ONE {
+                name.to_string()
             } else {
                 format!("{name}^{exp}")
             }
         })
         .collect();
     parts.join(" * ")
+}
+
+fn builtin_base_dim_name(id: &BaseDimId) -> &str {
+    match id {
+        BaseDimId::Prelude(name) => name.as_str(),
+        BaseDimId::UserDefined { .. } => {
+            panic!("builtin signature unexpectedly referenced user-defined dimension {id:?}")
+        }
+    }
 }
 
 /// Generate human-readable parameter and return type strings for a builtin function.

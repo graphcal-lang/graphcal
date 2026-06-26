@@ -181,16 +181,6 @@ pub enum BaseDimId {
     },
 }
 
-impl BaseDimId {
-    /// A human-readable fallback name when no symbol/name map is available.
-    #[must_use]
-    pub fn fallback_symbol(&self) -> String {
-        match self {
-            Self::Prelude(name) | Self::UserDefined { name, .. } => name.clone(),
-        }
-    }
-}
-
 /// A physical dimension represented as a sparse vector of rational exponents
 /// over base dimensions.
 ///
@@ -292,8 +282,8 @@ impl Dimension {
 
     /// Format this dimension using named base dimensions for display.
     ///
-    /// The `names` map provides `BaseDimId → name` mappings.
-    /// Unknown IDs are displayed as `D{id}`.
+    /// The `names` map must provide a `BaseDimId → name` mapping for every
+    /// base dimension in `self`; missing entries violate the registry invariant.
     #[must_use]
     pub const fn display_with<'a>(
         &'a self,
@@ -325,9 +315,7 @@ impl Dimension {
                 w.write_str(mul_sep)?;
             }
             first = false;
-            let name = names
-                .get(id)
-                .map_or_else(|| id.fallback_symbol(), String::clone);
+            let name = registered_base_dim_name(names, id);
             write!(w, "{name}")?;
             if exp != Rational::ONE {
                 write!(w, "^{exp}")?;
@@ -339,9 +327,7 @@ impl Dimension {
             if exp.num() >= 0 {
                 continue;
             }
-            let name = names
-                .get(id)
-                .map_or_else(|| id.fallback_symbol(), String::clone);
+            let name = registered_base_dim_name(names, id);
             if first {
                 // Only negative exponents (e.g., Frequency = s^-1)
                 write!(w, "{name}^{exp}")?;
@@ -357,6 +343,15 @@ impl Dimension {
         }
 
         Ok(())
+    }
+}
+
+fn registered_base_dim_name<'a>(names: &'a BTreeMap<BaseDimId, String>, id: &BaseDimId) -> &'a str {
+    match names.get(id) {
+        Some(name) => name.as_str(),
+        None => panic!(
+            "missing display name for base dimension {id:?}; registry invariant was violated"
+        ),
     }
 }
 
@@ -616,6 +611,14 @@ mod tests {
             format!("{}", Dimension::base(length()).display_with(&names)),
             "Length"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "missing display name for base dimension")]
+    fn dimension_display_panics_when_base_name_is_missing() {
+        let names = BTreeMap::new();
+
+        let _ = format!("{}", Dimension::base(length()).display_with(&names));
     }
 
     #[test]

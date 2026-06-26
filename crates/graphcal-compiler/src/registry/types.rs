@@ -635,6 +635,19 @@ fn format_dimension_preferring_alias(
     canonical
 }
 
+fn assert_base_dim_names_cover(
+    base_dim_names: &BTreeMap<BaseDimId, String>,
+    dim: &Dimension,
+    context: &str,
+) {
+    for (id, _) in dim.iter() {
+        assert!(
+            base_dim_names.contains_key(id),
+            "registry invariant violation: {context} references base dimension {id:?} without a registered display name"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Domain-specific registries (frozen / read-only)
 // ---------------------------------------------------------------------------
@@ -896,8 +909,16 @@ impl RegistryBuilder {
     }
 
     /// Freeze the builder into an immutable [`Registry`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if a registered dimension or unit references a base dimension that
+    /// has no registered display name. This indicates an internal registry
+    /// construction bug: all semantic base-dimension IDs must be paired with
+    /// explicit presentation metadata before formatting is possible.
     #[must_use]
     pub fn build(self) -> Registry {
+        self.assert_base_dim_name_invariant();
         Registry {
             dimensions: DimensionRegistry {
                 base_dim_names: self.base_dim_names,
@@ -914,6 +935,19 @@ impl RegistryBuilder {
                 nat_ranges: self.nat_ranges,
             },
             dags: DagRegistry { dags: self.dags },
+        }
+    }
+
+    fn assert_base_dim_name_invariant(&self) {
+        for (name, dim) in &self.dimensions {
+            assert_base_dim_names_cover(&self.base_dim_names, dim, &format!("dimension `{name}`"));
+        }
+        for (name, info) in &self.units {
+            assert_base_dim_names_cover(
+                &self.base_dim_names,
+                &info.dimension,
+                &format!("unit `{name}`"),
+            );
         }
     }
 
@@ -1469,6 +1503,15 @@ mod tests {
         let variant_strs: Vec<&str> = variants.iter().map(IndexVariantName::as_str).collect();
         assert_eq!(variant_strs, vec!["Departure", "Correction", "Insertion"]);
         assert!(r.indexes.get_index("NonExistent").is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "registry invariant violation")]
+    fn registry_build_panics_when_dimension_base_name_is_missing() {
+        let mut b = RegistryBuilder::new();
+        b.register_dimension(DimName::new("Broken"), Dimension::base(length_id()));
+
+        let _ = b.build();
     }
 
     #[test]
