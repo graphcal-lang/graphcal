@@ -175,9 +175,10 @@ impl DagId {
         })
     }
 
-    /// The segments of this identifier as an iterator (head first, then tail).
-    pub fn segments(&self) -> impl Iterator<Item = &Arc<str>> {
-        self.segments.iter()
+    /// The segments of this identifier (head first, then tail).
+    #[must_use]
+    pub const fn segments(&self) -> &NonEmpty<Arc<str>> {
+        &self.segments
     }
 
     /// Number of segments — always at least 1.
@@ -203,7 +204,8 @@ impl DagId {
             return false;
         }
         self.segments()
-            .zip(ancestor.segments())
+            .iter()
+            .zip(ancestor.segments().iter())
             .all(|(a, b)| a == b)
     }
 
@@ -293,7 +295,7 @@ mod tests {
     fn from_relative_path_strips_gcl() {
         let id =
             DagId::from_relative_path("math", std::path::Path::new("helpers/math.gcl")).unwrap();
-        let segs: Vec<&str> = id.segments().map(|s| &**s).collect();
+        let segs: Vec<&str> = id.segments().iter().map(|s| &**s).collect();
         assert_eq!(segs, ["helpers", "math"]);
         assert_eq!(id.package(), &DagPackageId::new("math"));
         assert_eq!(id.to_string(), "helpers.math");
@@ -354,6 +356,7 @@ mod tests {
         assert_eq!(rev1.to_string(), "src.units.si");
         assert_eq!(
             rev1.segments()
+                .iter()
                 .map(std::convert::AsRef::as_ref)
                 .collect::<Vec<_>>(),
             ["src", "units", "si"]
