@@ -845,49 +845,6 @@ impl TIR {
         }
         Some(id)
     }
-
-    /// Construct a minimal `TIR` for callers that need a context to satisfy
-    /// the eval pipeline's invariants but never look up an inline DAG.
-    ///
-    /// Currently used by display-only unit-scale resolution. The returned
-    /// TIR has a synthetic root id and empty per-DAG content; calling
-    /// [`Self::lookup_call_target`] on it always returns `None`.
-    #[must_use]
-    pub fn empty_for_eval_helpers(registry: Registry) -> Self {
-        let root_dag_id = crate::dag_id::DagId::root_in_package("<eval-helper>", "<eval-helper>");
-        let mut dags = DagRegistry::new();
-        dags.insert(
-            root_dag_id.clone(),
-            DagTIR {
-                dag_id: root_dag_id.clone(),
-                consts: Vec::new(),
-                params: Vec::new(),
-                nodes: Vec::new(),
-                asserts: Vec::new(),
-                plots: Vec::new(),
-                figures: Vec::new(),
-                layers: Vec::new(),
-                included_plots: Vec::new(),
-                semantic: DagSemanticBody::default(),
-                source_order: Vec::new(),
-                assert_names: std::collections::HashSet::new(),
-                assumes_map: HashMap::new(),
-                expected_fail: HashMap::new(),
-                resolved_decl_types: HashMap::new(),
-                domain_constraints: HashMap::new(),
-                imported_values: HashMap::new(),
-                imported_decl_types: HashMap::new(),
-                imported_value_sources: HashMap::new(),
-                pub_nodes: std::collections::HashSet::new(),
-            },
-        );
-        Self {
-            registry,
-            root_dag_id,
-            dags,
-            module_aliases: HashMap::new(),
-        }
-    }
 }
 
 /// The per-DAG compiled body — every field that's specific to one DAG (the
