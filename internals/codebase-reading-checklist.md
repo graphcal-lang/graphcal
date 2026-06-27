@@ -71,9 +71,14 @@ Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 
 ## Stage 5 - Registry and module resolution
 
-Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent.
+Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent. `registry/types.rs` now owns only the aggregate registry and builder while re-exporting the domain registries for compatibility.
 
 - [ ] `crates/graphcal-compiler/src/registry/format.rs`
+- [ ] `crates/graphcal-compiler/src/registry/dag.rs`
+- [ ] `crates/graphcal-compiler/src/registry/dimension_registry.rs`
+- [ ] `crates/graphcal-compiler/src/registry/index.rs`
+- [ ] `crates/graphcal-compiler/src/registry/type_def.rs`
+- [ ] `crates/graphcal-compiler/src/registry/unit.rs`
 - [ ] `crates/graphcal-compiler/src/registry/types.rs`
 - [ ] `crates/graphcal-compiler/src/registry/prelude.rs`
 - [ ] `crates/graphcal-compiler/src/registry/declared_type.rs`
