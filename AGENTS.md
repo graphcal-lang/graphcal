@@ -47,6 +47,31 @@ Treat the compiler as a functional core (parser → AST → IR → TIR → eval 
 
 The conceptual source-file ordering is maintained in `internals/codebase-reading-checklist.md` as a topologically sorted list in library-consumer order; update that checklist when refactors change the dependency graph. A file should only consume upstream files (ones that come before it in that list), and should be implemented as a library whose API makes invalid or wrong use impossible wherever practical, rather than relying on downstream consumers to call it correctly. This rule makes it easy to review the codebase in topological order because we can focus on making each file correct as a library implementation before tackling its consumers, rather than reasoning about a tightly-coupled codebase as a whole.
 
+### Module scope and layering
+
+Prefer small modules with a single, atomic responsibility over broad domain grab-bags. Two concepts belonging to the same user-facing domain is not enough reason to implement them in the same file; they should also live at the same abstraction layer and have a real implementation dependency. For example, syntax/surface reference types that carry module aliases or source-level names should not live beside core semantic algebra that does not depend on syntax. Split by role and dependency direction so that core business logic can be reviewed, tested, and reused independently of parser/AST concerns.
+
+Before adding a type to an existing module, ask:
+
+1. Is this type at the same abstraction layer as the existing contents (syntax, HIR, TIR, registry, eval, CLI, etc.)?
+2. Does it depend on the same upstream concepts, or would it pull in unrelated dependencies?
+3. Would moving it to a smaller focused module make dependency direction clearer?
+4. Is the module name still accurate after adding it?
+
+If a file starts containing both source/syntax structures and semantic/core structures, prefer splitting it. Re-exporting for ergonomics is acceptable at module boundaries when it does not hide dependency direction or create cycles.
+
+### Avoid zero-value wrapper types
+
+Do not introduce a newtype merely because a value can be described with a different noun. A wrapper is justified only when it preserves or enforces a real invariant, abstraction boundary, ownership/scope distinction, source span/spelling, phase distinction, or API safety property. If a wrapper only forwards `Display`, `AsRef`, or `inner()` to an already precise enum/struct, use the underlying type directly.
+
+Examples of wrappers that need extra justification:
+
+- `FooName(Foo)` when `Foo` is already a closed semantic enum and no source spelling/span is preserved.
+- `ResolvedThingName(ResolvedName<Thing>)` if it adds no behavior or invariant beyond a type alias.
+- A syntax-layer wrapper around a core value that is immediately unwrapped by the next compiler phase.
+
+When a distinction is useful, encode the missing information explicitly (for example, `Spanned<TimeScale>`, `SourceFoo { spelling, parsed }`, or a phase-specific enum), rather than adding an opaque wrapper with no additional semantics.
+
 ### When you reach for a string
 
 Stop. Ask yourself:
