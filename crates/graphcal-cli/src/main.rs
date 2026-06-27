@@ -18,7 +18,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::eval::{
     EvalResult, compile_and_eval_project, compile_to_tir_project, format_number,
 };
@@ -613,7 +613,7 @@ fn format_assertion_line(
     name: &str,
     result: &graphcal_eval::eval::AssertResult,
     name_width: usize,
-    affected: Option<&Vec<graphcal_compiler::syntax::names::ScopedName>>,
+    affected: Option<&Vec<graphcal_compiler::syntax::module_name::ScopedName>>,
 ) -> String {
     use std::fmt::Write as _;
 
@@ -652,10 +652,7 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
 
     fn value_to_json(
         v: &Value,
-        symbols: &std::collections::BTreeMap<
-            graphcal_compiler::syntax::dimension::BaseDimId,
-            String,
-        >,
+        symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     ) -> serde_json::Value {
         match v {
             Value::Scalar {
@@ -767,10 +764,7 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
 
     fn result_to_json(
         r: &Result<Value, NodeError>,
-        symbols: &std::collections::BTreeMap<
-            graphcal_compiler::syntax::dimension::BaseDimId,
-            String,
-        >,
+        symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     ) -> serde_json::Value {
         match r {
             Ok(v) => value_to_json(v, symbols),

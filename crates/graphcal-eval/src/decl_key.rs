@@ -1,4 +1,6 @@
-use graphcal_compiler::syntax::names::{DeclName, ResolvedName, ScopedName, namespace};
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::syntax::names::ResolvedName;
 use graphcal_compiler::tir::typed::DagTIR;
 
 /// Runtime key for a value declaration during evaluation.
@@ -8,12 +10,14 @@ use graphcal_compiler::tir::typed::DagTIR;
 /// synthesize those identities from the DAG owner plus the declaration leaf.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RuntimeDeclKey {
-    Resolved(ResolvedName<namespace::Decl>),
+    Resolved(graphcal_compiler::syntax::decl_name::ResolvedDeclName),
 }
 
 impl RuntimeDeclKey {
     #[must_use]
-    pub(crate) const fn resolved(name: ResolvedName<namespace::Decl>) -> Self {
+    pub(crate) const fn resolved(
+        name: graphcal_compiler::syntax::decl_name::ResolvedDeclName,
+    ) -> Self {
         Self::Resolved(name)
     }
 
@@ -49,7 +53,9 @@ impl RuntimeDeclKey {
     }
 
     #[must_use]
-    pub(crate) const fn as_resolved(&self) -> &ResolvedName<namespace::Decl> {
+    pub(crate) const fn as_resolved(
+        &self,
+    ) -> &graphcal_compiler::syntax::decl_name::ResolvedDeclName {
         match self {
             Self::Resolved(name) => name,
         }
@@ -63,8 +69,8 @@ impl RuntimeDeclKey {
     }
 }
 
-impl From<ResolvedName<namespace::Decl>> for RuntimeDeclKey {
-    fn from(name: ResolvedName<namespace::Decl>) -> Self {
+impl From<graphcal_compiler::syntax::decl_name::ResolvedDeclName> for RuntimeDeclKey {
+    fn from(name: graphcal_compiler::syntax::decl_name::ResolvedDeclName) -> Self {
         Self::Resolved(name)
     }
 }

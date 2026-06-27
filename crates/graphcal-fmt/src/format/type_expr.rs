@@ -117,7 +117,7 @@ fn format_dim_term(t: &DimTerm) -> RcDoc<'static> {
 
 /// Render an exponent suffix: `^2` for integers, `^(1/2)` for rationals —
 /// the parenthesized form is what the grammar accepts back.
-fn format_power(power: graphcal_compiler::syntax::dimension::Rational) -> String {
+fn format_power(power: graphcal_compiler::dimension::Rational) -> String {
     if power.is_integer() {
         format!("^{}", power.num())
     } else {

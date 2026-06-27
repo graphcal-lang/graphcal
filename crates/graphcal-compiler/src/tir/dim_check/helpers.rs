@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::dimension::Dimension;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeDef};
-use crate::syntax::dimension::Dimension;
 
 use super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
 use crate::tir::typed::{ResolvedIndex, ResolvedTypeExpr};

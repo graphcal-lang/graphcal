@@ -1,6 +1,6 @@
 use crate::dag_id::DagId;
-use crate::syntax::dimension::{Dimension, RationalError};
-use crate::syntax::names::{DimName, UnitName};
+use crate::dimension::{Dimension, RationalError};
+use crate::syntax::dimension::{DimName, UnitName};
 
 use crate::registry::types::{PositiveFiniteScale, RegistryBuilder};
 
@@ -72,7 +72,7 @@ pub(crate) fn load_prelude(builder: &mut RegistryBuilder) -> Result<(), Rational
 }
 
 fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
-    use crate::syntax::dimension::BaseDimId;
+    use crate::dimension::BaseDimId;
 
     let length_id = r.register_base_dimension_with_symbol(
         DimName::expect_valid("Length"),
@@ -305,8 +305,8 @@ fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dimension::{BaseDimId, Rational};
     use crate::registry::types::RegistryBuilder;
-    use crate::syntax::dimension::{BaseDimId, Rational};
 
     // Well-known IDs matching prelude dimension names.
     fn length_id() -> BaseDimId {
@@ -384,8 +384,8 @@ mod tests {
         let force_dim = r.dimensions.get_dimension("Force").unwrap().clone();
         let newton = r
             .units
-            .get_unit(&crate::syntax::names::UnitRef::local(
-                crate::syntax::names::UnitName::expect_valid("N"),
+            .get_unit(&crate::syntax::dimension::UnitRef::local(
+                crate::syntax::dimension::UnitName::expect_valid("N"),
             ))
             .unwrap();
         assert_eq!(newton.dimension, force_dim);
@@ -399,7 +399,7 @@ mod tests {
         let r = b.try_build().unwrap();
         let km = r
             .units
-            .get_unit(&crate::syntax::names::UnitRef::local(
+            .get_unit(&crate::syntax::dimension::UnitRef::local(
                 UnitName::expect_valid("km"),
             ))
             .unwrap();
@@ -413,8 +413,8 @@ mod tests {
         let r = b.try_build().unwrap();
         let deg = r
             .units
-            .get_unit(&crate::syntax::names::UnitRef::local(
-                crate::syntax::names::UnitName::expect_valid("deg"),
+            .get_unit(&crate::syntax::dimension::UnitRef::local(
+                crate::syntax::dimension::UnitName::expect_valid("deg"),
             ))
             .unwrap();
         assert!((deg.scale.as_static().unwrap() - std::f64::consts::PI / 180.0).abs() < 1e-15);

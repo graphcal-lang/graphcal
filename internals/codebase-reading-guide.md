@@ -417,11 +417,12 @@ The compiler crate owns the functional core through TIR.
 | `syntax/ast/common.rs`        | Shared AST nodes and typed common fields                      |
 | `syntax/ast/value.rs`         | Expression/value AST definitions                              |
 | `syntax/ast/decl.rs`          | Declaration AST definitions                                   |
-| `syntax/ast/plot_props.rs`    | Typed plot/figure/layer property keys and values              |
+| `syntax/ast/plot_props.rs`    | Syntax-level plot/figure/layer property names                 |
 | `syntax/ast/format_equivalent.rs` | Surface-equivalence checks used by formatting/tooling     |
+| `plot_props.rs`               | Semantic plot/mark/composition property registry              |
 | `syntax/phase.rs`             | `Raw`, `Desugared`, sugar/path slots, `never`                 |
 | `syntax/names.rs`             | `NameAtom`, typed name newtypes, paths, resolved names        |
-| `syntax/nat.rs`               | Normalized type-level Nat polynomial forms                    |
+| `nat.rs`                      | Normalized type-level Nat polynomial forms                    |
 | `dag_id.rs`                   | Filesystem-independent DAG identity                           |
 | `syntax/parser/`              | Parser for declarations, expressions, types, tables           |
 | `syntax/module_resolve.rs`    | Owner-qualified module symbol tables and path resolution      |
@@ -802,10 +803,10 @@ Index type references are split by semantic kind. Declared indexes use
 `TypeNameRef<namespace::Index>` and have a canonical `ResolvedName<Index>`.
 Compiler-generated Nat ranges use `NatRangeIndexRef`: concrete ranges carry a
 validated non-zero `NatRangeIndex`, while symbolic generic ranges carry a
-normalized `NatPolyForm` from `syntax/nat.rs`. Nat ranges intentionally do not
-have fake resolved names or registry-key strings; callers that need declared
-index ownership use `declared_resolved()`, and callers that need Nat range
-semantics use `nat_range_ref()` / `nat_range()` / `nat_range_form()`.
+normalized `NatPolyForm` from `nat.rs`. Nat ranges intentionally do not have fake
+resolved names or registry-key strings; callers that need declared index
+ownership use `declared_resolved()`, and callers that need Nat range semantics
+use `nat_range_ref()` / `nat_range()` / `nat_range_form()`.
 
 ## 4. Declarations, Visibility, and Evaluation
 
@@ -969,7 +970,7 @@ just lint
 | `ModulePathKey`                  | `loader.rs`                            | Keep module paths structured instead of separator-joined            |
 | `RuntimeDeclKey`                 | `crates/graphcal-eval/src/decl_key.rs` | Prevent runtime value collisions across DAG owners                  |
 | `TypeNameRef` identity carriers  | `registry/declared_type.rs`            | Preserve declared index/struct owners through runtime/public values |
-| Nat range identity carriers      | `syntax/nat.rs`, `registry/declared_type.rs` | Keep concrete/symbolic Nat ranges typed, not fake resolved names    |
+| Nat range identity carriers      | `nat.rs`, `registry/declared_type.rs` | Keep concrete/symbolic Nat ranges typed, not fake resolved names    |
 | Trait-based I/O                  | `graphcal-io`                          | Deterministic tests and editor integration                          |
 | Package identifier newtypes      | `graphcal-package`                     | Keep package/alias/instance/Git identities typed                    |
 | Visitor pattern                  | `syntax/visitor.rs`                    | Centralized AST traversal                                           |
@@ -988,7 +989,7 @@ For a first pass, read in pipeline order:
 
 1. `crates/graphcal-compiler/src/syntax/token.rs`
 2. `crates/graphcal-compiler/src/syntax/names.rs`
-3. `crates/graphcal-compiler/src/syntax/nat.rs`
+3. `crates/graphcal-compiler/src/nat.rs`
 4. `crates/graphcal-compiler/src/syntax/phase.rs`
 5. `crates/graphcal-compiler/src/syntax/ast/common.rs`
 6. `crates/graphcal-compiler/src/syntax/ast/value.rs`
@@ -1012,31 +1013,32 @@ For a first pass, read in pipeline order:
 24. `crates/graphcal-compiler/src/dag_id.rs`
 25. `crates/graphcal-compiler/src/tir/typed.rs`
 26. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
-27. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
-28. `crates/graphcal-io/src/lib.rs`
-29. `crates/graphcal-eval/src/loader.rs`
-30. `crates/graphcal-eval/src/eval/project/pipeline.rs`
-31. `crates/graphcal-eval/src/eval/project/lowering.rs`
-32. `crates/graphcal-eval/src/inline_dag.rs`
-33. `crates/graphcal-eval/src/exec_plan.rs`
-34. `crates/graphcal-eval/src/decl_key.rs`
-35. `crates/graphcal-eval/src/eval/runtime.rs`
-36. `crates/graphcal-eval/src/eval_expr/mod.rs`
-37. `crates/graphcal-eval/src/eval_expr/numeric.rs`
-38. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
-39. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
-40. `crates/graphcal-eval/src/eval_expr/conversions.rs`
-41. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
-42. `crates/graphcal-eval/src/eval_expr/functions.rs`
-43. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
-44. `crates/graphcal-eval/src/eval/types.rs`
-45. `crates/graphcal-eval/src/eval/plot_data.rs`
-46. `crates/graphcal-eval/src/graph_ir/mod.rs`
-47. `crates/graphcal-package/src/lib.rs`
-48. `crates/graphcal-cli/src/main.rs`
-49. `crates/graphcal-cli/src/deps.rs`
-50. `crates/graphcal-lsp/src/server.rs`
-51. `crates/graphcal-fmt/src/lib.rs`
+27. `crates/graphcal-compiler/src/plot_props.rs`
+28. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+29. `crates/graphcal-io/src/lib.rs`
+30. `crates/graphcal-eval/src/loader.rs`
+31. `crates/graphcal-eval/src/eval/project/pipeline.rs`
+32. `crates/graphcal-eval/src/eval/project/lowering.rs`
+33. `crates/graphcal-eval/src/inline_dag.rs`
+34. `crates/graphcal-eval/src/exec_plan.rs`
+35. `crates/graphcal-eval/src/decl_key.rs`
+36. `crates/graphcal-eval/src/eval/runtime.rs`
+37. `crates/graphcal-eval/src/eval_expr/mod.rs`
+38. `crates/graphcal-eval/src/eval_expr/numeric.rs`
+39. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
+40. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
+41. `crates/graphcal-eval/src/eval_expr/conversions.rs`
+42. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
+43. `crates/graphcal-eval/src/eval_expr/functions.rs`
+44. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
+45. `crates/graphcal-eval/src/eval/types.rs`
+46. `crates/graphcal-eval/src/eval/plot_data.rs`
+47. `crates/graphcal-eval/src/graph_ir/mod.rs`
+48. `crates/graphcal-package/src/lib.rs`
+49. `crates/graphcal-cli/src/main.rs`
+50. `crates/graphcal-cli/src/deps.rs`
+51. `crates/graphcal-lsp/src/server.rs`
+52. `crates/graphcal-fmt/src/lib.rs`
 
 For an exhaustive dependency-ordered checklist, use
 `internals/codebase-reading-checklist.md`. After the core pipeline, read

@@ -4,9 +4,8 @@ use indexmap::IndexMap;
 
 use crate::dag_id::DagId;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
-use crate::syntax::names::{
-    FieldName, IndexName, IndexVariantName, ResolvedIndexVariant, StructTypeName,
-};
+use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::type_name::{FieldName, StructTypeName};
 
 /// The kind of a [`RuntimeValue`], used in type-mismatch error reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]

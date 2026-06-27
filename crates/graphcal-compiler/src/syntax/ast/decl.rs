@@ -4,12 +4,15 @@ use crate::syntax::ast::common::{
 use crate::syntax::ast::value::{
     DimExpr, Expr, MapEntryKey, MultiDeclSharedAxes, ParamBinding, TypeExpr, UnitExpr,
 };
-use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
-    PlotPropertyName, ScopedName, StructTypeName, UnitName,
-};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::dimension::{DimName, UnitName};
+use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::module_name::ScopedName;
 use crate::syntax::phase::{Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
+
+use super::plot_props::PlotPropertyName;
 
 // ---------------------------------------------------------------------------
 // Raw-only sugar variants

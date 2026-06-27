@@ -2,9 +2,9 @@ use crate::syntax::ast::{
     Expr, ExprKind, ForBinding, ForBindingIndex, IdentPath, MatchArm, MatchPattern, NatExpr,
     PatternBinding,
 };
-use crate::syntax::names::FieldName;
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
+use crate::syntax::type_name::FieldName;
 
 use super::{ParseError, Parser};
 

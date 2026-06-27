@@ -275,7 +275,7 @@ impl<'a> HirRefCollector<'a> {
 
     fn variant_key(
         &self,
-        variant: &graphcal_compiler::syntax::names::ResolvedIndexVariant,
+        variant: &graphcal_compiler::syntax::index_name::ResolvedIndexVariant,
     ) -> SymbolKey {
         SymbolKey::Variant {
             parent: self.path_for(variant.index().owner(), variant.index().as_str()),
@@ -1860,8 +1860,8 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                 if let Some(unit_info) =
                     registry
                         .units
-                        .get_unit(&graphcal_compiler::syntax::names::UnitRef::local(
-                            graphcal_compiler::syntax::names::UnitName::expect_valid(name),
+                        .get_unit(&graphcal_compiler::syntax::dimension::UnitRef::local(
+                            graphcal_compiler::syntax::dimension::UnitName::expect_valid(name),
                         ))
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
@@ -1888,7 +1888,9 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                         IndexKind::Named { variants } => {
                             let vs: Vec<&str> = variants
                                 .iter()
-                                .map(graphcal_compiler::syntax::names::IndexVariantName::as_str)
+                                .map(
+                                    graphcal_compiler::syntax::index_name::IndexVariantName::as_str,
+                                )
                                 .collect();
                             def_mut.type_description = Some(format!("{{ {} }}", vs.join(", ")));
                         }

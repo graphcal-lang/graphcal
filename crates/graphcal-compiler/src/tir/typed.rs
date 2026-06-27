@@ -5,6 +5,10 @@
 //! concrete dimensions, struct types, generic dimension parameters, or generic
 //! index parameters.
 
+use crate::syntax::decl_name::ResolvedDeclName;
+use crate::syntax::dimension::ResolvedDimName;
+use crate::syntax::index_name::ResolvedIndexName;
+use crate::syntax::type_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
@@ -12,19 +16,21 @@ use miette::NamedSource;
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::{MulDivOp, TypeExpr, TypeExprKind};
+use crate::dimension::{Dimension, Rational, RationalError};
 use crate::hir;
 use crate::hir::diagnostics::{
     expr_lower_error_to_graphcal, hir_lower_error_to_graphcal, resolved_decl_key,
 };
 pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
-use crate::syntax::dimension::{Dimension, Rational, RationalError};
-use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, ModuleAliasName,
-    NameAtom, NamePath, StructTypeName,
-};
-use crate::syntax::nat::Monomial;
-pub use crate::syntax::nat::{NatLinearForm, NatPolyForm};
+use crate::nat::Monomial;
+pub use crate::nat::{NatLinearForm, NatPolyForm};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::dimension::DimName;
+use crate::syntax::index_name::IndexName;
+use crate::syntax::module_name::ModuleAliasName;
+use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
 
 use crate::ir::lower::IR;
 use crate::ir::resolve::{DeclCategory, ExpectedFail, ParsedExpectedFail};
@@ -35,8 +41,8 @@ use crate::registry::types::{
     IndexDef, Registry, RegistryBuildError, RegistryBuilder, TypeDef, TypeGenericConstraint,
     UnionMemberDef,
 };
+use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
-use crate::syntax::names::{ResolvedName, ScopedName, namespace};
 
 // ---------------------------------------------------------------------------
 // Resolved type types
@@ -64,10 +70,10 @@ pub enum ResolvedTypeExpr {
     /// A concrete scalar dimension, e.g. `Length * Time^-2`
     Scalar(Dimension),
     /// A non-generic struct type name, e.g. `TransferResult`.
-    Struct(ResolvedName<namespace::StructType>, Span),
+    Struct(ResolvedStructTypeName, Span),
     /// A generic struct with concrete type arguments, e.g. `Vec3<Length, ECI>`.
     GenericStruct {
-        name: ResolvedName<namespace::StructType>,
+        name: ResolvedStructTypeName,
         type_args: Vec<Self>,
         span: Span,
     },
@@ -293,11 +299,11 @@ pub fn normalize_nat_expr(
     }
 }
 
-/// Convert a [`NatOverflowError`](crate::syntax::nat::NatOverflowError)
+/// Convert a [`NatOverflowError`](crate::nat::NatOverflowError)
 /// into a spanned [`GraphcalError`].
 #[must_use]
 pub fn nat_overflow_error(
-    err: crate::syntax::nat::NatOverflowError,
+    err: crate::nat::NatOverflowError,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> GraphcalError {
@@ -312,7 +318,7 @@ pub fn nat_overflow_error(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedIndex {
     /// A concrete index name, e.g. `Maneuver`.
-    Concrete(ResolvedName<namespace::Index>, Span),
+    Concrete(ResolvedIndexName, Span),
     /// A generic index parameter, e.g. `I`
     GenericParam(GenericParamName, Span),
     /// A Nat expression in index position (covers literals, variables, addition, and multiplication).
@@ -333,7 +339,7 @@ impl ResolvedIndex {
     }
 }
 
-/// Canonical type-system definitions keyed by [`ResolvedName`] identities.
+/// Canonical type-system definitions keyed by [`ResolvedName`](crate::syntax::names::ResolvedName) identities.
 ///
 /// The standalone [`Registry`] remains leaf-keyed for now because runtime values and
 /// declaration types still use local names. This registry is the module-aware
@@ -342,17 +348,17 @@ impl ResolvedIndex {
 /// instead of by source alias text or a dotted string.
 #[derive(Debug, Clone)]
 pub struct ModuleConstructorDef {
-    pub owning_type: ResolvedName<namespace::StructType>,
+    pub owning_type: ResolvedStructTypeName,
     pub type_def: TypeDef,
     pub variant: UnionMemberDef,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct ModuleTypeRegistry {
-    dimensions: HashMap<ResolvedName<namespace::Dim>, Dimension>,
-    indexes: HashMap<ResolvedName<namespace::Index>, IndexDef>,
-    struct_types: HashMap<ResolvedName<namespace::StructType>, TypeDef>,
-    constructors: HashMap<ResolvedName<namespace::Constructor>, ModuleConstructorDef>,
+    dimensions: HashMap<ResolvedDimName, Dimension>,
+    indexes: HashMap<ResolvedIndexName, IndexDef>,
+    struct_types: HashMap<ResolvedStructTypeName, TypeDef>,
+    constructors: HashMap<ResolvedConstructorName, ModuleConstructorDef>,
 }
 
 /// Error from constructing the module type registry's prelude entries.
@@ -381,7 +387,7 @@ impl ModuleTypeRegistry {
         for name in crate::registry::prelude::PRELUDE_DIMENSION_NAMES {
             if let Some(dim) = registry.dimensions.get_dimension(name) {
                 self.dimensions.insert(
-                    ResolvedName::from_def(owner.clone(), DimName::expect_valid(*name)),
+                    ResolvedDimName::from_def(owner.clone(), DimName::expect_valid(*name)),
                     dim.clone(),
                 );
             }
@@ -398,24 +404,24 @@ impl ModuleTypeRegistry {
     pub fn insert_registry(&mut self, owner: &crate::dag_id::DagId, registry: &Registry) {
         for (name, dim) in registry.dimensions.all_dimensions() {
             self.dimensions.insert(
-                ResolvedName::from_def(owner.clone(), name.clone()),
+                ResolvedDimName::from_def(owner.clone(), name.clone()),
                 dim.clone(),
             );
         }
         for index in registry.indexes.all_indexes() {
             self.indexes.insert(
-                ResolvedName::from_def(owner.clone(), index.name.clone()),
+                ResolvedIndexName::from_def(owner.clone(), index.name.clone()),
                 index.clone(),
             );
         }
         for type_def in registry.types.all_types() {
-            let type_name = ResolvedName::from_def(owner.clone(), type_def.name.clone());
+            let type_name = ResolvedStructTypeName::from_def(owner.clone(), type_def.name.clone());
             self.struct_types
                 .insert(type_name.clone(), type_def.clone());
             if let Some(members) = type_def.union_members() {
                 for member in members {
                     self.constructors.insert(
-                        ResolvedName::from_def(owner.clone(), member.name.clone()),
+                        ResolvedConstructorName::from_def(owner.clone(), member.name.clone()),
                         ModuleConstructorDef {
                             owning_type: type_name.clone(),
                             type_def: type_def.clone(),
@@ -428,17 +434,17 @@ impl ModuleTypeRegistry {
     }
 
     #[must_use]
-    pub fn get_dimension(&self, name: &ResolvedName<namespace::Dim>) -> Option<&Dimension> {
+    pub fn get_dimension(&self, name: &ResolvedDimName) -> Option<&Dimension> {
         self.dimensions.get(name)
     }
 
     #[must_use]
-    pub fn get_index(&self, name: &ResolvedName<namespace::Index>) -> Option<&IndexDef> {
+    pub fn get_index(&self, name: &ResolvedIndexName) -> Option<&IndexDef> {
         self.indexes.get(name)
     }
 
     #[must_use]
-    pub fn get_struct_type(&self, name: &ResolvedName<namespace::StructType>) -> Option<&TypeDef> {
+    pub fn get_struct_type(&self, name: &ResolvedStructTypeName) -> Option<&TypeDef> {
         self.struct_types.get(name)
     }
 
@@ -446,7 +452,7 @@ impl ModuleTypeRegistry {
     #[must_use]
     pub fn lookup_constructor(
         &self,
-        constructor: &ResolvedName<namespace::Constructor>,
+        constructor: &ResolvedConstructorName,
     ) -> Option<&ModuleConstructorDef> {
         self.constructors.get(constructor)
     }
@@ -558,29 +564,28 @@ pub type DagRegistry = HashMap<crate::dag_id::DagId, DagTIR>;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolvedDagDependencies {
     /// For each param/node declaration, the canonical declarations it reads via `@`.
-    pub runtime_deps:
-        HashMap<ResolvedName<namespace::Decl>, BTreeSet<ResolvedName<namespace::Decl>>>,
+    pub runtime_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
     /// For each const declaration, the canonical const declarations it reads.
-    pub const_deps: HashMap<ResolvedName<namespace::Decl>, BTreeSet<ResolvedName<namespace::Decl>>>,
+    pub const_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
 }
 
 /// HIR expressions for value declarations.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedExpressions {
     /// Const declaration expression keyed by its canonical declaration identity.
-    pub consts: HashMap<ResolvedName<namespace::Decl>, hir::Expr>,
+    pub consts: HashMap<ResolvedDeclName, hir::Expr>,
     /// Param default expression keyed by its canonical declaration identity.
-    pub param_defaults: HashMap<ResolvedName<namespace::Decl>, hir::Expr>,
+    pub param_defaults: HashMap<ResolvedDeclName, hir::Expr>,
     /// Node expression keyed by its canonical declaration identity.
-    pub nodes: HashMap<ResolvedName<namespace::Decl>, hir::Expr>,
+    pub nodes: HashMap<ResolvedDeclName, hir::Expr>,
     /// Assert body keyed by its canonical declaration identity.
-    pub asserts: HashMap<ResolvedName<namespace::Decl>, hir::AssertBody>,
+    pub asserts: HashMap<ResolvedDeclName, hir::AssertBody>,
 }
 
 impl ResolvedExpressions {
     /// Look up the HIR expression for a runtime declaration (param default or node).
     #[must_use]
-    pub fn runtime_expr(&self, key: &ResolvedName<namespace::Decl>) -> Option<&hir::Expr> {
+    pub fn runtime_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
         self.param_defaults.get(key).or_else(|| self.nodes.get(key))
     }
 }
@@ -591,7 +596,7 @@ pub struct ResolvedCollectionRefs {
     /// Canonical index definitions observed while collecting the refs
     /// or owner-qualified declaration types that runtime collection semantics
     /// may need (for example `unfold` over a declared indexed node).
-    pub index_defs: HashMap<ResolvedName<namespace::Index>, IndexDef>,
+    pub index_defs: HashMap<ResolvedIndexName, IndexDef>,
 }
 
 /// Canonical HIR-derived constructor references used by constructor and match inference.
@@ -600,7 +605,7 @@ pub struct ResolvedConstructorRefs {
     /// Canonical constructor definitions observed while collecting constructor
     /// calls, const-like constructor refs, and match patterns. HIR carries the
     /// resolved constructor name inline; this map supplies the rich target.
-    pub constructor_defs: HashMap<ResolvedName<namespace::Constructor>, ResolvedConstructorTarget>,
+    pub constructor_defs: HashMap<ResolvedConstructorName, ResolvedConstructorTarget>,
 }
 
 /// Canonical HIR-derived inline-DAG calls used by dim-check/eval routing.
@@ -614,7 +619,7 @@ pub struct ResolvedInlineDagRefs {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResolvedStructFieldTypeKey {
     /// Canonical owner/name of the type that owns the constructor.
-    pub owning_type: ResolvedName<namespace::StructType>,
+    pub owning_type: ResolvedStructTypeName,
     /// Constructor/union-member leaf inside the owning type.
     pub constructor: ConstructorName,
     /// Field leaf inside the constructor payload.
@@ -625,14 +630,13 @@ pub struct ResolvedStructFieldTypeKey {
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
     /// Struct/tagged-union definitions keyed by canonical owner/name.
-    pub struct_types: HashMap<ResolvedName<namespace::StructType>, TypeDef>,
+    pub struct_types: HashMap<ResolvedStructTypeName, TypeDef>,
     /// Field type annotations resolved in the owning type's generic scope.
     pub field_types: HashMap<ResolvedStructFieldTypeKey, ResolvedTypeExpr>,
     /// Field domain bounds lowered to HIR in the owning type's generic scope.
     pub field_bounds: HashMap<ResolvedStructFieldTypeKey, Vec<ResolvedDomainBound>>,
     /// Generic parameter defaults resolved in the owning type's generic scope.
-    pub generic_defaults:
-        HashMap<(ResolvedName<namespace::StructType>, GenericParamName), ResolvedTypeExpr>,
+    pub generic_defaults: HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedTypeExpr>,
 }
 
 /// A `min:`/`max:` domain bound with its expression lowered to HIR.
@@ -663,7 +667,7 @@ pub struct DagSemanticBody {
     /// HIR expressions for const/default/node expressions.
     pub expressions: ResolvedExpressions,
     /// Domain bounds per declaration, lowered to HIR, in source order.
-    pub domain_bounds: HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
+    pub domain_bounds: HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
     /// Plot/figure/layer expressions lowered to HIR, keyed by declaration name.
     pub plot_exprs: ResolvedPlotExprs,
     /// Dynamic unit scale expressions lowered to HIR, keyed by unit reference.
@@ -672,7 +676,7 @@ pub struct DagSemanticBody {
     /// body carries entries; evaluation looks them up through the TIR root.
     /// Module-alias-qualified references (`u.mile`) key the entry the import
     /// merged under that alias.
-    pub dynamic_unit_scales: HashMap<crate::syntax::names::UnitRef, hir::Expr>,
+    pub dynamic_unit_scales: HashMap<crate::syntax::dimension::UnitRef, hir::Expr>,
     /// Canonical dependency maps for this DAG.
     pub dependencies: ResolvedDagDependencies,
     /// Canonical HIR-derived collection/index references.
@@ -684,7 +688,7 @@ pub struct DagSemanticBody {
     /// Canonical type definitions referenced by this DAG.
     pub type_defs: ResolvedTypeDefs,
     /// Canonical declaration identity for every value name visible in this DAG.
-    pub decl_bindings: HashMap<ScopedName, ResolvedName<namespace::Decl>>,
+    pub decl_bindings: HashMap<ScopedName, ResolvedDeclName>,
 }
 
 /// Plot/figure/layer expressions lowered to HIR.
@@ -707,16 +711,16 @@ pub struct ResolvedPlotExprs {
 pub struct ResolvedInlineDagCall {
     pub target: crate::dag_id::DagId,
     /// Param binding name span -> canonical declaration in the target DAG.
-    pub arg_targets: HashMap<Span, ResolvedName<namespace::Decl>>,
+    pub arg_targets: HashMap<Span, ResolvedDeclName>,
     /// Canonical projected declaration in the target DAG.
-    pub output: Spanned<ResolvedName<namespace::Decl>>,
+    pub output: Spanned<ResolvedDeclName>,
 }
 
 /// A resolved constructor and the tagged-union member it constructs.
 #[derive(Debug, Clone)]
 pub struct ResolvedConstructorTarget {
-    pub constructor: ResolvedName<namespace::Constructor>,
-    pub owning_type: ResolvedName<namespace::StructType>,
+    pub constructor: ResolvedConstructorName,
+    pub owning_type: ResolvedStructTypeName,
     pub type_def: TypeDef,
     pub variant: UnionMemberDef,
 }
@@ -981,10 +985,7 @@ impl DagTIR {
     /// source-facing entries still use resolved identities instead of
     /// source-keyed runtime maps.
     #[must_use]
-    pub fn resolved_decl_key_for_local(
-        &self,
-        name: &ScopedName,
-    ) -> Option<ResolvedName<namespace::Decl>> {
+    pub fn resolved_decl_key_for_local(&self, name: &ScopedName) -> Option<ResolvedDeclName> {
         if let Some(resolved) = self.semantic.decl_bindings.get(name) {
             return Some(resolved.clone());
         }
@@ -1346,7 +1347,7 @@ fn collect_struct_type_defs_from_resolved_type(
 }
 
 fn record_resolved_struct_type_def(
-    name: &ResolvedName<namespace::StructType>,
+    name: &ResolvedStructTypeName,
     ctx: ModuleTypeContext<'_>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
@@ -1405,7 +1406,7 @@ fn record_resolved_struct_type_def(
 /// Build the lexical generic scope of a type definition so field-bound
 /// expressions can lower references to the type's generic parameters.
 fn generic_scope_for_type_def(
-    name: &ResolvedName<namespace::StructType>,
+    name: &ResolvedStructTypeName,
     type_def: &TypeDef,
     src: &NamedSource<Arc<String>>,
 ) -> Result<hir::GenericScope, GraphcalError> {
@@ -1435,7 +1436,7 @@ fn generic_scope_for_type_def(
 
 fn resolve_type_expr_in_struct_scope(
     type_expr: &TypeExpr,
-    type_owner: &ResolvedName<namespace::StructType>,
+    type_owner: &ResolvedStructTypeName,
     type_def: &TypeDef,
     ctx: ModuleTypeContext<'_>,
     registry: &Registry,
@@ -1615,7 +1616,7 @@ fn decl_key_or_internal_error(
     name: &ScopedName,
     span: Span,
     src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedName<namespace::Decl>, GraphcalError> {
+) -> Result<ResolvedDeclName, GraphcalError> {
     resolved_decl_key(owner, name).ok_or_else(|| {
         internal_error(
             format!("could not build canonical declaration key for `{name}`"),
@@ -1651,7 +1652,7 @@ fn lower_domain_bounds(
 /// plus the HIR domain bounds collected while lowering them.
 struct LoweredDagExpressions {
     exprs: ResolvedExpressions,
-    domain_bounds: HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
+    domain_bounds: HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
 }
 
 /// HIR-level body policies that replaced the retired syntax-AST scope checks.
@@ -1673,7 +1674,7 @@ fn check_hir_body_policies(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let checker = HirPolicyChecker { registry, ctx, src };
-    let local = |key: &ResolvedName<namespace::Decl>| key.owner() == ctx.owner;
+    let local = |key: &ResolvedDeclName| key.owner() == ctx.owner;
     let is_pub = |leaf: &str| pub_names.contains(&DeclName::expect_valid(leaf));
 
     for (key, expr) in &semantic.expressions.consts {
@@ -1883,7 +1884,7 @@ impl HirPolicyChecker<'_> {
 
     fn check_graph_ref(
         &self,
-        target: &Spanned<ResolvedName<namespace::Decl>>,
+        target: &Spanned<ResolvedDeclName>,
         ref_span: Span,
         const_body: bool,
     ) -> Result<(), GraphcalError> {
@@ -1956,19 +1957,17 @@ fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticBody) {
     if semantic.dynamic_unit_scales.is_empty() {
         return;
     }
-    let scale_deps: HashMap<
-        crate::syntax::names::UnitRef,
-        BTreeSet<ResolvedName<namespace::Decl>>,
-    > = semantic
-        .dynamic_unit_scales
-        .iter()
-        .map(|(name, expr)| {
-            (
-                name.clone(),
-                hir::collect_expr_dependencies(expr).graph_refs,
-            )
-        })
-        .collect();
+    let scale_deps: HashMap<crate::syntax::dimension::UnitRef, BTreeSet<ResolvedDeclName>> =
+        semantic
+            .dynamic_unit_scales
+            .iter()
+            .map(|(name, expr)| {
+                (
+                    name.clone(),
+                    hir::collect_expr_dependencies(expr).graph_refs,
+                )
+            })
+            .collect();
 
     let DagSemanticBody {
         expressions,
@@ -1978,7 +1977,7 @@ fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticBody) {
     for (key, expr) in expressions.param_defaults.iter().chain(&expressions.nodes) {
         let mut unit_names = std::collections::HashSet::new();
         collect_unit_names_from_hir(expr, &mut unit_names);
-        let extra: BTreeSet<ResolvedName<namespace::Decl>> = unit_names
+        let extra: BTreeSet<ResolvedDeclName> = unit_names
             .iter()
             .filter_map(|unit| scale_deps.get(unit))
             .flatten()
@@ -1997,7 +1996,7 @@ fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticBody) {
 /// Collect every unit name mentioned by `UnitLiteral` / `Convert` nodes.
 fn collect_unit_names_from_hir(
     expr: &hir::Expr,
-    names: &mut std::collections::HashSet<crate::syntax::names::UnitRef>,
+    names: &mut std::collections::HashSet<crate::syntax::dimension::UnitRef>,
 ) {
     // Recursion choke point: recurses once per tree level.
     crate::stack::with_stack_growth(|| match &expr.kind {
@@ -2198,7 +2197,7 @@ fn collect_resolved_dag_dependencies(
 
 fn collect_resolved_collection_refs(
     exprs: &ResolvedExpressions,
-    domain_bounds: &HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
+    domain_bounds: &HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
@@ -2226,7 +2225,7 @@ fn collect_resolved_collection_refs(
 }
 
 fn record_resolved_collection_index(
-    index: &ResolvedName<namespace::Index>,
+    index: &ResolvedIndexName,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -2471,7 +2470,7 @@ fn collect_resolved_collection_refs_from_assert_body(
 
 fn collect_resolved_constructor_refs(
     exprs: &ResolvedExpressions,
-    domain_bounds: &HashMap<ResolvedName<namespace::Decl>, Vec<ResolvedDomainBound>>,
+    domain_bounds: &HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedConstructorRefs, GraphcalError> {
@@ -2494,7 +2493,7 @@ fn collect_resolved_constructor_refs(
 }
 
 fn record_resolved_constructor_target(
-    constructor: &ResolvedName<namespace::Constructor>,
+    constructor: &ResolvedConstructorName,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -2827,7 +2826,7 @@ fn collect_hir_decl_bindings(
     nodes: &[crate::ir::lower::NodeEntry],
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, ResolvedName<namespace::Decl>>, GraphcalError> {
+) -> Result<HashMap<ScopedName, ResolvedDeclName>, GraphcalError> {
     let mut bindings = HashMap::new();
 
     for name in consts
@@ -2849,7 +2848,7 @@ fn collect_hir_decl_bindings(
     for (name, source) in imported_value_sources {
         bindings.insert(
             name.clone(),
-            ResolvedName::from_def(source.dag_id.clone(), source.source_name.clone()),
+            ResolvedDeclName::from_def(source.dag_id.clone(), source.source_name.clone()),
         );
     }
 
@@ -2875,7 +2874,7 @@ fn collect_resolved_decl_bindings(
     imported_decl_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, ResolvedName<namespace::Decl>>, GraphcalError> {
+) -> Result<HashMap<ScopedName, ResolvedDeclName>, GraphcalError> {
     let mut bindings = collect_hir_decl_bindings(
         ctx.owner,
         consts,
@@ -2916,7 +2915,7 @@ fn collect_resolved_decl_bindings(
                     .fold(ctx.owner.clone(), |owner, segment| {
                         owner.child(segment.as_ref())
                     });
-                ResolvedName::from_def(synthetic_owner, DeclName::expect_valid(name.member()))
+                ResolvedDeclName::from_def(synthetic_owner, DeclName::expect_valid(name.member()))
             }
             Err(err) => return Err(module_resolve_error(&err, src, Span::new(0, 0))),
         };
@@ -4287,12 +4286,12 @@ const fn resolve_hir_builtin_type(builtin: hir::BuiltinType) -> ResolvedTypeExpr
         hir::BuiltinType::Dimensionless => ResolvedTypeExpr::Dimensionless,
         hir::BuiltinType::Bool => ResolvedTypeExpr::Bool,
         hir::BuiltinType::Int => ResolvedTypeExpr::Int,
-        hir::BuiltinType::Datetime(scale) => ResolvedTypeExpr::Datetime(scale.scale()),
+        hir::BuiltinType::Datetime(scale) => ResolvedTypeExpr::Datetime(scale),
     }
 }
 
 fn hir_dimension(
-    name: &ResolvedName<namespace::Dim>,
+    name: &ResolvedDimName,
     span: Span,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<Dimension, GraphcalError> {
@@ -4315,7 +4314,7 @@ fn hir_dimension(
 }
 
 fn hir_index_name(
-    name: &ResolvedName<namespace::Index>,
+    name: &ResolvedIndexName,
     span: Span,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<IndexName, GraphcalError> {
@@ -4331,7 +4330,7 @@ fn hir_index_name(
 }
 
 fn hir_struct_type_def<'a>(
-    name: &ResolvedName<namespace::StructType>,
+    name: &ResolvedStructTypeName,
     span: Span,
     ctx: HirTypeResolutionContext<'a>,
 ) -> Result<&'a TypeDef, GraphcalError> {
@@ -4445,7 +4444,7 @@ fn resolve_hir_index_ref(
 
 fn normalize_hir_nat_expr(
     expr: &hir::NatExpr,
-) -> Result<NatPolyForm, crate::syntax::nat::NatOverflowError> {
+) -> Result<NatPolyForm, crate::nat::NatOverflowError> {
     match expr {
         hir::NatExpr::Literal(value, _) => Ok(NatPolyForm::from_constant(*value)),
         hir::NatExpr::Param(param) => Ok(NatPolyForm::from_var(param.value.name.clone())),
@@ -4491,7 +4490,7 @@ fn check_type_application_arity(
 
 fn resolve_hir_type_application(
     type_ann: &hir::TypeExpr,
-    name: &crate::syntax::span::Spanned<ResolvedName<namespace::StructType>>,
+    name: &crate::syntax::span::Spanned<ResolvedStructTypeName>,
     type_args: &[hir::TypeExpr],
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
@@ -4567,7 +4566,7 @@ fn resolve_hir_type_arg_for_param(
 
 fn lower_type_generic_default(
     default_expr: &TypeExpr,
-    type_owner: &ResolvedName<namespace::StructType>,
+    type_owner: &ResolvedStructTypeName,
     type_def: &TypeDef,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<hir::TypeExpr, GraphcalError> {
@@ -4645,7 +4644,7 @@ fn resolve_index_expr_name(
     let text = require_local_type_level_path(path, span, src)?;
     if registry.indexes.get_index(text).is_some() {
         Ok(ResolvedIndex::Concrete(
-            ResolvedName::from_def(owner.clone(), IndexName::expect_valid(text)),
+            ResolvedIndexName::from_def(owner.clone(), IndexName::expect_valid(text)),
             span,
         ))
     } else {
@@ -4664,7 +4663,7 @@ fn resolve_concrete_index_path(
     owner: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<Option<ResolvedName<namespace::Index>>, GraphcalError> {
+) -> Result<Option<ResolvedIndexName>, GraphcalError> {
     if let Some(ctx) = module_ctx {
         match ctx.resolver.resolve_index_path(ctx.owner, path) {
             Ok(resolved) => {
@@ -4704,10 +4703,10 @@ fn resolve_concrete_index_path(
         crate::registry::types::IndexKind::Named { .. }
             | crate::registry::types::IndexKind::RequiredNamed
     )
-    .then(|| ResolvedName::from_def(owner.clone(), IndexName::from_atom(atom.clone()))))
+    .then(|| ResolvedIndexName::from_def(owner.clone(), IndexName::from_atom(atom.clone()))))
 }
 
-type ResolvedStructTypeLookup<'a> = Option<(ResolvedName<namespace::StructType>, &'a TypeDef)>;
+type ResolvedStructTypeLookup<'a> = Option<(ResolvedStructTypeName, &'a TypeDef)>;
 
 fn resolve_struct_type_path<'a>(
     path: &NamePath,
@@ -4740,7 +4739,10 @@ fn resolve_struct_type_path<'a>(
     };
     Ok(registry.types.get_type(atom.as_str()).map(|type_def| {
         (
-            ResolvedName::from_def(owner.clone(), StructTypeName::from_atom(atom.clone())),
+            ResolvedStructTypeName::from_def(
+                owner.clone(),
+                StructTypeName::from_atom(atom.clone()),
+            ),
             type_def,
         )
     }))
@@ -5284,9 +5286,9 @@ fn resolve_type_arg_for_param(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dimension::BaseDimId;
     use crate::registry::prelude::load_prelude;
     use crate::registry::types::RegistryBuilder;
-    use crate::syntax::dimension::BaseDimId;
     use crate::syntax::parser::Parser;
 
     fn make_registry() -> Registry {
@@ -5333,14 +5335,14 @@ mod tests {
             generic_params: vec![],
             kind: crate::registry::types::TypeDefKind::Union {
                 members: vec![crate::registry::types::UnionMemberDef {
-                    name: crate::syntax::names::ConstructorName::expect_valid("TransferResult"),
+                    name: crate::syntax::type_name::ConstructorName::expect_valid("TransferResult"),
                     fields: vec![
                         crate::registry::types::StructField {
-                            name: crate::syntax::names::FieldName::expect_valid("dv1"),
+                            name: crate::syntax::type_name::FieldName::expect_valid("dv1"),
                             type_ann: make_dim_type_expr("Velocity"),
                         },
                         crate::registry::types::StructField {
-                            name: crate::syntax::names::FieldName::expect_valid("dv2"),
+                            name: crate::syntax::type_name::FieldName::expect_valid("dv2"),
                             type_ann: make_dim_type_expr("Velocity"),
                         },
                     ],
@@ -5357,8 +5359,8 @@ mod tests {
             name: IndexName::expect_valid("Maneuver"),
             kind: crate::registry::types::IndexKind::Named {
                 variants: vec![
-                    crate::syntax::names::IndexVariantName::expect_valid("Departure"),
-                    crate::syntax::names::IndexVariantName::expect_valid("Insertion"),
+                    crate::syntax::index_name::IndexVariantName::expect_valid("Departure"),
+                    crate::syntax::index_name::IndexVariantName::expect_valid("Insertion"),
                 ],
             },
         });
@@ -5731,10 +5733,10 @@ mod tests {
         let tir =
             type_resolve_with_modules(ir, dag_id.clone(), &src, &resolver, &module_types).unwrap();
         let deps = &tir.root().semantic.dependencies;
-        let c = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("C"));
-        let d = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("D"));
-        let p = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("p"));
-        let x = ResolvedName::from_def(dag_id, DeclName::expect_valid("x"));
+        let c = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("C"));
+        let d = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("D"));
+        let p = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("p"));
+        let x = ResolvedDeclName::from_def(dag_id, DeclName::expect_valid("x"));
 
         assert!(deps.const_deps[&d].contains(&c));
         assert!(deps.const_deps[&c].is_empty());
@@ -5882,7 +5884,7 @@ mod tests {
         let src = make_src();
         let registry = make_registry();
         let owner = crate::dag_id::DagId::root_in_package("test", "a");
-        let resolved_index = ResolvedName::from_def(owner, IndexName::expect_valid("Phase"));
+        let resolved_index = ResolvedIndexName::from_def(owner, IndexName::expect_valid("Phase"));
         let generic = GenericParamName::expect_valid("I");
         let resolved_type = ResolvedTypeExpr::Indexed {
             base: Box::new(ResolvedTypeExpr::Dimensionless),
@@ -5952,7 +5954,7 @@ mod tests {
     #[test]
     fn convert_struct() {
         let owner = crate::dag_id::DagId::root_in_package("test", "test");
-        let resolved = ResolvedName::from_def(owner, StructTypeName::expect_valid("Foo"));
+        let resolved = ResolvedStructTypeName::from_def(owner, StructTypeName::expect_valid("Foo"));
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Struct(resolved.clone(), Span::new(0, 0)),
             &make_src(),
@@ -5967,7 +5969,7 @@ mod tests {
     #[test]
     fn convert_indexed() {
         let owner = crate::dag_id::DagId::root_in_package("test", "test");
-        let resolved_index = ResolvedName::from_def(owner, IndexName::expect_valid("M"));
+        let resolved_index = ResolvedIndexName::from_def(owner, IndexName::expect_valid("M"));
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Indexed {
                 base: Box::new(ResolvedTypeExpr::Scalar(Dimension::base(

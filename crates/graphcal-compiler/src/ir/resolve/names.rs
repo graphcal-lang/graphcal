@@ -6,7 +6,8 @@ use crate::registry::resolve_types::{
     ExpectedFail, ExpectedFailKeyPart, ParsedExpectedFail, ParsedExpectedFailKey,
     ParsedExpectedFailKeyPart,
 };
-use crate::syntax::names::{IndexVariantName, NamePath};
+use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use miette::NamedSource;

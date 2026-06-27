@@ -51,7 +51,7 @@ use crate::syntax::ast::{
     MapEntryKey, MultiDecl, MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl,
     ParamDecl, TableIndexSpec,
 };
-use crate::syntax::names::{IndexName, IndexVariantName};
+use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Raw};
 use crate::syntax::span::Spanned;

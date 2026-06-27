@@ -1,14 +1,17 @@
+use crate::syntax::decl_name::ResolvedDeclName;
+use crate::syntax::index_name::ResolvedIndexName;
+use crate::syntax::type_name::ResolvedStructTypeName;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::dimension::Dimension;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
-use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{
-    IndexName, IndexVariantName, ResolvedName, ScopedName, StructTypeName, namespace,
-};
+use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::module_name::ScopedName;
+use crate::syntax::type_name::StructTypeName;
 
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
@@ -52,7 +55,7 @@ impl InferredIndex {
     }
 
     #[must_use]
-    pub fn from_resolved(resolved: ResolvedName<namespace::Index>) -> Self {
+    pub fn from_resolved(resolved: ResolvedIndexName) -> Self {
         Self {
             reference: IndexTypeRef::from_resolved(resolved),
         }
@@ -98,7 +101,7 @@ impl InferredIndex {
     }
 
     #[must_use]
-    pub const fn declared_resolved(&self) -> Option<&ResolvedName<namespace::Index>> {
+    pub const fn declared_resolved(&self) -> Option<&ResolvedIndexName> {
         self.reference.declared_resolved()
     }
 
@@ -113,7 +116,7 @@ impl InferredIndex {
     }
 
     #[must_use]
-    pub fn matches_resolved(&self, expected: &ResolvedName<namespace::Index>) -> bool {
+    pub fn matches_resolved(&self, expected: &ResolvedIndexName) -> bool {
         self.declared_resolved() == Some(expected)
     }
 
@@ -153,7 +156,7 @@ impl InferredStructType {
     }
 
     #[must_use]
-    pub fn from_resolved(resolved: ResolvedName<namespace::StructType>) -> Self {
+    pub fn from_resolved(resolved: ResolvedStructTypeName) -> Self {
         Self {
             reference: StructTypeRef::from_resolved(resolved),
         }
@@ -175,12 +178,12 @@ impl InferredStructType {
     }
 
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedName<namespace::StructType> {
+    pub const fn resolved(&self) -> &ResolvedStructTypeName {
         self.reference.resolved()
     }
 
     #[must_use]
-    pub fn matches_resolved(&self, expected: &ResolvedName<namespace::StructType>) -> bool {
+    pub fn matches_resolved(&self, expected: &ResolvedStructTypeName) -> bool {
         self.resolved() == expected
     }
 
@@ -281,7 +284,7 @@ impl DimCheckContext<'_> {
     /// Look up the module-aware HIR expression for a local declaration.
     fn hir_expr_for_decl(
         &self,
-        name: &crate::syntax::names::ScopedName,
+        name: &crate::syntax::module_name::ScopedName,
     ) -> Option<&crate::hir::Expr> {
         let dag = self.dag?;
         let key = dag.resolved_decl_key_for_local(name)?;
@@ -295,7 +298,7 @@ impl DimCheckContext<'_> {
     /// Look up the module-aware HIR assertion body for a local assertion.
     fn hir_assert_body(
         &self,
-        name: &crate::syntax::names::ScopedName,
+        name: &crate::syntax::module_name::ScopedName,
         span: crate::syntax::span::Span,
     ) -> Result<&crate::hir::AssertBody, GraphcalError> {
         let dag = self.dag.ok_or_else(|| GraphcalError::InternalError {
@@ -344,7 +347,7 @@ impl DimCheckContext<'_> {
 /// Check that a declaration's expression type matches its declared type annotation.
 fn check_decl_expr_type(
     ctx: &DimCheckContext<'_>,
-    name: &crate::syntax::names::ScopedName,
+    name: &crate::syntax::module_name::ScopedName,
     type_ann_span: &crate::syntax::span::Span,
 ) -> Result<(), GraphcalError> {
     let declared = ctx
@@ -1017,7 +1020,7 @@ fn check_domain_constraint_dimensions_dag(
 }
 
 fn check_one_bound(
-    name: &crate::syntax::names::ScopedName,
+    name: &crate::syntax::module_name::ScopedName,
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
@@ -1503,7 +1506,7 @@ pub fn check_override_dimension(
         declared_types
             .get(&param_key)
             .ok_or_else(|| GraphcalError::OverrideUnknownParam {
-                name: crate::syntax::names::DeclName::expect_valid(param_name.to_string()),
+                name: crate::syntax::decl_name::DeclName::expect_valid(param_name.to_string()),
             })?;
     let dag = tir.root();
     let hir_expr = dag
@@ -1587,9 +1590,9 @@ fn detect_decl_cycles(
     use petgraph::algo::toposort;
     use petgraph::graph::DiGraph;
 
-    use crate::syntax::names::{ResolvedName, ScopedName, namespace};
+    use crate::syntax::module_name::ScopedName;
 
-    type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+    type ResolvedDeclKey = ResolvedDeclName;
 
     fn local_resolved_decl_key(
         dag: &crate::tir::typed::DagTIR,

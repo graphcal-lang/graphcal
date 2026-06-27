@@ -1,15 +1,19 @@
 use std::sync::Arc;
 
-use graphcal_compiler::hir::{self, BuiltinFnName, ConstRef, FunctionRef};
+use graphcal_compiler::builtin::{
+    AggregationFn, BuiltinFnName, ConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn,
+    SpecialFnKind, TypeConversionFn,
+};
+use graphcal_compiler::hir::{self, ConstRef, FunctionRef};
 use graphcal_compiler::ir::resolve::DeclCategory;
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{IndexDef, IndexKind};
-use graphcal_compiler::syntax::names::{
-    IndexVariantName, ResolvedName, ScopedName, StructTypeName, namespace,
-};
+use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::type_name::StructTypeName;
 use graphcal_compiler::tir::typed::{DagTIR, ResolvedConstructorTarget};
 use indexmap::IndexMap;
 use miette::NamedSource;
@@ -25,7 +29,7 @@ use super::{
 
 pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, RuntimeValue>;
 
-type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 /// Evaluate an already-lowered HIR expression.
 ///
@@ -195,7 +199,7 @@ fn eval_hir_const_ref(
 }
 
 fn eval_hir_nullary_constructor(
-    constructor: &ResolvedName<namespace::Constructor>,
+    constructor: &graphcal_compiler::syntax::type_name::ResolvedConstructorName,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -375,21 +379,17 @@ fn eval_hir_fn_call(
 ) -> Result<RuntimeValue, GraphcalError> {
     let FunctionRef::Builtin(name) = callee.value;
     match name.special_kind() {
-        Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::Aggregation(kind))
-            if args.len() == 1 =>
-        {
+        Some(SpecialFnKind::Aggregation(kind)) if args.len() == 1 => {
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             if let RuntimeValue::Indexed { entries, .. } = arg_val {
                 return eval_hir_aggregation_fn(kind, &entries, expr.span, ctx.src);
             }
             eval_hir_builtin_fn(expr, name, args, values, local_values, ctx)
         }
-        Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::TypeConversion(kind)) => {
+        Some(SpecialFnKind::TypeConversion(kind)) => {
             eval_hir_conversion_fn(kind, expr.span, args, values, local_values, ctx)
         }
-        Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::TimeScaleConversion(
-            scale,
-        )) => {
+        Some(SpecialFnKind::TimeScaleConversion(scale)) => {
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg else {
@@ -402,10 +402,10 @@ fn eval_hir_fn_call(
                 epoch.to_time_scale(scale.to_hifitime()),
             ))
         }
-        Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::Constructor(kind)) => {
+        Some(SpecialFnKind::Constructor(kind)) => {
             eval_hir_datetime_constructor(kind, expr.span, args, ctx.src)
         }
-        Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::DatetimeExtract(kind)) => {
+        Some(SpecialFnKind::DatetimeExtract(kind)) => {
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
@@ -416,28 +416,14 @@ fn eval_hir_fn_call(
             };
             let (year, month, day, hour, minute, second, _) = epoch.to_gregorian_utc();
             let result = match kind {
-                graphcal_compiler::registry::resolve_types::DatetimeExtractFn::Year => {
-                    i64::from(year)
-                }
-                graphcal_compiler::registry::resolve_types::DatetimeExtractFn::Month => {
-                    i64::from(month)
-                }
-                graphcal_compiler::registry::resolve_types::DatetimeExtractFn::Day => {
-                    i64::from(day)
-                }
-                graphcal_compiler::registry::resolve_types::DatetimeExtractFn::Hour => {
-                    i64::from(hour)
-                }
-                graphcal_compiler::registry::resolve_types::DatetimeExtractFn::Minute => {
-                    i64::from(minute)
-                }
-                graphcal_compiler::registry::resolve_types::DatetimeExtractFn::Second => {
-                    i64::from(second)
-                }
-                graphcal_compiler::registry::resolve_types::DatetimeExtractFn::Weekday => {
-                    i64::from(u8::from(epoch.weekday_utc()))
-                }
-                graphcal_compiler::registry::resolve_types::DatetimeExtractFn::DayOfYear => {
+                DatetimeExtractFn::Year => i64::from(year),
+                DatetimeExtractFn::Month => i64::from(month),
+                DatetimeExtractFn::Day => i64::from(day),
+                DatetimeExtractFn::Hour => i64::from(hour),
+                DatetimeExtractFn::Minute => i64::from(minute),
+                DatetimeExtractFn::Second => i64::from(second),
+                DatetimeExtractFn::Weekday => i64::from(u8::from(epoch.weekday_utc())),
+                DatetimeExtractFn::DayOfYear => {
                     let start = hifitime::Epoch::from_gregorian_utc_at_midnight(year, 1, 1);
                     #[expect(
                         clippy::arithmetic_side_effects,
@@ -461,7 +447,7 @@ fn eval_hir_fn_call(
             };
             Ok(RuntimeValue::Int(result))
         }
-        Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::DatetimeFrom(kind)) => {
+        Some(SpecialFnKind::DatetimeFrom(kind)) => {
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let num = match arg_val {
@@ -476,19 +462,13 @@ fn eval_hir_fn_call(
                 }
             };
             let epoch = match kind {
-                graphcal_compiler::registry::resolve_types::DatetimeFromFn::FromJd => {
-                    hifitime::Epoch::from_jde_utc(num)
-                }
-                graphcal_compiler::registry::resolve_types::DatetimeFromFn::FromMjd => {
-                    hifitime::Epoch::from_mjd_utc(num)
-                }
-                graphcal_compiler::registry::resolve_types::DatetimeFromFn::FromUnix => {
-                    hifitime::Epoch::from_unix_seconds(num)
-                }
+                DatetimeFromFn::FromJd => hifitime::Epoch::from_jde_utc(num),
+                DatetimeFromFn::FromMjd => hifitime::Epoch::from_mjd_utc(num),
+                DatetimeFromFn::FromUnix => hifitime::Epoch::from_unix_seconds(num),
             };
             Ok(RuntimeValue::Datetime(epoch))
         }
-        Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::DatetimeTo(kind)) => {
+        Some(SpecialFnKind::DatetimeTo(kind)) => {
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
@@ -498,26 +478,20 @@ fn eval_hir_fn_call(
                 ));
             };
             let result = match kind {
-                graphcal_compiler::registry::resolve_types::DatetimeToFn::ToJd => {
-                    epoch.to_jde_utc_days()
-                }
-                graphcal_compiler::registry::resolve_types::DatetimeToFn::ToMjd => {
-                    epoch.to_mjd_utc_days()
-                }
-                graphcal_compiler::registry::resolve_types::DatetimeToFn::ToUnix => {
-                    epoch.to_unix_seconds()
-                }
+                DatetimeToFn::ToJd => epoch.to_jde_utc_days(),
+                DatetimeToFn::ToMjd => epoch.to_mjd_utc_days(),
+                DatetimeToFn::ToUnix => epoch.to_unix_seconds(),
             };
             Ok(RuntimeValue::Scalar(result))
         }
-        None | Some(graphcal_compiler::registry::resolve_types::SpecialFnKind::Aggregation(_)) => {
+        None | Some(SpecialFnKind::Aggregation(_)) => {
             eval_hir_builtin_fn(expr, name, args, values, local_values, ctx)
         }
     }
 }
 
 fn eval_hir_aggregation_fn(
-    kind: graphcal_compiler::registry::resolve_types::AggregationFn,
+    kind: AggregationFn,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
     span: Span,
     src: &NamedSource<Arc<String>>,
@@ -532,7 +506,7 @@ fn eval_hir_aggregation_fn(
 }
 
 fn eval_hir_conversion_fn(
-    kind: graphcal_compiler::registry::resolve_types::TypeConversionFn,
+    kind: TypeConversionFn,
     span: Span,
     args: &[hir::Expr],
     values: &RuntimeValueMap,
@@ -540,14 +514,12 @@ fn eval_hir_conversion_fn(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let name = match kind {
-        graphcal_compiler::registry::resolve_types::TypeConversionFn::ToFloat => {
-            BuiltinFnName::ToFloat
-        }
-        graphcal_compiler::registry::resolve_types::TypeConversionFn::ToInt => BuiltinFnName::ToInt,
+        TypeConversionFn::ToFloat => BuiltinFnName::ToFloat,
+        TypeConversionFn::ToInt => BuiltinFnName::ToInt,
     };
     expect_hir_builtin_arity(name, args, 1, span, ctx)?;
     match kind {
-        graphcal_compiler::registry::resolve_types::TypeConversionFn::ToFloat => {
+        TypeConversionFn::ToFloat => {
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Int(i) = arg else {
                 return Err(
@@ -560,7 +532,7 @@ fn eval_hir_conversion_fn(
             )]
             Ok(RuntimeValue::Scalar(i as f64))
         }
-        graphcal_compiler::registry::resolve_types::TypeConversionFn::ToInt => {
+        TypeConversionFn::ToInt => {
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let f = arg
                 .expect_scalar("to_int argument")
@@ -573,13 +545,13 @@ fn eval_hir_conversion_fn(
 }
 
 fn eval_hir_datetime_constructor(
-    kind: graphcal_compiler::registry::resolve_types::ConstructorFn,
+    kind: ConstructorFn,
     span: Span,
     args: &[hir::Expr],
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match kind {
-        graphcal_compiler::registry::resolve_types::ConstructorFn::Datetime => {
+        ConstructorFn::Datetime => {
             if !(1..=2).contains(&args.len()) {
                 return Err(GraphcalError::InternalError {
                     message: format!(
@@ -621,7 +593,7 @@ fn eval_hir_datetime_constructor(
             };
             Ok(RuntimeValue::Datetime(epoch))
         }
-        graphcal_compiler::registry::resolve_types::ConstructorFn::Epoch => {
+        ConstructorFn::Epoch => {
             if args.len() != 2 {
                 return Err(GraphcalError::InternalError {
                     message: format!(
@@ -708,7 +680,9 @@ fn eval_hir_builtin_fn(
 fn eval_hir_field_access(
     inner_val: RuntimeValue,
     inner_span: Span,
-    field: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FieldName>,
+    field: &graphcal_compiler::syntax::span::Spanned<
+        graphcal_compiler::syntax::type_name::FieldName,
+    >,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match inner_val {
@@ -747,7 +721,7 @@ fn eval_hir_field_access(
 
 fn constructor_target<'a>(
     ctx: &'a EvalContext<'_>,
-    constructor: &ResolvedName<namespace::Constructor>,
+    constructor: &graphcal_compiler::syntax::type_name::ResolvedConstructorName,
 ) -> Option<&'a ResolvedConstructorTarget> {
     ctx.current_dag
         .map(|dag| &dag.semantic.constructor_refs)
@@ -755,7 +729,9 @@ fn constructor_target<'a>(
 }
 
 fn eval_hir_constructor_call(
-    callee: &graphcal_compiler::syntax::span::Spanned<ResolvedName<namespace::Constructor>>,
+    callee: &graphcal_compiler::syntax::span::Spanned<
+        graphcal_compiler::syntax::type_name::ResolvedConstructorName,
+    >,
     fields: &[hir::expr::FieldInit],
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
@@ -814,7 +790,7 @@ fn index_def_for_ref<'a>(
 
 fn ensure_index_ref_matches_resolved(
     actual: &IndexTypeRef,
-    expected: &ResolvedName<namespace::Index>,
+    expected: &graphcal_compiler::syntax::index_name::ResolvedIndexName,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {

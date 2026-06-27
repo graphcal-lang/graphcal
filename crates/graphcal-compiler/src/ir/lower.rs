@@ -18,6 +18,7 @@ use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl, PlotDecl,
     TypeExpr,
 };
+use crate::dimension::Rational;
 use crate::ir::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ParsedExpectedFail, ResolvedFile,
     resolve_with_imported_values,
@@ -31,11 +32,13 @@ use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
 };
-use crate::syntax::dimension::Rational;
-use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, IndexName, NameAtom, NamePath, ScopedName, StructTypeName,
-};
+use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
+use crate::syntax::dimension::DimName;
+use crate::syntax::index_name::IndexName;
+use crate::syntax::module_name::ScopedName;
+use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::{ConstructorName, StructTypeName};
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
 // ---------------------------------------------------------------------------
@@ -56,7 +59,7 @@ pub struct LoweredPlotBody {
 /// A named plot/figure/layer field expression lowered to HIR.
 #[derive(Debug, Clone)]
 pub struct LoweredPlotField {
-    pub name: crate::syntax::names::PlotPropertyName,
+    pub name: crate::syntax::ast::PlotPropertyName,
     /// Span of the property name in the source, for validation diagnostics.
     pub name_span: crate::syntax::span::Span,
     pub value: crate::hir::Expr,
@@ -1077,7 +1080,7 @@ impl UnfrozenIR {
                 .resolve_decl_path(owner, &path)
                 .unwrap_or_else(|_| {
                     crate::hir::diagnostics::resolved_decl_key(owner, name).unwrap_or_else(|| {
-                        crate::syntax::names::ResolvedName::from_def(
+                        ResolvedDeclName::from_def(
                             owner.clone(),
                             DeclName::expect_valid(name.member()),
                         )
@@ -1088,10 +1091,7 @@ impl UnfrozenIR {
         for (name, source) in &self.imported_value_sources {
             decl_bindings.insert(
                 name.clone(),
-                crate::syntax::names::ResolvedName::from_def(
-                    source.dag_id.clone(),
-                    source.source_name.clone(),
-                ),
+                ResolvedDeclName::from_def(source.dag_id.clone(), source.source_name.clone()),
             );
         }
 
@@ -2804,7 +2804,7 @@ fn register_base_dimension_decl(
     registry: &mut RegistryBuilder,
     dag_id: &crate::dag_id::DagId,
 ) {
-    let dim_id = crate::syntax::dimension::BaseDimId::UserDefined {
+    let dim_id = crate::dimension::BaseDimId::UserDefined {
         dag: dag_id.clone(),
         name: d.name.value.to_string(),
     };
@@ -2847,7 +2847,7 @@ fn register_required_dimension_decl(
     registry: &mut RegistryBuilder,
     dag_id: &crate::dag_id::DagId,
 ) {
-    let dim_id = crate::syntax::dimension::BaseDimId::UserDefined {
+    let dim_id = crate::dimension::BaseDimId::UserDefined {
         dag: dag_id.clone(),
         name: d.name.value.to_string(),
     };
@@ -3023,7 +3023,7 @@ fn first_graph_ref(expr: &Expr) -> Option<Spanned<ScopedName>> {
 fn first_non_const_unit_ref<'a>(
     registry: &RegistryBuilder,
     unit_expr: &'a crate::desugar::desugared_ast::UnitExpr,
-) -> Option<&'a Spanned<crate::syntax::names::UnitRef>> {
+) -> Option<&'a Spanned<crate::syntax::dimension::UnitRef>> {
     unit_expr.terms.iter().find_map(|term| {
         registry
             .get_unit(&term.name.value)
@@ -3242,7 +3242,7 @@ fn register_index_decl(
                     span: dimension.span.into(),
                 })?
                 .ok_or_else(|| GraphcalError::UnknownDimension {
-                    name: crate::syntax::names::DimName::expect_valid(idx.name.value.as_str()),
+                    name: crate::syntax::dimension::DimName::expect_valid(idx.name.value.as_str()),
                     src: src.clone(),
                     span: dimension.span.into(),
                 })?;
@@ -3316,9 +3316,9 @@ fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, G
             // (PI, E, TAU, SQRT2, LN2, LN10) are legal in scale expressions.
             let builtin = path
                 .as_bare()
-                .and_then(|ident| crate::hir::BuiltinConst::parse(ident.name.as_str()));
+                .and_then(|ident| crate::builtin::BuiltinConst::parse(ident.name.as_str()));
             builtin
-                .map(crate::hir::BuiltinConst::value)
+                .map(crate::builtin::BuiltinConst::value)
                 .ok_or_else(|| GraphcalError::EvalError {
                     message: format!(
                         "unknown constant `{}` in scale expression; only built-in \
@@ -3374,8 +3374,8 @@ fn eval_range_expr(
     expr: &Expr,
     registry: &RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-) -> Result<(f64, crate::syntax::dimension::Dimension), GraphcalError> {
-    use crate::syntax::dimension::Dimension;
+) -> Result<(f64, crate::dimension::Dimension), GraphcalError> {
+    use crate::dimension::Dimension;
 
     let ensure_finite = |value: f64, span: Span| {
         if value.is_finite() {
@@ -3478,7 +3478,7 @@ fn checked_range_step_count(
 
 /// Lower a range index declaration, evaluating start/end/step and validating dimensions.
 fn lower_range_index(
-    name: &crate::syntax::names::IndexName,
+    name: &crate::syntax::index_name::IndexName,
     start_expr: &Expr,
     end_expr: &Expr,
     step_expr: &Expr,
@@ -3621,8 +3621,8 @@ mod tests {
         assert!(
             ir.registry
                 .units
-                .get_unit(&crate::syntax::names::UnitRef::local(
-                    crate::syntax::names::UnitName::expect_valid("km"),
+                .get_unit(&crate::syntax::dimension::UnitRef::local(
+                    crate::syntax::dimension::UnitName::expect_valid("km"),
                 ))
                 .is_some()
         );
@@ -3703,7 +3703,7 @@ mod tests {
             qualified.clone(),
             (
                 RuntimeValue::Scalar(7.0),
-                DeclaredType::Scalar(crate::syntax::dimension::Dimension::dimensionless()),
+                DeclaredType::Scalar(crate::dimension::Dimension::dimensionless()),
             ),
         );
 

@@ -1094,13 +1094,13 @@ fn replace_dynamic_units_with_resolved_scales(
     builder: &mut RegistryBuilder,
     names: &graphcal_compiler::ir::lower::SelectedDeclarations,
     resolved_scales: &HashMap<
-        graphcal_compiler::syntax::names::UnitRef,
+        graphcal_compiler::syntax::dimension::UnitRef,
         graphcal_compiler::registry::types::PositiveFiniteScale,
     >,
 ) {
     use graphcal_compiler::registry::types::UnitScale;
     for name in &names.default {
-        let unit_ref = graphcal_compiler::syntax::names::UnitRef::local(name.clone());
+        let unit_ref = graphcal_compiler::syntax::dimension::UnitRef::local(name.clone());
         let Some(resolved) = resolved_scales.get(&unit_ref) else {
             continue;
         };
@@ -1146,7 +1146,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder_pub_filtered(
 /// last. The conflict is surfaced as a loud error instead.
 #[derive(Debug)]
 pub(in crate::eval::project) struct UnitMergeConflict {
-    pub name: graphcal_compiler::syntax::names::UnitRef,
+    pub name: graphcal_compiler::syntax::dimension::UnitRef,
 }
 
 pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
@@ -1159,7 +1159,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
     unit_alias: Option<(
         &ModuleAliasName,
         &HashMap<
-            graphcal_compiler::syntax::names::UnitRef,
+            graphcal_compiler::syntax::dimension::UnitRef,
             graphcal_compiler::registry::types::PositiveFiniteScale,
         >,
     )>,
@@ -1173,7 +1173,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
             continue;
         }
         builder.register_base_dimension(
-            graphcal_compiler::syntax::names::DimName::expect_valid(name),
+            graphcal_compiler::syntax::dimension::DimName::expect_valid(name),
             id.clone(),
         );
     }
@@ -1217,7 +1217,10 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
             if pub_names.is_some_and(|visible| !visible.contains(name.name().as_str())) {
                 continue;
             }
-            graphcal_compiler::syntax::names::UnitRef::qualified(alias.clone(), name.name().clone())
+            graphcal_compiler::syntax::dimension::UnitRef::qualified(
+                alias.clone(),
+                name.name().clone(),
+            )
         } else {
             if pub_names.is_some_and(|visible| !visible.contains(name.name().as_str())) {
                 continue;
@@ -1290,7 +1293,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
 /// base scale in practice).
 fn unit_definitions_compatible(
     existing: &graphcal_compiler::registry::types::UnitInfo,
-    dim: &graphcal_compiler::syntax::dimension::Dimension,
+    dim: &graphcal_compiler::dimension::Dimension,
     scale: &graphcal_compiler::registry::types::UnitScale,
     constness: graphcal_compiler::syntax::ast::UnitConstness,
 ) -> bool {

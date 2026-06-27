@@ -11,9 +11,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::syntax::names::{
-    ConstructorName, FieldName, ResolvedName, ScopedName, namespace,
-};
+use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::syntax::names::ResolvedName;
+use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
 use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
@@ -77,7 +77,7 @@ pub struct UnfoldContext<'a> {
 
 pub fn index_ref_matches_resolved(
     actual: &IndexTypeRef,
-    expected: &ResolvedName<namespace::Index>,
+    expected: &graphcal_compiler::syntax::index_name::ResolvedIndexName,
 ) -> bool {
     actual.declared_resolved() == Some(expected)
 }
@@ -150,7 +150,9 @@ impl EvalContext<'_> {
     }
 }
 
-fn dag_decl_runtime_key(name: &ResolvedName<namespace::Decl>) -> RuntimeDeclKey {
+fn dag_decl_runtime_key(
+    name: &graphcal_compiler::syntax::decl_name::ResolvedDeclName,
+) -> RuntimeDeclKey {
     RuntimeDeclKey::resolved(name.clone())
 }
 
@@ -193,7 +195,7 @@ fn topo_order_for_dag_body(dag_tir: &DagTIR) -> Result<Vec<ScopedName>, Vec<Scop
     topo_order_for_dag_body_resolved(dag_tir, &dag_tir.semantic.dependencies)
 }
 
-type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 fn topo_order_for_dag_body_resolved(
     dag_tir: &DagTIR,

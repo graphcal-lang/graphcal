@@ -4,35 +4,44 @@ All Rust files in the workspace, in library-consumer order: every `use`d file ap
 
 ## Stage 0 - Module maps and dependency-free leaves
 
-- [ ] `crates/graphcal-compiler/src/syntax/attribute.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/non_empty.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/phase.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/mod.rs`
-- [ ] `crates/graphcal-compiler/src/desugar/mod.rs`
-- [ ] `crates/graphcal-compiler/src/registry/mod.rs`
-- [ ] `crates/graphcal-compiler/src/registry/time_scale.rs`
-- [ ] `crates/graphcal-compiler/src/registry/manifest.rs`
-- [ ] `crates/graphcal-compiler/src/ir/mod.rs`
-- [ ] `crates/graphcal-compiler/src/tir/mod.rs`
-- [ ] `crates/graphcal-compiler/src/lib.rs`
-- [ ] `crates/graphcal-compiler/src/dag_id.rs`
+- [x] `crates/graphcal-compiler/src/syntax/attribute.rs`
+- [x] `crates/graphcal-compiler/src/syntax/non_empty.rs`
+- [x] `crates/graphcal-compiler/src/syntax/phase.rs`
+- [x] `crates/graphcal-compiler/src/syntax/mod.rs`
+- [x] `crates/graphcal-compiler/src/desugar/mod.rs`
+- [x] `crates/graphcal-compiler/src/registry/mod.rs`
+- [x] `crates/graphcal-compiler/src/registry/time_scale.rs`
+- [x] `crates/graphcal-compiler/src/builtin.rs`
+- [x] `crates/graphcal-compiler/src/registry/manifest.rs`
+- [x] `crates/graphcal-compiler/src/ir/mod.rs`
+- [x] `crates/graphcal-compiler/src/tir/mod.rs`
+- [x] `crates/graphcal-compiler/src/lib.rs`
+- [x] `crates/graphcal-compiler/src/dag_id.rs`
 
-## Stage 1 - Spans, names, tokens, lexer
+## Stage 1 - Names, spans, tokens, lexer, and syntax-domain leaves
 
 Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 
-- [ ] `crates/graphcal-compiler/src/syntax/dimension.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/names.rs`
+- [ ] `crates/graphcal-compiler/src/stack.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/ast/plot_props.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/decl_name.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/span.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/token.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/comments.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/lexer.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/nat.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/function_name.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/index_name.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/local_name.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/module_name.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/dimension.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/type_name.rs`
+- [ ] `crates/graphcal-compiler/src/nat.rs`
 
 ## Stage 2 - Core AST leaves and traversal
 
 - [ ] `crates/graphcal-compiler/src/syntax/ast/common.rs`
-- [ ] `crates/graphcal-compiler/src/stack.rs`
+- [ ] `crates/graphcal-compiler/src/dimension.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/value.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/decl.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/visitor.rs`
@@ -62,9 +71,14 @@ Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 
 ## Stage 5 - Registry and module resolution
 
-Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent.
+Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent. `registry/types.rs` now owns only the aggregate registry and builder while re-exporting the domain registries for compatibility.
 
 - [ ] `crates/graphcal-compiler/src/registry/format.rs`
+- [ ] `crates/graphcal-compiler/src/registry/dag.rs`
+- [ ] `crates/graphcal-compiler/src/registry/dimension_registry.rs`
+- [ ] `crates/graphcal-compiler/src/registry/index.rs`
+- [ ] `crates/graphcal-compiler/src/registry/type_def.rs`
+- [ ] `crates/graphcal-compiler/src/registry/unit.rs`
 - [ ] `crates/graphcal-compiler/src/registry/types.rs`
 - [ ] `crates/graphcal-compiler/src/registry/prelude.rs`
 - [ ] `crates/graphcal-compiler/src/registry/declared_type.rs`
@@ -81,7 +95,7 @@ Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent.
 
 ## Stage 7 - HIR and builtin signatures
 
-Note: `hir/types.rs`, `registry/builtins.rs`, `hir/lower.rs`, `hir/expr.rs`, and `hir/mod.rs` form a mutually dependent group.
+Note: `hir/types.rs`, `hir/lower.rs`, `hir/expr.rs`, and `hir/mod.rs` form a mutually dependent group. `registry/builtins.rs` is upstream of HIR and provides evaluation/dimension signatures for the built-in domain model.
 
 - [ ] `crates/graphcal-compiler/src/hir/types.rs`
 - [ ] `crates/graphcal-compiler/src/registry/builtins.rs`
@@ -105,11 +119,11 @@ Note: `tir/typed.rs`, `tir/dim_check/helpers.rs`, and `tir/dim_check/mod.rs` are
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/format_equivalent.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/ast/plot_props.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/multi.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
+- [ ] `crates/graphcal-compiler/src/plot_props.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
 
 ## Stage 9 - Filesystem abstraction (`graphcal-io`)

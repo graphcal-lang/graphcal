@@ -7,8 +7,10 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use graphcal_compiler::syntax::dimension::Dimension;
-use graphcal_compiler::syntax::names::{DeclName, IndexVariantName, ScopedName};
+use graphcal_compiler::dimension::Dimension;
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 
 use crate::decl_key::RuntimeDeclKey;
@@ -317,7 +319,7 @@ pub(super) fn export_dynamic_unit_scales(
     values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
 ) -> HashMap<
-    graphcal_compiler::syntax::names::UnitRef,
+    graphcal_compiler::syntax::dimension::UnitRef,
     graphcal_compiler::registry::types::PositiveFiniteScale,
 > {
     let builtin_consts = builtin_constants();
@@ -1485,10 +1487,10 @@ fn eval_composition_fields(
 /// (#845).
 fn check_positive_property(
     property: &'static str,
-    value_type: graphcal_compiler::syntax::ast::PlotPropertyType,
+    value_type: super::types::PlotPropertyType,
     value: &PlotFieldValue,
 ) -> Result<(), String> {
-    if value_type != graphcal_compiler::syntax::ast::PlotPropertyType::PositiveNumber {
+    if value_type != super::types::PlotPropertyType::PositiveNumber {
         return Ok(());
     }
     match value {

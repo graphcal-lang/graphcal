@@ -1,7 +1,11 @@
 use crate::syntax::ast::{BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, ModulePath, UnaryOp};
-use crate::syntax::names::{DeclName, FieldName, IndexVariantName, NamePath, ScopedName};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::module_name::ScopedName;
+use crate::syntax::names::NamePath;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::Token;
+use crate::syntax::type_name::FieldName;
 
 use super::{ParseError, Parser};
 
@@ -1018,7 +1022,7 @@ mod tests {
                     assert_eq!(unit.terms[1].name.value.to_string(), "s");
                     assert_eq!(
                         unit.terms[1].power,
-                        Some(crate::syntax::dimension::Rational::from(2))
+                        Some(crate::dimension::Rational::from(2))
                     );
                 }
                 _ => panic!("expected UnitLiteral"),

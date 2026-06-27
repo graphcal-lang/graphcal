@@ -37,7 +37,7 @@ struct DepDeclIndex<'a> {
     plots: HashSet<DeclName>,
     types: HashSet<StructTypeName>,
     dims: HashSet<DimName>,
-    units: HashSet<graphcal_compiler::syntax::names::UnitName>,
+    units: HashSet<graphcal_compiler::syntax::dimension::UnitName>,
     /// Maps index name to its declaration (needed for kind/required checks).
     indexes: HashMap<IndexName, &'a graphcal_compiler::desugar::desugared_ast::IndexDecl>,
     /// "Other" declarations (const node / node / assert) that are invalid as

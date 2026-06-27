@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::desugar::desugared_ast::{Expr, ExprKind};
-use crate::syntax::names::ScopedName;
+use crate::syntax::module_name::ScopedName;
 use crate::syntax::visitor::ExprVisitor;
 
 /// Sink for graph-reference observations during an AST walk.

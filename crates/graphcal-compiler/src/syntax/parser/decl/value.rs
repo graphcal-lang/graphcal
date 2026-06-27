@@ -1,7 +1,7 @@
 use crate::syntax::ast::{
     AssertBody, AssertDecl, ConstNodeDecl, DeclKind, Declaration, NodeDecl, ParamDecl, Visibility,
 };
-use crate::syntax::names::DeclName;
+use crate::syntax::decl_name::DeclName;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};

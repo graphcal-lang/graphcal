@@ -23,11 +23,12 @@ use std::fmt;
 use graphcal_compiler::syntax::ast::{
     Expr, ExprKind, FieldInit, Ident, IdentPath, MapEntry, MapEntryIndex, MapEntryKey,
 };
-use graphcal_compiler::syntax::names::{
-    DeclName, FieldName, IndexVariantName, NameAtom, NameAtomError, NamePath,
-};
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::names::{NameAtom, NameAtomError, NamePath};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::{Span, Spanned};
+use graphcal_compiler::syntax::type_name::FieldName;
 
 /// A synthetic span used for all AST nodes constructed from JSON input.
 const SYNTH_SPAN: Span = Span::new(0, 0);

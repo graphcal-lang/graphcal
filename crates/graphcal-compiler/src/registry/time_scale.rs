@@ -129,26 +129,6 @@ impl TryFrom<hifitime::TimeScale> for TimeScale {
     }
 }
 
-/// Returns the target `TimeScale` for a conversion function name, if it matches.
-///
-/// Maps `"to_utc"` → `UTC`, `"to_tai"` → `TAI`, etc.
-/// Returns `None` if the name is not a time scale conversion function.
-#[must_use]
-pub fn time_scale_from_conversion_fn(name: &str) -> Option<TimeScale> {
-    match name {
-        "to_utc" => Some(TimeScale::UTC),
-        "to_tai" => Some(TimeScale::TAI),
-        "to_tt" => Some(TimeScale::TT),
-        "to_tdb" => Some(TimeScale::TDB),
-        "to_et" => Some(TimeScale::ET),
-        "to_gpst" => Some(TimeScale::GPST),
-        "to_gst" => Some(TimeScale::GST),
-        "to_bdt" => Some(TimeScale::BDT),
-        "to_qzsst" => Some(TimeScale::QZSST),
-        _ => None,
-    }
-}
-
 impl fmt::Display for TimeScale {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())

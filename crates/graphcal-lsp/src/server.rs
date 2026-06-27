@@ -25,9 +25,9 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
+use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
-use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
-use graphcal_compiler::syntax::names::ScopedName;
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
 };
@@ -756,7 +756,7 @@ const INLAY_HINT_MAX_LEN: usize = 80;
 /// - Indexed: `"{ Departure: 4.92 [km/s], Correction: 0.24 [km/s], ... }"`
 fn format_value_inline(
     value: &Value,
-    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
 ) -> String {
     format_value_inline_with_budget(value, symbols, INLAY_HINT_MAX_LEN)
 }
@@ -765,7 +765,7 @@ fn format_value_inline(
 /// exceed `max_len`, remaining entries are replaced with `...`.
 fn format_value_inline_with_budget(
     value: &Value,
-    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
     match value {
@@ -818,7 +818,7 @@ fn format_entries<K>(
     prefix: &str,
     entries: &[(K, &Value)],
     render_key: impl Fn(&K) -> String,
-    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
     format_delimited_entries(
@@ -847,7 +847,7 @@ fn format_delimited_entries<K>(
     layout: EntryListLayout<'_>,
     entries: &[(K, &Value)],
     render_key: impl Fn(&K) -> String,
-    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
     let mut result = format!("{}{}", layout.prefix, layout.open);
@@ -882,7 +882,7 @@ fn format_delimited_entries<K>(
 fn format_parenthesized_entries(
     prefix: &str,
     entries: &[(&str, &Value)],
-    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
     format_delimited_entries(
@@ -926,7 +926,7 @@ fn flatten_indexed_entries<'a>(
 fn format_tuple_keyed_entries(
     prefix: &str,
     entries: &[(Vec<String>, &Value)],
-    symbols: &std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     max_len: usize,
 ) -> String {
     format_entries(
@@ -1499,16 +1499,15 @@ pub async fn run() {
 mod tests {
     use std::collections::BTreeMap;
 
-    use graphcal_compiler::syntax::dimension::Dimension;
-    use graphcal_compiler::syntax::names::{
-        FieldName, IndexName, IndexVariantName, StructTypeName,
-    };
+    use graphcal_compiler::dimension::Dimension;
+    use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
+    use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use graphcal_eval::eval::Value;
     use indexmap::IndexMap;
 
     use super::*;
 
-    fn empty_symbols() -> BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String> {
+    fn empty_symbols() -> BTreeMap<graphcal_compiler::dimension::BaseDimId, String> {
         BTreeMap::new()
     }
 

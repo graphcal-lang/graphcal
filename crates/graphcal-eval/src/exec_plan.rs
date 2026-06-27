@@ -10,10 +10,9 @@ use miette::NamedSource;
 
 use graphcal_compiler::hir::AssertBody;
 use graphcal_compiler::registry::declared_type::StructTypeRef;
-use graphcal_compiler::syntax::names::{
-    ConstructorName, FieldName, ResolvedName, ScopedName, namespace,
-};
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::{Span, Spanned};
+use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
@@ -213,7 +212,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
     })
 }
 
-type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 fn local_resolved_decl_key(
     dag: &DagTIR,
@@ -976,8 +975,8 @@ fn format_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> S
 mod tests {
     use super::*;
     use graphcal_compiler::ir::lower::lower;
+    use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
     use graphcal_compiler::syntax::module_resolve::ModuleResolver;
-    use graphcal_compiler::syntax::names::DeclName;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::tir::typed::{
         ModuleTypeRegistry, ResolvedDagDependencies, type_resolve_with_modules,
@@ -1030,7 +1029,7 @@ mod tests {
     }
 
     fn resolved_key(name: &str) -> RuntimeDeclKey {
-        RuntimeDeclKey::resolved(ResolvedName::from_def(
+        RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
             test_dag_id(),
             DeclName::expect_valid(name),
         ))
@@ -1103,8 +1102,8 @@ mod tests {
              const node b: Dimensionless = @a + 1.0;",
         );
         let dag_id = tir.root_dag_id.clone();
-        let a = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
-        let b = ResolvedName::from_def(dag_id, DeclName::expect_valid("b"));
+        let a = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
+        let b = ResolvedDeclName::from_def(dag_id, DeclName::expect_valid("b"));
         let mut resolved = ResolvedDagDependencies::default();
         resolved.const_deps.insert(a.clone(), BTreeSet::new());
         resolved.const_deps.insert(b, BTreeSet::from([a]));
@@ -1113,7 +1112,7 @@ mod tests {
         let plan = compile(&tir, &src).unwrap();
         assert!(
             (scalar(
-                &plan.const_values[&RuntimeDeclKey::resolved(ResolvedName::from_def(
+                &plan.const_values[&RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
                     tir.root_dag_id.clone(),
                     DeclName::expect_valid("b")
                 ))]
@@ -1132,8 +1131,8 @@ mod tests {
              node b: Dimensionless = @a + 1.0;",
         );
         let dag_id = tir.root_dag_id.clone();
-        let a = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
-        let b = ResolvedName::from_def(dag_id, DeclName::expect_valid("b"));
+        let a = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
+        let b = ResolvedDeclName::from_def(dag_id, DeclName::expect_valid("b"));
         let mut resolved = ResolvedDagDependencies::default();
         resolved.runtime_deps.insert(a.clone(), BTreeSet::new());
         resolved.runtime_deps.insert(b, BTreeSet::from([a]));
@@ -1144,7 +1143,7 @@ mod tests {
             .topo_order
             .iter()
             .position(|name| {
-                name == &RuntimeDeclKey::resolved(ResolvedName::from_def(
+                name == &RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
                     tir.root_dag_id.clone(),
                     DeclName::expect_valid("a"),
                 ))
@@ -1154,7 +1153,7 @@ mod tests {
             .topo_order
             .iter()
             .position(|name| {
-                name == &RuntimeDeclKey::resolved(ResolvedName::from_def(
+                name == &RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
                     tir.root_dag_id.clone(),
                     DeclName::expect_valid("b"),
                 ))

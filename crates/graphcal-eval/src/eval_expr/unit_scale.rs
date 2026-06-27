@@ -4,7 +4,7 @@ use graphcal_compiler::desugar::desugared_ast::{MulDivOp, UnitExpr};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{PositiveFiniteScale, UnitScale};
-use graphcal_compiler::syntax::names::UnitRef;
+use graphcal_compiler::syntax::dimension::UnitRef;
 use graphcal_compiler::syntax::span::Span;
 
 use super::numeric;
@@ -165,7 +165,7 @@ pub fn resolve_unit_scale(
         };
         let exp = item
             .power
-            .unwrap_or(graphcal_compiler::syntax::dimension::Rational::ONE);
+            .unwrap_or(graphcal_compiler::dimension::Rational::ONE);
         let powered_scale = checked_positive_finite_unit_scale(
             graphcal_compiler::registry::types::pow_scale(unit_scale, exp),
             "unit scale exponentiation",

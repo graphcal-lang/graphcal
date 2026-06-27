@@ -1,9 +1,9 @@
+use crate::dimension::Rational;
 use crate::syntax::ast::{
     AttributeArg, BindableVisibility, DeclKind, ExprKind, GenericConstraint, ImportItemNamespace,
     ImportKind, IndexDeclKind, MulDivOp, TypeDecl, TypeDeclBody, TypeExprKind, UnionMember,
     UnitConstness, Visibility,
 };
-use crate::syntax::dimension::Rational;
 use crate::syntax::parser::Parser;
 
 fn type_members(t: &TypeDecl) -> &[UnionMember] {

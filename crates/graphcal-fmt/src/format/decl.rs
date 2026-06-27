@@ -158,7 +158,7 @@ fn format_const_node_decl(
 fn format_value_decl(
     fmt: &mut Formatter<'_>,
     keyword: &str,
-    name: &graphcal_compiler::syntax::names::DeclName,
+    name: &graphcal_compiler::syntax::decl_name::DeclName,
     type_ann: &TypeExpr,
     value: &graphcal_compiler::syntax::ast::Expr,
 ) -> RcDoc<'static> {
@@ -588,7 +588,7 @@ fn format_composition_decl(
     keyword: &str,
     name: &str,
     plot_names: &[graphcal_compiler::syntax::span::Spanned<
-        graphcal_compiler::syntax::names::ScopedName,
+        graphcal_compiler::syntax::module_name::ScopedName,
     >],
     fields: &[graphcal_compiler::syntax::ast::PlotField],
 ) -> RcDoc<'static> {

@@ -15,27 +15,29 @@
 //! entry points ([`lower_expr`], [`lower_assert_body`]) reject any tree that
 //! contains an error node, so the batch pipeline never sees one.
 
+use crate::syntax::decl_name::{DeclNameNamespace, ResolvedDeclName};
+use crate::syntax::dimension::ResolvedDimName;
+use crate::syntax::index_name::ResolvedIndexName;
+use crate::syntax::type_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::collections::{BTreeSet, HashMap};
 
 use thiserror::Error;
 
+use crate::builtin::{BuiltinConst, BuiltinFnName, SpecialFnKind};
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::registry::resolve_types::{
-    AggregationFn, ConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, SpecialFnKind,
-    TypeConversionFn,
-};
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::local_name::LocalName;
+use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::{DeclSymbolKind, ModuleResolveError, ModuleResolver};
-use crate::syntax::names::{
-    DeclName, FieldName, GenericParamName, IndexName, IndexVariantName, LocalName, NameAtom,
-    NameAtomError, NameNamespace, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName,
-    namespace,
-};
+use crate::syntax::names::{NameAtom, NameAtomError, NameNamespace, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::{FieldName, GenericParamName};
 
 use super::lower::{
     GenericScope, HirLowerError, PreludeTypeScope, TypeLoweringContext, lower_nat_expr,
@@ -96,7 +98,7 @@ pub enum ExprLowerError {
     /// A built-in function was called with the wrong number of arguments.
     #[error("function `{name}` expects {expected} argument(s), got {got}")]
     WrongArity {
-        name: crate::syntax::names::FnName,
+        name: crate::syntax::function_name::FnName,
         expected: usize,
         got: usize,
         span: Span,
@@ -113,7 +115,7 @@ pub struct ExprLoweringContext<'a> {
     pub resolver: &'a ModuleResolver,
     pub generic_scope: &'a GenericScope,
     pub prelude: Option<&'a PreludeTypeScope>,
-    pub decl_bindings: Option<&'a HashMap<ScopedName, ResolvedName<namespace::Decl>>>,
+    pub decl_bindings: Option<&'a HashMap<ScopedName, ResolvedDeclName>>,
 }
 
 impl<'a> ExprLoweringContext<'a> {
@@ -150,7 +152,7 @@ impl<'a> ExprLoweringContext<'a> {
     #[must_use]
     pub const fn with_decl_bindings(
         self,
-        decl_bindings: &'a HashMap<ScopedName, ResolvedName<namespace::Decl>>,
+        decl_bindings: &'a HashMap<ScopedName, ResolvedDeclName>,
     ) -> Self {
         Self {
             owner: self.owner,
@@ -354,183 +356,6 @@ impl<V> Default for LocalEnv<'_, V> {
     }
 }
 
-/// Define a closed set of built-in names: the enum, the `parse` boundary
-/// crossing, the canonical `as_str` rendering, and an `ALL` listing for
-/// cross-table consistency tests — all generated from a single table so the
-/// spellings can never drift apart.
-macro_rules! define_builtin_names {
-    (
-        $(#[$meta:meta])*
-        $vis:vis enum $name:ident { $($variant:ident => $text:literal),+ $(,)? }
-    ) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        $vis enum $name { $($variant),+ }
-
-        impl $name {
-            /// Every variant, for cross-table consistency tests.
-            $vis const ALL: &'static [Self] = &[$(Self::$variant),+];
-
-            /// Parse a source name into the typed variant — the only place
-            /// these strings cross into the typed core.
-            #[must_use]
-            $vis fn parse(name: &str) -> Option<Self> {
-                match name {
-                    $($text => Some(Self::$variant),)+
-                    _ => None,
-                }
-            }
-
-            /// Canonical source spelling.
-            #[must_use]
-            $vis const fn as_str(self) -> &'static str {
-                match self {
-                    $(Self::$variant => $text),+
-                }
-            }
-        }
-    };
-}
-
-define_builtin_names! {
-    /// Built-in constants with closed semantic meaning.
-    pub enum BuiltinConst {
-        Pi => "PI",
-        E => "E",
-        Tau => "TAU",
-        Sqrt2 => "SQRT2",
-        Ln2 => "LN2",
-        Ln10 => "LN10",
-    }
-}
-
-impl BuiltinConst {
-    /// Numeric value of the constant. Must agree with
-    /// [`crate::registry::builtins::builtin_constants`] (enforced by test).
-    #[must_use]
-    pub const fn value(self) -> f64 {
-        match self {
-            Self::Pi => std::f64::consts::PI,
-            Self::E => std::f64::consts::E,
-            Self::Tau => std::f64::consts::TAU,
-            Self::Sqrt2 => std::f64::consts::SQRT_2,
-            Self::Ln2 => std::f64::consts::LN_2,
-            Self::Ln10 => std::f64::consts::LN_10,
-        }
-    }
-}
-
-define_builtin_names! {
-    /// Built-in function names with closed semantic meaning.
-    pub enum BuiltinFnName {
-        Sqrt => "sqrt",
-        Cbrt => "cbrt",
-        Exp => "exp",
-        Expm1 => "expm1",
-        Ln => "ln",
-        Log10 => "log10",
-        Log2 => "log2",
-        Log => "log",
-        Log1p => "log1p",
-        Sin => "sin",
-        Cos => "cos",
-        Tan => "tan",
-        Asin => "asin",
-        Acos => "acos",
-        Atan => "atan",
-        Atan2 => "atan2",
-        Sinh => "sinh",
-        Cosh => "cosh",
-        Tanh => "tanh",
-        Asinh => "asinh",
-        Acosh => "acosh",
-        Atanh => "atanh",
-        Abs => "abs",
-        Floor => "floor",
-        Ceil => "ceil",
-        Round => "round",
-        Trunc => "trunc",
-        Sign => "sign",
-        Min => "min",
-        Max => "max",
-        Hypot => "hypot",
-        Clamp => "clamp",
-        Sum => "sum",
-        Mean => "mean",
-        Count => "count",
-        ToFloat => "to_float",
-        ToInt => "to_int",
-        ToUtc => "to_utc",
-        ToTai => "to_tai",
-        ToTt => "to_tt",
-        ToTdb => "to_tdb",
-        ToEt => "to_et",
-        ToGpst => "to_gpst",
-        ToGst => "to_gst",
-        ToBdt => "to_bdt",
-        ToQzsst => "to_qzsst",
-        Datetime => "datetime",
-        Epoch => "epoch",
-        Year => "year",
-        Month => "month",
-        Day => "day",
-        Hour => "hour",
-        Minute => "minute",
-        Second => "second",
-        Weekday => "weekday",
-        DayOfYear => "day_of_year",
-        FromJd => "from_jd",
-        FromMjd => "from_mjd",
-        FromUnix => "from_unix",
-        ToJd => "to_jd",
-        ToMjd => "to_mjd",
-        ToUnix => "to_unix",
-    }
-}
-
-impl BuiltinFnName {
-    /// Return the existing typed special-function classification when this
-    /// built-in is one of the special categories.
-    #[must_use]
-    pub const fn special_kind(self) -> Option<SpecialFnKind> {
-        match self {
-            Self::Sum => Some(SpecialFnKind::Aggregation(AggregationFn::Sum)),
-            Self::Min => Some(SpecialFnKind::Aggregation(AggregationFn::Min)),
-            Self::Max => Some(SpecialFnKind::Aggregation(AggregationFn::Max)),
-            Self::Mean => Some(SpecialFnKind::Aggregation(AggregationFn::Mean)),
-            Self::Count => Some(SpecialFnKind::Aggregation(AggregationFn::Count)),
-            Self::ToFloat => Some(SpecialFnKind::TypeConversion(TypeConversionFn::ToFloat)),
-            Self::ToInt => Some(SpecialFnKind::TypeConversion(TypeConversionFn::ToInt)),
-            Self::ToUtc => Some(SpecialFnKind::TimeScaleConversion(TimeScale::UTC)),
-            Self::ToTai => Some(SpecialFnKind::TimeScaleConversion(TimeScale::TAI)),
-            Self::ToTt => Some(SpecialFnKind::TimeScaleConversion(TimeScale::TT)),
-            Self::ToTdb => Some(SpecialFnKind::TimeScaleConversion(TimeScale::TDB)),
-            Self::ToEt => Some(SpecialFnKind::TimeScaleConversion(TimeScale::ET)),
-            Self::ToGpst => Some(SpecialFnKind::TimeScaleConversion(TimeScale::GPST)),
-            Self::ToGst => Some(SpecialFnKind::TimeScaleConversion(TimeScale::GST)),
-            Self::ToBdt => Some(SpecialFnKind::TimeScaleConversion(TimeScale::BDT)),
-            Self::ToQzsst => Some(SpecialFnKind::TimeScaleConversion(TimeScale::QZSST)),
-            Self::Datetime => Some(SpecialFnKind::Constructor(ConstructorFn::Datetime)),
-            Self::Epoch => Some(SpecialFnKind::Constructor(ConstructorFn::Epoch)),
-            Self::Year => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Year)),
-            Self::Month => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Month)),
-            Self::Day => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Day)),
-            Self::Hour => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Hour)),
-            Self::Minute => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Minute)),
-            Self::Second => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Second)),
-            Self::Weekday => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Weekday)),
-            Self::DayOfYear => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::DayOfYear)),
-            Self::FromJd => Some(SpecialFnKind::DatetimeFrom(DatetimeFromFn::FromJd)),
-            Self::FromMjd => Some(SpecialFnKind::DatetimeFrom(DatetimeFromFn::FromMjd)),
-            Self::FromUnix => Some(SpecialFnKind::DatetimeFrom(DatetimeFromFn::FromUnix)),
-            Self::ToJd => Some(SpecialFnKind::DatetimeTo(DatetimeToFn::ToJd)),
-            Self::ToMjd => Some(SpecialFnKind::DatetimeTo(DatetimeToFn::ToMjd)),
-            Self::ToUnix => Some(SpecialFnKind::DatetimeTo(DatetimeToFn::ToUnix)),
-            _ => None,
-        }
-    }
-}
-
 /// HIR expression node.
 #[derive(Debug)]
 pub struct Expr {
@@ -608,7 +433,7 @@ pub enum ExprKind {
     Bool(bool),
     StringLiteral(String),
     TypeSystemRef(Spanned<TypeSystemRef>),
-    GraphRef(Spanned<ResolvedName<namespace::Decl>>),
+    GraphRef(Spanned<ResolvedDeclName>),
     ConstRef(Spanned<ConstRef>),
     LocalRef(Spanned<LocalId>),
     BinOp {
@@ -647,7 +472,7 @@ pub enum ExprKind {
         field: Spanned<FieldName>,
     },
     ConstructorCall {
-        callee: Spanned<ResolvedName<namespace::Constructor>>,
+        callee: Spanned<ResolvedConstructorName>,
         generic_args: Vec<GenericArg>,
         fields: Vec<FieldInit>,
     },
@@ -683,7 +508,7 @@ pub enum ExprKind {
     InlineDagRef {
         target: Spanned<DagId>,
         args: Vec<ParamBinding>,
-        output: Spanned<ResolvedName<namespace::Decl>>,
+        output: Spanned<ResolvedDeclName>,
     },
 }
 
@@ -691,9 +516,9 @@ pub enum ExprKind {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExprDependencies {
     /// Runtime graph dependencies reached through `@name` references.
-    pub graph_refs: BTreeSet<ResolvedName<namespace::Decl>>,
+    pub graph_refs: BTreeSet<ResolvedDeclName>,
     /// Compile-time const dependencies reached through const-like value refs.
-    pub const_refs: BTreeSet<ResolvedName<namespace::Decl>>,
+    pub const_refs: BTreeSet<ResolvedDeclName>,
 }
 
 /// Collect canonical declaration dependencies from an already-lowered HIR expression.
@@ -805,7 +630,7 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
 /// is a genuine cycle. Used to decide whether a declaration's self-edge can
 /// be dropped from the dependency graph.
 #[must_use]
-pub fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedName<namespace::Decl>) -> bool {
+pub fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedDeclName) -> bool {
     // Recursion choke point: recurses once per tree level (unbounded for
     // left-nested operator chains).
     crate::stack::with_stack_growth(|| match &expr.kind {
@@ -876,9 +701,9 @@ pub fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedName<namespace::Decl>)
 /// Type-system identifier used as a value expression, usually in include bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeSystemRef {
-    Type(ResolvedName<namespace::StructType>),
-    Dimension(ResolvedName<namespace::Dim>),
-    Index(ResolvedName<namespace::Index>),
+    Type(ResolvedStructTypeName),
+    Dimension(ResolvedDimName),
+    Index(ResolvedIndexName),
     IndexVariant(ResolvedIndexVariant),
 }
 
@@ -906,8 +731,8 @@ impl TypeSystemRef {
 /// Resolved constant-like expression target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstRef {
-    Decl(ResolvedName<namespace::Decl>),
-    Constructor(ResolvedName<namespace::Constructor>),
+    Decl(ResolvedDeclName),
+    Constructor(ResolvedConstructorName),
     Builtin(BuiltinConst),
     TimeScale(TimeScale),
     GenericNatParam(super::types::GenericParamId),
@@ -948,7 +773,7 @@ pub struct FieldInit {
 /// A param binding in an inline DAG invocation.
 #[derive(Debug, Clone)]
 pub struct ParamBinding {
-    pub target: Spanned<ResolvedName<namespace::Decl>>,
+    pub target: Spanned<ResolvedDeclName>,
     pub value: Expr,
     pub span: Span,
 }
@@ -980,7 +805,7 @@ pub struct ForBinding {
 /// Index target in a for-comprehension binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForBindingIndex {
-    Named(Spanned<ResolvedName<namespace::Index>>),
+    Named(Spanned<ResolvedIndexName>),
     Range { arg: NatExpr, span: Span },
 }
 
@@ -1004,7 +829,7 @@ pub struct MatchArm {
 #[derive(Debug, Clone)]
 pub enum MatchPattern {
     Constructor {
-        constructor: Spanned<ResolvedName<namespace::Constructor>>,
+        constructor: Spanned<ResolvedConstructorName>,
         bindings: Vec<PatternBinding>,
         span: Span,
     },
@@ -1590,7 +1415,7 @@ impl<'a> ExprLowerer<'a> {
                 Err(ExprLowerError::ModuleResolve {
                     source: ModuleResolveError::UnknownName {
                         owner: self.ctx.owner.clone(),
-                        namespace: namespace::Decl::DISPLAY_NAME,
+                        namespace: DeclNameNamespace::DISPLAY_NAME,
                         name: name.to_string(),
                     },
                     span,
@@ -1604,7 +1429,7 @@ impl<'a> ExprLowerer<'a> {
         &self,
         name: &ScopedName,
         span: Span,
-    ) -> Result<ResolvedName<namespace::Decl>, ExprLowerError> {
+    ) -> Result<ResolvedDeclName, ExprLowerError> {
         let path = scoped_name_to_path(name, span)?;
         if let Some(resolved) = self
             .ctx
@@ -1627,10 +1452,7 @@ impl<'a> ExprLowerer<'a> {
             })
     }
 
-    fn resolve_synthetic_child_decl_path(
-        &self,
-        path: &NamePath,
-    ) -> Option<ResolvedName<namespace::Decl>> {
+    fn resolve_synthetic_child_decl_path(&self, path: &NamePath) -> Option<ResolvedDeclName> {
         let (qualifier, leaf) = path.qualifier_and_leaf()?;
         let owner = qualifier
             .iter()
@@ -1641,7 +1463,7 @@ impl<'a> ExprLowerer<'a> {
             .resolver
             .modules()
             .contains_key(&owner)
-            .then(|| ResolvedName::from_def(owner, DeclName::from_atom(leaf.clone())))
+            .then(|| ResolvedDeclName::from_def(owner, DeclName::from_atom(leaf.clone())))
     }
 
     /// Validate a built-in call's argument count against the registry's
@@ -1653,12 +1475,10 @@ impl<'a> ExprLowerer<'a> {
         span: Span,
     ) -> Result<(), ExprLowerError> {
         let FunctionRef::Builtin(builtin) = function_ref;
-        if builtin.special_kind().is_some_and(|kind| {
-            matches!(
-                kind,
-                crate::registry::resolve_types::SpecialFnKind::Aggregation(_)
-            )
-        }) {
+        if builtin
+            .special_kind()
+            .is_some_and(|kind| matches!(kind, SpecialFnKind::Aggregation(_)))
+        {
             return Ok(());
         }
         let Some(function) = crate::registry::builtins::builtin_functions().get(builtin.as_str())
@@ -1667,7 +1487,7 @@ impl<'a> ExprLowerer<'a> {
         };
         if got != function.arity() {
             return Err(ExprLowerError::WrongArity {
-                name: crate::syntax::names::FnName::expect_valid(builtin.as_str()),
+                name: crate::syntax::function_name::FnName::expect_valid(builtin.as_str()),
                 expected: function.arity(),
                 got,
                 span,

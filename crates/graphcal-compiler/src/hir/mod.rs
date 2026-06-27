@@ -12,7 +12,7 @@
 //! - definition sites are owned by canonical [`DagId`](crate::dag_id::DagId)
 //!   identities;
 //! - module-level reference sites use [`ResolvedName`](crate::syntax::names::ResolvedName)
-//!   or [`ResolvedIndexVariant`](crate::syntax::names::ResolvedIndexVariant);
+//!   or [`ResolvedIndexVariant`](crate::syntax::index_name::ResolvedIndexVariant);
 //! - lexical references, such as locals and generic parameters, use dedicated
 //!   lexical IDs instead of module names;
 //! - built-ins use explicit variants or dedicated typed wrappers, not ad-hoc
@@ -30,10 +30,9 @@ pub mod lower;
 pub mod types;
 
 pub use expr::{
-    AssertBody, BuiltinConst, BuiltinFnName, ConstRef, Expr, ExprDependencies, ExprKind,
-    ExprLowerError, ExprLoweringContext, FunctionRef, LocalDef, LocalEnv, LocalId,
-    collect_expr_dependencies, has_ref_outside_unfold, lower_assert_body,
-    lower_assert_body_tolerant, lower_expr, lower_expr_tolerant,
+    AssertBody, ConstRef, Expr, ExprDependencies, ExprKind, ExprLowerError, ExprLoweringContext,
+    FunctionRef, LocalDef, LocalEnv, LocalId, collect_expr_dependencies, has_ref_outside_unfold,
+    lower_assert_body, lower_assert_body_tolerant, lower_expr, lower_expr_tolerant,
 };
 pub use lower::{
     GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope, TypeLoweringContext,

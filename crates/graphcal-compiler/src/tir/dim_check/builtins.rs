@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::dimension::Dimension;
 use crate::registry::builtins::{DimSignature, ParamDim, ResultDim};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
-use crate::syntax::dimension::Dimension;
-use crate::syntax::names::DimVarName;
+use crate::syntax::dimension::DimVarName;
 use crate::syntax::span::Span;
 
 pub(super) fn infer_fn_dim_from_spans(

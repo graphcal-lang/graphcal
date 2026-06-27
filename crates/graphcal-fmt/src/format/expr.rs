@@ -2,7 +2,7 @@ use graphcal_compiler::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, ForBinding, IndexArg, MapEntry, MatchArm, MatchPattern,
     ModulePath, ParamBinding, PatternBinding, TableIndexSpec, UnaryOp,
 };
-use graphcal_compiler::syntax::names::LocalName;
+use graphcal_compiler::syntax::local_name::LocalName;
 use graphcal_compiler::syntax::span::Spanned;
 use pretty::RcDoc;
 

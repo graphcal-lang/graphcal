@@ -22,7 +22,7 @@
 use graphcal_compiler::registry::declared_type::IndexTypeRef;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::ast::EncodingChannel;
-use graphcal_compiler::syntax::names::IndexVariantName;
+use graphcal_compiler::syntax::index_name::IndexVariantName;
 
 use super::types::{PlotFieldValue, epoch_to_rfc3339};
 
@@ -262,7 +262,7 @@ pub(super) fn align_encoding_channels(
 mod tests {
     use super::*;
     use graphcal_compiler::dag_id::DagId;
-    use graphcal_compiler::syntax::names::IndexName;
+    use graphcal_compiler::syntax::index_name::IndexName;
     use indexmap::IndexMap;
 
     fn indexed(index: &str, entries: Vec<(&str, RuntimeValue)>) -> RuntimeValue {
@@ -430,7 +430,7 @@ mod tests {
     fn rejects_struct_values() {
         let err = channel_data_from_runtime(&RuntimeValue::struct_with_owner(
             DagId::root_in_package("test", "main"),
-            graphcal_compiler::syntax::names::StructTypeName::expect_valid("Vec2"),
+            graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Vec2"),
             IndexMap::new(),
         ))
         .unwrap_err();

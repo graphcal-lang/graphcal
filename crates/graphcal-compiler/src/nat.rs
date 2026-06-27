@@ -1,32 +1,24 @@
 //! Typed representation of type-level Nat arithmetic.
 //!
 //! Nat forms are used by both type resolution and declared type references, so
-//! they live in the syntax layer rather than in TIR. Rendering a form to a
-//! string is a display operation only; semantic comparisons use the normalized
-//! polynomial structure directly.
+//! they live in a semantic compiler module rather than in syntax or TIR.
+//! Rendering a form to a string is a display operation only; semantic
+//! comparisons use the normalized polynomial structure directly.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::syntax::names::GenericParamName;
+use thiserror::Error;
+
+use crate::syntax::type_name::GenericParamName;
 
 /// Arithmetic overflow while combining type-level Nat forms.
 ///
 /// Coefficients and exponents are stored as `u64`; combining forms whose
 /// values exceed that range must fail loudly instead of wrapping, since a
 /// wrapped form could spuriously unify with an unrelated type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("type-level Nat arithmetic overflow (values are stored as `u64`)")]
 pub struct NatOverflowError;
-
-impl std::fmt::Display for NatOverflowError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "type-level Nat arithmetic overflow (values are stored as `u64`)"
-        )
-    }
-}
-
-impl std::error::Error for NatOverflowError {}
 
 /// A monomial: product of variables raised to natural number exponents.
 ///

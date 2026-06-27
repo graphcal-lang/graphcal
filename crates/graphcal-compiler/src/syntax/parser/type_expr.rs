@@ -1,12 +1,14 @@
+use crate::dimension::Rational;
 use crate::syntax::ast::{
     DimExpr, DimExprItem, DimTerm, Expr, ExprKind, GenericConstraint, GenericParam, IdentPath,
     IndexExpr, MulDivOp, NatExpr, TypeExpr, TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
-use crate::syntax::dimension::Rational;
-use crate::syntax::names::{GenericParamName, ModuleAliasName, UnitName, UnitRef};
+use crate::syntax::dimension::{UnitName, UnitRef};
+use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
+use crate::syntax::type_name::GenericParamName;
 
 use super::{ParseError, Parser};
 

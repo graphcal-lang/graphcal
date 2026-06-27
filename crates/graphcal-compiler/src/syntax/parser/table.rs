@@ -1,5 +1,6 @@
 use crate::syntax::ast::{Expr, ExprKind, MapEntry, MapEntryIndex, MapEntryKey, TableIndexSpec};
-use crate::syntax::names::{IndexVariantName, NamePath};
+use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;

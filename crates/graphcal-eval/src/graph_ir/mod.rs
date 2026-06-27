@@ -19,11 +19,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::registry::resolve_types::DeclCategory;
-use graphcal_compiler::syntax::names::{ResolvedName, namespace};
 use graphcal_compiler::tir::typed::{DagTIR, TIR};
 
 /// Stable identity of a graph node: the declaration's canonical resolved name.
-pub type GraphNodeId = ResolvedName<namespace::Decl>;
+pub type GraphNodeId = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 /// The declaration kind behind a graph node. Drives renderer styling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,12 +224,12 @@ mod tests {
     }
 
     fn node_id(name: &str) -> GraphNodeId {
-        ResolvedName::from_def(
+        graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
             graphcal_compiler::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(
                 "test.gcl",
             ))
             .unwrap(),
-            graphcal_compiler::syntax::names::DeclName::expect_valid(name),
+            graphcal_compiler::syntax::decl_name::DeclName::expect_valid(name),
         )
     }
 

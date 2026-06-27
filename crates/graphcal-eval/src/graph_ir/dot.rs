@@ -113,7 +113,7 @@ mod tests {
     use super::*;
     use crate::graph_ir::{GraphEdge, GraphNodeId};
     use graphcal_compiler::dag_id::DagId;
-    use graphcal_compiler::syntax::names::DeclName;
+    use graphcal_compiler::syntax::decl_name::DeclName;
 
     fn id(owner: &DagId, name: &str) -> GraphNodeId {
         GraphNodeId::from_def(owner.clone(), DeclName::expect_valid(name))

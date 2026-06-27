@@ -5,7 +5,7 @@
 
 /// Format a numeric value for display: integers without decimal point, floats with
 /// reasonable precision (up to 6 decimal places, trailing zeros stripped).
-use crate::syntax::dimension::Rational;
+use crate::dimension::Rational;
 #[must_use]
 pub fn format_number(value: f64) -> String {
     if value.fract() == 0.0 && value.abs() < 1e15 {
@@ -156,7 +156,7 @@ pub fn format_unit_expr_canonical(expr: &crate::syntax::ast::UnitExpr) -> String
 mod tests {
     use super::*;
     use crate::syntax::ast::{MulDivOp, UnitExpr, UnitExprItem};
-    use crate::syntax::names::{UnitName, UnitRef};
+    use crate::syntax::dimension::{UnitName, UnitRef};
     use crate::syntax::span::Span;
     use crate::syntax::span::Spanned;
 

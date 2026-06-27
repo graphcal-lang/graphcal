@@ -46,12 +46,16 @@ use crate::syntax::ast::{
     TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember, UnitDecl, UnitDef, UnitExpr,
     UnitExprItem, UnresolvedRef,
 };
-use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, FieldName, GenericParamName, IndexName, IndexVariantName,
-    ModuleAliasName, NamePath, PlotPropertyName, ScopedName, StructTypeName, UnitName,
-};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::dimension::{DimName, UnitName};
+use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::module_name::{ModuleAliasName, ScopedName};
+use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Spanned;
+use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
+
+use super::plot_props::PlotPropertyName;
 
 /// Structural equality of two [`Raw`](crate::syntax::phase::Raw) syntax trees
 /// modulo formatting — currently, modulo source spans.
@@ -87,7 +91,7 @@ format_equivalent_via_eq!(
     bool,
     i32,
     i64,
-    crate::syntax::dimension::Rational,
+    crate::dimension::Rational,
     u64,
     usize,
     String,
@@ -103,10 +107,10 @@ format_equivalent_via_eq!(
     GenericParamName,
     PlotPropertyName,
     ScopedName,
-    crate::syntax::names::LocalName,
+    crate::syntax::local_name::LocalName,
     NamePath,
     ModuleAliasName,
-    crate::syntax::names::UnitRef,
+    crate::syntax::dimension::UnitRef,
     // Closed enums with no payload spans.
     crate::syntax::ast::BinOp,
     crate::syntax::ast::UnaryOp,

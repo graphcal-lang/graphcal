@@ -9,6 +9,15 @@
 //! a module alias in the current module scope. The result of a successful lookup
 //! carries the canonical [`DagId`] owner, not the textual alias.
 
+use crate::syntax::decl_name::{DeclNameNamespace, ResolvedDeclName};
+use crate::syntax::dimension::{
+    DimNameNamespace, ResolvedDimName, ResolvedUnitName, UnitNameNamespace,
+};
+use crate::syntax::index_name::{IndexNameNamespace, IndexVariantNameNamespace, ResolvedIndexName};
+use crate::syntax::type_name::{
+    ConstructorNameNamespace, ResolvedConstructorName, ResolvedStructTypeName,
+    StructTypeNameNamespace,
+};
 use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
@@ -16,14 +25,15 @@ use thiserror::Error;
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::syntax::ast::{IdentPath, ImportItem, ImportItemNamespace, ImportKind, ModulePath};
-use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, IndexName, IndexVariantName, ModuleAliasName, NameAtom,
-    NameDef, NameNamespace, NamePath, ResolvedIndexVariant, ResolvedName, StructTypeName, UnitName,
-    namespace,
-};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::dimension::{DimName, UnitName};
+use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::module_name::{ModuleAliasName, ModuleAliasNameNamespace};
+use crate::syntax::names::{NameAtom, NameDef, NameNamespace, NamePath, ResolvedName};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::{ConstructorName, StructTypeName};
 
 /// Visibility of a symbol across module boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -193,7 +203,7 @@ impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ModuleSymbol<Ns> {
 /// Value/declaration symbol plus its semantic declaration kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleDeclSymbol {
-    symbol: ModuleSymbol<namespace::Decl>,
+    symbol: ModuleSymbol<DeclNameNamespace>,
     kind: DeclSymbolKind,
 }
 
@@ -213,7 +223,7 @@ impl ModuleDeclSymbol {
 
     /// Canonical resolved identity for this declaration.
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedName<namespace::Decl> {
+    pub const fn resolved(&self) -> &ResolvedDeclName {
         self.symbol.resolved()
     }
 
@@ -236,8 +246,8 @@ impl ModuleDeclSymbol {
     }
 }
 
-impl ModuleSymbolLookup<namespace::Decl> for ModuleDeclSymbol {
-    fn resolved(&self) -> &ResolvedName<namespace::Decl> {
+impl ModuleSymbolLookup<DeclNameNamespace> for ModuleDeclSymbol {
+    fn resolved(&self) -> &ResolvedDeclName {
         self.resolved()
     }
 
@@ -253,14 +263,14 @@ impl ModuleSymbolLookup<namespace::Decl> for ModuleDeclSymbol {
 /// Index symbol plus the variants declared by that index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleIndexSymbol {
-    symbol: ModuleSymbol<namespace::Index>,
+    symbol: ModuleSymbol<IndexNameNamespace>,
     variants: HashMap<IndexVariantName, Span>,
 }
 
 impl ModuleIndexSymbol {
     /// Canonical resolved identity for the index type.
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedName<namespace::Index> {
+    pub const fn resolved(&self) -> &ResolvedIndexName {
         self.symbol.resolved()
     }
 
@@ -283,8 +293,8 @@ impl ModuleIndexSymbol {
     }
 }
 
-impl ModuleSymbolLookup<namespace::Index> for ModuleIndexSymbol {
-    fn resolved(&self) -> &ResolvedName<namespace::Index> {
+impl ModuleSymbolLookup<IndexNameNamespace> for ModuleIndexSymbol {
+    fn resolved(&self) -> &ResolvedIndexName {
         self.resolved()
     }
 
@@ -302,11 +312,11 @@ impl ModuleSymbolLookup<namespace::Index> for ModuleIndexSymbol {
 pub struct ModuleSymbols {
     owner: DagId,
     decls: HashMap<DeclName, ModuleDeclSymbol>,
-    dimensions: HashMap<DimName, ModuleSymbol<namespace::Dim>>,
-    units: HashMap<UnitName, ModuleSymbol<namespace::Unit>>,
-    struct_types: HashMap<StructTypeName, ModuleSymbol<namespace::StructType>>,
+    dimensions: HashMap<DimName, ModuleSymbol<DimNameNamespace>>,
+    units: HashMap<UnitName, ModuleSymbol<UnitNameNamespace>>,
+    struct_types: HashMap<StructTypeName, ModuleSymbol<StructTypeNameNamespace>>,
     indexes: HashMap<IndexName, ModuleIndexSymbol>,
-    constructors: HashMap<ConstructorName, ModuleSymbol<namespace::Constructor>>,
+    constructors: HashMap<ConstructorName, ModuleSymbol<ConstructorNameNamespace>>,
 }
 
 impl ModuleSymbols {
@@ -351,13 +361,13 @@ impl ModuleSymbols {
 
     /// Dimension namespace symbols.
     #[must_use]
-    pub const fn dimensions(&self) -> &HashMap<DimName, ModuleSymbol<namespace::Dim>> {
+    pub const fn dimensions(&self) -> &HashMap<DimName, ModuleSymbol<DimNameNamespace>> {
         &self.dimensions
     }
 
     /// Unit namespace symbols.
     #[must_use]
-    pub const fn units(&self) -> &HashMap<UnitName, ModuleSymbol<namespace::Unit>> {
+    pub const fn units(&self) -> &HashMap<UnitName, ModuleSymbol<UnitNameNamespace>> {
         &self.units
     }
 
@@ -365,7 +375,7 @@ impl ModuleSymbols {
     #[must_use]
     pub const fn struct_types(
         &self,
-    ) -> &HashMap<StructTypeName, ModuleSymbol<namespace::StructType>> {
+    ) -> &HashMap<StructTypeName, ModuleSymbol<StructTypeNameNamespace>> {
         &self.struct_types
     }
 
@@ -379,7 +389,7 @@ impl ModuleSymbols {
     #[must_use]
     pub const fn constructors(
         &self,
-    ) -> &HashMap<ConstructorName, ModuleSymbol<namespace::Constructor>> {
+    ) -> &HashMap<ConstructorName, ModuleSymbol<ConstructorNameNamespace>> {
         &self.constructors
     }
 
@@ -451,7 +461,7 @@ impl ModuleSymbols {
                 ast::DeclKind::Unit(u) => self.insert_unit(
                     &u.name,
                     SymbolVisibility::from(u.visibility),
-                    namespace::Unit::DISPLAY_NAME,
+                    UnitNameNamespace::DISPLAY_NAME,
                 )?,
                 ast::DeclKind::Type(t) => self.insert_type_decl(&mut exclusive_names, t)?,
                 ast::DeclKind::Index(i) => self.insert_index_decl(&mut exclusive_names, i)?,
@@ -479,7 +489,7 @@ impl ModuleSymbols {
             ExclusiveNameKind::Value,
             name.span,
         )?;
-        self.insert_decl(name, visibility, namespace::Decl::DISPLAY_NAME, kind)
+        self.insert_decl(name, visibility, DeclNameNamespace::DISPLAY_NAME, kind)
     }
 
     fn insert_dimension_decl(
@@ -494,7 +504,7 @@ impl ModuleSymbols {
             ExclusiveNameKind::Dimension,
             name.span,
         )?;
-        self.insert_dimension(name, visibility, namespace::Dim::DISPLAY_NAME)
+        self.insert_dimension(name, visibility, DimNameNamespace::DISPLAY_NAME)
     }
 
     fn insert_type_decl(
@@ -512,14 +522,14 @@ impl ModuleSymbols {
         self.insert_struct_type(
             &type_decl.name,
             visibility,
-            namespace::StructType::DISPLAY_NAME,
+            StructTypeNameNamespace::DISPLAY_NAME,
         )?;
         if let ast::TypeDeclBody::Constructors(members) = &type_decl.body {
             for member in members {
                 self.insert_constructor(
                     &member.name,
                     visibility,
-                    namespace::Constructor::DISPLAY_NAME,
+                    ConstructorNameNamespace::DISPLAY_NAME,
                 )?;
             }
         }
@@ -645,7 +655,7 @@ impl ModuleSymbols {
         if let Some(first) = self.indexes.get(index.name.value.as_str()) {
             return Err(ModuleResolveError::DuplicateSymbol {
                 owner: self.owner.clone(),
-                namespace: namespace::Index::DISPLAY_NAME,
+                namespace: IndexNameNamespace::DISPLAY_NAME,
                 name: index.name.value.to_string(),
                 first: first.span(),
                 duplicate: index.name.span,
@@ -658,7 +668,7 @@ impl ModuleSymbols {
                 if let Some(first) = variants.insert(variant.value.clone(), variant.span) {
                     return Err(ModuleResolveError::DuplicateSymbol {
                         owner: self.owner.clone(),
-                        namespace: namespace::IndexVariant::DISPLAY_NAME,
+                        namespace: IndexVariantNameNamespace::DISPLAY_NAME,
                         name: variant.value.qualified_by(&index.name.value).to_string(),
                         first,
                         duplicate: variant.span,
@@ -812,12 +822,12 @@ impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ImportedSymbol<Ns> {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ModuleScope {
     module_aliases: HashMap<ModuleAliasName, ModuleAliasTarget>,
-    selected_decls: HashMap<DeclName, ImportedSymbol<namespace::Decl>>,
-    selected_dimensions: HashMap<DimName, ImportedSymbol<namespace::Dim>>,
-    selected_units: HashMap<UnitName, ImportedSymbol<namespace::Unit>>,
-    selected_struct_types: HashMap<StructTypeName, ImportedSymbol<namespace::StructType>>,
-    selected_indexes: HashMap<IndexName, ImportedSymbol<namespace::Index>>,
-    selected_constructors: HashMap<ConstructorName, ImportedSymbol<namespace::Constructor>>,
+    selected_decls: HashMap<DeclName, ImportedSymbol<DeclNameNamespace>>,
+    selected_dimensions: HashMap<DimName, ImportedSymbol<DimNameNamespace>>,
+    selected_units: HashMap<UnitName, ImportedSymbol<UnitNameNamespace>>,
+    selected_struct_types: HashMap<StructTypeName, ImportedSymbol<StructTypeNameNamespace>>,
+    selected_indexes: HashMap<IndexName, ImportedSymbol<IndexNameNamespace>>,
+    selected_constructors: HashMap<ConstructorName, ImportedSymbol<ConstructorNameNamespace>>,
 }
 
 impl ModuleScope {
@@ -861,27 +871,27 @@ trait ResolvableNamespace: NameNamespace {
     const SURFACE_KIND: SurfaceNameKind;
 }
 
-impl ResolvableNamespace for namespace::Decl {
+impl ResolvableNamespace for DeclNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Value;
 }
 
-impl ResolvableNamespace for namespace::Dim {
+impl ResolvableNamespace for DimNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Dimension;
 }
 
-impl ResolvableNamespace for namespace::Unit {
+impl ResolvableNamespace for UnitNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Unit;
 }
 
-impl ResolvableNamespace for namespace::StructType {
+impl ResolvableNamespace for StructTypeNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Type;
 }
 
-impl ResolvableNamespace for namespace::Index {
+impl ResolvableNamespace for IndexNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Index;
 }
 
-impl ResolvableNamespace for namespace::Constructor {
+impl ResolvableNamespace for ConstructorNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Constructor;
 }
 
@@ -894,32 +904,32 @@ enum ImportAddition {
     },
     Decl {
         local: Spanned<DeclName>,
-        target: ResolvedName<namespace::Decl>,
+        target: ResolvedDeclName,
         visibility: SymbolVisibility,
     },
     Dimension {
         local: Spanned<DimName>,
-        target: ResolvedName<namespace::Dim>,
+        target: ResolvedDimName,
         visibility: SymbolVisibility,
     },
     Unit {
         local: Spanned<UnitName>,
-        target: ResolvedName<namespace::Unit>,
+        target: ResolvedUnitName,
         visibility: SymbolVisibility,
     },
     StructType {
         local: Spanned<StructTypeName>,
-        target: ResolvedName<namespace::StructType>,
+        target: ResolvedStructTypeName,
         visibility: SymbolVisibility,
     },
     Index {
         local: Spanned<IndexName>,
-        target: ResolvedName<namespace::Index>,
+        target: ResolvedIndexName,
         visibility: SymbolVisibility,
     },
     Constructor {
         local: Spanned<ConstructorName>,
-        target: ResolvedName<namespace::Constructor>,
+        target: ResolvedConstructorName,
         visibility: SymbolVisibility,
     },
 }
@@ -1118,7 +1128,7 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedName<namespace::Decl>, ModuleResolveError> {
+    ) -> Result<ResolvedDeclName, ModuleResolveError> {
         self.resolve_symbol_path(owner, path, ModuleSymbols::decls, |scope| {
             &scope.selected_decls
         })
@@ -1129,7 +1139,7 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedName<namespace::Decl>, ModuleResolveError> {
+    ) -> Result<ResolvedDeclName, ModuleResolveError> {
         let resolved = self.resolve_decl_path(owner, path)?;
         let actual = self.decl_symbol_kind(&resolved)?;
         if actual.is_const() {
@@ -1146,7 +1156,7 @@ impl ModuleResolver {
     /// Return the semantic kind of a resolved declaration symbol.
     pub fn decl_symbol_kind(
         &self,
-        name: &ResolvedName<namespace::Decl>,
+        name: &ResolvedDeclName,
     ) -> Result<DeclSymbolKind, ModuleResolveError> {
         let symbols = self.module_symbols(name.owner())?;
         let def_name = DeclName::from_atom(name.atom().clone());
@@ -1156,7 +1166,7 @@ impl ModuleResolver {
             .map(ModuleDeclSymbol::kind)
             .ok_or_else(|| ModuleResolveError::UnknownName {
                 owner: name.owner().clone(),
-                namespace: namespace::Decl::DISPLAY_NAME,
+                namespace: DeclNameNamespace::DISPLAY_NAME,
                 name: name.as_str().to_string(),
             })
     }
@@ -1166,7 +1176,7 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedName<namespace::Dim>, ModuleResolveError> {
+    ) -> Result<ResolvedDimName, ModuleResolveError> {
         self.resolve_symbol_path(owner, path, ModuleSymbols::dimensions, |scope| {
             &scope.selected_dimensions
         })
@@ -1177,7 +1187,7 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedName<namespace::Unit>, ModuleResolveError> {
+    ) -> Result<ResolvedUnitName, ModuleResolveError> {
         self.resolve_symbol_path(owner, path, ModuleSymbols::units, |scope| {
             &scope.selected_units
         })
@@ -1188,7 +1198,7 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedName<namespace::StructType>, ModuleResolveError> {
+    ) -> Result<ResolvedStructTypeName, ModuleResolveError> {
         self.resolve_symbol_path(owner, path, ModuleSymbols::struct_types, |scope| {
             &scope.selected_struct_types
         })
@@ -1199,7 +1209,7 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedName<namespace::Constructor>, ModuleResolveError> {
+    ) -> Result<ResolvedConstructorName, ModuleResolveError> {
         self.resolve_symbol_path(owner, path, ModuleSymbols::constructors, |scope| {
             &scope.selected_constructors
         })
@@ -1211,7 +1221,7 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &IdentPath,
-    ) -> Result<ResolvedName<namespace::Constructor>, ModuleResolveError> {
+    ) -> Result<ResolvedConstructorName, ModuleResolveError> {
         self.resolve_constructor_path(owner, &ident_path_to_name_path(path))
     }
 
@@ -1220,7 +1230,7 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedName<namespace::Index>, ModuleResolveError> {
+    ) -> Result<ResolvedIndexName, ModuleResolveError> {
         self.resolve_symbol_path(owner, path, ModuleSymbols::indexes, |scope| {
             &scope.selected_indexes
         })
@@ -1269,7 +1279,7 @@ impl ModuleResolver {
             .get(index_name.as_str())
             .ok_or_else(|| ModuleResolveError::UnknownName {
                 owner: index_owner.clone(),
-                namespace: namespace::Index::DISPLAY_NAME,
+                namespace: IndexNameNamespace::DISPLAY_NAME,
                 name: index_name.to_string(),
             })?;
         if !index_symbol.variants.contains_key(variant.as_str()) {
@@ -1312,7 +1322,7 @@ impl ModuleResolver {
         match candidates.as_slice() {
             [] => Err(ModuleResolveError::UnknownName {
                 owner: owner.clone(),
-                namespace: namespace::IndexVariant::DISPLAY_NAME,
+                namespace: IndexVariantNameNamespace::DISPLAY_NAME,
                 name: variant.to_string(),
             }),
             [index] => Ok(ResolvedIndexVariant::new(index.clone(), variant.clone())),
@@ -1473,7 +1483,7 @@ impl ModuleResolver {
                     }]),
                     ExportLookup::Private => Err(ModuleResolveError::PrivateName {
                         owner: target.clone(),
-                        namespace: namespace::StructType::DISPLAY_NAME,
+                        namespace: StructTypeNameNamespace::DISPLAY_NAME,
                         name: source_atom.to_string(),
                     }),
                     ExportLookup::Missing => {
@@ -1489,7 +1499,7 @@ impl ModuleResolver {
                         }
                         Err(ModuleResolveError::UnknownName {
                             owner: target.clone(),
-                            namespace: namespace::StructType::DISPLAY_NAME,
+                            namespace: StructTypeNameNamespace::DISPLAY_NAME,
                             name: source_atom.to_string(),
                         })
                     }
@@ -1938,7 +1948,7 @@ impl ModuleScope {
                 alias,
                 target,
                 access,
-                namespace::ModuleAlias::DISPLAY_NAME,
+                ModuleAliasNameNamespace::DISPLAY_NAME,
             ),
             ImportAddition::Decl {
                 local,
@@ -1950,7 +1960,7 @@ impl ModuleScope {
                 local,
                 target,
                 visibility,
-                namespace::Decl::DISPLAY_NAME,
+                DeclNameNamespace::DISPLAY_NAME,
             ),
             ImportAddition::Dimension {
                 local,
@@ -1962,7 +1972,7 @@ impl ModuleScope {
                 local,
                 target,
                 visibility,
-                namespace::Dim::DISPLAY_NAME,
+                DimNameNamespace::DISPLAY_NAME,
             ),
             ImportAddition::Unit {
                 local,
@@ -1974,7 +1984,7 @@ impl ModuleScope {
                 local,
                 target,
                 visibility,
-                namespace::Unit::DISPLAY_NAME,
+                UnitNameNamespace::DISPLAY_NAME,
             ),
             ImportAddition::StructType {
                 local,
@@ -1986,7 +1996,7 @@ impl ModuleScope {
                 local,
                 target,
                 visibility,
-                namespace::StructType::DISPLAY_NAME,
+                StructTypeNameNamespace::DISPLAY_NAME,
             ),
             ImportAddition::Index {
                 local,
@@ -1998,7 +2008,7 @@ impl ModuleScope {
                 local,
                 target,
                 visibility,
-                namespace::Index::DISPLAY_NAME,
+                IndexNameNamespace::DISPLAY_NAME,
             ),
             ImportAddition::Constructor {
                 local,
@@ -2010,7 +2020,7 @@ impl ModuleScope {
                 local,
                 target,
                 visibility,
-                namespace::Constructor::DISPLAY_NAME,
+                ConstructorNameNamespace::DISPLAY_NAME,
             ),
         }
     }
@@ -2292,7 +2302,7 @@ pub enum ModuleResolveError {
     /// A name exists but has the wrong declaration kind for the use site.
     #[error("expected {expected} declaration `{name}`, found {actual}")]
     UnexpectedDeclKind {
-        name: ResolvedName<namespace::Decl>,
+        name: ResolvedDeclName,
         expected: &'static str,
         actual: DeclSymbolKind,
     },
@@ -2309,7 +2319,7 @@ pub enum ModuleResolveError {
     /// The index exists, but the requested variant is absent.
     #[error("unknown variant `{variant}` for index `{index}`")]
     UnknownIndexVariant {
-        index: ResolvedName<namespace::Index>,
+        index: ResolvedIndexName,
         variant: IndexVariantName,
     },
     /// A bare variant exists on more than one visible index.
@@ -2317,7 +2327,7 @@ pub enum ModuleResolveError {
     AmbiguousIndexVariant {
         owner: DagId,
         variant: IndexVariantName,
-        indexes: Vec<ResolvedName<namespace::Index>>,
+        indexes: Vec<ResolvedIndexName>,
     },
 }
 

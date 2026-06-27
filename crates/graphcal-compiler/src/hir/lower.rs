@@ -5,6 +5,7 @@
 //! `ResolvedName<Ns>` values or lexical `GenericParamId`s instead of carrying
 //! syntax paths forward.
 
+use crate::syntax::dimension::ResolvedDimName;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
@@ -14,11 +15,11 @@ use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
+use crate::syntax::dimension::DimName;
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver, SurfaceNameKind};
-use crate::syntax::names::{
-    DimName, GenericParamName, NameAtom, NamePath, ResolvedName, TimeScaleName, namespace,
-};
+use crate::syntax::names::{NameAtom, NamePath, ResolvedName};
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::GenericParamName;
 
 use super::types::{
     BuiltinType, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericParamDef, GenericParamId,
@@ -61,9 +62,9 @@ pub enum HirLowerError {
     /// `Datetime<...>` has the wrong number of arguments.
     #[error("type `Datetime` expects 0 or 1 type argument(s), got {got}")]
     WrongDatetimeArgCount { got: usize, span: Span },
-    /// `Datetime<...>` argument was not a bare time-scale name.
+    /// `Datetime<...>` argument was not a bare time scale.
     #[error("expected a time scale name (e.g., UTC, TAI, TT, TDB, GPST)")]
-    ExpectedTimeScaleName { span: Span },
+    ExpectedTimeScale { span: Span },
     /// `Datetime<...>` argument was a bare name, but not a supported time scale.
     #[error("unknown time scale `{name}`; expected one of: {expected}")]
     UnknownTimeScale {
@@ -107,10 +108,7 @@ impl PreludeTypeScope {
         )
     }
 
-    pub(crate) fn resolve_dimension_path(
-        &self,
-        path: &NamePath,
-    ) -> Option<ResolvedName<namespace::Dim>> {
+    pub(crate) fn resolve_dimension_path(&self, path: &NamePath) -> Option<ResolvedDimName> {
         let atom = path.as_bare()?;
         self.dimensions
             .contains(atom.as_str())
@@ -259,10 +257,7 @@ impl<'a> TypeLoweringContext<'a> {
         }
     }
 
-    fn resolve_prelude_dimension_path(
-        self,
-        path: &NamePath,
-    ) -> Option<ResolvedName<namespace::Dim>> {
+    fn resolve_prelude_dimension_path(self, path: &NamePath) -> Option<ResolvedDimName> {
         self.prelude
             .and_then(|prelude| prelude.resolve_dimension_path(path))
     }
@@ -367,22 +362,21 @@ fn lower_datetime_application(
     }
 }
 
-fn lower_time_scale_arg(arg: &ast::TypeExpr) -> Result<TimeScaleName, HirLowerError> {
+fn lower_time_scale_arg(arg: &ast::TypeExpr) -> Result<TimeScale, HirLowerError> {
     let ast::TypeExprKind::DimExpr(dim_expr) = &arg.kind else {
-        return Err(HirLowerError::ExpectedTimeScaleName { span: arg.span });
+        return Err(HirLowerError::ExpectedTimeScale { span: arg.span });
     };
     let [item] = dim_expr.terms.as_slice() else {
-        return Err(HirLowerError::ExpectedTimeScaleName { span: arg.span });
+        return Err(HirLowerError::ExpectedTimeScale { span: arg.span });
     };
     if item.term.power.is_some() {
-        return Err(HirLowerError::ExpectedTimeScaleName { span: arg.span });
+        return Err(HirLowerError::ExpectedTimeScale { span: arg.span });
     }
     let Some(atom) = item.term.name.value.as_bare() else {
-        return Err(HirLowerError::ExpectedTimeScaleName { span: arg.span });
+        return Err(HirLowerError::ExpectedTimeScale { span: arg.span });
     };
     atom.as_str()
         .parse::<TimeScale>()
-        .map(TimeScaleName::new)
         .map_err(|_| HirLowerError::UnknownTimeScale {
             name: atom.to_string(),
             expected: "UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST",
@@ -698,8 +692,8 @@ fn type_position_wrong_universe(source: ModuleResolveError) -> ModuleResolveErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::names::{ResolvedName, StructTypeName};
     use crate::syntax::parser::Parser;
+    use crate::syntax::type_name::{ResolvedStructTypeName, StructTypeName};
 
     fn desugared_source(source: &str) -> ast::File {
         let raw = Parser::new(source).parse_file().unwrap();
@@ -809,7 +803,7 @@ mod tests {
             .unwrap();
 
         let type_decl = first_type_decl(&file);
-        let type_owner = GenericParamOwner::Type(ResolvedName::from_def(
+        let type_owner = GenericParamOwner::Type(ResolvedStructTypeName::from_def(
             owner_id.clone(),
             StructTypeName::expect_valid("Series"),
         ));

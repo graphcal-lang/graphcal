@@ -27,7 +27,7 @@ impl Phase for Desugared {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::names::DeclName;
+    use crate::syntax::decl_name::DeclName;
     use crate::syntax::span::{Span, Spanned};
 
     #[test]

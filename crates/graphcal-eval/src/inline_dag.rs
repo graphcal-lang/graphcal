@@ -16,7 +16,7 @@ use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
-use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type};
 
 use crate::import_surface::{ImportItemPresence, file_import_item_presence};
@@ -199,7 +199,7 @@ pub fn classify_value_decls_in_ast(
     ast: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> ParentValueDecls {
     let placeholder =
-        || DeclaredType::Scalar(graphcal_compiler::syntax::dimension::Dimension::dimensionless());
+        || DeclaredType::Scalar(graphcal_compiler::dimension::Dimension::dimensionless());
     let mut values = ParentValueDecls::default();
     for decl in &ast.declarations {
         match &decl.kind {

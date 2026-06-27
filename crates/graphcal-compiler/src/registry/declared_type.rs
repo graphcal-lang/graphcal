@@ -1,12 +1,14 @@
 //! Declared type of a const/param/node.
 
 use crate::dag_id::DagId;
-use crate::syntax::dimension::Dimension;
-use crate::syntax::names::{NameDef, NameNamespace, ResolvedName, namespace};
+use crate::dimension::Dimension;
+use crate::syntax::index_name::{IndexName, IndexNameNamespace, ResolvedIndexName};
+use crate::syntax::names::{NameDef, NameNamespace, ResolvedName};
+use crate::syntax::type_name::StructTypeNameNamespace;
 
+use crate::nat::NatPolyForm;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{DimensionRegistry, NatRangeIndex, NatRangeIndexError};
-use crate::syntax::nat::NatPolyForm;
 
 /// A type-level reference to a named compiler entity.
 ///
@@ -134,7 +136,7 @@ impl NatRangeIndexRef {
 
     /// Render this Nat range as a source-like display name for diagnostics.
     #[must_use]
-    pub fn display_name(&self) -> NameDef<namespace::Index> {
+    pub fn display_name(&self) -> IndexName {
         match self {
             Self::Concrete(index) => index.display_name(),
             Self::Symbolic(form) => NameDef::expect_valid(format!("range({})", form.format())),
@@ -158,30 +160,27 @@ impl NatRangeIndexRef {
 /// axes are typed Nat-range identities and do not have declared resolved names.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IndexTypeRef {
-    Declared(TypeNameRef<namespace::Index>),
+    Declared(TypeNameRef<IndexNameNamespace>),
     NatRange(NatRangeIndexRef),
 }
 
 impl IndexTypeRef {
     /// Create a module-aware reference from a canonical resolved declared-index name.
     #[must_use]
-    pub fn from_resolved(resolved: ResolvedName<namespace::Index>) -> Self {
+    pub fn from_resolved(resolved: ResolvedIndexName) -> Self {
         Self::Declared(TypeNameRef::from_resolved(resolved))
     }
 
     /// Resolve a declared-index definition-site leaf into the given owner.
     #[must_use]
-    pub fn with_owner(owner: DagId, name: NameDef<namespace::Index>) -> Self {
+    pub fn with_owner(owner: DagId, name: IndexName) -> Self {
         Self::Declared(TypeNameRef::with_owner(owner, name))
     }
 
     /// Create a reference with a display leaf that differs from the canonical
     /// owner-qualified identity.
     #[must_use]
-    pub const fn with_display_leaf(
-        name: NameDef<namespace::Index>,
-        resolved: ResolvedName<namespace::Index>,
-    ) -> Self {
+    pub const fn with_display_leaf(name: IndexName, resolved: ResolvedIndexName) -> Self {
         Self::Declared(TypeNameRef::with_display_leaf(name, resolved))
     }
 
@@ -208,7 +207,7 @@ impl IndexTypeRef {
 
     /// The declared leaf name, when this is a declared index.
     #[must_use]
-    pub const fn declared_name(&self) -> Option<&NameDef<namespace::Index>> {
+    pub const fn declared_name(&self) -> Option<&IndexName> {
         match self {
             Self::Declared(reference) => Some(reference.name()),
             Self::NatRange(_) => None,
@@ -217,7 +216,7 @@ impl IndexTypeRef {
 
     /// The canonical declared owner/name identity, when this is a declared index.
     #[must_use]
-    pub const fn declared_resolved(&self) -> Option<&ResolvedName<namespace::Index>> {
+    pub const fn declared_resolved(&self) -> Option<&ResolvedIndexName> {
         match self {
             Self::Declared(reference) => Some(reference.resolved()),
             Self::NatRange(_) => None,
@@ -250,7 +249,7 @@ impl IndexTypeRef {
 
     /// Render a display-only leaf name for diagnostics and formatting.
     #[must_use]
-    pub fn display_name(&self) -> NameDef<namespace::Index> {
+    pub fn display_name(&self) -> IndexName {
         match self {
             Self::Declared(reference) => reference.to_unowned_name(),
             Self::NatRange(reference) => reference.display_name(),
@@ -269,13 +268,13 @@ impl IndexTypeRef {
 
     /// Clone the leaf definition/display name for diagnostic/display boundaries.
     #[must_use]
-    pub fn to_unowned_name(&self) -> NameDef<namespace::Index> {
+    pub fn to_unowned_name(&self) -> IndexName {
         self.display_name()
     }
 }
 
-impl From<ResolvedName<namespace::Index>> for IndexTypeRef {
-    fn from(resolved: ResolvedName<namespace::Index>) -> Self {
+impl From<ResolvedIndexName> for IndexTypeRef {
+    fn from(resolved: ResolvedIndexName) -> Self {
         Self::from_resolved(resolved)
     }
 }
@@ -287,7 +286,7 @@ impl std::fmt::Display for IndexTypeRef {
 }
 
 /// Type-level reference to a struct/tagged-union definition.
-pub type StructTypeRef = TypeNameRef<namespace::StructType>;
+pub type StructTypeRef = TypeNameRef<StructTypeNameNamespace>;
 
 /// The declared type of a const/param/node: either a scalar with a dimension, a bool, or a struct.
 #[derive(Debug, Clone, PartialEq, Eq)]

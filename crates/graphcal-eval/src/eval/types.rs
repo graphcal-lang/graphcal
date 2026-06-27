@@ -6,12 +6,13 @@ use thiserror::Error;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
+use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
-use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
-use graphcal_compiler::syntax::names::{
-    DeclName, FieldName, IndexName, IndexVariantName, ScopedName, StructTypeName,
-};
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
 
 /// The kind of a declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -592,7 +593,7 @@ pub struct EvalResult {
     pub assumes_map: std::collections::HashMap<ScopedName, Vec<ScopedName>>,
     /// Base dimension symbols for display (e.g., `BaseDimId::Prelude("Length") → "m"`).
     pub base_dim_symbols:
-        std::collections::BTreeMap<graphcal_compiler::syntax::dimension::BaseDimId, String>,
+        std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     /// Domain constraints for params/nodes, for programmatic access (sweeping/sampling).
     pub domain_constraints: std::collections::HashMap<
         ScopedName,
@@ -615,7 +616,9 @@ impl EvalResult {
 // The typed property registry (names, value types, Vega names) lives in the
 // compiler so resolution-time validation and runtime evaluation dispatch on
 // one source of truth (#845).
-pub use graphcal_compiler::syntax::ast::{CompositionProperty, MarkProperty, PlotProperty};
+pub use graphcal_compiler::plot_props::{
+    CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType,
+};
 
 /// A single evaluated plot specification.
 #[derive(Debug, Clone)]
