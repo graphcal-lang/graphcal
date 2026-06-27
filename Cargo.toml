@@ -7,7 +7,7 @@ members = ["crates/*"]
 default-members = ["crates/graphcal-cli"]
 
 [workspace.package]
-version = "0.0.1-alpha.14"
+version = "0.0.1-alpha.15"
 edition = "2024"
 rust-version = "1.91"
 description = "Type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations"
@@ -20,12 +20,12 @@ categories = ["compilers", "science"]
 [workspace.dependencies]
 clap = { version = "4.5.58", features = ["derive"] }
 gix = { version = "0.84.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "parallel", "sha1", "worktree-mutation"] }
-graphcal-compiler = { path = "crates/graphcal-compiler", version = "0.0.1-alpha.14" }
-graphcal-eval = { path = "crates/graphcal-eval", version = "0.0.1-alpha.14" }
-graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.0.1-alpha.14" }
-graphcal-io = { path = "crates/graphcal-io", version = "0.0.1-alpha.14" }
-graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.0.1-alpha.14" }
-graphcal-package = { path = "crates/graphcal-package", version = "0.0.1-alpha.14" }
+graphcal-compiler = { path = "crates/graphcal-compiler", version = "0.0.1-alpha.15" }
+graphcal-eval = { path = "crates/graphcal-eval", version = "0.0.1-alpha.15" }
+graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.0.1-alpha.15" }
+graphcal-io = { path = "crates/graphcal-io", version = "0.0.1-alpha.15" }
+graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.0.1-alpha.15" }
+graphcal-package = { path = "crates/graphcal-package", version = "0.0.1-alpha.15" }
 hifitime = "4.2.4"
 indexmap = "2.13.0"
 insta = "1.46.3"
