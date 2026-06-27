@@ -109,7 +109,7 @@ pub(crate) fn assert_base_dim_names_cover(
     Ok(())
 }
 
-/// Error returned when freezing a [`RegistryBuilder`] would violate registry invariants.
+/// Error returned when freezing a [`crate::registry::types::RegistryBuilder`] would violate registry invariants.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RegistryBuildError {
     /// A dimension or unit references a base dimension whose display name was

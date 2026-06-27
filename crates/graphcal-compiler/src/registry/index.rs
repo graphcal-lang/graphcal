@@ -223,15 +223,6 @@ impl NatRangeIndex {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Private helper functions for resolution logic
-// ---------------------------------------------------------------------------
-
-/// Why a unit expression could not be resolved.
-///
-/// Carries the failing unit name so callers can produce a precise
-/// diagnostic instead of re-scanning the expression to find it (the old
-
 /// Index registry: maps declared index names and typed Nat-range identities to `IndexDef`.
 #[derive(Debug, Clone)]
 pub struct IndexRegistry {

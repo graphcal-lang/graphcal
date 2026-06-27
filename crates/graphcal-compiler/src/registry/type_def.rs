@@ -138,8 +138,6 @@ impl TypeDef {
     }
 }
 
-/// Data for a concrete numeric range index (e.g., `linspace(0.0 s, 100.0 s, step: 0.1 s)`).
-
 /// Type registry: maps type names to `TypeDef` and provides
 /// constructor-namespace lookup.
 ///
