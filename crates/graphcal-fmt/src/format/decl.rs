@@ -10,6 +10,7 @@ use pretty::RcDoc;
 use super::{
     Formatter, INDENT, flat_alt_group, format_dim_expr_inline, format_expr,
     format_type_expr_inline, format_unit_expr_inline, render_doc_to_string, soft_parenthesized,
+    soft_parenthesized_list,
 };
 
 // ---------------------------------------------------------------------------
@@ -344,18 +345,15 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
             let header =
                 RcDoc::text("index ").append(RcDoc::text(d.name.value.as_str().to_string()));
 
-            let args = RcDoc::intersperse(
-                [
-                    format_expr(fmt, start),
-                    format_expr(fmt, end),
-                    RcDoc::text("step: ").append(format_expr(fmt, step)),
-                ],
-                RcDoc::text(",").append(RcDoc::line()),
-            );
+            let args = vec![
+                format_expr(fmt, start),
+                format_expr(fmt, end),
+                RcDoc::text("step: ").append(format_expr(fmt, step)),
+            ];
 
             header
                 .append(RcDoc::text(" = linspace"))
-                .append(soft_parenthesized(args))
+                .append(soft_parenthesized_list(args, false))
                 .append(RcDoc::text(";"))
         }
     }
@@ -406,6 +404,39 @@ fn format_import_or_include_path(
     RcDoc::text(format!("{keyword} {path_str}"))
 }
 
+/// Format a selective import/include suffix (`.{ ... };`).
+///
+/// The selector is a suffix of the import/include head, but it must choose its
+/// own layout after the head has been rendered. A multiline include binding
+/// list should not force a single selected output into a brace block; conversely
+/// a long one-line head should still make the selector break when it does not
+/// fit in the remaining width. Appending a grouped suffix to the head gives the
+/// pretty printer exactly that local decision point.
+fn format_selective_import_or_include(
+    head: RcDoc<'static>,
+    item_docs: Vec<RcDoc<'static>>,
+) -> RcDoc<'static> {
+    head.append(format_selective_import_or_include_suffix(item_docs))
+}
+
+fn format_selective_import_or_include_suffix(item_docs: Vec<RcDoc<'static>>) -> RcDoc<'static> {
+    if item_docs.is_empty() {
+        return RcDoc::text(".{ };");
+    }
+
+    let single_line = RcDoc::text(".{ ")
+        .append(RcDoc::intersperse(item_docs.clone(), RcDoc::text(", ")))
+        .append(RcDoc::text(" };"));
+
+    let multi_items = RcDoc::intersperse(item_docs, RcDoc::text(",").append(RcDoc::line())).group();
+    let multi_line = RcDoc::text(".{")
+        .append(RcDoc::hardline().append(multi_items).nest(INDENT))
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("};"));
+
+    flat_alt_group(single_line, multi_line)
+}
+
 /// Format the kind portion (selective/module) of an import/include declaration.
 fn format_import_or_include_kind(
     path_doc: RcDoc<'static>,
@@ -436,11 +467,7 @@ fn format_import_or_include_kind(
                     doc
                 })
                 .collect();
-            path_doc
-                .append(bindings_doc)
-                .append(RcDoc::text(".{ "))
-                .append(RcDoc::intersperse(name_docs, RcDoc::text(", ")))
-                .append(RcDoc::text(" };"))
+            format_selective_import_or_include(path_doc.append(bindings_doc), name_docs)
         }
         graphcal_compiler::syntax::ast::ImportKind::Module { alias: None } => {
             path_doc.append(bindings_doc).append(RcDoc::text(";"))
@@ -467,10 +494,7 @@ fn format_include_param_bindings(
                 .append(format_expr(fmt, &b.value))
         })
         .collect();
-    soft_parenthesized(RcDoc::intersperse(
-        binding_docs,
-        RcDoc::text(",").append(RcDoc::line()),
-    ))
+    soft_parenthesized_list(binding_docs, false)
 }
 
 /// `plot name = { mark: type, encode: { x: ..., y: ... }, title: "..." };`
