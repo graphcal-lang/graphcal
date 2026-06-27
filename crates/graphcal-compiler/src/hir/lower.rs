@@ -14,7 +14,6 @@ use thiserror::Error;
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::time_scale::TimeScaleName;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::dimension::DimName;
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver, SurfaceNameKind};
@@ -63,9 +62,9 @@ pub enum HirLowerError {
     /// `Datetime<...>` has the wrong number of arguments.
     #[error("type `Datetime` expects 0 or 1 type argument(s), got {got}")]
     WrongDatetimeArgCount { got: usize, span: Span },
-    /// `Datetime<...>` argument was not a bare time-scale name.
+    /// `Datetime<...>` argument was not a bare time scale.
     #[error("expected a time scale name (e.g., UTC, TAI, TT, TDB, GPST)")]
-    ExpectedTimeScaleName { span: Span },
+    ExpectedTimeScale { span: Span },
     /// `Datetime<...>` argument was a bare name, but not a supported time scale.
     #[error("unknown time scale `{name}`; expected one of: {expected}")]
     UnknownTimeScale {
@@ -363,22 +362,21 @@ fn lower_datetime_application(
     }
 }
 
-fn lower_time_scale_arg(arg: &ast::TypeExpr) -> Result<TimeScaleName, HirLowerError> {
+fn lower_time_scale_arg(arg: &ast::TypeExpr) -> Result<TimeScale, HirLowerError> {
     let ast::TypeExprKind::DimExpr(dim_expr) = &arg.kind else {
-        return Err(HirLowerError::ExpectedTimeScaleName { span: arg.span });
+        return Err(HirLowerError::ExpectedTimeScale { span: arg.span });
     };
     let [item] = dim_expr.terms.as_slice() else {
-        return Err(HirLowerError::ExpectedTimeScaleName { span: arg.span });
+        return Err(HirLowerError::ExpectedTimeScale { span: arg.span });
     };
     if item.term.power.is_some() {
-        return Err(HirLowerError::ExpectedTimeScaleName { span: arg.span });
+        return Err(HirLowerError::ExpectedTimeScale { span: arg.span });
     }
     let Some(atom) = item.term.name.value.as_bare() else {
-        return Err(HirLowerError::ExpectedTimeScaleName { span: arg.span });
+        return Err(HirLowerError::ExpectedTimeScale { span: arg.span });
     };
     atom.as_str()
         .parse::<TimeScale>()
-        .map(TimeScaleName::new)
         .map_err(|_| HirLowerError::UnknownTimeScale {
             name: atom.to_string(),
             expected: "UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST",

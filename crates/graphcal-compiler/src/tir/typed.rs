@@ -4286,7 +4286,7 @@ const fn resolve_hir_builtin_type(builtin: hir::BuiltinType) -> ResolvedTypeExpr
         hir::BuiltinType::Dimensionless => ResolvedTypeExpr::Dimensionless,
         hir::BuiltinType::Bool => ResolvedTypeExpr::Bool,
         hir::BuiltinType::Int => ResolvedTypeExpr::Int,
-        hir::BuiltinType::Datetime(scale) => ResolvedTypeExpr::Datetime(scale.scale()),
+        hir::BuiltinType::Datetime(scale) => ResolvedTypeExpr::Datetime(scale),
     }
 }
 

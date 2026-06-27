@@ -165,7 +165,7 @@ pub fn hir_lower_error_to_graphcal(
         | hir::HirLowerError::UnknownTypePath { span, .. }
         | hir::HirLowerError::GenericConstraintMismatch { span, .. }
         | hir::HirLowerError::UnknownGenericParam { span, .. }
-        | hir::HirLowerError::ExpectedTimeScaleName { span }
+        | hir::HirLowerError::ExpectedTimeScale { span }
         | hir::HirLowerError::UnknownTimeScale { span, .. }
         | hir::HirLowerError::WrongDatetimeArgCount { span, .. } => *span,
         hir::HirLowerError::DuplicateGenericParam { duplicate, .. } => *duplicate,

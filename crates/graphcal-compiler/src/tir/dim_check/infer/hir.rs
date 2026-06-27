@@ -1951,7 +1951,7 @@ fn infer_hir_generic_type_arg(
         hir::TypeExprKind::Builtin(hir::BuiltinType::Bool) => Ok(InferredType::Bool),
         hir::TypeExprKind::Builtin(hir::BuiltinType::Int) => Ok(InferredType::Int),
         hir::TypeExprKind::Builtin(hir::BuiltinType::Datetime(scale)) => {
-            Ok(InferredType::Datetime(scale.scale()))
+            Ok(InferredType::Datetime(*scale))
         }
         hir::TypeExprKind::DimExpr(dim_expr) => {
             infer_hir_dim_expr_arg(dim_expr, registry, src).map(InferredType::Scalar)

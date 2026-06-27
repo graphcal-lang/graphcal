@@ -7,7 +7,6 @@
 //! owning type/function signature.
 
 use crate::registry::time_scale::TimeScale;
-use crate::registry::time_scale::TimeScaleName;
 use crate::syntax::ast::{GenericConstraint, MulDivOp};
 use crate::syntax::dimension::Rational;
 use crate::syntax::dimension::ResolvedDimName;
@@ -63,14 +62,14 @@ pub enum BuiltinType {
     /// `Int`.
     Int,
     /// `Datetime` or `Datetime<Scale>`.
-    Datetime(TimeScaleName),
+    Datetime(TimeScale),
 }
 
 impl BuiltinType {
     /// The default `Datetime` type is UTC.
     #[must_use]
     pub const fn datetime_utc() -> Self {
-        Self::Datetime(TimeScaleName::new(TimeScale::UTC))
+        Self::Datetime(TimeScale::UTC)
     }
 }
 
