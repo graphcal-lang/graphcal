@@ -4,13 +4,12 @@
 //! type-level references. These HIR types represent the corresponding resolved
 //! boundary: every module-owned reference carries a canonical `ResolvedName`,
 //! while lexical generic parameters carry a `GenericParamId` scoped to their
-//! owning type/function signature.
+//! owning type signature.
 
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::{GenericConstraint, MulDivOp};
 use crate::syntax::dimension::Rational;
 use crate::syntax::dimension::ResolvedDimName;
-use crate::syntax::function_name::ResolvedFnName;
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
@@ -40,8 +39,6 @@ impl GenericParamId {
 pub enum GenericParamOwner {
     /// Generic parameter on a user-defined `type` declaration.
     Type(ResolvedStructTypeName),
-    /// Generic parameter on a function signature.
-    Function(ResolvedFnName),
 }
 
 /// A resolved generic-parameter definition.

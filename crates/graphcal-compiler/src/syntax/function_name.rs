@@ -1,6 +1,6 @@
 //! Function namespace names.
 
-use crate::syntax::names::{NameDef, NameNamespace, ResolvedName};
+use crate::syntax::names::{NameDef, NameNamespace};
 
 /// Function namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -12,6 +12,3 @@ impl NameNamespace for FnNameNamespace {
 
 /// Name of a function (e.g., `"sqrt"`, `"lerp"`).
 pub type FnName = NameDef<FnNameNamespace>;
-
-/// Module-resolved function name.
-pub type ResolvedFnName = ResolvedName<FnNameNamespace>;
