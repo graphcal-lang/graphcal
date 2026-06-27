@@ -3268,6 +3268,48 @@ fn eval_qualified_const_refs_with_colliding_leaf_names() {
 }
 
 #[test]
+fn eval_included_struct_array_field_access_uses_imported_type_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/repro");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"repro\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("types.gcl"),
+        "pub type Item {\n    Item(mass: Mass),\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("data.gcl"),
+        "import repro.types.{ type Item, Item };\n\
+         pub index ItemId = { Only };\n\
+         pub node items: Item[ItemId] = {\n\
+             ItemId.Only: Item(mass: 1.0 kg),\n\
+         };\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import repro.types.{ type Item };\n\
+         import repro.data.{ ItemId };\n\
+         include repro.data().{ items };\n\
+         node first_mass: Mass = @items[ItemId.Only].mass;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let first_mass = find_value(&result, "first_mass");
+    assert!(
+        (first_mass - 1.0).abs() < 1e-10,
+        "first_mass = {first_mass}"
+    );
+}
+
+#[test]
 fn eval_qualified_runtime_refs_with_colliding_leaf_names() {
     let dir = tempfile::tempdir().unwrap();
     let root_dir = dir.path().join("src/collide");
