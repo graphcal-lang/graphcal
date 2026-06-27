@@ -39,5 +39,6 @@ serde_json.workspace = true
 workspace = true
 
 [build-dependencies]
+gix = { version = "0.84.0", default-features = false, features = ["sha1"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

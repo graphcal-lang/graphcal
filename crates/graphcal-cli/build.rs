@@ -1,8 +1,8 @@
 use std::env;
 use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 
+use gix::bstr::ByteSlice;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -30,21 +30,36 @@ fn env_git_hash() -> Option<String> {
         .and_then(|value| non_empty_trimmed(&value))
 }
 
-fn git_output(args: &[&str]) -> Option<String> {
-    Command::new("git")
-        .args(args)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .and_then(|stdout| non_empty_trimmed(&stdout))
+fn manifest_dir() -> Option<PathBuf> {
+    env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from)
 }
 
 fn cargo_vcs_hash() -> Option<String> {
-    let path = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR")?).join(".cargo_vcs_info.json");
+    let path = manifest_dir()?.join(".cargo_vcs_info.json");
     let contents = fs::read_to_string(path).ok()?;
     let info: CargoVcsInfo = serde_json::from_str(&contents).ok()?;
     non_empty_trimmed(&info.git?.sha1)
+}
+
+fn discover_git_repo() -> Option<gix::Repository> {
+    gix::discover(manifest_dir()?).ok()
+}
+
+fn git_head_hash(repo: &gix::Repository) -> Option<String> {
+    Some(repo.head_id().ok()?.detach().to_hex().to_string())
+}
+
+fn rerun_if_changed(path: &Path) {
+    println!("cargo:rerun-if-changed={}", path.display());
+}
+
+fn emit_git_rerun_paths(repo: &gix::Repository) {
+    rerun_if_changed(&repo.git_dir().join("HEAD"));
+    rerun_if_changed(&repo.common_dir().join("packed-refs"));
+
+    if let Ok(Some(head_name)) = repo.head_name() {
+        rerun_if_changed(&repo.common_dir().join(head_name.as_bstr().to_path_lossy()));
+    }
 }
 
 fn main() {
@@ -53,22 +68,15 @@ fn main() {
 
     let packaged_hash = cargo_vcs_hash();
     let has_packaged_hash = packaged_hash.is_some();
+    let git_repo = (!has_packaged_hash).then(discover_git_repo).flatten();
     let git_hash = env_git_hash()
         .or(packaged_hash)
-        .or_else(|| git_output(&["rev-parse", "--short=7", "HEAD"]))
+        .or_else(|| git_repo.as_ref().and_then(git_head_hash))
         .map(|hash| short_commit_sha(&hash));
     let git_hash_value = git_hash.as_deref().unwrap_or("");
     println!("cargo:rustc-env=GIT_HASH={git_hash_value}");
 
-    if !has_packaged_hash {
-        // Rebuild when HEAD moves to another ref or when the current branch advances.
-        if let Some(git_head_path) = git_output(&["rev-parse", "--git-path", "HEAD"]) {
-            println!("cargo:rerun-if-changed={git_head_path}");
-        }
-        if let Some(head_ref) = git_output(&["symbolic-ref", "-q", "HEAD"])
-            && let Some(head_ref_path) = git_output(&["rev-parse", "--git-path", &head_ref])
-        {
-            println!("cargo:rerun-if-changed={head_ref_path}");
-        }
+    if let Some(repo) = git_repo {
+        emit_git_rerun_paths(&repo);
     }
 }
