@@ -1,4 +1,5 @@
 use super::*;
+use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::parser::Parser;
 
 fn make_src(source: &str) -> NamedSource<Arc<String>> {
@@ -36,10 +37,8 @@ fn compile_to_tir(source: &str) -> Result<crate::tir::typed::TIR, GraphcalError>
 /// Dependency names of `decl` in `map`, as leaf strings.
 fn dep_names_of<'a>(
     map: &'a std::collections::HashMap<
-        crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Decl>,
-        std::collections::BTreeSet<
-            crate::syntax::names::ResolvedName<crate::syntax::names::namespace::Decl>,
-        >,
+        ResolvedDeclName,
+        std::collections::BTreeSet<ResolvedDeclName>,
     >,
     decl: &str,
 ) -> Vec<&'a str> {

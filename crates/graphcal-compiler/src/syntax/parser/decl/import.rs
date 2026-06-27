@@ -3,7 +3,8 @@ use crate::syntax::ast::Declaration;
 use crate::syntax::ast::ImportKind;
 use crate::syntax::ast::ModulePath;
 use crate::syntax::ast::Visibility;
-use crate::syntax::names::{ModuleAliasName, NameAtom};
+use crate::syntax::module_name::ModuleAliasName;
+use crate::syntax::names::NameAtom;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};

@@ -21,7 +21,8 @@ use crate::registry::resolve_types::{
     ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
 };
 use crate::syntax::attribute::AttributeName;
-use crate::syntax::names::{DeclName, NameAtom};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
@@ -30,7 +31,7 @@ pub use crate::registry::resolve_types::{
     ParsedExpectedFail, ParsedExpectedFailKey, ParsedExpectedFailKeyPart, ResolvedFile,
     is_aggregation_fn, is_time_scale_name,
 };
-pub use crate::syntax::names::ScopedName;
+pub use crate::syntax::module_name::ScopedName;
 
 // Re-export items from submodules (crate-internal only).
 pub use deps::{collect_graph_ref_names, collect_graph_refs, contains_graph_ref};

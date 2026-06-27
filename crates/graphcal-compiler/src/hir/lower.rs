@@ -5,6 +5,7 @@
 //! `ResolvedName<Ns>` values or lexical `GenericParamId`s instead of carrying
 //! syntax paths forward.
 
+use crate::syntax::dimension::ResolvedDimName;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
@@ -13,12 +14,13 @@ use thiserror::Error;
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
+use crate::registry::time_scale::TimeScaleName;
 use crate::syntax::ast::GenericConstraint;
+use crate::syntax::dimension::DimName;
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver, SurfaceNameKind};
-use crate::syntax::names::{
-    DimName, GenericParamName, NameAtom, NamePath, ResolvedName, TimeScaleName, namespace,
-};
+use crate::syntax::names::{NameAtom, NamePath, ResolvedName};
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::GenericParamName;
 
 use super::types::{
     BuiltinType, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericParamDef, GenericParamId,
@@ -107,10 +109,7 @@ impl PreludeTypeScope {
         )
     }
 
-    pub(crate) fn resolve_dimension_path(
-        &self,
-        path: &NamePath,
-    ) -> Option<ResolvedName<namespace::Dim>> {
+    pub(crate) fn resolve_dimension_path(&self, path: &NamePath) -> Option<ResolvedDimName> {
         let atom = path.as_bare()?;
         self.dimensions
             .contains(atom.as_str())
@@ -259,10 +258,7 @@ impl<'a> TypeLoweringContext<'a> {
         }
     }
 
-    fn resolve_prelude_dimension_path(
-        self,
-        path: &NamePath,
-    ) -> Option<ResolvedName<namespace::Dim>> {
+    fn resolve_prelude_dimension_path(self, path: &NamePath) -> Option<ResolvedDimName> {
         self.prelude
             .and_then(|prelude| prelude.resolve_dimension_path(path))
     }
@@ -698,8 +694,9 @@ fn type_position_wrong_universe(source: ModuleResolveError) -> ModuleResolveErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::names::{ResolvedName, StructTypeName};
+    use crate::syntax::names::ResolvedName;
     use crate::syntax::parser::Parser;
+    use crate::syntax::type_name::StructTypeName;
 
     fn desugared_source(source: &str) -> ast::File {
         let raw = Parser::new(source).parse_file().unwrap();

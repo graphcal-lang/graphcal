@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::syntax::names::GenericParamName;
+use crate::syntax::type_name::GenericParamName;
 
 /// Arithmetic overflow while combining type-level Nat forms.
 ///

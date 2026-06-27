@@ -3,10 +3,12 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
-use crate::syntax::names::{
-    DeclName, DimName, FieldName, FnName, IndexName, IndexVariantName, ScopedName, StructTypeName,
-    UnitName, UnitRef,
-};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::dimension::{DimName, UnitName, UnitRef};
+use crate::syntax::function_name::FnName;
+use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::module_name::ScopedName;
+use crate::syntax::type_name::{FieldName, StructTypeName};
 
 /// Rich diagnostic error types for graphcal evaluation.
 #[derive(Debug, Clone, Error, Diagnostic)]

@@ -8,9 +8,10 @@ use std::collections::{HashMap, HashSet};
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
 use crate::registry::declared_type::IndexTypeRef;
-use crate::syntax::names::{
-    DeclName, IndexName, IndexVariantName, NamePath, ResolvedIndexVariant, ScopedName,
-};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::module_name::ScopedName;
+use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 
 // ---------------------------------------------------------------------------

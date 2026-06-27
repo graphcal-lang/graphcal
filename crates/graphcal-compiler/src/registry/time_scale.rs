@@ -176,6 +176,42 @@ impl FromStr for TimeScale {
     }
 }
 
+/// Name of a built-in datetime time scale (e.g., `"UTC"`, `"TAI"`, `"TDB"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TimeScaleName(TimeScale);
+
+impl TimeScaleName {
+    /// Create a time-scale name from an already-validated time scale.
+    #[must_use]
+    pub const fn new(scale: TimeScale) -> Self {
+        Self(scale)
+    }
+
+    /// Get the underlying time scale.
+    #[must_use]
+    pub const fn scale(self) -> TimeScale {
+        self.0
+    }
+
+    /// Get the canonical time-scale name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.0.name()
+    }
+}
+
+impl fmt::Display for TimeScaleName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for TimeScaleName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

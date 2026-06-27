@@ -1,5 +1,5 @@
 use crate::syntax::ast::{BindableVisibility, DeclKind, Declaration, IndexDecl, IndexDeclKind};
-use crate::syntax::names::{IndexName, IndexVariantName};
+use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};

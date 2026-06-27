@@ -1,14 +1,17 @@
 use std::marker::PhantomData;
 
 use crate::syntax::ast::common::{Ident, ModulePath};
+use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::Rational;
-use crate::syntax::names::{
-    ConstructorName, DeclName, FieldName, IndexName, IndexVariantName, LocalName, NamePath,
-    ScopedName, UnitRef,
-};
+use crate::syntax::dimension::UnitRef;
+use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::local_name::LocalName;
+use crate::syntax::module_name::ScopedName;
+use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::{ConstructorName, FieldName};
 
 /// Expression-level sugar — only legal in [`Raw`].
 ///
@@ -761,7 +764,7 @@ impl MapEntryIndex {
 
 impl From<IndexName> for MapEntryIndex {
     fn from(value: IndexName) -> Self {
-        Self::Named(NamePath::from(value))
+        Self::Named(NamePath::local(value.into_atom()))
     }
 }
 

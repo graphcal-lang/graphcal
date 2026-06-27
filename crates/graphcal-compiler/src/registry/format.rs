@@ -156,7 +156,7 @@ pub fn format_unit_expr_canonical(expr: &crate::syntax::ast::UnitExpr) -> String
 mod tests {
     use super::*;
     use crate::syntax::ast::{MulDivOp, UnitExpr, UnitExprItem};
-    use crate::syntax::names::{UnitName, UnitRef};
+    use crate::syntax::dimension::{UnitName, UnitRef};
     use crate::syntax::span::Span;
     use crate::syntax::span::Spanned;
 

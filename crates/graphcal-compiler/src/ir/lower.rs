@@ -31,11 +31,14 @@ use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
 };
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::dimension::DimName;
 use crate::syntax::dimension::Rational;
-use crate::syntax::names::{
-    ConstructorName, DeclName, DimName, IndexName, NameAtom, NamePath, ScopedName, StructTypeName,
-};
+use crate::syntax::index_name::IndexName;
+use crate::syntax::module_name::ScopedName;
+use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::{ConstructorName, StructTypeName};
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
 // ---------------------------------------------------------------------------
@@ -56,7 +59,7 @@ pub struct LoweredPlotBody {
 /// A named plot/figure/layer field expression lowered to HIR.
 #[derive(Debug, Clone)]
 pub struct LoweredPlotField {
-    pub name: crate::syntax::names::PlotPropertyName,
+    pub name: crate::syntax::plot_name::PlotPropertyName,
     /// Span of the property name in the source, for validation diagnostics.
     pub name_span: crate::syntax::span::Span,
     pub value: crate::hir::Expr,
@@ -3023,7 +3026,7 @@ fn first_graph_ref(expr: &Expr) -> Option<Spanned<ScopedName>> {
 fn first_non_const_unit_ref<'a>(
     registry: &RegistryBuilder,
     unit_expr: &'a crate::desugar::desugared_ast::UnitExpr,
-) -> Option<&'a Spanned<crate::syntax::names::UnitRef>> {
+) -> Option<&'a Spanned<crate::syntax::dimension::UnitRef>> {
     unit_expr.terms.iter().find_map(|term| {
         registry
             .get_unit(&term.name.value)
@@ -3242,7 +3245,7 @@ fn register_index_decl(
                     span: dimension.span.into(),
                 })?
                 .ok_or_else(|| GraphcalError::UnknownDimension {
-                    name: crate::syntax::names::DimName::expect_valid(idx.name.value.as_str()),
+                    name: crate::syntax::dimension::DimName::expect_valid(idx.name.value.as_str()),
                     src: src.clone(),
                     span: dimension.span.into(),
                 })?;
@@ -3478,7 +3481,7 @@ fn checked_range_step_count(
 
 /// Lower a range index declaration, evaluating start/end/step and validating dimensions.
 fn lower_range_index(
-    name: &crate::syntax::names::IndexName,
+    name: &crate::syntax::index_name::IndexName,
     start_expr: &Expr,
     end_expr: &Expr,
     step_expr: &Expr,
@@ -3621,8 +3624,8 @@ mod tests {
         assert!(
             ir.registry
                 .units
-                .get_unit(&crate::syntax::names::UnitRef::local(
-                    crate::syntax::names::UnitName::expect_valid("km"),
+                .get_unit(&crate::syntax::dimension::UnitRef::local(
+                    crate::syntax::dimension::UnitName::expect_valid("km"),
                 ))
                 .is_some()
         );

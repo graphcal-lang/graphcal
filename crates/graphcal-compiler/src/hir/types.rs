@@ -7,10 +7,15 @@
 //! owning type/function signature.
 
 use crate::registry::time_scale::TimeScale;
+use crate::registry::time_scale::TimeScaleName;
 use crate::syntax::ast::{GenericConstraint, MulDivOp};
 use crate::syntax::dimension::Rational;
-use crate::syntax::names::{GenericParamName, ResolvedName, TimeScaleName, namespace};
+use crate::syntax::dimension::ResolvedDimName;
+use crate::syntax::function_name::ResolvedFnName;
+use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::GenericParamName;
+use crate::syntax::type_name::ResolvedStructTypeName;
 
 /// Canonical identity for a generic parameter in a lexical generic scope.
 ///
@@ -35,9 +40,9 @@ impl GenericParamId {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GenericParamOwner {
     /// Generic parameter on a user-defined `type` declaration.
-    Type(ResolvedName<namespace::StructType>),
+    Type(ResolvedStructTypeName),
     /// Generic parameter on a function signature.
-    Function(ResolvedName<namespace::Fn>),
+    Function(ResolvedFnName),
 }
 
 /// A resolved generic-parameter definition.
@@ -102,12 +107,12 @@ pub enum TypeExprKind {
     /// reject it before TIR construction.
     Index(IndexRef),
     /// A user-defined non-generic struct/tagged-union type.
-    Struct(Spanned<ResolvedName<namespace::StructType>>),
+    Struct(Spanned<ResolvedStructTypeName>),
     /// A generic type parameter (`F: Type`).
     GenericTypeParam(Spanned<GenericParamId>),
     /// A user-defined generic type application.
     TypeApplication {
-        name: Spanned<ResolvedName<namespace::StructType>>,
+        name: Spanned<ResolvedStructTypeName>,
         type_args: Vec<TypeExpr>,
     },
     /// An indexed type expression.
@@ -144,7 +149,7 @@ pub struct DimTermRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DimTermTarget {
     /// A concrete module-owned dimension declaration.
-    Dimension(Spanned<ResolvedName<namespace::Dim>>),
+    Dimension(Spanned<ResolvedDimName>),
     /// A generic dimension parameter (`D: Dim`).
     GenericParam(Spanned<GenericParamId>),
 }
@@ -153,7 +158,7 @@ pub enum DimTermTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexRef {
     /// A concrete module-owned index declaration.
-    Concrete(Spanned<ResolvedName<namespace::Index>>),
+    Concrete(Spanned<ResolvedIndexName>),
     /// A generic index parameter (`I: Index`).
     GenericParam(Spanned<GenericParamId>),
     /// A type-level natural-number expression.

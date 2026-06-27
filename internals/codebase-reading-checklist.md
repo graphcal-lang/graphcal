@@ -4,35 +4,43 @@ All Rust files in the workspace, in library-consumer order: every `use`d file ap
 
 ## Stage 0 - Module maps and dependency-free leaves
 
-- [ ] `crates/graphcal-compiler/src/syntax/attribute.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/non_empty.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/phase.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/mod.rs`
-- [ ] `crates/graphcal-compiler/src/desugar/mod.rs`
-- [ ] `crates/graphcal-compiler/src/registry/mod.rs`
-- [ ] `crates/graphcal-compiler/src/registry/time_scale.rs`
-- [ ] `crates/graphcal-compiler/src/registry/manifest.rs`
-- [ ] `crates/graphcal-compiler/src/ir/mod.rs`
-- [ ] `crates/graphcal-compiler/src/tir/mod.rs`
-- [ ] `crates/graphcal-compiler/src/lib.rs`
-- [ ] `crates/graphcal-compiler/src/dag_id.rs`
+- [x] `crates/graphcal-compiler/src/syntax/attribute.rs`
+- [x] `crates/graphcal-compiler/src/syntax/non_empty.rs`
+- [x] `crates/graphcal-compiler/src/syntax/phase.rs`
+- [x] `crates/graphcal-compiler/src/syntax/mod.rs`
+- [x] `crates/graphcal-compiler/src/desugar/mod.rs`
+- [x] `crates/graphcal-compiler/src/registry/mod.rs`
+- [x] `crates/graphcal-compiler/src/registry/time_scale.rs`
+- [x] `crates/graphcal-compiler/src/registry/manifest.rs`
+- [x] `crates/graphcal-compiler/src/ir/mod.rs`
+- [x] `crates/graphcal-compiler/src/tir/mod.rs`
+- [x] `crates/graphcal-compiler/src/lib.rs`
+- [x] `crates/graphcal-compiler/src/dag_id.rs`
 
-## Stage 1 - Spans, names, tokens, lexer
+## Stage 1 - Names, spans, tokens, lexer, and syntax-domain leaves
 
 Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 
-- [ ] `crates/graphcal-compiler/src/syntax/dimension.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/names.rs`
+- [ ] `crates/graphcal-compiler/src/stack.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/ast/plot_props.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/decl_name.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/span.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/token.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/comments.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/lexer.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/function_name.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/index_name.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/local_name.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/module_name.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/dimension.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/plot_name.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/type_name.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/nat.rs`
 
 ## Stage 2 - Core AST leaves and traversal
 
 - [ ] `crates/graphcal-compiler/src/syntax/ast/common.rs`
-- [ ] `crates/graphcal-compiler/src/stack.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/value.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/decl.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/visitor.rs`

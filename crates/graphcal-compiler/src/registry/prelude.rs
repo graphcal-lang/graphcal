@@ -1,6 +1,6 @@
 use crate::dag_id::DagId;
+use crate::syntax::dimension::{DimName, UnitName};
 use crate::syntax::dimension::{Dimension, RationalError};
-use crate::syntax::names::{DimName, UnitName};
 
 use crate::registry::types::{PositiveFiniteScale, RegistryBuilder};
 
@@ -384,8 +384,8 @@ mod tests {
         let force_dim = r.dimensions.get_dimension("Force").unwrap().clone();
         let newton = r
             .units
-            .get_unit(&crate::syntax::names::UnitRef::local(
-                crate::syntax::names::UnitName::expect_valid("N"),
+            .get_unit(&crate::syntax::dimension::UnitRef::local(
+                crate::syntax::dimension::UnitName::expect_valid("N"),
             ))
             .unwrap();
         assert_eq!(newton.dimension, force_dim);
@@ -399,7 +399,7 @@ mod tests {
         let r = b.try_build().unwrap();
         let km = r
             .units
-            .get_unit(&crate::syntax::names::UnitRef::local(
+            .get_unit(&crate::syntax::dimension::UnitRef::local(
                 UnitName::expect_valid("km"),
             ))
             .unwrap();
@@ -413,8 +413,8 @@ mod tests {
         let r = b.try_build().unwrap();
         let deg = r
             .units
-            .get_unit(&crate::syntax::names::UnitRef::local(
-                crate::syntax::names::UnitName::expect_valid("deg"),
+            .get_unit(&crate::syntax::dimension::UnitRef::local(
+                crate::syntax::dimension::UnitName::expect_valid("deg"),
             ))
             .unwrap();
         assert!((deg.scale.as_static().unwrap() - std::f64::consts::PI / 180.0).abs() < 1e-15);

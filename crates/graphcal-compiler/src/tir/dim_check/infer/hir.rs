@@ -5,6 +5,8 @@
 //! index, constructor, inline-DAG refs, lexical `LocalId`s, and typed built-in
 //! function variants. It must not fall back to source/syntax-AST inference.
 
+use crate::syntax::decl_name::ResolvedDeclName;
+use crate::syntax::type_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -16,11 +18,10 @@ use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeDef, TypeGenericConstraint, UnionMemberDef};
 use crate::syntax::ast::UnaryOp;
 use crate::syntax::dimension::{Dimension, Rational};
-use crate::syntax::names::{
-    FieldName, GenericParamName, IndexName, IndexVariantName, ResolvedIndexVariant, ResolvedName,
-    ScopedName, namespace,
-};
+use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
+use crate::syntax::type_name::{FieldName, GenericParamName};
 use crate::tir::typed::NatLinearForm;
 
 use super::super::builtins::infer_fn_dim_from_spans;
@@ -32,7 +33,7 @@ use super::super::{DeclaredType, InferredIndex, InferredStructType, InferredType
 
 type HirLocalTypes<'a> = hir::LocalEnv<'a, InferredType>;
 
-type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+type ResolvedDeclKey = ResolvedDeclName;
 
 /// Infer a HIR expression.
 pub(in crate::tir::dim_check) fn infer_hir_type_with_owner(
@@ -679,7 +680,7 @@ fn infer_hir_fn_call(
         Some(crate::registry::resolve_types::SpecialFnKind::DatetimeFrom(_)) => {
             if args.len() != 1 {
                 return Err(GraphcalError::WrongArity {
-                    name: crate::syntax::names::FnName::expect_valid(name.as_str()),
+                    name: crate::syntax::function_name::FnName::expect_valid(name.as_str()),
                     expected: 1,
                     got: args.len(),
                     src: src.clone(),
@@ -770,7 +771,7 @@ fn infer_hir_builtin_fn(
     };
     if args.len() != func.dim_sig.params.len() {
         return Err(GraphcalError::WrongArity {
-            name: crate::syntax::names::FnName::expect_valid(name.as_str()),
+            name: crate::syntax::function_name::FnName::expect_valid(name.as_str()),
             expected: func.dim_sig.params.len(),
             got: args.len(),
             src: src.clone(),
@@ -821,7 +822,7 @@ fn infer_hir_type_conversion(
     let expected_arity = 1;
     if args.len() != expected_arity {
         return Err(GraphcalError::WrongArity {
-            name: crate::syntax::names::FnName::expect_valid(kind.as_str()),
+            name: crate::syntax::function_name::FnName::expect_valid(kind.as_str()),
             expected: expected_arity,
             got: args.len(),
             src: src.clone(),
@@ -883,7 +884,7 @@ fn infer_hir_timescale_conversion(
 ) -> Result<InferredType, GraphcalError> {
     if args.len() != 1 {
         return Err(GraphcalError::WrongArity {
-            name: crate::syntax::names::FnName::expect_valid(name.as_str()),
+            name: crate::syntax::function_name::FnName::expect_valid(name.as_str()),
             expected: 1,
             got: args.len(),
             src: src.clone(),
@@ -980,7 +981,7 @@ fn infer_hir_datetime_constructor(
         crate::registry::resolve_types::ConstructorFn::Epoch => {
             if args.len() != 2 {
                 return Err(GraphcalError::WrongArity {
-                    name: crate::syntax::names::FnName::expect_valid("epoch"),
+                    name: crate::syntax::function_name::FnName::expect_valid("epoch"),
                     expected: 2,
                     got: args.len(),
                     src: src.clone(),
@@ -1037,7 +1038,7 @@ fn infer_hir_datetime_unary(
 ) -> Result<InferredType, GraphcalError> {
     if args.len() != 1 {
         return Err(GraphcalError::WrongArity {
-            name: crate::syntax::names::FnName::expect_valid(name.as_str()),
+            name: crate::syntax::function_name::FnName::expect_valid(name.as_str()),
             expected: 1,
             got: args.len(),
             src: src.clone(),
@@ -1736,7 +1737,7 @@ fn infer_hir_display_timezone(
 }
 
 fn resolved_type_field_key(
-    owning_type: &ResolvedName<namespace::StructType>,
+    owning_type: &ResolvedStructTypeName,
     constructor: &UnionMemberDef,
     field: &FieldName,
 ) -> crate::tir::typed::ResolvedStructFieldTypeKey {
@@ -1823,7 +1824,7 @@ fn substitute_resolved_type_with_type_params(
 }
 
 fn resolved_field_type(
-    owning_type: &ResolvedName<namespace::StructType>,
+    owning_type: &ResolvedStructTypeName,
     constructor: &UnionMemberDef,
     field: &FieldName,
     type_def: &TypeDef,
@@ -2098,7 +2099,7 @@ fn infer_hir_dim_expr_arg(
 )]
 fn infer_hir_constructor_call(
     expr: &hir::Expr,
-    callee: &crate::syntax::span::Spanned<ResolvedName<namespace::Constructor>>,
+    callee: &crate::syntax::span::Spanned<ResolvedConstructorName>,
     constructor_generic_args: &[hir::expr::GenericArg],
     fields: &[hir::expr::FieldInit],
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -2243,7 +2244,7 @@ fn infer_hir_constructor_call(
 }
 
 fn resolve_constructor_generic_args(
-    owning_type: &ResolvedName<namespace::StructType>,
+    owning_type: &ResolvedStructTypeName,
     type_def: &TypeDef,
     constructor_generic_args: &[hir::expr::GenericArg],
     dag: &crate::tir::typed::DagTIR,
@@ -2850,7 +2851,7 @@ fn infer_hir_unfold(
 fn constructor_field_type(
     field: &crate::syntax::span::Spanned<FieldName>,
     variant: &UnionMemberDef,
-    owning_type: &ResolvedName<namespace::StructType>,
+    owning_type: &ResolvedStructTypeName,
     type_def: &TypeDef,
     scrutinee_type_args: &[InferredType],
     dag: &crate::tir::typed::DagTIR,
@@ -3128,7 +3129,7 @@ fn infer_hir_inline_dag_ref(
     expr: &hir::Expr,
     target: &crate::syntax::span::Spanned<crate::dag_id::DagId>,
     args: &[hir::expr::ParamBinding],
-    output: &crate::syntax::span::Spanned<ResolvedName<namespace::Decl>>,
+    output: &crate::syntax::span::Spanned<ResolvedDeclName>,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,

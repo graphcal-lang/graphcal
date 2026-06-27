@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use crate::syntax::dimension::DimVarName;
 use crate::syntax::dimension::{BaseDimId, Dimension, Rational};
-use crate::syntax::names::DimVarName;
 
 /// Describes how a single parameter's dimension is constrained.
 #[derive(Debug, Clone, PartialEq, Eq)]

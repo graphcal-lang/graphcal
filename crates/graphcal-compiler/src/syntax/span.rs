@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn spanned_eq_considers_span() {
-        use crate::syntax::names::DeclName;
+        use crate::syntax::decl_name::DeclName;
 
         let a = Spanned::new(DeclName::expect_valid("x"), Span::new(0, 1));
         let b = Spanned::new(DeclName::expect_valid("x"), Span::new(10, 11));
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn spanned_ne_different_value() {
-        use crate::syntax::names::DeclName;
+        use crate::syntax::decl_name::DeclName;
 
         let a = Spanned::new(DeclName::expect_valid("x"), Span::new(0, 1));
         let b = Spanned::new(DeclName::expect_valid("y"), Span::new(0, 1));
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn spanned_hash_considers_span() {
-        use crate::syntax::names::DeclName;
+        use crate::syntax::decl_name::DeclName;
         use std::hash::{DefaultHasher, Hash, Hasher};
 
         let a = Spanned::new(DeclName::expect_valid("x"), Span::new(0, 1));

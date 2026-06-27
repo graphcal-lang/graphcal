@@ -2,7 +2,8 @@ use crate::syntax::ast::{
     DeclKind, Declaration, Encoding, EncodingChannel, MarkSpec, MarkType, PlotDecl, PlotField,
     Visibility,
 };
-use crate::syntax::names::{DeclName, PlotPropertyName};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::plot_name::PlotPropertyName;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};

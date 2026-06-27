@@ -1,7 +1,7 @@
 use crate::syntax::ast::{
     BaseDimDecl, BindableVisibility, DeclKind, Declaration, DimDecl, UnitConstness, Visibility,
 };
-use crate::syntax::names::{DimName, UnitName};
+use crate::syntax::dimension::{DimName, UnitName};
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};

@@ -1,6 +1,8 @@
-use crate::syntax::names::{GenericParamName, ModuleAliasName, NameAtom};
+use crate::syntax::module_name::ModuleAliasName;
+use crate::syntax::names::NameAtom;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::GenericParamName;
 
 /// An attribute annotation on a declaration: `#[name]` or `#[name(arg1, arg2)]`.
 #[derive(Debug, Clone)]

@@ -2,16 +2,19 @@
 //! plus the canonical declaration-key derivation shared by the IR freeze
 //! boundary and TIR.
 
+use crate::syntax::decl_name::{DeclNameNamespace, ResolvedDeclName};
+use crate::syntax::index_name::IndexNameNamespace;
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use crate::hir;
 use crate::registry::error::GraphcalError;
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::index_name::IndexName;
+use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::ModuleResolveError;
-use crate::syntax::names::{
-    DeclName, IndexName, NameNamespace, ResolvedName, ScopedName, namespace,
-};
+use crate::syntax::names::{NameNamespace, ResolvedName};
 
 /// Derive the canonical declaration key for an entry name under `owner`.
 ///
@@ -22,7 +25,7 @@ use crate::syntax::names::{
 pub fn resolved_decl_key(
     owner: &crate::dag_id::DagId,
     name: &ScopedName,
-) -> Option<ResolvedName<namespace::Decl>> {
+) -> Option<ResolvedDeclName> {
     let owner = name
         .qualifier()
         .iter()
@@ -107,7 +110,7 @@ pub fn expr_lower_error_to_graphcal(
                     namespace, name, ..
                 },
             span,
-        } if *namespace == namespace::Index::DISPLAY_NAME => {
+        } if *namespace == IndexNameNamespace::DISPLAY_NAME => {
             if let Ok(index_name) = IndexName::try_new(name.clone()) {
                 return GraphcalError::UnknownIndex {
                     name: index_name,
@@ -122,7 +125,7 @@ pub fn expr_lower_error_to_graphcal(
                     namespace, name, ..
                 },
             span,
-        } if *namespace == namespace::Decl::DISPLAY_NAME => {
+        } if *namespace == DeclNameNamespace::DISPLAY_NAME => {
             return GraphcalError::UnknownLocalRef {
                 name: name.clone(),
                 src: src.clone(),

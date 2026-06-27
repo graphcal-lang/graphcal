@@ -1,7 +1,10 @@
 use super::*;
 use crate::registry::declared_type::IndexTypeRef;
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::dimension::BaseDimId;
-use crate::syntax::names::{DeclName, ResolvedName, ScopedName, namespace};
+use crate::syntax::module_name::ScopedName;
+use crate::syntax::names::ResolvedName;
 use crate::syntax::parser::Parser;
 use crate::syntax::span::Span;
 
@@ -16,7 +19,7 @@ fn test_dag_id() -> crate::dag_id::DagId {
 fn test_index_ref(name: &str) -> IndexTypeRef {
     IndexTypeRef::with_owner(
         test_dag_id(),
-        crate::syntax::names::IndexName::expect_valid(name.to_string()),
+        crate::syntax::index_name::IndexName::expect_valid(name.to_string()),
     )
 }
 
@@ -190,7 +193,7 @@ fn cycle_detection_uses_semantic_dependencies() {
     let a = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
     let b = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("b"));
     let x = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("x"));
-    let y = ResolvedName::<namespace::Decl>::from_def(dag_id, DeclName::expect_valid("y"));
+    let y = ResolvedDeclName::from_def(dag_id, DeclName::expect_valid("y"));
 
     let mut resolved = crate::tir::typed::ResolvedDagDependencies::default();
     resolved.const_deps.insert(a.clone(), BTreeSet::new());

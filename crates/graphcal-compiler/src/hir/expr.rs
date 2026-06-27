@@ -15,6 +15,10 @@
 //! entry points ([`lower_expr`], [`lower_assert_body`]) reject any tree that
 //! contains an error node, so the batch pipeline never sees one.
 
+use crate::syntax::decl_name::{DeclNameNamespace, ResolvedDeclName};
+use crate::syntax::dimension::ResolvedDimName;
+use crate::syntax::index_name::ResolvedIndexName;
+use crate::syntax::type_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::collections::{BTreeSet, HashMap};
 
 use thiserror::Error;
@@ -27,15 +31,16 @@ use crate::registry::resolve_types::{
 };
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::local_name::LocalName;
+use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::{DeclSymbolKind, ModuleResolveError, ModuleResolver};
-use crate::syntax::names::{
-    DeclName, FieldName, GenericParamName, IndexName, IndexVariantName, LocalName, NameAtom,
-    NameAtomError, NameNamespace, NamePath, ResolvedIndexVariant, ResolvedName, ScopedName,
-    namespace,
-};
+use crate::syntax::names::{NameAtom, NameAtomError, NameNamespace, NamePath, ResolvedName};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::type_name::{FieldName, GenericParamName};
 
 use super::lower::{
     GenericScope, HirLowerError, PreludeTypeScope, TypeLoweringContext, lower_nat_expr,
@@ -96,7 +101,7 @@ pub enum ExprLowerError {
     /// A built-in function was called with the wrong number of arguments.
     #[error("function `{name}` expects {expected} argument(s), got {got}")]
     WrongArity {
-        name: crate::syntax::names::FnName,
+        name: crate::syntax::function_name::FnName,
         expected: usize,
         got: usize,
         span: Span,
@@ -113,7 +118,7 @@ pub struct ExprLoweringContext<'a> {
     pub resolver: &'a ModuleResolver,
     pub generic_scope: &'a GenericScope,
     pub prelude: Option<&'a PreludeTypeScope>,
-    pub decl_bindings: Option<&'a HashMap<ScopedName, ResolvedName<namespace::Decl>>>,
+    pub decl_bindings: Option<&'a HashMap<ScopedName, ResolvedDeclName>>,
 }
 
 impl<'a> ExprLoweringContext<'a> {
@@ -150,7 +155,7 @@ impl<'a> ExprLoweringContext<'a> {
     #[must_use]
     pub const fn with_decl_bindings(
         self,
-        decl_bindings: &'a HashMap<ScopedName, ResolvedName<namespace::Decl>>,
+        decl_bindings: &'a HashMap<ScopedName, ResolvedDeclName>,
     ) -> Self {
         Self {
             owner: self.owner,
@@ -608,7 +613,7 @@ pub enum ExprKind {
     Bool(bool),
     StringLiteral(String),
     TypeSystemRef(Spanned<TypeSystemRef>),
-    GraphRef(Spanned<ResolvedName<namespace::Decl>>),
+    GraphRef(Spanned<ResolvedDeclName>),
     ConstRef(Spanned<ConstRef>),
     LocalRef(Spanned<LocalId>),
     BinOp {
@@ -647,7 +652,7 @@ pub enum ExprKind {
         field: Spanned<FieldName>,
     },
     ConstructorCall {
-        callee: Spanned<ResolvedName<namespace::Constructor>>,
+        callee: Spanned<ResolvedConstructorName>,
         generic_args: Vec<GenericArg>,
         fields: Vec<FieldInit>,
     },
@@ -683,7 +688,7 @@ pub enum ExprKind {
     InlineDagRef {
         target: Spanned<DagId>,
         args: Vec<ParamBinding>,
-        output: Spanned<ResolvedName<namespace::Decl>>,
+        output: Spanned<ResolvedDeclName>,
     },
 }
 
@@ -691,9 +696,9 @@ pub enum ExprKind {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExprDependencies {
     /// Runtime graph dependencies reached through `@name` references.
-    pub graph_refs: BTreeSet<ResolvedName<namespace::Decl>>,
+    pub graph_refs: BTreeSet<ResolvedDeclName>,
     /// Compile-time const dependencies reached through const-like value refs.
-    pub const_refs: BTreeSet<ResolvedName<namespace::Decl>>,
+    pub const_refs: BTreeSet<ResolvedDeclName>,
 }
 
 /// Collect canonical declaration dependencies from an already-lowered HIR expression.
@@ -805,7 +810,7 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
 /// is a genuine cycle. Used to decide whether a declaration's self-edge can
 /// be dropped from the dependency graph.
 #[must_use]
-pub fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedName<namespace::Decl>) -> bool {
+pub fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedDeclName) -> bool {
     // Recursion choke point: recurses once per tree level (unbounded for
     // left-nested operator chains).
     crate::stack::with_stack_growth(|| match &expr.kind {
@@ -876,9 +881,9 @@ pub fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedName<namespace::Decl>)
 /// Type-system identifier used as a value expression, usually in include bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeSystemRef {
-    Type(ResolvedName<namespace::StructType>),
-    Dimension(ResolvedName<namespace::Dim>),
-    Index(ResolvedName<namespace::Index>),
+    Type(ResolvedStructTypeName),
+    Dimension(ResolvedDimName),
+    Index(ResolvedIndexName),
     IndexVariant(ResolvedIndexVariant),
 }
 
@@ -906,8 +911,8 @@ impl TypeSystemRef {
 /// Resolved constant-like expression target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstRef {
-    Decl(ResolvedName<namespace::Decl>),
-    Constructor(ResolvedName<namespace::Constructor>),
+    Decl(ResolvedDeclName),
+    Constructor(ResolvedConstructorName),
     Builtin(BuiltinConst),
     TimeScale(TimeScale),
     GenericNatParam(super::types::GenericParamId),
@@ -948,7 +953,7 @@ pub struct FieldInit {
 /// A param binding in an inline DAG invocation.
 #[derive(Debug, Clone)]
 pub struct ParamBinding {
-    pub target: Spanned<ResolvedName<namespace::Decl>>,
+    pub target: Spanned<ResolvedDeclName>,
     pub value: Expr,
     pub span: Span,
 }
@@ -980,7 +985,7 @@ pub struct ForBinding {
 /// Index target in a for-comprehension binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForBindingIndex {
-    Named(Spanned<ResolvedName<namespace::Index>>),
+    Named(Spanned<ResolvedIndexName>),
     Range { arg: NatExpr, span: Span },
 }
 
@@ -1004,7 +1009,7 @@ pub struct MatchArm {
 #[derive(Debug, Clone)]
 pub enum MatchPattern {
     Constructor {
-        constructor: Spanned<ResolvedName<namespace::Constructor>>,
+        constructor: Spanned<ResolvedConstructorName>,
         bindings: Vec<PatternBinding>,
         span: Span,
     },
@@ -1590,7 +1595,7 @@ impl<'a> ExprLowerer<'a> {
                 Err(ExprLowerError::ModuleResolve {
                     source: ModuleResolveError::UnknownName {
                         owner: self.ctx.owner.clone(),
-                        namespace: namespace::Decl::DISPLAY_NAME,
+                        namespace: DeclNameNamespace::DISPLAY_NAME,
                         name: name.to_string(),
                     },
                     span,
@@ -1604,7 +1609,7 @@ impl<'a> ExprLowerer<'a> {
         &self,
         name: &ScopedName,
         span: Span,
-    ) -> Result<ResolvedName<namespace::Decl>, ExprLowerError> {
+    ) -> Result<ResolvedDeclName, ExprLowerError> {
         let path = scoped_name_to_path(name, span)?;
         if let Some(resolved) = self
             .ctx
@@ -1627,10 +1632,7 @@ impl<'a> ExprLowerer<'a> {
             })
     }
 
-    fn resolve_synthetic_child_decl_path(
-        &self,
-        path: &NamePath,
-    ) -> Option<ResolvedName<namespace::Decl>> {
+    fn resolve_synthetic_child_decl_path(&self, path: &NamePath) -> Option<ResolvedDeclName> {
         let (qualifier, leaf) = path.qualifier_and_leaf()?;
         let owner = qualifier
             .iter()
@@ -1667,7 +1669,7 @@ impl<'a> ExprLowerer<'a> {
         };
         if got != function.arity() {
             return Err(ExprLowerError::WrongArity {
-                name: crate::syntax::names::FnName::expect_valid(builtin.as_str()),
+                name: crate::syntax::function_name::FnName::expect_valid(builtin.as_str()),
                 expected: function.arity(),
                 got,
                 span,
