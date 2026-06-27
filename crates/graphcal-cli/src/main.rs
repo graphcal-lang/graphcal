@@ -29,6 +29,17 @@ use graphcal::format::{FormatStatus, collect_gcl_files, format_status};
 use crate::display::{OutputBlock, build_output_blocks, format_indexed_table, max_flat_name_len};
 use crate::overrides::{OverrideParseError, parse_overrides};
 
+const VERSION: &str = if env!("GIT_HASH").is_empty() {
+    env!("CARGO_PKG_VERSION")
+} else {
+    concat!(
+        env!("CARGO_PKG_VERSION"),
+        " (commit: ",
+        env!("GIT_HASH"),
+        ")"
+    )
+};
+
 /// True when an assertion result represents a failure (a `Fail` outcome or
 /// a runtime `Error` while evaluating the assertion). Used to decide both
 /// the process exit code and stderr-vs-stdout routing in text output.
@@ -48,7 +59,7 @@ fn bail_with(prefix: &str, err: impl std::fmt::Display, exit_code: i32) -> ! {
 }
 
 #[derive(Parser)]
-#[command(name = "graphcal", version, about = "Graphcal language evaluator")]
+#[command(name = "graphcal", version = VERSION, about = "Graphcal language evaluator")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

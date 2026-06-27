@@ -22,7 +22,10 @@ This downloads Graphcal from [crates.io](https://crates.io/crates/graphcal), bui
 
 ```bash
 graphcal --version
+# graphcal <version> (commit: <sha>)
 ```
+
+The commit suffix is shown when the build can determine the source commit.
 
 ## Editor Setup
 

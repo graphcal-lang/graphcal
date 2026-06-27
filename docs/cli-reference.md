@@ -15,7 +15,7 @@ graphcal [OPTIONS] <COMMAND>
 | Option | Description |
 |--------|-------------|
 | `-h`, `--help` | Print help |
-| `-V`, `--version` | Print version |
+| `-V`, `--version` | Print version and build commit SHA when available |
 
 ## Commands Overview
 
