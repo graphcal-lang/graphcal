@@ -7,11 +7,12 @@ use thiserror::Error;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
-use graphcal_compiler::syntax::names::{
-    DeclName, FieldName, IndexName, IndexVariantName, ScopedName, StructTypeName,
-};
+use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
 
 /// The kind of a declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -117,7 +117,7 @@ fn eval_uses_hir_builtin_dispatch_after_syntax_mutation() {
     let values = run_mutated_tir_values(&tir, source);
     let key = crate::decl_key::RuntimeDeclKey::for_local_decl(
         tir.root(),
-        &graphcal_compiler::syntax::names::ScopedName::local("y"),
+        &graphcal_compiler::syntax::module_name::ScopedName::local("y"),
     );
     let value = values[&key].expect_scalar("y").unwrap();
     assert!((value - 2.0).abs() < f64::EPSILON);
@@ -134,12 +134,12 @@ fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
     let values = run_mutated_tir_values(&tir, source);
     let key = crate::decl_key::RuntimeDeclKey::for_local_decl(
         tir.root(),
-        &graphcal_compiler::syntax::names::ScopedName::local("y"),
+        &graphcal_compiler::syntax::module_name::ScopedName::local("y"),
     );
     let crate::eval_expr::RuntimeValue::Indexed { entries, .. } = &values[&key] else {
         panic!("expected indexed value, got {:?}", values[&key]);
     };
-    let burn = graphcal_compiler::syntax::names::IndexVariantName::expect_valid("Burn");
+    let burn = graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn");
     let value = entries[&burn].expect_scalar("Burn entry").unwrap();
     assert!((value - 1.0).abs() < f64::EPSILON);
 }
@@ -1738,28 +1738,28 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir
         .root()
-        .resolved_decl_key_for_local(&graphcal_compiler::syntax::names::ScopedName::local(
+        .resolved_decl_key_for_local(&graphcal_compiler::syntax::module_name::ScopedName::local(
             "distance",
         ))
         .expect("distance decl key");
     let expr = &tir.root().semantic.expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
-        graphcal_compiler::syntax::names::StructTypeName::expect_valid("Command"),
+        graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Command"),
     );
     let mut fields = indexmap::IndexMap::new();
     fields.insert(
-        graphcal_compiler::syntax::names::FieldName::expect_valid("distance"),
+        graphcal_compiler::syntax::type_name::FieldName::expect_valid("distance"),
         crate::eval_expr::RuntimeValue::Scalar(9.0),
     );
     let values = HashMap::from([(
         crate::decl_key::RuntimeDeclKey::for_local_decl(
             tir.root(),
-            &graphcal_compiler::syntax::names::ScopedName::local("action"),
+            &graphcal_compiler::syntax::module_name::ScopedName::local("action"),
         ),
         crate::eval_expr::RuntimeValue::Struct {
             type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
-                graphcal_compiler::syntax::names::StructTypeName::expect_valid("Pick"),
+                graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Pick"),
                 b_owner,
             ),
             fields,
@@ -1803,28 +1803,28 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir
         .root()
-        .resolved_decl_key_for_local(&graphcal_compiler::syntax::names::ScopedName::local(
+        .resolved_decl_key_for_local(&graphcal_compiler::syntax::module_name::ScopedName::local(
             "distance",
         ))
         .expect("distance decl key");
     let expr = &tir.root().semantic.expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
-        graphcal_compiler::syntax::names::StructTypeName::expect_valid("Item"),
+        graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
     );
     let mut fields = indexmap::IndexMap::new();
     fields.insert(
-        graphcal_compiler::syntax::names::FieldName::expect_valid("distance"),
+        graphcal_compiler::syntax::type_name::FieldName::expect_valid("distance"),
         crate::eval_expr::RuntimeValue::Scalar(99.0),
     );
     let values = HashMap::from([(
         crate::decl_key::RuntimeDeclKey::for_local_decl(
             tir.root(),
-            &graphcal_compiler::syntax::names::ScopedName::local("item"),
+            &graphcal_compiler::syntax::module_name::ScopedName::local("item"),
         ),
         crate::eval_expr::RuntimeValue::Struct {
             type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
-                graphcal_compiler::syntax::names::StructTypeName::expect_valid("Item"),
+                graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
                 b_owner,
             ),
             fields,
@@ -1905,7 +1905,7 @@ fn project_declared_type_preserves_same_leaf_index_owner() {
     let declared = tir.root().build_declared_types(src).unwrap();
 
     let graphcal_compiler::registry::declared_type::DeclaredType::Indexed { index, .. } =
-        &declared[&graphcal_compiler::syntax::names::ScopedName::local("series")]
+        &declared[&graphcal_compiler::syntax::module_name::ScopedName::local("series")]
     else {
         panic!("expected indexed declared type for `series`");
     };
@@ -1934,12 +1934,12 @@ fn project_declared_type_preserves_same_leaf_struct_owner() {
     let declared = tir.root().build_declared_types(src).unwrap();
 
     let graphcal_compiler::registry::declared_type::DeclaredType::Struct(item, _) =
-        &declared[&graphcal_compiler::syntax::names::ScopedName::local("item")]
+        &declared[&graphcal_compiler::syntax::module_name::ScopedName::local("item")]
     else {
         panic!("expected struct declared type for `item`");
     };
     let graphcal_compiler::registry::declared_type::DeclaredType::Struct(other, _) =
-        &declared[&graphcal_compiler::syntax::names::ScopedName::local("other")]
+        &declared[&graphcal_compiler::syntax::module_name::ScopedName::local("other")]
     else {
         panic!("expected struct declared type for `other`");
     };
@@ -2012,7 +2012,7 @@ fn project_generic_struct_defaults_preserve_same_leaf_owner() {
     let a_id = loaded_file_dag_id(&project, "a.gcl");
     let b_id = loaded_file_dag_id(&project, "b.gcl");
     let marker_owner = |decl: &str| {
-        let key = graphcal_compiler::syntax::names::ScopedName::local(decl);
+        let key = graphcal_compiler::syntax::module_name::ScopedName::local(decl);
         let graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct {
             name: wrap,
             type_args,
@@ -2368,26 +2368,28 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir
         .root()
-        .resolved_decl_key_for_local(&graphcal_compiler::syntax::names::ScopedName::local("burn"))
+        .resolved_decl_key_for_local(&graphcal_compiler::syntax::module_name::ScopedName::local(
+            "burn",
+        ))
         .expect("burn decl key");
     let expr = &tir.root().semantic.expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
-        graphcal_compiler::syntax::names::IndexName::expect_valid("Phase"),
+        graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
     );
     let mut entries = indexmap::IndexMap::new();
     entries.insert(
-        graphcal_compiler::syntax::names::IndexVariantName::expect_valid("Burn"),
+        graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
         crate::eval_expr::RuntimeValue::Scalar(99.0),
     );
     entries.insert(
-        graphcal_compiler::syntax::names::IndexVariantName::expect_valid("Coast"),
+        graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Coast"),
         crate::eval_expr::RuntimeValue::Scalar(100.0),
     );
     let values = HashMap::from([(
         crate::decl_key::RuntimeDeclKey::for_local_decl(
             tir.root(),
-            &graphcal_compiler::syntax::names::ScopedName::local("series"),
+            &graphcal_compiler::syntax::module_name::ScopedName::local("series"),
         ),
         crate::eval_expr::RuntimeValue::Indexed {
             index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
@@ -2437,7 +2439,9 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir
         .root()
-        .resolved_decl_key_for_local(&graphcal_compiler::syntax::names::ScopedName::local("code"))
+        .resolved_decl_key_for_local(&graphcal_compiler::syntax::module_name::ScopedName::local(
+            "code",
+        ))
         .expect("code decl key");
     let expr = &tir.root().semantic.expressions.nodes[&expr_key];
     let graphcal_compiler::hir::ExprKind::ForComp { bindings, body } = &expr.kind else {
@@ -2449,7 +2453,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let match_expr = body;
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
-        graphcal_compiler::syntax::names::IndexName::expect_valid("Phase"),
+        graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
     );
     let values = HashMap::new();
     let local_values = crate::eval_expr::HirLocalValueMap::from_bindings(vec![(
@@ -2458,7 +2462,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
                 b_owner,
             ),
-            variant: graphcal_compiler::syntax::names::IndexVariantName::expect_valid("Burn"),
+            variant: graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
         },
     )]);
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::decl_name::DeclName;
 
 mod display;
 mod plot_data;

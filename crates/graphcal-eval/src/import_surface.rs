@@ -11,7 +11,7 @@ use graphcal_compiler::desugar::desugared_ast::{
     DeclKind, Declaration, File, TypeDecl, TypeDeclBody,
 };
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
-use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::decl_name::DeclName;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectDeclKind {

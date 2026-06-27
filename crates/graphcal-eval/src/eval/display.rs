@@ -6,7 +6,7 @@ use graphcal_compiler::hir::expr::{ConstRef, IndexArg, MapEntry, MapEntryKey, Ma
 use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::syntax::names::{IndexVariantName, ResolvedName, namespace};
+use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::tir::typed::ResolvedConstructorTarget;
 use indexmap::IndexMap;
 
@@ -137,7 +137,7 @@ fn resolve_defining_expr<'a>(
         return Ok(None);
     }
     let exprs = &ctx.tir.root().semantic.expressions;
-    let decl_expr = |name: &ResolvedName<namespace::Decl>| {
+    let decl_expr = |name: &graphcal_compiler::syntax::decl_name::ResolvedDeclName| {
         exprs.runtime_expr(name).or_else(|| exprs.consts.get(name))
     };
     let resolved = match &expr.kind {
@@ -220,7 +220,7 @@ fn resolve_defining_expr<'a>(
 
 fn constructor_target<'a>(
     ctx: &'a EvalContext<'_>,
-    constructor: &ResolvedName<namespace::Constructor>,
+    constructor: &graphcal_compiler::syntax::type_name::ResolvedConstructorName,
 ) -> Option<&'a ResolvedConstructorTarget> {
     ctx.current_dag
         .map(|dag| &dag.semantic.constructor_refs)

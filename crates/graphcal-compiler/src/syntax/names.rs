@@ -18,10 +18,10 @@
 //! - [`NameNamespace`] is implemented by zero-sized marker types owned by the
 //!   relevant domain module. It gives [`NameDef`] and [`ResolvedName`] their
 //!   type-level namespace without adding runtime data.
-//! - [`NameDef`]`<Ns>` is a definition-site leaf name tagged with a semantic
+//! - <code>[NameDef]&lt;Ns&gt;</code> is a definition-site leaf name tagged with a semantic
 //!   namespace marker. Use it when the grammar already determines the namespace
 //!   of the identifier being introduced.
-//! - [`ResolvedName`]`<Ns>` is a reference that has passed module-aware
+//! - <code>[ResolvedName]&lt;Ns&gt;</code> is a reference that has passed module-aware
 //!   resolution. It stores the canonical owning [`DagId`](crate::dag_id::DagId)
 //!   plus the leaf [`NameAtom`], rather than preserving source qualifier text.
 //! - [`NamePath`] is a syntactic non-empty dotted path with no semantic

@@ -4,7 +4,7 @@ use graphcal_compiler::desugar::desugared_ast::{MulDivOp, UnitExpr};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{PositiveFiniteScale, UnitScale};
-use graphcal_compiler::syntax::names::UnitRef;
+use graphcal_compiler::syntax::dimension::UnitRef;
 use graphcal_compiler::syntax::span::Span;
 
 use super::numeric;

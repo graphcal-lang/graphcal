@@ -17,7 +17,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use graphcal_compiler::desugar::desugared_ast::Expr;
-use graphcal_compiler::syntax::names::{DeclName, NameAtomError};
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::names::NameAtomError;
 use graphcal_compiler::syntax::parser::ParseError;
 use miette::Diagnostic;
 use thiserror::Error;

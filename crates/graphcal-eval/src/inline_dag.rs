@@ -16,7 +16,7 @@ use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
-use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type};
 
 use crate::import_surface::{ImportItemPresence, file_import_item_presence};

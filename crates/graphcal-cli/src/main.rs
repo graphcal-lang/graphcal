@@ -18,7 +18,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use graphcal_compiler::syntax::names::DeclName;
+use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::eval::{
     EvalResult, compile_and_eval_project, compile_to_tir_project, format_number,
 };
@@ -613,7 +613,7 @@ fn format_assertion_line(
     name: &str,
     result: &graphcal_eval::eval::AssertResult,
     name_width: usize,
-    affected: Option<&Vec<graphcal_compiler::syntax::names::ScopedName>>,
+    affected: Option<&Vec<graphcal_compiler::syntax::module_name::ScopedName>>,
 ) -> String {
     use std::fmt::Write as _;
 

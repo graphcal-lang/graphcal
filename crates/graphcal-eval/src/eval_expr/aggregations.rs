@@ -1,6 +1,6 @@
 use graphcal_compiler::registry::resolve_types::AggregationFn;
 use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueError};
-use graphcal_compiler::syntax::names::IndexVariantName;
+use graphcal_compiler::syntax::index_name::IndexVariantName;
 use indexmap::IndexMap;
 use thiserror::Error;
 

@@ -94,8 +94,8 @@ fn build_single_spec(spec: &PlotSpec) -> JsonValue {
 /// backstop, not a user-facing contract.
 fn referenced_plots<'a>(
     owner_kind: &str,
-    owner_name: &graphcal_compiler::syntax::names::ScopedName,
-    plot_names: &[graphcal_compiler::syntax::names::ScopedName],
+    owner_name: &graphcal_compiler::syntax::module_name::ScopedName,
+    plot_names: &[graphcal_compiler::syntax::module_name::ScopedName],
     all_plots: &'a [PlotSpec],
 ) -> Vec<&'a PlotSpec> {
     plot_names

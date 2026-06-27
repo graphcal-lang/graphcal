@@ -8,12 +8,14 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Expr, ExprKind, ModulePath};
-use graphcal_compiler::syntax::names::{
-    DeclName, DimName, IndexName, ModuleAliasName, StructTypeName, UnitRef,
-};
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::dimension::{DimName, UnitRef};
+use graphcal_compiler::syntax::index_name::IndexName;
+use graphcal_compiler::syntax::module_name::ModuleAliasName;
 use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::span::Spanned;
+use graphcal_compiler::syntax::type_name::StructTypeName;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
 
 pub(in crate::eval::project) use crate::import_surface::{

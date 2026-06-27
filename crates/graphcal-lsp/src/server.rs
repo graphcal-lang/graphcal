@@ -27,7 +27,7 @@ use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_di
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
 use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
-use graphcal_compiler::syntax::names::ScopedName;
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
 };
@@ -1500,9 +1500,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use graphcal_compiler::syntax::dimension::Dimension;
-    use graphcal_compiler::syntax::names::{
-        FieldName, IndexName, IndexVariantName, StructTypeName,
-    };
+    use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
+    use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use graphcal_eval::eval::Value;
     use indexmap::IndexMap;
 

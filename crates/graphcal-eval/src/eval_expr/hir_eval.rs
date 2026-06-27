@@ -6,10 +6,10 @@ use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{IndexDef, IndexKind};
-use graphcal_compiler::syntax::names::{
-    IndexVariantName, ResolvedName, ScopedName, StructTypeName, namespace,
-};
+use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::type_name::StructTypeName;
 use graphcal_compiler::tir::typed::{DagTIR, ResolvedConstructorTarget};
 use indexmap::IndexMap;
 use miette::NamedSource;
@@ -25,7 +25,7 @@ use super::{
 
 pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, RuntimeValue>;
 
-type ResolvedDeclKey = ResolvedName<namespace::Decl>;
+type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 /// Evaluate an already-lowered HIR expression.
 ///
@@ -195,7 +195,7 @@ fn eval_hir_const_ref(
 }
 
 fn eval_hir_nullary_constructor(
-    constructor: &ResolvedName<namespace::Constructor>,
+    constructor: &graphcal_compiler::syntax::type_name::ResolvedConstructorName,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -708,7 +708,9 @@ fn eval_hir_builtin_fn(
 fn eval_hir_field_access(
     inner_val: RuntimeValue,
     inner_span: Span,
-    field: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::names::FieldName>,
+    field: &graphcal_compiler::syntax::span::Spanned<
+        graphcal_compiler::syntax::type_name::FieldName,
+    >,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match inner_val {
@@ -747,7 +749,7 @@ fn eval_hir_field_access(
 
 fn constructor_target<'a>(
     ctx: &'a EvalContext<'_>,
-    constructor: &ResolvedName<namespace::Constructor>,
+    constructor: &graphcal_compiler::syntax::type_name::ResolvedConstructorName,
 ) -> Option<&'a ResolvedConstructorTarget> {
     ctx.current_dag
         .map(|dag| &dag.semantic.constructor_refs)
@@ -755,7 +757,9 @@ fn constructor_target<'a>(
 }
 
 fn eval_hir_constructor_call(
-    callee: &graphcal_compiler::syntax::span::Spanned<ResolvedName<namespace::Constructor>>,
+    callee: &graphcal_compiler::syntax::span::Spanned<
+        graphcal_compiler::syntax::type_name::ResolvedConstructorName,
+    >,
     fields: &[hir::expr::FieldInit],
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
@@ -814,7 +818,7 @@ fn index_def_for_ref<'a>(
 
 fn ensure_index_ref_matches_resolved(
     actual: &IndexTypeRef,
-    expected: &ResolvedName<namespace::Index>,
+    expected: &graphcal_compiler::syntax::index_name::ResolvedIndexName,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
