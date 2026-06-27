@@ -14,7 +14,7 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::ModuleResolveError;
-use crate::syntax::names::{NameNamespace, ResolvedName};
+use crate::syntax::names::NameNamespace;
 
 /// Derive the canonical declaration key for an entry name under `owner`.
 ///
@@ -33,7 +33,7 @@ pub fn resolved_decl_key(
             owner.child(segment.as_ref())
         });
     let name = DeclName::try_new(name.member()).ok()?;
-    Some(ResolvedName::from_def(owner, name))
+    Some(ResolvedDeclName::from_def(owner, name))
 }
 
 /// Convert a HIR expression-lowering failure into a spanned diagnostic.

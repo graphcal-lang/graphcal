@@ -31,7 +31,7 @@ use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
 };
-use crate::syntax::decl_name::DeclName;
+use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::DimName;
 use crate::syntax::dimension::Rational;
 use crate::syntax::index_name::IndexName;
@@ -59,7 +59,7 @@ pub struct LoweredPlotBody {
 /// A named plot/figure/layer field expression lowered to HIR.
 #[derive(Debug, Clone)]
 pub struct LoweredPlotField {
-    pub name: crate::syntax::plot_name::PlotPropertyName,
+    pub name: crate::syntax::ast::PlotPropertyName,
     /// Span of the property name in the source, for validation diagnostics.
     pub name_span: crate::syntax::span::Span,
     pub value: crate::hir::Expr,
@@ -1080,7 +1080,7 @@ impl UnfrozenIR {
                 .resolve_decl_path(owner, &path)
                 .unwrap_or_else(|_| {
                     crate::hir::diagnostics::resolved_decl_key(owner, name).unwrap_or_else(|| {
-                        crate::syntax::names::ResolvedName::from_def(
+                        ResolvedDeclName::from_def(
                             owner.clone(),
                             DeclName::expect_valid(name.member()),
                         )
@@ -1091,10 +1091,7 @@ impl UnfrozenIR {
         for (name, source) in &self.imported_value_sources {
             decl_bindings.insert(
                 name.clone(),
-                crate::syntax::names::ResolvedName::from_def(
-                    source.dag_id.clone(),
-                    source.source_name.clone(),
-                ),
+                ResolvedDeclName::from_def(source.dag_id.clone(), source.source_name.clone()),
             );
         }
 

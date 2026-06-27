@@ -17,7 +17,6 @@ pub mod nat;
 pub mod non_empty;
 pub mod parser;
 pub mod phase;
-pub mod plot_name;
 pub mod span;
 pub mod token;
 pub mod type_name;

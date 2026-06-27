@@ -1,3 +1,4 @@
+use crate::syntax::ast::PlotPropertyName;
 use crate::syntax::ast::common::{
     Attribute, BindableVisibility, ImportKind, ModulePath, Visibility,
 };
@@ -9,7 +10,6 @@ use crate::syntax::dimension::{DimName, UnitName};
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::phase::{Phase, Raw};
-use crate::syntax::plot_name::PlotPropertyName;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
 

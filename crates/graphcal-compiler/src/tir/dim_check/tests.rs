@@ -4,7 +4,6 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::dimension::BaseDimId;
 use crate::syntax::module_name::ScopedName;
-use crate::syntax::names::ResolvedName;
 use crate::syntax::parser::Parser;
 use crate::syntax::span::Span;
 
@@ -190,9 +189,9 @@ fn cycle_detection_uses_semantic_dependencies() {
     let (mut tir, src) = module_aware_tir(source);
     let dag_id = test_dag_id();
 
-    let a = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
-    let b = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("b"));
-    let x = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("x"));
+    let a = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
+    let b = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("b"));
+    let x = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("x"));
     let y = ResolvedDeclName::from_def(dag_id, DeclName::expect_valid("y"));
 
     let mut resolved = crate::tir::typed::ResolvedDagDependencies::default();

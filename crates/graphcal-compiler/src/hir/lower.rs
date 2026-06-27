@@ -694,9 +694,8 @@ fn type_position_wrong_universe(source: ModuleResolveError) -> ModuleResolveErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::names::ResolvedName;
     use crate::syntax::parser::Parser;
-    use crate::syntax::type_name::StructTypeName;
+    use crate::syntax::type_name::{ResolvedStructTypeName, StructTypeName};
 
     fn desugared_source(source: &str) -> ast::File {
         let raw = Parser::new(source).parse_file().unwrap();
@@ -806,7 +805,7 @@ mod tests {
             .unwrap();
 
         let type_decl = first_type_decl(&file);
-        let type_owner = GenericParamOwner::Type(ResolvedName::from_def(
+        let type_owner = GenericParamOwner::Type(ResolvedStructTypeName::from_def(
             owner_id.clone(),
             StructTypeName::expect_valid("Series"),
         ));

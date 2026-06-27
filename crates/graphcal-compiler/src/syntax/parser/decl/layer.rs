@@ -1,7 +1,7 @@
+use crate::syntax::ast::PlotPropertyName;
 use crate::syntax::ast::{DeclKind, Declaration, LayerDecl, PlotField, Visibility};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::ScopedName;
-use crate::syntax::plot_name::PlotPropertyName;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};

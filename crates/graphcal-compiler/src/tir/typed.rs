@@ -43,7 +43,6 @@ use crate::registry::types::{
 };
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
-use crate::syntax::names::ResolvedName;
 
 // ---------------------------------------------------------------------------
 // Resolved type types
@@ -340,7 +339,7 @@ impl ResolvedIndex {
     }
 }
 
-/// Canonical type-system definitions keyed by [`ResolvedName`] identities.
+/// Canonical type-system definitions keyed by [`ResolvedName`](crate::syntax::names::ResolvedName) identities.
 ///
 /// The standalone [`Registry`] remains leaf-keyed for now because runtime values and
 /// declaration types still use local names. This registry is the module-aware
@@ -388,7 +387,7 @@ impl ModuleTypeRegistry {
         for name in crate::registry::prelude::PRELUDE_DIMENSION_NAMES {
             if let Some(dim) = registry.dimensions.get_dimension(name) {
                 self.dimensions.insert(
-                    ResolvedName::from_def(owner.clone(), DimName::expect_valid(*name)),
+                    ResolvedDimName::from_def(owner.clone(), DimName::expect_valid(*name)),
                     dim.clone(),
                 );
             }
@@ -405,24 +404,24 @@ impl ModuleTypeRegistry {
     pub fn insert_registry(&mut self, owner: &crate::dag_id::DagId, registry: &Registry) {
         for (name, dim) in registry.dimensions.all_dimensions() {
             self.dimensions.insert(
-                ResolvedName::from_def(owner.clone(), name.clone()),
+                ResolvedDimName::from_def(owner.clone(), name.clone()),
                 dim.clone(),
             );
         }
         for index in registry.indexes.all_indexes() {
             self.indexes.insert(
-                ResolvedName::from_def(owner.clone(), index.name.clone()),
+                ResolvedIndexName::from_def(owner.clone(), index.name.clone()),
                 index.clone(),
             );
         }
         for type_def in registry.types.all_types() {
-            let type_name = ResolvedName::from_def(owner.clone(), type_def.name.clone());
+            let type_name = ResolvedStructTypeName::from_def(owner.clone(), type_def.name.clone());
             self.struct_types
                 .insert(type_name.clone(), type_def.clone());
             if let Some(members) = type_def.union_members() {
                 for member in members {
                     self.constructors.insert(
-                        ResolvedName::from_def(owner.clone(), member.name.clone()),
+                        ResolvedConstructorName::from_def(owner.clone(), member.name.clone()),
                         ModuleConstructorDef {
                             owning_type: type_name.clone(),
                             type_def: type_def.clone(),
@@ -2849,7 +2848,7 @@ fn collect_hir_decl_bindings(
     for (name, source) in imported_value_sources {
         bindings.insert(
             name.clone(),
-            ResolvedName::from_def(source.dag_id.clone(), source.source_name.clone()),
+            ResolvedDeclName::from_def(source.dag_id.clone(), source.source_name.clone()),
         );
     }
 
@@ -2916,7 +2915,7 @@ fn collect_resolved_decl_bindings(
                     .fold(ctx.owner.clone(), |owner, segment| {
                         owner.child(segment.as_ref())
                     });
-                ResolvedName::from_def(synthetic_owner, DeclName::expect_valid(name.member()))
+                ResolvedDeclName::from_def(synthetic_owner, DeclName::expect_valid(name.member()))
             }
             Err(err) => return Err(module_resolve_error(&err, src, Span::new(0, 0))),
         };
@@ -4645,7 +4644,7 @@ fn resolve_index_expr_name(
     let text = require_local_type_level_path(path, span, src)?;
     if registry.indexes.get_index(text).is_some() {
         Ok(ResolvedIndex::Concrete(
-            ResolvedName::from_def(owner.clone(), IndexName::expect_valid(text)),
+            ResolvedIndexName::from_def(owner.clone(), IndexName::expect_valid(text)),
             span,
         ))
     } else {
@@ -4704,7 +4703,7 @@ fn resolve_concrete_index_path(
         crate::registry::types::IndexKind::Named { .. }
             | crate::registry::types::IndexKind::RequiredNamed
     )
-    .then(|| ResolvedName::from_def(owner.clone(), IndexName::from_atom(atom.clone()))))
+    .then(|| ResolvedIndexName::from_def(owner.clone(), IndexName::from_atom(atom.clone()))))
 }
 
 type ResolvedStructTypeLookup<'a> = Option<(ResolvedStructTypeName, &'a TypeDef)>;
@@ -4740,7 +4739,10 @@ fn resolve_struct_type_path<'a>(
     };
     Ok(registry.types.get_type(atom.as_str()).map(|type_def| {
         (
-            ResolvedName::from_def(owner.clone(), StructTypeName::from_atom(atom.clone())),
+            ResolvedStructTypeName::from_def(
+                owner.clone(),
+                StructTypeName::from_atom(atom.clone()),
+            ),
             type_def,
         )
     }))
@@ -5731,10 +5733,10 @@ mod tests {
         let tir =
             type_resolve_with_modules(ir, dag_id.clone(), &src, &resolver, &module_types).unwrap();
         let deps = &tir.root().semantic.dependencies;
-        let c = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("C"));
-        let d = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("D"));
-        let p = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("p"));
-        let x = ResolvedName::from_def(dag_id, DeclName::expect_valid("x"));
+        let c = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("C"));
+        let d = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("D"));
+        let p = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("p"));
+        let x = ResolvedDeclName::from_def(dag_id, DeclName::expect_valid("x"));
 
         assert!(deps.const_deps[&d].contains(&c));
         assert!(deps.const_deps[&c].is_empty());
@@ -5882,7 +5884,7 @@ mod tests {
         let src = make_src();
         let registry = make_registry();
         let owner = crate::dag_id::DagId::root_in_package("test", "a");
-        let resolved_index = ResolvedName::from_def(owner, IndexName::expect_valid("Phase"));
+        let resolved_index = ResolvedIndexName::from_def(owner, IndexName::expect_valid("Phase"));
         let generic = GenericParamName::expect_valid("I");
         let resolved_type = ResolvedTypeExpr::Indexed {
             base: Box::new(ResolvedTypeExpr::Dimensionless),
@@ -5952,7 +5954,7 @@ mod tests {
     #[test]
     fn convert_struct() {
         let owner = crate::dag_id::DagId::root_in_package("test", "test");
-        let resolved = ResolvedName::from_def(owner, StructTypeName::expect_valid("Foo"));
+        let resolved = ResolvedStructTypeName::from_def(owner, StructTypeName::expect_valid("Foo"));
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Struct(resolved.clone(), Span::new(0, 0)),
             &make_src(),
@@ -5967,7 +5969,7 @@ mod tests {
     #[test]
     fn convert_indexed() {
         let owner = crate::dag_id::DagId::root_in_package("test", "test");
-        let resolved_index = ResolvedName::from_def(owner, IndexName::expect_valid("M"));
+        let resolved_index = ResolvedIndexName::from_def(owner, IndexName::expect_valid("M"));
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Indexed {
                 base: Box::new(ResolvedTypeExpr::Scalar(Dimension::base(

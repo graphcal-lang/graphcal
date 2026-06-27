@@ -36,7 +36,7 @@ use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVarian
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::{DeclSymbolKind, ModuleResolveError, ModuleResolver};
-use crate::syntax::names::{NameAtom, NameAtomError, NameNamespace, NamePath, ResolvedName};
+use crate::syntax::names::{NameAtom, NameAtomError, NameNamespace, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
@@ -1643,7 +1643,7 @@ impl<'a> ExprLowerer<'a> {
             .resolver
             .modules()
             .contains_key(&owner)
-            .then(|| ResolvedName::from_def(owner, DeclName::from_atom(leaf.clone())))
+            .then(|| ResolvedDeclName::from_def(owner, DeclName::from_atom(leaf.clone())))
     }
 
     /// Validate a built-in call's argument count against the registry's

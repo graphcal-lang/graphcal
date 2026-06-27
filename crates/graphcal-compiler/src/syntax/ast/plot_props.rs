@@ -6,6 +6,20 @@
 //! never on raw property-name strings; `from_name` is the only place the
 //! source spelling crosses into the typed core.
 
+use crate::syntax::names::{NameDef, NameNamespace};
+
+/// Plot/figure/layer property namespace marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PlotPropertyNameNamespace {}
+
+impl NameNamespace for PlotPropertyNameNamespace {
+    const DISPLAY_NAME: &'static str = "PlotPropertyName";
+}
+
+/// Name of an open plot/figure/layer property (e.g., `"title"`, `"width"`,
+/// `"stroke_width"`).
+pub type PlotPropertyName = NameDef<PlotPropertyNameNamespace>;
+
 /// Expected value type of a plot-family property.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlotPropertyType {
