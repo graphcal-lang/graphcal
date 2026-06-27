@@ -182,6 +182,36 @@ fn format_type_import_item() {
 }
 
 #[test]
+fn format_long_include_selector_keeps_empty_bindings_attached() {
+    let source = "include a.very.very.very.very.very.very.very.very.very.very.very.long.dag_name().{ node1, node2, node3 };";
+    let formatted = format_source(source).unwrap();
+    assert_eq!(
+        formatted,
+        "include a.very.very.very.very.very.very.very.very.very.very.very.long.dag_name().{\n    node1, node2, node3\n};\n"
+    );
+}
+
+#[test]
+fn format_long_include_selector_splits_items_when_needed() {
+    let source = "include package.subsystem.very.long.dag_name().{ output_node_with_a_very_very_long_name_one, output_node_with_a_very_very_long_name_two, output_node_with_a_very_very_long_name_three };";
+    let formatted = format_source(source).unwrap();
+    assert_eq!(
+        formatted,
+        "include package.subsystem.very.long.dag_name().{\n    output_node_with_a_very_very_long_name_one,\n    output_node_with_a_very_very_long_name_two,\n    output_node_with_a_very_very_long_name_three\n};\n"
+    );
+}
+
+#[test]
+fn format_empty_parenthesized_lists_are_atomic() {
+    let source = "node value: Dimensionless = a.very.very.very.very.very.very.very.very.very.very.very.long.function_name();";
+    let formatted = format_source(source).unwrap();
+    assert_eq!(
+        formatted,
+        "node value: Dimensionless = a.very.very.very.very.very.very.very.very.very.very.very.long.function_name();\n"
+    );
+}
+
+#[test]
 fn format_base_dimension() {
     let source = "base dim Length;\n";
     let formatted = format_source(source).unwrap();

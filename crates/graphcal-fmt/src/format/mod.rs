@@ -223,6 +223,32 @@ pub fn soft_parenthesized(body: RcDoc<'static>) -> RcDoc<'static> {
         .group()
 }
 
+/// Format a comma-separated argument list in soft parentheses.
+///
+/// Empty argument lists are always emitted as the atomic token pair `()`.
+/// Without this special case, a long callee can force `soft_parenthesized(nil)`
+/// into the multiline layout and produce a visually empty parenthesis block:
+/// `foo(\n\n)`. List formatters should use this helper instead of building
+/// parenthesized comma lists by hand so empty delimiter pairs stay stable in
+/// every surrounding layout.
+pub fn soft_parenthesized_list(
+    items: Vec<RcDoc<'static>>,
+    trailing_comma_when_multiline: bool,
+) -> RcDoc<'static> {
+    if items.is_empty() {
+        return RcDoc::text("()");
+    }
+
+    let body = RcDoc::intersperse(items, RcDoc::text(",").append(RcDoc::line()));
+    let body = if trailing_comma_when_multiline {
+        body.append(RcDoc::text(",").flat_alt(RcDoc::nil()))
+    } else {
+        body
+    };
+
+    soft_parenthesized(body)
+}
+
 /// Render an `RcDoc` to a string (for measuring column widths).
 pub fn render_doc_to_string(doc: &RcDoc<'static>) -> String {
     let mut buf = Vec::new();

@@ -7,6 +7,8 @@ include lib.lib(
         MyPhase.Design: 10.0,
         MyPhase.Build: 20.0,
     }
-).{ total };
+).{
+    total
+};
 
 node result: Dimensionless = @total;
