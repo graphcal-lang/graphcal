@@ -1051,6 +1051,8 @@ fn type_resolve_impl(
         src,
         &root_dag_id,
         module_ctx,
+        &ir.imported_values,
+        &ir.imported_decl_types,
         &imported_value_sources_for_hir,
     )?
     .with_body(
@@ -1118,6 +1120,8 @@ fn type_resolve_single_impl(
         src,
         dag_id,
         module_ctx,
+        &ir.imported_values,
+        &ir.imported_decl_types,
         &imported_value_sources_for_hir,
     )?
     .with_body(
@@ -1183,6 +1187,14 @@ fn type_resolve_dag(
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     module_ctx: ModuleTypeContext<'_>,
+    imported_values: &HashMap<
+        ScopedName,
+        (
+            crate::registry::runtime_value::RuntimeValue,
+            crate::registry::declared_type::DeclaredType,
+        ),
+    >,
+    imported_decl_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
 ) -> Result<DagTIRSeed, GraphcalError> {
     let mut resolved_decl_types = HashMap::new();
@@ -1252,6 +1264,8 @@ fn type_resolve_dag(
         &expressions,
         &domain_bounds,
         &resolved_decl_types,
+        imported_values,
+        imported_decl_types,
         module_ctx,
         src,
     )?;
@@ -1261,6 +1275,8 @@ fn type_resolve_dag(
     let type_defs = collect_resolved_type_defs(
         &resolved_decl_types,
         &constructor_refs,
+        imported_values,
+        imported_decl_types,
         module_ctx,
         registry,
         src,
@@ -1292,6 +1308,14 @@ fn type_resolve_dag(
 fn collect_resolved_type_defs(
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
     constructor_refs: &ResolvedConstructorRefs,
+    imported_values: &HashMap<
+        ScopedName,
+        (
+            crate::registry::runtime_value::RuntimeValue,
+            crate::registry::declared_type::DeclaredType,
+        ),
+    >,
+    imported_decl_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
     ctx: ModuleTypeContext<'_>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
@@ -1305,10 +1329,42 @@ fn collect_resolved_type_defs(
     for resolved in resolved_decl_types.values() {
         collect_struct_type_defs_from_resolved_type(resolved, ctx, registry, src, &mut defs)?;
     }
+    for declared in imported_decl_types
+        .values()
+        .chain(imported_values.values().map(|(_value, declared)| declared))
+    {
+        collect_struct_type_defs_from_declared_type(declared, ctx, registry, src, &mut defs)?;
+    }
     for target in constructor_refs.constructor_defs.values() {
         record_resolved_struct_type_def(&target.owning_type, ctx, registry, src, &mut defs)?;
     }
     Ok(defs)
+}
+
+fn collect_struct_type_defs_from_declared_type(
+    declared: &crate::registry::declared_type::DeclaredType,
+    ctx: ModuleTypeContext<'_>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    defs: &mut ResolvedTypeDefs,
+) -> Result<(), GraphcalError> {
+    match declared {
+        crate::registry::declared_type::DeclaredType::Struct(name, type_args) => {
+            record_resolved_struct_type_def(name.resolved(), ctx, registry, src, defs)?;
+            for arg in type_args {
+                collect_struct_type_defs_from_declared_type(arg, ctx, registry, src, defs)?;
+            }
+        }
+        crate::registry::declared_type::DeclaredType::Indexed { element, .. } => {
+            collect_struct_type_defs_from_declared_type(element, ctx, registry, src, defs)?;
+        }
+        crate::registry::declared_type::DeclaredType::Scalar(_)
+        | crate::registry::declared_type::DeclaredType::Bool
+        | crate::registry::declared_type::DeclaredType::Int
+        | crate::registry::declared_type::DeclaredType::Datetime(_)
+        | crate::registry::declared_type::DeclaredType::IndexArg(_) => {}
+    }
+    Ok(())
 }
 
 fn collect_struct_type_defs_from_resolved_type(
@@ -2199,6 +2255,14 @@ fn collect_resolved_collection_refs(
     exprs: &ResolvedExpressions,
     domain_bounds: &HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
+    imported_values: &HashMap<
+        ScopedName,
+        (
+            crate::registry::runtime_value::RuntimeValue,
+            crate::registry::declared_type::DeclaredType,
+        ),
+    >,
+    imported_decl_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedCollectionRefs, GraphcalError> {
@@ -2206,6 +2270,12 @@ fn collect_resolved_collection_refs(
 
     for resolved_type in resolved_decl_types.values() {
         collect_resolved_collection_indexes_from_type(resolved_type, ctx, src, &mut refs)?;
+    }
+    for declared in imported_decl_types
+        .values()
+        .chain(imported_values.values().map(|(_value, declared)| declared))
+    {
+        collect_resolved_collection_indexes_from_declared_type(declared, ctx, src, &mut refs)?;
     }
 
     for hir_expr in exprs
@@ -2243,6 +2313,44 @@ fn record_resolved_collection_index(
     })?;
     refs.index_defs.insert(index.clone(), def);
     Ok(())
+}
+
+fn collect_resolved_collection_indexes_from_declared_type(
+    declared_type: &crate::registry::declared_type::DeclaredType,
+    ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+    refs: &mut ResolvedCollectionRefs,
+) -> Result<(), GraphcalError> {
+    match declared_type {
+        crate::registry::declared_type::DeclaredType::IndexArg(index) => {
+            record_declared_collection_index(index, ctx, src, refs)
+        }
+        crate::registry::declared_type::DeclaredType::Indexed { element, index } => {
+            record_declared_collection_index(index, ctx, src, refs)?;
+            collect_resolved_collection_indexes_from_declared_type(element, ctx, src, refs)
+        }
+        crate::registry::declared_type::DeclaredType::Struct(_name, type_args) => {
+            for arg in type_args {
+                collect_resolved_collection_indexes_from_declared_type(arg, ctx, src, refs)?;
+            }
+            Ok(())
+        }
+        crate::registry::declared_type::DeclaredType::Scalar(_)
+        | crate::registry::declared_type::DeclaredType::Bool
+        | crate::registry::declared_type::DeclaredType::Int
+        | crate::registry::declared_type::DeclaredType::Datetime(_) => Ok(()),
+    }
+}
+
+fn record_declared_collection_index(
+    index: &IndexTypeRef,
+    ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+    refs: &mut ResolvedCollectionRefs,
+) -> Result<(), GraphcalError> {
+    index.declared_resolved().map_or(Ok(()), |resolved| {
+        record_resolved_collection_index(resolved, ctx, src, Span::new(0, 0), refs)
+    })
 }
 
 fn collect_resolved_collection_indexes_from_type(
