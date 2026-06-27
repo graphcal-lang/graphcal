@@ -52,6 +52,7 @@ Requires the Rust stable toolchain. Get it from [rustup.rs](https://rustup.rs/) 
 
 ```sh
 cargo install graphcal --locked
+graphcal --version  # prints the package version and, when available, the build commit SHA
 ```
 
 ## Quickstart
