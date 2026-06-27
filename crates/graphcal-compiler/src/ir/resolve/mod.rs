@@ -29,7 +29,7 @@ use crate::syntax::span::Span;
 pub use crate::registry::resolve_types::{
     DeclCategory, ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart, ImportedValueNames,
     ParsedExpectedFail, ParsedExpectedFailKey, ParsedExpectedFailKeyPart, ResolvedFile,
-    is_aggregation_fn, is_time_scale_name,
+    is_time_scale_name,
 };
 pub use crate::syntax::module_name::ScopedName;
 

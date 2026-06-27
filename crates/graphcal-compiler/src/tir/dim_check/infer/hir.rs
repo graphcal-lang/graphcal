@@ -12,8 +12,11 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::builtin::{
+    AggregationFn, BuiltinFnName, ConstructorFn, SpecialFnKind, TypeConversionFn,
+};
 use crate::dimension::{Dimension, Rational};
-use crate::hir::{self, BuiltinFnName, ConstRef, FunctionRef};
+use crate::hir::{self, ConstRef, FunctionRef};
 use crate::nat::NatOverflowError;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
@@ -583,9 +586,7 @@ fn infer_hir_fn_call(
 ) -> Result<InferredType, GraphcalError> {
     let FunctionRef::Builtin(name) = callee.value;
     match name.special_kind() {
-        Some(crate::registry::resolve_types::SpecialFnKind::Aggregation(kind))
-            if args.len() == 1 =>
-        {
+        Some(SpecialFnKind::Aggregation(kind)) if args.len() == 1 => {
             let arg_type = infer_arg(
                 &args[0],
                 declared_types,
@@ -598,13 +599,11 @@ fn infer_hir_fn_call(
             )?;
             if let InferredType::Indexed { element, .. } = arg_type {
                 return Ok(match kind {
-                    crate::registry::resolve_types::AggregationFn::Count => {
-                        InferredType::Scalar(Dimension::dimensionless())
-                    }
-                    crate::registry::resolve_types::AggregationFn::Sum
-                    | crate::registry::resolve_types::AggregationFn::Min
-                    | crate::registry::resolve_types::AggregationFn::Max
-                    | crate::registry::resolve_types::AggregationFn::Mean => *element,
+                    AggregationFn::Count => InferredType::Scalar(Dimension::dimensionless()),
+                    AggregationFn::Sum
+                    | AggregationFn::Min
+                    | AggregationFn::Max
+                    | AggregationFn::Mean => *element,
                 });
             }
             infer_hir_builtin_fn(
@@ -620,65 +619,57 @@ fn infer_hir_fn_call(
                 src,
             )
         }
-        Some(crate::registry::resolve_types::SpecialFnKind::TypeConversion(kind)) => {
-            infer_hir_type_conversion(
-                kind,
-                callee.span,
-                args,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )
-        }
-        Some(crate::registry::resolve_types::SpecialFnKind::TimeScaleConversion(scale)) => {
-            infer_hir_timescale_conversion(
-                name,
-                scale,
-                callee.span,
-                args,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )
-        }
-        Some(crate::registry::resolve_types::SpecialFnKind::Constructor(kind)) => {
-            infer_hir_datetime_constructor(
-                kind,
-                callee.span,
-                args,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )
-        }
-        Some(crate::registry::resolve_types::SpecialFnKind::DatetimeExtract(_)) => {
-            infer_hir_datetime_unary(
-                name,
-                callee.span,
-                args,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-                InferredType::Int,
-            )
-        }
-        Some(crate::registry::resolve_types::SpecialFnKind::DatetimeFrom(_)) => {
+        Some(SpecialFnKind::TypeConversion(kind)) => infer_hir_type_conversion(
+            kind,
+            callee.span,
+            args,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        ),
+        Some(SpecialFnKind::TimeScaleConversion(scale)) => infer_hir_timescale_conversion(
+            name,
+            scale,
+            callee.span,
+            args,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        ),
+        Some(SpecialFnKind::Constructor(kind)) => infer_hir_datetime_constructor(
+            kind,
+            callee.span,
+            args,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        ),
+        Some(SpecialFnKind::DatetimeExtract(_)) => infer_hir_datetime_unary(
+            name,
+            callee.span,
+            args,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+            InferredType::Int,
+        ),
+        Some(SpecialFnKind::DatetimeFrom(_)) => {
             if args.len() != 1 {
                 return Err(GraphcalError::WrongArity {
                     name: crate::syntax::function_name::FnName::expect_valid(name.as_str()),
@@ -718,35 +709,31 @@ fn infer_hir_fn_call(
                 crate::registry::time_scale::TimeScale::UTC,
             ))
         }
-        Some(crate::registry::resolve_types::SpecialFnKind::DatetimeTo(_)) => {
-            infer_hir_datetime_unary(
-                name,
-                callee.span,
-                args,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-                InferredType::Scalar(Dimension::dimensionless()),
-            )
-        }
-        None | Some(crate::registry::resolve_types::SpecialFnKind::Aggregation(_)) => {
-            infer_hir_builtin_fn(
-                name,
-                callee.span,
-                args,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )
-        }
+        Some(SpecialFnKind::DatetimeTo(_)) => infer_hir_datetime_unary(
+            name,
+            callee.span,
+            args,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+            InferredType::Scalar(Dimension::dimensionless()),
+        ),
+        None | Some(SpecialFnKind::Aggregation(_)) => infer_hir_builtin_fn(
+            name,
+            callee.span,
+            args,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        ),
     }
 }
 
@@ -809,7 +796,7 @@ fn infer_hir_builtin_fn(
 
 #[expect(clippy::too_many_arguments, reason = "function-call context")]
 fn infer_hir_type_conversion(
-    kind: crate::registry::resolve_types::TypeConversionFn,
+    kind: TypeConversionFn,
     span: crate::syntax::span::Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -841,7 +828,7 @@ fn infer_hir_type_conversion(
         src,
     )?;
     match kind {
-        crate::registry::resolve_types::TypeConversionFn::ToFloat => {
+        TypeConversionFn::ToFloat => {
             if !arg_type.is_int_like() {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Int".to_string(),
@@ -853,7 +840,7 @@ fn infer_hir_type_conversion(
             }
             Ok(InferredType::Scalar(Dimension::dimensionless()))
         }
-        crate::registry::resolve_types::TypeConversionFn::ToInt => {
+        TypeConversionFn::ToInt => {
             let dim = expect_scalar(&arg_type, registry, src, args[0].span)?;
             if !dim.is_dimensionless() {
                 return Err(GraphcalError::DimensionMismatch {
@@ -916,7 +903,7 @@ fn infer_hir_timescale_conversion(
 
 #[expect(clippy::too_many_arguments, reason = "function-call context")]
 fn infer_hir_datetime_constructor(
-    kind: crate::registry::resolve_types::ConstructorFn,
+    kind: ConstructorFn,
     span: crate::syntax::span::Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -928,7 +915,7 @@ fn infer_hir_datetime_constructor(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     match kind {
-        crate::registry::resolve_types::ConstructorFn::Datetime => {
+        ConstructorFn::Datetime => {
             if args.is_empty() || args.len() > 2 {
                 return Err(GraphcalError::EvalError {
                     message: format!("datetime() expects 1 or 2 arguments, got {}", args.len()),
@@ -979,7 +966,7 @@ fn infer_hir_datetime_constructor(
                 crate::registry::time_scale::TimeScale::UTC,
             ))
         }
-        crate::registry::resolve_types::ConstructorFn::Epoch => {
+        ConstructorFn::Epoch => {
             if args.len() != 2 {
                 return Err(GraphcalError::WrongArity {
                     name: crate::syntax::function_name::FnName::expect_valid("epoch"),

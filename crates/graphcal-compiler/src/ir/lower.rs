@@ -3316,9 +3316,9 @@ fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, G
             // (PI, E, TAU, SQRT2, LN2, LN10) are legal in scale expressions.
             let builtin = path
                 .as_bare()
-                .and_then(|ident| crate::hir::BuiltinConst::parse(ident.name.as_str()));
+                .and_then(|ident| crate::builtin::BuiltinConst::parse(ident.name.as_str()));
             builtin
-                .map(crate::hir::BuiltinConst::value)
+                .map(crate::builtin::BuiltinConst::value)
                 .ok_or_else(|| GraphcalError::EvalError {
                     message: format!(
                         "unknown constant `{}` in scale expression; only built-in \

@@ -4,6 +4,7 @@
     reason = "GraphcalError is inherently large and only constructed on the error path"
 )]
 
+pub mod builtin;
 pub mod dag_id;
 pub mod desugar;
 pub mod dimension;

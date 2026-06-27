@@ -11,6 +11,7 @@ All Rust files in the workspace, in library-consumer order: every `use`d file ap
 - [x] `crates/graphcal-compiler/src/desugar/mod.rs`
 - [x] `crates/graphcal-compiler/src/registry/mod.rs`
 - [x] `crates/graphcal-compiler/src/registry/time_scale.rs`
+- [x] `crates/graphcal-compiler/src/builtin.rs`
 - [x] `crates/graphcal-compiler/src/registry/manifest.rs`
 - [x] `crates/graphcal-compiler/src/ir/mod.rs`
 - [x] `crates/graphcal-compiler/src/tir/mod.rs`
@@ -89,7 +90,7 @@ Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent.
 
 ## Stage 7 - HIR and builtin signatures
 
-Note: `hir/types.rs`, `registry/builtins.rs`, `hir/lower.rs`, `hir/expr.rs`, and `hir/mod.rs` form a mutually dependent group.
+Note: `hir/types.rs`, `hir/lower.rs`, `hir/expr.rs`, and `hir/mod.rs` form a mutually dependent group. `registry/builtins.rs` is upstream of HIR and provides evaluation/dimension signatures for the built-in domain model.
 
 - [ ] `crates/graphcal-compiler/src/hir/types.rs`
 - [ ] `crates/graphcal-compiler/src/registry/builtins.rs`

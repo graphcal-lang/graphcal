@@ -647,7 +647,7 @@ mod tests {
         // The typed BuiltinConst table and the registry constant map are
         // maintained separately; this pins them together so adding a
         // constant to one without the other fails loudly.
-        use crate::hir::BuiltinConst;
+        use crate::builtin::BuiltinConst;
         let map = builtin_constants();
         for c in BuiltinConst::ALL {
             let registry_value = map.get(c.as_str()).unwrap_or_else(|| {
@@ -676,8 +676,7 @@ mod tests {
         // and every BuiltinFnName must be evaluable: either via the function
         // map or via the special-function classification. A name added to
         // only one table would resolve in one phase and fail in another.
-        use crate::hir::BuiltinFnName;
-        use crate::registry::resolve_types::classify_special_fn;
+        use crate::builtin::{BuiltinFnName, classify_special_fn};
         let map = builtin_functions();
         for name in map.keys() {
             assert!(

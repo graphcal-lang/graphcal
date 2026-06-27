@@ -23,12 +23,9 @@ use std::collections::{BTreeSet, HashMap};
 
 use thiserror::Error;
 
+use crate::builtin::{BuiltinConst, BuiltinFnName, SpecialFnKind};
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::registry::resolve_types::{
-    AggregationFn, ConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, SpecialFnKind,
-    TypeConversionFn,
-};
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
 use crate::syntax::decl_name::DeclName;
@@ -356,183 +353,6 @@ impl<'a, V> LocalEnv<'a, V> {
 impl<V> Default for LocalEnv<'_, V> {
     fn default() -> Self {
         Self::root()
-    }
-}
-
-/// Define a closed set of built-in names: the enum, the `parse` boundary
-/// crossing, the canonical `as_str` rendering, and an `ALL` listing for
-/// cross-table consistency tests — all generated from a single table so the
-/// spellings can never drift apart.
-macro_rules! define_builtin_names {
-    (
-        $(#[$meta:meta])*
-        $vis:vis enum $name:ident { $($variant:ident => $text:literal),+ $(,)? }
-    ) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        $vis enum $name { $($variant),+ }
-
-        impl $name {
-            /// Every variant, for cross-table consistency tests.
-            $vis const ALL: &'static [Self] = &[$(Self::$variant),+];
-
-            /// Parse a source name into the typed variant — the only place
-            /// these strings cross into the typed core.
-            #[must_use]
-            $vis fn parse(name: &str) -> Option<Self> {
-                match name {
-                    $($text => Some(Self::$variant),)+
-                    _ => None,
-                }
-            }
-
-            /// Canonical source spelling.
-            #[must_use]
-            $vis const fn as_str(self) -> &'static str {
-                match self {
-                    $(Self::$variant => $text),+
-                }
-            }
-        }
-    };
-}
-
-define_builtin_names! {
-    /// Built-in constants with closed semantic meaning.
-    pub enum BuiltinConst {
-        Pi => "PI",
-        E => "E",
-        Tau => "TAU",
-        Sqrt2 => "SQRT2",
-        Ln2 => "LN2",
-        Ln10 => "LN10",
-    }
-}
-
-impl BuiltinConst {
-    /// Numeric value of the constant. Must agree with
-    /// [`crate::registry::builtins::builtin_constants`] (enforced by test).
-    #[must_use]
-    pub const fn value(self) -> f64 {
-        match self {
-            Self::Pi => std::f64::consts::PI,
-            Self::E => std::f64::consts::E,
-            Self::Tau => std::f64::consts::TAU,
-            Self::Sqrt2 => std::f64::consts::SQRT_2,
-            Self::Ln2 => std::f64::consts::LN_2,
-            Self::Ln10 => std::f64::consts::LN_10,
-        }
-    }
-}
-
-define_builtin_names! {
-    /// Built-in function names with closed semantic meaning.
-    pub enum BuiltinFnName {
-        Sqrt => "sqrt",
-        Cbrt => "cbrt",
-        Exp => "exp",
-        Expm1 => "expm1",
-        Ln => "ln",
-        Log10 => "log10",
-        Log2 => "log2",
-        Log => "log",
-        Log1p => "log1p",
-        Sin => "sin",
-        Cos => "cos",
-        Tan => "tan",
-        Asin => "asin",
-        Acos => "acos",
-        Atan => "atan",
-        Atan2 => "atan2",
-        Sinh => "sinh",
-        Cosh => "cosh",
-        Tanh => "tanh",
-        Asinh => "asinh",
-        Acosh => "acosh",
-        Atanh => "atanh",
-        Abs => "abs",
-        Floor => "floor",
-        Ceil => "ceil",
-        Round => "round",
-        Trunc => "trunc",
-        Sign => "sign",
-        Min => "min",
-        Max => "max",
-        Hypot => "hypot",
-        Clamp => "clamp",
-        Sum => "sum",
-        Mean => "mean",
-        Count => "count",
-        ToFloat => "to_float",
-        ToInt => "to_int",
-        ToUtc => "to_utc",
-        ToTai => "to_tai",
-        ToTt => "to_tt",
-        ToTdb => "to_tdb",
-        ToEt => "to_et",
-        ToGpst => "to_gpst",
-        ToGst => "to_gst",
-        ToBdt => "to_bdt",
-        ToQzsst => "to_qzsst",
-        Datetime => "datetime",
-        Epoch => "epoch",
-        Year => "year",
-        Month => "month",
-        Day => "day",
-        Hour => "hour",
-        Minute => "minute",
-        Second => "second",
-        Weekday => "weekday",
-        DayOfYear => "day_of_year",
-        FromJd => "from_jd",
-        FromMjd => "from_mjd",
-        FromUnix => "from_unix",
-        ToJd => "to_jd",
-        ToMjd => "to_mjd",
-        ToUnix => "to_unix",
-    }
-}
-
-impl BuiltinFnName {
-    /// Return the existing typed special-function classification when this
-    /// built-in is one of the special categories.
-    #[must_use]
-    pub const fn special_kind(self) -> Option<SpecialFnKind> {
-        match self {
-            Self::Sum => Some(SpecialFnKind::Aggregation(AggregationFn::Sum)),
-            Self::Min => Some(SpecialFnKind::Aggregation(AggregationFn::Min)),
-            Self::Max => Some(SpecialFnKind::Aggregation(AggregationFn::Max)),
-            Self::Mean => Some(SpecialFnKind::Aggregation(AggregationFn::Mean)),
-            Self::Count => Some(SpecialFnKind::Aggregation(AggregationFn::Count)),
-            Self::ToFloat => Some(SpecialFnKind::TypeConversion(TypeConversionFn::ToFloat)),
-            Self::ToInt => Some(SpecialFnKind::TypeConversion(TypeConversionFn::ToInt)),
-            Self::ToUtc => Some(SpecialFnKind::TimeScaleConversion(TimeScale::UTC)),
-            Self::ToTai => Some(SpecialFnKind::TimeScaleConversion(TimeScale::TAI)),
-            Self::ToTt => Some(SpecialFnKind::TimeScaleConversion(TimeScale::TT)),
-            Self::ToTdb => Some(SpecialFnKind::TimeScaleConversion(TimeScale::TDB)),
-            Self::ToEt => Some(SpecialFnKind::TimeScaleConversion(TimeScale::ET)),
-            Self::ToGpst => Some(SpecialFnKind::TimeScaleConversion(TimeScale::GPST)),
-            Self::ToGst => Some(SpecialFnKind::TimeScaleConversion(TimeScale::GST)),
-            Self::ToBdt => Some(SpecialFnKind::TimeScaleConversion(TimeScale::BDT)),
-            Self::ToQzsst => Some(SpecialFnKind::TimeScaleConversion(TimeScale::QZSST)),
-            Self::Datetime => Some(SpecialFnKind::Constructor(ConstructorFn::Datetime)),
-            Self::Epoch => Some(SpecialFnKind::Constructor(ConstructorFn::Epoch)),
-            Self::Year => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Year)),
-            Self::Month => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Month)),
-            Self::Day => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Day)),
-            Self::Hour => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Hour)),
-            Self::Minute => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Minute)),
-            Self::Second => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Second)),
-            Self::Weekday => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::Weekday)),
-            Self::DayOfYear => Some(SpecialFnKind::DatetimeExtract(DatetimeExtractFn::DayOfYear)),
-            Self::FromJd => Some(SpecialFnKind::DatetimeFrom(DatetimeFromFn::FromJd)),
-            Self::FromMjd => Some(SpecialFnKind::DatetimeFrom(DatetimeFromFn::FromMjd)),
-            Self::FromUnix => Some(SpecialFnKind::DatetimeFrom(DatetimeFromFn::FromUnix)),
-            Self::ToJd => Some(SpecialFnKind::DatetimeTo(DatetimeToFn::ToJd)),
-            Self::ToMjd => Some(SpecialFnKind::DatetimeTo(DatetimeToFn::ToMjd)),
-            Self::ToUnix => Some(SpecialFnKind::DatetimeTo(DatetimeToFn::ToUnix)),
-            _ => None,
-        }
     }
 }
 
@@ -1655,12 +1475,10 @@ impl<'a> ExprLowerer<'a> {
         span: Span,
     ) -> Result<(), ExprLowerError> {
         let FunctionRef::Builtin(builtin) = function_ref;
-        if builtin.special_kind().is_some_and(|kind| {
-            matches!(
-                kind,
-                crate::registry::resolve_types::SpecialFnKind::Aggregation(_)
-            )
-        }) {
+        if builtin
+            .special_kind()
+            .is_some_and(|kind| matches!(kind, SpecialFnKind::Aggregation(_)))
+        {
             return Ok(());
         }
         let Some(function) = crate::registry::builtins::builtin_functions().get(builtin.as_str())

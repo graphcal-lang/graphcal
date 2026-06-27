@@ -1,4 +1,4 @@
-use graphcal_compiler::registry::resolve_types::AggregationFn;
+use graphcal_compiler::builtin::AggregationFn;
 use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueError};
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use indexmap::IndexMap;
