@@ -1556,9 +1556,9 @@ mod tests {
     fn format_struct_with_fields() {
         let symbols = empty_symbols();
         let mut fields = IndexMap::new();
-        fields.insert(FieldName::new("dv1"), scalar(100.0));
-        fields.insert(FieldName::new("dv2"), scalar(200.0));
-        let val = test_struct(StructTypeName::new("TransferResult"), fields);
+        fields.insert(FieldName::expect_valid("dv1"), scalar(100.0));
+        fields.insert(FieldName::expect_valid("dv2"), scalar(200.0));
+        let val = test_struct(StructTypeName::expect_valid("TransferResult"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "TransferResult(dv1: 100, dv2: 200)"
@@ -1568,7 +1568,7 @@ mod tests {
     #[test]
     fn format_struct_empty_fields() {
         let symbols = empty_symbols();
-        let val = test_struct(StructTypeName::new("Nominal"), IndexMap::new());
+        let val = test_struct(StructTypeName::expect_valid("Nominal"), IndexMap::new());
         assert_eq!(format_value_inline(&val, &symbols), "Nominal");
     }
 
@@ -1576,9 +1576,9 @@ mod tests {
     fn format_struct_multi_variant() {
         let symbols = empty_symbols();
         let mut fields = IndexMap::new();
-        fields.insert(FieldName::new("thrust"), scalar(0.5));
-        fields.insert(FieldName::new("duration"), scalar(3600.0));
-        let val = test_struct(StructTypeName::new("LowThrust"), fields);
+        fields.insert(FieldName::expect_valid("thrust"), scalar(0.5));
+        fields.insert(FieldName::expect_valid("duration"), scalar(3600.0));
+        let val = test_struct(StructTypeName::expect_valid("LowThrust"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "LowThrust(thrust: 0.5, duration: 3600)"
@@ -1635,17 +1635,17 @@ mod tests {
     fn format_indexed() {
         let symbols = empty_symbols();
         let mut entries = IndexMap::new();
-        entries.insert(IndexVariantName::new("A"), scalar(1.0));
-        entries.insert(IndexVariantName::new("B"), scalar(2.0));
-        entries.insert(IndexVariantName::new("C"), scalar(3.0));
-        let val = test_indexed(IndexName::new("Phase"), entries);
+        entries.insert(IndexVariantName::expect_valid("A"), scalar(1.0));
+        entries.insert(IndexVariantName::expect_valid("B"), scalar(2.0));
+        entries.insert(IndexVariantName::expect_valid("C"), scalar(3.0));
+        let val = test_indexed(IndexName::expect_valid("Phase"), entries);
         assert_eq!(format_value_inline(&val, &symbols), "{ A: 1, B: 2, C: 3 }");
     }
 
     #[test]
     fn format_indexed_empty() {
         let symbols = empty_symbols();
-        let val = test_indexed(IndexName::new("Phase"), IndexMap::new());
+        let val = test_indexed(IndexName::expect_valid("Phase"), IndexMap::new());
         assert_eq!(format_value_inline(&val, &symbols), "{}");
     }
 
@@ -1654,11 +1654,23 @@ mod tests {
         let symbols = empty_symbols();
         let mut entries = IndexMap::new();
         // Create entries with long names to trigger truncation at 80 chars
-        entries.insert(IndexVariantName::new("LongVariantAlpha"), scalar(1.23456));
-        entries.insert(IndexVariantName::new("LongVariantBeta"), scalar(2.34567));
-        entries.insert(IndexVariantName::new("LongVariantGamma"), scalar(3.45678));
-        entries.insert(IndexVariantName::new("LongVariantDelta"), scalar(4.56789));
-        let val = test_indexed(IndexName::new("Idx"), entries);
+        entries.insert(
+            IndexVariantName::expect_valid("LongVariantAlpha"),
+            scalar(1.23456),
+        );
+        entries.insert(
+            IndexVariantName::expect_valid("LongVariantBeta"),
+            scalar(2.34567),
+        );
+        entries.insert(
+            IndexVariantName::expect_valid("LongVariantGamma"),
+            scalar(3.45678),
+        );
+        entries.insert(
+            IndexVariantName::expect_valid("LongVariantDelta"),
+            scalar(4.56789),
+        );
+        let val = test_indexed(IndexName::expect_valid("Idx"), entries);
         let result = format_value_inline(&val, &symbols);
         assert!(
             result.len() <= INLAY_HINT_MAX_LEN + 10,
@@ -1671,11 +1683,11 @@ mod tests {
     fn format_struct_inside_indexed() {
         let symbols = empty_symbols();
         let mut fields = IndexMap::new();
-        fields.insert(FieldName::new("x"), scalar(1.0));
-        let struct_val = test_struct(StructTypeName::new("Point"), fields);
+        fields.insert(FieldName::expect_valid("x"), scalar(1.0));
+        let struct_val = test_struct(StructTypeName::expect_valid("Point"), fields);
         let mut entries = IndexMap::new();
-        entries.insert(IndexVariantName::new("A"), struct_val);
-        let val = test_indexed(IndexName::new("Idx"), entries);
+        entries.insert(IndexVariantName::expect_valid("A"), struct_val);
+        let val = test_indexed(IndexName::expect_valid("Idx"), entries);
         assert_eq!(format_value_inline(&val, &symbols), "{ A: Point(x: 1) }");
     }
 
@@ -1683,21 +1695,21 @@ mod tests {
     fn format_nested_indexed_tuple_keyed() {
         let symbols = empty_symbols();
         let mut inner_a = IndexMap::new();
-        inner_a.insert(IndexVariantName::new("X"), scalar(1.0));
-        inner_a.insert(IndexVariantName::new("Y"), scalar(2.0));
+        inner_a.insert(IndexVariantName::expect_valid("X"), scalar(1.0));
+        inner_a.insert(IndexVariantName::expect_valid("Y"), scalar(2.0));
         let mut inner_b = IndexMap::new();
-        inner_b.insert(IndexVariantName::new("X"), scalar(3.0));
-        inner_b.insert(IndexVariantName::new("Y"), scalar(4.0));
+        inner_b.insert(IndexVariantName::expect_valid("X"), scalar(3.0));
+        inner_b.insert(IndexVariantName::expect_valid("Y"), scalar(4.0));
         let mut entries = IndexMap::new();
         entries.insert(
-            IndexVariantName::new("A"),
-            test_indexed(IndexName::new("Col"), inner_a),
+            IndexVariantName::expect_valid("A"),
+            test_indexed(IndexName::expect_valid("Col"), inner_a),
         );
         entries.insert(
-            IndexVariantName::new("B"),
-            test_indexed(IndexName::new("Col"), inner_b),
+            IndexVariantName::expect_valid("B"),
+            test_indexed(IndexName::expect_valid("Col"), inner_b),
         );
-        let val = test_indexed(IndexName::new("Row"), entries);
+        let val = test_indexed(IndexName::expect_valid("Row"), entries);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "{ (A, X): 1, (A, Y): 2, (B, X): 3, (B, Y): 4 }"
@@ -1709,18 +1721,18 @@ mod tests {
         let symbols = empty_symbols();
         // 3-level nesting: Scenario[Phase[Maneuver[scalar]]]
         let mut inner_most = IndexMap::new();
-        inner_most.insert(IndexVariantName::new("Dep"), scalar(100.0));
+        inner_most.insert(IndexVariantName::expect_valid("Dep"), scalar(100.0));
         let mut mid = IndexMap::new();
         mid.insert(
-            IndexVariantName::new("Launch"),
-            test_indexed(IndexName::new("Maneuver"), inner_most),
+            IndexVariantName::expect_valid("Launch"),
+            test_indexed(IndexName::expect_valid("Maneuver"), inner_most),
         );
         let mut outer = IndexMap::new();
         outer.insert(
-            IndexVariantName::new("Nom"),
-            test_indexed(IndexName::new("Phase"), mid),
+            IndexVariantName::expect_valid("Nom"),
+            test_indexed(IndexName::expect_valid("Phase"), mid),
         );
-        let val = test_indexed(IndexName::new("Scenario"), outer);
+        let val = test_indexed(IndexName::expect_valid("Scenario"), outer);
         assert_eq!(
             format_value_inline(&val, &symbols),
             "{ (Nom, Launch, Dep): 100 }"
@@ -1731,23 +1743,41 @@ mod tests {
     fn format_nested_indexed_truncation() {
         let symbols = empty_symbols();
         let mut inner_a = IndexMap::new();
-        inner_a.insert(IndexVariantName::new("LongNameAlpha"), scalar(1.23456));
-        inner_a.insert(IndexVariantName::new("LongNameBeta"), scalar(2.34567));
-        inner_a.insert(IndexVariantName::new("LongNameGamma"), scalar(3.45678));
+        inner_a.insert(
+            IndexVariantName::expect_valid("LongNameAlpha"),
+            scalar(1.23456),
+        );
+        inner_a.insert(
+            IndexVariantName::expect_valid("LongNameBeta"),
+            scalar(2.34567),
+        );
+        inner_a.insert(
+            IndexVariantName::expect_valid("LongNameGamma"),
+            scalar(3.45678),
+        );
         let mut inner_b = IndexMap::new();
-        inner_b.insert(IndexVariantName::new("LongNameAlpha"), scalar(4.56789));
-        inner_b.insert(IndexVariantName::new("LongNameBeta"), scalar(5.6789));
-        inner_b.insert(IndexVariantName::new("LongNameGamma"), scalar(6.7891));
+        inner_b.insert(
+            IndexVariantName::expect_valid("LongNameAlpha"),
+            scalar(4.56789),
+        );
+        inner_b.insert(
+            IndexVariantName::expect_valid("LongNameBeta"),
+            scalar(5.6789),
+        );
+        inner_b.insert(
+            IndexVariantName::expect_valid("LongNameGamma"),
+            scalar(6.7891),
+        );
         let mut entries = IndexMap::new();
         entries.insert(
-            IndexVariantName::new("LongOuter1"),
-            test_indexed(IndexName::new("Inner"), inner_a),
+            IndexVariantName::expect_valid("LongOuter1"),
+            test_indexed(IndexName::expect_valid("Inner"), inner_a),
         );
         entries.insert(
-            IndexVariantName::new("LongOuter2"),
-            test_indexed(IndexName::new("Inner"), inner_b),
+            IndexVariantName::expect_valid("LongOuter2"),
+            test_indexed(IndexName::expect_valid("Inner"), inner_b),
         );
-        let val = test_indexed(IndexName::new("Outer"), entries);
+        let val = test_indexed(IndexName::expect_valid("Outer"), entries);
         let result = format_value_inline(&val, &symbols);
         assert!(
             result.len() <= INLAY_HINT_MAX_LEN + 10,

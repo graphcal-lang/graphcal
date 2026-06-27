@@ -125,7 +125,7 @@ impl Parser<'_> {
         ident: &crate::syntax::ast::Ident,
     ) -> Result<UnionMember, ParseError> {
         let start_span = ident.span;
-        let name = Spanned::new(ConstructorName::new(&ident.name), ident.span);
+        let name = Spanned::new(ConstructorName::from_atom(ident.name.clone()), ident.span);
 
         let (payload, end_span) = match self.lexer.peek() {
             Some(&Token::LParen) => {
@@ -172,7 +172,7 @@ impl Parser<'_> {
             self.expect(Token::Colon)?;
             let type_ann = self.parse_type_expr()?;
             fields.push(FieldDecl {
-                name: Spanned::new(FieldName::new(&ident.name), ident.span),
+                name: Spanned::new(FieldName::from_atom(ident.name), ident.span),
                 type_ann,
             });
             match self.lexer.peek() {

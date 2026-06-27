@@ -101,7 +101,7 @@ pub fn extract_pub_names(file: &File) -> HashSet<DeclName> {
                     {
                         for item in items {
                             if item.is_pub {
-                                pub_names.insert(DeclName::new(item.local_name()));
+                                pub_names.insert(DeclName::expect_valid(item.local_name()));
                             }
                         }
                     }
@@ -112,7 +112,7 @@ pub fn extract_pub_names(file: &File) -> HashSet<DeclName> {
                     {
                         for item in items {
                             if item.is_pub {
-                                pub_names.insert(DeclName::new(item.local_name()));
+                                pub_names.insert(DeclName::expect_valid(item.local_name()));
                             }
                         }
                     }
@@ -122,7 +122,7 @@ pub fn extract_pub_names(file: &File) -> HashSet<DeclName> {
             continue;
         }
         if let Some(identity) = decl_identity(decl) {
-            pub_names.insert(DeclName::new(identity.name));
+            pub_names.insert(DeclName::expect_valid(identity.name));
         }
     }
     pub_names

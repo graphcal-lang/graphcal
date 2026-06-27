@@ -277,7 +277,7 @@ fn classify_param_bindings(
         let binding_name = &binding.name.name;
         if dep_index.params.contains(binding_name.as_str()) {
             out.params
-                .insert(DeclName::new(binding_name), binding.value.clone());
+                .insert(DeclName::expect_valid(binding_name), binding.value.clone());
             continue;
         }
         if dep_index.types.contains(binding_name.as_str()) {
@@ -287,8 +287,8 @@ fn classify_param_bindings(
                 file_src,
             )?;
             out.types.insert(
-                StructTypeName::new(binding_name),
-                StructTypeName::new(rhs_name),
+                StructTypeName::expect_valid(binding_name),
+                StructTypeName::expect_valid(rhs_name),
             );
             continue;
         }
@@ -298,8 +298,10 @@ fn classify_param_bindings(
                 binding_name,
                 file_src,
             )?;
-            out.dims
-                .insert(DimName::new(binding_name), DimName::new(rhs_name));
+            out.dims.insert(
+                DimName::expect_valid(binding_name),
+                DimName::expect_valid(rhs_name),
+            );
             continue;
         }
         if dep_index.indexes.contains_key(binding_name.as_str()) {
@@ -308,8 +310,10 @@ fn classify_param_bindings(
                 binding_name,
                 file_src,
             )?;
-            out.indexes
-                .insert(IndexName::new(binding_name), IndexName::new(rhs_name));
+            out.indexes.insert(
+                IndexName::expect_valid(binding_name),
+                IndexName::expect_valid(rhs_name),
+            );
             continue;
         }
         if let Some(kind) = dep_index.other.get(binding_name.as_str()) {
@@ -520,9 +524,9 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                     // The requested plot merges into the root namespace under
                     // its local alias, evaluating against this instance (#847).
                     requested_plots.insert(
-                        DeclName::new(orig_name),
+                        DeclName::expect_valid(orig_name),
                         graphcal_compiler::ir::lower::RequestedPlot {
-                            alias: DeclName::new(&local_name),
+                            alias: DeclName::expect_valid(&local_name),
                             hidden,
                         },
                     );
@@ -535,8 +539,10 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
 
                 // Collect import-item attributes for deferred processing.
                 if !import_item.attributes.is_empty() {
-                    import_item_attributes
-                        .insert(DeclName::new(orig_name), import_item.attributes.clone());
+                    import_item_attributes.insert(
+                        DeclName::expect_valid(orig_name),
+                        import_item.attributes.clone(),
+                    );
                 }
 
                 // Register the local name in scope for the resolver.
@@ -565,8 +571,8 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 }
 
                 selective.push(ImportAlias {
-                    original: DeclName::new(orig_name),
-                    local: DeclName::new(local_name),
+                    original: DeclName::expect_valid(orig_name),
+                    local: DeclName::expect_valid(local_name),
                 });
             }
             Some(selective)
@@ -622,7 +628,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
             .filter(|it| it.is_pub)
-            .map(|it| DeclName::new(&it.name.name))
+            .map(|it| DeclName::from_atom(it.name.name.clone()))
             .collect(),
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
@@ -677,10 +683,10 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     // Determine the prefix (namespace) for the merged declarations.
     let prefix = match &include_decl.kind {
         ImportKind::Module { alias } => alias.as_ref().map_or_else(
-            || ModuleAliasName::new(dag_name),
+            || ModuleAliasName::expect_valid(dag_name),
             |alias_ident| alias_ident.value.clone(),
         ),
-        ImportKind::Selective(_) => ModuleAliasName::new(dag_name),
+        ImportKind::Selective(_) => ModuleAliasName::expect_valid(dag_name),
     };
 
     // Check for duplicate module names. The map records the inline DAG's
@@ -746,9 +752,9 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                 let hidden = include_item_hidden_flag(import_item, is_plot, file_src)?;
                 if is_plot {
                     requested_plots.insert(
-                        DeclName::new(orig_name),
+                        DeclName::expect_valid(orig_name),
                         graphcal_compiler::ir::lower::RequestedPlot {
-                            alias: DeclName::new(&local_name),
+                            alias: DeclName::expect_valid(&local_name),
                             hidden,
                         },
                     );
@@ -760,8 +766,10 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                 }
 
                 if !import_item.attributes.is_empty() {
-                    import_item_attributes
-                        .insert(DeclName::new(orig_name), import_item.attributes.clone());
+                    import_item_attributes.insert(
+                        DeclName::expect_valid(orig_name),
+                        import_item.attributes.clone(),
+                    );
                 }
 
                 // Register the local name in scope.
@@ -783,8 +791,8 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                 }
 
                 selective.push(ImportAlias {
-                    original: DeclName::new(orig_name),
-                    local: DeclName::new(local_name),
+                    original: DeclName::expect_valid(orig_name),
+                    local: DeclName::expect_valid(local_name),
                 });
             }
             Some(selective)
@@ -827,7 +835,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
             .filter(|it| it.is_pub)
-            .map(|it| DeclName::new(&it.name.name))
+            .map(|it| DeclName::from_atom(it.name.name.clone()))
             .collect(),
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
@@ -1045,7 +1053,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                         // We just need to make the name visible for #[assumes].
                         ctx.imported_names
                             .assert_names
-                            .push((DeclName::new(&local_name), import_item.name.span));
+                            .push((DeclName::expect_valid(&local_name), import_item.name.span));
                     }
                     SelectiveImportResult::NotFound => {
                         if is_default_namespace
@@ -1244,7 +1252,7 @@ pub(in crate::eval::project) fn import_selective_item(
 ) -> Result<SelectiveImportResult, CompileError> {
     // The dep's `declared_types` is keyed by typed `ScopedName`. Its top-level
     // declarations are always bare locals, so wrap the bare member name.
-    let orig_decl = DeclName::new(orig_name);
+    let orig_decl = DeclName::expect_valid(orig_name);
     if let Some(rv) = dep.const_values.get(&orig_decl) {
         let dt = imported_declared_type(dep, &orig_decl, src, span)?;
         let scoped = ScopedName::local(local_name);
@@ -1381,8 +1389,8 @@ mod tests {
     fn import_selective_item_errors_when_declared_type_is_missing() {
         let mut dep = empty_evaluated_file();
         dep.const_values
-            .insert(DeclName::new("g0"), RuntimeValue::Scalar(9.80665));
-        dep.pub_names.insert(DeclName::new("g0"));
+            .insert(DeclName::expect_valid("g0"), RuntimeValue::Scalar(9.80665));
+        dep.pub_names.insert(DeclName::expect_valid("g0"));
 
         let src = NamedSource::new("test.gcl", Arc::new(String::new()));
         let mut imported_names = ImportedValueNames::default();
@@ -1413,8 +1421,8 @@ mod tests {
     fn transitive_const_only_import_skips_runtime_without_registering_it() {
         let mut dep = empty_evaluated_file();
         dep.values
-            .insert(DeclName::new("runtime"), RuntimeValue::Scalar(1.0));
-        dep.pub_names.insert(DeclName::new("runtime"));
+            .insert(DeclName::expect_valid("runtime"), RuntimeValue::Scalar(1.0));
+        dep.pub_names.insert(DeclName::expect_valid("runtime"));
 
         let import_item = graphcal_compiler::desugar::desugared_ast::ImportItem {
             name: graphcal_compiler::desugar::desugared_ast::Ident {

@@ -93,7 +93,7 @@ impl ExprVisitorMut<Desugared> for AliasFieldAccessRewriter<'_> {
             && let ExprKind::GraphRef(qualifier_name) = &inner.kind
             && !qualifier_name.value.is_qualified()
             && self.qualified_pairs.contains(&QualifiedMember {
-                module: ModuleAliasName::new(qualifier_name.value.member()),
+                module: ModuleAliasName::expect_valid(qualifier_name.value.member()),
                 member: DeclName::from_atom(field.value.atom().clone()),
             }) {
             let merged_span = qualifier_name.span.merge(field.span);
@@ -381,8 +381,8 @@ fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<QualifiedMe
     for (scoped, _) in entries {
         if let [module] = scoped.qualifier() {
             pairs.insert(QualifiedMember {
-                module: ModuleAliasName::new(module.as_ref()),
-                member: DeclName::new(scoped.member()),
+                module: ModuleAliasName::expect_valid(module.as_ref()),
+                member: DeclName::expect_valid(scoped.member()),
             });
         }
     }

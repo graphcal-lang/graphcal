@@ -230,7 +230,7 @@ mod tests {
                 "test.gcl",
             ))
             .unwrap(),
-            graphcal_compiler::syntax::names::DeclName::new(name),
+            graphcal_compiler::syntax::names::DeclName::expect_valid(name),
         )
     }
 

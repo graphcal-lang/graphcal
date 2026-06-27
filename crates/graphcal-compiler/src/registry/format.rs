@@ -163,7 +163,10 @@ mod tests {
     fn unit_term(op: MulDivOp, name: &str, power: Option<i32>) -> UnitExprItem {
         UnitExprItem {
             op,
-            name: Spanned::new(UnitRef::local(UnitName::new(name)), Span::new(0, 0)),
+            name: Spanned::new(
+                UnitRef::local(UnitName::expect_valid(name)),
+                Span::new(0, 0),
+            ),
             power: power.map(Rational::from),
         }
     }

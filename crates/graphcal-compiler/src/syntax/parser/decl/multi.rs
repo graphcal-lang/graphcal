@@ -624,7 +624,7 @@ impl Parser<'_> {
                     let variant = self.parse_any_ident()?;
                     let span = ident.span.merge(variant.span);
                     return Ok(HeaderCell::Variant {
-                        axis: Some(Spanned::new(IndexName::new(&ident.name), ident.span)),
+                        axis: Some(Spanned::new(IndexName::from_atom(ident.name), ident.span)),
                         variant: variant.into_spanned::<IndexVariantName>(),
                         span,
                     });

@@ -290,7 +290,7 @@ fn top_level_const_values(
             const_values
                 .get(&key)
                 .cloned()
-                .map(|value| (DeclName::new(entry.name.member()), value))
+                .map(|value| (DeclName::expect_valid(entry.name.member()), value))
         })
         .collect()
 }
@@ -370,7 +370,7 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
         .iter()
         .chain(compiled.included_plots.iter())
         .filter(|spec| !spec.name.is_qualified())
-        .map(|spec| (DeclName::new(spec.name.member()), spec.clone()))
+        .map(|spec| (DeclName::expect_valid(spec.name.member()), spec.clone()))
         .collect();
 
     evaluated_files.insert(
@@ -760,7 +760,10 @@ pub(in crate::eval::project) fn route_overrides_to_files(
                         if is_param {
                             result.insert(
                                 override_name.clone(),
-                                (import_canonical.clone(), DeclName::new(orig_name.clone())),
+                                (
+                                    import_canonical.clone(),
+                                    DeclName::expect_valid(orig_name.clone()),
+                                ),
                             );
                             found = true;
                             break;
@@ -825,7 +828,7 @@ pub(super) fn filter_local_runtime_values(
             values
                 .get(&key)
                 .cloned()
-                .map(|value| (DeclName::new(name.member()), value))
+                .map(|value| (DeclName::expect_valid(name.member()), value))
         })
         .collect()
 }

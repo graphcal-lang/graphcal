@@ -1030,7 +1030,10 @@ mod tests {
     }
 
     fn resolved_key(name: &str) -> RuntimeDeclKey {
-        RuntimeDeclKey::resolved(ResolvedName::from_def(test_dag_id(), DeclName::new(name)))
+        RuntimeDeclKey::resolved(ResolvedName::from_def(
+            test_dag_id(),
+            DeclName::expect_valid(name),
+        ))
     }
 
     #[test]
@@ -1100,8 +1103,8 @@ mod tests {
              const node b: Dimensionless = @a + 1.0;",
         );
         let dag_id = tir.root_dag_id.clone();
-        let a = ResolvedName::from_def(dag_id.clone(), DeclName::new("a"));
-        let b = ResolvedName::from_def(dag_id, DeclName::new("b"));
+        let a = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
+        let b = ResolvedName::from_def(dag_id, DeclName::expect_valid("b"));
         let mut resolved = ResolvedDagDependencies::default();
         resolved.const_deps.insert(a.clone(), BTreeSet::new());
         resolved.const_deps.insert(b, BTreeSet::from([a]));
@@ -1112,7 +1115,7 @@ mod tests {
             (scalar(
                 &plan.const_values[&RuntimeDeclKey::resolved(ResolvedName::from_def(
                     tir.root_dag_id.clone(),
-                    DeclName::new("b")
+                    DeclName::expect_valid("b")
                 ))]
             ) - 2.0)
                 .abs()
@@ -1129,8 +1132,8 @@ mod tests {
              node b: Dimensionless = @a + 1.0;",
         );
         let dag_id = tir.root_dag_id.clone();
-        let a = ResolvedName::from_def(dag_id.clone(), DeclName::new("a"));
-        let b = ResolvedName::from_def(dag_id, DeclName::new("b"));
+        let a = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
+        let b = ResolvedName::from_def(dag_id, DeclName::expect_valid("b"));
         let mut resolved = ResolvedDagDependencies::default();
         resolved.runtime_deps.insert(a.clone(), BTreeSet::new());
         resolved.runtime_deps.insert(b, BTreeSet::from([a]));
@@ -1143,7 +1146,7 @@ mod tests {
             .position(|name| {
                 name == &RuntimeDeclKey::resolved(ResolvedName::from_def(
                     tir.root_dag_id.clone(),
-                    DeclName::new("a"),
+                    DeclName::expect_valid("a"),
                 ))
             })
             .unwrap();
@@ -1153,7 +1156,7 @@ mod tests {
             .position(|name| {
                 name == &RuntimeDeclKey::resolved(ResolvedName::from_def(
                     tir.root_dag_id.clone(),
-                    DeclName::new("b"),
+                    DeclName::expect_valid("b"),
                 ))
             })
             .unwrap();

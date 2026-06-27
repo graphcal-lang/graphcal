@@ -1857,9 +1857,12 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
             SymbolCategory::Unit => {
                 // Definition symbols are file-local declarations, so the
                 // registry key is always the bare reference.
-                if let Some(unit_info) = registry
-                    .units
-                    .get_unit(&graphcal_compiler::syntax::names::UnitRef::local(name))
+                if let Some(unit_info) =
+                    registry
+                        .units
+                        .get_unit(&graphcal_compiler::syntax::names::UnitRef::local(
+                            graphcal_compiler::syntax::names::UnitName::expect_valid(name),
+                        ))
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     let scale_str = match &unit_info.scale {

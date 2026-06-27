@@ -253,23 +253,6 @@ impl<Ns: NameNamespace> std::fmt::Debug for NameDef<Ns> {
 }
 
 impl<Ns: NameNamespace> NameDef<Ns> {
-    /// Create a new leaf name from a string.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the string is empty or contains `.`. Use [`Self::try_new`]
-    /// when validating external input.
-    #[must_use]
-    #[expect(
-        clippy::panic,
-        reason = "infallible constructor documents invalid input panic"
-    )]
-    pub fn new(s: impl Into<String>) -> Self {
-        Self::try_new(s).unwrap_or_else(|err| {
-            panic!("invalid {} leaf name: {err}", Ns::DISPLAY_NAME);
-        })
-    }
-
     /// Try to create a new leaf name from a string.
     ///
     /// # Errors
@@ -278,6 +261,20 @@ impl<Ns: NameNamespace> NameDef<Ns> {
     /// separator.
     pub fn try_new(s: impl Into<String>) -> Result<Self, NameAtomError> {
         NameAtom::parse(s).map(Self::from_atom)
+    }
+
+    /// Create a leaf name from trusted text, panicking if invalid.
+    ///
+    /// Prefer [`Self::try_new`] for external input. This helper keeps panic
+    /// policy explicit at trusted call sites without exposing a generic
+    /// panicking `new` constructor.
+    #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "trusted constructor centralizes explicit panic policy"
+    )]
+    pub fn expect_valid(s: impl Into<String>) -> Self {
+        Self::try_new(s).expect("trusted leaf name must be valid")
     }
 
     /// Create this namespace-specific name from an existing atom.
@@ -350,15 +347,19 @@ impl<Ns: NameNamespace> From<NameAtom> for NameDef<Ns> {
     }
 }
 
-impl<Ns: NameNamespace> From<String> for NameDef<Ns> {
-    fn from(s: String) -> Self {
-        Self::new(s)
+impl<Ns: NameNamespace> TryFrom<String> for NameDef<Ns> {
+    type Error = NameAtomError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Self::try_new(s)
     }
 }
 
-impl<Ns: NameNamespace> From<&str> for NameDef<Ns> {
-    fn from(s: &str) -> Self {
-        Self::new(s)
+impl<Ns: NameNamespace> TryFrom<&str> for NameDef<Ns> {
+    type Error = NameAtomError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        Self::try_new(s)
     }
 }
 
@@ -498,7 +499,7 @@ impl IndexVariantName {
     /// parser, and evaluator can't disagree on it.
     #[must_use]
     pub fn range_step(n: impl std::fmt::Display) -> Self {
-        Self::new(format!("#{n}"))
+        Self::expect_valid(format!("#{n}"))
     }
 
     /// Pair this variant with its index name for qualified rendering.
@@ -1011,52 +1012,58 @@ mod tests {
 
     #[test]
     fn newtype_display() {
-        let name = DeclName::new("dry_mass");
+        let name = DeclName::expect_valid("dry_mass");
         assert_eq!(format!("{name}"), "dry_mass");
     }
 
     #[test]
     fn newtype_as_str() {
-        let name = DimName::new("Length");
+        let name = DimName::expect_valid("Length");
         assert_eq!(name.as_str(), "Length");
     }
 
     #[test]
     fn newtype_into_inner() {
-        let name = UnitName::new("km");
+        let name = UnitName::expect_valid("km");
         assert_eq!(name.into_inner(), "km");
     }
 
     #[test]
     fn newtype_hash_map_borrow_lookup() {
         let mut map = HashMap::new();
-        map.insert(DeclName::new("x"), 42);
+        map.insert(DeclName::expect_valid("x"), 42);
         // Lookup with &str via Borrow<str>
         assert_eq!(map.get("x"), Some(&42));
     }
 
     #[test]
-    fn newtype_from_string() {
-        let name: FieldName = "dv1".to_string().into();
+    fn newtype_try_from_string() {
+        let name = FieldName::try_from("dv1".to_string()).unwrap();
         assert_eq!(name.as_str(), "dv1");
     }
 
     #[test]
-    fn newtype_from_str() {
-        let name: IndexVariantName = "Departure".into();
+    fn newtype_try_from_str() {
+        let name = IndexVariantName::try_from("Departure").unwrap();
         assert_eq!(name.as_str(), "Departure");
     }
 
     #[test]
     fn newtype_equality() {
-        assert_eq!(IndexName::new("Maneuver"), IndexName::new("Maneuver"));
-        assert_ne!(IndexName::new("Maneuver"), IndexName::new("Phase"));
+        assert_eq!(
+            IndexName::expect_valid("Maneuver"),
+            IndexName::expect_valid("Maneuver")
+        );
+        assert_ne!(
+            IndexName::expect_valid("Maneuver"),
+            IndexName::expect_valid("Phase")
+        );
     }
 
     #[test]
     fn newtype_ord() {
-        let a = FnName::new("alpha");
-        let b = FnName::new("beta");
+        let a = FnName::expect_valid("alpha");
+        let b = FnName::expect_valid("beta");
         assert!(a < b);
     }
 
@@ -1079,8 +1086,8 @@ mod tests {
 
     #[test]
     fn name_def_aliases_keep_namespace_and_leaf_invariant() {
-        let decl = DeclName::new("x");
-        let index = IndexName::new("x");
+        let decl = DeclName::expect_valid("x");
+        let index = IndexName::expect_valid("x");
 
         assert_eq!(decl.as_str(), index.as_str());
         assert_eq!(
@@ -1095,7 +1102,7 @@ mod tests {
 
     #[test]
     fn resolved_name_carries_canonical_owner_and_leaf() {
-        let name = DeclName::new("dry_mass");
+        let name = DeclName::expect_valid("dry_mass");
         let resolved = ResolvedName::<namespace::Decl>::from_def(
             crate::dag_id::DagId::new(
                 "test",
@@ -1107,16 +1114,19 @@ mod tests {
         assert_eq!(resolved.owner().to_string(), "helpers.mass");
         assert_eq!(resolved.as_str(), "dry_mass");
         assert_eq!(resolved.to_string(), "helpers.mass.dry_mass");
-        assert_eq!(resolved.to_unowned_def_name(), DeclName::new("dry_mass"));
+        assert_eq!(
+            resolved.to_unowned_def_name(),
+            DeclName::expect_valid("dry_mass")
+        );
     }
 
     #[test]
     fn resolved_index_variant_carries_resolved_index_owner() {
         let index = ResolvedName::<namespace::Index>::from_def(
             crate::dag_id::DagId::root_in_package("test", "mission"),
-            IndexName::new("Phase"),
+            IndexName::expect_valid("Phase"),
         );
-        let variant = ResolvedIndexVariant::new(index, IndexVariantName::new("Burn"));
+        let variant = ResolvedIndexVariant::new(index, IndexVariantName::expect_valid("Burn"));
 
         assert_eq!(variant.index().owner().to_string(), "mission");
         assert_eq!(variant.index().as_str(), "Phase");

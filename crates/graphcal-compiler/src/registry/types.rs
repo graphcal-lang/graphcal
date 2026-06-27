@@ -471,7 +471,7 @@ impl NatRangeIndex {
     /// Render this identity for diagnostics as source-level `range(N)` syntax.
     #[must_use]
     pub fn display_name(self) -> IndexName {
-        IndexName::new(format!("range({})", self.size_u64()))
+        IndexName::expect_valid(format!("range({})", self.size_u64()))
     }
 }
 
@@ -1353,7 +1353,10 @@ mod tests {
     }
 
     fn make_unit_name(name: &str) -> Spanned<UnitRef> {
-        Spanned::new(UnitRef::local(UnitName::new(name)), Span::new(0, 0))
+        Spanned::new(
+            UnitRef::local(UnitName::expect_valid(name)),
+            Span::new(0, 0),
+        )
     }
 
     #[test]
@@ -1384,7 +1387,10 @@ mod tests {
     #[test]
     fn registry_base_units() {
         let r = make_registry();
-        let m = r.units.get_unit(&UnitRef::local("m")).unwrap();
+        let m = r
+            .units
+            .get_unit(&UnitRef::local(UnitName::expect_valid("m")))
+            .unwrap();
         assert_eq!(m.dimension, Dimension::base(length_id()));
         assert!((m.scale.as_static().unwrap() - 1.0).abs() < f64::EPSILON);
     }
@@ -1392,7 +1398,10 @@ mod tests {
     #[test]
     fn registry_derived_units() {
         let r = make_registry();
-        let km = r.units.get_unit(&UnitRef::local("km")).unwrap();
+        let km = r
+            .units
+            .get_unit(&UnitRef::local(UnitName::expect_valid("km")))
+            .unwrap();
         assert_eq!(km.dimension, Dimension::base(length_id()));
         assert!((km.scale.as_static().unwrap() - 1000.0).abs() < f64::EPSILON);
     }
@@ -1486,18 +1495,18 @@ mod tests {
         // Record-shaped types are single-variant unions whose sole
         // constructor's name matches the type's name.
         b.register_type(TypeDef {
-            name: StructTypeName::new("TransferResult"),
+            name: StructTypeName::expect_valid("TransferResult"),
             generic_params: vec![],
             kind: TypeDefKind::Union {
                 members: vec![UnionMemberDef {
-                    name: ConstructorName::new("TransferResult"),
+                    name: ConstructorName::expect_valid("TransferResult"),
                     fields: vec![
                         StructField {
-                            name: FieldName::new("dv1"),
+                            name: FieldName::expect_valid("dv1"),
                             type_ann: make_dim_type_expr("Velocity"),
                         },
                         StructField {
-                            name: FieldName::new("dv2"),
+                            name: FieldName::expect_valid("dv2"),
                             type_ann: make_dim_type_expr("Velocity"),
                         },
                     ],
@@ -1524,12 +1533,12 @@ mod tests {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
         b.register_index(IndexDef {
-            name: IndexName::new("Maneuver"),
+            name: IndexName::expect_valid("Maneuver"),
             kind: IndexKind::Named {
                 variants: vec![
-                    IndexVariantName::new("Departure"),
-                    IndexVariantName::new("Correction"),
-                    IndexVariantName::new("Insertion"),
+                    IndexVariantName::expect_valid("Departure"),
+                    IndexVariantName::expect_valid("Correction"),
+                    IndexVariantName::expect_valid("Insertion"),
                 ],
             },
         });
@@ -1545,7 +1554,10 @@ mod tests {
     #[test]
     fn registry_try_build_reports_missing_dimension_base_name() {
         let mut b = RegistryBuilder::new();
-        b.register_dimension(DimName::new("Broken"), Dimension::base(length_id()));
+        b.register_dimension(
+            DimName::expect_valid("Broken"),
+            Dimension::base(length_id()),
+        );
 
         let err = b.try_build().unwrap_err();
         assert_eq!(
@@ -1565,7 +1577,7 @@ mod tests {
             dag: crate::dag_id::DagId::root_in_package("test", "test"),
             name: "Information".to_string(),
         };
-        let id = b.register_base_dimension(DimName::new("Information"), info_id.clone());
+        let id = b.register_base_dimension(DimName::expect_valid("Information"), info_id.clone());
         assert_eq!(id, info_id);
         let r = b.try_build().unwrap();
         // Should be retrievable
@@ -1582,7 +1594,7 @@ mod tests {
     fn register_base_dimension_with_symbol() {
         let mut b = RegistryBuilder::new();
         let id = b.register_base_dimension_with_symbol(
-            DimName::new("Length"),
+            DimName::expect_valid("Length"),
             BaseDimId::Prelude("Length".to_string()),
             "m".to_string(),
         );
@@ -1600,7 +1612,7 @@ mod tests {
             dag: crate::dag_id::DagId::root_in_package("test", "test"),
             name: "Information".to_string(),
         };
-        let id = b.register_base_dimension(DimName::new("Information"), info_id);
+        let id = b.register_base_dimension(DimName::expect_valid("Information"), info_id);
         b.set_base_dim_symbol(id.clone(), "bit".to_string());
         // Second call should not overwrite
         b.set_base_dim_symbol(id.clone(), "byte".to_string());

@@ -347,9 +347,9 @@ mod tests {
     fn indexed_1d(name: &str, pairs: &[(&str, Value)]) -> Value {
         let mut entries = IndexMap::new();
         for (k, v) in pairs {
-            entries.insert(IndexVariantName::new(*k), v.clone());
+            entries.insert(IndexVariantName::expect_valid(*k), v.clone());
         }
-        Value::indexed_with_owner(test_owner(), IndexName::new(name), entries)
+        Value::indexed_with_owner(test_owner(), IndexName::expect_valid(name), entries)
     }
 
     #[test]
@@ -416,9 +416,10 @@ mod tests {
     #[test]
     fn flatten_struct_expands_to_field_entries() {
         let mut fields = IndexMap::new();
-        fields.insert(FieldName::new("x"), scalar(1.0));
-        fields.insert(FieldName::new("y"), scalar(2.0));
-        let s = Value::struct_with_owner(test_owner(), StructTypeName::new("Pair"), fields);
+        fields.insert(FieldName::expect_valid("x"), scalar(1.0));
+        fields.insert(FieldName::expect_valid("y"), scalar(2.0));
+        let s =
+            Value::struct_with_owner(test_owner(), StructTypeName::expect_valid("Pair"), fields);
         let mut out = Vec::new();
         flatten_value("p", &s, &mut out);
         let names: Vec<&str> = out
@@ -432,8 +433,11 @@ mod tests {
 
     #[test]
     fn flatten_empty_struct_keeps_single_entry() {
-        let s =
-            Value::struct_with_owner(test_owner(), StructTypeName::new("Unit"), IndexMap::new());
+        let s = Value::struct_with_owner(
+            test_owner(),
+            StructTypeName::expect_valid("Unit"),
+            IndexMap::new(),
+        );
         let mut out = Vec::new();
         flatten_value("u", &s, &mut out);
         assert_eq!(out.len(), 1);

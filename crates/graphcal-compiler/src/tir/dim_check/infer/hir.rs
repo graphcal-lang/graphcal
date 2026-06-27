@@ -679,7 +679,7 @@ fn infer_hir_fn_call(
         Some(crate::registry::resolve_types::SpecialFnKind::DatetimeFrom(_)) => {
             if args.len() != 1 {
                 return Err(GraphcalError::WrongArity {
-                    name: crate::syntax::names::FnName::new(name.as_str()),
+                    name: crate::syntax::names::FnName::expect_valid(name.as_str()),
                     expected: 1,
                     got: args.len(),
                     src: src.clone(),
@@ -770,7 +770,7 @@ fn infer_hir_builtin_fn(
     };
     if args.len() != func.dim_sig.params.len() {
         return Err(GraphcalError::WrongArity {
-            name: crate::syntax::names::FnName::new(name.as_str()),
+            name: crate::syntax::names::FnName::expect_valid(name.as_str()),
             expected: func.dim_sig.params.len(),
             got: args.len(),
             src: src.clone(),
@@ -821,7 +821,7 @@ fn infer_hir_type_conversion(
     let expected_arity = 1;
     if args.len() != expected_arity {
         return Err(GraphcalError::WrongArity {
-            name: crate::syntax::names::FnName::new(kind.as_str()),
+            name: crate::syntax::names::FnName::expect_valid(kind.as_str()),
             expected: expected_arity,
             got: args.len(),
             src: src.clone(),
@@ -883,7 +883,7 @@ fn infer_hir_timescale_conversion(
 ) -> Result<InferredType, GraphcalError> {
     if args.len() != 1 {
         return Err(GraphcalError::WrongArity {
-            name: crate::syntax::names::FnName::new(name.as_str()),
+            name: crate::syntax::names::FnName::expect_valid(name.as_str()),
             expected: 1,
             got: args.len(),
             src: src.clone(),
@@ -980,7 +980,7 @@ fn infer_hir_datetime_constructor(
         crate::registry::resolve_types::ConstructorFn::Epoch => {
             if args.len() != 2 {
                 return Err(GraphcalError::WrongArity {
-                    name: crate::syntax::names::FnName::new("epoch"),
+                    name: crate::syntax::names::FnName::expect_valid("epoch"),
                     expected: 2,
                     got: args.len(),
                     src: src.clone(),
@@ -1037,7 +1037,7 @@ fn infer_hir_datetime_unary(
 ) -> Result<InferredType, GraphcalError> {
     if args.len() != 1 {
         return Err(GraphcalError::WrongArity {
-            name: crate::syntax::names::FnName::new(name.as_str()),
+            name: crate::syntax::names::FnName::expect_valid(name.as_str()),
             expected: 1,
             got: args.len(),
             src: src.clone(),
@@ -2162,7 +2162,7 @@ fn infer_hir_constructor_call(
     let extra: Vec<FieldName> = provided_names
         .iter()
         .filter(|name| !def_field_names.contains(**name))
-        .map(|name| FieldName::new(*name))
+        .map(|name| FieldName::expect_valid(*name))
         .collect();
     if !extra.is_empty() {
         return Err(GraphcalError::ExtraFields {
@@ -2372,7 +2372,9 @@ impl MapLiteralVariantKey {
     fn display_index(&self) -> IndexName {
         match self {
             Self::Declared(resolved) => resolved.index().to_unowned_def_name(),
-            Self::NatRange { form, .. } => IndexName::new(format!("range({})", form.format())),
+            Self::NatRange { form, .. } => {
+                IndexName::expect_valid(format!("range({})", form.format()))
+            }
         }
     }
 }
@@ -3026,7 +3028,7 @@ fn infer_hir_match(
                 if !type_name.matches_resolved(&target.owning_type) {
                     return Err(GraphcalError::UnknownField {
                         type_name: type_name.name().clone(),
-                        field_name: FieldName::new(target.variant.name.as_str()),
+                        field_name: FieldName::expect_valid(target.variant.name.as_str()),
                         src: src.clone(),
                         span: constructor.span.into(),
                     });

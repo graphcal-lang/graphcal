@@ -116,7 +116,7 @@ mod tests {
     use graphcal_compiler::syntax::names::DeclName;
 
     fn id(owner: &DagId, name: &str) -> GraphNodeId {
-        GraphNodeId::from_def(owner.clone(), DeclName::new(name))
+        GraphNodeId::from_def(owner.clone(), DeclName::expect_valid(name))
     }
 
     #[test]

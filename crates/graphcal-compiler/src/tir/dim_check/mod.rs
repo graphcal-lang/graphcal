@@ -1503,7 +1503,7 @@ pub fn check_override_dimension(
         declared_types
             .get(&param_key)
             .ok_or_else(|| GraphcalError::OverrideUnknownParam {
-                name: crate::syntax::names::DeclName::new(param_name.to_string()),
+                name: crate::syntax::names::DeclName::expect_valid(param_name.to_string()),
             })?;
     let dag = tir.root();
     let hir_expr = dag

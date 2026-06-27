@@ -274,7 +274,7 @@ pub fn normalize_nat_expr(
                 .iter()
                 .find(|p| p.as_str() == ident.name.as_str())
                 .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: IndexName::new(&ident.name),
+                    name: IndexName::from_atom(ident.name.clone()),
                     src: src.clone(),
                     span: ident.span.into(),
                 })?;
@@ -381,7 +381,7 @@ impl ModuleTypeRegistry {
         for name in crate::registry::prelude::PRELUDE_DIMENSION_NAMES {
             if let Some(dim) = registry.dimensions.get_dimension(name) {
                 self.dimensions.insert(
-                    ResolvedName::from_def(owner.clone(), DimName::new(*name)),
+                    ResolvedName::from_def(owner.clone(), DimName::expect_valid(*name)),
                     dim.clone(),
                 );
             }
@@ -1674,7 +1674,7 @@ fn check_hir_body_policies(
 ) -> Result<(), GraphcalError> {
     let checker = HirPolicyChecker { registry, ctx, src };
     let local = |key: &ResolvedName<namespace::Decl>| key.owner() == ctx.owner;
-    let is_pub = |leaf: &str| pub_names.contains(&DeclName::new(leaf));
+    let is_pub = |leaf: &str| pub_names.contains(&DeclName::expect_valid(leaf));
 
     for (key, expr) in &semantic.expressions.consts {
         checker.check_expr(expr, true, local(key))?;
@@ -1894,7 +1894,7 @@ impl HirPolicyChecker<'_> {
         };
         if matches!(kind, crate::syntax::module_resolve::DeclSymbolKind::Assert) {
             return Err(GraphcalError::GraphRefToAssert {
-                name: DeclName::new(target.value.as_str()),
+                name: DeclName::expect_valid(target.value.as_str()),
                 src: self.src.clone(),
                 span: ref_span.into(),
             });
@@ -1926,7 +1926,11 @@ impl HirPolicyChecker<'_> {
             .resolver
             .modules()
             .get(self.ctx.owner)
-            .and_then(|symbols| symbols.indexes().get(&IndexName::new(index.as_str())))
+            .and_then(|symbols| {
+                symbols
+                    .indexes()
+                    .get(&IndexName::expect_valid(index.as_str()))
+            })
             .is_some_and(|symbol| {
                 symbol.visibility().is_bindable() && !symbol.variants().is_empty()
             });
@@ -2912,7 +2916,7 @@ fn collect_resolved_decl_bindings(
                     .fold(ctx.owner.clone(), |owner, segment| {
                         owner.child(segment.as_ref())
                     });
-                ResolvedName::from_def(synthetic_owner, DeclName::new(name.member()))
+                ResolvedName::from_def(synthetic_owner, DeclName::expect_valid(name.member()))
             }
             Err(err) => return Err(module_resolve_error(&err, src, Span::new(0, 0))),
         };
@@ -3279,7 +3283,9 @@ fn resolved_index_display_name(index: &ResolvedIndex) -> IndexName {
     match index {
         ResolvedIndex::Concrete(name, _) => name.to_unowned_def_name(),
         ResolvedIndex::GenericParam(name, _) => IndexName::from_atom(name.atom().clone()),
-        ResolvedIndex::NatExpr(form, _) => IndexName::new(format!("range({})", form.format())),
+        ResolvedIndex::NatExpr(form, _) => {
+            IndexName::expect_valid(format!("range({})", form.format()))
+        }
     }
 }
 
@@ -3311,7 +3317,7 @@ fn unify_nat_poly_form(
     // genuine mismatches and for arithmetic overflow during reduction (an
     // overflowing form cannot match any concrete index size).
     let form_mismatch = || GraphcalError::IndexMismatch {
-        expected: IndexName::new(format!("range({})", form.format())),
+        expected: IndexName::expect_valid(format!("range({})", form.format())),
         found: actual_idx.clone(),
         src: src.clone(),
         span: span.into(),
@@ -3343,7 +3349,7 @@ fn unify_nat_poly_form(
                         span: span.into(),
                     })?
                     .display_name(),
-                None => IndexName::new(format!("range({})", form.format())),
+                None => IndexName::expect_valid(format!("range({})", form.format())),
             };
             return Err(GraphcalError::IndexMismatch {
                 expected,
@@ -3528,7 +3534,10 @@ pub fn unify_resolved_type(
                             .filter(NatPolyForm::is_constant)
                             .map(|actual_form| actual_form.constant())
                             .ok_or_else(|| GraphcalError::IndexMismatch {
-                                expected: IndexName::new(format!("range({})", form.format())),
+                                expected: IndexName::expect_valid(format!(
+                                    "range({})",
+                                    form.format()
+                                )),
                                 found: actual_idx.name(),
                                 src: src.clone(),
                                 span: span.into(),
@@ -4636,12 +4645,12 @@ fn resolve_index_expr_name(
     let text = require_local_type_level_path(path, span, src)?;
     if registry.indexes.get_index(text).is_some() {
         Ok(ResolvedIndex::Concrete(
-            ResolvedName::from_def(owner.clone(), IndexName::new(text)),
+            ResolvedName::from_def(owner.clone(), IndexName::expect_valid(text)),
             span,
         ))
     } else {
         Err(GraphcalError::UnknownIndex {
-            name: IndexName::new(text),
+            name: IndexName::expect_valid(text),
             src: src.clone(),
             span: span.into(),
         })
@@ -5061,7 +5070,7 @@ fn concrete_dimension_for_term(
             .as_bare()
             .map_or_else(|| item.term.name.value.display_path(), ToString::to_string);
         GraphcalError::UnknownDimension {
-            name: DimName::new(name),
+            name: DimName::expect_valid(name),
             src: src.clone(),
             span: item.term.span.into(),
         }
@@ -5320,18 +5329,18 @@ mod tests {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
         b.register_type(crate::registry::types::TypeDef {
-            name: StructTypeName::new("TransferResult"),
+            name: StructTypeName::expect_valid("TransferResult"),
             generic_params: vec![],
             kind: crate::registry::types::TypeDefKind::Union {
                 members: vec![crate::registry::types::UnionMemberDef {
-                    name: crate::syntax::names::ConstructorName::new("TransferResult"),
+                    name: crate::syntax::names::ConstructorName::expect_valid("TransferResult"),
                     fields: vec![
                         crate::registry::types::StructField {
-                            name: crate::syntax::names::FieldName::new("dv1"),
+                            name: crate::syntax::names::FieldName::expect_valid("dv1"),
                             type_ann: make_dim_type_expr("Velocity"),
                         },
                         crate::registry::types::StructField {
-                            name: crate::syntax::names::FieldName::new("dv2"),
+                            name: crate::syntax::names::FieldName::expect_valid("dv2"),
                             type_ann: make_dim_type_expr("Velocity"),
                         },
                     ],
@@ -5345,11 +5354,11 @@ mod tests {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
         b.register_index(crate::registry::types::IndexDef {
-            name: IndexName::new("Maneuver"),
+            name: IndexName::expect_valid("Maneuver"),
             kind: crate::registry::types::IndexKind::Named {
                 variants: vec![
-                    crate::syntax::names::IndexVariantName::new("Departure"),
-                    crate::syntax::names::IndexVariantName::new("Insertion"),
+                    crate::syntax::names::IndexVariantName::expect_valid("Departure"),
+                    crate::syntax::names::IndexVariantName::expect_valid("Insertion"),
                 ],
             },
         });
@@ -5434,7 +5443,7 @@ mod tests {
     #[test]
     fn resolve_generic_dim_param() {
         let r = make_registry();
-        let dim_params = vec![GenericParamName::new("D")];
+        let dim_params = vec![GenericParamName::expect_valid("D")];
         let te = parse_type("D");
         let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
         assert!(
@@ -5445,7 +5454,7 @@ mod tests {
     #[test]
     fn resolve_generic_dim_expr_with_power() {
         let r = make_registry();
-        let dim_params = vec![GenericParamName::new("D")];
+        let dim_params = vec![GenericParamName::expect_valid("D")];
         let te = parse_type("D^2");
         let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
         match resolved {
@@ -5466,7 +5475,7 @@ mod tests {
     #[test]
     fn resolve_mixed_generic_concrete() {
         let r = make_registry();
-        let dim_params = vec![GenericParamName::new("D")];
+        let dim_params = vec![GenericParamName::expect_valid("D")];
         // D * Length  — this is a DimExpr with a generic and a concrete term
         let te = parse_type("D * Length");
         let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
@@ -5507,8 +5516,8 @@ mod tests {
     #[test]
     fn resolve_generic_indexed() {
         let r = make_registry();
-        let dim_params = vec![GenericParamName::new("D")];
-        let index_params = vec![GenericParamName::new("I")];
+        let dim_params = vec![GenericParamName::expect_valid("D")];
+        let index_params = vec![GenericParamName::expect_valid("I")];
         let te = parse_type("D[I]");
         let resolved =
             resolve_type_expr(&te, &r, &dim_params, &index_params, &[], &make_src()).unwrap();
@@ -5551,7 +5560,7 @@ mod tests {
         // PascalCase and generic params are single letters, but let's
         // make sure the priority is correct.
         let r = make_registry_with_struct();
-        let dim_params = vec![GenericParamName::new("TransferResult")];
+        let dim_params = vec![GenericParamName::expect_valid("TransferResult")];
         let te = parse_type("TransferResult");
         let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
         assert!(matches!(resolved, ResolvedTypeExpr::Struct(..)));
@@ -5722,10 +5731,10 @@ mod tests {
         let tir =
             type_resolve_with_modules(ir, dag_id.clone(), &src, &resolver, &module_types).unwrap();
         let deps = &tir.root().semantic.dependencies;
-        let c = ResolvedName::from_def(dag_id.clone(), DeclName::new("C"));
-        let d = ResolvedName::from_def(dag_id.clone(), DeclName::new("D"));
-        let p = ResolvedName::from_def(dag_id.clone(), DeclName::new("p"));
-        let x = ResolvedName::from_def(dag_id, DeclName::new("x"));
+        let c = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("C"));
+        let d = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("D"));
+        let p = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("p"));
+        let x = ResolvedName::from_def(dag_id, DeclName::expect_valid("x"));
 
         assert!(deps.const_deps[&d].contains(&c));
         assert!(deps.const_deps[&c].is_empty());
@@ -5873,8 +5882,8 @@ mod tests {
         let src = make_src();
         let registry = make_registry();
         let owner = crate::dag_id::DagId::root_in_package("test", "a");
-        let resolved_index = ResolvedName::from_def(owner, IndexName::new("Phase"));
-        let generic = GenericParamName::new("I");
+        let resolved_index = ResolvedName::from_def(owner, IndexName::expect_valid("Phase"));
+        let generic = GenericParamName::expect_valid("I");
         let resolved_type = ResolvedTypeExpr::Indexed {
             base: Box::new(ResolvedTypeExpr::Dimensionless),
             indexes: vec![ResolvedIndex::GenericParam(
@@ -5943,7 +5952,7 @@ mod tests {
     #[test]
     fn convert_struct() {
         let owner = crate::dag_id::DagId::root_in_package("test", "test");
-        let resolved = ResolvedName::from_def(owner, StructTypeName::new("Foo"));
+        let resolved = ResolvedName::from_def(owner, StructTypeName::expect_valid("Foo"));
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Struct(resolved.clone(), Span::new(0, 0)),
             &make_src(),
@@ -5958,7 +5967,7 @@ mod tests {
     #[test]
     fn convert_indexed() {
         let owner = crate::dag_id::DagId::root_in_package("test", "test");
-        let resolved_index = ResolvedName::from_def(owner, IndexName::new("M"));
+        let resolved_index = ResolvedName::from_def(owner, IndexName::expect_valid("M"));
         let dt = resolved_to_declared_type(
             &ResolvedTypeExpr::Indexed {
                 base: Box::new(ResolvedTypeExpr::Scalar(Dimension::base(
@@ -5986,7 +5995,10 @@ mod tests {
     #[test]
     fn convert_generic_dim_param_fails() {
         let err = resolved_to_declared_type(
-            &ResolvedTypeExpr::GenericDimParam(GenericParamName::new("D"), Span::new(0, 0)),
+            &ResolvedTypeExpr::GenericDimParam(
+                GenericParamName::expect_valid("D"),
+                Span::new(0, 0),
+            ),
             &make_src(),
         )
         .unwrap_err();
@@ -5999,7 +6011,7 @@ mod tests {
             &ResolvedTypeExpr::Indexed {
                 base: Box::new(ResolvedTypeExpr::Dimensionless),
                 indexes: vec![ResolvedIndex::GenericParam(
-                    GenericParamName::new("I"),
+                    GenericParamName::expect_valid("I"),
                     Span::new(0, 0),
                 )],
             },
@@ -6102,16 +6114,16 @@ mod tests {
     #[test]
     fn nat_leq_same_var() {
         // N <= N
-        let a = NatPolyForm::from_var(GenericParamName::new("N"));
-        let b = NatPolyForm::from_var(GenericParamName::new("N"));
+        let a = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
+        let b = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
         assert!(a.is_leq(&b));
     }
 
     #[test]
     fn nat_leq_var_plus_constant() {
         // N <= N + 1
-        let a = NatPolyForm::from_var(GenericParamName::new("N"));
-        let b = NatPolyForm::from_var(GenericParamName::new("N"))
+        let a = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
+        let b = NatPolyForm::from_var(GenericParamName::expect_valid("N"))
             .add(&NatPolyForm::from_constant(1))
             .unwrap();
         assert!(a.is_leq(&b));
@@ -6120,18 +6132,18 @@ mod tests {
     #[test]
     fn nat_leq_var_plus_constant_reverse() {
         // N + 1 <= N → false
-        let a = NatPolyForm::from_var(GenericParamName::new("N"))
+        let a = NatPolyForm::from_var(GenericParamName::expect_valid("N"))
             .add(&NatPolyForm::from_constant(1))
             .unwrap();
-        let b = NatPolyForm::from_var(GenericParamName::new("N"));
+        let b = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
         assert!(!a.is_leq(&b));
     }
 
     #[test]
     fn nat_leq_different_vars() {
         // N <= M → false (N could be larger)
-        let a = NatPolyForm::from_var(GenericParamName::new("N"));
-        let b = NatPolyForm::from_var(GenericParamName::new("M"));
+        let a = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
+        let b = NatPolyForm::from_var(GenericParamName::expect_valid("M"));
         assert!(!a.is_leq(&b));
     }
 
@@ -6139,7 +6151,7 @@ mod tests {
     fn nat_leq_zero_leq_anything() {
         // 0 <= N
         let a = NatPolyForm::from_constant(0);
-        let b = NatPolyForm::from_var(GenericParamName::new("N"));
+        let b = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
         assert!(a.is_leq(&b));
     }
 
@@ -6165,7 +6177,7 @@ mod tests {
     #[test]
     fn nat_range_identity_symbolic_to_display_only_index_type_ref()
     -> Result<(), Box<dyn std::error::Error>> {
-        let reference = NatPolyForm::from_var(GenericParamName::new("N"))
+        let reference = NatPolyForm::from_var(GenericParamName::expect_valid("N"))
             .add(&NatPolyForm::from_constant(1))
             .unwrap()
             .to_nat_range_identity()?
@@ -6189,49 +6201,49 @@ mod tests {
     #[test]
     fn nat_mul_var_by_constant() {
         // N * 3
-        let n = NatPolyForm::from_var(GenericParamName::new("N"));
+        let n = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
         let three = NatPolyForm::from_constant(3);
         let result = n.mul(&three).unwrap();
         // Should format as "3 * N"
         assert_eq!(result.format(), "3 * N");
         // Evaluate with N=5 → 15
         let mut bindings = HashMap::new();
-        bindings.insert(GenericParamName::new("N"), 5);
+        bindings.insert(GenericParamName::expect_valid("N"), 5);
         assert_eq!(result.evaluate(&bindings), Some(15));
     }
 
     #[test]
     fn nat_mul_two_vars() {
         // M * N
-        let m = NatPolyForm::from_var(GenericParamName::new("M"));
-        let n = NatPolyForm::from_var(GenericParamName::new("N"));
+        let m = NatPolyForm::from_var(GenericParamName::expect_valid("M"));
+        let n = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
         let result = m.mul(&n).unwrap();
         assert_eq!(result.format(), "M * N");
         let mut bindings = HashMap::new();
-        bindings.insert(GenericParamName::new("M"), 3);
-        bindings.insert(GenericParamName::new("N"), 4);
+        bindings.insert(GenericParamName::expect_valid("M"), 3);
+        bindings.insert(GenericParamName::expect_valid("N"), 4);
         assert_eq!(result.evaluate(&bindings), Some(12));
     }
 
     #[test]
     fn nat_mul_distributive() {
         // (M + 1) * N = M * N + N
-        let m = NatPolyForm::from_var(GenericParamName::new("M"));
-        let n = NatPolyForm::from_var(GenericParamName::new("N"));
+        let m = NatPolyForm::from_var(GenericParamName::expect_valid("M"));
+        let n = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
         let m_plus_1 = m.add(&NatPolyForm::from_constant(1)).unwrap();
         let result = m_plus_1.mul(&n).unwrap();
         // Evaluate with M=2, N=3 → (2+1)*3 = 9
         let mut bindings = HashMap::new();
-        bindings.insert(GenericParamName::new("M"), 2);
-        bindings.insert(GenericParamName::new("N"), 3);
+        bindings.insert(GenericParamName::expect_valid("M"), 2);
+        bindings.insert(GenericParamName::expect_valid("N"), 3);
         assert_eq!(result.evaluate(&bindings), Some(9));
     }
 
     #[test]
     fn nat_mul_mixed_add() {
         // M * N + 1
-        let m = NatPolyForm::from_var(GenericParamName::new("M"));
-        let n = NatPolyForm::from_var(GenericParamName::new("N"));
+        let m = NatPolyForm::from_var(GenericParamName::expect_valid("M"));
+        let n = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
         let result = m
             .mul(&n)
             .unwrap()
@@ -6239,8 +6251,8 @@ mod tests {
             .unwrap();
         assert_eq!(result.format(), "M * N + 1");
         let mut bindings = HashMap::new();
-        bindings.insert(GenericParamName::new("M"), 2);
-        bindings.insert(GenericParamName::new("N"), 3);
+        bindings.insert(GenericParamName::expect_valid("M"), 2);
+        bindings.insert(GenericParamName::expect_valid("N"), 3);
         assert_eq!(result.evaluate(&bindings), Some(7));
     }
 
@@ -6249,11 +6261,11 @@ mod tests {
         let c = NatPolyForm::from_constant(5);
         assert!(c.is_constant());
 
-        let n = NatPolyForm::from_var(GenericParamName::new("N"));
+        let n = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
         assert!(!n.is_constant());
 
-        let mn = NatPolyForm::from_var(GenericParamName::new("M"))
-            .mul(&NatPolyForm::from_var(GenericParamName::new("N")))
+        let mn = NatPolyForm::from_var(GenericParamName::expect_valid("M"))
+            .mul(&NatPolyForm::from_var(GenericParamName::expect_valid("N")))
             .unwrap();
         assert!(!mn.is_constant());
     }
@@ -6261,8 +6273,8 @@ mod tests {
     #[test]
     fn nat_poly_leq_with_mul() {
         // M * N <= M * N + 1
-        let mn = NatPolyForm::from_var(GenericParamName::new("M"))
-            .mul(&NatPolyForm::from_var(GenericParamName::new("N")))
+        let mn = NatPolyForm::from_var(GenericParamName::expect_valid("M"))
+            .mul(&NatPolyForm::from_var(GenericParamName::expect_valid("N")))
             .unwrap();
         let mn_plus_1 = mn.add(&NatPolyForm::from_constant(1)).unwrap();
         assert!(mn.is_leq(&mn_plus_1));
@@ -6293,16 +6305,16 @@ mod tests {
         // release wraparound). `2 * N` with N bound near u64::MAX must report
         // a mismatch instead.
         let form = NatPolyForm::from_constant(2)
-            .mul(&NatPolyForm::from_var(GenericParamName::new("N")))
+            .mul(&NatPolyForm::from_var(GenericParamName::expect_valid("N")))
             .unwrap();
         let mut nat_sub = HashMap::new();
-        nat_sub.insert(GenericParamName::new("N"), u64::MAX / 2 + 1);
+        nat_sub.insert(GenericParamName::expect_valid("N"), u64::MAX / 2 + 1);
         let src = NamedSource::new("<test>", Arc::new(String::new()));
         let result = unify_nat_poly_form(
             &form,
             4,
             &mut nat_sub,
-            &IndexName::new("range(4)"),
+            &IndexName::expect_valid("range(4)"),
             &src,
             Span::new(0, 0),
         );

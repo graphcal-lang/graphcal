@@ -1110,7 +1110,7 @@ fn eval_hir_index_access(
                         variant.clone()
                     }
                     RuntimeValue::Struct { type_name, .. } => {
-                        IndexVariantName::new(type_name.as_str())
+                        IndexVariantName::expect_valid(type_name.as_str())
                     }
                     RuntimeValue::RangeLabel { step_index, .. } => {
                         IndexVariantName::range_step(step_index)

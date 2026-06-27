@@ -461,29 +461,29 @@ mod tests {
     #[test]
     fn scalar_with_units() {
         let overrides = json_to_overrides(r#"{"dry_mass": "1500.0 kg"}"#).unwrap();
-        assert!(overrides.contains_key(&DeclName::new("dry_mass")));
-        let expr = &overrides[&DeclName::new("dry_mass")];
+        assert!(overrides.contains_key(&DeclName::expect_valid("dry_mass")));
+        let expr = &overrides[&DeclName::expect_valid("dry_mass")];
         assert!(matches!(expr.kind, ExprKind::UnitLiteral { .. }));
     }
 
     #[test]
     fn bool_value() {
         let overrides = json_to_overrides(r#"{"enabled": false}"#).unwrap();
-        let expr = &overrides[&DeclName::new("enabled")];
+        let expr = &overrides[&DeclName::expect_valid("enabled")];
         assert!(matches!(expr.kind, ExprKind::Bool(false)));
     }
 
     #[test]
     fn integer_value() {
         let overrides = json_to_overrides(r#"{"count": 42}"#).unwrap();
-        let expr = &overrides[&DeclName::new("count")];
+        let expr = &overrides[&DeclName::expect_valid("count")];
         assert!(matches!(expr.kind, ExprKind::Integer(42)));
     }
 
     #[test]
     fn dimensionless_float() {
         let overrides = json_to_overrides(r#"{"ratio": 3.33}"#).unwrap();
-        let expr = &overrides[&DeclName::new("ratio")];
+        let expr = &overrides[&DeclName::expect_valid("ratio")];
         assert!(matches!(expr.kind, ExprKind::Number(f) if (f - 3.33).abs() < f64::EPSILON));
     }
 
@@ -491,7 +491,7 @@ mod tests {
     fn struct_single_variant() {
         let json = r#"{"transfer": {"type": "TransferResult", "fields": {"dv1": "150.0 m/s", "dv2": "250.0 m/s"}}}"#;
         let overrides = json_to_overrides(json).unwrap();
-        let expr = &overrides[&DeclName::new("transfer")];
+        let expr = &overrides[&DeclName::expect_valid("transfer")];
         match &expr.kind {
             ExprKind::ConstructorCall { callee, fields, .. } => {
                 assert_eq!(callee.as_bare().unwrap().name, "TransferResult");
@@ -517,7 +517,7 @@ mod tests {
     fn tagged_union_with_fields() {
         let json = r#"{"maneuver": {"variant": "LowThrust", "fields": {"thrust": "0.5 N", "duration": "3600.0 s"}}}"#;
         let overrides = json_to_overrides(json).unwrap();
-        let expr = &overrides[&DeclName::new("maneuver")];
+        let expr = &overrides[&DeclName::expect_valid("maneuver")];
         match &expr.kind {
             ExprKind::ConstructorCall { callee, fields, .. } => {
                 assert_eq!(callee.as_bare().unwrap().name, "LowThrust");
@@ -531,7 +531,7 @@ mod tests {
     fn bare_variant_object() {
         let json = r#"{"status": {"variant": "Nominal"}}"#;
         let overrides = json_to_overrides(json).unwrap();
-        let expr = &overrides[&DeclName::new("status")];
+        let expr = &overrides[&DeclName::expect_valid("status")];
         match &expr.kind {
             ExprKind::ConstructorCall { callee, fields, .. } => {
                 assert_eq!(callee.as_bare().unwrap().name, "Nominal");
@@ -547,14 +547,14 @@ mod tests {
         // (PascalCase identifier). The evaluator handles this as a bare variant.
         let json = r#"{"status": "Nominal"}"#;
         let overrides = json_to_overrides(json).unwrap();
-        assert!(overrides.contains_key(&DeclName::new("status")));
+        assert!(overrides.contains_key(&DeclName::expect_valid("status")));
     }
 
     #[test]
     fn named_label_indexed() {
         let json = r#"{"delta_v": {"index": "Maneuver", "entries": {"Departure": "3.0 km/s", "Correction": "0.2 km/s", "Insertion": "2.0 km/s"}}}"#;
         let overrides = json_to_overrides(json).unwrap();
-        let expr = &overrides[&DeclName::new("delta_v")];
+        let expr = &overrides[&DeclName::expect_valid("delta_v")];
         match &expr.kind {
             ExprKind::MapLiteral { entries } => {
                 assert_eq!(entries.len(), 3);
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn expression_string_with_arithmetic() {
         let overrides = json_to_overrides(r#"{"x": "2.0 + 3.0"}"#).unwrap();
-        let expr = &overrides[&DeclName::new("x")];
+        let expr = &overrides[&DeclName::expect_valid("x")];
         assert!(matches!(expr.kind, ExprKind::BinOp { .. }));
     }
 
@@ -610,7 +610,7 @@ mod tests {
         }"#;
         let overrides = json_to_overrides(json).unwrap();
 
-        match &overrides[&DeclName::new("status")].kind {
+        match &overrides[&DeclName::expect_valid("status")].kind {
             ExprKind::ConstructorCall { callee, .. } => {
                 let segments: Vec<_> = callee.segments().iter().map(|s| s.name.as_str()).collect();
                 assert_eq!(segments, ["lib", "Pick"]);
@@ -618,7 +618,7 @@ mod tests {
             other => panic!("expected ConstructorCall, got {other:?}"),
         }
 
-        match &overrides[&DeclName::new("series")].kind {
+        match &overrides[&DeclName::expect_valid("series")].kind {
             ExprKind::MapLiteral { entries } => {
                 assert_eq!(entries[0].keys[0].index.value.to_string(), "lib.Phase");
             }

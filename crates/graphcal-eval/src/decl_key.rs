@@ -22,7 +22,7 @@ impl RuntimeDeclKey {
             || {
                 Self::Resolved(ResolvedName::from_def(
                     dag.dag_id.clone(),
-                    DeclName::new(name.member()),
+                    DeclName::expect_valid(name.member()),
                 ))
             },
             Self::Resolved,

@@ -259,6 +259,6 @@ impl Ident {
     /// Interpret this identifier as a generic parameter name.
     #[must_use]
     pub fn as_generic_param_name(&self) -> GenericParamName {
-        GenericParamName::new(&self.name)
+        GenericParamName::from_atom(self.name.clone())
     }
 }
