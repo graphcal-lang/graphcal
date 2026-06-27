@@ -1019,26 +1019,26 @@ For a first pass, read in pipeline order:
 30. `crates/graphcal-eval/src/loader.rs`
 31. `crates/graphcal-eval/src/eval/project/pipeline.rs`
 32. `crates/graphcal-eval/src/eval/project/lowering.rs`
-32. `crates/graphcal-eval/src/inline_dag.rs`
-33. `crates/graphcal-eval/src/exec_plan.rs`
-34. `crates/graphcal-eval/src/decl_key.rs`
-35. `crates/graphcal-eval/src/eval/runtime.rs`
-36. `crates/graphcal-eval/src/eval_expr/mod.rs`
-37. `crates/graphcal-eval/src/eval_expr/numeric.rs`
-38. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
-39. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
-40. `crates/graphcal-eval/src/eval_expr/conversions.rs`
-41. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
-42. `crates/graphcal-eval/src/eval_expr/functions.rs`
-43. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
-44. `crates/graphcal-eval/src/eval/types.rs`
-45. `crates/graphcal-eval/src/eval/plot_data.rs`
-46. `crates/graphcal-eval/src/graph_ir/mod.rs`
-47. `crates/graphcal-package/src/lib.rs`
-48. `crates/graphcal-cli/src/main.rs`
-49. `crates/graphcal-cli/src/deps.rs`
-50. `crates/graphcal-lsp/src/server.rs`
-51. `crates/graphcal-fmt/src/lib.rs`
+33. `crates/graphcal-eval/src/inline_dag.rs`
+34. `crates/graphcal-eval/src/exec_plan.rs`
+35. `crates/graphcal-eval/src/decl_key.rs`
+36. `crates/graphcal-eval/src/eval/runtime.rs`
+37. `crates/graphcal-eval/src/eval_expr/mod.rs`
+38. `crates/graphcal-eval/src/eval_expr/numeric.rs`
+39. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
+40. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
+41. `crates/graphcal-eval/src/eval_expr/conversions.rs`
+42. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
+43. `crates/graphcal-eval/src/eval_expr/functions.rs`
+44. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
+45. `crates/graphcal-eval/src/eval/types.rs`
+46. `crates/graphcal-eval/src/eval/plot_data.rs`
+47. `crates/graphcal-eval/src/graph_ir/mod.rs`
+48. `crates/graphcal-package/src/lib.rs`
+49. `crates/graphcal-cli/src/main.rs`
+50. `crates/graphcal-cli/src/deps.rs`
+51. `crates/graphcal-lsp/src/server.rs`
+52. `crates/graphcal-fmt/src/lib.rs`
 
 For an exhaustive dependency-ordered checklist, use
 `internals/codebase-reading-checklist.md`. After the core pipeline, read
