@@ -14,6 +14,7 @@ use miette::NamedSource;
 
 use crate::dimension::{Dimension, Rational};
 use crate::hir::{self, BuiltinFnName, ConstRef, FunctionRef};
+use crate::nat::NatOverflowError;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeDef, TypeGenericConstraint, UnionMemberDef};
@@ -1256,9 +1257,7 @@ fn infer_hir_binop(
     )
 }
 
-fn hir_nat_to_linear_form(
-    expr: &hir::NatExpr,
-) -> Result<NatLinearForm, crate::syntax::nat::NatOverflowError> {
+fn hir_nat_to_linear_form(expr: &hir::NatExpr) -> Result<NatLinearForm, NatOverflowError> {
     match expr {
         hir::NatExpr::Literal(n, _) => Ok(NatLinearForm::from_constant(*n)),
         hir::NatExpr::Param(param) => Ok(NatLinearForm::from_var(param.value.name.clone())),
@@ -1272,7 +1271,7 @@ fn hir_nat_to_linear_form(
 }
 
 fn nat_overflow_error(
-    err: crate::syntax::nat::NatOverflowError,
+    err: NatOverflowError,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> GraphcalError {

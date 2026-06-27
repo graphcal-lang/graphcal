@@ -421,7 +421,7 @@ The compiler crate owns the functional core through TIR.
 | `syntax/ast/format_equivalent.rs` | Surface-equivalence checks used by formatting/tooling     |
 | `syntax/phase.rs`             | `Raw`, `Desugared`, sugar/path slots, `never`                 |
 | `syntax/names.rs`             | `NameAtom`, typed name newtypes, paths, resolved names        |
-| `syntax/nat.rs`               | Normalized type-level Nat polynomial forms                    |
+| `nat.rs`                      | Normalized type-level Nat polynomial forms                    |
 | `dag_id.rs`                   | Filesystem-independent DAG identity                           |
 | `syntax/parser/`              | Parser for declarations, expressions, types, tables           |
 | `syntax/module_resolve.rs`    | Owner-qualified module symbol tables and path resolution      |
@@ -802,10 +802,10 @@ Index type references are split by semantic kind. Declared indexes use
 `TypeNameRef<namespace::Index>` and have a canonical `ResolvedName<Index>`.
 Compiler-generated Nat ranges use `NatRangeIndexRef`: concrete ranges carry a
 validated non-zero `NatRangeIndex`, while symbolic generic ranges carry a
-normalized `NatPolyForm` from `syntax/nat.rs`. Nat ranges intentionally do not
-have fake resolved names or registry-key strings; callers that need declared
-index ownership use `declared_resolved()`, and callers that need Nat range
-semantics use `nat_range_ref()` / `nat_range()` / `nat_range_form()`.
+normalized `NatPolyForm` from `nat.rs`. Nat ranges intentionally do not have fake
+resolved names or registry-key strings; callers that need declared index
+ownership use `declared_resolved()`, and callers that need Nat range semantics
+use `nat_range_ref()` / `nat_range()` / `nat_range_form()`.
 
 ## 4. Declarations, Visibility, and Evaluation
 
@@ -969,7 +969,7 @@ just lint
 | `ModulePathKey`                  | `loader.rs`                            | Keep module paths structured instead of separator-joined            |
 | `RuntimeDeclKey`                 | `crates/graphcal-eval/src/decl_key.rs` | Prevent runtime value collisions across DAG owners                  |
 | `TypeNameRef` identity carriers  | `registry/declared_type.rs`            | Preserve declared index/struct owners through runtime/public values |
-| Nat range identity carriers      | `syntax/nat.rs`, `registry/declared_type.rs` | Keep concrete/symbolic Nat ranges typed, not fake resolved names    |
+| Nat range identity carriers      | `nat.rs`, `registry/declared_type.rs` | Keep concrete/symbolic Nat ranges typed, not fake resolved names    |
 | Trait-based I/O                  | `graphcal-io`                          | Deterministic tests and editor integration                          |
 | Package identifier newtypes      | `graphcal-package`                     | Keep package/alias/instance/Git identities typed                    |
 | Visitor pattern                  | `syntax/visitor.rs`                    | Centralized AST traversal                                           |
@@ -988,7 +988,7 @@ For a first pass, read in pipeline order:
 
 1. `crates/graphcal-compiler/src/syntax/token.rs`
 2. `crates/graphcal-compiler/src/syntax/names.rs`
-3. `crates/graphcal-compiler/src/syntax/nat.rs`
+3. `crates/graphcal-compiler/src/nat.rs`
 4. `crates/graphcal-compiler/src/syntax/phase.rs`
 5. `crates/graphcal-compiler/src/syntax/ast/common.rs`
 6. `crates/graphcal-compiler/src/syntax/ast/value.rs`

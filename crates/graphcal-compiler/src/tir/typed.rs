@@ -22,13 +22,13 @@ use crate::hir::diagnostics::{
     expr_lower_error_to_graphcal, hir_lower_error_to_graphcal, resolved_decl_key,
 };
 pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
+use crate::nat::Monomial;
+pub use crate::nat::{NatLinearForm, NatPolyForm};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::DimName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::names::{NameAtom, NamePath};
-use crate::syntax::nat::Monomial;
-pub use crate::syntax::nat::{NatLinearForm, NatPolyForm};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
 
@@ -299,11 +299,11 @@ pub fn normalize_nat_expr(
     }
 }
 
-/// Convert a [`NatOverflowError`](crate::syntax::nat::NatOverflowError)
+/// Convert a [`NatOverflowError`](crate::nat::NatOverflowError)
 /// into a spanned [`GraphcalError`].
 #[must_use]
 pub fn nat_overflow_error(
-    err: crate::syntax::nat::NatOverflowError,
+    err: crate::nat::NatOverflowError,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> GraphcalError {
@@ -4444,7 +4444,7 @@ fn resolve_hir_index_ref(
 
 fn normalize_hir_nat_expr(
     expr: &hir::NatExpr,
-) -> Result<NatPolyForm, crate::syntax::nat::NatOverflowError> {
+) -> Result<NatPolyForm, crate::nat::NatOverflowError> {
     match expr {
         hir::NatExpr::Literal(value, _) => Ok(NatPolyForm::from_constant(*value)),
         hir::NatExpr::Param(param) => Ok(NatPolyForm::from_var(param.value.name.clone())),

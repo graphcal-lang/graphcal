@@ -13,7 +13,6 @@ pub mod local_name;
 pub mod module_name;
 pub mod module_resolve;
 pub mod names;
-pub mod nat;
 pub mod non_empty;
 pub mod parser;
 pub mod phase;

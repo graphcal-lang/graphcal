@@ -6,9 +6,9 @@ use crate::syntax::index_name::{IndexName, IndexNameNamespace, ResolvedIndexName
 use crate::syntax::names::{NameDef, NameNamespace, ResolvedName};
 use crate::syntax::type_name::StructTypeNameNamespace;
 
+use crate::nat::NatPolyForm;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{DimensionRegistry, NatRangeIndex, NatRangeIndexError};
-use crate::syntax::nat::NatPolyForm;
 
 /// A type-level reference to a named compiler entity.
 ///

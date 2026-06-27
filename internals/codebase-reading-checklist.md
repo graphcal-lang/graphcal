@@ -35,7 +35,7 @@ Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 - [ ] `crates/graphcal-compiler/src/syntax/module_name.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/dimension.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/type_name.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/nat.rs`
+- [ ] `crates/graphcal-compiler/src/nat.rs`
 
 ## Stage 2 - Core AST leaves and traversal
 
