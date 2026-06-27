@@ -14,7 +14,7 @@ use toml_spanner::{Item, Table};
 /// Graphcal's first lockfile schema version.
 pub const LOCK_VERSION: u64 = 1;
 /// Current standard-library identity recorded by the MVP lockfile.
-pub const STDLIB_VERSION: &str = "0.0.1-alpha.14";
+pub const STDLIB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// A package's real `[package].name`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1216,7 +1216,7 @@ fn push_escaped_string(out: &mut String, value: &str) {
 mod tests {
     use super::*;
 
-    const GRAPHCAL_VERSION: &str = "0.0.1-alpha.14";
+    const GRAPHCAL_VERSION: &str = STDLIB_VERSION;
 
     fn pkg(name: &str) -> PackageName {
         PackageName::new(name).unwrap()
