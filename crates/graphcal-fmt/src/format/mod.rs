@@ -206,6 +206,23 @@ pub fn flat_alt_group(single: RcDoc<'static>, multi: RcDoc<'static>) -> RcDoc<'s
     multi.flat_alt(single).group()
 }
 
+/// Wrap a possibly-multiline child document in soft parentheses.
+///
+/// Delimited expression contexts must not append a child directly after the
+/// opening delimiter (for example, `sum(` + `for ... { ... }`): if the child
+/// later chooses a multiline layout, its internal hardlines inherit the wrong
+/// indentation anchor. This combinator centralizes the safe layout invariant:
+/// the body is preceded and followed by `line_()`, so it stays inline when the
+/// whole group fits but moves to its own indented line whenever any nested
+/// hardline or width break makes the group multiline.
+pub fn soft_parenthesized(body: RcDoc<'static>) -> RcDoc<'static> {
+    RcDoc::text("(")
+        .append(RcDoc::line_().append(body).nest(INDENT))
+        .append(RcDoc::line_())
+        .append(RcDoc::text(")"))
+        .group()
+}
+
 /// Render an `RcDoc` to a string (for measuring column widths).
 pub fn render_doc_to_string(doc: &RcDoc<'static>) -> String {
     let mut buf = Vec::new();

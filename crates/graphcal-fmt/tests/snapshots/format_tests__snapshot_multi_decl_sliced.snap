@@ -33,11 +33,15 @@ param      power_mode_active: Bool[Phase, Component, OperationMode]
 
 // Derived: total active power per phase, summed over components and modes.
 node total_active_power: Power[Phase] = for p: Phase {
-    sum(for c: Component {
-            sum(for m: OperationMode {
+    sum(
+        for c: Component {
+            sum(
+                for m: OperationMode {
                     if @power_mode_active[p, c, m] { @power_consumption[p, c] } else { 0.0 W }
-                })
-        })
+                }
+            )
+        }
+    )
 };
 
 node peak_active_power: Power = max(for p: Phase { @total_active_power[p] });
