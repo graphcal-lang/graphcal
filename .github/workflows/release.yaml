@@ -1,0 +1,78 @@
+name: Publish to crates.io
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create-tag:
+    name: Create a Git tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: true
+
+      - name: Get the version
+        id: get-version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "graphcal") | .version')
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Create a Git tag
+        run: |
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions"
+          git fetch --tags
+          git tag --annotate "v${STEPS_GET_VERSION_OUTPUTS_VERSION}" --message="v${STEPS_GET_VERSION_OUTPUTS_VERSION}"
+          git push origin "v${STEPS_GET_VERSION_OUTPUTS_VERSION}"
+        env:
+          STEPS_GET_VERSION_OUTPUTS_VERSION: ${{ steps.get-version.outputs.version }}
+
+  publish:
+    name: Publish to crates.io
+    needs:
+      - create-tag
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://crates.io/crates/graphcal
+    permissions:
+      contents: read
+      id-token: write # IMPORTANT: mandatory for trusted publishing
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        id: auth
+      - run: cargo publish --workspace --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  github-release:
+    name: Create GitHub Release
+    needs:
+      - publish
+      - create-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # IMPORTANT: mandatory for making GitHub Releases
+
+    steps:
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NEEDS_CREATE_TAG_OUTPUTS_VERSION: ${{ needs.create-tag.outputs.version }}
+        run: >-
+          gh release create
+          v${NEEDS_CREATE_TAG_OUTPUTS_VERSION}
+          --draft
+          --verify-tag
+          --generate-notes
+          --repo ${{ github.repository }}
+          --target ${{ github.sha }}
