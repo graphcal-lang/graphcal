@@ -8,7 +8,7 @@ use pretty::RcDoc;
 
 use super::{
     Formatter, INDENT, flat_alt_group, format_unit_expr_inline, prepend_comments,
-    render_doc_to_string,
+    render_doc_to_string, soft_parenthesized,
 };
 
 // ---------------------------------------------------------------------------
@@ -173,9 +173,7 @@ fn format_convert_operand(fmt: &mut Formatter<'_>, inner: &Expr) -> RcDoc<'stati
         inner.kind,
         ExprKind::Convert { .. } | ExprKind::DisplayTimezone { .. }
     ) {
-        return RcDoc::text("(")
-            .append(format_expr(fmt, inner))
-            .append(RcDoc::text(")"));
+        return soft_parenthesized(format_expr(fmt, inner));
     }
     format_expr(fmt, inner)
 }
@@ -207,9 +205,7 @@ fn format_binop_child(
         _ => false,
     };
     if needs_parens {
-        return RcDoc::text("(")
-            .append(format_expr(fmt, child))
-            .append(RcDoc::text(")"));
+        return soft_parenthesized(format_expr(fmt, child));
     }
     format_expr(fmt, child)
 }
@@ -223,9 +219,7 @@ fn format_unary_operand(fmt: &mut Formatter<'_>, operand: &Expr) -> RcDoc<'stati
     if let ExprKind::BinOp { op: child_op, .. } = &operand.kind
         && precedence(*child_op) < UNARY_PREC
     {
-        return RcDoc::text("(")
-            .append(format_expr(fmt, operand))
-            .append(RcDoc::text(")"));
+        return soft_parenthesized(format_expr(fmt, operand));
     }
     format_expr(fmt, operand)
 }
@@ -273,9 +267,7 @@ pub fn format_fn_call_expr(
     if !type_args.is_empty() {
         doc = doc.append(format_generic_args(fmt, type_args));
     }
-    doc.append(RcDoc::text("("))
-        .append(inner.nest(INDENT).group())
-        .append(RcDoc::text(")"))
+    doc.append(soft_parenthesized(inner))
 }
 
 fn format_generic_args(
@@ -357,12 +349,7 @@ pub fn format_constructor_call(
     // Construction is always a constructor call — parens with named
     // args. There is no brace-form construction; the parser rejects
     // `Ctor { field: val }` outright.
-    header
-        .append(RcDoc::text("("))
-        .append(RcDoc::line_().append(inner).nest(INDENT).group())
-        .append(RcDoc::line_())
-        .append(RcDoc::text(")"))
-        .group()
+    header.append(soft_parenthesized(inner))
 }
 
 pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDoc<'static> {
@@ -797,17 +784,21 @@ fn format_lambda_call(
     lambda_params: (&Spanned<LocalName>, &Spanned<LocalName>),
     body: &Expr,
 ) -> RcDoc<'static> {
-    let mut doc = RcDoc::text(head).append(RcDoc::text("("));
-    for arg in args {
-        doc = doc.append(format_expr(fmt, arg)).append(RcDoc::text(", "));
-    }
-    doc.append(RcDoc::text("|"))
+    let lambda_body = RcDoc::text("|")
         .append(RcDoc::text(lambda_params.0.value.as_str().to_owned()))
         .append(RcDoc::text(", "))
         .append(RcDoc::text(lambda_params.1.value.as_str().to_owned()))
-        .append(RcDoc::text("| "))
-        .append(format_expr(fmt, body))
-        .append(RcDoc::text(")"))
+        .append(RcDoc::text("|"))
+        .append(RcDoc::line().append(format_expr(fmt, body)).nest(INDENT))
+        .group();
+    let arg_docs = args
+        .iter()
+        .map(|arg| format_expr(fmt, arg))
+        .chain(std::iter::once(lambda_body));
+    RcDoc::text(head).append(soft_parenthesized(RcDoc::intersperse(
+        arg_docs,
+        RcDoc::text(",").append(RcDoc::line()),
+    )))
 }
 
 fn format_scan(
@@ -947,9 +938,9 @@ fn format_inline_dag_ref(
         })
         .collect();
     let path_text = path.display_path();
+    let inner = RcDoc::intersperse(binding_docs, RcDoc::text(",").append(RcDoc::line()));
     RcDoc::text(format!("@{path_text}"))
-        .append(RcDoc::text("("))
-        .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
-        .append(RcDoc::text(")."))
+        .append(soft_parenthesized(inner))
+        .append(RcDoc::text("."))
         .append(RcDoc::text(output.to_string()))
 }

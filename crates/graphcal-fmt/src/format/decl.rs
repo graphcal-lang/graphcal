@@ -9,7 +9,7 @@ use pretty::RcDoc;
 
 use super::{
     Formatter, INDENT, flat_alt_group, format_dim_expr_inline, format_expr,
-    format_type_expr_inline, format_unit_expr_inline, render_doc_to_string,
+    format_type_expr_inline, format_unit_expr_inline, render_doc_to_string, soft_parenthesized,
 };
 
 // ---------------------------------------------------------------------------
@@ -217,9 +217,7 @@ fn format_unit_def(fmt: &mut Formatter<'_>, def: &UnitDef) -> RcDoc<'static> {
     // complex expressions are wrapped in parentheses.
     let scale_doc = match &def.scale_expr.kind {
         ExprKind::Number(_) | ExprKind::Integer(_) => format_expr(fmt, &def.scale_expr),
-        _ => RcDoc::text("(")
-            .append(format_expr(fmt, &def.scale_expr))
-            .append(RcDoc::text(")")),
+        _ => soft_parenthesized(format_expr(fmt, &def.scale_expr)),
     };
     scale_doc
         .append(RcDoc::text(" "))
@@ -346,14 +344,19 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
             let header =
                 RcDoc::text("index ").append(RcDoc::text(d.name.value.as_str().to_string()));
 
+            let args = RcDoc::intersperse(
+                [
+                    format_expr(fmt, start),
+                    format_expr(fmt, end),
+                    RcDoc::text("step: ").append(format_expr(fmt, step)),
+                ],
+                RcDoc::text(",").append(RcDoc::line()),
+            );
+
             header
-                .append(RcDoc::text(" = linspace("))
-                .append(format_expr(fmt, start))
-                .append(RcDoc::text(", "))
-                .append(format_expr(fmt, end))
-                .append(RcDoc::text(", step: "))
-                .append(format_expr(fmt, step))
-                .append(RcDoc::text(");"))
+                .append(RcDoc::text(" = linspace"))
+                .append(soft_parenthesized(args))
+                .append(RcDoc::text(";"))
         }
     }
 }
@@ -464,9 +467,10 @@ fn format_include_param_bindings(
                 .append(format_expr(fmt, &b.value))
         })
         .collect();
-    RcDoc::text("(")
-        .append(RcDoc::intersperse(binding_docs, RcDoc::text(", ")))
-        .append(RcDoc::text(")"))
+    soft_parenthesized(RcDoc::intersperse(
+        binding_docs,
+        RcDoc::text(",").append(RcDoc::line()),
+    ))
 }
 
 /// `plot name = { mark: type, encode: { x: ..., y: ... }, title: "..." };`

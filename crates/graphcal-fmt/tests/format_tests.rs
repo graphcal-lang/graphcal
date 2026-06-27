@@ -222,6 +222,27 @@ fn format_no_unnecessary_parens() {
     );
 }
 
+#[test]
+fn format_multiline_function_argument_starts_on_own_line() {
+    let source = "\
+index Item = { A };
+node total: Number = sum(for x: Item {
+    match @kind {
+        A => @a,
+    }
+});
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("sum(\n    for x: Item {\n        match @kind"),
+        "multiline function argument should start on its own line:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("\n    }\n);"),
+        "function closing paren should align after multiline argument:\n{formatted}"
+    );
+}
+
 // Issue #575: load-bearing parens around a binary-op operand of unary `!` or
 // around the lhs of `^` must survive the formatter.
 

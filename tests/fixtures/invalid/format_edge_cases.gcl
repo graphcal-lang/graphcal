@@ -39,7 +39,9 @@ dag compute_transfer_velocity {
 
     node v2: Velocity = sqrt(@gm / @r_arrival);
 
-    node dv_hohmann: Velocity = sqrt(2.0 * @gm * @r_arrival / (@r_departure * (@r_departure + @r_arrival))) - @v1;
+    node dv_hohmann: Velocity = sqrt(
+        2.0 * @gm * @r_arrival / (@r_departure * (@r_departure + @r_arrival))
+    ) - @v1;
 
     node dv_plane: Velocity = 2.0 * @v1 * sin(@inclination_change / 2.0);
 
@@ -119,14 +121,19 @@ node state_body: StateVec<Length, Velocity, Body> = StateVec<Length, Velocity, B
 node body_pos_x: Length = @state_body.pos_x;
 
 // Long binary expression chains
-node combined_metric: Dimensionless = (@phase_priority[Phase.Launch] + @phase_priority[Phase.Coast] + @phase_priority[Phase.Burn] + @phase_priority[Phase.Insertion] + @phase_priority[Phase.Deorbit]) / 5.0;
+node combined_metric: Dimensionless = (
+    @phase_priority[Phase.Launch] + @phase_priority[Phase.Coast] + @phase_priority[Phase.Burn] + @phase_priority[Phase.Insertion] + @phase_priority[Phase.Deorbit]
+) / 5.0;
 
 // Scan with complex body
 node cumulative_priority: Dimensionless[Phase] = scan(@phase_priority, 0.0, |acc, val| acc + val);
 
 // Unfold with complex body
 const node decay_rate: Frequency = 0.5 Hz;
-node decay: Dimensionless[Step] = unfold(100.0, |prev_t, t| @decay[prev_t] * (1.0 - @decay_rate * (t - prev_t)));
+node decay: Dimensionless[Step] = unfold(
+    100.0,
+    |prev_t, t| @decay[prev_t] * (1.0 - @decay_rate * (t - prev_t))
+);
 
 // DAG for complex result computation
 dag compute_complex_result {
