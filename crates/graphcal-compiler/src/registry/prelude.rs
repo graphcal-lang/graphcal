@@ -133,16 +133,16 @@ fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
 
 fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RationalError> {
     let velocity = (&ids.length / &ids.time)?;
-    let time_squared = ids.time.pow_int(2)?;
+    let time_squared = ids.time.pow(2)?;
     let acceleration = (&ids.length / &time_squared)?;
     let force = (&ids.mass * &acceleration)?;
     let energy = (&force * &ids.length)?;
     let power = (&energy / &ids.time)?;
     let frequency = (Dimension::dimensionless() / ids.time.clone())?;
-    let length_squared = ids.length.pow_int(2)?;
+    let length_squared = ids.length.pow(2)?;
     let pressure = (&force / &length_squared)?;
-    let area = ids.length.pow_int(2)?;
-    let volume = ids.length.pow_int(3)?;
+    let area = ids.length.pow(2)?;
+    let volume = ids.length.pow(3)?;
 
     r.register_dimension(DimName::new("Velocity"), velocity);
     r.register_dimension(DimName::new("Acceleration"), acceleration);
@@ -185,11 +185,11 @@ fn load_base_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
 
 fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RationalError> {
     let mass_length = (&ids.mass * &ids.length)?;
-    let time_squared = ids.time.pow_int(2)?;
+    let time_squared = ids.time.pow(2)?;
     let force = (mass_length / time_squared)?;
     let energy = (&force * &ids.length)?;
     let power = (&energy / &ids.time)?;
-    let length_squared = ids.length.pow_int(2)?;
+    let length_squared = ids.length.pow(2)?;
     let pressure = (&force / &length_squared)?;
     let frequency = (Dimension::dimensionless() / ids.time.clone())?;
 
@@ -321,7 +321,7 @@ mod tests {
         // Force = Mass * Length / Time^2
         assert_eq!(force.get_exponent(&mass_id()), Rational::ONE);
         assert_eq!(force.get_exponent(&length_id()), Rational::ONE);
-        assert_eq!(force.get_exponent(&time_id()), Rational::from_int(-2));
+        assert_eq!(force.get_exponent(&time_id()), Rational::from(-2));
     }
 
     #[test]

@@ -1441,15 +1441,14 @@ mod tests {
                 UnitExprItem {
                     op: MulDivOp::Div,
                     name: make_unit_name("s"),
-                    power: Some(Rational::from_int(2)),
+                    power: Some(Rational::from(2)),
                 },
             ],
             span: Span::new(0, 0),
         };
         let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap();
-        let expected_dim = (Dimension::base(length_id())
-            / Dimension::base(time_id()).pow_int(2).unwrap())
-        .unwrap();
+        let expected_dim =
+            (Dimension::base(length_id()) / Dimension::base(time_id()).pow(2).unwrap()).unwrap();
         assert_eq!(dim, expected_dim);
         assert!((scale - 1.0).abs() < f64::EPSILON);
     }
