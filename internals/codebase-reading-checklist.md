@@ -113,11 +113,11 @@ Note: `tir/typed.rs`, `tir/dim_check/helpers.rs`, and `tir/dim_check/mod.rs` are
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/format_equivalent.rs`
-- [ ] `crates/graphcal-compiler/src/syntax/ast/plot_props.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/multi.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
+- [ ] `crates/graphcal-compiler/src/plot_props.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
 
 ## Stage 9 - Filesystem abstraction (`graphcal-io`)

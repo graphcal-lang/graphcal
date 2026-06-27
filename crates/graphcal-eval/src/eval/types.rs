@@ -616,7 +616,9 @@ impl EvalResult {
 // The typed property registry (names, value types, Vega names) lives in the
 // compiler so resolution-time validation and runtime evaluation dispatch on
 // one source of truth (#845).
-pub use graphcal_compiler::syntax::ast::{CompositionProperty, MarkProperty, PlotProperty};
+pub use graphcal_compiler::plot_props::{
+    CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType,
+};
 
 /// A single evaluated plot specification.
 #[derive(Debug, Clone)]

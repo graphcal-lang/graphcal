@@ -10,6 +10,7 @@ pub mod dimension;
 pub mod hir;
 pub mod ir;
 pub mod nat;
+pub mod plot_props;
 pub mod registry;
 pub mod stack;
 pub mod syntax;

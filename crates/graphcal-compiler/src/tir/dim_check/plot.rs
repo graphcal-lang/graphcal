@@ -1,7 +1,7 @@
 //! Static validation of plot, mark, and figure/layer properties (#845).
 //!
 //! Property names are checked against the typed registry in
-//! [`crate::syntax::ast::plot_props`], and property values are type-checked
+//! [`crate::plot_props`], and property values are type-checked
 //! (string literal vs. dimensionless number vs. boolean). A typo'd or
 //! wrongly-typed property is a check-time error, never a silently dropped
 //! field; a dimensioned value is rejected instead of having its unit
@@ -9,8 +9,8 @@
 
 use crate::hir::ExprKind;
 use crate::ir::lower::LoweredPlotField;
+use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
 use crate::registry::error::GraphcalError;
-use crate::syntax::ast::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
 
 use super::{DimCheckContext, InferredType, helpers::format_inferred_type, infer};
 

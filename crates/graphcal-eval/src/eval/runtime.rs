@@ -1487,10 +1487,10 @@ fn eval_composition_fields(
 /// (#845).
 fn check_positive_property(
     property: &'static str,
-    value_type: graphcal_compiler::syntax::ast::PlotPropertyType,
+    value_type: super::types::PlotPropertyType,
     value: &PlotFieldValue,
 ) -> Result<(), String> {
-    if value_type != graphcal_compiler::syntax::ast::PlotPropertyType::PositiveNumber {
+    if value_type != super::types::PlotPropertyType::PositiveNumber {
         return Ok(());
     }
     match value {

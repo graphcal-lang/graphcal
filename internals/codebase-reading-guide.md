@@ -417,8 +417,9 @@ The compiler crate owns the functional core through TIR.
 | `syntax/ast/common.rs`        | Shared AST nodes and typed common fields                      |
 | `syntax/ast/value.rs`         | Expression/value AST definitions                              |
 | `syntax/ast/decl.rs`          | Declaration AST definitions                                   |
-| `syntax/ast/plot_props.rs`    | Typed plot/figure/layer property keys and values              |
+| `syntax/ast/plot_props.rs`    | Syntax-level plot/figure/layer property names                 |
 | `syntax/ast/format_equivalent.rs` | Surface-equivalence checks used by formatting/tooling     |
+| `plot_props.rs`               | Semantic plot/mark/composition property registry              |
 | `syntax/phase.rs`             | `Raw`, `Desugared`, sugar/path slots, `never`                 |
 | `syntax/names.rs`             | `NameAtom`, typed name newtypes, paths, resolved names        |
 | `nat.rs`                      | Normalized type-level Nat polynomial forms                    |
@@ -1012,11 +1013,12 @@ For a first pass, read in pipeline order:
 24. `crates/graphcal-compiler/src/dag_id.rs`
 25. `crates/graphcal-compiler/src/tir/typed.rs`
 26. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
-27. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
-28. `crates/graphcal-io/src/lib.rs`
-29. `crates/graphcal-eval/src/loader.rs`
-30. `crates/graphcal-eval/src/eval/project/pipeline.rs`
-31. `crates/graphcal-eval/src/eval/project/lowering.rs`
+27. `crates/graphcal-compiler/src/plot_props.rs`
+28. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+29. `crates/graphcal-io/src/lib.rs`
+30. `crates/graphcal-eval/src/loader.rs`
+31. `crates/graphcal-eval/src/eval/project/pipeline.rs`
+32. `crates/graphcal-eval/src/eval/project/lowering.rs`
 32. `crates/graphcal-eval/src/inline_dag.rs`
 33. `crates/graphcal-eval/src/exec_plan.rs`
 34. `crates/graphcal-eval/src/decl_key.rs`
