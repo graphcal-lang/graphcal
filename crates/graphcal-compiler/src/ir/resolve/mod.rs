@@ -136,7 +136,7 @@ fn check_exclusive_universe_collisions(
         .filter(|(name, _)| !name.is_qualified())
         .map(|(name, span)| {
             (
-                DeclName::new(name.member()).into_atom(),
+                DeclName::expect_valid(name.member()).into_atom(),
                 (ExclusiveUniverse::Value, *span),
             )
         })
@@ -322,7 +322,7 @@ fn collect_local_declarations(
         let Some((name, _)) = decl.kind.name_and_span() else {
             continue;
         };
-        pub_names.insert(DeclName::new(name));
+        pub_names.insert(DeclName::expect_valid(name));
     }
 
     // Validate: required `index`, `type`, `dim` must be `pub(bind)` (V002).
@@ -396,7 +396,7 @@ fn collect_local_declarations(
             DeclKind::ConstNode(_) => DeclCategory::Const,
             DeclKind::Node(_) => DeclCategory::Node,
             DeclKind::Assert(_) => {
-                assert_names.insert(DeclName::new(name.as_str()));
+                assert_names.insert(DeclName::expect_valid(name.as_str()));
                 DeclCategory::Assert
             }
             DeclKind::Plot(_) => DeclCategory::Plot,
@@ -415,7 +415,7 @@ fn collect_local_declarations(
             }
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
         };
-        source_order.push((DeclName::new(name.as_str()), category));
+        source_order.push((DeclName::expect_valid(name.as_str()), category));
     }
 
     // Second pass: collect declaration entries. Reference validation and
@@ -593,7 +593,7 @@ fn validate_attributes(
                         }
                         if let Some(ref dname) = decl_name {
                             assumes_map
-                                .entry(DeclName::new(arg_name))
+                                .entry(DeclName::expect_valid(arg_name))
                                 .or_default()
                                 .push(dname.clone());
                         }
@@ -968,7 +968,7 @@ pub(crate) fn resolve_with_imports(
     // Build assert names (imported + local) for attribute validation
     let mut all_assert_names: HashSet<DeclName> = HashSet::new();
     for (name, _, _) in &imported.asserts {
-        all_assert_names.insert(DeclName::new(name.as_str()));
+        all_assert_names.insert(DeclName::expect_valid(name.as_str()));
     }
     all_assert_names.extend(local.assert_names.iter().cloned());
 
@@ -1018,16 +1018,16 @@ pub(crate) fn resolve_with_imports(
     // Prepend imported source_order entries
     let mut all_source_order: Vec<(DeclName, DeclCategory)> = Vec::new();
     for (name, _, _, _) in &imported.consts {
-        all_source_order.push((DeclName::new(name.as_str()), DeclCategory::Const));
+        all_source_order.push((DeclName::expect_valid(name.as_str()), DeclCategory::Const));
     }
     for (name, _, _, _) in &imported.params {
-        all_source_order.push((DeclName::new(name.as_str()), DeclCategory::Param));
+        all_source_order.push((DeclName::expect_valid(name.as_str()), DeclCategory::Param));
     }
     for (name, _, _, _) in &imported.nodes {
-        all_source_order.push((DeclName::new(name.as_str()), DeclCategory::Node));
+        all_source_order.push((DeclName::expect_valid(name.as_str()), DeclCategory::Node));
     }
     for (name, _, _) in &imported.asserts {
-        all_source_order.push((DeclName::new(name.as_str()), DeclCategory::Assert));
+        all_source_order.push((DeclName::expect_valid(name.as_str()), DeclCategory::Assert));
     }
     all_source_order.extend(local.source_order);
 

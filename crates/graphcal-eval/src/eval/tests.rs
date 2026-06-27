@@ -139,7 +139,7 @@ fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
     let crate::eval_expr::RuntimeValue::Indexed { entries, .. } = &values[&key] else {
         panic!("expected indexed value, got {:?}", values[&key]);
     };
-    let burn = graphcal_compiler::syntax::names::IndexVariantName::new("Burn");
+    let burn = graphcal_compiler::syntax::names::IndexVariantName::expect_valid("Burn");
     let value = entries[&burn].expect_scalar("Burn entry").unwrap();
     assert!((value - 1.0).abs() < f64::EPSILON);
 }
@@ -974,7 +974,7 @@ fn override_param_changes_result() {
     let default_dv = find_value(&default, "delta_v");
 
     let mut overrides = HashMap::new();
-    overrides.insert(DeclName::new("isp"), parse_expr("450.0 s"));
+    overrides.insert(DeclName::expect_valid("isp"), parse_expr("450.0 s"));
     let overridden = compile_and_eval_with_overrides(source, "test.gcl", &overrides).unwrap();
     let new_dv = find_value(&overridden, "delta_v");
 
@@ -986,7 +986,7 @@ fn override_with_wrong_dimension_errors() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     // isp expects Time, not Mass
     let mut overrides = HashMap::new();
-    overrides.insert(DeclName::new("isp"), parse_expr("450.0 kg"));
+    overrides.insert(DeclName::expect_valid("isp"), parse_expr("450.0 kg"));
     let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     assert!(result.is_err());
 }
@@ -995,7 +995,7 @@ fn override_with_wrong_dimension_errors() {
 fn override_node_errors() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     let mut overrides = HashMap::new();
-    overrides.insert(DeclName::new("delta_v"), parse_expr("100.0 m/s"));
+    overrides.insert(DeclName::expect_valid("delta_v"), parse_expr("100.0 m/s"));
     let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
@@ -1010,7 +1010,7 @@ fn override_node_errors() {
 fn override_const_errors() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     let mut overrides = HashMap::new();
-    overrides.insert(DeclName::new("g0"), parse_expr("10.0 m/s^2"));
+    overrides.insert(DeclName::expect_valid("g0"), parse_expr("10.0 m/s^2"));
     let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
@@ -1025,7 +1025,7 @@ fn override_const_errors() {
 fn override_unknown_param_errors() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     let mut overrides = HashMap::new();
-    overrides.insert(DeclName::new("nonexistent"), parse_expr("100"));
+    overrides.insert(DeclName::expect_valid("nonexistent"), parse_expr("100"));
     let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideUnknownParam { name })) => {
@@ -1051,7 +1051,7 @@ fn required_param_without_override_errors() {
 fn required_param_with_override_succeeds() {
     let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
     let mut overrides = HashMap::new();
-    overrides.insert(DeclName::new("x"), parse_expr("42.0"));
+    overrides.insert(DeclName::expect_valid("x"), parse_expr("42.0"));
     let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides).unwrap();
     let y = find_value(&result, "y");
     assert!((y - 43.0).abs() < f64::EPSILON, "y = {y}, expected 43.0");
@@ -1745,11 +1745,11 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let expr = &tir.root().semantic.expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
-        graphcal_compiler::syntax::names::StructTypeName::new("Command"),
+        graphcal_compiler::syntax::names::StructTypeName::expect_valid("Command"),
     );
     let mut fields = indexmap::IndexMap::new();
     fields.insert(
-        graphcal_compiler::syntax::names::FieldName::new("distance"),
+        graphcal_compiler::syntax::names::FieldName::expect_valid("distance"),
         crate::eval_expr::RuntimeValue::Scalar(9.0),
     );
     let values = HashMap::from([(
@@ -1759,7 +1759,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         ),
         crate::eval_expr::RuntimeValue::Struct {
             type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
-                graphcal_compiler::syntax::names::StructTypeName::new("Pick"),
+                graphcal_compiler::syntax::names::StructTypeName::expect_valid("Pick"),
                 b_owner,
             ),
             fields,
@@ -1810,11 +1810,11 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let expr = &tir.root().semantic.expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
-        graphcal_compiler::syntax::names::StructTypeName::new("Item"),
+        graphcal_compiler::syntax::names::StructTypeName::expect_valid("Item"),
     );
     let mut fields = indexmap::IndexMap::new();
     fields.insert(
-        graphcal_compiler::syntax::names::FieldName::new("distance"),
+        graphcal_compiler::syntax::names::FieldName::expect_valid("distance"),
         crate::eval_expr::RuntimeValue::Scalar(99.0),
     );
     let values = HashMap::from([(
@@ -1824,7 +1824,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         ),
         crate::eval_expr::RuntimeValue::Struct {
             type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
-                graphcal_compiler::syntax::names::StructTypeName::new("Item"),
+                graphcal_compiler::syntax::names::StructTypeName::expect_valid("Item"),
                 b_owner,
             ),
             fields,
@@ -2373,15 +2373,15 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let expr = &tir.root().semantic.expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
-        graphcal_compiler::syntax::names::IndexName::new("Phase"),
+        graphcal_compiler::syntax::names::IndexName::expect_valid("Phase"),
     );
     let mut entries = indexmap::IndexMap::new();
     entries.insert(
-        graphcal_compiler::syntax::names::IndexVariantName::new("Burn"),
+        graphcal_compiler::syntax::names::IndexVariantName::expect_valid("Burn"),
         crate::eval_expr::RuntimeValue::Scalar(99.0),
     );
     entries.insert(
-        graphcal_compiler::syntax::names::IndexVariantName::new("Coast"),
+        graphcal_compiler::syntax::names::IndexVariantName::expect_valid("Coast"),
         crate::eval_expr::RuntimeValue::Scalar(100.0),
     );
     let values = HashMap::from([(
@@ -2449,7 +2449,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let match_expr = body;
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
-        graphcal_compiler::syntax::names::IndexName::new("Phase"),
+        graphcal_compiler::syntax::names::IndexName::expect_valid("Phase"),
     );
     let values = HashMap::new();
     let local_values = crate::eval_expr::HirLocalValueMap::from_bindings(vec![(
@@ -2458,7 +2458,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
                 b_owner,
             ),
-            variant: graphcal_compiler::syntax::names::IndexVariantName::new("Burn"),
+            variant: graphcal_compiler::syntax::names::IndexVariantName::expect_valid("Burn"),
         },
     )]);
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
@@ -2550,7 +2550,7 @@ fn cli_partial_override_uses_defaults() {
     // When overrides are provided for some params, the rest fall back to defaults.
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     let mut overrides = HashMap::new();
-    overrides.insert(DeclName::new("isp"), parse_expr("450.0 s"));
+    overrides.insert(DeclName::expect_valid("isp"), parse_expr("450.0 s"));
     let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     assert!(
         result.is_ok(),
@@ -3399,8 +3399,8 @@ fn eval_overrides_route_selective_same_leaf_params_by_owner() {
     .unwrap();
 
     let mut overrides = HashMap::new();
-    overrides.insert(DeclName::new("a_shared"), parse_expr("20.0"));
-    overrides.insert(DeclName::new("b_shared"), parse_expr("30.0"));
+    overrides.insert(DeclName::expect_valid("a_shared"), parse_expr("20.0"));
+    overrides.insert(DeclName::expect_valid("b_shared"), parse_expr("30.0"));
     let result = compile_and_eval_project(&root, &overrides, None, &fs()).unwrap();
     let total = find_value(&result, "total");
     assert!((total - 50.0).abs() < 1e-10, "total = {total}");

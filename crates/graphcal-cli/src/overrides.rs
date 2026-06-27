@@ -233,15 +233,15 @@ mod tests {
         let set = vec!["x=1.0 m".to_string(), "y=2".to_string()];
         let overrides = parse_overrides(&set, None, None).unwrap();
         assert_eq!(overrides.len(), 2);
-        assert!(overrides.contains_key(&DeclName::new("x")));
-        assert!(overrides.contains_key(&DeclName::new("y")));
+        assert!(overrides.contains_key(&DeclName::expect_valid("x")));
+        assert!(overrides.contains_key(&DeclName::expect_valid("y")));
     }
 
     #[test]
     fn parse_overrides_trims_whitespace() {
         let set = vec!["  x  =  42  ".to_string()];
         let overrides = parse_overrides(&set, None, None).unwrap();
-        assert!(overrides.contains_key(&DeclName::new("x")));
+        assert!(overrides.contains_key(&DeclName::expect_valid("x")));
     }
 
     #[test]
@@ -330,7 +330,7 @@ mod tests {
         std::fs::write(&path, r#"{"x": "1.0 m"}"#).unwrap();
 
         let overrides = parse_overrides(&[], Some(&path), Some(DEFAULT_INPUT_MAX_BYTES)).unwrap();
-        assert!(overrides.contains_key(&DeclName::new("x")));
+        assert!(overrides.contains_key(&DeclName::expect_valid("x")));
     }
 
     #[test]
@@ -345,6 +345,6 @@ mod tests {
         // (the name-uniqueness proves precedence — the actual expr shape is
         // tested in json_input / parser tests).
         assert_eq!(overrides.len(), 1);
-        assert!(overrides.contains_key(&DeclName::new("x")));
+        assert!(overrides.contains_key(&DeclName::expect_valid("x")));
     }
 }

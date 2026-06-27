@@ -4,7 +4,6 @@ use crate::syntax::ast::{
 };
 use crate::syntax::names::FieldName;
 use crate::syntax::span::Span;
-use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
@@ -93,7 +92,7 @@ impl Parser<'_> {
     /// - `field_name: _` (wildcard)
     fn parse_pattern_binding(&mut self) -> Result<PatternBinding, ParseError> {
         let field_ident = self.parse_any_ident()?;
-        let field = Spanned::new(FieldName::new(&field_ident.name), field_ident.span);
+        let field = field_ident.into_spanned::<FieldName>();
 
         self.expect(Token::Colon)?;
         // Check for wildcard `_`

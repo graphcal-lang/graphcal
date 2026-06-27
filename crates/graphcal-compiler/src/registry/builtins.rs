@@ -53,7 +53,7 @@ const fn dimensionless() -> Dimension {
 }
 
 fn dim_var_d() -> DimVarName {
-    DimVarName::new("D")
+    DimVarName::expect_valid("D")
 }
 
 fn angle() -> Dimension {

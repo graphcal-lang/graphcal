@@ -36,7 +36,7 @@ mod tests {
             declarations: vec![Declaration {
                 attributes: vec![],
                 kind: DeclKind::Param(ParamDecl {
-                    name: Spanned::new(DeclName::new("x"), Span::new(6, 1)),
+                    name: Spanned::new(DeclName::expect_valid("x"), Span::new(6, 1)),
                     type_ann: TypeExpr {
                         kind: TypeExprKind::Dimensionless,
                         constraints: vec![],

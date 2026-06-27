@@ -75,22 +75,22 @@ fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
     use crate::syntax::dimension::BaseDimId;
 
     let length_id = r.register_base_dimension_with_symbol(
-        DimName::new("Length"),
+        DimName::expect_valid("Length"),
         BaseDimId::Prelude("Length".to_string()),
         "m".to_string(),
     );
     let time_id = r.register_base_dimension_with_symbol(
-        DimName::new("Time"),
+        DimName::expect_valid("Time"),
         BaseDimId::Prelude("Time".to_string()),
         "s".to_string(),
     );
     let mass_id = r.register_base_dimension_with_symbol(
-        DimName::new("Mass"),
+        DimName::expect_valid("Mass"),
         BaseDimId::Prelude("Mass".to_string()),
         "kg".to_string(),
     );
     let temperature_id = r.register_base_dimension_with_symbol(
-        DimName::new("Temperature"),
+        DimName::expect_valid("Temperature"),
         BaseDimId::Prelude("Temperature".to_string()),
         "K".to_string(),
     );
@@ -99,22 +99,22 @@ fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
     // silently display wrong values (#648 U4).
     r.mark_affine_prone(temperature_id.clone());
     let electric_current_id = r.register_base_dimension_with_symbol(
-        DimName::new("ElectricCurrent"),
+        DimName::expect_valid("ElectricCurrent"),
         BaseDimId::Prelude("ElectricCurrent".to_string()),
         "A".to_string(),
     );
     let amount_id = r.register_base_dimension_with_symbol(
-        DimName::new("Amount"),
+        DimName::expect_valid("Amount"),
         BaseDimId::Prelude("Amount".to_string()),
         "mol".to_string(),
     );
     let luminous_intensity_id = r.register_base_dimension_with_symbol(
-        DimName::new("LuminousIntensity"),
+        DimName::expect_valid("LuminousIntensity"),
         BaseDimId::Prelude("LuminousIntensity".to_string()),
         "cd".to_string(),
     );
     let angle_id = r.register_base_dimension_with_symbol(
-        DimName::new("Angle"),
+        DimName::expect_valid("Angle"),
         BaseDimId::Prelude("Angle".to_string()),
         "rad".to_string(),
     );
@@ -144,15 +144,15 @@ fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<
     let area = ids.length.pow(2)?;
     let volume = ids.length.pow(3)?;
 
-    r.register_dimension(DimName::new("Velocity"), velocity);
-    r.register_dimension(DimName::new("Acceleration"), acceleration);
-    r.register_dimension(DimName::new("Force"), force);
-    r.register_dimension(DimName::new("Energy"), energy);
-    r.register_dimension(DimName::new("Power"), power);
-    r.register_dimension(DimName::new("Frequency"), frequency);
-    r.register_dimension(DimName::new("Pressure"), pressure);
-    r.register_dimension(DimName::new("Area"), area);
-    r.register_dimension(DimName::new("Volume"), volume);
+    r.register_dimension(DimName::expect_valid("Velocity"), velocity);
+    r.register_dimension(DimName::expect_valid("Acceleration"), acceleration);
+    r.register_dimension(DimName::expect_valid("Force"), force);
+    r.register_dimension(DimName::expect_valid("Energy"), energy);
+    r.register_dimension(DimName::expect_valid("Power"), power);
+    r.register_dimension(DimName::expect_valid("Frequency"), frequency);
+    r.register_dimension(DimName::expect_valid("Pressure"), pressure);
+    r.register_dimension(DimName::expect_valid("Area"), area);
+    r.register_dimension(DimName::expect_valid("Volume"), volume);
     Ok(())
 }
 
@@ -161,26 +161,46 @@ const fn prelude_scale(value: f64) -> PositiveFiniteScale {
 }
 
 fn load_base_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
-    r.register_unit(UnitName::new("m"), ids.length.clone(), prelude_scale(1.0));
-    r.register_unit(UnitName::new("s"), ids.time.clone(), prelude_scale(1.0));
-    r.register_unit(UnitName::new("kg"), ids.mass.clone(), prelude_scale(1.0));
     r.register_unit(
-        UnitName::new("K"),
+        UnitName::expect_valid("m"),
+        ids.length.clone(),
+        prelude_scale(1.0),
+    );
+    r.register_unit(
+        UnitName::expect_valid("s"),
+        ids.time.clone(),
+        prelude_scale(1.0),
+    );
+    r.register_unit(
+        UnitName::expect_valid("kg"),
+        ids.mass.clone(),
+        prelude_scale(1.0),
+    );
+    r.register_unit(
+        UnitName::expect_valid("K"),
         ids.temperature.clone(),
         prelude_scale(1.0),
     );
     r.register_unit(
-        UnitName::new("A"),
+        UnitName::expect_valid("A"),
         ids.electric_current.clone(),
         prelude_scale(1.0),
     );
-    r.register_unit(UnitName::new("mol"), ids.amount.clone(), prelude_scale(1.0));
     r.register_unit(
-        UnitName::new("cd"),
+        UnitName::expect_valid("mol"),
+        ids.amount.clone(),
+        prelude_scale(1.0),
+    );
+    r.register_unit(
+        UnitName::expect_valid("cd"),
         ids.luminous_intensity.clone(),
         prelude_scale(1.0),
     );
-    r.register_unit(UnitName::new("rad"), ids.angle.clone(), prelude_scale(1.0));
+    r.register_unit(
+        UnitName::expect_valid("rad"),
+        ids.angle.clone(),
+        prelude_scale(1.0),
+    );
 }
 
 fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RationalError> {
@@ -195,58 +215,90 @@ fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), R
 
     // Length
     r.register_unit(
-        UnitName::new("km"),
+        UnitName::expect_valid("km"),
         ids.length.clone(),
         prelude_scale(1000.0),
     );
-    r.register_unit(UnitName::new("cm"), ids.length.clone(), prelude_scale(0.01));
     r.register_unit(
-        UnitName::new("mm"),
+        UnitName::expect_valid("cm"),
+        ids.length.clone(),
+        prelude_scale(0.01),
+    );
+    r.register_unit(
+        UnitName::expect_valid("mm"),
         ids.length.clone(),
         prelude_scale(0.001),
     );
 
     // Time
     r.register_unit(
-        UnitName::new("hour"),
+        UnitName::expect_valid("hour"),
         ids.time.clone(),
         prelude_scale(3600.0),
     );
-    r.register_unit(UnitName::new("min"), ids.time.clone(), prelude_scale(60.0));
+    r.register_unit(
+        UnitName::expect_valid("min"),
+        ids.time.clone(),
+        prelude_scale(60.0),
+    );
 
     // Angle
     r.register_unit(
-        UnitName::new("deg"),
+        UnitName::expect_valid("deg"),
         ids.angle.clone(),
         prelude_scale(std::f64::consts::PI / 180.0),
     );
 
     // Mass
-    r.register_unit(UnitName::new("g"), ids.mass.clone(), prelude_scale(0.001));
+    r.register_unit(
+        UnitName::expect_valid("g"),
+        ids.mass.clone(),
+        prelude_scale(0.001),
+    );
 
     // Force
-    r.register_unit(UnitName::new("N"), force.clone(), prelude_scale(1.0));
-    r.register_unit(UnitName::new("kN"), force, prelude_scale(1000.0));
+    r.register_unit(
+        UnitName::expect_valid("N"),
+        force.clone(),
+        prelude_scale(1.0),
+    );
+    r.register_unit(UnitName::expect_valid("kN"), force, prelude_scale(1000.0));
 
     // Energy
-    r.register_unit(UnitName::new("J"), energy.clone(), prelude_scale(1.0));
-    r.register_unit(UnitName::new("kJ"), energy, prelude_scale(1000.0));
+    r.register_unit(
+        UnitName::expect_valid("J"),
+        energy.clone(),
+        prelude_scale(1.0),
+    );
+    r.register_unit(UnitName::expect_valid("kJ"), energy, prelude_scale(1000.0));
 
     // Power
-    r.register_unit(UnitName::new("W"), power.clone(), prelude_scale(1.0));
-    r.register_unit(UnitName::new("kW"), power, prelude_scale(1000.0));
+    r.register_unit(
+        UnitName::expect_valid("W"),
+        power.clone(),
+        prelude_scale(1.0),
+    );
+    r.register_unit(UnitName::expect_valid("kW"), power, prelude_scale(1000.0));
 
     // Pressure
-    r.register_unit(UnitName::new("Pa"), pressure.clone(), prelude_scale(1.0));
     r.register_unit(
-        UnitName::new("kPa"),
+        UnitName::expect_valid("Pa"),
+        pressure.clone(),
+        prelude_scale(1.0),
+    );
+    r.register_unit(
+        UnitName::expect_valid("kPa"),
         pressure.clone(),
         prelude_scale(1000.0),
     );
-    r.register_unit(UnitName::new("MPa"), pressure, prelude_scale(1_000_000.0));
+    r.register_unit(
+        UnitName::expect_valid("MPa"),
+        pressure,
+        prelude_scale(1_000_000.0),
+    );
 
     // Frequency
-    r.register_unit(UnitName::new("Hz"), frequency, prelude_scale(1.0));
+    r.register_unit(UnitName::expect_valid("Hz"), frequency, prelude_scale(1.0));
     Ok(())
 }
 
@@ -332,7 +384,9 @@ mod tests {
         let force_dim = r.dimensions.get_dimension("Force").unwrap().clone();
         let newton = r
             .units
-            .get_unit(&crate::syntax::names::UnitRef::local("N"))
+            .get_unit(&crate::syntax::names::UnitRef::local(
+                crate::syntax::names::UnitName::expect_valid("N"),
+            ))
             .unwrap();
         assert_eq!(newton.dimension, force_dim);
         assert!((newton.scale.as_static().unwrap() - 1.0).abs() < f64::EPSILON);
@@ -345,7 +399,9 @@ mod tests {
         let r = b.try_build().unwrap();
         let km = r
             .units
-            .get_unit(&crate::syntax::names::UnitRef::local("km"))
+            .get_unit(&crate::syntax::names::UnitRef::local(
+                UnitName::expect_valid("km"),
+            ))
             .unwrap();
         assert!((km.scale.as_static().unwrap() - 1000.0).abs() < f64::EPSILON);
     }
@@ -357,7 +413,9 @@ mod tests {
         let r = b.try_build().unwrap();
         let deg = r
             .units
-            .get_unit(&crate::syntax::names::UnitRef::local("deg"))
+            .get_unit(&crate::syntax::names::UnitRef::local(
+                crate::syntax::names::UnitName::expect_valid("deg"),
+            ))
             .unwrap();
         assert!((deg.scale.as_static().unwrap() - std::f64::consts::PI / 180.0).abs() < 1e-15);
     }

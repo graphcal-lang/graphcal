@@ -1539,7 +1539,7 @@ impl<'a> ExprLowerer<'a> {
             if let Ok(scale) = name.member().parse::<TimeScale>() {
                 return Ok(ConstRef::TimeScale(scale));
             }
-            let generic_name = GenericParamName::new(name.member());
+            let generic_name = GenericParamName::expect_valid(name.member());
             if let Some(binding) = self.ctx.generic_scope.get(&generic_name)
                 && binding.constraint == ast::GenericConstraint::Nat
             {
@@ -1667,7 +1667,7 @@ impl<'a> ExprLowerer<'a> {
         };
         if got != function.arity() {
             return Err(ExprLowerError::WrongArity {
-                name: crate::syntax::names::FnName::new(builtin.as_str()),
+                name: crate::syntax::names::FnName::expect_valid(builtin.as_str()),
                 expected: function.arity(),
                 got,
                 span,

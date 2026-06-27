@@ -511,13 +511,13 @@ pub(crate) fn lower_to_builder(
     // DeclName-keyed.
     let mut type_anns = extract_type_annotations(ast);
     for (name, type_ann, _, _) in &imported.consts {
-        type_anns.insert(DeclName::new(name.clone()), type_ann.clone());
+        type_anns.insert(DeclName::expect_valid(name.clone()), type_ann.clone());
     }
     for (name, type_ann, _, _) in &imported.params {
-        type_anns.insert(DeclName::new(name.clone()), type_ann.clone());
+        type_anns.insert(DeclName::expect_valid(name.clone()), type_ann.clone());
     }
     for (name, type_ann, _, _) in &imported.nodes {
-        type_anns.insert(DeclName::new(name.clone()), type_ann.clone());
+        type_anns.insert(DeclName::expect_valid(name.clone()), type_ann.clone());
     }
 
     // Step 3: Build registry, augment deps, and construct IR
@@ -862,7 +862,7 @@ fn build_ir_from_resolved(
         .consts
         .into_iter()
         .map(|entry| {
-            let decl_name = DeclName::new(entry.name);
+            let decl_name = DeclName::expect_valid(entry.name);
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenConstEntry {
                 name: ScopedName::from(decl_name),
@@ -879,7 +879,7 @@ fn build_ir_from_resolved(
         .params
         .into_iter()
         .map(|entry| {
-            let decl_name = DeclName::new(entry.name);
+            let decl_name = DeclName::expect_valid(entry.name);
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenParamEntry {
                 name: ScopedName::from(decl_name),
@@ -896,7 +896,7 @@ fn build_ir_from_resolved(
         .nodes
         .into_iter()
         .map(|entry| {
-            let decl_name = DeclName::new(entry.name);
+            let decl_name = DeclName::expect_valid(entry.name);
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenNodeEntry {
                 name: ScopedName::from(decl_name),
@@ -1079,7 +1079,7 @@ impl UnfrozenIR {
                     crate::hir::diagnostics::resolved_decl_key(owner, name).unwrap_or_else(|| {
                         crate::syntax::names::ResolvedName::from_def(
                             owner.clone(),
-                            DeclName::new(name.member()),
+                            DeclName::expect_valid(name.member()),
                         )
                     })
                 });
@@ -1524,17 +1524,17 @@ impl UnfrozenIR {
         all_dep_names.extend(
             dep.imported_values
                 .keys()
-                .map(|name| DeclName::new(name.member())),
+                .map(|name| DeclName::expect_valid(name.member())),
         );
         all_dep_names.extend(
             dep.imported_decl_types
                 .keys()
-                .map(|name| DeclName::new(name.member())),
+                .map(|name| DeclName::expect_valid(name.member())),
         );
         all_dep_names.extend(
             dep.imported_value_sources
                 .keys()
-                .map(|name| DeclName::new(name.member())),
+                .map(|name| DeclName::expect_valid(name.member())),
         );
         let dep_names = &all_dep_names;
 
@@ -2726,7 +2726,7 @@ fn topo_sort_derived_dims<'a>(
         let cycle_name = graph[cycle.node_id()];
         let pos = idx_to_pos[&cycle.node_id()];
         GraphcalError::CyclicDimension {
-            name: DimName::new(cycle_name),
+            name: DimName::expect_valid(cycle_name),
             src: src.clone(),
             span: dims[pos].name.span.into(),
         }
@@ -2914,7 +2914,7 @@ fn register_unit_decl(
             span: u.name.span.into(),
         })?
         .ok_or_else(|| GraphcalError::UnknownDimension {
-            name: DimName::new(u.name.value.as_str()),
+            name: DimName::expect_valid(u.name.value.as_str()),
             src: src.clone(),
             span: u.name.span.into(),
         })?;
@@ -3242,7 +3242,7 @@ fn register_index_decl(
                     span: dimension.span.into(),
                 })?
                 .ok_or_else(|| GraphcalError::UnknownDimension {
-                    name: crate::syntax::names::DimName::new(idx.name.value.as_str()),
+                    name: crate::syntax::names::DimName::expect_valid(idx.name.value.as_str()),
                     src: src.clone(),
                     span: dimension.span.into(),
                 })?;
@@ -3285,7 +3285,7 @@ fn register_type_decl(t: &crate::desugar::desugared_ast::TypeDecl, registry: &mu
                             .collect()
                     });
                     types::UnionMemberDef {
-                        name: ConstructorName::new(m.name.value.as_str()),
+                        name: ConstructorName::expect_valid(m.name.value.as_str()),
                         fields,
                     }
                 })
@@ -3621,7 +3621,9 @@ mod tests {
         assert!(
             ir.registry
                 .units
-                .get_unit(&crate::syntax::names::UnitRef::local("km"))
+                .get_unit(&crate::syntax::names::UnitRef::local(
+                    crate::syntax::names::UnitName::expect_valid("km"),
+                ))
                 .is_some()
         );
     }
@@ -3725,7 +3727,7 @@ mod tests {
         let dep_names: HashSet<DeclName> = dep_unfrozen
             .source_order
             .iter()
-            .map(|(n, _)| DeclName::new(n.member()))
+            .map(|(n, _)| DeclName::expect_valid(n.member()))
             .collect();
         unfrozen
             .merge_dependency(

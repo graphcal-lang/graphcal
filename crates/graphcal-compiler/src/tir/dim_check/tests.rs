@@ -16,7 +16,7 @@ fn test_dag_id() -> crate::dag_id::DagId {
 fn test_index_ref(name: &str) -> IndexTypeRef {
     IndexTypeRef::with_owner(
         test_dag_id(),
-        crate::syntax::names::IndexName::new(name.to_string()),
+        crate::syntax::names::IndexName::expect_valid(name.to_string()),
     )
 }
 
@@ -187,10 +187,10 @@ fn cycle_detection_uses_semantic_dependencies() {
     let (mut tir, src) = module_aware_tir(source);
     let dag_id = test_dag_id();
 
-    let a = ResolvedName::from_def(dag_id.clone(), DeclName::new("a"));
-    let b = ResolvedName::from_def(dag_id.clone(), DeclName::new("b"));
-    let x = ResolvedName::from_def(dag_id.clone(), DeclName::new("x"));
-    let y = ResolvedName::<namespace::Decl>::from_def(dag_id, DeclName::new("y"));
+    let a = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
+    let b = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("b"));
+    let x = ResolvedName::from_def(dag_id.clone(), DeclName::expect_valid("x"));
+    let y = ResolvedName::<namespace::Decl>::from_def(dag_id, DeclName::expect_valid("y"));
 
     let mut resolved = crate::tir::typed::ResolvedDagDependencies::default();
     resolved.const_deps.insert(a.clone(), BTreeSet::new());

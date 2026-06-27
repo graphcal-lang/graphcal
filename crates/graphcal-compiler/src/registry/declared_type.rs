@@ -137,7 +137,7 @@ impl NatRangeIndexRef {
     pub fn display_name(&self) -> NameDef<namespace::Index> {
         match self {
             Self::Concrete(index) => index.display_name(),
-            Self::Symbolic(form) => NameDef::new(format!("range({})", form.format())),
+            Self::Symbolic(form) => NameDef::expect_valid(format!("range({})", form.format())),
         }
     }
 

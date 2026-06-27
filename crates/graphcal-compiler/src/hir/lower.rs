@@ -103,7 +103,7 @@ impl PreludeTypeScope {
             crate::registry::prelude::PRELUDE_DIMENSION_NAMES
                 .iter()
                 .copied()
-                .map(DimName::new),
+                .map(DimName::expect_valid),
         )
     }
 
@@ -811,7 +811,7 @@ mod tests {
         let type_decl = first_type_decl(&file);
         let type_owner = GenericParamOwner::Type(ResolvedName::from_def(
             owner_id.clone(),
-            StructTypeName::new("Series"),
+            StructTypeName::expect_valid("Series"),
         ));
         let (scope, defs) =
             lower_generic_params(&type_owner, &type_decl.generic_params, &owner_id, &resolver)

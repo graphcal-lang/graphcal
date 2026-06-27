@@ -152,7 +152,7 @@ pub fn preprocess_dag_body_self_imports(
                                         scoped,
                                         ImportedValueSource {
                                             dag_id: parent_dag_id.clone(),
-                                            source_name: DeclName::new(orig_name),
+                                            source_name: DeclName::expect_valid(orig_name),
                                         },
                                     );
                                 }
@@ -240,7 +240,7 @@ pub fn classify_value_decls_in_tir(
     let root = tir.root();
     let mut values = ParentValueDecls::default();
     for entry in &root.consts {
-        let name = DeclName::new(entry.name.member());
+        let name = DeclName::expect_valid(entry.name.member());
         if !parent_pub_names.contains(&name) {
             continue;
         }
@@ -252,10 +252,12 @@ pub fn classify_value_decls_in_tir(
             .insert(name, resolved_to_declared_type(resolved, src)?);
     }
     for entry in &root.params {
-        values.runtime.insert(DeclName::new(entry.name.member()));
+        values
+            .runtime
+            .insert(DeclName::expect_valid(entry.name.member()));
     }
     for entry in &root.nodes {
-        let name = DeclName::new(entry.name.member());
+        let name = DeclName::expect_valid(entry.name.member());
         if parent_pub_names.contains(&name) {
             values.runtime.insert(name);
         }

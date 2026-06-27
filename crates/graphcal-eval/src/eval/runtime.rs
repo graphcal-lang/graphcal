@@ -957,7 +957,7 @@ pub(super) fn check_indexed_assert(
 /// Recursively collect failing variant paths from an indexed assertion value.
 ///
 /// Each path is a `Vec<(IndexTypeRef, VariantName)>` of index/variant pairs from outermost to innermost.
-/// For example, `vec![(IndexTypeRef::with_owner(owner, IndexName::new("Phase")), VariantName::new("Launch")), ...]` for a 2D failure.
+/// For example, `vec![(IndexTypeRef::with_owner(owner, IndexName::expect_valid("Phase")), VariantName::new("Launch")), ...]` for a 2D failure.
 fn collect_failing_paths(
     index_name: &IndexTypeRef,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,

@@ -47,7 +47,7 @@ impl Parser<'_> {
     /// `field: expr`. Used inside the paren-form `Ctor(field: expr, ...)`.
     pub(super) fn parse_named_field_init(&mut self) -> Result<FieldInit, ParseError> {
         let ident = self.parse_any_ident()?;
-        let name = Spanned::new(FieldName::new(&ident.name), ident.span);
+        let name = ident.into_spanned::<FieldName>();
         self.expect(Token::Colon)?;
         let value = self.parse_expr()?;
         Ok(FieldInit { name, value })
@@ -683,10 +683,7 @@ impl Parser<'_> {
         let variant_ident = segments.remove(segments.len() - 1);
         let full_span = start_span.merge(variant_ident.span);
         let index = Self::index_name_path_from_segments(&segments);
-        let variant = Spanned::new(
-            IndexVariantName::new(variant_ident.name),
-            variant_ident.span,
-        );
+        let variant = variant_ident.into_spanned::<IndexVariantName>();
         Ok((index, variant, full_span))
     }
 

@@ -106,8 +106,8 @@ mod tests {
     fn spanned_eq_considers_span() {
         use crate::syntax::names::DeclName;
 
-        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
-        let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
+        let a = Spanned::new(DeclName::expect_valid("x"), Span::new(0, 1));
+        let b = Spanned::new(DeclName::expect_valid("x"), Span::new(10, 11));
         assert_ne!(a, b);
     }
 
@@ -115,8 +115,8 @@ mod tests {
     fn spanned_ne_different_value() {
         use crate::syntax::names::DeclName;
 
-        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
-        let b = Spanned::new(DeclName::new("y"), Span::new(0, 1));
+        let a = Spanned::new(DeclName::expect_valid("x"), Span::new(0, 1));
+        let b = Spanned::new(DeclName::expect_valid("y"), Span::new(0, 1));
         assert_ne!(a, b);
     }
 
@@ -125,8 +125,8 @@ mod tests {
         use crate::syntax::names::DeclName;
         use std::hash::{DefaultHasher, Hash, Hasher};
 
-        let a = Spanned::new(DeclName::new("x"), Span::new(0, 1));
-        let b = Spanned::new(DeclName::new("x"), Span::new(10, 11));
+        let a = Spanned::new(DeclName::expect_valid("x"), Span::new(0, 1));
+        let b = Spanned::new(DeclName::expect_valid("x"), Span::new(10, 11));
         let mut ha = DefaultHasher::new();
         a.hash(&mut ha);
         let mut hb = DefaultHasher::new();

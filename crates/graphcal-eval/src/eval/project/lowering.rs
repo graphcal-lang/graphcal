@@ -832,7 +832,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
         // ---- 4. Validation checks -----------------------------------------
         let mut dep_names: HashSet<DeclName> = HashSet::new();
         for (name, _) in &dep_unfrozen.source_order {
-            dep_names.insert(DeclName::new(name.member()));
+            dep_names.insert(DeclName::expect_valid(name.member()));
         }
         dep_unfrozen.check_include_reconciles_overrides(
             &deferred.bindings,
@@ -1173,7 +1173,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
             continue;
         }
         builder.register_base_dimension(
-            graphcal_compiler::syntax::names::DimName::new(name),
+            graphcal_compiler::syntax::names::DimName::expect_valid(name),
             id.clone(),
         );
     }
