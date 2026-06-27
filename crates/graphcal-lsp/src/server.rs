@@ -26,6 +26,7 @@ use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
+use graphcal_compiler::syntax::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::syntax::names::ScopedName;
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
@@ -649,7 +650,12 @@ pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo>
     static FN_SIGS: LazyLock<HashMap<String, FnSignatureInfo>> = LazyLock::new(|| {
         let mut sigs = HashMap::new();
         for (name, f) in builtin_functions() {
-            let (params, ret) = builtin_signature_parts(&f.dim_sig);
+            let (params, ret) = builtin_signature_parts(&f.dim_sig).unwrap_or_else(|err| {
+                (
+                    vec![format!("<invalid builtin signature: {err}>")],
+                    "<invalid>".to_string(),
+                )
+            });
             let params_str = params.join(", ");
             let label = format!("fn {name}({params_str}) -> {ret}");
             sigs.insert(
@@ -665,46 +671,61 @@ pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo>
     &FN_SIGS
 }
 
-/// Format a dimension for display in builtin signatures (no registry needed).
-fn format_dim_display(dim: &graphcal_compiler::syntax::dimension::Dimension) -> String {
+/// Format a dimension for display in builtin signatures.
+///
+/// Builtin signatures are defined only in terms of prelude dimensions, so no
+/// per-file registry is needed here. A user-defined base dimension in this path
+/// would be an internal bug in builtin construction.
+fn format_dim_display(dim: &Dimension) -> std::result::Result<String, String> {
     if dim.is_dimensionless() {
-        return "Dimensionless".to_string();
+        return Ok("Dimensionless".to_string());
     }
-    let parts: Vec<String> = dim
+    let parts = dim
         .iter()
         .map(|(id, exp)| {
-            let name = id.fallback_symbol();
-            if *exp == graphcal_compiler::syntax::dimension::Rational::ONE {
-                name
+            let name = builtin_base_dim_name(id)?;
+            Ok(if *exp == Rational::ONE {
+                name.to_string()
             } else {
                 format!("{name}^{exp}")
-            }
+            })
         })
-        .collect();
-    parts.join(" * ")
+        .collect::<std::result::Result<Vec<_>, String>>()?;
+    Ok(parts.join(" * "))
+}
+
+fn builtin_base_dim_name(id: &BaseDimId) -> std::result::Result<&str, String> {
+    match id {
+        BaseDimId::Prelude(name) => Ok(name.as_str()),
+        BaseDimId::UserDefined { .. } => Err(format!(
+            "builtin signature unexpectedly referenced user-defined dimension {id:?}"
+        )),
+    }
 }
 
 /// Generate human-readable parameter and return type strings for a builtin function.
-fn builtin_signature_parts(sig: &DimSignature) -> (Vec<String>, String) {
+fn builtin_signature_parts(
+    sig: &DimSignature,
+) -> std::result::Result<(Vec<String>, String), String> {
     let params: Vec<String> = sig
         .params
         .iter()
         .map(|p| {
             let type_str = match &p.dim {
-                ParamDim::Fixed(dim) => format_dim_display(dim),
+                ParamDim::Fixed(dim) => format_dim_display(dim)?,
                 ParamDim::Bind(var) | ParamDim::Ref(var) => var.to_string(),
             };
-            format!("{}: {type_str}", p.name)
+            Ok(format!("{}: {type_str}", p.name))
         })
-        .collect();
+        .collect::<std::result::Result<_, String>>()?;
 
     let ret = match &sig.result {
-        ResultDim::Fixed(dim) => format_dim_display(dim),
+        ResultDim::Fixed(dim) => format_dim_display(dim)?,
         ResultDim::Var(name) => name.to_string(),
         ResultDim::VarPow(name, power) => format!("{name}^({power})"),
     };
 
-    (params, ret)
+    Ok((params, ret))
 }
 
 /// Format all successfully evaluated values into display strings.

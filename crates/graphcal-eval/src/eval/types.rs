@@ -304,8 +304,8 @@ impl Value {
     /// Get the unit label for display, or `None` for dimensionless values.
     ///
     /// Returns the explicit display unit label if set (e.g., "km", "km/hour"),
-    /// otherwise falls back to a label built from registered base-unit symbols
-    /// (e.g., "m/s", "kg").
+    /// otherwise uses registered base-unit symbols (e.g., "m/s", "kg"). If any
+    /// referenced base dimension has no registered symbol, no default label is shown.
     #[must_use]
     pub fn display_label(&self, symbols: &BTreeMap<BaseDimId, String>) -> Option<String> {
         match self {
@@ -416,7 +416,7 @@ fn default_unit_label(
             result.push('*');
         }
         first = false;
-        push_unit_factor(&mut result, id, exp, symbols);
+        push_unit_factor(&mut result, id, exp, symbols)?;
     }
 
     for (id, &exp) in dimension.iter() {
@@ -424,14 +424,14 @@ fn default_unit_label(
             continue;
         }
         if first {
-            push_unit_factor(&mut result, id, exp, symbols);
+            push_unit_factor(&mut result, id, exp, symbols)?;
             first = false;
         } else {
             result.push('/');
             let Ok(positive_exp) = exp.checked_neg() else {
                 return None;
             };
-            push_unit_factor(&mut result, id, positive_exp, symbols);
+            push_unit_factor(&mut result, id, positive_exp, symbols)?;
         }
     }
 
@@ -443,15 +443,14 @@ fn push_unit_factor(
     id: &BaseDimId,
     exp: Rational,
     symbols: &BTreeMap<BaseDimId, String>,
-) {
-    let symbol = symbols
-        .get(id)
-        .map_or_else(|| id.fallback_symbol(), String::clone);
-    result.push_str(&symbol);
+) -> Option<()> {
+    let symbol = symbols.get(id)?;
+    result.push_str(symbol);
     if exp != Rational::ONE {
         result.push('^');
         result.push_str(&exp.to_string());
     }
+    Some(())
 }
 
 /// Format an `hifitime::Epoch` with an optional IANA timezone.
@@ -775,6 +774,13 @@ mod tests {
     #[test]
     fn display_label_omits_dimensionless_default_unit() {
         let value = scalar(Dimension::dimensionless(), None);
+
+        assert_eq!(value.display_label(&symbols()), None);
+    }
+
+    #[test]
+    fn display_label_omits_default_unit_when_symbol_is_missing() {
+        let value = scalar(Dimension::base(dim_id("Mass")), None);
 
         assert_eq!(value.display_label(&symbols()), None);
     }

@@ -427,7 +427,7 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalE
 /// Lower an AST with imported declarations into an [`IR`].
 ///
 /// Same as [`lower`] but accepts imported names from other files.
-/// The registry is frozen (via `build()`) before returning.
+/// The registry is frozen (via `try_build()`) before returning.
 ///
 /// # Errors
 ///
@@ -440,7 +440,10 @@ fn lower_with_imports(
 ) -> Result<IR, GraphcalError> {
     let (builder, resolved_ir) = lower_to_builder(ast, src, imported, dag_id)?;
     let resolver = single_module_resolver(ast, dag_id, src)?;
-    resolved_ir.freeze(builder.build(), dag_id, &resolver, src)
+    let registry = builder
+        .try_build()
+        .map_err(|err| registry_build_error(&err, src))?;
+    resolved_ir.freeze(registry, dag_id, &resolver, src)
 }
 
 /// Build a resolver covering only this file's own module.
@@ -743,7 +746,10 @@ pub fn lower_dag_body_to_ir(
         &dag_dag_id,
         None,
     )?;
-    unfrozen.freeze(builder.build(), &dag_dag_id, resolver, src)
+    let registry = builder
+        .try_build()
+        .map_err(|err| registry_build_error(&err, src))?;
+    unfrozen.freeze(registry, &dag_dag_id, resolver, src)
 }
 
 /// Result of `preprocess_dag_body_self_imports`: imported names, declared
@@ -2846,6 +2852,17 @@ fn register_required_dimension_decl(
         name: d.name.value.to_string(),
     };
     registry.register_base_dimension(d.name.value.clone(), dim_id);
+}
+
+fn registry_build_error(
+    err: &types::RegistryBuildError,
+    src: &NamedSource<Arc<String>>,
+) -> GraphcalError {
+    GraphcalError::InternalError {
+        message: format!("registry build failed: {err}"),
+        src: src.clone(),
+        span: Span::new(0, 0).into(),
+    }
 }
 
 fn eval_error(

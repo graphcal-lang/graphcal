@@ -40,20 +40,29 @@ impl Rational {
     ///
     /// Returns `Err` if `den` is zero.
     pub fn try_new(num: i32, den: i32) -> Result<Self, RationalError> {
+        Self::try_new_i64(i64::from(num), i64::from(den))
+    }
+
+    /// Normalize `num / den` in `i64` with GCD reduction, then narrow back to `i32`.
+    ///
+    /// Returns `Err(RationalError::Overflow)` if the reduced result does not fit
+    /// in `i32`, and `Err(RationalError::ZeroDenominator)` if `den` is zero.
+    fn try_new_i64(num: i64, den: i64) -> Result<Self, RationalError> {
         if den == 0 {
             return Err(RationalError::ZeroDenominator);
         }
         if num == 0 {
             return Ok(Self::ZERO);
         }
-        let g = gcd(num.unsigned_abs(), den.unsigned_abs()).cast_signed();
-        let (n, d) = (num / g, den / g);
-        // Normalize sign: denominator is always positive
+        let g = gcd64(num.unsigned_abs(), den.unsigned_abs()).cast_signed();
+        let (mut n, mut d) = (num / g, den / g);
         if d < 0 {
-            Ok(Self { num: -n, den: -d })
-        } else {
-            Ok(Self { num: n, den: d })
+            n = n.checked_neg().ok_or(RationalError::Overflow)?;
+            d = d.checked_neg().ok_or(RationalError::Overflow)?;
         }
+        let num = i32::try_from(n).map_err(|_| RationalError::Overflow)?;
+        let den = i32::try_from(d).map_err(|_| RationalError::Overflow)?;
+        Ok(Self { num, den })
     }
 
     /// Create a rational from an integer.
@@ -111,28 +120,6 @@ pub enum RationalError {
     Overflow,
 }
 
-/// Compute `num / den` in `i64` with GCD reduction, then narrow back to `i32`.
-///
-/// Returns `Err(RationalError::Overflow)` if the reduced result does not fit
-/// in `i32`, and `Err(RationalError::ZeroDenominator)` if `den` is zero.
-fn reduce_i64(num: i64, den: i64) -> Result<(i32, i32), RationalError> {
-    if den == 0 {
-        return Err(RationalError::ZeroDenominator);
-    }
-    if num == 0 {
-        return Ok((0, 1));
-    }
-    let g = gcd64(num.unsigned_abs(), den.unsigned_abs()).cast_signed();
-    let (mut n, mut d) = (num / g, den / g);
-    if d < 0 {
-        n = -n;
-        d = -d;
-    }
-    let num = i32::try_from(n).map_err(|_| RationalError::Overflow)?;
-    let den = i32::try_from(d).map_err(|_| RationalError::Overflow)?;
-    Ok((num, den))
-}
-
 impl std::ops::Add for Rational {
     type Output = Result<Self, RationalError>;
     fn add(self, rhs: Self) -> Self::Output {
@@ -140,8 +127,7 @@ impl std::ops::Add for Rational {
         let num =
             i64::from(self.num) * i64::from(rhs.den) + i64::from(rhs.num) * i64::from(self.den);
         let den = i64::from(self.den) * i64::from(rhs.den);
-        let (n, d) = reduce_i64(num, den)?;
-        Ok(Self { num: n, den: d })
+        Self::try_new_i64(num, den)
     }
 }
 
@@ -151,8 +137,7 @@ impl std::ops::Sub for Rational {
         let num =
             i64::from(self.num) * i64::from(rhs.den) - i64::from(rhs.num) * i64::from(self.den);
         let den = i64::from(self.den) * i64::from(rhs.den);
-        let (n, d) = reduce_i64(num, den)?;
-        Ok(Self { num: n, den: d })
+        Self::try_new_i64(num, den)
     }
 }
 
@@ -173,13 +158,8 @@ impl std::ops::Mul for Rational {
     fn mul(self, rhs: Self) -> Self::Output {
         let num = i64::from(self.num) * i64::from(rhs.num);
         let den = i64::from(self.den) * i64::from(rhs.den);
-        let (n, d) = reduce_i64(num, den)?;
-        Ok(Self { num: n, den: d })
+        Self::try_new_i64(num, den)
     }
-}
-
-fn gcd(a: u32, b: u32) -> u32 {
-    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 fn gcd64(a: u64, b: u64) -> u64 {
@@ -199,16 +179,6 @@ pub enum BaseDimId {
         dag: crate::dag_id::DagId,
         name: String,
     },
-}
-
-impl BaseDimId {
-    /// A human-readable fallback name when no symbol/name map is available.
-    #[must_use]
-    pub fn fallback_symbol(&self) -> String {
-        match self {
-            Self::Prelude(name) | Self::UserDefined { name, .. } => name.clone(),
-        }
-    }
 }
 
 /// A physical dimension represented as a sparse vector of rational exponents
@@ -312,28 +282,35 @@ impl Dimension {
 
     /// Format this dimension using named base dimensions for display.
     ///
-    /// The `names` map provides `BaseDimId → name` mappings.
-    /// Unknown IDs are displayed as `D{id}`.
-    #[must_use]
-    pub const fn display_with<'a>(
-        &'a self,
-        names: &'a BTreeMap<BaseDimId, String>,
-    ) -> DimensionDisplay<'a> {
-        DimensionDisplay { dim: self, names }
+    /// The `names` map must provide a `BaseDimId → name` mapping for every
+    /// base dimension in `self`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingBaseDimensionName`] when `names` does not contain an
+    /// entry for a base dimension referenced by `self`.
+    pub fn try_format_with(
+        &self,
+        names: &BTreeMap<BaseDimId, String>,
+    ) -> Result<String, MissingBaseDimensionName> {
+        if self.is_dimensionless() {
+            return Ok("Dimensionless".to_string());
+        }
+        self.format_exponents(names, " * ", " / ")
     }
 
-    /// Write the dimension's exponents to a [`fmt::Write`] sink.
+    /// Format the dimension's exponents.
     ///
     /// `mul_sep` is placed between positive-exponent terms (e.g., `"*"` or `" * "`).
     /// `div_sep` is placed before each negative-exponent term when positive terms exist
     /// (e.g., `"/"` or `" / "`).
-    fn write_exponents(
+    fn format_exponents(
         &self,
-        w: &mut impl fmt::Write,
         names: &BTreeMap<BaseDimId, String>,
         mul_sep: &str,
         div_sep: &str,
-    ) -> fmt::Result {
+    ) -> Result<String, MissingBaseDimensionName> {
+        let mut out = String::new();
         let mut first = true;
 
         // Positive exponents (numerator)
@@ -342,16 +319,10 @@ impl Dimension {
                 continue;
             }
             if !first {
-                w.write_str(mul_sep)?;
+                out.push_str(mul_sep);
             }
             first = false;
-            let name = names
-                .get(id)
-                .map_or_else(|| id.fallback_symbol(), String::clone);
-            write!(w, "{name}")?;
-            if exp != Rational::ONE {
-                write!(w, "^{exp}")?;
-            }
+            push_dim_factor(&mut out, registered_base_dim_name(names, id)?, exp);
         }
 
         // Negative exponents (denominator)
@@ -359,40 +330,45 @@ impl Dimension {
             if exp.num() >= 0 {
                 continue;
             }
-            let name = names
-                .get(id)
-                .map_or_else(|| id.fallback_symbol(), String::clone);
+            let name = registered_base_dim_name(names, id)?;
             if first {
                 // Only negative exponents (e.g., Frequency = s^-1)
-                write!(w, "{name}^{exp}")?;
+                push_dim_factor(&mut out, name, exp);
                 first = false;
             } else {
-                w.write_str(div_sep)?;
-                write!(w, "{name}")?;
+                out.push_str(div_sep);
                 let pos_exp = -exp;
-                if pos_exp != Rational::ONE {
-                    write!(w, "^{pos_exp}")?;
-                }
+                push_dim_factor(&mut out, name, pos_exp);
             }
         }
 
-        Ok(())
+        Ok(out)
     }
 }
 
-/// A wrapper for displaying a `Dimension` with named base dimensions.
-pub struct DimensionDisplay<'a> {
-    dim: &'a Dimension,
+fn registered_base_dim_name<'a>(
     names: &'a BTreeMap<BaseDimId, String>,
+    id: &BaseDimId,
+) -> Result<&'a str, MissingBaseDimensionName> {
+    names
+        .get(id)
+        .map(String::as_str)
+        .ok_or_else(|| MissingBaseDimensionName { id: id.clone() })
 }
 
-impl fmt::Display for DimensionDisplay<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.dim.is_dimensionless() {
-            return write!(f, "Dimensionless");
-        }
-        self.dim.write_exponents(f, self.names, " * ", " / ")
+fn push_dim_factor(out: &mut String, name: &str, exp: Rational) {
+    out.push_str(name);
+    if exp != Rational::ONE {
+        out.push('^');
+        out.push_str(&exp.to_string());
     }
+}
+
+/// A base dimension referenced by a [`Dimension`] had no registered display name.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("missing display name for base dimension {id:?}")]
+pub struct MissingBaseDimensionName {
+    pub id: BaseDimId,
 }
 
 /// Whether to add or subtract exponents when combining dimensions.
@@ -629,12 +605,22 @@ mod tests {
     fn dimension_display_simple() {
         let names = test_names();
         assert_eq!(
-            format!("{}", Dimension::dimensionless().display_with(&names)),
+            Dimension::dimensionless().try_format_with(&names).unwrap(),
             "Dimensionless"
         );
         assert_eq!(
-            format!("{}", Dimension::base(length()).display_with(&names)),
+            Dimension::base(length()).try_format_with(&names).unwrap(),
             "Length"
+        );
+    }
+
+    #[test]
+    fn dimension_display_reports_missing_base_name() {
+        let names = BTreeMap::new();
+
+        assert_eq!(
+            Dimension::base(length()).try_format_with(&names),
+            Err(MissingBaseDimensionName { id: length() })
         );
     }
 
@@ -642,10 +628,7 @@ mod tests {
     fn dimension_display_velocity() {
         let names = test_names();
         let velocity = (Dimension::base(length()) / Dimension::base(time())).unwrap();
-        assert_eq!(
-            format!("{}", velocity.display_with(&names)),
-            "Length / Time"
-        );
+        assert_eq!(velocity.try_format_with(&names).unwrap(), "Length / Time");
     }
 
     #[test]
@@ -655,7 +638,7 @@ mod tests {
             / Dimension::base(time()).pow_int(2).unwrap())
         .unwrap();
         assert_eq!(
-            format!("{}", force.display_with(&names)),
+            force.try_format_with(&names).unwrap(),
             "Length * Mass / Time^2"
         );
     }
@@ -664,7 +647,7 @@ mod tests {
     fn dimension_display_area() {
         let names = test_names();
         let area = Dimension::base(length()).pow_int(2).unwrap();
-        assert_eq!(format!("{}", area.display_with(&names)), "Length^2");
+        assert_eq!(area.try_format_with(&names).unwrap(), "Length^2");
     }
 
     #[test]
@@ -672,7 +655,7 @@ mod tests {
         let names = test_names();
         // Frequency = Time^-1 (only negative exponent)
         let freq = (Dimension::dimensionless() / Dimension::base(time())).unwrap();
-        assert_eq!(format!("{}", freq.display_with(&names)), "Time^-1");
+        assert_eq!(freq.try_format_with(&names).unwrap(), "Time^-1");
     }
 
     #[test]
@@ -693,7 +676,7 @@ mod tests {
         let mut names = test_names();
         names.insert(info_id, "Information".to_string());
         assert_eq!(
-            format!("{}", bandwidth.display_with(&names)),
+            bandwidth.try_format_with(&names).unwrap(),
             "Information / Time"
         );
     }
@@ -762,7 +745,10 @@ mod tests {
                 prop_assert!(r.den() > 0, "den must be positive, got {}", r.den());
                 // gcd(|num|, den) == 1 (reduced form)
                 if r.num() != 0 {
-                    let g = gcd(r.num().unsigned_abs(), r.den().unsigned_abs());
+                    let g = gcd64(
+                        u64::from(r.num().unsigned_abs()),
+                        u64::from(r.den().unsigned_abs()),
+                    );
                     prop_assert_eq!(g, 1, "not reduced: {}/{}", r.num(), r.den());
                 } else {
                     prop_assert_eq!(r.den(), 1, "zero should have den=1, got {}", r.den());

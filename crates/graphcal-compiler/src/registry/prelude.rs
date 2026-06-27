@@ -271,7 +271,7 @@ mod tests {
     fn prelude_loads_all_base_dims() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = b.try_build().unwrap();
         for name in [
             "Length",
             "Time",
@@ -293,7 +293,7 @@ mod tests {
     fn prelude_loads_all_derived_dims() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = b.try_build().unwrap();
         for name in [
             "Velocity",
             "Acceleration",
@@ -316,7 +316,7 @@ mod tests {
     fn prelude_force_dimension_is_correct() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = b.try_build().unwrap();
         let force = r.dimensions.get_dimension("Force").unwrap();
         // Force = Mass * Length / Time^2
         assert_eq!(force.get_exponent(&mass_id()), Rational::ONE);
@@ -328,7 +328,7 @@ mod tests {
     fn prelude_newton_matches_force_dim() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = b.try_build().unwrap();
         let force_dim = r.dimensions.get_dimension("Force").unwrap().clone();
         let newton = r
             .units
@@ -342,7 +342,7 @@ mod tests {
     fn prelude_km_scale_correct() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = b.try_build().unwrap();
         let km = r
             .units
             .get_unit(&crate::syntax::names::UnitRef::local("km"))
@@ -354,7 +354,7 @@ mod tests {
     fn prelude_deg_scale_correct() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = b.try_build().unwrap();
         let deg = r
             .units
             .get_unit(&crate::syntax::names::UnitRef::local("deg"))
@@ -366,7 +366,7 @@ mod tests {
     fn prelude_base_dim_names_registered() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = b.try_build().unwrap();
         let names = r.dimensions.base_dim_names();
         assert_eq!(names.len(), 8);
         assert_eq!(names.get(&length_id()), Some(&"Length".to_string()));
@@ -377,7 +377,7 @@ mod tests {
     fn prelude_base_dim_symbols_registered() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = b.try_build().unwrap();
         let symbols = r.dimensions.base_dim_symbols();
         assert_eq!(symbols.len(), 8);
         assert_eq!(symbols.get(&length_id()), Some(&"m".to_string()));
