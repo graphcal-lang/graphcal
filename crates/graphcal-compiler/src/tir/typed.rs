@@ -5415,7 +5415,7 @@ mod tests {
         let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
         let expected = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
             / Dimension::base(BaseDimId::Prelude("Time".to_string()))
-                .pow_int(2)
+                .pow(2)
                 .unwrap())
         .unwrap();
         assert_eq!(resolved, ResolvedTypeExpr::Scalar(expected));
@@ -5454,7 +5454,7 @@ mod tests {
                 match &terms[0] {
                     ResolvedDimTerm::GenericParam { name, power, .. } => {
                         assert_eq!(name.as_str(), "D");
-                        assert_eq!(*power, Rational::from_int(2));
+                        assert_eq!(*power, Rational::from(2));
                     }
                     ResolvedDimTerm::Concrete { .. } => panic!("expected GenericParam term"),
                 }

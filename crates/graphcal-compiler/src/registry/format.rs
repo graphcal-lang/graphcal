@@ -164,7 +164,7 @@ mod tests {
         UnitExprItem {
             op,
             name: Spanned::new(UnitRef::local(UnitName::new(name)), Span::new(0, 0)),
-            power: power.map(Rational::from_int),
+            power: power.map(Rational::from),
         }
     }
 

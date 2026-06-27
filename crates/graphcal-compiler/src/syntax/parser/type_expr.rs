@@ -361,13 +361,13 @@ impl Parser<'_> {
                     span: den_span.into(),
                 })?
             } else {
-                Rational::from_int(num)
+                Rational::from(num)
             };
             let (_, rparen_span) = self.expect(Token::RParen)?;
             (value, num_span.merge(rparen_span))
         } else {
             let (neg, value, span) = self.parse_integer_literal()?;
-            (Rational::from_int(if neg { -value } else { value }), span)
+            (Rational::from(if neg { -value } else { value }), span)
         };
         if value.is_zero() {
             return Err(ParseError::ZeroExponent {

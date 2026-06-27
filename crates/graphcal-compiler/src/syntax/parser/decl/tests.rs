@@ -97,10 +97,10 @@ fn parse_node_with_compound_dim_type() {
                 TypeExprKind::DimExpr(d) => {
                     assert_eq!(d.terms.len(), 2);
                     assert_eq!(d.terms[0].term.name.value.leaf().as_str(), "Length");
-                    assert_eq!(d.terms[0].term.power, Some(Rational::from_int(3)));
+                    assert_eq!(d.terms[0].term.power, Some(Rational::from(3)));
                     assert_eq!(d.terms[1].op, MulDivOp::Div);
                     assert_eq!(d.terms[1].term.name.value.leaf().as_str(), "Time");
-                    assert_eq!(d.terms[1].term.power, Some(Rational::from_int(2)));
+                    assert_eq!(d.terms[1].term.power, Some(Rational::from(2)));
                 }
                 other => panic!("expected DimExpr, got {other:?}"),
             }
@@ -227,7 +227,7 @@ fn parse_compound_unit_decl() {
             assert_eq!(def.unit_expr.terms[1].name.value.to_string(), "m");
             assert_eq!(def.unit_expr.terms[2].op, MulDivOp::Div);
             assert_eq!(def.unit_expr.terms[2].name.value.to_string(), "s");
-            assert_eq!(def.unit_expr.terms[2].power, Some(Rational::from_int(2)));
+            assert_eq!(def.unit_expr.terms[2].power, Some(Rational::from(2)));
         }
         _ => panic!("expected unit"),
     }
@@ -1292,7 +1292,7 @@ fn parse_required_range_compound_dim() {
                     assert_eq!(dimension.terms[0].term.name.value.leaf().as_str(), "Mass");
                     assert_eq!(dimension.terms[1].term.name.value.leaf().as_str(), "Length");
                     assert_eq!(dimension.terms[2].term.name.value.leaf().as_str(), "Time");
-                    assert_eq!(dimension.terms[2].term.power, Some(Rational::from_int(2)));
+                    assert_eq!(dimension.terms[2].term.power, Some(Rational::from(2)));
                     assert_eq!(dimension.terms[2].op, MulDivOp::Div);
                 }
                 other => panic!("expected required range, got {other:?}"),

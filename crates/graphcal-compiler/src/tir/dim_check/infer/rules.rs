@@ -398,12 +398,13 @@ pub(super) fn binop_rule(
                             reason = "guarded by fract() == 0.0 and range checks"
                         )]
                         let exp = n as i32;
-                        let dim = lhs_dim.pow(Rational::from_int(exp)).map_err(|_| {
-                            GraphcalError::DimensionOverflow {
-                                src: src.clone(),
-                                span: expr_span.into(),
-                            }
-                        })?;
+                        let dim =
+                            lhs_dim
+                                .pow(exp)
+                                .map_err(|_| GraphcalError::DimensionOverflow {
+                                    src: src.clone(),
+                                    span: expr_span.into(),
+                                })?;
                         Ok(InferredType::Scalar(dim))
                     } else {
                         #[expect(
@@ -433,12 +434,12 @@ pub(super) fn binop_rule(
                         src: src.clone(),
                         span: expr_span.into(),
                     })?;
-                    let dim = lhs_dim.pow(Rational::from_int(exp)).map_err(|_| {
-                        GraphcalError::DimensionOverflow {
+                    let dim = lhs_dim
+                        .pow(exp)
+                        .map_err(|_| GraphcalError::DimensionOverflow {
                             src: src.clone(),
                             span: expr_span.into(),
-                        }
-                    })?;
+                        })?;
                     Ok(InferredType::Scalar(dim))
                 }
                 None => {

@@ -28,6 +28,12 @@ impl fmt::Display for Rational {
     }
 }
 
+impl From<i32> for Rational {
+    fn from(value: i32) -> Self {
+        Self { num: value, den: 1 }
+    }
+}
+
 impl Rational {
     pub const ZERO: Self = Self { num: 0, den: 1 };
     pub const ONE: Self = Self { num: 1, den: 1 };
@@ -63,16 +69,6 @@ impl Rational {
         let num = i32::try_from(n).map_err(|_| RationalError::Overflow)?;
         let den = i32::try_from(d).map_err(|_| RationalError::Overflow)?;
         Ok(Self { num, den })
-    }
-
-    /// Create a rational from an integer.
-    #[must_use]
-    pub const fn from_int(n: i32) -> Self {
-        if n == 0 {
-            Self::ZERO
-        } else {
-            Self { num: n, den: 1 }
-        }
     }
 
     /// Returns the numerator.
@@ -254,11 +250,14 @@ impl Dimension {
         self.exponents.iter()
     }
 
-    /// Raise a dimension to a rational power (multiply all exponents).
+    /// Raise a dimension to a power (multiply all exponents).
+    ///
+    /// Integer exponents are accepted directly and converted to [`Rational`].
     ///
     /// Returns `Err(RationalError::Overflow)` if any exponent multiplication
     /// produces a reduced value outside the `i32` range.
-    pub fn pow(&self, exp: Rational) -> Result<Self, RationalError> {
+    pub fn pow(&self, exp: impl Into<Rational>) -> Result<Self, RationalError> {
+        let exp = exp.into();
         if exp.is_zero() {
             return Ok(Self::dimensionless());
         }
@@ -270,14 +269,6 @@ impl Dimension {
             }
         }
         Ok(Self { exponents })
-    }
-
-    /// Raise a dimension to an integer power.
-    ///
-    /// Returns `Err(RationalError::Overflow)` if any exponent multiplication
-    /// overflows `i32`.
-    pub fn pow_int(&self, n: i32) -> Result<Self, RationalError> {
-        self.pow(Rational::from_int(n))
     }
 
     /// Format this dimension using named base dimensions for display.
@@ -518,10 +509,10 @@ mod tests {
     }
 
     #[test]
-    fn rational_from_int() {
-        assert_eq!(Rational::from_int(3), r(3, 1));
-        assert_eq!(Rational::from_int(0), Rational::ZERO);
-        assert_eq!(Rational::from_int(-2), r(-2, 1));
+    fn rational_from_i32() {
+        assert_eq!(Rational::from(3), r(3, 1));
+        assert_eq!(Rational::from(0), Rational::ZERO);
+        assert_eq!(Rational::from(-2), r(-2, 1));
     }
 
     #[test]
@@ -546,7 +537,7 @@ mod tests {
         let velocity = (l / t).unwrap();
 
         assert_eq!(velocity.get_exponent(&length()), Rational::ONE);
-        assert_eq!(velocity.get_exponent(&time()), Rational::from_int(-1));
+        assert_eq!(velocity.get_exponent(&time()), Rational::from(-1));
     }
 
     #[test]
@@ -554,10 +545,10 @@ mod tests {
         // Acceleration = Length / Time^2
         let l = Dimension::base(length());
         let t = Dimension::base(time());
-        let accel = (l / t.pow_int(2).unwrap()).unwrap();
+        let accel = (l / t.pow(2).unwrap()).unwrap();
 
         assert_eq!(accel.get_exponent(&length()), Rational::ONE);
-        assert_eq!(accel.get_exponent(&time()), Rational::from_int(-2));
+        assert_eq!(accel.get_exponent(&time()), Rational::from(-2));
     }
 
     #[test]
@@ -566,17 +557,17 @@ mod tests {
         let m = Dimension::base(mass());
         let l = Dimension::base(length());
         let t = Dimension::base(time());
-        let force = ((m * l).unwrap() / t.pow_int(2).unwrap()).unwrap();
+        let force = ((m * l).unwrap() / t.pow(2).unwrap()).unwrap();
 
         assert_eq!(force.get_exponent(&mass()), Rational::ONE);
         assert_eq!(force.get_exponent(&length()), Rational::ONE);
-        assert_eq!(force.get_exponent(&time()), Rational::from_int(-2));
+        assert_eq!(force.get_exponent(&time()), Rational::from(-2));
     }
 
     #[test]
     fn dimension_sqrt() {
         // sqrt(Area) = sqrt(Length^2) = Length
-        let area = Dimension::base(length()).pow_int(2).unwrap();
+        let area = Dimension::base(length()).pow(2).unwrap();
         let sqrt_area = area.pow(Rational::HALF).unwrap();
         assert_eq!(sqrt_area, Dimension::base(length()));
     }
@@ -635,7 +626,7 @@ mod tests {
     fn dimension_display_force() {
         let names = test_names();
         let force = ((Dimension::base(mass()) * Dimension::base(length())).unwrap()
-            / Dimension::base(time()).pow_int(2).unwrap())
+            / Dimension::base(time()).pow(2).unwrap())
         .unwrap();
         assert_eq!(
             force.try_format_with(&names).unwrap(),
@@ -646,7 +637,7 @@ mod tests {
     #[test]
     fn dimension_display_area() {
         let names = test_names();
-        let area = Dimension::base(length()).pow_int(2).unwrap();
+        let area = Dimension::base(length()).pow(2).unwrap();
         assert_eq!(area.try_format_with(&names).unwrap(), "Length^2");
     }
 
@@ -670,7 +661,7 @@ mod tests {
         let bandwidth = (information / t).unwrap();
 
         assert_eq!(bandwidth.get_exponent(&info_id), Rational::ONE);
-        assert_eq!(bandwidth.get_exponent(&time()), Rational::from_int(-1));
+        assert_eq!(bandwidth.get_exponent(&time()), Rational::from(-1));
 
         // Display with names
         let mut names = test_names();
@@ -809,8 +800,8 @@ mod tests {
             }
 
             #[test]
-            fn dimension_pow_int_consistent_with_pow(a in arb_dimension(), n in -3i32..=3) {
-                prop_assert_eq!(a.pow_int(n).unwrap(), a.pow(Rational::from_int(n)).unwrap());
+            fn dimension_pow_accepts_integer_exponents(a in arb_dimension(), n in -3i32..=3) {
+                prop_assert_eq!(a.pow(n).unwrap(), a.pow(Rational::from(n)).unwrap());
             }
 
             #[test]
