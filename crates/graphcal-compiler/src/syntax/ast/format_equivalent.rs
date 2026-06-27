@@ -34,7 +34,6 @@
 //! accounted for. The equivalence check can never silently go stale and miss a
 //! meaning-changing edit.
 
-use crate::syntax::ast::PlotPropertyName;
 use crate::syntax::ast::{
     AssertBody, AssertDecl, Attribute, AttributeArg, BaseDimDecl, ConstNodeDecl, DagDecl, DeclKind,
     Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, DomainBound, Encoding, Expr, ExprKind,
@@ -55,6 +54,8 @@ use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Spanned;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
+
+use super::plot_props::PlotPropertyName;
 
 /// Structural equality of two [`Raw`](crate::syntax::phase::Raw) syntax trees
 /// modulo formatting — currently, modulo source spans.
