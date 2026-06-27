@@ -13,4 +13,6 @@ include lib.lib(
         MyModes.Active: 150.0,
         MyModes.Overdrive: 100.0,
     }
-).{ #[expected_fail(MyModes.Overdrive)] within_limit };
+).{
+    #[expected_fail(MyModes.Overdrive)] within_limit
+};

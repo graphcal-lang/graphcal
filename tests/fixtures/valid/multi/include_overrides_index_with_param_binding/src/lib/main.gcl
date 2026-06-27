@@ -10,6 +10,8 @@ include lib.lib(
         MyPhase.Plan: 10.0,
         MyPhase.Make: 20.0,
     }
-).{ total };
+).{
+    total
+};
 
 node result: Dimensionless = @total;
