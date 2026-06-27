@@ -12,9 +12,9 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{BinOp, UnaryOp, UnitExpr};
+use crate::dimension::{Dimension, Rational};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
-use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::span::Span;
 
 use super::super::helpers::{expect_scalar, format_inferred_type};
@@ -224,9 +224,8 @@ pub(super) fn binop_rule(
             }
             // Point-vs-vector rules for Datetime
             if let InferredType::Datetime(ls) = lhs_type {
-                let time_dim = Dimension::base(crate::syntax::dimension::BaseDimId::Prelude(
-                    "Time".to_string(),
-                ));
+                let time_dim =
+                    Dimension::base(crate::dimension::BaseDimId::Prelude("Time".to_string()));
                 if let InferredType::Datetime(rs) = rhs_type {
                     // Datetime - Datetime -> Scalar(Time)
                     if op == BinOp::Sub {
@@ -268,9 +267,8 @@ pub(super) fn binop_rule(
             if let InferredType::Datetime(rs) = rhs_type {
                 // Scalar(Time) + Datetime -> Datetime (only for Add)
                 if op == BinOp::Add {
-                    let time_dim = Dimension::base(crate::syntax::dimension::BaseDimId::Prelude(
-                        "Time".to_string(),
-                    ));
+                    let time_dim =
+                        Dimension::base(crate::dimension::BaseDimId::Prelude("Time".to_string()));
                     let lhs_dim = expect_scalar(lhs_type, registry, src, lhs.span)?;
                     if lhs_dim != time_dim {
                         return Err(GraphcalError::DimensionMismatch {

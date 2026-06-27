@@ -1022,7 +1022,7 @@ mod tests {
                     assert_eq!(unit.terms[1].name.value.to_string(), "s");
                     assert_eq!(
                         unit.terms[1].power,
-                        Some(crate::syntax::dimension::Rational::from(2))
+                        Some(crate::dimension::Rational::from(2))
                     );
                 }
                 _ => panic!("expected UnitLiteral"),

@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::dimension::Dimension;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
-use crate::syntax::dimension::Dimension;
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::type_name::StructTypeName;

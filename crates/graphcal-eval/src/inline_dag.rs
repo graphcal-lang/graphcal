@@ -199,7 +199,7 @@ pub fn classify_value_decls_in_ast(
     ast: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> ParentValueDecls {
     let placeholder =
-        || DeclaredType::Scalar(graphcal_compiler::syntax::dimension::Dimension::dimensionless());
+        || DeclaredType::Scalar(graphcal_compiler::dimension::Dimension::dimensionless());
     let mut values = ParentValueDecls::default();
     for decl in &ast.declarations {
         match &decl.kind {

@@ -6,6 +6,7 @@
 
 pub mod dag_id;
 pub mod desugar;
+pub mod dimension;
 pub mod hir;
 pub mod ir;
 pub mod registry;

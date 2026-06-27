@@ -6,11 +6,9 @@ use thiserror::Error;
 use crate::desugar::desugared_ast::{
     DagDecl, DimExpr, Expr, GenericConstraint, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
 };
+use crate::dimension::{BaseDimId, Dimension, MissingBaseDimensionName, Rational, RationalError};
 use crate::syntax::ast::UnitConstness;
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::{
-    BaseDimId, Dimension, MissingBaseDimensionName, Rational, RationalError,
-};
 use crate::syntax::dimension::{DimName, UnitRef};
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
@@ -1304,9 +1302,9 @@ impl RegistryBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dimension::BaseDimId;
     use crate::registry::prelude::load_prelude;
     use crate::syntax::ast::{DimExprItem, DimTerm, UnitExprItem};
-    use crate::syntax::dimension::BaseDimId;
     use crate::syntax::dimension::UnitName;
     use crate::syntax::names::NamePath;
     use crate::syntax::span::Span;

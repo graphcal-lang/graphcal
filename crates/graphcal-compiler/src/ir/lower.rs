@@ -18,6 +18,7 @@ use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl, PlotDecl,
     TypeExpr,
 };
+use crate::dimension::Rational;
 use crate::ir::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ParsedExpectedFail, ResolvedFile,
     resolve_with_imported_values,
@@ -33,7 +34,6 @@ use crate::registry::types::{
 };
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::DimName;
-use crate::syntax::dimension::Rational;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NameAtom, NamePath};
@@ -2804,7 +2804,7 @@ fn register_base_dimension_decl(
     registry: &mut RegistryBuilder,
     dag_id: &crate::dag_id::DagId,
 ) {
-    let dim_id = crate::syntax::dimension::BaseDimId::UserDefined {
+    let dim_id = crate::dimension::BaseDimId::UserDefined {
         dag: dag_id.clone(),
         name: d.name.value.to_string(),
     };
@@ -2847,7 +2847,7 @@ fn register_required_dimension_decl(
     registry: &mut RegistryBuilder,
     dag_id: &crate::dag_id::DagId,
 ) {
-    let dim_id = crate::syntax::dimension::BaseDimId::UserDefined {
+    let dim_id = crate::dimension::BaseDimId::UserDefined {
         dag: dag_id.clone(),
         name: d.name.value.to_string(),
     };
@@ -3374,8 +3374,8 @@ fn eval_range_expr(
     expr: &Expr,
     registry: &RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-) -> Result<(f64, crate::syntax::dimension::Dimension), GraphcalError> {
-    use crate::syntax::dimension::Dimension;
+) -> Result<(f64, crate::dimension::Dimension), GraphcalError> {
+    use crate::dimension::Dimension;
 
     let ensure_finite = |value: f64, span: Span| {
         if value.is_finite() {
@@ -3703,7 +3703,7 @@ mod tests {
             qualified.clone(),
             (
                 RuntimeValue::Scalar(7.0),
-                DeclaredType::Scalar(crate::syntax::dimension::Dimension::dimensionless()),
+                DeclaredType::Scalar(crate::dimension::Dimension::dimensionless()),
             ),
         );
 

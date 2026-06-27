@@ -1293,7 +1293,7 @@ pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
 /// base scale in practice).
 fn unit_definitions_compatible(
     existing: &graphcal_compiler::registry::types::UnitInfo,
-    dim: &graphcal_compiler::syntax::dimension::Dimension,
+    dim: &graphcal_compiler::dimension::Dimension,
     scale: &graphcal_compiler::registry::types::UnitScale,
     constness: graphcal_compiler::syntax::ast::UnitConstness,
 ) -> bool {

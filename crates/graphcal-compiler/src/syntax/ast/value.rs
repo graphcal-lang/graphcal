@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 
+use crate::dimension::Rational;
 use crate::syntax::ast::common::{Ident, ModulePath};
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::Rational;
 use crate::syntax::dimension::UnitRef;
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::local_name::LocalName;

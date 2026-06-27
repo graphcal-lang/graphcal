@@ -16,6 +16,7 @@ use miette::NamedSource;
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::{MulDivOp, TypeExpr, TypeExprKind};
+use crate::dimension::{Dimension, Rational, RationalError};
 use crate::hir;
 use crate::hir::diagnostics::{
     expr_lower_error_to_graphcal, hir_lower_error_to_graphcal, resolved_decl_key,
@@ -23,7 +24,6 @@ use crate::hir::diagnostics::{
 pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::DimName;
-use crate::syntax::dimension::{Dimension, Rational, RationalError};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::names::{NameAtom, NamePath};
@@ -5286,9 +5286,9 @@ fn resolve_type_arg_for_param(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dimension::BaseDimId;
     use crate::registry::prelude::load_prelude;
     use crate::registry::types::RegistryBuilder;
-    use crate::syntax::dimension::BaseDimId;
     use crate::syntax::parser::Parser;
 
     fn make_registry() -> Registry {

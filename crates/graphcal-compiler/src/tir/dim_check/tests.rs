@@ -1,8 +1,8 @@
 use super::*;
+use crate::dimension::BaseDimId;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::decl_name::ResolvedDeclName;
-use crate::syntax::dimension::BaseDimId;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::parser::Parser;
 use crate::syntax::span::Span;

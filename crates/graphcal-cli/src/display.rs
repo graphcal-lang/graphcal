@@ -21,7 +21,7 @@
 
 use std::collections::BTreeMap;
 
-use graphcal_compiler::syntax::dimension::BaseDimId;
+use graphcal_compiler::dimension::BaseDimId;
 use graphcal_eval::eval::{NodeError, Value};
 
 /// One line of flat output: either a successfully-evaluated value or an error.
@@ -326,7 +326,7 @@ pub fn format_indexed_table(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphcal_compiler::syntax::dimension::Dimension;
+    use graphcal_compiler::dimension::Dimension;
     use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
     use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use indexmap::IndexMap;

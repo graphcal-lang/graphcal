@@ -7,8 +7,8 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
+use graphcal_compiler::dimension::Dimension;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::dimension::Dimension;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;

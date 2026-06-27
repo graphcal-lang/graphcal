@@ -6,9 +6,9 @@
 //! while lexical generic parameters carry a `GenericParamId` scoped to their
 //! owning type signature.
 
+use crate::dimension::Rational;
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::{GenericConstraint, MulDivOp};
-use crate::syntax::dimension::Rational;
 use crate::syntax::dimension::ResolvedDimName;
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::span::{Span, Spanned};

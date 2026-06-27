@@ -652,10 +652,7 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
 
     fn value_to_json(
         v: &Value,
-        symbols: &std::collections::BTreeMap<
-            graphcal_compiler::syntax::dimension::BaseDimId,
-            String,
-        >,
+        symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     ) -> serde_json::Value {
         match v {
             Value::Scalar {
@@ -767,10 +764,7 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
 
     fn result_to_json(
         r: &Result<Value, NodeError>,
-        symbols: &std::collections::BTreeMap<
-            graphcal_compiler::syntax::dimension::BaseDimId,
-            String,
-        >,
+        symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     ) -> serde_json::Value {
         match r {
             Ok(v) => value_to_json(v, symbols),

@@ -12,12 +12,12 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::dimension::{Dimension, Rational};
 use crate::hir::{self, BuiltinFnName, ConstRef, FunctionRef};
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeDef, TypeGenericConstraint, UnionMemberDef};
 use crate::syntax::ast::UnaryOp;
-use crate::syntax::dimension::{Dimension, Rational};
 use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;

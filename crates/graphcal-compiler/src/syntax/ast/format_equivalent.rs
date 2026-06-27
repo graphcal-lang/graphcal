@@ -91,7 +91,7 @@ format_equivalent_via_eq!(
     bool,
     i32,
     i64,
-    crate::syntax::dimension::Rational,
+    crate::dimension::Rational,
     u64,
     usize,
     String,
