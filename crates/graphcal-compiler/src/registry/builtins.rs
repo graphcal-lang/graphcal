@@ -672,24 +672,15 @@ mod tests {
 
     #[test]
     fn builtin_function_tables_agree() {
-        // Every name in the eval function map must be a typed BuiltinFnName,
-        // and every BuiltinFnName must be evaluable: either via the function
-        // map or via the special-function classification. A name added to
-        // only one table would resolve in one phase and fail in another.
-        use crate::builtin::{BuiltinFnName, classify_special_fn};
+        // Every ordinary scalar eval function must be a typed BuiltinFnName.
+        // Non-registry built-in call shapes are accounted for by the HIR type
+        // inference routing test in `tir::dim_check::infer::builtin_call`.
+        use crate::builtin::BuiltinFnName;
         let map = builtin_functions();
         for name in map.keys() {
             assert!(
                 BuiltinFnName::parse(name).is_some(),
                 "builtin_functions() entry `{name}` missing from BuiltinFnName"
-            );
-        }
-        for f in BuiltinFnName::ALL {
-            let name = f.as_str();
-            assert!(
-                map.contains_key(name) || classify_special_fn(name).is_some(),
-                "BuiltinFnName::{f:?} (`{name}`) is neither in builtin_functions() \
-                 nor classified by classify_special_fn"
             );
         }
     }
