@@ -12,9 +12,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::builtin::{
-    AggregationFn, BuiltinFnName, ConstructorFn, SpecialFnKind, TypeConversionFn,
-};
+use crate::builtin::BuiltinFnName;
 use crate::dimension::{Dimension, Rational};
 use crate::hir::{self, ConstRef, FunctionRef};
 use crate::nat::NatOverflowError;
@@ -34,6 +32,9 @@ use super::super::helpers::{
     struct_type_def_for_inferred,
 };
 use super::super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
+use super::builtin_call::{
+    AggregationFn, BuiltinTypeRule, DatetimeConstructorFn, TypeConversionFn, type_rule_for_builtin,
+};
 
 type HirLocalTypes<'a> = hir::LocalEnv<'a, InferredType>;
 
@@ -585,8 +586,8 @@ fn infer_hir_fn_call(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let FunctionRef::Builtin(name) = callee.value;
-    match name.special_kind() {
-        Some(SpecialFnKind::Aggregation(kind)) if args.len() == 1 => {
+    match type_rule_for_builtin(name) {
+        BuiltinTypeRule::CollectionAggregation(kind) if args.len() == 1 => {
             let arg_type = infer_arg(
                 &args[0],
                 declared_types,
@@ -619,7 +620,7 @@ fn infer_hir_fn_call(
                 src,
             )
         }
-        Some(SpecialFnKind::TypeConversion(kind)) => infer_hir_type_conversion(
+        BuiltinTypeRule::TypeConversion(kind) => infer_hir_type_conversion(
             kind,
             callee.span,
             args,
@@ -631,7 +632,7 @@ fn infer_hir_fn_call(
             builtin_fns,
             src,
         ),
-        Some(SpecialFnKind::TimeScaleConversion(scale)) => infer_hir_timescale_conversion(
+        BuiltinTypeRule::TimeScaleConversion(scale) => infer_hir_timescale_conversion(
             name,
             scale,
             callee.span,
@@ -644,7 +645,7 @@ fn infer_hir_fn_call(
             builtin_fns,
             src,
         ),
-        Some(SpecialFnKind::Constructor(kind)) => infer_hir_datetime_constructor(
+        BuiltinTypeRule::DatetimeConstructor(kind) => infer_hir_datetime_constructor(
             kind,
             callee.span,
             args,
@@ -656,7 +657,7 @@ fn infer_hir_fn_call(
             builtin_fns,
             src,
         ),
-        Some(SpecialFnKind::DatetimeExtract(_)) => infer_hir_datetime_unary(
+        BuiltinTypeRule::DatetimeExtract => infer_hir_datetime_unary(
             name,
             callee.span,
             args,
@@ -669,7 +670,7 @@ fn infer_hir_fn_call(
             src,
             InferredType::Int,
         ),
-        Some(SpecialFnKind::DatetimeFrom(_)) => {
+        BuiltinTypeRule::DatetimeFromNumeric => {
             if args.len() != 1 {
                 return Err(GraphcalError::WrongArity {
                     name: crate::syntax::function_name::FnName::expect_valid(name.as_str()),
@@ -709,7 +710,7 @@ fn infer_hir_fn_call(
                 crate::registry::time_scale::TimeScale::UTC,
             ))
         }
-        Some(SpecialFnKind::DatetimeTo(_)) => infer_hir_datetime_unary(
+        BuiltinTypeRule::DatetimeToNumeric => infer_hir_datetime_unary(
             name,
             callee.span,
             args,
@@ -722,18 +723,20 @@ fn infer_hir_fn_call(
             src,
             InferredType::Scalar(Dimension::dimensionless()),
         ),
-        None | Some(SpecialFnKind::Aggregation(_)) => infer_hir_builtin_fn(
-            name,
-            callee.span,
-            args,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            builtin_fns,
-            src,
-        ),
+        BuiltinTypeRule::RegistrySignature | BuiltinTypeRule::CollectionAggregation(_) => {
+            infer_hir_builtin_fn(
+                name,
+                callee.span,
+                args,
+                declared_types,
+                local_types,
+                dag,
+                tir,
+                registry,
+                builtin_fns,
+                src,
+            )
+        }
     }
 }
 
@@ -903,7 +906,7 @@ fn infer_hir_timescale_conversion(
 
 #[expect(clippy::too_many_arguments, reason = "function-call context")]
 fn infer_hir_datetime_constructor(
-    kind: ConstructorFn,
+    kind: DatetimeConstructorFn,
     span: crate::syntax::span::Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -915,7 +918,7 @@ fn infer_hir_datetime_constructor(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     match kind {
-        ConstructorFn::Datetime => {
+        DatetimeConstructorFn::Datetime => {
             if args.is_empty() || args.len() > 2 {
                 return Err(GraphcalError::EvalError {
                     message: format!("datetime() expects 1 or 2 arguments, got {}", args.len()),
@@ -966,7 +969,7 @@ fn infer_hir_datetime_constructor(
                 crate::registry::time_scale::TimeScale::UTC,
             ))
         }
-        ConstructorFn::Epoch => {
+        DatetimeConstructorFn::Epoch => {
             if args.len() != 2 {
                 return Err(GraphcalError::WrongArity {
                     name: crate::syntax::function_name::FnName::expect_valid("epoch"),

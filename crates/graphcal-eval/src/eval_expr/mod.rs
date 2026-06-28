@@ -1,5 +1,6 @@
 mod aggregations;
 mod arithmetic;
+mod builtin_call;
 mod conversions;
 mod functions;
 mod hir_eval;

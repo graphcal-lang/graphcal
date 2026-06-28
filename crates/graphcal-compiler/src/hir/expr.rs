@@ -23,7 +23,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use thiserror::Error;
 
-use crate::builtin::{BuiltinConst, BuiltinFnName, SpecialFnKind};
+use crate::builtin::{BuiltinConst, BuiltinFnName};
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
@@ -867,6 +867,19 @@ pub enum PatternBinding {
     },
 }
 
+/// Returns `true` when HIR cannot validate arity from the ordinary fixed-arity
+/// built-in registry because the type checker may accept a different call shape.
+const fn builtin_has_type_checker_arity(name: BuiltinFnName) -> bool {
+    matches!(
+        name,
+        BuiltinFnName::Sum
+            | BuiltinFnName::Min
+            | BuiltinFnName::Max
+            | BuiltinFnName::Mean
+            | BuiltinFnName::Count
+    )
+}
+
 struct ExprLowerer<'a> {
     ctx: ExprLoweringContext<'a>,
     local_scopes: Vec<HashMap<LocalName, LocalDef>>,
@@ -1475,10 +1488,7 @@ impl<'a> ExprLowerer<'a> {
         span: Span,
     ) -> Result<(), ExprLowerError> {
         let FunctionRef::Builtin(builtin) = function_ref;
-        if builtin
-            .special_kind()
-            .is_some_and(|kind| matches!(kind, SpecialFnKind::Aggregation(_)))
-        {
+        if builtin_has_type_checker_arity(builtin) {
             return Ok(());
         }
         let Some(function) = crate::registry::builtins::builtin_functions().get(builtin.as_str())

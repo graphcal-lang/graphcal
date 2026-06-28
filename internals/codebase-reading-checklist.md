@@ -115,6 +115,7 @@ Note: `tir/typed.rs`, `tir/dim_check/helpers.rs`, and `tir/dim_check/mod.rs` are
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
 - [ ] `crates/graphcal-compiler/src/ir/resolve/tests.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
+- [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/builtin_call.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
@@ -145,6 +146,7 @@ Note: `eval_expr/arithmetic.rs`, `eval_expr/unit_scale.rs`, `eval_expr/hir_eval.
 
 - [ ] `crates/graphcal-eval/src/decl_key.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/numeric.rs`
+- [ ] `crates/graphcal-eval/src/eval_expr/builtin_call.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/conversions.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/aggregations.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/functions.rs`

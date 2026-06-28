@@ -5,6 +5,7 @@
 //! walker was retired once every boundary expression (declaration bodies,
 //! domain bounds, CLI overrides) gained a stored HIR form (#765).
 
+mod builtin_call;
 pub(super) mod hir;
 mod rules;
 
