@@ -8,7 +8,7 @@ use pretty::RcDoc;
 
 use super::{
     Formatter, INDENT, flat_alt_group, format_unit_expr_inline, prepend_comments,
-    render_doc_to_string, soft_parenthesized,
+    render_doc_to_string, soft_parenthesized, soft_parenthesized_list,
 };
 
 // ---------------------------------------------------------------------------
@@ -261,13 +261,11 @@ pub fn format_fn_call_expr(
             .unwrap_or_else(RcDoc::nil);
         arg_docs.push(prepend_comments(leading, arg_doc.append(trailing)));
     }
-    let sep = RcDoc::text(",").append(RcDoc::line());
-    let inner = RcDoc::intersperse(arg_docs, sep);
     let mut doc = RcDoc::text(callee.display_path());
     if !type_args.is_empty() {
         doc = doc.append(format_generic_args(fmt, type_args));
     }
-    doc.append(soft_parenthesized(inner))
+    doc.append(soft_parenthesized_list(arg_docs, false))
 }
 
 fn format_generic_args(
@@ -342,14 +340,10 @@ pub fn format_constructor_call(
         field_docs.push(prepend_comments(leading, field_doc));
     }
 
-    let sep = RcDoc::text(",").append(RcDoc::line());
-    let trailing_comma = RcDoc::text(",").flat_alt(RcDoc::nil());
-    let inner = RcDoc::intersperse(field_docs, sep).append(trailing_comma);
-
     // Construction is always a constructor call — parens with named
     // args. There is no brace-form construction; the parser rejects
     // `Ctor { field: val }` outright.
-    header.append(soft_parenthesized(inner))
+    header.append(soft_parenthesized_list(field_docs, true))
 }
 
 pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDoc<'static> {
@@ -794,11 +788,9 @@ fn format_lambda_call(
     let arg_docs = args
         .iter()
         .map(|arg| format_expr(fmt, arg))
-        .chain(std::iter::once(lambda_body));
-    RcDoc::text(head).append(soft_parenthesized(RcDoc::intersperse(
-        arg_docs,
-        RcDoc::text(",").append(RcDoc::line()),
-    )))
+        .chain(std::iter::once(lambda_body))
+        .collect();
+    RcDoc::text(head).append(soft_parenthesized_list(arg_docs, false))
 }
 
 fn format_scan(
@@ -938,9 +930,8 @@ fn format_inline_dag_ref(
         })
         .collect();
     let path_text = path.display_path();
-    let inner = RcDoc::intersperse(binding_docs, RcDoc::text(",").append(RcDoc::line()));
     RcDoc::text(format!("@{path_text}"))
-        .append(soft_parenthesized(inner))
+        .append(soft_parenthesized_list(binding_docs, false))
         .append(RcDoc::text("."))
         .append(RcDoc::text(output.to_string()))
 }
