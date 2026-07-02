@@ -223,15 +223,24 @@ fn is_valid_name(value: &str) -> bool {
 }
 
 fn url_has_userinfo(value: &str) -> bool {
-    let Some(scheme_idx) = value.find("://") else {
-        return false;
-    };
-    let authority_start = scheme_idx + 3;
-    let authority = value[authority_start..]
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
-    authority.contains('@')
+    if let Some(scheme_idx) = value.find("://") {
+        let scheme = &value[..scheme_idx];
+        let authority_start = scheme_idx + 3;
+        let authority = value[authority_start..]
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or_default();
+        return authority.rsplit_once('@').is_some_and(|(userinfo, _)| {
+            userinfo.contains(':') || !(scheme == "ssh" && userinfo == "git")
+        });
+    }
+
+    value.split_once('@').is_some_and(|(userinfo, _)| {
+        let at_is_before_path = value
+            .find(['/', '?', '#'])
+            .is_none_or(|path_start| value.find('@').is_some_and(|at| at < path_start));
+        at_is_before_path && userinfo.contains(':')
+    })
 }
 
 /// Parsed `graphcal.toml` package section and direct dependencies.
@@ -1336,6 +1345,18 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
         .unwrap_err();
 
         assert!(matches!(err, ManifestError::GitRev(_)));
+    }
+
+    #[test]
+    fn manifest_accepts_standard_ssh_git_user_url() {
+        GitUrl::new("ssh://git@github.com/acme/orbital.git").unwrap();
+        GitUrl::new("git@github.com:acme/orbital.git").unwrap();
+    }
+
+    #[test]
+    fn manifest_rejects_scp_like_credential_url() {
+        let err = GitUrl::new("user:token@example.com/acme/orbital.git").unwrap_err();
+        assert_eq!(err.reason, GitUrlErrorReason::Credentials);
     }
 
     #[test]

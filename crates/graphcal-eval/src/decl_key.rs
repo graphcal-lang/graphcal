@@ -61,6 +61,7 @@ impl RuntimeDeclKey {
         }
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn member(&self) -> &str {
         match self {

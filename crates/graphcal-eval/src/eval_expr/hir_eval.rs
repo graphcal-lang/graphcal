@@ -1200,27 +1200,18 @@ fn eval_hir_unfold(
 ) -> Result<RuntimeValue, GraphcalError> {
     let unfold_ctx = ctx.unfold_context.as_ref().ok_or_else(|| {
         ctx.eval_error(
-            "unfold expression requires evaluation context with self_name and declared_types",
+            "unfold expression requires evaluation context with self_key and declared type",
             span,
         )
     })?;
-    let self_name = unfold_ctx.self_name;
-    let declared = unfold_ctx
-        .declared_types
-        .get(&ScopedName::local(self_name))
-        .ok_or_else(|| {
-            ctx.eval_error(
-                format!("no declared type for node `{self_name}`"),
-                Span::new(0, 0),
-            )
-        })?;
-    let index_ref = match declared {
+    let self_key = unfold_ctx.self_key.clone();
+    let index_ref = match unfold_ctx.self_declared_type {
         graphcal_compiler::registry::declared_type::DeclaredType::Indexed { index, .. } => {
             index.clone()
         }
         _ => {
             return Err(ctx.eval_error(
-                format!("node `{self_name}` must have an indexed type for time scan"),
+                format!("node `{self_key}` must have an indexed type for time scan"),
                 Span::new(0, 0),
             ));
         }
@@ -1240,11 +1231,6 @@ fn eval_hir_unfold(
     let mut result_entries = IndexMap::new();
     result_entries.insert(variants[0].clone(), init_val);
 
-    let self_scoped = ScopedName::local(self_name);
-    let self_key = RuntimeDeclKey::for_local_decl(
-        ctx.current_dag.unwrap_or_else(|| ctx.tir.root()),
-        &self_scoped,
-    );
     let mut overlay_values = values.clone();
     overlay_values.insert(
         self_key.clone(),
