@@ -135,9 +135,6 @@ pub struct NatPolyForm {
     pub(crate) terms: BTreeMap<Monomial, u64>,
 }
 
-/// Backward-compatible alias for code that still speaks in linear Nat forms.
-pub type NatLinearForm = NatPolyForm;
-
 impl NatPolyForm {
     /// Create a polynomial from a constant.
     #[must_use]

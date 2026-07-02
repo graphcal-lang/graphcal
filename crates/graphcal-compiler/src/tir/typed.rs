@@ -14,7 +14,7 @@ use crate::dimension::Dimension;
 use crate::hir;
 use crate::hir::diagnostics::{expr_lower_error_to_graphcal, resolved_decl_key};
 pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
-pub use crate::nat::{NatLinearForm, NatPolyForm};
+pub use crate::nat::NatPolyForm;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::span::{Span, Spanned};

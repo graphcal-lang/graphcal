@@ -565,6 +565,11 @@ pub(super) fn resolve_unit_dimension_or_diagnose(
                 src: src.clone(),
                 span: unit.span.into(),
             },
+            UnitResolveError::InvalidScale { value, reason } => GraphcalError::EvalError {
+                message: format!("compound unit scale {reason}, got {value}"),
+                src: src.clone(),
+                span: unit.span.into(),
+            },
             UnitResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
                 src: src.clone(),
                 span: unit.span.into(),

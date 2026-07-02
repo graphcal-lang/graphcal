@@ -17,7 +17,7 @@ use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::Registry;
-use crate::tir::typed::{NatLinearForm, NatRangeIndexIdentity};
+use crate::tir::typed::{NatPolyForm, NatRangeIndexIdentity};
 
 pub(crate) use helpers::{expect_scalar, format_inferred_type};
 
@@ -85,7 +85,7 @@ impl InferredIndex {
     ///
     /// Returns an error when the form is a concrete invalid Nat range size.
     pub fn from_nat_range_form(
-        form: NatLinearForm,
+        form: NatPolyForm,
     ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
         Self::from_nat_range_identity(&NatRangeIndexIdentity::try_from_form(form)?)
     }
@@ -111,7 +111,7 @@ impl InferredIndex {
     }
 
     #[must_use]
-    pub fn nat_range_form(&self) -> Option<NatLinearForm> {
+    pub fn nat_range_form(&self) -> Option<NatPolyForm> {
         self.reference.nat_range_form()
     }
 
@@ -235,7 +235,7 @@ pub enum InferredType {
     ///
     /// `Fin(N)` is not a user-declarable type — it only arises as the type of loop
     /// variables in `for i: range(N) { ... }`.
-    Fin(NatLinearForm),
+    Fin(NatPolyForm),
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
     /// A named index identity in an index-only position.

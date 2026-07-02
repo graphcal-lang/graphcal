@@ -24,7 +24,7 @@ use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVarian
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{FieldName, GenericParamName};
-use crate::tir::typed::NatLinearForm;
+use crate::tir::typed::NatPolyForm;
 
 use super::super::builtins::infer_fn_dim_from_spans;
 use super::super::helpers::{
@@ -1263,10 +1263,10 @@ fn infer_hir_binop(
     )
 }
 
-fn hir_nat_to_linear_form(expr: &hir::NatExpr) -> Result<NatLinearForm, NatOverflowError> {
+fn hir_nat_to_linear_form(expr: &hir::NatExpr) -> Result<NatPolyForm, NatOverflowError> {
     match expr {
-        hir::NatExpr::Literal(n, _) => Ok(NatLinearForm::from_constant(*n)),
-        hir::NatExpr::Param(param) => Ok(NatLinearForm::from_var(param.value.name.clone())),
+        hir::NatExpr::Literal(n, _) => Ok(NatPolyForm::from_constant(*n)),
+        hir::NatExpr::Param(param) => Ok(NatPolyForm::from_var(param.value.name.clone())),
         hir::NatExpr::Add(lhs, rhs, _) => {
             hir_nat_to_linear_form(lhs)?.add(&hir_nat_to_linear_form(rhs)?)
         }
@@ -1342,7 +1342,7 @@ fn infer_hir_for_comp(
                         }
                     }
                     crate::registry::types::IndexKind::NatRange { size } => {
-                        InferredType::Fin(NatLinearForm::from_constant(size.get() as u64))
+                        InferredType::Fin(NatPolyForm::from_constant(size.get() as u64))
                     }
                 }
             }
@@ -1525,7 +1525,7 @@ fn infer_hir_index_access(
                                     if !idx_def.is_nat_range() {
                                         return None;
                                     }
-                                    idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                                    idx_def.nat_range_size().map(NatPolyForm::from_constant)
                                 },
                             );
                         let Some(index_form) = index_form else {
@@ -1582,7 +1582,7 @@ fn infer_hir_index_access(
                             if !idx_def.is_nat_range() {
                                 return None;
                             }
-                            idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                            idx_def.nat_range_size().map(NatPolyForm::from_constant)
                         },
                     );
                 let Some(index_form) = index_form else {
@@ -1633,7 +1633,7 @@ fn infer_hir_index_access(
 
 fn check_constant_nat_range_index(
     index_expr: &hir::Expr,
-    index_form: &NatLinearForm,
+    index_form: &NatPolyForm,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let Some(index) = try_const_int(index_expr) else {
@@ -2405,7 +2405,7 @@ fn resolve_constructor_generic_args(
 enum MapLiteralVariantKey {
     Declared(ResolvedIndexVariant),
     NatRange {
-        form: NatLinearForm,
+        form: NatPolyForm,
         variant: IndexVariantName,
     },
 }
@@ -2457,7 +2457,7 @@ fn inferred_index_for_hir_map_key(
             variant.variant.index().clone(),
         )),
         hir::expr::MapEntryKey::NatRangeVariant { size, variant } => {
-            InferredIndex::from_nat_range_form(NatLinearForm::from_constant(*size))
+            InferredIndex::from_nat_range_form(NatPolyForm::from_constant(*size))
                 .map_err(|err| nat_range_error(err, src, variant.span))
         }
     }

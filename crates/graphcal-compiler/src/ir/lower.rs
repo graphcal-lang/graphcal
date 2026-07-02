@@ -3065,6 +3065,17 @@ fn unit_resolve_to_graphcal(
             src: src.clone(),
             span: span.into(),
         },
+        UnitResolveError::InvalidScale { value, reason } => {
+            let reason = match reason {
+                PositiveFiniteScaleError::NonFinite => "must be finite",
+                PositiveFiniteScaleError::NonPositive => "must be greater than zero",
+            };
+            GraphcalError::EvalError {
+                message: format!("compound unit scale {reason}, got {value}"),
+                src: src.clone(),
+                span: span.into(),
+            }
+        }
         UnitResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
             src: src.clone(),
             span: span.into(),
@@ -3555,6 +3566,17 @@ fn lower_range_index(
                         src: src.clone(),
                         span: unit.span.into(),
                     });
+                }
+                Err(crate::registry::types::UnitResolveError::InvalidScale { value, reason }) => {
+                    let reason = match reason {
+                        PositiveFiniteScaleError::NonFinite => "must be finite",
+                        PositiveFiniteScaleError::NonPositive => "must be greater than zero",
+                    };
+                    return Err(eval_error(
+                        format!("range display unit scale {reason}, got {value}"),
+                        src,
+                        unit.span,
+                    ));
                 }
                 Err(_) => (None, 1.0),
             }

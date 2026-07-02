@@ -290,11 +290,9 @@ impl RegistryBuilder {
     ///
     /// For tagged unions (the common case), also populates the
     /// constructor namespace: each variant's name resolves back to the
-    /// union it belongs to. Constructor collisions are detected here —
-    /// the prelude is loaded first, so any later user-defined
-    /// constructor that collides with a prelude or sibling type's
-    /// constructor is silently ignored on the *second* registration
-    /// (consistent with the type-name "first wins" behavior).
+    /// union it belongs to. Constructor collisions are rejected upstream
+    /// during declaration collection, so this low-level registry overwrites
+    /// by key like the other `register_*` helpers.
     pub fn register_type(&mut self, def: TypeDef) {
         if let TypeDefKind::Union { ref members } = def.kind {
             for member in members {
@@ -624,6 +622,30 @@ mod tests {
         assert_eq!(dim, expected_dim);
         // km/hour = 1000 m / 3600 s ≈ 0.2778 m/s
         assert!((scale - 1000.0 / 3600.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn resolve_unit_expr_rejects_non_finite_compound_scale() {
+        let r = make_registry();
+        let expr = UnitExpr {
+            terms: vec![UnitExprItem {
+                op: MulDivOp::Mul,
+                name: make_unit_name("km"),
+                power: Some(Rational::from(400)),
+            }],
+            span: Span::new(0, 0),
+        };
+        let err = r.units.resolve_unit_expr(&expr).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                UnitResolveError::InvalidScale {
+                    reason: PositiveFiniteScaleError::NonFinite,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
     }
 
     #[test]

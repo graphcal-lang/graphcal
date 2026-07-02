@@ -120,6 +120,11 @@ pub enum UnitResolveError {
     UnknownUnit(UnitRef),
     /// A unit in the expression has a runtime-dependent scale.
     DynamicScale(UnitRef),
+    /// The compound scale was zero, negative, NaN, or infinite.
+    InvalidScale {
+        value: f64,
+        reason: PositiveFiniteScaleError,
+    },
     /// Dimension exponent arithmetic overflowed.
     Overflow(RationalError),
 }
@@ -170,6 +175,10 @@ pub(crate) fn resolve_unit_expr_impl(
                 scale /= powered_scale;
             }
         }
+        PositiveFiniteScale::new(scale).map_err(|reason| UnitResolveError::InvalidScale {
+            value: scale,
+            reason,
+        })?;
     }
     Ok((dim, scale))
 }
