@@ -812,6 +812,24 @@ fn scoped_name_to_name_path(
     })
 }
 
+fn resolve_existing_synthetic_child_decl(
+    resolver: &crate::syntax::module_resolve::ModuleResolver,
+    owner: &crate::dag_id::DagId,
+    name: &ScopedName,
+) -> Option<ResolvedDeclName> {
+    let mut qualifier = name.qualifier().iter();
+    let first = qualifier.next()?;
+    let synthetic_owner = qualifier.fold(owner.child(first.as_ref()), |owner, segment| {
+        owner.child(segment.as_ref())
+    });
+    let decl_name = DeclName::expect_valid(name.member());
+    resolver
+        .modules()
+        .get(&synthetic_owner)
+        .and_then(|module| module.decls().contains_key(&decl_name).then_some(()))
+        .map(|()| ResolvedDeclName::from_def(synthetic_owner, decl_name))
+}
+
 /// Shared implementation for `lower_to_builder` and `lower_to_builder_with_imported_values`.
 ///
 /// Builds the registry, augments runtime deps for dynamic units, pairs resolved
@@ -1077,16 +1095,24 @@ impl UnfrozenIR {
         }
         for name in self.imported_values.keys() {
             let path = scoped_name_to_name_path(name, src)?;
-            let canonical = resolver
-                .resolve_decl_path(owner, &path)
-                .unwrap_or_else(|_| {
-                    crate::hir::diagnostics::resolved_decl_key(owner, name).unwrap_or_else(|| {
-                        ResolvedDeclName::from_def(
-                            owner.clone(),
-                            DeclName::expect_valid(name.member()),
-                        )
-                    })
-                });
+            let canonical = match resolver.resolve_decl_path(owner, &path) {
+                Ok(resolved) => resolved,
+                Err(err) => match self.imported_value_sources.get(name) {
+                    Some(source) => ResolvedDeclName::from_def(
+                        source.dag_id.clone(),
+                        source.source_name.clone(),
+                    ),
+                    None => resolve_existing_synthetic_child_decl(resolver, owner, name)
+                        .or_else(|| crate::hir::diagnostics::resolved_decl_key(owner, name))
+                        .ok_or_else(|| GraphcalError::InternalError {
+                            message: format!(
+                                "imported value `{name}` is not present in module resolver: {err}"
+                            ),
+                            src: src.clone(),
+                            span: Span::new(0, 0).into(),
+                        })?,
+                },
+            };
             decl_bindings.insert(name.clone(), canonical);
         }
         for (name, source) in &self.imported_value_sources {

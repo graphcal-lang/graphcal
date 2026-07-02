@@ -1474,11 +1474,13 @@ impl<'a> ExprLowerer<'a> {
             .fold(self.ctx.owner.clone(), |owner, segment| {
                 owner.child(segment.as_str())
             });
-        self.ctx
-            .resolver
-            .modules()
-            .contains_key(&owner)
-            .then(|| ResolvedDeclName::from_def(owner, DeclName::from_atom(leaf.clone())))
+        self.ctx.resolver.modules().get(&owner).and_then(|module| {
+            let decl_name = DeclName::from_atom(leaf.clone());
+            module
+                .decls()
+                .contains_key(&decl_name)
+                .then(|| ResolvedDeclName::from_def(owner, decl_name))
+        })
     }
 
     /// Validate a built-in call's argument count against the registry's
