@@ -918,7 +918,8 @@ impl Parser<'_> {
         if let Some((&Token::Number, _)) = self.lexer.peek_with_span() {
             let (_, lit_span) = self.advance()?;
             let text = self.lexer.slice_at(lit_span);
-            let value: u64 = text.parse().map_err(|_| {
+            let normalized = text.replace('_', "");
+            let value: u64 = normalized.parse().map_err(|_| {
                 self.unexpected_token("a valid non-negative integer", text, lit_span)
             })?;
             Ok(GenericArg::Nat(NatExpr::Literal(value, lit_span)))
@@ -1257,6 +1258,19 @@ mod tests {
                 crate::syntax::ast::GenericArg::Nat(crate::syntax::ast::NatExpr::Literal(3, _))
             ));
             assert_eq!(args.len(), 0);
+        } else {
+            panic!("expected FnCall, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn parse_turbofish_nat_arg_with_separators() {
+        let expr = parse_node_expr("eye<1_000>()");
+        if let ExprKind::FnCall { type_args, .. } = &expr.kind {
+            assert!(matches!(
+                &type_args[0],
+                crate::syntax::ast::GenericArg::Nat(crate::syntax::ast::NatExpr::Literal(1000, _))
+            ));
         } else {
             panic!("expected FnCall, got {:?}", expr.kind);
         }

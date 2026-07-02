@@ -956,7 +956,8 @@ fn format_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> S
         ExprKind::Number(n) => graphcal_compiler::registry::format::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
         ExprKind::UnitLiteral { value, unit } => {
-            let unit_str = graphcal_compiler::registry::format::format_unit_expr(unit);
+            let unit_str =
+                graphcal_compiler::registry::format::format_unit_expr_with_config(unit, true);
             let val_str = graphcal_compiler::registry::format::format_number(*value);
             format!("{val_str} {unit_str}")
         }

@@ -69,7 +69,9 @@ impl FileSystemReader for InMemoryFileSystem {
             match component {
                 std::path::Component::CurDir => {}
                 std::path::Component::ParentDir => {
-                    normalized.pop();
+                    if normalized.parent().is_some() {
+                        normalized.pop();
+                    }
                 }
                 other => normalized.push(other),
             }
@@ -128,6 +130,14 @@ mod tests {
         fs.add_file(PathBuf::from("/project/sub/file.gcl"), String::new());
         let canonical = fs.canonicalize(Path::new("/project/sub")).unwrap();
         assert_eq!(canonical, PathBuf::from("/project/sub"));
+    }
+
+    #[test]
+    fn in_memory_canonicalize_parent_of_root_stays_root() {
+        let mut fs = InMemoryFileSystem::new();
+        fs.add_file(PathBuf::from("/project/main.gcl"), String::new());
+        let canonical = fs.canonicalize(Path::new("/..")).unwrap();
+        assert_eq!(canonical, PathBuf::from("/"));
     }
 
     #[test]

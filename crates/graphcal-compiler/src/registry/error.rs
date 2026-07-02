@@ -701,7 +701,7 @@ pub enum GraphcalError {
 
     #[error("invalid source path `{path}`: {reason}")]
     #[diagnostic(
-        code(graphcal::M000),
+        code(graphcal::M020),
         help("Graphcal source files must be UTF-8 `.gcl` files")
     )]
     InvalidSourcePath { path: String, reason: String },
@@ -1199,7 +1199,7 @@ pub enum GraphcalError {
 
     #[error("index binding `{dep_index} = {value}`: `{value}` is not a known index")]
     #[diagnostic(
-        code(graphcal::M017),
+        code(graphcal::M019),
         help(
             "the right-hand side of an index binding must be a `cat` or `range` index declared in the importing file or its transitive imports"
         )

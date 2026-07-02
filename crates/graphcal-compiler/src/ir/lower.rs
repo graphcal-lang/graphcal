@@ -26,7 +26,7 @@ use crate::ir::resolve::{
 use crate::ir::resolve::{ImportedNames, resolve_with_imports};
 use crate::registry::declared_type::DeclaredType;
 use crate::registry::error::GraphcalError;
-use crate::registry::format::format_unit_expr;
+use crate::registry::format::format_unit_expr_with_config;
 use crate::registry::prelude::load_prelude;
 use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{
@@ -3548,7 +3548,7 @@ fn lower_range_index(
                         src,
                         unit.span,
                     )?;
-                    (Some(format_unit_expr(unit)), scale.get())
+                    (Some(format_unit_expr_with_config(unit, true)), scale.get())
                 }
                 Err(crate::registry::types::UnitResolveError::Overflow(_)) => {
                     return Err(GraphcalError::DimensionOverflow {
