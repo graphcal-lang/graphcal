@@ -463,21 +463,31 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                     DeclKind::Index(idx) if idx.name.value.as_str() == rhs_name => Some(idx),
                     _ => None,
                 });
-        // Check 2: already-compiled dependency registries.
-        let importer_idx_from_registry = if importer_idx_ast.is_none() {
-            ctx.extra_registry_builders
+        // Check 2: already-compiled dependency registries. Collect every
+        // same-leaf match instead of taking the first `HashMap` iteration hit:
+        // if two dependencies expose the same index name with different kinds,
+        // acceptance must not depend on map order.
+        let importer_registry_index_kinds = if importer_idx_ast.is_none() {
+            let mut kinds = ctx
+                .extra_registry_builders
                 .iter()
-                .find_map(|import| import.registry.indexes.get_index(&rhs_name))
-                .or_else(|| {
-                    evaluated_files
-                        .values()
-                        .find_map(|ef| ef.registry.indexes.get_index(&rhs_name))
-                })
+                .filter_map(|import| import.registry.indexes.get_index(&rhs_name))
+                .map(graphcal_compiler::registry::types::IndexDef::is_named)
+                .collect::<Vec<_>>();
+            kinds.extend(
+                evaluated_files
+                    .values()
+                    .filter_map(|ef| ef.registry.indexes.get_index(&rhs_name))
+                    .map(graphcal_compiler::registry::types::IndexDef::is_named),
+            );
+            kinds.sort_unstable();
+            kinds.dedup();
+            kinds
         } else {
-            None
+            Vec::new()
         };
 
-        if importer_idx_ast.is_none() && importer_idx_from_registry.is_none() {
+        if importer_idx_ast.is_none() && importer_registry_index_kinds.is_empty() {
             return Err(CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
                 dep_index: binding_name.to_string(),
                 value: rhs_name,
@@ -493,10 +503,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 | graphcal_compiler::desugar::desugared_ast::IndexDeclKind::RequiredNamed
         );
         let imp_is_named = importer_idx_ast.map_or_else(
-            || {
-                importer_idx_from_registry
-                    .map(graphcal_compiler::registry::types::IndexDef::is_named)
-            },
+            || importer_registry_index_kinds.first().copied(),
             |imp_idx| {
                 Some(matches!(
                     imp_idx.kind,
@@ -505,14 +512,21 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 ))
             },
         );
-        if let Some(imp_named) = imp_is_named
-            && dep_is_named != imp_named
+        let ambiguous_registry_kind =
+            importer_idx_ast.is_none() && importer_registry_index_kinds.len() > 1;
+        if ambiguous_registry_kind
+            || matches!(imp_is_named, Some(imp_named) if dep_is_named != imp_named)
         {
             return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
                 dep_index: binding_name.to_string(),
                 dep_kind: if dep_is_named { "named" } else { "range" }.to_string(),
                 bound_index: rhs_name,
-                bound_kind: if imp_named { "named" } else { "range" }.to_string(),
+                bound_kind: match (ambiguous_registry_kind, imp_is_named) {
+                    (true, _) => "ambiguous".to_string(),
+                    (false, Some(true)) => "named".to_string(),
+                    (false, Some(false)) => "range".to_string(),
+                    (false, None) => "unknown".to_string(),
+                },
                 src: file_src.clone(),
                 span: binding.name.span.into(),
             }));
