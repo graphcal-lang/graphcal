@@ -312,24 +312,34 @@ fn handle_eval(
                 }
             }
 
+            // Plot evaluation failures are reported even without `--plot`, so
+            // a normal eval run cannot hide broken plot declarations.
+            for err in &result.plot_errors {
+                eprintln!("error: plot `{}` not rendered: {}", err.name, err.message);
+            }
+
             // Handle --plot output. JSON plot mode has a pipe-friendly stdout
             // contract: the entire stdout stream is the figure array, so normal
             // evaluation output is suppressed above.
+            let mut plot_output_failed = false;
             if let Some(plot_mode) = plot_output {
                 let rendered = plot::build_figures(&result.plots, &result.figures, &result.layers);
-                // Plots that failed to evaluate are reported on stderr —
-                // outside the stdout JSON contract — so the root cause is
-                // never hidden in --plot mode (#842), and they fail the run
-                // (exit code 1) like any other evaluation error.
-                for err in &result.plot_errors {
-                    eprintln!("error: plot `{}` not rendered: {}", err.name, err.message);
-                }
                 let no_plot_decls = result.plots.is_empty()
                     && result.plot_errors.is_empty()
                     && result.figures.is_empty()
                     && result.layers.is_empty();
                 if no_plot_decls {
                     eprintln!("warning: no plot declarations found");
+                }
+                let no_displayed_plots =
+                    matches!(plot_mode, PlotOutput::Browser | PlotOutput::HtmlFile(_))
+                        && rendered.is_empty()
+                        && !no_plot_decls;
+                if no_displayed_plots {
+                    eprintln!(
+                        "error: no displayed plots to render (all selected plots may be #[hidden])"
+                    );
+                    plot_output_failed = true;
                 }
                 match plot_mode {
                     PlotOutput::Browser | PlotOutput::HtmlFile(_) if rendered.is_empty() => {}
@@ -369,8 +379,7 @@ fn handle_eval(
                 }
             }
 
-            let has_plot_errors = plot_output.is_some() && !result.plot_errors.is_empty();
-            if result.has_errors() || has_plot_errors {
+            if result.has_errors() || plot_output_failed {
                 process::exit(1);
             }
         }
