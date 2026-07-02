@@ -92,7 +92,10 @@ pub(super) fn runtime_to_value(
                 .iter()
                 .map(|(field_name, field_rv)| {
                     let field_declared = type_def.and_then(|td| {
-                        td.fields()
+                        td.union_members()?
+                            .iter()
+                            .find(|member| member.name.as_str() == public_type_name.as_str())?
+                            .fields
                             .iter()
                             .find(|f| f.name == *field_name)
                             .and_then(|f| resolve_field_declared_type(f, &generic_sub, registry))

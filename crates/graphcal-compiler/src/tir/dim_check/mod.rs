@@ -1442,8 +1442,10 @@ fn check_no_constraints_on_generic_type_args(
         }
     }
     for type_def in tir.registry.types.all_types() {
-        for field in type_def.fields() {
-            walk(&field.type_ann)?;
+        if let Some(members) = type_def.union_members() {
+            for field in members.iter().flat_map(|member| &member.fields) {
+                walk(&field.type_ann)?;
+            }
         }
     }
     Ok(())

@@ -1919,25 +1919,23 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                 if let Some(type_def) = registry.types.get_type(name)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
-                    let desc = type_def.union_members().map_or_else(
-                        || {
-                            // Record or unit type: show fields
-                            let fields = type_def.fields();
-                            if fields.is_empty() {
-                                type_def.name.to_string()
-                            } else {
+                    let desc = match type_def.union_members() {
+                        None => format!("{} (required)", type_def.name),
+                        Some(members) => match type_def.record_fields() {
+                            Some(fields) if fields.is_empty() => type_def.name.to_string(),
+                            Some(fields) => {
                                 let field_descs: Vec<String> =
                                     fields.iter().map(|f| f.name.to_string()).collect();
                                 format!("{} {{ {} }}", type_def.name, field_descs.join(", "))
                             }
+                            None => {
+                                // Union type: show members separated by |
+                                let member_descs: Vec<String> =
+                                    members.iter().map(|m| m.name.to_string()).collect();
+                                member_descs.join(" | ")
+                            }
                         },
-                        |members| {
-                            // Union type: show members separated by |
-                            let member_descs: Vec<String> =
-                                members.iter().map(|m| m.name.to_string()).collect();
-                            member_descs.join(" | ")
-                        },
-                    );
+                    };
                     def_mut.type_description = Some(desc);
                 }
             }
@@ -1950,24 +1948,29 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
     // resolve to the field of the right struct/variant, even when two structs
     // share a field name.
     for type_def in registry.types.all_types() {
-        for field in type_def.fields() {
-            let field_key = SymbolKey::Field {
-                owner: SymbolPath::local(type_def.name.to_string()),
-                field_name: field.name.to_string(),
-            };
-            if !table.definitions.contains_key(&field_key) {
-                table.insert_definition(
-                    field_key,
-                    DefinitionInfo {
-                        name: field.name.to_string(),
-                        category: SymbolCategory::Field,
-                        name_span: Span::new(0, 0),
-                        decl_span: Span::new(0, 0),
-                        type_description: None,
-                        detail: Some(format!("field of {}", type_def.name)),
-                        visibility: None,
-                    },
-                );
+        let Some(members) = type_def.union_members() else {
+            continue;
+        };
+        for member in members {
+            for field in &member.fields {
+                let field_key = SymbolKey::Field {
+                    owner: SymbolPath::local(member.name.to_string()),
+                    field_name: field.name.to_string(),
+                };
+                if !table.definitions.contains_key(&field_key) {
+                    table.insert_definition(
+                        field_key,
+                        DefinitionInfo {
+                            name: field.name.to_string(),
+                            category: SymbolCategory::Field,
+                            name_span: Span::new(0, 0),
+                            decl_span: Span::new(0, 0),
+                            type_description: None,
+                            detail: Some(format!("field of {}.{}", type_def.name, member.name)),
+                            visibility: None,
+                        },
+                    );
+                }
             }
         }
     }
