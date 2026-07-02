@@ -15,7 +15,10 @@ fn make_registry() -> Registry {
 }
 
 fn make_dim_term_name(name: &str) -> crate::syntax::span::Spanned<crate::syntax::names::NamePath> {
-    crate::syntax::span::Spanned::new(crate::syntax::names::NamePath::from(name), Span::new(0, 0))
+    crate::syntax::span::Spanned::new(
+        crate::syntax::names::NamePath::expect_local(name),
+        Span::new(0, 0),
+    )
 }
 
 /// Create a simple dimension `TypeExpr` from a name string like `"Velocity"`.

@@ -2261,7 +2261,7 @@ pub fn substitute_type_expr_index_names(
                     && let Some(atom) = path.value.as_bare()
                     && let Some(new_name) = bindings.get(atom.as_str())
                 {
-                    path.value = crate::syntax::names::NamePath::from(new_name.as_str());
+                    path.value = crate::syntax::names::NamePath::expect_local(new_name.as_str());
                 }
             }
             substitute_type_expr_index_names(base, bindings);
@@ -2307,7 +2307,8 @@ where
                 if let Some(atom) = item.term.name.value.as_bare()
                     && let Some(new_name) = bindings.get(atom.as_str())
                 {
-                    item.term.name.value = crate::syntax::names::NamePath::from(new_name.as_ref());
+                    item.term.name.value =
+                        crate::syntax::names::NamePath::expect_local(new_name.as_ref());
                 }
             }
         }
@@ -2318,7 +2319,7 @@ where
             if let Some(atom) = name.value.as_bare()
                 && let Some(new_name) = bindings.get(atom.as_str())
             {
-                name.value = crate::syntax::names::NamePath::from(new_name.as_ref());
+                name.value = crate::syntax::names::NamePath::expect_local(new_name.as_ref());
             }
             for arg in type_args {
                 substitute_type_expr_nominal_names(arg, bindings);
