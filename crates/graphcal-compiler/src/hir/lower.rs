@@ -419,6 +419,32 @@ fn lower_single_term_nominal_type(
     }
 
     let path = &item.term.name.value;
+    if let Some(atom) = path.as_bare()
+        && let Some(binding) = ctx.generic_scope.get_atom(atom)
+    {
+        match binding.constraint {
+            GenericConstraint::Type => {
+                return Ok(NominalTypeLookup::Found(TypeExprKind::GenericTypeParam(
+                    binding.spanned_id(item.term.name.span),
+                )));
+            }
+            GenericConstraint::Dim => return Ok(NominalTypeLookup::absent()),
+            GenericConstraint::Index => {
+                return Ok(NominalTypeLookup::Found(TypeExprKind::Index(
+                    IndexRef::GenericParam(binding.spanned_id(item.term.name.span)),
+                )));
+            }
+            GenericConstraint::Nat => {
+                return Err(HirLowerError::GenericConstraintMismatch {
+                    name: GenericParamName::from_atom(atom.clone()),
+                    actual: binding.constraint,
+                    expected: "Dim or Type",
+                    span: item.term.name.span,
+                });
+            }
+        }
+    }
+
     let mut deferred_error = None;
 
     match resolve_optional(ctx.resolver.resolve_index_path(ctx.owner, path)) {
@@ -442,32 +468,6 @@ fn lower_single_term_nominal_type(
         LookupCandidate::Absent => {}
         LookupCandidate::Error(source) => {
             deferred_error.get_or_insert(source);
-        }
-    }
-
-    if let Some(atom) = path.as_bare()
-        && let Some(binding) = ctx.generic_scope.get_atom(atom)
-    {
-        match binding.constraint {
-            GenericConstraint::Type => {
-                return Ok(NominalTypeLookup::Found(TypeExprKind::GenericTypeParam(
-                    binding.spanned_id(item.term.name.span),
-                )));
-            }
-            GenericConstraint::Dim => return Ok(NominalTypeLookup::Absent { deferred_error }),
-            GenericConstraint::Index => {
-                return Ok(NominalTypeLookup::Found(TypeExprKind::Index(
-                    IndexRef::GenericParam(binding.spanned_id(item.term.name.span)),
-                )));
-            }
-            GenericConstraint::Nat => {
-                return Err(HirLowerError::GenericConstraintMismatch {
-                    name: GenericParamName::from_atom(atom.clone()),
-                    actual: binding.constraint,
-                    expected: "Dim or Type",
-                    span: item.term.name.span,
-                });
-            }
         }
     }
 

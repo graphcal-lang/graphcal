@@ -494,6 +494,37 @@ fn type_resolve_hohmann() {
 }
 
 #[test]
+fn generic_index_param_shadows_same_named_module_index_in_type_args() {
+    let source = r"
+pub index I = { A };
+pub type Box<I: Index> {
+    Box(values: Dimensionless[I]),
+}
+pub type Wrap<I: Index> {
+    Wrap(boxed: Box<I>, values: Dimensionless[I]),
+}
+";
+    let tir = parse_and_type_resolve(source).unwrap();
+    let boxed_field = tir
+        .root()
+        .semantic
+        .type_defs
+        .field_types
+        .iter()
+        .find_map(|(key, ty)| (key.field.as_str() == "boxed").then_some(ty))
+        .expect("Wrap.boxed field type");
+
+    let ResolvedTypeExpr::GenericStruct { type_args, .. } = boxed_field else {
+        panic!("expected generic Box<I>, got {boxed_field:?}");
+    };
+    assert!(
+        matches!(&type_args[0], ResolvedTypeExpr::IndexArg(ResolvedIndex::GenericParam(name, _)) if name.as_str() == "I"),
+        "generic argument should bind to the index parameter, got {:?}",
+        type_args[0]
+    );
+}
+
+#[test]
 fn type_resolve_generics() {
     let source = include_str!("../../../../../tests/fixtures/valid/generics.gcl");
     let tir = parse_and_type_resolve(source).unwrap();
