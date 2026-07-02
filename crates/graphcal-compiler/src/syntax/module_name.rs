@@ -37,12 +37,29 @@ pub struct ScopedName {
 }
 
 impl ScopedName {
-    /// Create an unqualified local name.
+    /// Create a scoped name from display-boundary text.
+    ///
+    /// Dotted input is treated as a qualified path so `ScopedName::local("a.b")`
+    /// cannot display indistinguishably from `ScopedName::qualified("a", "b")`.
     #[must_use]
     pub fn local(member: impl Into<Arc<str>>) -> Self {
-        Self {
-            qualifier: Arc::from([] as [Arc<str>; 0]),
-            member: member.into(),
+        let member = member.into();
+        let parts = member.split('.').collect::<Vec<_>>();
+        if parts.len() > 1 && parts.iter().all(|part| !part.is_empty()) {
+            let qualifier = parts[..parts.len() - 1]
+                .iter()
+                .map(|part| Arc::<str>::from(*part))
+                .collect();
+            let leaf = Arc::<str>::from(parts[parts.len() - 1]);
+            Self {
+                qualifier,
+                member: leaf,
+            }
+        } else {
+            Self {
+                qualifier: Arc::from([] as [Arc<str>; 0]),
+                member,
+            }
         }
     }
 
@@ -117,7 +134,7 @@ impl From<NameAtom> for ScopedName {
 }
 
 impl From<String> for ScopedName {
-    /// Wrap a bare string as a local `ScopedName`.
+    /// Wrap display-boundary text as a `ScopedName`.
     fn from(s: String) -> Self {
         Self::local(s)
     }
@@ -144,6 +161,17 @@ mod tests {
         assert_eq!(
             name.qualifier().iter().map(|s| &**s).collect::<Vec<_>>(),
             ["module"]
+        );
+    }
+
+    #[test]
+    fn scoped_name_local_splits_dotted_boundary_text() {
+        let name = ScopedName::local("helpers.math.G0");
+        assert_eq!(format!("{name}"), "helpers.math.G0");
+        assert_eq!(name.member(), "G0");
+        assert_eq!(
+            name.qualifier().iter().map(|s| &**s).collect::<Vec<_>>(),
+            ["helpers", "math"]
         );
     }
 
