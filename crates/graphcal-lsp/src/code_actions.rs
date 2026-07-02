@@ -19,7 +19,6 @@ use crate::symbol_table::SymbolKey;
 /// All declaration keywords that can be preceded by `pub`.
 ///
 /// Used by `find_keyword_position` to locate the insertion point for `pub `.
-/// `"base"` matches `"base dim ..."` via `starts_with`.
 const ALL_DECL_KEYWORDS: &[&str] = &[
     "param", "node", "const", "index", "dim", "unit", "type", "base", "dag", "plot", "assert",
     "import", "include",
@@ -167,28 +166,41 @@ fn make_add_pub_bind_action_v002(diag: &Diagnostic, source: &str, uri: &Url) -> 
 /// Skips leading whitespace and returns the position at which a keyword
 /// (`param`, `node`, `const`, `index`, `dim`, `unit`, `type`, `base`, `dag`,
 /// `plot`, `assert`, `import`, `include`) starts.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "line numbers and character offsets fit in u32 for typical source files"
-)]
 fn find_keyword_position(source: &str, line: u32) -> Option<Position> {
-    let line_str = source.lines().nth(line as usize)?;
+    let line_start = line_start_offset(source, line)?;
+    let line_str = source.get(line_start..)?.lines().next().unwrap_or("");
 
-    // Find the start of the keyword (skip leading whitespace).
     let trimmed = line_str.trim_start();
     let indent = line_str.len() - trimmed.len();
+    let _keyword = ALL_DECL_KEYWORDS
+        .iter()
+        .find(|keyword| keyword_matches(trimmed, keyword))?;
 
-    // Verify this looks like a declaration keyword.
-    let starts_with_keyword = ALL_DECL_KEYWORDS.iter().any(|kw| trimmed.starts_with(kw));
+    Some(LineIndex::new(source).position(line_start + indent))
+}
 
-    if !starts_with_keyword {
-        return None;
+fn keyword_matches(trimmed: &str, keyword: &str) -> bool {
+    let Some(rest) = trimmed.strip_prefix(keyword) else {
+        return false;
+    };
+    rest.chars()
+        .next()
+        .is_none_or(|ch| ch.is_whitespace() || ch == '(')
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "line numbers fit in usize for typical source files"
+)]
+fn line_start_offset(source: &str, line: u32) -> Option<usize> {
+    let mut offset = 0usize;
+    for (idx, segment) in source.split_inclusive('\n').enumerate() {
+        if idx == line as usize {
+            return Some(offset);
+        }
+        offset += segment.len();
     }
-
-    Some(Position {
-        line,
-        character: indent as u32,
-    })
+    (line as usize == source.lines().count()).then_some(offset)
 }
 
 #[cfg(test)]
@@ -222,6 +234,19 @@ mod tests {
             import_links: Vec::new(),
             buffer_parsed: true,
         }
+    }
+
+    #[test]
+    fn find_keyword_position_uses_utf16_columns() {
+        let source = "\u{3000}param x: Dimensionless = 1.0;";
+        let pos = find_keyword_position(source, 0).unwrap();
+        assert_eq!(pos.line, 0);
+        assert_eq!(pos.character, 1);
+    }
+
+    #[test]
+    fn find_keyword_position_rejects_prefix_only_keyword_match() {
+        assert!(find_keyword_position("nodeish x", 0).is_none());
     }
 
     fn make_diag(

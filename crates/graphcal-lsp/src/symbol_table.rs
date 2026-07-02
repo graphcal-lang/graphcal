@@ -11,6 +11,7 @@ use graphcal_compiler::desugar::desugared_ast::{
 };
 use graphcal_compiler::hir;
 use graphcal_compiler::syntax::attribute::AttributeName;
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
 use graphcal_compiler::syntax::names::NamePath;
 use graphcal_compiler::syntax::span::Span;
@@ -743,6 +744,31 @@ fn symbol_key_for_name_path(path: &NamePath) -> SymbolKey {
 }
 
 impl SymbolKey {
+    pub fn from_scoped_name(name: &ScopedName) -> Self {
+        if name.qualifier().is_empty() {
+            Self::TopLevel(name.member().to_string())
+        } else {
+            Self::Qualified {
+                module: name.qualifier().iter().map(ToString::to_string).collect(),
+                name: name.member().to_string(),
+            }
+        }
+    }
+
+    pub fn to_scoped_name(&self) -> Option<ScopedName> {
+        match self {
+            Self::TopLevel(name) => Some(ScopedName::local(name.clone())),
+            Self::Qualified { module, name } => Some(ScopedName::qualified_path(
+                module.iter().map(String::as_str),
+                name.clone(),
+            )),
+            Self::Constructor(_)
+            | Self::Variant { .. }
+            | Self::Field { .. }
+            | Self::ExprScoped { .. } => None,
+        }
+    }
+
     /// Returns the top-level name if this is a `TopLevel` key.
     pub fn top_level_name(&self) -> Option<&str> {
         match self {
