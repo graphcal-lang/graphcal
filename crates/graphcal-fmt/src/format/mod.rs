@@ -178,14 +178,22 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
     let mut fmt = Formatter::new(source, metadata);
     let mut docs = format_decl_sequence(&mut fmt, &file.declarations);
 
-    // Drain any remaining comments at end of file
-    if let Some(remaining) = fmt.drain_comments_before(usize::MAX) {
-        docs.push(RcDoc::hardline());
+    // Drain any remaining comments at end of file. `drain_comments_before`
+    // already appends a hardline after every emitted comment, so that hardline
+    // is the final newline when trailing comments exist.
+    let had_remaining = if let Some(remaining) = fmt.drain_comments_before(usize::MAX) {
+        if !docs.is_empty() {
+            docs.push(RcDoc::hardline());
+        }
         docs.push(remaining);
-    }
+        true
+    } else {
+        false
+    };
 
-    // Final newline
-    docs.push(RcDoc::hardline());
+    if !had_remaining {
+        docs.push(RcDoc::hardline());
+    }
 
     RcDoc::concat(docs)
 }

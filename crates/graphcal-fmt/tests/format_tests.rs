@@ -132,6 +132,17 @@ fn formats_fn_call_argument_trailing_comment_before_comma() {
 }
 
 #[test]
+fn file_trailing_comment_has_single_final_newline() {
+    let source = "param x: Dimensionless = 1.0;\n// tail\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.ends_with("// tail\n") && !formatted.ends_with("// tail\n\n"),
+        "trailing comment newline should converge: {formatted:?}"
+    );
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
 fn trailing_newline() {
     let source = "param x: Dimensionless = 1.0;";
     let formatted = format_source(source).unwrap();
