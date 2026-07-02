@@ -240,6 +240,15 @@ impl Dimension {
         self.exponents.is_empty()
     }
 
+    /// Returns true when this dimension cannot be represented by a single base
+    /// dimension to the first power.
+    #[must_use]
+    pub fn is_compound(&self) -> bool {
+        !self.exponents.is_empty()
+            && (self.exponents.len() != 1
+                || self.exponents.values().next().copied() != Some(Rational::ONE))
+    }
+
     /// Get the exponent for a specific base dimension (zero if absent).
     #[must_use]
     pub fn get_exponent(&self, id: &BaseDimId) -> Rational {

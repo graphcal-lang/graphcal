@@ -25,6 +25,7 @@ use crate::ir::resolve::{
 };
 use crate::ir::resolve::{ImportedNames, resolve_with_imports};
 use crate::registry::declared_type::DeclaredType;
+use crate::registry::dimension_registry::DimensionResolveError;
 use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr_with_config;
 use crate::registry::prelude::load_prelude;
@@ -2823,16 +2824,8 @@ fn register_dimension_decl(
         return Ok(());
     };
     let dim = registry
-        .resolve_dim_expr(definition)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: d.name.span.into(),
-        })?
-        .ok_or_else(|| GraphcalError::UnknownDimension {
-            name: d.name.value.clone(),
-            src: src.clone(),
-            span: d.name.span.into(),
-        })?;
+        .resolve_dim_expr_detailed(definition)
+        .map_err(|err| dimension_resolve_error(err, src, definition.span))?;
     registry.register_dimension(d.name.value.clone(), dim);
     Ok(())
 }
@@ -2862,6 +2855,24 @@ fn registry_build_error(
         message: format!("registry build failed: {err}"),
         src: src.clone(),
         span: Span::new(0, 0).into(),
+    }
+}
+
+fn dimension_resolve_error(
+    err: DimensionResolveError,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    match err {
+        DimensionResolveError::UnknownDimension { name } => GraphcalError::UnknownDimension {
+            name,
+            src: src.clone(),
+            span: span.into(),
+        },
+        DimensionResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
+            src: src.clone(),
+            span: span.into(),
+        },
     }
 }
 
@@ -2908,16 +2919,8 @@ fn register_unit_decl(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let dim = registry
-        .resolve_dim_expr(&u.dim_type)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: u.name.span.into(),
-        })?
-        .ok_or_else(|| GraphcalError::UnknownDimension {
-            name: DimName::expect_valid(u.name.value.as_str()),
-            src: src.clone(),
-            span: u.name.span.into(),
-        })?;
+        .resolve_dim_expr_detailed(&u.dim_type)
+        .map_err(|err| dimension_resolve_error(err, src, u.dim_type.span))?;
     if u.definition.is_some() && registry.is_affine_prone(&dim) {
         return Err(GraphcalError::AffineProneUnitDefinition {
             dim: registry.format_dimension(&dim),
@@ -3247,16 +3250,8 @@ fn register_index_decl(
         }
         crate::desugar::desugared_ast::IndexDeclKind::RequiredRange { dimension } => {
             let dim = registry
-                .resolve_dim_expr(dimension)
-                .map_err(|_| GraphcalError::DimensionOverflow {
-                    src: src.clone(),
-                    span: dimension.span.into(),
-                })?
-                .ok_or_else(|| GraphcalError::UnknownDimension {
-                    name: crate::syntax::dimension::DimName::expect_valid(idx.name.value.as_str()),
-                    src: src.clone(),
-                    span: dimension.span.into(),
-                })?;
+                .resolve_dim_expr_detailed(dimension)
+                .map_err(|err| dimension_resolve_error(err, src, dimension.span))?;
             types::IndexKind::RequiredRange { dimension: dim }
         }
     };
@@ -3682,6 +3677,24 @@ mod tests {
         let err = parse_and_lower("param x: Dimensionless = 1.0;\nnode x: Dimensionless = 2.0;")
             .unwrap_err();
         assert!(matches!(err, GraphcalError::DuplicateName { .. }));
+    }
+
+    #[test]
+    fn unknown_unit_dimension_reports_referenced_dimension() {
+        let err = parse_and_lower("unit foo: Blah = 1.0 m;").unwrap_err();
+        assert!(matches!(
+            err,
+            GraphcalError::UnknownDimension { name, .. } if name.as_str() == "Blah"
+        ));
+    }
+
+    #[test]
+    fn unknown_derived_dimension_term_reports_referenced_dimension() {
+        let err = parse_and_lower("dim Foo = Bar * Baz;").unwrap_err();
+        assert!(matches!(
+            err,
+            GraphcalError::UnknownDimension { name, .. } if name.as_str() == "Bar"
+        ));
     }
 
     #[test]

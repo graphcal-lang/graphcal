@@ -4,7 +4,8 @@ use std::num::NonZeroUsize;
 use crate::desugar::desugared_ast::{DagDecl, DimExpr, TypeExpr, UnitExpr};
 use crate::dimension::{BaseDimId, Dimension, Rational, RationalError};
 use crate::registry::dimension_registry::{
-    assert_base_dim_names_cover, format_dimension_preferring_alias_after_validation,
+    DimensionResolveError, assert_base_dim_names_cover,
+    format_dimension_preferring_alias_after_validation, resolve_dim_expr_detailed_impl,
     resolve_dim_expr_impl, resolve_type_expr_impl,
 };
 use crate::registry::unit::{resolve_unit_dimension_impl, resolve_unit_expr_impl};
@@ -397,6 +398,15 @@ impl RegistryBuilder {
     /// dimension exponent arithmetic overflows `i32`.
     pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RationalError> {
         resolve_dim_expr_impl(&self.dimensions, expr)
+    }
+
+    /// Resolve a `DimExpr` AST node to a concrete `Dimension`, preserving the
+    /// unknown referenced dimension name in the error.
+    pub fn resolve_dim_expr_detailed(
+        &self,
+        expr: &DimExpr,
+    ) -> Result<Dimension, DimensionResolveError> {
+        resolve_dim_expr_detailed_impl(&self.dimensions, expr)
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
