@@ -244,10 +244,7 @@ impl LockResolver {
         rev: &GitCommitHash,
     ) -> Result<MaterializedGit, DepsError> {
         let path = self.cache_dir.join("git").join(cache_key(url, rev));
-        if path.is_dir() {
-            let sha256 = hash_source_tree(&path)?;
-            return Ok(MaterializedGit { root: path, sha256 });
-        }
+        remove_existing_cache_checkout(&path)?;
 
         let parent = path.parent().ok_or_else(|| {
             DepsError::Internal(format!("cache path {} has no parent", path.display()))
@@ -278,6 +275,26 @@ impl LockResolver {
                 source,
             }),
         }
+    }
+}
+
+fn remove_existing_cache_checkout(path: &Path) -> Result<(), DepsError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            std::fs::remove_dir_all(path).map_err(|source| DepsError::RemoveDir {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            Ok(())
+        }
+        Ok(_) => Err(DepsError::UnsupportedSourceEntry {
+            path: path.to_path_buf(),
+        }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(DepsError::Metadata {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 
@@ -579,6 +596,12 @@ pub enum DepsError {
     Rename {
         from: PathBuf,
         to: PathBuf,
+        source: std::io::Error,
+    },
+    /// Directory removal failed.
+    #[error("could not remove directory `{}`: {source}", path.display())]
+    RemoveDir {
+        path: PathBuf,
         source: std::io::Error,
     },
     /// Unsupported file type in source hash input.
