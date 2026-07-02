@@ -357,6 +357,13 @@ struct MaterializedGit {
 
 fn read_manifest(root: &Path) -> Result<PackageManifest, DepsError> {
     let path = root.join("graphcal.toml");
+    let metadata = std::fs::symlink_metadata(&path).map_err(|source| DepsError::Metadata {
+        path: path.clone(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(DepsError::UnsupportedSourceEntry { path });
+    }
     let content = std::fs::read_to_string(&path).map_err(|source| DepsError::ReadFile {
         path: path.clone(),
         source,
@@ -428,7 +435,7 @@ fn collect_hash_files(
         return Ok(());
     }
     let path = root.join(relative);
-    let metadata = std::fs::metadata(&path).map_err(|source| DepsError::Metadata {
+    let metadata = std::fs::symlink_metadata(&path).map_err(|source| DepsError::Metadata {
         path: path.clone(),
         source,
     })?;
@@ -583,4 +590,51 @@ pub enum DepsError {
     /// Internal invariant violation.
     #[error("internal deps lock error: {0}")]
     Internal(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_temp_dir() -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be after UNIX_EPOCH")
+            .as_nanos();
+        std::env::temp_dir().join(format!("graphcal-deps-test-{}-{nanos}", std::process::id()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hash_source_tree_rejects_symlinked_source_file() {
+        let root = unique_temp_dir();
+        let outside = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(
+            root.join("graphcal.toml"),
+            "[package]\nname = \"mission\"\nsource_dir = \"src\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/mission.gcl"),
+            "node x: Dimensionless = 1.0;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            outside.join("secret.gcl"),
+            "node secret: Dimensionless = 2.0;\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.gcl"), root.join("src/evil.gcl")).unwrap();
+
+        let err = hash_source_tree(&root).unwrap_err();
+        assert!(matches!(
+            err,
+            DepsError::UnsupportedSourceEntry { path } if path.ends_with("src/evil.gcl")
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
 }
