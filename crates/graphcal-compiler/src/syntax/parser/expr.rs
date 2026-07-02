@@ -9,6 +9,32 @@ use crate::syntax::type_name::FieldName;
 
 use super::{ParseError, Parser};
 
+fn skip_ws_and_line_comments(bytes: &[u8], mut pos: usize) -> usize {
+    loop {
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'/' {
+            while pos < bytes.len() && bytes[pos] != b'\n' {
+                pos += 1;
+            }
+            continue;
+        }
+        return pos;
+    }
+}
+
+fn scan_ascii_ident(bytes: &[u8], pos: usize) -> Option<usize> {
+    if pos >= bytes.len() || (!bytes[pos].is_ascii_alphabetic() && bytes[pos] != b'_') {
+        return None;
+    }
+    let mut end = pos + 1;
+    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+        end += 1;
+    }
+    Some(end)
+}
+
 /// Map comparison tokens to their corresponding `BinOp`.
 pub(super) const fn token_to_comparison_op(token: Token) -> Option<BinOp> {
     match token {
@@ -758,8 +784,8 @@ impl Parser<'_> {
     /// unbalanced, or a byte that can never occur inside a generic-argument
     /// list shows up first — in that case the `<` is a comparison operator,
     /// so an ordinary boolean expression like `a < b && c > (d)` is not
-    /// misparsed as turbofish. Comments are skipped so their contents affect
-    /// neither the bracket balance nor the operator bail-out.
+    /// misparsed as turbofish. Line comments are skipped so their contents
+    /// affect neither the bracket balance nor the operator bail-out.
     fn is_type_args_followed_by(&mut self, expected: u8) -> bool {
         let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
             return false;
@@ -773,10 +799,7 @@ impl Parser<'_> {
                 b'>' => {
                     depth -= 1;
                     if depth == 0 {
-                        let mut p = pos + 1;
-                        while p < bytes.len() && bytes[p].is_ascii_whitespace() {
-                            p += 1;
-                        }
+                        let p = skip_ws_and_line_comments(bytes, pos + 1);
                         return p < bytes.len() && bytes[p] == expected;
                     }
                 }
@@ -784,14 +807,6 @@ impl Parser<'_> {
                     while pos < bytes.len() && bytes[pos] != b'\n' {
                         pos += 1;
                     }
-                    continue;
-                }
-                b'/' if bytes.get(pos + 1) == Some(&b'*') => {
-                    pos += 2;
-                    while pos + 1 < bytes.len() && !(bytes[pos] == b'*' && bytes[pos + 1] == b'/') {
-                        pos += 1;
-                    }
-                    pos += 2;
                     continue;
                 }
                 // Generic arguments are type expressions or Nat literals;
@@ -807,8 +822,8 @@ impl Parser<'_> {
     /// Look ahead to check if `(` starts tuple-key sugar: `(ident, ident, ...) =>`.
     ///
     /// Scans the raw source string from the current position without consuming tokens.
-    /// Returns `true` only if the `(...)` contains only identifiers and commas,
-    /// followed by `)` then `=>`.
+    /// Returns `true` only if the `(...)` contains only identifiers, commas,
+    /// whitespace, and line comments, followed by `)` then `=>`.
     pub(super) fn is_tuple_key_sugar(&mut self) -> bool {
         let Some((&Token::LParen, lp_span)) = self.lexer.peek_with_span() else {
             return false;
@@ -816,34 +831,23 @@ impl Parser<'_> {
         let bytes = self.source.as_bytes();
         let mut pos = lp_span.offset() + lp_span.len(); // byte after `(`
 
-        // Scan for matching `)`: expect only identifiers, commas, and whitespace inside.
+        // Scan for matching `)`: expect only identifiers, commas, whitespace,
+        // and line comments inside.
         loop {
-            // Skip whitespace
-            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
+            pos = skip_ws_and_line_comments(bytes, pos);
             if pos >= bytes.len() {
                 return false;
             }
             if bytes[pos] == b')' {
                 // Found `)`, now check for `=>`
                 pos += 1;
-                while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-                    pos += 1;
-                }
+                pos = skip_ws_and_line_comments(bytes, pos);
                 return pos + 1 < bytes.len() && bytes[pos] == b'=' && bytes[pos + 1] == b'>';
             }
-            // Expect an identifier (ASCII alphanumeric or underscore, starting with letter/underscore)
-            if !bytes[pos].is_ascii_alphabetic() && bytes[pos] != b'_' {
+            let Some(ident_end) = scan_ascii_ident(bytes, pos) else {
                 return false;
-            }
-            while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-                pos += 1;
-            }
-            // Skip whitespace after identifier
-            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
+            };
+            pos = skip_ws_and_line_comments(bytes, ident_end);
             if pos >= bytes.len() {
                 return false;
             }
@@ -882,34 +886,15 @@ impl Parser<'_> {
         let bytes = self.source.as_bytes();
         let mut pos = lp_span.offset() + lp_span.len();
 
-        // Skip whitespace and line comments.
-        loop {
-            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
-            if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'/' {
-                while pos < bytes.len() && bytes[pos] != b'\n' {
-                    pos += 1;
-                }
-                continue;
-            }
-            break;
-        }
+        pos = skip_ws_and_line_comments(bytes, pos);
         if pos >= bytes.len() {
             return false;
         }
 
-        // First char of the first arg must be an identifier-start.
-        if !bytes[pos].is_ascii_alphabetic() && bytes[pos] != b'_' {
+        let Some(ident_end) = scan_ascii_ident(bytes, pos) else {
             return false;
-        }
-        while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-            pos += 1;
-        }
-        // Skip whitespace.
-        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-            pos += 1;
-        }
+        };
+        pos = skip_ws_and_line_comments(bytes, ident_end);
         if pos >= bytes.len() {
             return false;
         }
