@@ -123,6 +123,10 @@ pub enum JsonInputError {
     InvalidEntries { param: String },
     /// A JSON object has unrecognized structure.
     AmbiguousObject { param: String },
+    /// A JSON object mixes mutually-exclusive shape keys.
+    ConflictingObjectKeys { param: String },
+    /// A JSON object contains a key that is not part of its declared shape.
+    UnknownObjectKey { param: String, key: String },
 }
 
 impl fmt::Display for JsonInputError {
@@ -177,6 +181,15 @@ impl fmt::Display for JsonInputError {
                      {{\"type\": ..., \"fields\": ...}}, or \
                      {{\"index\": ..., \"entries\": ...}}"
                 )
+            }
+            Self::ConflictingObjectKeys { param } => {
+                write!(
+                    f,
+                    "JSON object for `{param}` mixes mutually-exclusive shape keys"
+                )
+            }
+            Self::UnknownObjectKey { param, key } => {
+                write!(f, "unknown key `{key}` in JSON object for `{param}`")
             }
         }
     }
@@ -293,20 +306,50 @@ fn convert_object(
     obj: &serde_json::Map<String, serde_json::Value>,
     param_name: &str,
 ) -> Result<Expr, JsonInputError> {
-    if obj.contains_key("variant") {
+    let has_variant = obj.contains_key("variant");
+    let has_type = obj.contains_key("type");
+    let has_index = obj.contains_key("index");
+    let shape_count = [has_variant, has_type, has_index]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+    if shape_count > 1 {
+        return Err(JsonInputError::ConflictingObjectKeys {
+            param: param_name.to_string(),
+        });
+    }
+
+    if has_variant {
+        reject_unknown_keys(obj, param_name, &["variant", "fields"])?;
         convert_tagged_union(obj, param_name)
-    } else if obj.contains_key("type") && obj.contains_key("fields") {
+    } else if has_type && obj.contains_key("fields") {
+        reject_unknown_keys(obj, param_name, &["type", "fields"])?;
         convert_struct(obj, param_name)
     } else if obj.contains_key("fields") {
         Err(JsonInputError::MissingTypeKey {
             param: param_name.to_string(),
         })
-    } else if obj.contains_key("index") && obj.contains_key("entries") {
+    } else if has_index && obj.contains_key("entries") {
+        reject_unknown_keys(obj, param_name, &["index", "entries"])?;
         convert_indexed(obj, param_name)
     } else {
         Err(JsonInputError::AmbiguousObject {
             param: param_name.to_string(),
         })
+    }
+}
+
+fn reject_unknown_keys(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    param_name: &str,
+    allowed: &[&str],
+) -> Result<(), JsonInputError> {
+    match obj.keys().find(|key| !allowed.contains(&key.as_str())) {
+        Some(key) => Err(JsonInputError::UnknownObjectKey {
+            param: param_name.to_string(),
+            key: key.clone(),
+        }),
+        None => Ok(()),
     }
 }
 
@@ -512,6 +555,20 @@ mod tests {
             matches!(err, JsonInputError::MissingTypeKey { .. }),
             "expected MissingTypeKey, got {err}"
         );
+    }
+
+    #[test]
+    fn object_unknown_key_errors() {
+        let json = r#"{"transfer": {"type": "TransferResult", "fields": {}, "extra": 1}}"#;
+        let err = json_to_overrides(json).unwrap_err();
+        assert!(matches!(err, JsonInputError::UnknownObjectKey { key, .. } if key == "extra"));
+    }
+
+    #[test]
+    fn object_conflicting_shape_keys_error() {
+        let json = r#"{"value": {"variant": "Ok", "type": "Result", "fields": {}}}"#;
+        let err = json_to_overrides(json).unwrap_err();
+        assert!(matches!(err, JsonInputError::ConflictingObjectKeys { .. }));
     }
 
     #[test]

@@ -87,6 +87,11 @@ pub enum OverrideParseError {
         source: Box<ParseError>,
     },
 
+    /// The same override name was provided more than once.
+    #[error("duplicate override for `{name}`")]
+    #[diagnostic(code(graphcal::cli::O008))]
+    DuplicateOverride { name: DeclName },
+
     /// An `--input` JSON file could not be opened / read.
     #[error("cannot read input file {}: {source}", path.display())]
     #[diagnostic(code(graphcal::cli::O005))]
@@ -169,7 +174,12 @@ pub fn parse_overrides(
                 name: name.to_string(),
                 source: Box::new(e),
             })?;
-        overrides.insert(override_name, resolve_override_expr(raw_expr));
+        let previous = overrides.insert(override_name.clone(), resolve_override_expr(raw_expr));
+        if previous.is_some() {
+            return Err(OverrideParseError::DuplicateOverride {
+                name: override_name,
+            });
+        }
     }
 
     if let Some(input_path) = input {
@@ -275,6 +285,15 @@ mod tests {
         assert!(
             matches!(err, OverrideParseError::InvalidFormat { .. }),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_overrides_rejects_duplicate_set_name() {
+        let set = vec!["x=1".to_string(), "x=2".to_string()];
+        let err = parse_overrides(&set, None, None).unwrap_err();
+        assert!(
+            matches!(err, OverrideParseError::DuplicateOverride { name } if name.as_str() == "x")
         );
     }
 
