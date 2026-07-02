@@ -883,14 +883,68 @@ impl NatExpr {
     }
 }
 
+impl NatExpr {
+    fn precedence(&self) -> u8 {
+        match self {
+            Self::Add(..) => 1,
+            Self::Mul(..) => 2,
+            Self::Literal(..) | Self::Var(_) => 3,
+        }
+    }
+
+    fn fmt_with_min_precedence(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        min_precedence: u8,
+    ) -> std::fmt::Result {
+        let needs_parens = self.precedence() < min_precedence;
+        if needs_parens {
+            f.write_str("(")?;
+        }
+        match self {
+            Self::Literal(n, _) => write!(f, "{n}")?,
+            Self::Var(ident) => f.write_str(&ident.name)?,
+            Self::Add(lhs, rhs, _) => {
+                lhs.fmt_with_min_precedence(f, self.precedence())?;
+                f.write_str(" + ")?;
+                rhs.fmt_with_min_precedence(f, self.precedence())?;
+            }
+            Self::Mul(lhs, rhs, _) => {
+                lhs.fmt_with_min_precedence(f, self.precedence())?;
+                f.write_str(" * ")?;
+                rhs.fmt_with_min_precedence(f, self.precedence())?;
+            }
+        }
+        if needs_parens {
+            f.write_str(")")?;
+        }
+        Ok(())
+    }
+}
+
 impl std::fmt::Display for NatExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Literal(n, _) => write!(f, "{n}"),
-            Self::Var(ident) => f.write_str(&ident.name),
-            Self::Add(lhs, rhs, _) => write!(f, "{lhs} + {rhs}"),
-            Self::Mul(lhs, rhs, _) => write!(f, "{lhs} * {rhs}"),
-        }
+        self.fmt_with_min_precedence(f, 0)
+    }
+}
+
+#[cfg(test)]
+mod nat_expr_display_tests {
+    use super::*;
+
+    #[test]
+    fn display_parenthesizes_addition_under_multiplication() {
+        let span = Span::new(0, 0);
+        let expr = NatExpr::Mul(
+            Box::new(NatExpr::Add(
+                Box::new(NatExpr::Literal(1, span)),
+                Box::new(NatExpr::Literal(2, span)),
+                span,
+            )),
+            Box::new(NatExpr::Literal(3, span)),
+            span,
+        );
+        assert_eq!(expr.to_string(), "(1 + 2) * 3");
     }
 }
 
