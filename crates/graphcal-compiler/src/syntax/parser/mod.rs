@@ -616,7 +616,10 @@ impl<'src> Parser<'src> {
     /// Parse any identifier regardless of casing.
     pub(super) fn parse_any_ident(&mut self) -> Result<Ident, ParseError> {
         match self.lexer.next_token() {
-            Some((Token::Ident, span)) => Ok(Ident {
+            Some((
+                Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step,
+                span,
+            )) => Ok(Ident {
                 name: NameAtom::new_unchecked_for_parser(self.lexer.slice_at(span).to_string()),
                 span,
             }),

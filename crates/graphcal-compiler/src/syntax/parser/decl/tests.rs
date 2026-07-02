@@ -42,6 +42,18 @@ fn parse_param_with_type() {
 }
 
 #[test]
+fn parse_contextual_keyword_as_param_name() {
+    let file = Parser::new("param step: Int = 1;\nnode x: Int = step;")
+        .parse_file()
+        .unwrap();
+    assert_eq!(file.declarations.len(), 2);
+    match &file.declarations[0].kind {
+        DeclKind::Param(p) => assert_eq!(p.name.value.as_str(), "step"),
+        _ => panic!("expected param"),
+    }
+}
+
+#[test]
 fn parse_param_with_dim_type() {
     let file = Parser::new("param alt: Length = 400.0 km;")
         .parse_file()

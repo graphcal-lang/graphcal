@@ -250,22 +250,41 @@ pub fn format_fn_call_expr(
     args: &[Expr],
 ) -> RcDoc<'static> {
     let mut arg_docs: Vec<RcDoc<'static>> = Vec::new();
+    let mut arg_docs_with_commas: Vec<RcDoc<'static>> = Vec::new();
+    let mut has_trailing_comment = false;
     for arg in args {
         // Drain leading comments before this argument
         let leading = fmt.drain_comments_before(arg.span.offset());
         let arg_doc = format_expr(fmt, arg);
         // Drain trailing comment after this argument
         let arg_end = arg.span.offset() + arg.span.len();
-        let trailing = fmt
-            .drain_trailing_comment(arg_end)
-            .unwrap_or_else(RcDoc::nil);
-        arg_docs.push(prepend_comments(leading, arg_doc.append(trailing)));
+        let trailing = fmt.drain_trailing_comment(arg_end);
+        has_trailing_comment |= trailing.is_some();
+
+        let plain_doc = match trailing.clone() {
+            Some(comment) => arg_doc.clone().append(comment),
+            None => arg_doc.clone(),
+        };
+        let comma_doc = match trailing {
+            Some(comment) => arg_doc.append(RcDoc::text(",")).append(comment),
+            None => arg_doc.append(RcDoc::text(",")),
+        };
+        arg_docs.push(prepend_comments(leading.clone(), plain_doc));
+        arg_docs_with_commas.push(prepend_comments(leading, comma_doc));
     }
     let mut doc = RcDoc::text(callee.display_path());
     if !type_args.is_empty() {
         doc = doc.append(format_generic_args(fmt, type_args));
     }
-    doc.append(soft_parenthesized_list(arg_docs, false))
+    if has_trailing_comment {
+        let body = RcDoc::intersperse(arg_docs_with_commas, RcDoc::hardline());
+        doc.append(RcDoc::text("("))
+            .append(RcDoc::hardline().append(body).nest(INDENT))
+            .append(RcDoc::hardline())
+            .append(RcDoc::text(")"))
+    } else {
+        doc.append(soft_parenthesized_list(arg_docs, false))
+    }
 }
 
 fn format_generic_args(

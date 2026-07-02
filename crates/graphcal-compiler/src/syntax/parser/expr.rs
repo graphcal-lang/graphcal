@@ -316,7 +316,7 @@ impl Parser<'_> {
     }
 
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
-        match self.lexer.peek() {
+        match self.lexer.peek().cloned() {
             Some(Token::Number) => self.parse_number_expr(),
             Some(Token::True) => {
                 let (_, span) = self.advance()?;
@@ -334,15 +334,17 @@ impl Parser<'_> {
                 Ok(Expr::new(ExprKind::StringLiteral(text), span))
             }
             Some(Token::At) => self.parse_at_expr(),
-            Some(Token::Scan) => {
+            Some(Token::Scan) if self.lexer.peek_second() == Some(&Token::LParen) => {
                 let (_, span) = self.advance()?;
                 self.parse_scan(span)
             }
-            Some(Token::Unfold) => {
+            Some(Token::Unfold) if self.lexer.peek_second() == Some(&Token::LParen) => {
                 let (_, span) = self.advance()?;
                 self.parse_unfold(span)
             }
-            Some(Token::Ident) => self.parse_identifier_expr(),
+            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
+                self.parse_identifier_expr()
+            }
             Some(Token::For) => {
                 // For comprehension: for m: Maneuver { expr }
                 self.parse_for_comp()
@@ -713,17 +715,16 @@ impl Parser<'_> {
         let expr = self.parse_expr()?;
 
         // If it's a bare name reference, use IndexArg::Var for backward compatibility.
-        match expr.kind {
-            ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
-                match path.into_bare() {
-                    Ok(ident) => Ok(IndexArg::Var(ident)),
-                    Err(path) => Ok(IndexArg::Expr(Box::new(Expr::new(
-                        ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)),
-                        expr.span,
-                    )))),
-                }
+        if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) = &expr.kind {
+            match path.clone().into_bare() {
+                Ok(ident) => Ok(IndexArg::Var(ident)),
+                Err(path) => Ok(IndexArg::Expr(Box::new(Expr::new(
+                    ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)),
+                    expr.span,
+                )))),
             }
-            other => Ok(IndexArg::Expr(Box::new(Expr::new(other, expr.span)))),
+        } else {
+            Ok(IndexArg::Expr(Box::new(expr)))
         }
     }
 

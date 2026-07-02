@@ -446,10 +446,19 @@ impl Parser<'_> {
             // an identifier or `(` (parenthesized group). Otherwise, leave the
             // operator for the expression parser to handle as arithmetic
             // (e.g., `459.3 W / (1.0 m^2)`).
-            if !matches!(
-                self.lexer.peek_second(),
-                Some(&Token::Ident | &Token::LParen)
-            ) {
+            let can_continue_unit = match self.lexer.peek_second() {
+                Some(&Token::Ident) => true,
+                // `/(m * s)` continues the unit expression, but `/(1.0 m^2)`
+                // is arithmetic division by a parenthesized numeric value.
+                Some(&Token::LParen) => {
+                    matches!(
+                        self.lexer.peek_third(),
+                        Some(&Token::Ident | &Token::LParen)
+                    )
+                }
+                _ => false,
+            };
+            if !can_continue_unit {
                 break;
             }
 
@@ -1018,6 +1027,12 @@ mod tests {
             }
             _ => panic!("expected param"),
         }
+    }
+
+    #[test]
+    fn parse_unit_literal_stops_before_parenthesized_arithmetic_divisor() {
+        let source = "node x: Dimensionless = 459.3 W / (1.0 m^2);";
+        Parser::new(source).parse_file().unwrap();
     }
 
     #[test]

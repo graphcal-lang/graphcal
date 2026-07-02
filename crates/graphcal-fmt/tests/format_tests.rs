@@ -119,6 +119,19 @@ fn preserves_blank_line_between_declarations() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn formats_fn_call_argument_trailing_comment_before_comma() {
+    let source = "node x: Dimensionless = min(\n    1.0, // first\n    2.0,\n);\n";
+    let formatted = format_source(source).expect("format_source should succeed");
+    assert!(
+        formatted.contains("1.0, // first"),
+        "comma must come before trailing line comment: {formatted}"
+    );
+    graphcal_compiler::syntax::parser::Parser::new(&formatted)
+        .parse_file()
+        .expect("formatted output should parse");
+}
+
+#[test]
 fn trailing_newline() {
     let source = "param x: Dimensionless = 1.0;";
     let formatted = format_source(source).unwrap();

@@ -457,7 +457,7 @@ impl From<Expr<Raw>> for Expr<Desugared> {
     fn from(e: Expr<Raw>) -> Self {
         // Recursion choke point: conversion recurses once per tree level
         // (unbounded for left-nested operator chains).
-        crate::stack::with_stack_growth(|| Self::new(e.kind.into(), e.span))
+        crate::stack::with_stack_growth(|| Self::new(e.kind.clone().into(), e.span))
     }
 }
 

@@ -101,6 +101,9 @@ DIGIT_SEQ
 NUMBER
    = DIGIT_SEQ, [ ".", DIGIT_SEQ ], [ ( "e" | "E" ), [ "+" | "-" ], DIGIT_SEQ ];
 
+STRING
+   = '"', { ? any character except '"' or newline ? }, '"';
+
 (* An integer literal is a NUMBER with no decimal point and no
    exponent. Integer literals cannot be followed by a unit expression;
    use a float literal instead (e.g., "42.0 km" not "42 km"). *)
@@ -724,6 +727,7 @@ atom
    = float_literal
    | integer_literal
    | bool_literal
+   | string_literal
    | graph_ref
    | ident_expr
    | map_literal
@@ -747,6 +751,9 @@ integer_literal
    Integer literals cannot be followed by a unit expression. *)
 bool_literal
    = "true" | "false";
+
+string_literal
+   = STRING;
 
 (* --- References --- *)
 graph_ref

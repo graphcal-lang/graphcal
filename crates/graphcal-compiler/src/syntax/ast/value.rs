@@ -486,6 +486,25 @@ where
     }
 }
 
+#[expect(
+    unsafe_code,
+    reason = "manual Drop must move the recursive field under the stack-growth guard"
+)]
+impl<P: Phase> Drop for Expr<P> {
+    fn drop(&mut self) {
+        // SAFETY: `kind` is moved out and immediately replaced with the
+        // non-recursive `Number` placeholder before the moved value is dropped.
+        // Rust then drops only the placeholder after this `Drop` impl returns,
+        // avoiding a double-drop while letting recursive child drops run under
+        // the stack-growth guard.
+        unsafe {
+            let kind = std::ptr::read(&self.kind);
+            std::ptr::write(&mut self.kind, ExprKind::Number(0.0));
+            crate::stack::with_stack_growth(|| drop(kind));
+        }
+    }
+}
+
 impl<P: Phase> Expr<P> {
     /// Construct an expression with the given kind and span.
     #[must_use]
