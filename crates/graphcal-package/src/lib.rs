@@ -537,7 +537,22 @@ impl Lockfile {
                 }
             }
         }
+        self.reject_dependency_cycles()?;
         self.reject_duplicate_canonical_instances()?;
+        Ok(())
+    }
+
+    fn reject_dependency_cycles(&self) -> Result<(), LockValidationError> {
+        let packages = self
+            .packages
+            .iter()
+            .map(|package| (&package.id, package))
+            .collect::<BTreeMap<_, _>>();
+        let mut visiting = BTreeSet::new();
+        let mut visited = BTreeSet::new();
+        for package in &self.packages {
+            visit_lock_package_for_cycles(&package.id, &packages, &mut visiting, &mut visited)?;
+        }
         Ok(())
     }
 
@@ -637,6 +652,30 @@ impl Lockfile {
         }
         out
     }
+}
+
+fn visit_lock_package_for_cycles<'a>(
+    id: &'a PackageInstanceId,
+    packages: &BTreeMap<&'a PackageInstanceId, &'a LockedPackage>,
+    visiting: &mut BTreeSet<&'a PackageInstanceId>,
+    visited: &mut BTreeSet<&'a PackageInstanceId>,
+) -> Result<(), LockValidationError> {
+    if visited.contains(id) {
+        return Ok(());
+    }
+    if !visiting.insert(id) {
+        return Err(LockValidationError::DependencyCycle {
+            package: id.clone(),
+        });
+    }
+    if let Some(package) = packages.get(id) {
+        for target in package.dependencies.values() {
+            visit_lock_package_for_cycles(target, packages, visiting, visited)?;
+        }
+    }
+    visiting.remove(id);
+    visited.insert(id);
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -752,6 +791,9 @@ pub enum LockValidationError {
         package: PackageInstanceId,
         dependency: DependencyName,
     },
+    /// The locked dependency graph contains a cycle.
+    #[error("dependency cycle involving package `{package}` in graphcal.lock")]
+    DependencyCycle { package: PackageInstanceId },
     /// Two ids describe the same canonical package instance.
     #[error("package ids `{first}` and `{second}` describe the same canonical package instance")]
     DuplicateCanonicalPackage {
@@ -1449,6 +1491,26 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             LockValidationError::MissingDependencyTarget { target, .. }
                 if target == id("pkg-missing")
         ));
+    }
+
+    #[test]
+    fn lockfile_rejects_dependency_cycles() {
+        let mut root_deps = BTreeMap::new();
+        root_deps.insert(dep("orbital"), id("pkg-orbital"));
+        let mut orbital_deps = BTreeMap::new();
+        orbital_deps.insert(dep("mission_dep"), id("pkg-mission"));
+        let lock = lockfile(vec![
+            package("pkg-mission", "mission", path_source(), root_deps),
+            package(
+                "pkg-orbital",
+                "orbital",
+                git_source("https://github.com/acme/orbital.git", 'a'),
+                orbital_deps,
+            ),
+        ]);
+
+        let err = lock.validate(GRAPHCAL_VERSION, STDLIB_VERSION).unwrap_err();
+        assert!(matches!(err, LockValidationError::DependencyCycle { .. }));
     }
 
     #[test]
