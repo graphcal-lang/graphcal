@@ -390,7 +390,6 @@ pub(super) fn evaluate_plan_with_values(
 ) -> (EvalResult, RuntimeValueMap) {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
-    let _empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
     let empty_hir_locals = HirLocalValueMap::root();
 
     let EvalLoopResult { values, errors } =

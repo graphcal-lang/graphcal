@@ -35,7 +35,7 @@ pub use crate::registry::resolve_types::{
 pub use crate::syntax::module_name::ScopedName;
 
 // Re-export items from submodules (crate-internal only).
-pub use deps::{collect_graph_ref_names, collect_graph_refs, contains_graph_ref};
+pub use deps::contains_graph_ref;
 
 // Import helpers from submodules for use within this file.
 use names::parse_expected_fail_args;
@@ -59,32 +59,20 @@ fn register_value_namespace_name(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExclusiveUniverse {
-    Type,
-    Index,
-    Value,
-}
-
-type ExclusiveUniverseBinding = (ExclusiveUniverse, Span);
-
 fn register_exclusive_universe_name(
-    occupied: &mut HashMap<NameAtom, ExclusiveUniverseBinding>,
+    occupied: &mut HashMap<NameAtom, Span>,
     atom: &NameAtom,
-    universe: ExclusiveUniverse,
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    occupied
-        .insert(atom.clone(), (universe, span))
-        .map_or(Ok(()), |first| {
-            Err(GraphcalError::DuplicateName {
-                name: atom.to_string(),
-                src: src.clone(),
-                duplicate: span.into(),
-                first: first.1.into(),
-            })
+    occupied.insert(atom.clone(), span).map_or(Ok(()), |first| {
+        Err(GraphcalError::DuplicateName {
+            name: atom.to_string(),
+            src: src.clone(),
+            duplicate: span.into(),
+            first: first.into(),
         })
+    })
 }
 
 fn check_builtin_name_shadowing(
@@ -149,43 +137,34 @@ fn check_exclusive_universe_collisions(
     let mut occupied = names
         .iter()
         .filter(|(name, _)| !name.is_qualified())
-        .map(|(name, span)| {
-            (
-                DeclName::expect_valid(name.member()).into_atom(),
-                (ExclusiveUniverse::Value, *span),
-            )
-        })
+        .map(|(name, span)| (DeclName::expect_valid(name.member()).into_atom(), *span))
         .collect::<HashMap<_, _>>();
 
-    for (atom, universe, span) in file
+    for (atom, span) in file
         .declarations
         .iter()
         .filter_map(|decl| exclusive_universe_decl(&decl.kind))
     {
-        register_exclusive_universe_name(&mut occupied, atom, universe, span, src)?;
+        register_exclusive_universe_name(&mut occupied, atom, span, src)?;
     }
 
     Ok(())
 }
 
-fn exclusive_universe_decl(decl: &DeclKind) -> Option<(&NameAtom, ExclusiveUniverse, Span)> {
+fn exclusive_universe_decl(decl: &DeclKind) -> Option<(&NameAtom, Span)> {
     match decl {
-        DeclKind::Param(p) => Some((p.name.value.atom(), ExclusiveUniverse::Value, p.name.span)),
-        DeclKind::Node(n) => Some((n.name.value.atom(), ExclusiveUniverse::Value, n.name.span)),
-        DeclKind::ConstNode(c) => {
-            Some((c.name.value.atom(), ExclusiveUniverse::Value, c.name.span))
-        }
-        DeclKind::Assert(a) => Some((a.name.value.atom(), ExclusiveUniverse::Value, a.name.span)),
-        DeclKind::Plot(p) => Some((p.name.value.atom(), ExclusiveUniverse::Value, p.name.span)),
-        DeclKind::Figure(f) => Some((f.name.value.atom(), ExclusiveUniverse::Value, f.name.span)),
-        DeclKind::Layer(l) => Some((l.name.value.atom(), ExclusiveUniverse::Value, l.name.span)),
-        DeclKind::Dag(d) => Some((d.name.value.atom(), ExclusiveUniverse::Value, d.name.span)),
-        DeclKind::BaseDimension(d) => {
-            Some((d.name.value.atom(), ExclusiveUniverse::Type, d.name.span))
-        }
-        DeclKind::Dimension(d) => Some((d.name.value.atom(), ExclusiveUniverse::Type, d.name.span)),
-        DeclKind::Type(t) => Some((t.name.value.atom(), ExclusiveUniverse::Type, t.name.span)),
-        DeclKind::Index(i) => Some((i.name.value.atom(), ExclusiveUniverse::Index, i.name.span)),
+        DeclKind::Param(p) => Some((p.name.value.atom(), p.name.span)),
+        DeclKind::Node(n) => Some((n.name.value.atom(), n.name.span)),
+        DeclKind::ConstNode(c) => Some((c.name.value.atom(), c.name.span)),
+        DeclKind::Assert(a) => Some((a.name.value.atom(), a.name.span)),
+        DeclKind::Plot(p) => Some((p.name.value.atom(), p.name.span)),
+        DeclKind::Figure(f) => Some((f.name.value.atom(), f.name.span)),
+        DeclKind::Layer(l) => Some((l.name.value.atom(), l.name.span)),
+        DeclKind::Dag(d) => Some((d.name.value.atom(), d.name.span)),
+        DeclKind::BaseDimension(d) => Some((d.name.value.atom(), d.name.span)),
+        DeclKind::Dimension(d) => Some((d.name.value.atom(), d.name.span)),
+        DeclKind::Type(t) => Some((t.name.value.atom(), t.name.span)),
+        DeclKind::Index(i) => Some((i.name.value.atom(), i.name.span)),
         DeclKind::Unit(_) | DeclKind::Import(_) | DeclKind::Include(_) => None,
         DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
     }
