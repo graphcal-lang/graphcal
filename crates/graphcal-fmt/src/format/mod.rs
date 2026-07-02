@@ -34,6 +34,19 @@ pub(super) fn pad_right_to_width(text: &str, width: usize) -> String {
     format!("{}{}", text, " ".repeat(padding))
 }
 
+pub(super) fn text_with_hardlines(text: &str) -> RcDoc<'static> {
+    RcDoc::intersperse(
+        text.split('\n').map(|line| {
+            if line.is_empty() {
+                RcDoc::nil()
+            } else {
+                RcDoc::text(line.to_string())
+            }
+        }),
+        RcDoc::hardline(),
+    )
+}
+
 /// State for tracking comments during formatting.
 ///
 /// `pub` is module-scoped (parent module is private).
@@ -195,7 +208,7 @@ fn format_decl_sequence(
         let decl_doc = if fmt.has_comment_before(emit_end) {
             fmt.next_comment = comment_snapshot;
             fmt.skip_comments_before(emit_end);
-            RcDoc::text(fmt.slice(decl.span).to_string())
+            text_with_hardlines(fmt.slice(decl.span))
         } else {
             formatted
         };
@@ -312,7 +325,9 @@ pub fn render_doc_to_string(doc: &RcDoc<'static>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_width, pad_left_to_width, pad_right_to_width};
+    use pretty::RcDoc;
+
+    use super::{display_width, pad_left_to_width, pad_right_to_width, text_with_hardlines};
 
     #[test]
     fn alignment_helpers_use_display_width_not_bytes() {
@@ -320,5 +335,21 @@ mod tests {
         assert_eq!("界".len(), 3);
         assert_eq!(pad_left_to_width("界", 4), "  界");
         assert_eq!(pad_right_to_width("界", 4), "界  ");
+    }
+
+    #[test]
+    fn multiline_text_uses_hardlines_for_nesting() {
+        let doc = RcDoc::text("{")
+            .append(
+                RcDoc::hardline()
+                    .append(text_with_hardlines("a\nb"))
+                    .nest(4),
+            )
+            .append(RcDoc::hardline())
+            .append(RcDoc::text("}"));
+        let mut out = Vec::new();
+        doc.render(80, &mut out).unwrap();
+        let rendered = String::from_utf8(out).unwrap();
+        assert_eq!(rendered, "{\n    a\n    b\n}");
     }
 }

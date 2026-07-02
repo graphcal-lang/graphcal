@@ -10,7 +10,7 @@ use pretty::RcDoc;
 use super::{
     Formatter, INDENT, display_width, flat_alt_group, format_dim_expr_inline, format_expr,
     format_type_expr_inline, format_unit_expr_inline, pad_left_to_width, pad_right_to_width,
-    render_doc_to_string, soft_parenthesized, soft_parenthesized_list,
+    render_doc_to_string, soft_parenthesized, soft_parenthesized_list, text_with_hardlines,
 };
 
 // ---------------------------------------------------------------------------
@@ -839,7 +839,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
     out.push_str(&" ".repeat(INDENT as usize));
     out.push_str("};");
 
-    RcDoc::text(out)
+    text_with_hardlines(&out)
 }
 
 fn render_multi_decl_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {

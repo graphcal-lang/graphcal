@@ -1188,6 +1188,35 @@ param      duty:  Dimensionless[Component]
 }
 
 #[test]
+fn multi_decl_inside_dag_body_is_nested() {
+    let source = "\
+index Component = { A, B };
+dag d {
+    param      power: Dimensionless[Component],
+    param      duty:  Dimensionless[Component]
+        = table[Component, (_, _)] {
+             : _, _;
+            A: 1.0, 2.0;
+            B: 3.0, 4.0;
+        };
+}
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("\n    param power:"),
+        "first slot should be nested in dag body:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("\n    param duty:"),
+        "continuation slot should be nested in dag body:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("\nparam duty:"),
+        "continuation slot escaped to column 0:\n{formatted}"
+    );
+}
+
+#[test]
 fn comment_inside_if_branch_does_not_migrate() {
     // Regression: comments in undrained expression positions (e.g. inside
     // an `if` branch) stayed queued and were emitted as the *next*
