@@ -1352,6 +1352,36 @@ fn project_instantiated_import_graph_ref() {
 }
 
 #[test]
+fn project_selective_import_item_rejects_unknown_attribute() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/attr");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"attr\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("lib.gcl"),
+        "pub node x: Dimensionless = 1.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import attr.lib.{ #[bogus] x };\nnode y: Dimensionless = @x;\n",
+    )
+    .unwrap();
+
+    match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::UnknownAttribute { name, .. })) => {
+            assert_eq!(name, "bogus");
+        }
+        other => panic!("expected UnknownAttribute, got {other:?}"),
+    }
+}
+
+#[test]
 fn project_qualified_index_type_annotation_and_variant_arg() {
     let dir = tempfile::tempdir().unwrap();
     let root_dir = dir.path().join("src/mission");
