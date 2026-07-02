@@ -365,6 +365,34 @@ mod tests {
     }
 
     #[test]
+    fn prelude_name_lists_match_loaded_registry() {
+        use std::collections::BTreeSet;
+
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b).unwrap();
+        let r = b.try_build().unwrap();
+
+        let listed_dims = PRELUDE_DIMENSION_NAMES
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let loaded_dims = r
+            .dimensions
+            .all_dimensions()
+            .map(|(name, _)| name.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(listed_dims, loaded_dims);
+
+        let listed_units = PRELUDE_UNIT_NAMES.iter().copied().collect::<BTreeSet<_>>();
+        let loaded_units = r
+            .units
+            .all_units()
+            .map(|(unit_ref, _, _)| unit_ref.name().as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(listed_units, loaded_units);
+    }
+
+    #[test]
     fn prelude_force_dimension_is_correct() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
