@@ -511,7 +511,13 @@ impl Parser<'_> {
 
         if is_integer {
             // Integer literal: no decimal point or scientific notation
-            if self.lexer.peek() == Some(&Token::Ident) {
+            let next_ident_span = match self.lexer.peek_with_span() {
+                Some((Token::Ident, next_span)) => Some(next_span),
+                _ => None,
+            };
+            if next_ident_span
+                .is_some_and(|next_span| !self.has_line_break_between(span, next_span))
+            {
                 // Integer followed by unit is an error: must use float
                 return Err(ParseError::InvalidNumber {
                     reason: format!("integer literal cannot have units; write `{text}.0` instead"),
@@ -531,8 +537,17 @@ impl Parser<'_> {
             // Float literal: has decimal point or scientific notation
             let value = self.parse_finite_f64_literal(&text, span)?;
 
-            // Check if followed by an identifier (unit literal): `400.0 km`
-            if self.lexer.peek() == Some(&Token::Ident) {
+            // Check if followed by an identifier on the same line (unit
+            // literal): `400.0 km`. A newline starts the next syntactic item;
+            // without this guard, a missing comma between match arms could be
+            // misread as `1.0 NextArm`.
+            let next_ident_span = match self.lexer.peek_with_span() {
+                Some((Token::Ident, next_span)) => Some(next_span),
+                _ => None,
+            };
+            if next_ident_span
+                .is_some_and(|next_span| !self.has_line_break_between(span, next_span))
+            {
                 let unit_expr = self.parse_unit_expr()?;
                 let full_span = span.merge(unit_expr.span);
                 Ok(Expr::new(
@@ -546,6 +561,14 @@ impl Parser<'_> {
                 Ok(Expr::new(ExprKind::Number(value), span))
             }
         }
+    }
+
+    fn has_line_break_between(&self, left: Span, right: Span) -> bool {
+        let start = left.offset() + left.len();
+        let end = right.offset();
+        self.source
+            .get(start..end)
+            .is_some_and(|gap| gap.contains('\n') || gap.contains('\r'))
     }
 
     /// Parse an identifier-based expression.
@@ -624,14 +647,14 @@ impl Parser<'_> {
                     // Map literal: { Index.Variant: expr, ... }
                     self.parse_map_literal_after_first_entry(start_span, index, variant)
                 } else {
-                    let found = self
-                        .lexer
-                        .peek()
-                        .map_or_else(|| "EOF".to_string(), std::string::ToString::to_string);
+                    let (found, found_span) = self.lexer.peek_with_span().map_or_else(
+                        || ("EOF".to_string(), start_span),
+                        |(tok, span)| (tok.to_string(), span),
+                    );
                     Err(self.unexpected_token(
                         "`:` after variant in map literal",
                         &found,
-                        start_span,
+                        found_span,
                     ))
                 }
             } else {
@@ -639,21 +662,21 @@ impl Parser<'_> {
                 Err(self.unexpected_token(
                     "map literal (`{ Index.Variant: expr, ... }`)",
                     &saved_text,
-                    start_span,
+                    ident_span,
                 ))
             }
         } else if self.lexer.peek() == Some(&Token::LParen) {
             // Could be tuple-key map literal: { (Index.Variant, ...): expr, ... }
             self.parse_tuple_key_map_literal(start_span)
         } else {
-            let found = self
-                .lexer
-                .peek()
-                .map_or_else(|| "EOF".to_string(), std::string::ToString::to_string);
+            let (found, found_span) = self.lexer.peek_with_span().map_or_else(
+                || ("EOF".to_string(), start_span),
+                |(tok, span)| (tok.to_string(), span),
+            );
             Err(self.unexpected_token(
                 "map literal (`{ Index.Variant: expr, ... }`)",
                 &found,
-                start_span,
+                found_span,
             ))
         }
     }
@@ -989,6 +1012,19 @@ mod tests {
             vec!["1.0"; 10_000].join(" + ")
         );
         Parser::new(&src).parse_file().unwrap();
+    }
+
+    #[test]
+    fn brace_expr_error_points_at_offending_token() {
+        let source = "node x: Dimensionless = { nope };";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        match err {
+            ParseError::UnexpectedToken { found, span, .. } => {
+                assert_eq!(found, "nope");
+                assert_eq!(span.offset(), source.find("nope").unwrap());
+            }
+            other => panic!("expected UnexpectedToken, got {other:?}"),
+        }
     }
 
     #[test]

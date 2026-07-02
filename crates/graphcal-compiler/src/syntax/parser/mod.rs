@@ -138,15 +138,15 @@ pub enum ParseError {
     },
 
     #[error(
-        "multi-decl row `{row_label}` has {got} value(s), but the multi-decl declares {slot_count} slot{}",
-        if *slot_count == 1 { "" } else { "s" }
+        "multi-decl row `{row_label}` has {got} value(s), but the header row declares {expected_count} value column{}",
+        if *expected_count == 1 { "" } else { "s" }
     )]
     #[diagnostic(
         code(graphcal::P009),
-        help("each row must have exactly one value per slot")
+        help("each row must have exactly one value per header column")
     )]
     MultiDeclRowArity {
-        slot_count: usize,
+        expected_count: usize,
         got: usize,
         row_label: String,
         #[source_code]
