@@ -163,6 +163,12 @@ pub(super) fn binop_rule(
             if lhs_elem == rhs_elem || (lhs_elem.is_int_like() && rhs_elem.is_int_like()) {
                 return Ok(bool_with_axes(&axes));
             }
+            if let (Some(lhs_dim), Some(rhs_dim)) =
+                (lhs_elem.scalar_dimension(), rhs_elem.scalar_dimension())
+                && lhs_dim == rhs_dim
+            {
+                return Ok(bool_with_axes(&axes));
+            }
             Err(GraphcalError::DimensionMismatch {
                 expected: format_inferred_type(lhs_elem, registry),
                 found: format_inferred_type(rhs_elem, registry),

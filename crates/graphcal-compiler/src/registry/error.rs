@@ -28,7 +28,9 @@ pub enum GraphcalError {
     #[error("{kind} `{name}` shadows a built-in name")]
     #[diagnostic(
         code(graphcal::N009),
-        help("choose a different name; built-in dimensions, types, and units cannot be redefined")
+        help(
+            "choose a different name; built-in dimensions, types, units, constants, and time scales cannot be redefined"
+        )
     )]
     BuiltinNameShadowed {
         kind: &'static str,

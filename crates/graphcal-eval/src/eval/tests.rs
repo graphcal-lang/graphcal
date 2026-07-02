@@ -806,6 +806,22 @@ fn eval_indexed_milestone() {
 }
 
 #[test]
+fn eval_scan_uses_index_order_for_map_literals() {
+    let source = r"
+index Phase = { A, B };
+node x: Dimensionless[Phase] = { Phase.B: 10.0, Phase.A: 1.0 };
+node y: Dimensionless[Phase] = scan(@x, 0.0, |acc, val| acc + val);
+";
+    let result = compile_and_eval(source).unwrap();
+    let x = find_entry(&result, "x");
+    let y = find_entry(&result, "y");
+    let x_vals = indexed_si_values(&x);
+    let y_vals = indexed_si_values(&y);
+    assert_eq!(x_vals, [("A", 1.0), ("B", 10.0)]);
+    assert_eq!(y_vals, [("A", 1.0), ("B", 11.0)]);
+}
+
+#[test]
 fn eval_table_literal_nat_range_1d() {
     let source = r"
 param v: Dimensionless[3] = table[3] {

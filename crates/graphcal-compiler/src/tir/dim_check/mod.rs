@@ -217,6 +217,15 @@ impl std::ops::Deref for InferredStructType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InferredType {
     Scalar(Dimension),
+    /// A scalar value produced by iterating a declared range index.
+    ///
+    /// Range labels can participate in scalar arithmetic, but retain the
+    /// originating index identity so `@series[t]` can prove that `t` belongs
+    /// to the same range axis as `series` instead of reading positionally.
+    RangeIndexLabel {
+        index: InferredIndex,
+        dimension: Dimension,
+    },
     Bool,
     Int,
     /// A bounded natural number `Fin(N)`: the type of loop variables over `range(N)`.
@@ -247,6 +256,14 @@ impl InferredType {
     #[must_use]
     pub const fn is_int_like(&self) -> bool {
         matches!(self, Self::Int | Self::Fin(_))
+    }
+
+    #[must_use]
+    pub const fn scalar_dimension(&self) -> Option<&Dimension> {
+        match self {
+            Self::Scalar(dimension) | Self::RangeIndexLabel { dimension, .. } => Some(dimension),
+            _ => None,
+        }
     }
 }
 
@@ -611,7 +628,9 @@ fn check_hir_assert_body(
 
             let tolerance_ok = if *is_relative {
                 tolerance_elem.is_int_like()
-                    || matches!(tolerance_elem, InferredType::Scalar(d) if d.is_dimensionless())
+                    || tolerance_elem
+                        .scalar_dimension()
+                        .is_some_and(Dimension::is_dimensionless)
             } else {
                 let tolerance_dim = expect_scalar(tolerance_elem, registry, src, tolerance.span)?;
                 tolerance_dim == actual_dim
@@ -1030,16 +1049,15 @@ fn check_one_bound(
     match expected {
         ExpectedBound::Scalar(target_dim) => {
             let ok = match inferred {
-                InferredType::Scalar(d) => d == target_dim,
                 InferredType::Int => target_dim.is_dimensionless(),
-                _ => false,
+                other => other.scalar_dimension() == Some(target_dim),
             };
             if ok {
                 return Ok(());
             }
-            let bound_dim_str = match inferred {
-                InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
-                other => format_inferred_type(other, registry),
+            let bound_dim_str = match inferred.scalar_dimension() {
+                Some(d) => registry.dimensions.format_dimension(d),
+                None => format_inferred_type(inferred, registry),
             };
             Err(GraphcalError::DomainDimensionMismatch {
                 name: name.to_string(),
@@ -1053,8 +1071,9 @@ fn check_one_bound(
         ExpectedBound::Int => {
             let ok = match inferred {
                 InferredType::Int => true,
-                InferredType::Scalar(d) => d.is_dimensionless(),
-                _ => false,
+                other => other
+                    .scalar_dimension()
+                    .is_some_and(Dimension::is_dimensionless),
             };
             if ok {
                 return Ok(());
@@ -1351,16 +1370,15 @@ fn check_one_bound_with_display_name(
     match expected {
         ExpectedBound::Scalar(target_dim) => {
             let ok = match inferred {
-                InferredType::Scalar(d) => d == target_dim,
                 InferredType::Int => target_dim.is_dimensionless(),
-                _ => false,
+                other => other.scalar_dimension() == Some(target_dim),
             };
             if ok {
                 return Ok(());
             }
-            let bound_dim_str = match inferred {
-                InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
-                other => format_inferred_type(other, registry),
+            let bound_dim_str = match inferred.scalar_dimension() {
+                Some(d) => registry.dimensions.format_dimension(d),
+                None => format_inferred_type(inferred, registry),
             };
             Err(GraphcalError::DomainDimensionMismatch {
                 name: display_name.to_string(),
@@ -1374,8 +1392,9 @@ fn check_one_bound_with_display_name(
         ExpectedBound::Int => {
             let ok = match inferred {
                 InferredType::Int => true,
-                InferredType::Scalar(d) => d.is_dimensionless(),
-                _ => false,
+                other => other
+                    .scalar_dimension()
+                    .is_some_and(Dimension::is_dimensionless),
             };
             if ok {
                 return Ok(());

@@ -74,6 +74,19 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
+    #[error("duplicate domain constraint `{bound}`")]
+    #[diagnostic(
+        code(graphcal::P021),
+        help("each domain constraint may appear at most once")
+    )]
+    DuplicateDomainBound {
+        bound: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate bound here")]
+        span: SourceSpan,
+    },
+
     #[error("stray character in source")]
     #[diagnostic(
         code(graphcal::P006),
@@ -306,6 +319,7 @@ impl ParseError {
             | Self::InvalidNumber { src, .. }
             | Self::TableRowLengthMismatch { src, .. }
             | Self::InvalidDomainBoundKey { src, .. }
+            | Self::DuplicateDomainBound { src, .. }
             | Self::UnknownToken { src, .. }
             | Self::MultiDeclTupleArity { src, .. }
             | Self::MultiDeclHeaderArity { src, .. }

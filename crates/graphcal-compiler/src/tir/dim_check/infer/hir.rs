@@ -691,7 +691,9 @@ fn infer_hir_fn_call(
                 src,
             )?;
             match &arg_type {
-                InferredType::Scalar(dim) if dim.is_dimensionless() => {}
+                t if t
+                    .scalar_dimension()
+                    .is_some_and(Dimension::is_dimensionless) => {}
                 t if t.is_int_like() => {}
                 _ => {
                     return Err(GraphcalError::DimensionMismatch {
@@ -1314,10 +1316,16 @@ fn infer_hir_for_comp(
                         InferredType::NamedIndex(index_identity)
                     }
                     crate::registry::types::IndexKind::Range(data) => {
-                        InferredType::Scalar(data.dimension.clone())
+                        InferredType::RangeIndexLabel {
+                            index: index_identity,
+                            dimension: data.dimension.clone(),
+                        }
                     }
                     crate::registry::types::IndexKind::RequiredRange { dimension } => {
-                        InferredType::Scalar(dimension.clone())
+                        InferredType::RangeIndexLabel {
+                            index: index_identity,
+                            dimension: dimension.clone(),
+                        }
                     }
                     crate::registry::types::IndexKind::NatRange { size } => {
                         InferredType::Fin(NatLinearForm::from_constant(size.get() as u64))
@@ -1425,23 +1433,60 @@ fn infer_hir_index_access(
                             });
                         }
                     }
-                    InferredType::Scalar(_) => {
+                    InferredType::RangeIndexLabel {
+                        index: label_index,
+                        dimension: label_dimension,
+                    } => {
                         let idx_def = super::index_def_for_inferred(&index, Some(dag), registry)
                             .ok_or_else(|| GraphcalError::UnknownIndex {
                                 name: index.name(),
                                 src: src.clone(),
                                 span: local.span.into(),
                             })?;
-                        if !idx_def.is_range() {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "range-index loop variable cannot index into non-range index `{}`",
-                                    index.name()
-                                ),
+                        let expected_dimension = match &idx_def.kind {
+                            crate::registry::types::IndexKind::Range(data) => &data.dimension,
+                            crate::registry::types::IndexKind::RequiredRange { dimension } => {
+                                dimension
+                            }
+                            _ => {
+                                return Err(GraphcalError::EvalError {
+                                    message: format!(
+                                        "range-index loop variable cannot index into non-range index `{}`",
+                                        index.name()
+                                    ),
+                                    src: src.clone(),
+                                    span: local.span.into(),
+                                });
+                            }
+                        };
+                        if label_index != &index {
+                            return Err(GraphcalError::IndexMismatch {
+                                expected: index.name(),
+                                found: label_index.name(),
                                 src: src.clone(),
                                 span: local.span.into(),
                             });
                         }
+                        if label_dimension != expected_dimension {
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: registry.dimensions.format_dimension(expected_dimension),
+                                found: registry.dimensions.format_dimension(label_dimension),
+                                help: "range-index loop variable dimension must match the indexed range"
+                                    .to_string(),
+                                src: src.clone(),
+                                span: local.span.into(),
+                            });
+                        }
+                    }
+                    InferredType::Scalar(_) => {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "scalar local cannot index into range index `{}`; use that range index's loop variable",
+                                index.name()
+                            ),
+                            src: src.clone(),
+                            span: local.span.into(),
+                        });
                     }
                     InferredType::Int => {
                         if let Some(idx_def) =
@@ -2808,8 +2853,20 @@ fn infer_hir_unfold(
         }
     };
     let scan_locals = local_types.child(vec![
-        (prev.id, InferredType::Scalar(dimension.clone())),
-        (curr.id, InferredType::Scalar(dimension)),
+        (
+            prev.id,
+            InferredType::RangeIndexLabel {
+                index: index.clone(),
+                dimension: dimension.clone(),
+            },
+        ),
+        (
+            curr.id,
+            InferredType::RangeIndexLabel {
+                index: index.clone(),
+                dimension,
+            },
+        ),
     ]);
     let body_type = infer_hir_type(
         body,

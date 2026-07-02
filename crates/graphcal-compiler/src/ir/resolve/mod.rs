@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::builtin::BuiltinConst;
 use crate::desugar::desugared_ast::{
     AssertBody, AttributeArg, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeDeclBody,
     TypeExpr, TypeExprKind,
@@ -107,6 +108,15 @@ fn check_builtin_name_shadowing(
             DeclKind::Unit(u) if PRELUDE_UNIT_NAMES.contains(&u.name.value.as_str()) => {
                 Some(("unit", u.name.value.to_string(), u.name.span))
             }
+            DeclKind::Param(p) if is_builtin_value_name(p.name.value.as_str()) => {
+                Some(("param", p.name.value.to_string(), p.name.span))
+            }
+            DeclKind::Node(n) if is_builtin_value_name(n.name.value.as_str()) => {
+                Some(("node", n.name.value.to_string(), n.name.span))
+            }
+            DeclKind::ConstNode(c) if is_builtin_value_name(c.name.value.as_str()) => {
+                Some(("const node", c.name.value.to_string(), c.name.span))
+            }
             _ => None,
         };
 
@@ -125,6 +135,10 @@ fn check_builtin_name_shadowing(
 
 fn is_builtin_type_name(name: &str) -> bool {
     PRELUDE_DIMENSION_NAMES.contains(&name) || PRELUDE_BUILTIN_TYPE_NAMES.contains(&name)
+}
+
+fn is_builtin_value_name(name: &str) -> bool {
+    BuiltinConst::parse(name).is_some() || is_time_scale_name(name)
 }
 
 fn check_exclusive_universe_collisions(

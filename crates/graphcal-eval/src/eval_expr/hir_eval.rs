@@ -871,11 +871,26 @@ fn eval_hir_map_literal(
     let idx_name = map_entry_index_ref(first_key, ctx)?;
 
     if arity == 1 {
-        let mut result = IndexMap::new();
+        let idx_def = map_entry_index_def(first_key, &idx_name, ctx).ok_or_else(|| {
+            ctx.internal_error(format!("unknown index `{idx_name}`"), Span::new(0, 0))
+        })?;
+        let mut evaluated = IndexMap::new();
         for entry in entries {
             let key = entry.keys.first();
             let variant = map_entry_variant_for_axis(key, &idx_name, ctx)?;
             let val = eval_hir_expr(&entry.value, values, local_values, ctx)?;
+            evaluated.insert(variant, val);
+        }
+        let mut result = IndexMap::new();
+        for variant in idx_def.variants() {
+            let val = evaluated.swap_remove(&variant).ok_or_else(|| {
+                ctx.internal_error(
+                    format!(
+                        "map literal for index `{idx_name}` is missing entry for variant `{variant}`"
+                    ),
+                    Span::new(0, 0),
+                )
+            })?;
             result.insert(variant, val);
         }
         return Ok(RuntimeValue::Indexed {
@@ -1013,6 +1028,7 @@ fn eval_hir_for_comp(
                 variant: variant.clone(),
             },
             IndexKind::Range(data) => RuntimeValue::RangeLabel {
+                index_name: idx_name.clone(),
                 step_index,
                 value: data.step_value(step_index),
             },
@@ -1089,7 +1105,21 @@ fn eval_hir_index_access(
                     RuntimeValue::Struct { type_name, .. } => {
                         IndexVariantName::expect_valid(type_name.as_str())
                     }
-                    RuntimeValue::RangeLabel { step_index, .. } => {
+                    RuntimeValue::RangeLabel {
+                        index_name: label_index,
+                        step_index,
+                        ..
+                    } => {
+                        if !index_name.matches_ref(label_index) {
+                            return Err(ctx.eval_error(
+                                format!(
+                                    "index argument belongs to `{}`, but value is indexed by `{}`",
+                                    label_index.display_name(),
+                                    index_name.display_name()
+                                ),
+                                local.span,
+                            ));
+                        }
                         IndexVariantName::range_step(step_index)
                     }
                     RuntimeValue::Int(n) => IndexVariantName::range_step(n),
@@ -1236,6 +1266,7 @@ fn eval_hir_unfold(
         scan_locals.bind(
             prev.id,
             RuntimeValue::RangeLabel {
+                index_name: index_ref.clone(),
                 step_index: previous_step_index,
                 value: range_data.step_value(previous_step_index),
             },
@@ -1243,6 +1274,7 @@ fn eval_hir_unfold(
         scan_locals.bind(
             curr.id,
             RuntimeValue::RangeLabel {
+                index_name: index_ref.clone(),
                 step_index: i,
                 value: range_data.step_value(i),
             },

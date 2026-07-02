@@ -146,6 +146,8 @@ impl Parser<'_> {
     ) -> Result<Vec<crate::syntax::ast::DomainBound>, ParseError> {
         let (_, _lparen_span) = self.expect(Token::LParen)?;
         let mut constraints = Vec::new();
+        let mut min_span = None;
+        let mut max_span = None;
         loop {
             if self.lexer.peek() == Some(&Token::RParen) {
                 break;
@@ -163,6 +165,17 @@ impl Parser<'_> {
                     });
                 }
             };
+            let seen_span = match kind {
+                crate::syntax::ast::DomainBoundKind::Min => &mut min_span,
+                crate::syntax::ast::DomainBoundKind::Max => &mut max_span,
+            };
+            if seen_span.replace(kind_span).is_some() {
+                return Err(ParseError::DuplicateDomainBound {
+                    bound: kind.to_string(),
+                    src: self.named_source(),
+                    span: kind_span.into(),
+                });
+            }
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             let bound_span = kind_span.merge(value.span);
@@ -1005,6 +1018,16 @@ mod tests {
             }
             _ => panic!("expected param"),
         }
+    }
+
+    #[test]
+    fn parse_rejects_duplicate_domain_bound() {
+        let source = "param m: Mass(min: 1.0 kg, min: 2.0 kg) = 1.5 kg;";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        assert!(
+            matches!(err, ParseError::DuplicateDomainBound { ref bound, .. } if bound == "min"),
+            "got {err:?}"
+        );
     }
 
     #[test]

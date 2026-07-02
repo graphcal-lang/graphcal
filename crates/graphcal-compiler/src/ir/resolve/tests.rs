@@ -141,6 +141,18 @@ fn resolve_rejects_builtin_unit_shadowing() {
 }
 
 #[test]
+fn resolve_rejects_builtin_value_shadowing() {
+    let err = parse_and_resolve("const node E: Dimensionless = 2.0;").unwrap_err();
+    assert!(matches!(err, GraphcalError::BuiltinNameShadowed { name, .. } if name == "E"));
+}
+
+#[test]
+fn resolve_rejects_time_scale_value_shadowing() {
+    let err = parse_and_resolve("node UTC: Dimensionless = 0.0;").unwrap_err();
+    assert!(matches!(err, GraphcalError::BuiltinNameShadowed { name, .. } if name == "UTC"));
+}
+
+#[test]
 fn resolve_unknown_graph_ref() {
     // Unknown `@` targets are rejected by HIR lowering during type
     // resolution — the IR collection pass no longer classifies references.

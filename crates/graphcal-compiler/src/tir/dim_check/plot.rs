@@ -194,13 +194,19 @@ fn check_property_value(
             }
             match infer_property_type(ctx, field)? {
                 InferredType::Int => Ok(()),
-                InferredType::Scalar(d) if d.is_dimensionless() => Ok(()),
-                InferredType::Scalar(d) => Err(GraphcalError::PlotPropertyDimensioned {
-                    property,
-                    dimension: ctx.registry.dimensions.format_dimension(&d),
-                    src: ctx.src.clone(),
-                    span: field.value.span.into(),
-                }),
+                InferredType::Scalar(d) | InferredType::RangeIndexLabel { dimension: d, .. }
+                    if d.is_dimensionless() =>
+                {
+                    Ok(())
+                }
+                InferredType::Scalar(d) | InferredType::RangeIndexLabel { dimension: d, .. } => {
+                    Err(GraphcalError::PlotPropertyDimensioned {
+                        property,
+                        dimension: ctx.registry.dimensions.format_dimension(&d),
+                        src: ctx.src.clone(),
+                        span: field.value.span.into(),
+                    })
+                }
                 other => Err(mismatch(format_inferred_type(&other, ctx.registry))),
             }
         }

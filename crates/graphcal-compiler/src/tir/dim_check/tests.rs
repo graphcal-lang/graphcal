@@ -1445,6 +1445,20 @@ node w: Dimensionless[TimeStep] = for t: TimeStep { @v[t] };";
 }
 
 #[test]
+fn range_loop_var_cannot_index_different_range_indexed_value() {
+    let source = "\
+pub index TimeGrid = linspace(0.0 s, 2.0 s, step: 1.0 s);
+pub index LenGrid = linspace(0.0 m, 2.0 m, step: 1.0 m);
+param v: Dimensionless[LenGrid] = for x: LenGrid { 1.0 };
+node w: Dimensionless[TimeGrid] = for t: TimeGrid { @v[t] };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::IndexMismatch { expected, found, .. } if expected.as_str() == "LenGrid" && found.as_str() == "TimeGrid"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
 fn fin_comparison_same_range() {
     // i : Fin(3), j : Fin(3) — i == j is valid
     let source = "\
