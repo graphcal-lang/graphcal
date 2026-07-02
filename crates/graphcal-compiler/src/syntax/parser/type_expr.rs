@@ -718,7 +718,9 @@ impl Parser<'_> {
                 })?;
                 Ok(IndexExprAtom::Nat(NatExpr::Literal(value, span)))
             }
-            Some(Token::Ident) => Ok(IndexExprAtom::Path(self.parse_ident_path()?)),
+            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
+                Ok(IndexExprAtom::Path(self.parse_ident_path()?))
+            }
             _ => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token(

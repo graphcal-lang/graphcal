@@ -249,7 +249,7 @@ impl Parser<'_> {
                 })?;
                 Ok(NatExpr::Literal(value, span))
             }
-            Some(Token::Ident) => {
+            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
                 let ident = self.parse_any_ident()?;
                 Ok(NatExpr::Var(ident))
             }
