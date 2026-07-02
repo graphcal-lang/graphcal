@@ -458,6 +458,20 @@ fn resolve_unfold_self_edge_excluded() {
     );
 }
 
+#[test]
+fn resolve_unfold_init_self_edge_retained() {
+    let source = r"
+        index TimeStep = { First, Second, Third };
+        node x: Dimensionless[TimeStep] = unfold(sum(@x), |prev_t, t| @x[prev_t] * 2.0);
+    ";
+    let tir = compile_to_tir(source).unwrap();
+    let deps = &tir.root().semantic.dependencies;
+    assert!(
+        dep_names_of(&deps.runtime_deps, "x").contains(&"x"),
+        "unfold init self-reference must remain a runtime dependency"
+    );
+}
+
 // --- Visibility tests ---
 
 #[test]

@@ -42,7 +42,7 @@ const VERSION: &str = if env!("GIT_HASH").is_empty() {
 
 /// True when an assertion result represents a failure (a `Fail` outcome or
 /// a runtime `Error` while evaluating the assertion). Used to decide both
-/// the process exit code and stderr-vs-stdout routing in text output.
+/// stderr-vs-stdout routing in text output.
 const fn is_assert_failure(r: &graphcal_eval::eval::AssertResult) -> bool {
     matches!(
         r,
@@ -369,14 +369,8 @@ fn handle_eval(
                 }
             }
 
-            let has_eval_errors = result.params.iter().any(|(_, r)| r.is_err())
-                || result.nodes.iter().any(|(_, r)| r.is_err());
-            let has_assert_failures = result
-                .assertions
-                .iter()
-                .any(|(_, r, _)| is_assert_failure(r));
             let has_plot_errors = plot_output.is_some() && !result.plot_errors.is_empty();
-            if has_eval_errors || has_assert_failures || has_plot_errors {
+            if result.has_errors() || has_plot_errors {
                 process::exit(1);
             }
         }
@@ -865,5 +859,12 @@ mod tests {
     #[test]
     fn format_large_decimal() {
         assert_eq!(format_number(3138.128), "3138.128");
+    }
+
+    #[test]
+    fn format_small_nonzero_decimal() {
+        assert_eq!(format_number(3.0e-9), "3e-9");
+        assert_eq!(format_number(-3.0e-9), "-3e-9");
+        assert_eq!(format_number(-0.0), "0");
     }
 }

@@ -602,10 +602,11 @@ pub struct EvalResult {
 }
 
 impl EvalResult {
-    /// Returns `true` if any param/node evaluation failed or any assertion failed.
+    /// Returns `true` if any const/param/node evaluation failed or any assertion failed.
     #[must_use]
     pub fn has_errors(&self) -> bool {
-        self.params.iter().any(|(_, r)| r.is_err())
+        self.consts.iter().any(|(_, r)| r.is_err())
+            || self.params.iter().any(|(_, r)| r.is_err())
             || self.nodes.iter().any(|(_, r)| r.is_err())
             || self.assertions.iter().any(|(_, r, _)| {
                 matches!(r, AssertResult::Fail { .. } | AssertResult::Error { .. })

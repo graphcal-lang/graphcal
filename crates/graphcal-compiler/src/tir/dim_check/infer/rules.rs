@@ -481,18 +481,26 @@ pub(super) fn unary_rule(
             }
             Ok(InferredType::Bool)
         }
-        UnaryOp::Neg => {
-            if operand.ty == InferredType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "numeric type".to_string(),
-                    found: "Bool".to_string(),
-                    help: "negation requires a numeric operand, not Bool".to_string(),
-                    src: src.clone(),
-                    span: operand.span.into(),
-                });
+        UnaryOp::Neg => match &operand.ty {
+            InferredType::Scalar(_) | InferredType::Int => Ok(operand.ty.clone()),
+            InferredType::RangeIndexLabel { dimension, .. } => {
+                Ok(InferredType::Scalar(dimension.clone()))
             }
-            // Negation preserves the type (Scalar or Int)
-            Ok(operand.ty.clone())
+            InferredType::Fin(_) => Err(GraphcalError::DimensionMismatch {
+                expected: "Int or Scalar".to_string(),
+                found: format_inferred_type(&operand.ty, registry),
+                help: "range(N) loop variables are bounded natural indexes; convert explicitly before negating"
+                    .to_string(),
+                src: src.clone(),
+                span: operand.span.into(),
+            }),
+            other => Err(GraphcalError::DimensionMismatch {
+                expected: "Int or Scalar".to_string(),
+                found: format_inferred_type(other, registry),
+                help: "negation requires a numeric scalar or Int operand".to_string(),
+                src: src.clone(),
+                span: operand.span.into(),
+            }),
         }
     }
 }

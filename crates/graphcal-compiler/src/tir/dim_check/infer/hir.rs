@@ -599,13 +599,27 @@ fn infer_hir_fn_call(
                 src,
             )?;
             if let InferredType::Indexed { element, .. } = arg_type {
-                return Ok(match kind {
-                    AggregationFn::Count => InferredType::Scalar(Dimension::dimensionless()),
+                return match kind {
+                    AggregationFn::Count => Ok(InferredType::Scalar(Dimension::dimensionless())),
                     AggregationFn::Sum
                     | AggregationFn::Min
                     | AggregationFn::Max
-                    | AggregationFn::Mean => *element,
-                });
+                    | AggregationFn::Mean => element.scalar_dimension().cloned().map_or_else(
+                        || {
+                            Err(GraphcalError::DimensionMismatch {
+                                expected: "indexed scalar collection".to_string(),
+                                found: format_inferred_type(&element, registry),
+                                help: format!(
+                                    "{}() requires every indexed element to be scalar",
+                                    name.as_str()
+                                ),
+                                src: src.clone(),
+                                span: args[0].span.into(),
+                            })
+                        },
+                        |dimension| Ok(InferredType::Scalar(dimension)),
+                    ),
+                };
             }
             infer_hir_builtin_fn(
                 name,

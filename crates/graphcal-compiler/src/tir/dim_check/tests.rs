@@ -1459,6 +1459,65 @@ node w: Dimensionless[TimeGrid] = for t: TimeGrid { @v[t] };";
 }
 
 #[test]
+fn unfold_init_self_reference_is_cycle() {
+    let source = "\
+index Step = linspace(0.0 s, 2.0 s, step: 1.0 s);
+node y: Dimensionless[Step] = unfold(sum(@y), |p, t| @y[p] + 1.0);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::CyclicDependency { .. }),
+        "expected CyclicDependency, got: {err:?}"
+    );
+}
+
+#[test]
+fn negation_rejects_fin_index_variable() {
+    let source = "\
+param v: Dimensionless[3] = for i: range(3) { 1.0 };
+node w: Dimensionless[3] = for i: range(3) { @v[-i] };";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::DimensionMismatch { found, .. } if found.contains("Fin")),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn negation_rejects_datetime() {
+    let source = "node t: Datetime<UTC> = -datetime(\"2026-01-01T00:00:00Z\");";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::DimensionMismatch { found, .. } if found.contains("Datetime")),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn aggregation_rejects_non_scalar_elements() {
+    let source = "\
+pub index Phase = { A, B };
+param flags: Bool[Phase] = for p: Phase { true };
+node total: Dimensionless = sum(@flags);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::DimensionMismatch { expected, .. } if expected == "indexed scalar collection"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn aggregation_rejects_int_elements() {
+    let source = "\
+param counts: Int[3] = for i: range(3) { i };
+node total: Int = sum(@counts);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::DimensionMismatch { expected, .. } if expected == "indexed scalar collection"),
+        "got: {err:?}"
+    );
+}
+
+#[test]
 fn fin_comparison_same_range() {
     // i : Fin(3), j : Fin(3) — i == j is valid
     let source = "\
