@@ -11,8 +11,8 @@ use graphcal_eval::loader::discover_project_root;
 use graphcal_io::RealFileSystem;
 use graphcal_package::{
     DependencyName, DependencySpec, GitCommitHash, GitUrl, LOCK_VERSION, LockedPackage, Lockfile,
-    PackageGraph, PackageInstanceId, PackageManifest, PackageName, PackageSource, STDLIB_VERSION,
-    SourceTreeHashes, parse_manifest_str,
+    LockfileSerializeError, PackageGraph, PackageInstanceId, PackageManifest, PackageName,
+    PackageSource, STDLIB_VERSION, SourceTreeHashes, parse_manifest_str,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -59,7 +59,9 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
     let graph = lockfile.package_graph(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)?;
     ensure_lock_graph_loadable(&graph)?;
 
-    let content = lockfile.to_deterministic_toml();
+    let content = lockfile
+        .to_deterministic_toml()
+        .map_err(DepsError::LockfileSerialize)?;
     let lockfile_path = root.join("graphcal.lock");
     let changed = match std::fs::read_to_string(&lockfile_path) {
         Ok(existing) if existing == content => false,
@@ -616,6 +618,9 @@ pub enum DepsError {
     /// Lock validation failed.
     #[error("{0}")]
     LockValidation(#[from] graphcal_package::LockValidationError),
+    /// Lockfile serialization failed.
+    #[error("could not serialize graphcal.lock: {0}")]
+    LockfileSerialize(#[from] LockfileSerializeError),
     /// Generated package id was invalid.
     #[error(transparent)]
     PackageId(graphcal_package::PackageInstanceIdError),

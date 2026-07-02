@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::{Component, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
 use toml_spanner::{Item, Table};
@@ -600,8 +600,12 @@ impl Lockfile {
     }
 
     /// Serialize the lockfile in deterministic TOML form.
-    #[must_use]
-    pub fn to_deterministic_toml(&self) -> String {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LockfileSerializeError`] if a path cannot be represented
+    /// losslessly in the UTF-8 TOML lockfile format.
+    pub fn to_deterministic_toml(&self) -> Result<String, LockfileSerializeError> {
         let mut out = String::new();
         push_kv_u64(&mut out, "lock_version", self.lock_version);
         push_kv_string(&mut out, "created_by", &self.created_by);
@@ -618,7 +622,7 @@ impl Lockfile {
             push_kv_string(
                 &mut out,
                 "source_dir",
-                package.source_dir.to_string_lossy().as_ref(),
+                path_to_lockfile_str(&package.source_dir)?,
             );
             out.push_str("\n[package.source]\n");
             match &package.source {
@@ -650,8 +654,23 @@ impl Lockfile {
                 }
             }
         }
-        out
+        Ok(out)
     }
+}
+
+fn path_to_lockfile_str(path: &Path) -> Result<&str, LockfileSerializeError> {
+    path.to_str()
+        .ok_or_else(|| LockfileSerializeError::NonUtf8Path {
+            path: path.to_path_buf(),
+        })
+}
+
+/// Lockfile serialization error.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum LockfileSerializeError {
+    /// `source_dir` cannot be represented as a TOML string without loss.
+    #[error("path `{}` is not valid UTF-8 and cannot be written to graphcal.lock", path.display())]
+    NonUtf8Path { path: PathBuf },
 }
 
 fn visit_lock_package_for_cycles<'a>(
@@ -1258,6 +1277,12 @@ fn push_escaped_string(out: &mut String, value: &str) {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            other if other.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04X}", other as u32);
+            }
             other => out.push(other),
         }
     }
@@ -1641,16 +1666,31 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             ),
         ]);
 
-        let toml = lock.to_deterministic_toml();
+        let toml = lock.to_deterministic_toml().unwrap();
         let reparsed = parse_lockfile_str(&toml).unwrap();
 
-        assert_eq!(reparsed.to_deterministic_toml(), toml);
+        assert_eq!(reparsed.to_deterministic_toml().unwrap(), toml);
         assert_eq!(reparsed.root, lock.root);
         assert!(
             toml.find("pkg-mission").unwrap() < toml.find("pkg-units-v1").unwrap()
                 && toml.find("pkg-units-v1").unwrap() < toml.find("pkg-units-v2").unwrap()
         );
         assert!(toml.contains("units_v1 = \"pkg-units-v1\"\nunits_v2 = \"pkg-units-v2\""));
+    }
+
+    #[test]
+    fn lockfile_toml_escapes_control_characters() {
+        let mut package = package("pkg-mission", "mission", path_source(), BTreeMap::new());
+        package.source_dir = PathBuf::from("src/line\nfeed");
+        let lock = lockfile(vec![package]);
+
+        let toml = lock.to_deterministic_toml().unwrap();
+        assert!(toml.contains("source_dir = \"src/line\\nfeed\""));
+        let reparsed = parse_lockfile_str(&toml).unwrap();
+        assert_eq!(
+            reparsed.packages[0].source_dir,
+            PathBuf::from("src/line\nfeed")
+        );
     }
 
     #[test]
