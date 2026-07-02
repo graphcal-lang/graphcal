@@ -1419,8 +1419,13 @@ impl LanguageServer for Backend {
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri.clone();
-        self.with_analysis(&uri, |analysis| {
-            crate::code_actions::code_actions(&params, analysis)
+        let current_text = self.current_text(&uri).await;
+        self.with_analysis(&uri, move |analysis| {
+            let current_text = current_text.as_ref()?;
+            if current_text.as_str() != analysis.source.as_str() {
+                return None;
+            }
+            crate::code_actions::code_actions(&params, analysis, current_text)
         })
         .await
     }
@@ -1429,9 +1434,14 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let new_name = params.new_name;
+        let current_text = self.current_text(&uri).await;
         let outcome = self
             .with_analysis(&uri, |analysis| {
-                let offset = position_to_byte_offset(&analysis.source, position);
+                let current_text = current_text.as_ref()?;
+                if current_text.as_str() != analysis.source.as_str() {
+                    return None;
+                }
+                let offset = position_to_byte_offset(current_text, position);
                 Some(crate::rename::rename(analysis, &uri, offset, &new_name))
             })
             .await?;
@@ -1453,8 +1463,13 @@ impl LanguageServer for Backend {
     ) -> Result<Option<PrepareRenameResponse>> {
         let uri = params.text_document.uri;
         let position = params.position;
+        let current_text = self.current_text(&uri).await;
         self.with_analysis(&uri, |analysis| {
-            let offset = position_to_byte_offset(&analysis.source, position);
+            let current_text = current_text.as_ref()?;
+            if current_text.as_str() != analysis.source.as_str() {
+                return None;
+            }
+            let offset = position_to_byte_offset(current_text, position);
             crate::rename::prepare_rename(analysis, offset)
         })
         .await

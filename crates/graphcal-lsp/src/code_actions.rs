@@ -29,8 +29,9 @@ const ALL_DECL_KEYWORDS: &[&str] = &[
 pub fn code_actions(
     params: &CodeActionParams,
     analysis: &AnalysisResult,
+    current_source: &str,
 ) -> Option<CodeActionResponse> {
-    let source = analysis.source.as_str();
+    let source = current_source;
     let mut actions = Vec::new();
 
     for diag in &params.context.diagnostics {
@@ -50,7 +51,8 @@ pub fn code_actions(
             // V003 and V006 share a fix shape: add `pub` to the private
             // item named in the diagnostic's structured data.
             "graphcal::V003" | "graphcal::V006" => {
-                if let Some(action) = make_add_pub_action(diag, analysis, &params.text_document.uri)
+                if let Some(action) =
+                    make_add_pub_action(diag, analysis, current_source, &params.text_document.uri)
                 {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
@@ -97,13 +99,14 @@ fn declaration_line(analysis: &AnalysisResult, name: &str) -> Option<u32> {
 fn make_add_pub_action(
     diag: &Diagnostic,
     analysis: &AnalysisResult,
+    current_source: &str,
     uri: &Url,
 ) -> Option<CodeAction> {
     let ref_name = referenced_name_from_data(diag)?;
     let decl_line = declaration_line(analysis, &ref_name)?;
     make_add_visibility_action(
         diag,
-        &analysis.source,
+        current_source,
         uri,
         decl_line,
         "pub ",
@@ -273,7 +276,7 @@ mod tests {
         );
 
         let params = make_params(&uri, vec![diag]);
-        let actions = code_actions(&params, &analysis).unwrap();
+        let actions = code_actions(&params, &analysis, &analysis.source).unwrap();
         assert_eq!(actions.len(), 1);
 
         let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
@@ -318,7 +321,7 @@ mod tests {
         );
 
         let params = make_params(&uri, vec![diag]);
-        let actions = code_actions(&params, &analysis).unwrap();
+        let actions = code_actions(&params, &analysis, &analysis.source).unwrap();
         let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
             panic!("expected CodeAction");
         };
@@ -356,7 +359,7 @@ mod tests {
         );
 
         let params = make_params(&uri, vec![diag]);
-        let actions = code_actions(&params, &analysis).unwrap();
+        let actions = code_actions(&params, &analysis, &analysis.source).unwrap();
         assert_eq!(actions.len(), 1);
 
         let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
@@ -394,7 +397,7 @@ mod tests {
         );
 
         let params = make_params(&uri, vec![diag]);
-        let actions = code_actions(&params, &analysis).unwrap();
+        let actions = code_actions(&params, &analysis, &analysis.source).unwrap();
         let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
             panic!("expected CodeAction");
         };
@@ -424,7 +427,7 @@ mod tests {
         );
 
         let params = make_params(&uri, vec![diag]);
-        let actions = code_actions(&params, &analysis).unwrap();
+        let actions = code_actions(&params, &analysis, &analysis.source).unwrap();
         assert_eq!(actions.len(), 1);
 
         let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
@@ -456,7 +459,7 @@ mod tests {
             None,
         );
         let params = make_params(&uri, vec![diag]);
-        assert!(code_actions(&params, &analysis).is_none());
+        assert!(code_actions(&params, &analysis, &analysis.source).is_none());
     }
 
     #[test]
@@ -470,6 +473,6 @@ mod tests {
             None,
         );
         let params = make_params(&uri, vec![diag]);
-        assert!(code_actions(&params, &analysis).is_none());
+        assert!(code_actions(&params, &analysis, &analysis.source).is_none());
     }
 }
