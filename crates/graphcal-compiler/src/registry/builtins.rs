@@ -378,7 +378,11 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
     m.insert(
         "sign",
         BuiltinFunction {
-            eval: |a| a[0].signum(),
+            eval: |a| match a[0].partial_cmp(&0.0) {
+                Some(std::cmp::Ordering::Greater) => 1.0,
+                Some(std::cmp::Ordering::Less) => -1.0,
+                Some(std::cmp::Ordering::Equal) | None => 0.0,
+            },
             dim_sig: DimSignature::free_to_fixed("x", dimensionless()),
         },
     );
@@ -542,8 +546,8 @@ mod tests {
         let f = &fns["sign"];
         assert!(((f.eval)(&[5.0]) - 1.0).abs() < f64::EPSILON);
         assert!(((f.eval)(&[-5.0]) - -1.0).abs() < f64::EPSILON);
-        // f64::signum(0.0) returns 1.0, signum(-0.0) returns -1.0
-        assert!(((f.eval)(&[0.0]) - 1.0).abs() < f64::EPSILON);
+        assert!(((f.eval)(&[0.0]) - 0.0).abs() < f64::EPSILON);
+        assert!(((f.eval)(&[-0.0]) - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
