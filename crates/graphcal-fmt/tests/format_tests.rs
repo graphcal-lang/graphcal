@@ -967,6 +967,31 @@ param dv: Dimensionless[Maneuver] = table[Maneuver] {
 }
 
 #[test]
+fn preserves_leading_comment_before_2d_table_row_without_embedding_in_cell() {
+    let source = r"
+index Phase = { Launch, Cruise };
+index Maneuver = { Departure };
+param m: Dimensionless[Phase, Maneuver] = table[Phase, Maneuver] {
+    : Departure;
+    Launch:  1.0;
+    // note about cruise
+    Cruise: 3.0 + 4.0;
+};
+";
+    let formatted = format_source(source).unwrap();
+    let comment_pos = formatted.find("// note about cruise").unwrap();
+    let row_pos = formatted.find("Cruise:").unwrap();
+    assert!(
+        comment_pos < row_pos,
+        "leading row comment should stay before row: {formatted}"
+    );
+    assert!(
+        !formatted.contains("+ // note about cruise"),
+        "row comment must not be embedded inside the cell expression: {formatted}"
+    );
+}
+
+#[test]
 fn preserves_comment_in_match_arms() {
     let source = r"
 index Phase = { Coast, Burn };

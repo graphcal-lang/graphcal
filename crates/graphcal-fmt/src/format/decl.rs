@@ -1,9 +1,9 @@
 use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
-    Encoding, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl, IncludeDecl,
-    IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis, MultiSlotKind,
-    NodeDecl, ParamBinding, ParamDecl, PlotDecl, TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr,
-    UnitConstness, UnitDecl, UnitDef, Visibility,
+    Encoding, Expr, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl,
+    IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis,
+    MultiSlotKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TableIndexSpec, TypeDecl,
+    TypeDeclBody, TypeExpr, UnitConstness, UnitDecl, UnitDef, Visibility,
 };
 use pretty::RcDoc;
 
@@ -846,6 +846,11 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
     RcDoc::text(out)
 }
 
+fn render_multi_decl_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
+    let mut cell_fmt = fmt.fork_skipping_comments_before(expr.span.offset());
+    render_doc_to_string(&format_expr(&mut cell_fmt, expr))
+}
+
 fn compute_multi_decl_layout(
     fmt: &mut Formatter<'_>,
     info: &MultiDecl,
@@ -873,7 +878,7 @@ fn compute_multi_decl_layout(
                 .map(|row| {
                     row.values
                         .iter()
-                        .map(|v| render_doc_to_string(&format_expr(fmt, v)))
+                        .map(|v| render_multi_decl_cell_value(fmt, v))
                         .collect()
                 })
                 .collect()

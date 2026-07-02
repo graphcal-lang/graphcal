@@ -21,6 +21,11 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
     graphcal_compiler::stack::with_stack_growth(|| format_expr_inner(fmt, expr))
 }
 
+fn render_table_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
+    let mut cell_fmt = fmt.fork_skipping_comments_before(expr.span.offset());
+    render_doc_to_string(&format_expr(&mut cell_fmt, expr))
+}
+
 fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
     match &expr.kind {
         ExprKind::Number(_) | ExprKind::Integer(_) => {
@@ -460,7 +465,7 @@ fn format_table_1d(
     // Render each cell value to a string for width computation
     let rendered_values: Vec<String> = entries
         .iter()
-        .map(|e| render_doc_to_string(&format_expr(fmt, &e.value)))
+        .map(|e| render_table_cell_value(fmt, &e.value))
         .collect();
 
     // Compute max value width for right-alignment
@@ -573,7 +578,7 @@ fn format_table_2d_body(
         let Some(ci) = col_labels.iter().position(|c| c == col_label) else {
             continue;
         };
-        grid[ri][ci] = render_doc_to_string(&format_expr(fmt, &e.value));
+        grid[ri][ci] = render_table_cell_value(fmt, &e.value);
         entry_indices[ri][ci] = Some(ei);
     }
 

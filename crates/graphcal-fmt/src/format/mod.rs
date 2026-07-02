@@ -112,6 +112,30 @@ impl<'src> Formatter<'src> {
             self.next_comment += 1;
         }
     }
+
+    /// Make a speculative formatter for pre-rendering aligned table cells.
+    ///
+    /// Cell width pre-rendering must not consume row/slice comments from the
+    /// real formatter cursor. Comments before the cell value are skipped in the
+    /// fork so row-level drains can decide where they belong; comments inside
+    /// the cell remain undrained in the real formatter and trigger the usual
+    /// declaration-level verbatim fallback.
+    pub fn fork_skipping_comments_before(&self, offset: usize) -> Self {
+        let mut next_comment = self.next_comment;
+        while self
+            .metadata
+            .comments()
+            .get(next_comment)
+            .is_some_and(|comment| comment.span.offset() < offset)
+        {
+            next_comment += 1;
+        }
+        Self {
+            source: self.source,
+            metadata: self.metadata,
+            next_comment,
+        }
+    }
 }
 
 /// Format a declaration list (file body or `dag` body) into doc parts.
