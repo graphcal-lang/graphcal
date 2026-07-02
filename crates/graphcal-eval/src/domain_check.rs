@@ -40,11 +40,7 @@ pub fn check_domain_constraint(
 ) -> Result<(), DomainViolation> {
     match rv {
         RuntimeValue::Scalar(si_value) => check_scalar_constraint(*si_value, constraint),
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "domain bound comparison on small integers"
-        )]
-        RuntimeValue::Int(i) => check_scalar_constraint(*i as f64, constraint),
+        RuntimeValue::Int(i) => check_int_constraint(*i, constraint),
         RuntimeValue::Indexed { entries, .. } => {
             for (variant, entry_rv) in entries {
                 if let Err(violation) = check_domain_constraint(entry_rv, constraint) {
@@ -59,6 +55,27 @@ pub fn check_domain_constraint(
         // Bool, Label, Struct, Datetime, RangeLabel: no constraint checking
         _ => Ok(()),
     }
+}
+
+const MAX_EXACT_F64_INT: u64 = 1_u64 << f64::MANTISSA_DIGITS;
+
+fn check_int_constraint(
+    value: i64,
+    constraint: &ResolvedDomainConstraint,
+) -> Result<(), DomainViolation> {
+    if (constraint.min.is_some() || constraint.max.is_some())
+        && value.unsigned_abs() > MAX_EXACT_F64_INT
+    {
+        return Err(DomainViolation::new(format!(
+            "integer {value} is too large for exact domain-bound comparison"
+        )));
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "integer magnitude is checked to be exactly representable before casting"
+    )]
+    let scalar = value as f64;
+    check_scalar_constraint(scalar, constraint)
 }
 
 /// Check a scalar SI value against min/max bounds.
@@ -83,4 +100,33 @@ fn check_scalar_constraint(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use graphcal_compiler::syntax::span::Span;
+
+    fn max_constraint(max: f64) -> ResolvedDomainConstraint {
+        ResolvedDomainConstraint {
+            min: None,
+            max: Some(max),
+            min_display: None,
+            max_display: Some(max.to_string()),
+            span: Span::new(0, 0),
+        }
+    }
+
+    #[test]
+    fn rejects_int_too_large_for_exact_domain_comparison() {
+        let err = check_domain_constraint(
+            &RuntimeValue::Int((1_i64 << f64::MANTISSA_DIGITS) + 1),
+            &max_constraint(f64::MAX),
+        )
+        .unwrap_err();
+        assert!(
+            err.message
+                .contains("too large for exact domain-bound comparison")
+        );
+    }
 }

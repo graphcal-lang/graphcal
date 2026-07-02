@@ -453,8 +453,9 @@ fn eval_hir_fn_call(
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let num = match arg_val {
                 RuntimeValue::Scalar(v) => v,
-                #[expect(clippy::cast_precision_loss, reason = "Julian/Unix values fit f64")]
-                RuntimeValue::Int(v) => v as f64,
+                RuntimeValue::Int(v) => {
+                    exact_numeric_datetime_arg(v, name.as_str(), args[0].span, ctx)?
+                }
                 _ => {
                     return Err(ctx.internal_error(
                         format!("{}() received non-numeric argument", name.as_str()),
@@ -542,6 +543,28 @@ fn eval_hir_conversion_fn(
                 .map(RuntimeValue::Int)
                 .map_err(|err| ctx.eval_error(err.to_string(), span))
         }
+    }
+}
+
+fn exact_numeric_datetime_arg(
+    value: i64,
+    fn_name: &str,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<f64, GraphcalError> {
+    const MAX_EXACT_F64_INT: u64 = 1_u64 << f64::MANTISSA_DIGITS;
+    if value.unsigned_abs() > MAX_EXACT_F64_INT {
+        return Err(ctx.eval_error(
+            format!("{fn_name}() integer argument {value} is too large for exact conversion"),
+            span,
+        ));
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "integer magnitude is checked to be exactly representable before casting"
+    )]
+    {
+        Ok(value as f64)
     }
 }
 
