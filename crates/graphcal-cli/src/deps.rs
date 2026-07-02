@@ -64,10 +64,7 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
     let changed = match std::fs::read_to_string(&lockfile_path) {
         Ok(existing) if existing == content => false,
         Ok(_) | Err(_) => {
-            std::fs::write(&lockfile_path, content).map_err(|source| DepsError::WriteFile {
-                path: lockfile_path.clone(),
-                source,
-            })?;
+            write_file_atomic(&root, &lockfile_path, content.as_bytes())?;
             true
         }
     };
@@ -76,6 +73,33 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
         lockfile_path,
         changed,
     })
+}
+
+fn write_file_atomic(root: &Path, final_path: &Path, bytes: &[u8]) -> Result<(), DepsError> {
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".graphcal-lock-")
+        .tempfile_in(root)
+        .map_err(|source| DepsError::CreateTempDir {
+            path: root.to_path_buf(),
+            source,
+        })?;
+    std::io::Write::write_all(&mut tmp, bytes).map_err(|source| DepsError::WriteFile {
+        path: tmp.path().to_path_buf(),
+        source,
+    })?;
+    tmp.as_file()
+        .sync_all()
+        .map_err(|source| DepsError::WriteFile {
+            path: tmp.path().to_path_buf(),
+            source,
+        })?;
+    let tmp_path = tmp.path().to_path_buf();
+    tmp.persist(final_path).map_err(|err| DepsError::Rename {
+        from: tmp_path,
+        to: final_path.to_path_buf(),
+        source: err.error,
+    })?;
+    Ok(())
 }
 
 fn ensure_lock_graph_loadable(graph: &PackageGraph) -> Result<(), DepsError> {
@@ -242,13 +266,18 @@ impl LockResolver {
         let tmp_path = tmp.path().to_path_buf();
         materialize_git_revision(url, rev, &tmp_path)?;
         let sha256 = hash_source_tree(&tmp_path)?;
-        std::fs::rename(&tmp_path, &path).map_err(|source| DepsError::Rename {
-            from: tmp_path,
-            to: path.clone(),
-            source,
-        })?;
-
-        Ok(MaterializedGit { root: path, sha256 })
+        match std::fs::rename(&tmp_path, &path) {
+            Ok(()) => Ok(MaterializedGit { root: path, sha256 }),
+            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {
+                let sha256 = hash_source_tree(&path)?;
+                Ok(MaterializedGit { root: path, sha256 })
+            }
+            Err(source) => Err(DepsError::Rename {
+                from: tmp_path,
+                to: path.clone(),
+                source,
+            }),
+        }
     }
 }
 
