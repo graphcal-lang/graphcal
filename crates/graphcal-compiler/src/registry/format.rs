@@ -123,20 +123,21 @@ pub fn format_unit_expr_canonical(expr: &crate::syntax::ast::UnitExpr) -> String
     use crate::syntax::ast::MulDivOp;
     use std::collections::BTreeMap;
 
-    let mut exponents: BTreeMap<String, Rational> = BTreeMap::new();
+    let mut exponents: BTreeMap<crate::syntax::dimension::UnitRef, Rational> = BTreeMap::new();
     for item in &expr.terms {
         let pow = item.power.unwrap_or(Rational::ONE);
         let signed = match item.op {
             MulDivOp::Mul => pow,
             MulDivOp::Div => negate_exponent(pow),
         };
-        let name = item.name.value.to_string();
-        let entry = exponents.entry(name).or_insert(Rational::ZERO);
+        let entry = exponents
+            .entry(item.name.value.clone())
+            .or_insert(Rational::ZERO);
         // Saturate on overflow: this is a display label, not a value.
         *entry = (*entry + signed).unwrap_or(*entry);
     }
 
-    let render = |name: &str, exp: Rational| -> String {
+    let render = |name: &crate::syntax::dimension::UnitRef, exp: Rational| -> String {
         if exp == Rational::ONE {
             name.to_string()
         } else {
