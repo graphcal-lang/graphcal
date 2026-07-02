@@ -180,7 +180,7 @@ pub fn max_flat_name_len(blocks: &[OutputBlock<'_>]) -> usize {
 /// Render a 2D `Indexed` value as a formatted table grid (without name/unit
 /// header — the caller prepends that).
 ///
-/// Columns come from the first row's variant keys and become the top header.
+/// Columns come from the union of row variant keys and become the top header.
 /// Row variants become the leftmost column. Cells use `format_display(None)`
 /// (units are already in the table caption).
 #[must_use]
@@ -205,13 +205,16 @@ pub fn format_table_grid(value: &Value) -> String {
     // Union the column keys across all rows (preserving first-seen order):
     // deriving columns from the first row alone silently hid cells of any
     // row with extra columns and rendered phantom blanks for missing ones.
-    let mut col_variants: Vec<_> = Vec::new();
+    // Capture each header label from the row where the column key is first
+    // observed so range-index display labels are not resolved through an
+    // unrelated first row that may not contain that key.
+    let mut columns: Vec<_> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for row_val in row_entries.values() {
         if let Value::Indexed { entries: cells, .. } = row_val {
             for variant in cells.keys() {
                 if seen.insert(variant.clone()) {
-                    col_variants.push(variant.clone());
+                    columns.push((variant.clone(), row_val.indexed_entry_display_name(variant)));
                 }
             }
         }
@@ -221,18 +224,14 @@ pub fn format_table_grid(value: &Value) -> String {
 
     // Header row: empty corner cell + column variant names
     let mut header_row = vec![String::new()];
-    header_row.extend(
-        col_variants
-            .iter()
-            .map(|variant| first_row.indexed_entry_display_name(variant)),
-    );
+    header_row.extend(columns.iter().map(|(_, display)| display.clone()));
     builder.push_record(header_row);
 
     // Data rows: row variant name + cell values
     for (row_variant, row_val) in row_entries {
         let mut row = vec![value.indexed_entry_display_name(row_variant)];
         if let Value::Indexed { entries: cells, .. } = row_val {
-            for col_variant in &col_variants {
+            for (col_variant, _) in &columns {
                 let cell_val = cells
                     .get(col_variant)
                     .map(|v| v.format_display(None))
@@ -327,6 +326,7 @@ pub fn format_indexed_table(
 mod tests {
     use super::*;
     use graphcal_compiler::dimension::Dimension;
+    use graphcal_compiler::registry::declared_type::IndexTypeRef;
     use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
     use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use indexmap::IndexMap;
@@ -349,6 +349,26 @@ mod tests {
             entries.insert(IndexVariantName::expect_valid(*k), v.clone());
         }
         Value::indexed_with_owner(test_owner(), IndexName::expect_valid(name), entries)
+    }
+
+    fn indexed_1d_with_display(
+        name: &str,
+        pairs: &[(&str, Value)],
+        displays: &[(&str, &str)],
+    ) -> Value {
+        let mut entries = IndexMap::new();
+        for (k, v) in pairs {
+            entries.insert(IndexVariantName::expect_valid(*k), v.clone());
+        }
+        let mut entry_display_names = IndexMap::new();
+        for (k, display) in displays {
+            entry_display_names.insert(IndexVariantName::expect_valid(*k), (*display).to_string());
+        }
+        Value::Indexed {
+            index_name: IndexTypeRef::with_owner(test_owner(), IndexName::expect_valid(name)),
+            entries,
+            entry_display_names: Some(entry_display_names),
+        }
     }
 
     #[test]
@@ -483,6 +503,16 @@ mod tests {
         assert!(grid.contains("R2"), "grid missing R2 row: {grid}");
         assert!(grid.contains('X'), "grid missing X col: {grid}");
         assert!(grid.contains('Y'), "grid missing Y col: {grid}");
+    }
+
+    #[test]
+    fn format_table_grid_column_headers_use_row_containing_column() {
+        let inner_r1 = indexed_1d_with_display("Col", &[("X", scalar(1.0))], &[("X", "first-X")]);
+        let inner_r2 = indexed_1d_with_display("Col", &[("Y", scalar(2.0))], &[("Y", "second-Y")]);
+        let v = indexed_1d("Row", &[("R1", inner_r1), ("R2", inner_r2)]);
+        let grid = format_table_grid(&v);
+        assert!(grid.contains("first-X"), "grid missing X display: {grid}");
+        assert!(grid.contains("second-Y"), "grid missing Y display: {grid}");
     }
 
     #[test]
