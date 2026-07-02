@@ -7,8 +7,8 @@ use graphcal_compiler::syntax::span::Spanned;
 use pretty::RcDoc;
 
 use super::{
-    Formatter, INDENT, flat_alt_group, format_unit_expr_inline, prepend_comments,
-    render_doc_to_string, soft_parenthesized, soft_parenthesized_list,
+    Formatter, INDENT, display_width, flat_alt_group, format_unit_expr_inline, pad_left_to_width,
+    prepend_comments, render_doc_to_string, soft_parenthesized, soft_parenthesized_list,
 };
 
 // ---------------------------------------------------------------------------
@@ -457,7 +457,7 @@ fn format_table_1d(
     } else {
         entries
             .iter()
-            .map(|e| e.keys[0].variant.value.as_str().len())
+            .map(|e| display_width(e.keys[0].variant.value.as_str()))
             .max()
             .unwrap_or(0)
     };
@@ -471,7 +471,7 @@ fn format_table_1d(
     // Compute max value width for right-alignment
     let max_value_width = rendered_values
         .iter()
-        .map(std::string::String::len)
+        .map(|value| display_width(value))
         .max()
         .unwrap_or(0);
 
@@ -481,12 +481,12 @@ fn format_table_1d(
         // key spans may point to the index declaration, not the table row)
         let leading = fmt.drain_comments_before(e.value.span.offset());
 
-        let value_padding = max_value_width - rendered.len();
+        let value_padding = max_value_width - display_width(rendered);
         let row_text = if nat_range {
             format!("{}{};", " ".repeat(value_padding), rendered)
         } else {
             let label = e.keys[0].variant.value.as_str();
-            let padding = max_label_width - label.len();
+            let padding = max_label_width - display_width(label);
             format!(
                 "{}:{} {};",
                 label,
@@ -587,8 +587,16 @@ fn format_table_2d_body(
     // do not contribute to width.
     let col_widths: Vec<usize> = (0..num_cols)
         .map(|ci| {
-            let label_width = if col_is_nat { 0 } else { col_labels[ci].len() };
-            let max_cell = grid.iter().map(|row| row[ci].len()).max().unwrap_or(0);
+            let label_width = if col_is_nat {
+                0
+            } else {
+                display_width(&col_labels[ci])
+            };
+            let max_cell = grid
+                .iter()
+                .map(|row| display_width(&row[ci]))
+                .max()
+                .unwrap_or(0);
             label_width.max(max_cell)
         })
         .collect();
@@ -599,7 +607,7 @@ fn format_table_2d_body(
     } else {
         row_labels
             .iter()
-            .map(std::string::String::len)
+            .map(|label| display_width(label))
             .max()
             .unwrap_or(0)
     };
@@ -611,7 +619,7 @@ fn format_table_2d_body(
         let header_cells: Vec<String> = col_labels
             .iter()
             .enumerate()
-            .map(|(ci, label)| format!("{:>width$}", label, width = col_widths[ci]))
+            .map(|(ci, label)| pad_left_to_width(label, col_widths[ci]))
             .collect();
         let header_line = if row_is_nat {
             // No row labels — just `: Col1, Col2, ...;` at the row start.
@@ -635,12 +643,12 @@ fn format_table_2d_body(
             .and_then(|ei| fmt.drain_comments_before(entries[ei].value.span.offset()));
 
         let cells: Vec<String> = (0..num_cols)
-            .map(|ci| format!("{:>width$}", grid[ri][ci], width = col_widths[ci]))
+            .map(|ci| pad_left_to_width(&grid[ri][ci], col_widths[ci]))
             .collect();
         let row_line = if row_is_nat {
             format!("{};", cells.join(", "))
         } else {
-            let label_padding = max_row_label_width - row_label.len();
+            let label_padding = max_row_label_width - display_width(row_label);
             format!(
                 "{}:{} {};",
                 row_label,
@@ -691,13 +699,11 @@ fn format_table_sliced(
             })
             .collect();
 
-        if let Some(last) = slices.last_mut()
-            && last.1 == slice_key
-        {
-            last.0.push(idx);
-            continue;
+        if let Some((entry_indices, _)) = slices.iter_mut().find(|(_, key)| key == &slice_key) {
+            entry_indices.push(idx);
+        } else {
+            slices.push((vec![idx], slice_key));
         }
-        slices.push((vec![idx], slice_key));
     }
 
     // Build each slice doc and nest it for indentation.

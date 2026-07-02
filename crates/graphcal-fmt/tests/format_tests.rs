@@ -1075,6 +1075,34 @@ param dv: Dimensionless[Maneuver] = {
 }
 
 #[test]
+fn format_3d_table_merges_non_contiguous_slice_headers() {
+    let source = r"
+index Scenario = { Nominal, Contingency };
+index Phase = { Launch, Cruise };
+index Maneuver = { Departure };
+param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver] {
+    [Scenario.Nominal]
+           : Departure;
+    Launch:  5000.0;
+
+    [Scenario.Contingency]
+           : Departure;
+    Launch:  4800.0;
+
+    [Scenario.Nominal]
+           : Departure;
+    Cruise:  4500.0;
+};
+";
+    let formatted = format_source(source).unwrap();
+    assert_eq!(
+        formatted.matches("[Scenario.Nominal]").count(),
+        1,
+        "duplicate Nominal slice header after formatting: {formatted}"
+    );
+}
+
+#[test]
 fn preserves_trailing_comment_on_3d_table_slice_header() {
     let source = r"
 index Scenario = { Nominal, Contingency };

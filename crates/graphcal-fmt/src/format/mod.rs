@@ -20,6 +20,20 @@ pub use type_expr::{format_dim_expr_inline, format_type_expr_inline, format_unit
 /// effectively crate-internal.
 pub const INDENT: isize = 4;
 
+pub(super) fn display_width(text: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(text)
+}
+
+pub(super) fn pad_left_to_width(text: &str, width: usize) -> String {
+    let padding = width.saturating_sub(display_width(text));
+    format!("{}{}", " ".repeat(padding), text)
+}
+
+pub(super) fn pad_right_to_width(text: &str, width: usize) -> String {
+    let padding = width.saturating_sub(display_width(text));
+    format!("{}{}", text, " ".repeat(padding))
+}
+
 /// State for tracking comments during formatting.
 ///
 /// `pub` is module-scoped (parent module is private).
@@ -294,4 +308,17 @@ pub fn render_doc_to_string(doc: &RcDoc<'static>) -> String {
         reason = "doc bytes are always valid UTF-8 by construction"
     )]
     String::from_utf8(buf).expect("rendered doc must be valid UTF-8")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{display_width, pad_left_to_width, pad_right_to_width};
+
+    #[test]
+    fn alignment_helpers_use_display_width_not_bytes() {
+        assert_eq!(display_width("界"), 2);
+        assert_eq!("界".len(), 3);
+        assert_eq!(pad_left_to_width("界", 4), "  界");
+        assert_eq!(pad_right_to_width("界", 4), "界  ");
+    }
 }

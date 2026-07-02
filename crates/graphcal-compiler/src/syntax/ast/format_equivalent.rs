@@ -1563,8 +1563,25 @@ impl FormatEquivalent for RawExprSugar {
             indexes: other_indexes,
             entries: other_entries,
         } = other;
-        indexes.format_equivalent(other_indexes) && entries.format_equivalent(other_entries)
+        indexes.format_equivalent(other_indexes)
+            && table_entries_format_equivalent(entries, other_entries)
     }
+}
+
+fn table_entries_format_equivalent(lhs: &[MapEntry], rhs: &[MapEntry]) -> bool {
+    if lhs.len() != rhs.len() {
+        return false;
+    }
+    let mut matched_rhs = vec![false; rhs.len()];
+    lhs.iter().all(|entry| {
+        rhs.iter()
+            .enumerate()
+            .find(|(idx, candidate)| !matched_rhs[*idx] && entry.format_equivalent(candidate))
+            .is_some_and(|(idx, _)| {
+                matched_rhs[idx] = true;
+                true
+            })
+    })
 }
 
 impl FormatEquivalent for Expr {

@@ -49,6 +49,7 @@ toml = "1.1.2"
 # TODO: Remove this workspace dependency once graphcal-package no longer uses toml-spanner.
 toml-spanner = "1.0.0"
 tower-lsp = "0.20"
+unicode-width = "0.2.2"
 walkdir = "2.5.0"
 
 [workspace.lints.clippy]
