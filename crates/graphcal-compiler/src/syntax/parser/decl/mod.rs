@@ -1,8 +1,11 @@
 use crate::syntax::ast::{
-    Attribute, AttributeArg, BindableVisibility, DeclKind, Declaration, Visibility,
+    Attribute, AttributeArg, BindableVisibility, DeclKind, Declaration, PlotField,
+    PlotPropertyName, Visibility,
 };
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::module_name::ScopedName;
 use crate::syntax::non_empty::NonEmpty;
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::Token;
 
 use super::{ParseError, Parser};
@@ -26,6 +29,13 @@ const fn visibility_without_bindability(visibility: BindableVisibility) -> Visib
         BindableVisibility::Private => Visibility::Private,
         BindableVisibility::Public | BindableVisibility::PublicBind => Visibility::Public,
     }
+}
+
+struct CompositionDeclParts {
+    name: Spanned<DeclName>,
+    plot_names: Vec<Spanned<ScopedName>>,
+    fields: Vec<PlotField>,
+    span: Span,
 }
 
 const fn decl_accepts_bindable_visibility(decl: &Declaration) -> bool {
@@ -56,6 +66,82 @@ const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibil
 }
 
 impl Parser<'_> {
+    fn parse_composition_decl_parts(
+        &mut self,
+        token: Token,
+        kind: &'static str,
+    ) -> Result<CompositionDeclParts, ParseError> {
+        let (_, start_span) = self.expect(token)?;
+        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
+        self.expect(Token::Eq)?;
+
+        self.expect(Token::LBrace)?;
+        let mut plots_seen = false;
+        let mut plot_names = Vec::new();
+        let mut fields = Vec::new();
+
+        while self.lexer.peek() != Some(&Token::RBrace) {
+            let field_name = self.parse_any_ident()?;
+            let field_start = field_name.span;
+            self.expect(Token::Colon)?;
+
+            if field_name.name == "plots" {
+                if plots_seen {
+                    return Err(self.duplicate_plot_field("plots", kind, field_start));
+                }
+                plots_seen = true;
+                self.expect(Token::LBracket)?;
+                while self.lexer.peek() != Some(&Token::RBracket) {
+                    let plot_name = self.parse_any_ident()?.into_spanned::<ScopedName>();
+                    plot_names.push(plot_name);
+                    if self.lexer.peek() == Some(&Token::Comma) {
+                        self.expect(Token::Comma)?;
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(Token::RBracket)?;
+            } else {
+                if fields
+                    .iter()
+                    .any(|f: &PlotField| f.name.value.as_str() == field_name.name)
+                {
+                    return Err(self.duplicate_plot_field(&field_name.name, kind, field_start));
+                }
+                let value = self.parse_expr()?;
+                let field_end = value.span;
+                fields.push(PlotField {
+                    name: field_name.into_spanned::<PlotPropertyName>(),
+                    value,
+                    span: field_start.merge(field_end),
+                });
+            }
+            if self.lexer.peek() == Some(&Token::Comma) {
+                self.expect(Token::Comma)?;
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::RBrace)?;
+
+        let (_, semi_span) = self.expect(Token::Semicolon)?;
+        let span = start_span.merge(semi_span);
+        if plot_names.is_empty() {
+            return Err(ParseError::EmptyCompositionPlots {
+                kind,
+                src: self.named_source(),
+                span: span.into(),
+            });
+        }
+
+        Ok(CompositionDeclParts {
+            name,
+            plot_names,
+            fields,
+            span,
+        })
+    }
+
     /// Parse one top-level declaration surface form. A multi-decl is
     /// represented as `DeclKind::Multi(MultiDecl)` and expanded later
     /// by the desugar pass.
