@@ -142,16 +142,16 @@ pub(super) fn format_declared_type(dt: &DeclaredType, registry: &Registry) -> St
 
 /// Look up the definition for an inferred struct identity.
 ///
-/// Prefer canonical semantic TIR type definitions, then consult the leaf-keyed
-/// registry for boundary-created synthetic owners.
+/// This lookup is canonical-owner based only. Falling back from a resolved
+/// identity to a bare leaf would make diamond imports with same-named types
+/// nondeterministic.
 pub(super) fn struct_type_def_for_inferred<'a>(
     ty: &InferredStructType,
     dag: Option<&'a crate::tir::typed::DagTIR>,
-    registry: &'a Registry,
+    _registry: &'a Registry,
 ) -> Option<&'a TypeDef> {
     dag.map(|dag| &dag.semantic.type_defs)
         .and_then(|defs| defs.struct_types.get(ty.resolved()))
-        .or_else(|| registry.types.get_type(ty.name().as_str()))
 }
 
 /// Format an inferred type for display in diagnostics.
