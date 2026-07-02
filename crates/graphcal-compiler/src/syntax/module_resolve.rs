@@ -1304,7 +1304,10 @@ impl ModuleResolver {
 
         for symbol in local.indexes.values() {
             if symbol.variants().contains_key(variant.as_str()) {
-                candidates.push(symbol.resolved().clone());
+                let resolved = symbol.resolved().clone();
+                if !candidates.contains(&resolved) {
+                    candidates.push(resolved);
+                }
             }
         }
         for imported in scope.selected_indexes.values() {
@@ -1315,7 +1318,7 @@ impl ModuleResolver {
             let Some(symbol) = target_symbols.indexes.get(index_name.as_str()) else {
                 continue;
             };
-            if symbol.variants().contains_key(variant.as_str()) {
+            if symbol.variants().contains_key(variant.as_str()) && !candidates.contains(resolved) {
                 candidates.push(resolved.clone());
             }
         }
@@ -2439,6 +2442,32 @@ mod tests {
                 ..
             } if err_owner == owner && name == "M"
         ));
+    }
+
+    #[test]
+    fn alias_reimport_of_same_index_does_not_ambiguous_bare_variant() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source("pub index Phase = { Burn, Coast };");
+        let main = desugared_source("import lib.{ Phase, Phase as P };");
+        let imports = imports(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, imports[0].0, imports[0].1, &lib_id)
+            .unwrap();
+
+        let resolved = resolver
+            .resolve_bare_index_variant(&main_id, &IndexVariantName::expect_valid("Burn"))
+            .unwrap();
+        assert_eq!(resolved.index().as_str(), "Phase");
+        assert_eq!(resolved.variant().as_str(), "Burn");
     }
 
     #[test]
