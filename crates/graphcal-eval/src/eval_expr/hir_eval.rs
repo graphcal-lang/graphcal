@@ -1122,7 +1122,15 @@ fn eval_hir_index_access(
                         }
                         IndexVariantName::range_step(step_index)
                     }
-                    RuntimeValue::Int(n) => IndexVariantName::range_step(n),
+                    RuntimeValue::Int(n) => {
+                        if *n < 0 {
+                            return Err(ctx.eval_error(
+                                format!("index variable evaluated to negative value: {n}"),
+                                local.span,
+                            ));
+                        }
+                        IndexVariantName::range_step(n)
+                    }
                     _ => return Err(ctx.eval_error("value is not a loop variable", local.span)),
                 }
             }
