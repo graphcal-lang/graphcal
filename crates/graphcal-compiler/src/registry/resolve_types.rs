@@ -78,7 +78,7 @@ impl std::fmt::Display for DeclCategory {
 /// A resolved const declaration (before type annotation is added).
 #[derive(Debug)]
 pub struct ResolvedConstEntry {
-    pub name: String,
+    pub name: DeclName,
     pub expr: Expr,
     pub span: Span,
 }
@@ -86,7 +86,7 @@ pub struct ResolvedConstEntry {
 /// A resolved param declaration (before type annotation is added).
 #[derive(Debug)]
 pub struct ResolvedParamEntry {
-    pub name: String,
+    pub name: DeclName,
     pub default_expr: Option<Expr>,
     pub span: Span,
 }
@@ -94,7 +94,7 @@ pub struct ResolvedParamEntry {
 /// A resolved node declaration (before type annotation is added).
 #[derive(Debug)]
 pub struct ResolvedNodeEntry {
-    pub name: String,
+    pub name: DeclName,
     pub expr: Expr,
     pub span: Span,
 }
@@ -102,7 +102,7 @@ pub struct ResolvedNodeEntry {
 /// A resolved assert declaration.
 #[derive(Debug)]
 pub struct ResolvedAssertEntry {
-    pub name: String,
+    pub name: DeclName,
     pub body: AssertBody,
     pub span: Span,
 }
@@ -110,7 +110,7 @@ pub struct ResolvedAssertEntry {
 /// A resolved plot declaration.
 #[derive(Debug)]
 pub struct ResolvedPlotEntry {
-    pub name: String,
+    pub name: DeclName,
     pub decl: PlotDecl,
     pub span: Span,
 }
@@ -118,7 +118,7 @@ pub struct ResolvedPlotEntry {
 /// A resolved figure declaration.
 #[derive(Debug)]
 pub struct ResolvedFigureEntry {
-    pub name: String,
+    pub name: DeclName,
     pub decl: FigureDecl,
     pub span: Span,
 }
@@ -126,7 +126,7 @@ pub struct ResolvedFigureEntry {
 /// A resolved layer declaration.
 #[derive(Debug)]
 pub struct ResolvedLayerEntry {
-    pub name: String,
+    pub name: DeclName,
     pub decl: LayerDecl,
     pub span: Span,
 }

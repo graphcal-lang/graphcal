@@ -428,49 +428,49 @@ fn collect_local_declarations(
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
             DeclKind::Assert(a) => {
                 asserts.push(ResolvedAssertEntry {
-                    name: a.name.value.to_string(),
+                    name: a.name.value.clone(),
                     body: a.body.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Plot(p) => {
                 plots.push(ResolvedPlotEntry {
-                    name: p.name.value.to_string(),
+                    name: p.name.value.clone(),
                     decl: p.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Figure(f) => {
                 figures.push(ResolvedFigureEntry {
-                    name: f.name.value.to_string(),
+                    name: f.name.value.clone(),
                     decl: f.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Layer(l) => {
                 layers.push(ResolvedLayerEntry {
-                    name: l.name.value.to_string(),
+                    name: l.name.value.clone(),
                     decl: l.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Param(p) => {
                 params.push(ResolvedParamEntry {
-                    name: p.name.value.to_string(),
+                    name: p.name.value.clone(),
                     default_expr: p.value.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::ConstNode(c) => {
                 consts.push(ResolvedConstEntry {
-                    name: c.name.value.to_string(),
+                    name: c.name.value.clone(),
                     expr: c.value.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Node(n) => {
                 nodes.push(ResolvedNodeEntry {
-                    name: n.name.value.to_string(),
+                    name: n.name.value.clone(),
                     expr: n.value.clone(),
                     span: decl.span,
                 });
@@ -905,10 +905,10 @@ fn ref_kind_for(file: &File, ref_name: &str) -> &'static str {
 /// These are treated as if they were declared locally, appearing before local declarations.
 #[derive(Debug, Default)]
 pub(crate) struct ImportedNames {
-    pub consts: Vec<(String, TypeExpr, Expr, Span)>,
-    pub params: Vec<(String, TypeExpr, Expr, Span)>,
-    pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
-    pub asserts: Vec<(String, AssertBody, Span)>,
+    pub consts: Vec<(DeclName, TypeExpr, Expr, Span)>,
+    pub params: Vec<(DeclName, TypeExpr, Expr, Span)>,
+    pub nodes: Vec<(DeclName, TypeExpr, Expr, Span)>,
+    pub asserts: Vec<(DeclName, AssertBody, Span)>,
 }
 
 /// Collect declaration entries and validate declaration shells.
@@ -962,7 +962,7 @@ pub(crate) fn resolve_with_imports(
     // Build assert names (imported + local) for attribute validation
     let mut all_assert_names: HashSet<DeclName> = HashSet::new();
     for (name, _, _) in &imported.asserts {
-        all_assert_names.insert(DeclName::expect_valid(name.as_str()));
+        all_assert_names.insert(name.clone());
     }
     all_assert_names.extend(local.assert_names.iter().cloned());
 

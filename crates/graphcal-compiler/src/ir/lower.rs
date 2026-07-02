@@ -510,18 +510,15 @@ pub(crate) fn lower_to_builder(
     let resolved = resolve_with_imports(ast, src, imported)?;
 
     // Step 2: Extract type annotations from AST + imported declarations.
-    // Imported lists still carry flat-string names (a wider typing pass is
-    // tracked separately); wrap them at the boundary so the map stays
-    // DeclName-keyed.
     let mut type_anns = extract_type_annotations(ast);
     for (name, type_ann, _, _) in &imported.consts {
-        type_anns.insert(DeclName::expect_valid(name.clone()), type_ann.clone());
+        type_anns.insert(name.clone(), type_ann.clone());
     }
     for (name, type_ann, _, _) in &imported.params {
-        type_anns.insert(DeclName::expect_valid(name.clone()), type_ann.clone());
+        type_anns.insert(name.clone(), type_ann.clone());
     }
     for (name, type_ann, _, _) in &imported.nodes {
-        type_anns.insert(DeclName::expect_valid(name.clone()), type_ann.clone());
+        type_anns.insert(name.clone(), type_ann.clone());
     }
 
     // Step 3: Build registry, augment deps, and construct IR
@@ -876,15 +873,12 @@ fn build_ir_from_resolved(
     }
     register_file_declarations(ast, &mut builder, src, dag_id)?;
 
-    // Pair resolved declarations with type annotations. The resolved entries
-    // still carry flat-string names (a wider typing pass is tracked separately);
-    // wrap each into a `DeclName` once so both `take_type_ann` and the
-    // `ScopedName::from` lift see the typed form.
+    // Pair resolved declarations with type annotations.
     let consts = resolved
         .consts
         .into_iter()
         .map(|entry| {
-            let decl_name = DeclName::expect_valid(entry.name);
+            let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenConstEntry {
                 name: ScopedName::from(decl_name),
@@ -901,7 +895,7 @@ fn build_ir_from_resolved(
         .params
         .into_iter()
         .map(|entry| {
-            let decl_name = DeclName::expect_valid(entry.name);
+            let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenParamEntry {
                 name: ScopedName::from(decl_name),
@@ -918,7 +912,7 @@ fn build_ir_from_resolved(
         .nodes
         .into_iter()
         .map(|entry| {
-            let decl_name = DeclName::expect_valid(entry.name);
+            let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenNodeEntry {
                 name: ScopedName::from(decl_name),
@@ -940,7 +934,7 @@ fn build_ir_from_resolved(
             .asserts
             .into_iter()
             .map(|entry| UnfrozenAssertEntry {
-                name: ScopedName::local(entry.name),
+                name: ScopedName::from(entry.name),
                 body: entry.body,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
@@ -954,7 +948,7 @@ fn build_ir_from_resolved(
                 let is_pub = resolved.pub_names.contains(entry.name.as_str());
                 let displayed = !resolved.hidden_plots.contains(entry.name.as_str());
                 UnfrozenPlotEntry {
-                    name: ScopedName::local(entry.name),
+                    name: ScopedName::from(entry.name),
                     decl: entry.decl,
                     body_resolution_owner: dag_id.clone(),
                     span: entry.span,
@@ -967,7 +961,7 @@ fn build_ir_from_resolved(
             .figures
             .into_iter()
             .map(|entry| UnfrozenFigureEntry {
-                name: ScopedName::local(entry.name),
+                name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
@@ -977,7 +971,7 @@ fn build_ir_from_resolved(
             .layers
             .into_iter()
             .map(|entry| UnfrozenLayerEntry {
-                name: ScopedName::local(entry.name),
+                name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
