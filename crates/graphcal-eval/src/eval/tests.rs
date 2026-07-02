@@ -745,6 +745,31 @@ fn indexed_si_values(value: &Value) -> Vec<(&str, f64)> {
 }
 
 #[test]
+fn epoch_constructor_applies_explicit_scale_without_suffix_concat() {
+    let result =
+        compile_and_eval(r#"node tt: Datetime<TT> = epoch("2000-01-01T12:00:00", TT);"#).unwrap();
+    let Value::Datetime { epoch, .. } = find_entry(&result, "tt") else {
+        panic!("expected datetime value");
+    };
+    let expected =
+        hifitime::Epoch::maybe_from_gregorian(2000, 1, 1, 12, 0, 0, 0, hifitime::TimeScale::TT)
+            .unwrap();
+    assert_eq!(epoch, expected);
+}
+
+#[test]
+fn epoch_constructor_rejects_embedded_scale_suffix() {
+    let result =
+        compile_and_eval(r#"node bad: Datetime<TT> = epoch("2000-01-01T12:00:00 UTC", TT);"#)
+            .unwrap();
+    let err = result.nodes[0].1.as_ref().unwrap_err().to_string();
+    assert!(
+        err.contains("must not include a time scale"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn eval_indexed_milestone() {
     let source = include_str!("../../../../tests/fixtures/valid/indexed.gcl");
     let result = compile_and_eval(source).unwrap();

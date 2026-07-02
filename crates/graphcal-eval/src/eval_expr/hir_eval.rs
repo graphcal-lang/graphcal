@@ -6,6 +6,7 @@ use graphcal_compiler::ir::resolve::DeclCategory;
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{IndexDef, IndexKind};
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -649,8 +650,14 @@ fn eval_hir_datetime_constructor(
                     span: args[1].span.into(),
                 });
             };
-            let with_scale = format!("{s} {scale}");
-            let epoch = hifitime::Epoch::from_gregorian_str(&with_scale).map_err(|e| {
+            if has_time_scale_suffix(s) {
+                return Err(GraphcalError::EvalError {
+                    message: "epoch() date string must not include a time scale; pass it as the second argument".to_string(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
+            }
+            let epoch = epoch_from_gregorian_str_at_scale(s, *scale).map_err(|e| {
                 GraphcalError::EvalError {
                     message: format!("invalid epoch string: {e}"),
                     src: src.clone(),
@@ -660,6 +667,30 @@ fn eval_hir_datetime_constructor(
             Ok(RuntimeValue::Datetime(epoch))
         }
     }
+}
+
+fn has_time_scale_suffix(s: &str) -> bool {
+    s.split_whitespace()
+        .last()
+        .is_some_and(|suffix| suffix.parse::<TimeScale>().is_ok())
+}
+
+fn epoch_from_gregorian_str_at_scale(
+    s: &str,
+    scale: TimeScale,
+) -> Result<hifitime::Epoch, hifitime::HifitimeError> {
+    let parsed = hifitime::Epoch::from_gregorian_str(s)?;
+    let (year, month, day, hour, minute, second, nanos) = parsed.to_gregorian_utc();
+    hifitime::Epoch::maybe_from_gregorian(
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        nanos,
+        scale.to_hifitime(),
+    )
 }
 
 fn eval_hir_builtin_fn(
