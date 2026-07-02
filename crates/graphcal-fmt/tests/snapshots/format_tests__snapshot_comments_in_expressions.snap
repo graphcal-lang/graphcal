@@ -1,6 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 675
+assertion_line: 610
 expression: formatted
 ---
 // comments_in_expressions.gcl -- Comments inside expressions should stay in place
@@ -47,10 +47,12 @@ dag compute {
     param v: Velocity;
 
     node a: Velocity = @v * // compute first intermediate
-    2.0;
+
+        2.0;
 
     node b: Velocity = @a + // compute second intermediate
-    1.0 m/s;
+
+        1.0 m/s;
 
     node result: Velocity = @b;
 }
