@@ -1206,11 +1206,11 @@ pub(in crate::eval::project) fn check_dag_recursion(
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
     fn dfs<'a>(
-        node: &'a str,
-        deps: &HashMap<&str, Vec<&'a str>>,
-        visited: &mut HashSet<&'a str>,
-        in_stack: &mut HashSet<&'a str>,
-        path: &mut Vec<&'a str>,
+        node: &'a DeclName,
+        deps: &HashMap<&'a DeclName, Vec<&'a DeclName>>,
+        visited: &mut HashSet<&'a DeclName>,
+        in_stack: &mut HashSet<&'a DeclName>,
+        path: &mut Vec<&'a DeclName>,
     ) -> Option<Vec<String>> {
         if in_stack.contains(node) {
             #[expect(
@@ -1223,7 +1223,7 @@ pub(in crate::eval::project) fn check_dag_recursion(
                 .expect("DFS invariant: in_stack ⇒ node is on path");
             let mut cycle: Vec<String> = path[cycle_start..]
                 .iter()
-                .map(ToString::to_string)
+                .map(|name| name.to_string())
                 .collect();
             cycle.push(node.to_string());
             return Some(cycle);
@@ -1249,32 +1249,26 @@ pub(in crate::eval::project) fn check_dag_recursion(
     }
 
     // Build adjacency list: dag_name -> set of dag names it includes.
-    let mut deps: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut deps: HashMap<&DeclName, Vec<&DeclName>> = HashMap::new();
     for (name, dag) in dag_definitions {
         let mut includes = Vec::new();
         for decl in &dag.body {
             if let DeclKind::Include(inc) = &decl.kind
                 && inc.path.segments.len() == 1
             {
-                let target = inc.path.segments[0].name.as_str();
-                if dag_definitions.contains_key(target) {
-                    includes.push(target);
+                let target = DeclName::from_atom(inc.path.segments[0].name.clone());
+                if let Some((target_name, _)) = dag_definitions.get_key_value(&target) {
+                    includes.push(target_name);
                 }
             }
         }
-        deps.insert(name.as_str(), includes);
+        deps.insert(name, includes);
     }
 
-    let mut visited: HashSet<&str> = HashSet::new();
-    let mut in_stack: HashSet<&str> = HashSet::new();
+    let mut visited: HashSet<&DeclName> = HashSet::new();
+    let mut in_stack: HashSet<&DeclName> = HashSet::new();
     for name in dag_definitions.keys() {
-        if let Some(cycle) = dfs(
-            name.as_str(),
-            &deps,
-            &mut visited,
-            &mut in_stack,
-            &mut Vec::new(),
-        ) {
+        if let Some(cycle) = dfs(name, &deps, &mut visited, &mut in_stack, &mut Vec::new()) {
             let cycle_str = cycle.join(" -> ");
             return Err(CompileError::Eval(GraphcalError::EvalError {
                 message: format!("recursive DAG instantiation: {cycle_str}"),
