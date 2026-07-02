@@ -237,7 +237,7 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
             lhs_doc
                 .append(RcDoc::text(op_str(op)))
                 .append(comment)
-                .append(rhs_doc)
+                .append(RcDoc::line().append(rhs_doc).nest(INDENT))
         }
     }
 }

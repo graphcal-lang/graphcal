@@ -132,6 +132,16 @@ fn formats_fn_call_argument_trailing_comment_before_comma() {
 }
 
 #[test]
+fn binop_rhs_after_trailing_comment_is_indented() {
+    let source = "node x: Dimensionless = 1.0 + // rhs\n2.0;\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("\n    2.0") && !formatted.contains("\n2.0"),
+        "rhs should stay in the expression indentation: {formatted}"
+    );
+}
+
+#[test]
 fn file_trailing_comment_has_single_final_newline() {
     let source = "param x: Dimensionless = 1.0;\n// tail\n";
     let formatted = format_source(source).unwrap();
