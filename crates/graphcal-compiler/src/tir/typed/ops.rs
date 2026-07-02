@@ -621,10 +621,22 @@ pub fn unify_resolved_type(
                     span: span.into(),
                 });
             }
+            if type_args.len() != actual_args.len() {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: format!(
+                        "{} with {} generic argument(s)",
+                        name.as_str(),
+                        type_args.len()
+                    ),
+                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    help: "generic struct argument count must match exactly".to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
             // Recursively unify each declared type argument against the
-            // actual one when both sides carry them. (Inferred values may
-            // omit args for non-generic uses — only mismatched *pairs* are
-            // an error.)
+            // actual one now that both sides are known to carry the same
+            // number of arguments.
             for (declared_arg, actual_arg) in type_args.iter().zip(actual_args) {
                 unify_resolved_type(
                     declared_arg,
