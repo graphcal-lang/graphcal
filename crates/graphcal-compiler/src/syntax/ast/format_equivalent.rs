@@ -35,16 +35,15 @@
 //! meaning-changing edit.
 
 use crate::syntax::ast::{
-    AssertBody, AssertDecl, Attribute, AttributeArg, BaseDimDecl, ConstNodeDecl, DagDecl, DeclKind,
-    Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, DomainBound, Encoding, Expr, ExprKind,
-    FieldDecl, FieldInit, FigureDecl, File, ForBinding, ForBindingIndex, GenericArg, GenericParam,
-    Ident, IdentPath, ImportDecl, ImportItem, ImportKind, IncludeDecl, IndexArg, IndexDecl,
-    IndexDeclKind, IndexExpr, LayerDecl, MapEntry, MapEntryKey, MarkSpec, MatchArm, MatchPattern,
-    ModulePath, MultiDataRow, MultiDecl, MultiDeclSharedAxes, MultiDeclSlice, MultiDeclSlot,
-    MultiHeaderCell, MultiSlotAxis, MultiSlotColumnSpan, NatExpr, NodeDecl, ParamBinding,
-    ParamDecl, PatternBinding, PlotDecl, PlotField, RawDeclSugar, RawExprSugar, TableIndexSpec,
-    TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember, UnitDecl, UnitDef, UnitExpr,
-    UnitExprItem, UnresolvedRef,
+    AssertBody, AssertDecl, Attribute, AttributeArg, BaseDimDecl, DagDecl, DeclKind, Declaration,
+    DimDecl, DimExpr, DimExprItem, DimTerm, DomainBound, Encoding, Expr, ExprKind, FieldDecl,
+    FieldInit, FigureDecl, File, ForBinding, ForBindingIndex, GenericArg, GenericParam, Ident,
+    IdentPath, ImportDecl, ImportItem, ImportKind, IncludeDecl, IndexArg, IndexDecl, IndexDeclKind,
+    IndexExpr, LayerDecl, MapEntry, MapEntryKey, MarkSpec, MatchArm, MatchPattern, ModulePath,
+    MultiDataRow, MultiDecl, MultiDeclSharedAxes, MultiDeclSlice, MultiDeclSlot, MultiHeaderCell,
+    MultiSlotAxis, MultiSlotColumnSpan, NatExpr, ParamBinding, ParamDecl, PatternBinding, PlotDecl,
+    PlotField, RawDeclSugar, RawExprSugar, TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr,
+    TypeExprKind, UnionMember, UnitDecl, UnitDef, UnitExpr, UnitExprItem, UnresolvedRef, ValueDecl,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
@@ -452,28 +451,7 @@ impl FormatEquivalent for ParamDecl {
     }
 }
 
-impl FormatEquivalent for NodeDecl {
-    fn format_equivalent(&self, other: &Self) -> bool {
-        let Self {
-            visibility,
-            name,
-            type_ann,
-            value,
-        } = self;
-        let Self {
-            visibility: other_visibility,
-            name: other_name,
-            type_ann: other_type_ann,
-            value: other_value,
-        } = other;
-        visibility.format_equivalent(other_visibility)
-            && name.format_equivalent(other_name)
-            && type_ann.format_equivalent(other_type_ann)
-            && value.format_equivalent(other_value)
-    }
-}
-
-impl FormatEquivalent for ConstNodeDecl {
+impl FormatEquivalent for ValueDecl {
     fn format_equivalent(&self, other: &Self) -> bool {
         let Self {
             visibility,

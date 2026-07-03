@@ -458,23 +458,20 @@ pub struct MultiDataRow<P: Phase = Raw> {
     pub span: Span,
 }
 
-/// Runtime node declaration: `node name: Type = expr;`
+/// Shared shape for value declarations with an expression body.
 #[derive(Debug, Clone)]
-pub struct NodeDecl<P: Phase = Raw> {
+pub struct ValueDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr<P>,
     pub value: Expr<P>,
 }
 
+/// Runtime node declaration: `node name: Type = expr;`
+pub type NodeDecl<P = Raw> = ValueDecl<P>;
+
 /// Const node declaration: `const node name: Type = expr;`
-#[derive(Debug, Clone)]
-pub struct ConstNodeDecl<P: Phase = Raw> {
-    pub visibility: Visibility,
-    pub name: Spanned<DeclName>,
-    pub type_ann: TypeExpr<P>,
-    pub value: Expr<P>,
-}
+pub type ConstNodeDecl<P = Raw> = ValueDecl<P>;
 
 /// Base dimension declaration: `base dim Length;`
 #[derive(Debug, Clone)]
