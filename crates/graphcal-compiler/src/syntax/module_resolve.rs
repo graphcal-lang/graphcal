@@ -465,7 +465,11 @@ impl ModuleSymbols {
                 )?,
                 ast::DeclKind::Type(t) => self.insert_type_decl(&mut exclusive_names, t)?,
                 ast::DeclKind::Index(i) => self.insert_index_decl(&mut exclusive_names, i)?,
-                ast::DeclKind::Import(_) | ast::DeclKind::Include(_) => {}
+                // Plugin imports register their alias into the module scope
+                // (see `register_plugin_imports`), not the symbol table.
+                ast::DeclKind::Import(_)
+                | ast::DeclKind::PluginImport(_)
+                | ast::DeclKind::Include(_) => {}
                 #[expect(
                     clippy::uninhabited_references,
                     reason = "post-desugar Sugar payload is uninhabited by phase invariant"
@@ -768,6 +772,35 @@ impl ModuleAliasTarget {
     }
 }
 
+/// An extern-plugin alias registered in one module's import scope by
+/// `import plugin "path" as alias { ... }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginAliasTarget {
+    path: crate::syntax::plugin::PluginPath,
+    span: Span,
+    functions: HashMap<crate::syntax::function_name::FnName, Span>,
+}
+
+impl PluginAliasTarget {
+    /// The plugin identity the alias refers to.
+    #[must_use]
+    pub const fn path(&self) -> &crate::syntax::plugin::PluginPath {
+        &self.path
+    }
+
+    /// Source span of the local alias name.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
+
+    /// The extern functions declared under this alias, with their name spans.
+    #[must_use]
+    pub const fn functions(&self) -> &HashMap<crate::syntax::function_name::FnName, Span> {
+        &self.functions
+    }
+}
+
 /// A selective import binding for one namespace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportedSymbol<Ns: NameNamespace> {
@@ -822,6 +855,7 @@ impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ImportedSymbol<Ns> {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ModuleScope {
     module_aliases: HashMap<ModuleAliasName, ModuleAliasTarget>,
+    plugin_aliases: HashMap<ModuleAliasName, PluginAliasTarget>,
     selected_decls: HashMap<DeclName, ImportedSymbol<DeclNameNamespace>>,
     selected_dimensions: HashMap<DimName, ImportedSymbol<DimNameNamespace>>,
     selected_units: HashMap<UnitName, ImportedSymbol<UnitNameNamespace>>,
@@ -835,6 +869,12 @@ impl ModuleScope {
     #[must_use]
     pub const fn module_aliases(&self) -> &HashMap<ModuleAliasName, ModuleAliasTarget> {
         &self.module_aliases
+    }
+
+    /// Extern-plugin aliases introduced by `import plugin` declarations.
+    #[must_use]
+    pub const fn plugin_aliases(&self) -> &HashMap<ModuleAliasName, PluginAliasTarget> {
+        &self.plugin_aliases
     }
 }
 
@@ -983,9 +1023,30 @@ impl ModuleResolver {
             return Err(ModuleResolveError::DuplicateModule { owner });
         }
         let symbols = ModuleSymbols::from_declarations(owner.clone(), declarations)?;
-        self.scopes.entry(owner.clone()).or_default();
+        let scope = self.scopes.entry(owner.clone()).or_default();
+        register_plugin_imports(&owner, scope, declarations)?;
         self.modules.insert(owner, symbols);
         Ok(())
+    }
+
+    /// Look up an extern-plugin alias visible from `owner`.
+    ///
+    /// Plugin imports are file-level declarations; inline `dag` children see
+    /// the enclosing file's aliases, so the lookup walks up the owner chain.
+    #[must_use]
+    pub fn plugin_alias(&self, owner: &DagId, alias: &str) -> Option<&PluginAliasTarget> {
+        let mut current = Some(owner.clone());
+        while let Some(id) = current {
+            if let Some(target) = self
+                .scopes
+                .get(&id)
+                .and_then(|scope| scope.plugin_aliases.get(alias))
+            {
+                return Some(target);
+            }
+            current = id.parent();
+        }
+        None
     }
 
     /// Borrow all module symbol tables.
@@ -1959,14 +2020,27 @@ impl ModuleScope {
                 alias,
                 target,
                 access,
-            } => insert_module_alias(
-                owner,
-                &mut self.module_aliases,
-                alias,
-                target,
-                access,
-                ModuleAliasNameNamespace::DISPLAY_NAME,
-            ),
+            } => {
+                // Module aliases and plugin aliases share one qualifier
+                // namespace: `alias.name` must have a single meaning.
+                if let Some(first) = self.plugin_aliases.get(alias.value.as_str()) {
+                    return Err(ModuleResolveError::DuplicateImportName {
+                        owner: owner.clone(),
+                        namespace: ModuleAliasNameNamespace::DISPLAY_NAME,
+                        name: alias.value.to_string(),
+                        first: first.span(),
+                        duplicate: alias.span,
+                    });
+                }
+                insert_module_alias(
+                    owner,
+                    &mut self.module_aliases,
+                    alias,
+                    target,
+                    access,
+                    ModuleAliasNameNamespace::DISPLAY_NAME,
+                )
+            }
             ImportAddition::Decl {
                 local,
                 target,
@@ -2068,6 +2142,55 @@ fn insert_module_alias(
             access,
         },
     );
+    Ok(())
+}
+
+/// Register the plugin aliases declared by a module's `import plugin`
+/// declarations into its scope.
+///
+/// Rejects duplicate aliases across plugin imports and duplicate function
+/// names inside one plugin block. Collisions with module-import aliases are
+/// caught when the module alias registers (imports register after modules).
+fn register_plugin_imports(
+    owner: &DagId,
+    scope: &mut ModuleScope,
+    declarations: &[ast::Declaration],
+) -> Result<(), ModuleResolveError> {
+    for decl in declarations {
+        let ast::DeclKind::PluginImport(plugin) = &decl.kind else {
+            continue;
+        };
+        if let Some(first) = scope.plugin_aliases.get(plugin.alias.value.as_str()) {
+            return Err(ModuleResolveError::DuplicateImportName {
+                owner: owner.clone(),
+                namespace: ModuleAliasNameNamespace::DISPLAY_NAME,
+                name: plugin.alias.value.to_string(),
+                first: first.span(),
+                duplicate: plugin.alias.span,
+            });
+        }
+        let mut functions = HashMap::new();
+        for function in &plugin.functions {
+            if let Some(first) = functions.insert(function.name.value.clone(), function.name.span)
+            {
+                return Err(ModuleResolveError::DuplicateSymbol {
+                    owner: owner.clone(),
+                    namespace: crate::syntax::function_name::FnNameNamespace::DISPLAY_NAME,
+                    name: function.name.value.to_string(),
+                    first,
+                    duplicate: function.name.span,
+                });
+            }
+        }
+        scope.plugin_aliases.insert(
+            plugin.alias.value.clone(),
+            PluginAliasTarget {
+                path: plugin.path.value.clone(),
+                span: plugin.alias.span,
+                functions,
+            },
+        );
+    }
     Ok(())
 }
 

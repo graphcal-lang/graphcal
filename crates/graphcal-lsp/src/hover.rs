@@ -102,6 +102,12 @@ fn format_hover(def: &DefinitionInfo) -> String {
             let detail = def.detail.as_deref().unwrap_or("");
             format!("```graphcal\n{sig}\n```\n{detail}")
         }
+        SymbolCategory::ExternFn => {
+            let fallback = format!("fn {}", def.name);
+            let sig = def.type_description.as_deref().unwrap_or(&fallback);
+            let detail = def.detail.as_deref().unwrap_or("");
+            format!("```graphcal\n{sig}\n```\n{detail}")
+        }
         SymbolCategory::BuiltinConst => {
             let type_str = def.type_description.as_deref().unwrap_or("Dimensionless");
             format!(

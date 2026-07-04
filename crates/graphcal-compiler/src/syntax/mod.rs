@@ -16,6 +16,7 @@ pub mod names;
 pub mod non_empty;
 pub mod parser;
 pub mod phase;
+pub mod plugin;
 pub mod span;
 pub mod token;
 pub mod type_name;

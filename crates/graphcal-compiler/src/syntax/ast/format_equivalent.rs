@@ -110,6 +110,10 @@ format_equivalent_via_eq!(
     NamePath,
     ModuleAliasName,
     crate::syntax::dimension::UnitRef,
+    crate::syntax::dimension::DimVarName,
+    crate::syntax::function_name::FnName,
+    crate::syntax::function_name::FnParamName,
+    crate::syntax::plugin::PluginPath,
     // Closed enums with no payload spans.
     crate::syntax::ast::BinOp,
     crate::syntax::ast::UnaryOp,
@@ -417,11 +421,69 @@ impl FormatEquivalent for DeclKind {
                 let Self::Layer(b) = other else { return false };
                 a.format_equivalent(b)
             }
+            Self::PluginImport(a) => {
+                let Self::PluginImport(b) = other else {
+                    return false;
+                };
+                a.format_equivalent(b)
+            }
             Self::Sugar(a) => {
                 let Self::Sugar(b) = other else { return false };
                 a.format_equivalent(b)
             }
         }
+    }
+}
+
+impl FormatEquivalent for crate::syntax::ast::PluginImportDecl {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        let Self {
+            path,
+            alias,
+            functions,
+        } = self;
+        let Self {
+            path: other_path,
+            alias: other_alias,
+            functions: other_functions,
+        } = other;
+        path.format_equivalent(other_path)
+            && alias.format_equivalent(other_alias)
+            && functions.format_equivalent(other_functions)
+    }
+}
+
+impl FormatEquivalent for crate::syntax::ast::ExternFnDecl {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        let Self {
+            name,
+            dim_vars,
+            params,
+            result,
+            span: _,
+        } = self;
+        let Self {
+            name: other_name,
+            dim_vars: other_dim_vars,
+            params: other_params,
+            result: other_result,
+            span: _,
+        } = other;
+        name.format_equivalent(other_name)
+            && dim_vars.format_equivalent(other_dim_vars)
+            && params.format_equivalent(other_params)
+            && result.format_equivalent(other_result)
+    }
+}
+
+impl FormatEquivalent for crate::syntax::ast::ExternFnParam {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        let Self { name, type_ann } = self;
+        let Self {
+            name: other_name,
+            type_ann: other_type_ann,
+        } = other;
+        name.format_equivalent(other_name) && type_ann.format_equivalent(other_type_ann)
     }
 }
 

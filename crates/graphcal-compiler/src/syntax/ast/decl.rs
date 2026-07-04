@@ -73,6 +73,7 @@ pub enum DeclKind<P: Phase = Raw> {
     Type(TypeDecl<P>),
     Index(IndexDecl<P>),
     Import(ImportDecl),
+    PluginImport(PluginImportDecl<P>),
     Include(IncludeDecl<P>),
     Dag(DagDecl<P>),
     Assert(AssertDecl<P>),
@@ -110,7 +111,7 @@ impl<P: Phase> DeclKind<P> {
             Self::Plot(p) => Some((p.name.value.as_str(), p.name.span)),
             Self::Figure(f) => Some((f.name.value.as_str(), f.name.span)),
             Self::Layer(l) => Some((l.name.value.as_str(), l.name.span)),
-            Self::Import(_) | Self::Include(_) | Self::Sugar(_) => None,
+            Self::Import(_) | Self::PluginImport(_) | Self::Include(_) | Self::Sugar(_) => None,
         }
     }
 }
@@ -286,6 +287,55 @@ pub struct ImportDecl {
     pub visibility: Visibility,
     pub path: ModulePath,
     pub kind: ImportKind,
+}
+
+/// Extern plugin import (issue #943, Phase A of #25):
+///
+/// ```text
+/// import plugin "plugins/coolprop.wasm" as fluids {
+///     fn density(p: Pressure, t: Temperature) -> Density;
+///     fn smooth<D>(x: D, window: Dimensionless) -> D;
+/// }
+/// ```
+///
+/// Declares externally-provided scalar functions with explicit graphcal
+/// signatures. The alias is mandatory: extern functions are only callable
+/// qualified (`fluids.density(...)`), mirroring module-import explicitness.
+/// The path string carries no filesystem semantics in Phase A; it identifies
+/// the plugin in the embedder's host function registry.
+#[derive(Debug, Clone)]
+pub struct PluginImportDecl<P: Phase = Raw> {
+    /// The verbatim plugin path string.
+    pub path: Spanned<crate::syntax::plugin::PluginPath>,
+    /// The mandatory module alias extern calls are qualified with.
+    pub alias: Spanned<crate::syntax::module_name::ModuleAliasName>,
+    /// The declared extern function signatures, in source order.
+    pub functions: Vec<ExternFnDecl<P>>,
+}
+
+/// One extern function signature inside an `import plugin` block:
+/// `fn smooth<D>(x: D, window: Dimensionless) -> D;`
+#[derive(Debug, Clone)]
+pub struct ExternFnDecl<P: Phase = Raw> {
+    /// The function name.
+    pub name: Spanned<crate::syntax::function_name::FnName>,
+    /// Explicit dimension-variable binders (`<D1, D2>`), possibly empty.
+    pub dim_vars: Vec<Spanned<crate::syntax::dimension::DimVarName>>,
+    /// The named parameters, in order.
+    pub params: Vec<ExternFnParam<P>>,
+    /// The result type annotation.
+    pub result: TypeExpr<P>,
+    /// Span of the whole `fn ...;` declaration.
+    pub span: Span,
+}
+
+/// One named parameter in an extern function signature: `p: Pressure`.
+#[derive(Debug, Clone)]
+pub struct ExternFnParam<P: Phase = Raw> {
+    /// The parameter name.
+    pub name: Spanned<crate::syntax::function_name::FnParamName>,
+    /// The parameter type annotation.
+    pub type_ann: TypeExpr<P>,
 }
 
 /// Include declaration (DAG embedding / instantiation).

@@ -119,6 +119,7 @@ fn convert_decl_kind_non_sugar(k: DeclKind<Raw>) -> DeclKind<Desugared> {
         DeclKind::Type(t) => DeclKind::Type(t.into()),
         DeclKind::Index(i) => DeclKind::Index(i.into()),
         DeclKind::Import(i) => DeclKind::Import(i),
+        DeclKind::PluginImport(p) => DeclKind::PluginImport(p.into()),
         DeclKind::Include(i) => DeclKind::Include(i.into()),
         DeclKind::Dag(d) => DeclKind::Dag(d.into()),
         DeclKind::Assert(a) => DeclKind::Assert(a.into()),
@@ -136,6 +137,37 @@ fn convert_decl_kind_non_sugar(k: DeclKind<Raw>) -> DeclKind<Desugared> {
 // ---------------------------------------------------------------------------
 // Decl-specific structs
 // ---------------------------------------------------------------------------
+
+impl From<crate::syntax::ast::PluginImportDecl<Raw>> for crate::syntax::ast::PluginImportDecl<Desugared> {
+    fn from(p: crate::syntax::ast::PluginImportDecl<Raw>) -> Self {
+        Self {
+            path: p.path,
+            alias: p.alias,
+            functions: p.functions.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<crate::syntax::ast::ExternFnDecl<Raw>> for crate::syntax::ast::ExternFnDecl<Desugared> {
+    fn from(f: crate::syntax::ast::ExternFnDecl<Raw>) -> Self {
+        Self {
+            name: f.name,
+            dim_vars: f.dim_vars,
+            params: f.params.into_iter().map(Into::into).collect(),
+            result: f.result.into(),
+            span: f.span,
+        }
+    }
+}
+
+impl From<crate::syntax::ast::ExternFnParam<Raw>> for crate::syntax::ast::ExternFnParam<Desugared> {
+    fn from(p: crate::syntax::ast::ExternFnParam<Raw>) -> Self {
+        Self {
+            name: p.name,
+            type_ann: p.type_ann.into(),
+        }
+    }
+}
 
 impl From<ParamDecl<Raw>> for ParamDecl<Desugared> {
     fn from(p: ParamDecl<Raw>) -> Self {

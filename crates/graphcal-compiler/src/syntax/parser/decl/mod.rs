@@ -57,6 +57,9 @@ const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibil
         DeclKind::Type(d) => d.visibility = visibility,
         DeclKind::Index(d) => d.visibility = visibility,
         DeclKind::Import(d) => d.visibility = visibility_without_bindability(visibility),
+        // Plugin imports carry no visibility: extern functions are only
+        // callable through their own alias and cannot be re-exported.
+        DeclKind::PluginImport(_) => {}
         DeclKind::Include(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Dag(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Assert(d) => d.visibility = visibility_without_bindability(visibility),
@@ -328,6 +331,20 @@ impl Parser<'_> {
             }
             None => Err(self.unexpected_eof(expected)),
         }?;
+
+        // Plugin imports cannot carry visibility: extern functions are only
+        // callable qualified through their own alias, so there is nothing to
+        // re-export.
+        if visibility != BindableVisibility::Private
+            && matches!(decl.kind, DeclKind::PluginImport(_))
+            && let Some(vis_span) = visibility_span
+        {
+            return Err(self.unexpected_token(
+                "no visibility annotation (plugin imports cannot be re-exported)",
+                "`pub`",
+                vis_span,
+            ));
+        }
 
         // Set visibility
         if visibility == BindableVisibility::PublicBind

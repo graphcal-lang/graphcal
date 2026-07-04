@@ -165,7 +165,10 @@ fn exclusive_universe_decl(decl: &DeclKind) -> Option<(&NameAtom, Span)> {
         DeclKind::Dimension(d) => Some((d.name.value.atom(), d.name.span)),
         DeclKind::Type(t) => Some((t.name.value.atom(), t.name.span)),
         DeclKind::Index(i) => Some((i.name.value.atom(), i.name.span)),
-        DeclKind::Unit(_) | DeclKind::Import(_) | DeclKind::Include(_) => None,
+        DeclKind::Unit(_)
+        | DeclKind::Import(_)
+        | DeclKind::PluginImport(_)
+        | DeclKind::Include(_) => None,
         DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
     }
 }
@@ -238,6 +241,7 @@ fn check_value_namespace_collisions(
             | DeclKind::Unit(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_)
+            | DeclKind::PluginImport(_)
             | DeclKind::Include(_)
             | DeclKind::Dag(_) => {}
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
@@ -301,6 +305,9 @@ fn collect_local_declarations(
             DeclKind::Type(d) => d.visibility.is_public(),
             DeclKind::Index(d) => d.visibility.is_public(),
             DeclKind::Import(d) => d.visibility.is_public(),
+            // Plugin imports carry no visibility; extern functions are only
+            // callable through their own alias.
+            DeclKind::PluginImport(_) => false,
             DeclKind::Include(d) => d.visibility.is_public(),
             DeclKind::Dag(d) => d.visibility.is_public(),
             DeclKind::Assert(d) => d.visibility.is_public(),
@@ -373,6 +380,7 @@ fn collect_local_declarations(
             | DeclKind::Type(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_)
+            | DeclKind::PluginImport(_)
             | DeclKind::Include(_)
             | DeclKind::Dag(_) => {
                 continue;
@@ -401,6 +409,7 @@ fn collect_local_declarations(
             | DeclKind::Type(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_)
+            | DeclKind::PluginImport(_)
             | DeclKind::Include(_)
             | DeclKind::Dag(_) => {
                 // These declarations are handled earlier (continue'd before reaching here).
@@ -422,6 +431,7 @@ fn collect_local_declarations(
             | DeclKind::Type(_)
             | DeclKind::Index(_)
             | DeclKind::Import(_)
+            | DeclKind::PluginImport(_)
             | DeclKind::Include(_)
             | DeclKind::Dag(_) => {}
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
@@ -546,7 +556,7 @@ fn validate_attributes(
                         DeclKind::Unit(_) => Some("unit"),
                         DeclKind::Type(_) => Some("type"),
                         DeclKind::Index(_) => Some("cat/range"),
-                        DeclKind::Import(_) => Some("import"),
+                        DeclKind::Import(_) | DeclKind::PluginImport(_) => Some("import"),
                         DeclKind::Include(_) => Some("include"),
                         DeclKind::Dag(_) => Some("dag"),
                         DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
@@ -627,7 +637,7 @@ fn validate_attributes(
                         DeclKind::Unit(_) => "unit",
                         DeclKind::Type(_) => "type",
                         DeclKind::Index(_) => "cat/range",
-                        DeclKind::Import(_) => "import",
+                        DeclKind::Import(_) | DeclKind::PluginImport(_) => "import",
                         DeclKind::Include(_) => "include",
                         DeclKind::Dag(_) => "dag",
                         DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
@@ -654,7 +664,7 @@ fn validate_attributes(
                         DeclKind::Unit(_) => Some("unit"),
                         DeclKind::Type(_) => Some("type"),
                         DeclKind::Index(_) => Some("cat/range"),
-                        DeclKind::Import(_) => Some("import"),
+                        DeclKind::Import(_) | DeclKind::PluginImport(_) => Some("import"),
                         DeclKind::Include(_) => Some("include"),
                         DeclKind::Dag(_) => Some("dag"),
                         DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
@@ -770,6 +780,9 @@ fn validate_private_in_public(
             DeclKind::Type(d) => d.visibility.is_public(),
             DeclKind::Index(d) => d.visibility.is_public(),
             DeclKind::Import(d) => d.visibility.is_public(),
+            // Plugin imports carry no visibility; extern functions are only
+            // callable through their own alias.
+            DeclKind::PluginImport(_) => false,
             DeclKind::Include(d) => d.visibility.is_public(),
             DeclKind::Dag(d) => d.visibility.is_public(),
             DeclKind::Assert(d) => d.visibility.is_public(),

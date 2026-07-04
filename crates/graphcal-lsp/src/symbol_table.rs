@@ -793,6 +793,8 @@ pub enum SymbolCategory {
     Field,
     LocalVar,
     BuiltinFn,
+    /// Extern function declared by an `import plugin` block.
+    ExternFn,
     BuiltinConst,
     Assert,
     Plot,
@@ -1130,6 +1132,7 @@ pub fn build_from_ast(
                 collect_layer_decl(l, decl.span, l.visibility.into(), &mut table, &mut refs);
             }
             DeclKind::Import(u) => collect_import_decl(u, &mut table),
+            DeclKind::PluginImport(p) => collect_plugin_import_decl(p, source, &mut table),
             DeclKind::Include(u) => collect_include_decl(u, &mut table),
             DeclKind::Dag(d) => collect_dag_decl(d, decl.span, d.visibility.into(), &mut table),
             // `Sugar(_)` carries `Infallible` for the `Desugared` phase, so
@@ -1606,6 +1609,42 @@ fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
     // Each imported name is a reference; target resolution for cross-file
     // go-to-definition is handled separately.
     collect_import_or_include_names(&u.kind, table);
+}
+
+/// Register each extern function of an `import plugin` block as an
+/// alias-qualified definition, so completion offers `alias.fn` and
+/// go-to-definition lands on the `fn` name inside the block.
+fn collect_plugin_import_decl(
+    p: &graphcal_compiler::desugar::desugared_ast::PluginImportDecl,
+    source: &str,
+    table: &mut SymbolTable,
+) {
+    for function in &p.functions {
+        // The declared signature text, verbatim, is the best hover/detail
+        // rendering: it is already in graphcal vocabulary.
+        let signature = source
+            .get(function.span.offset()..function.span.offset() + function.span.len())
+            .map(|text| text.trim_end_matches(';').trim().to_string());
+        table.insert_definition(
+            SymbolKey::Qualified {
+                module: vec![p.alias.value.to_string()],
+                name: function.name.value.to_string(),
+            },
+            DefinitionInfo {
+                name: format!("{}.{}", p.alias.value, function.name.value),
+                category: SymbolCategory::ExternFn,
+                name_span: function.name.span,
+                decl_span: function.span,
+                type_description: signature,
+                detail: Some(format!("extern function (plugin \"{}\")", p.path.value)),
+                visibility: None,
+            },
+        );
+        for param in &function.params {
+            collect_type_expr_refs(&param.type_ann, table);
+        }
+        collect_type_expr_refs(&function.result, table);
+    }
 }
 
 fn collect_include_decl(

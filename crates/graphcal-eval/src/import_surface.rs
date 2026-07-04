@@ -50,7 +50,7 @@ pub fn decl_identity(decl: &Declaration) -> Option<ProjectDeclIdentity<'_>> {
         DeclKind::Figure(f) => (f.name.value.as_str(), ProjectDeclKind::Figure),
         DeclKind::Layer(l) => (l.name.value.as_str(), ProjectDeclKind::Layer),
         DeclKind::Dag(d) => (d.name.value.as_str(), ProjectDeclKind::Dag),
-        DeclKind::Import(_) | DeclKind::Include(_) => return None,
+        DeclKind::Import(_) | DeclKind::PluginImport(_) | DeclKind::Include(_) => return None,
         DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
     };
     Some(ProjectDeclIdentity { name, kind })
@@ -66,6 +66,9 @@ pub fn decl_is_public(decl: &Declaration) -> bool {
         DeclKind::Type(d) => d.visibility.is_public(),
         DeclKind::Index(d) => d.visibility.is_public(),
         DeclKind::Import(d) => d.visibility.is_public(),
+        // Plugin imports carry no visibility; their functions are only
+        // callable through the alias and are never re-exported.
+        DeclKind::PluginImport(_) => false,
         DeclKind::Include(d) => d.visibility.is_public(),
         DeclKind::Dag(d) => d.visibility.is_public(),
         DeclKind::Assert(d) => d.visibility.is_public(),
@@ -192,6 +195,7 @@ fn decl_import_item_presence(
         | DeclKind::Plot(_)
         | DeclKind::Figure(_)
         | DeclKind::Layer(_)
+        | DeclKind::PluginImport(_)
         | DeclKind::Dag(_) => decl_identity(decl)
             .is_some_and(|identity| {
                 import_namespace_matches(identity.kind, namespace) && identity.name == name

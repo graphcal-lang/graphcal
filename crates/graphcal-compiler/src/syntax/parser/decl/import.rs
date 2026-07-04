@@ -17,6 +17,20 @@ impl Parser<'_> {
     pub(super) fn parse_import_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Import)?;
 
+        // `import plugin "path" as alias { ... }` — the contextual keyword
+        // `plugin` followed by a string literal selects the extern-plugin
+        // form; `import plugin.foo;` (a module path whose first segment is
+        // spelled `plugin`) stays an ordinary import.
+        if let Some((Token::Ident, ident_span)) = self
+            .lexer
+            .peek_with_span()
+            .map(|(tok, span)| (*tok, span))
+            && self.lexer.slice_at(ident_span) == "plugin"
+            && self.lexer.peek_second() == Some(&Token::StringLiteral)
+        {
+            return self.parse_plugin_import_decl(start_span);
+        }
+
         let path = self.parse_module_path()?;
 
         // Reject param bindings on `import` — use `include` for DAG instantiation.
@@ -40,6 +54,124 @@ impl Parser<'_> {
                 kind,
             }),
             span,
+        })
+    }
+
+    /// Parse an extern plugin import (issue #943):
+    ///   `import plugin "plugins/coolprop.wasm" as fluids {`
+    ///   `    fn density(p: Pressure, t: Temperature) -> Density;`
+    ///   `    fn smooth<D>(x: D, window: Dimensionless) -> D;`
+    ///   `}`
+    ///
+    /// The caller has consumed `import` and verified the next tokens are the
+    /// contextual keyword `plugin` followed by a string literal.
+    fn parse_plugin_import_decl(
+        &mut self,
+        start_span: crate::syntax::span::Span,
+    ) -> Result<Declaration, ParseError> {
+        self.advance()?; // consume the contextual `plugin` keyword
+
+        let (_, path_span) = self.expect(Token::StringLiteral)?;
+        let raw = self.lexer.slice_at(path_span);
+        // Strip surrounding quotes.
+        let path = crate::syntax::plugin::PluginPath::new(&raw[1..raw.len() - 1]);
+
+        // The alias is mandatory: extern functions are only callable
+        // qualified through it.
+        self.expect(Token::As)?;
+        let alias = self.parse_any_ident()?.into_spanned::<ModuleAliasName>();
+
+        self.expect(Token::LBrace)?;
+        let mut functions = Vec::new();
+        while self.lexer.peek() != Some(&Token::RBrace) {
+            functions.push(self.parse_extern_fn_decl()?);
+        }
+        let (_, end_span) = self.expect(Token::RBrace)?;
+
+        Ok(Declaration {
+            attributes: vec![],
+            kind: DeclKind::PluginImport(crate::syntax::ast::PluginImportDecl {
+                path: crate::syntax::span::Spanned::new(path, path_span),
+                alias,
+                functions,
+            }),
+            span: start_span.merge(end_span),
+        })
+    }
+
+    /// Parse one extern function signature inside an `import plugin` block:
+    ///   `fn smooth<D>(x: D, window: Dimensionless) -> D;`
+    fn parse_extern_fn_decl(&mut self) -> Result<crate::syntax::ast::ExternFnDecl, ParseError> {
+        // `fn` is a contextual keyword valid only inside plugin blocks.
+        let fn_ident = match self.lexer.peek_with_span().map(|(tok, span)| (*tok, span)) {
+            Some((Token::Ident, span)) if self.lexer.slice_at(span) == "fn" => {
+                self.advance()?;
+                span
+            }
+            Some((tok, _)) => {
+                let tok_str = tok.to_string();
+                let (_, span) = self.advance()?;
+                return Err(self.unexpected_token(
+                    "`fn` to declare an extern function, or `}` to close the plugin block",
+                    &tok_str,
+                    span,
+                ));
+            }
+            None => {
+                return Err(
+                    self.unexpected_eof("`fn` to declare an extern function, or `}`")
+                );
+            }
+        };
+
+        let name = self
+            .parse_any_ident()?
+            .into_spanned::<crate::syntax::function_name::FnName>();
+
+        // Optional explicit dimension-variable binders: `<D1, D2>`.
+        let mut dim_vars = Vec::new();
+        if self.lexer.peek() == Some(&Token::Lt) {
+            self.advance()?;
+            loop {
+                let var = self.parse_any_ident()?;
+                dim_vars.push(crate::syntax::span::Spanned::new(
+                    crate::syntax::dimension::DimVarName::from_atom(var.name),
+                    var.span,
+                ));
+                match self.lexer.peek() {
+                    Some(Token::Comma) => {
+                        self.advance()?;
+                        if self.lexer.peek() == Some(&Token::Gt) {
+                            break; // trailing comma
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            self.expect(Token::Gt)?;
+        }
+
+        self.expect(Token::LParen)?;
+        let params = self.parse_comma_separated(Token::RParen, |p| {
+            let name = p
+                .parse_any_ident()?
+                .into_spanned::<crate::syntax::function_name::FnParamName>();
+            p.expect(Token::Colon)?;
+            let type_ann = p.parse_type_expr()?;
+            Ok(crate::syntax::ast::ExternFnParam { name, type_ann })
+        })?;
+        self.expect(Token::RParen)?;
+
+        self.expect(Token::Arrow)?;
+        let result = self.parse_type_expr()?;
+        let (_, end_span) = self.expect(Token::Semicolon)?;
+
+        Ok(crate::syntax::ast::ExternFnDecl {
+            name,
+            dim_vars,
+            params,
+            result,
+            span: fn_ident.merge(end_span),
         })
     }
 

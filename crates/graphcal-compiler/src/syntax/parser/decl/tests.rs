@@ -346,6 +346,7 @@ node speed_kmh: Velocity = @speed -> km/hour;
             DeclKind::Type(t) => t.name.value.as_str(),
             DeclKind::Index(i) => i.name.value.as_str(),
             DeclKind::Import(_) => "<import>",
+            DeclKind::PluginImport(_) => "<plugin import>",
             DeclKind::Include(_) => "<include>",
             DeclKind::Dag(d) => d.name.value.as_str(),
             DeclKind::Assert(a) => a.name.value.as_str(),

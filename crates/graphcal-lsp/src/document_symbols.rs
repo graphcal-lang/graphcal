@@ -40,6 +40,7 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
             | SymbolCategory::Plot
             | SymbolCategory::Figure
             | SymbolCategory::Layer => SymbolKind::EVENT,
+            SymbolCategory::ExternFn => SymbolKind::FUNCTION,
             SymbolCategory::IndexVariant
             | SymbolCategory::Field
             | SymbolCategory::LocalVar
