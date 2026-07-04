@@ -4,7 +4,8 @@ use std::num::NonZeroUsize;
 use crate::desugar::desugared_ast::{DagDecl, DimExpr, TypeExpr, UnitExpr};
 use crate::dimension::{BaseDimId, Dimension, Rational, RationalError};
 use crate::registry::dimension_registry::{
-    assert_base_dim_names_cover, format_dimension_preferring_alias_after_validation,
+    DimensionResolveError, assert_base_dim_names_cover,
+    format_dimension_preferring_alias_after_validation, resolve_dim_expr_detailed_impl,
     resolve_dim_expr_impl, resolve_type_expr_impl,
 };
 use crate::registry::unit::{resolve_unit_dimension_impl, resolve_unit_expr_impl};
@@ -290,11 +291,9 @@ impl RegistryBuilder {
     ///
     /// For tagged unions (the common case), also populates the
     /// constructor namespace: each variant's name resolves back to the
-    /// union it belongs to. Constructor collisions are detected here —
-    /// the prelude is loaded first, so any later user-defined
-    /// constructor that collides with a prelude or sibling type's
-    /// constructor is silently ignored on the *second* registration
-    /// (consistent with the type-name "first wins" behavior).
+    /// union it belongs to. Constructor collisions are rejected upstream
+    /// during declaration collection, so this low-level registry overwrites
+    /// by key like the other `register_*` helpers.
     pub fn register_type(&mut self, def: TypeDef) {
         if let TypeDefKind::Union { ref members } = def.kind {
             for member in members {
@@ -401,6 +400,15 @@ impl RegistryBuilder {
         resolve_dim_expr_impl(&self.dimensions, expr)
     }
 
+    /// Resolve a `DimExpr` AST node to a concrete `Dimension`, preserving the
+    /// unknown referenced dimension name in the error.
+    pub fn resolve_dim_expr_detailed(
+        &self,
+        expr: &DimExpr,
+    ) -> Result<Dimension, DimensionResolveError> {
+        resolve_dim_expr_detailed_impl(&self.dimensions, expr)
+    }
+
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
     ///
     /// Returns `Ok(None)` if the type references unknown dimensions, and
@@ -467,7 +475,7 @@ mod tests {
     }
 
     fn make_dim_term_name(name: &str) -> Spanned<NamePath> {
-        Spanned::new(NamePath::from(name), Span::new(0, 0))
+        Spanned::new(NamePath::expect_local(name), Span::new(0, 0))
     }
 
     /// Create a simple dimension `TypeExpr` from a name string.
@@ -624,6 +632,30 @@ mod tests {
         assert_eq!(dim, expected_dim);
         // km/hour = 1000 m / 3600 s ≈ 0.2778 m/s
         assert!((scale - 1000.0 / 3600.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn resolve_unit_expr_rejects_non_finite_compound_scale() {
+        let r = make_registry();
+        let expr = UnitExpr {
+            terms: vec![UnitExprItem {
+                op: MulDivOp::Mul,
+                name: make_unit_name("km"),
+                power: Some(Rational::from(400)),
+            }],
+            span: Span::new(0, 0),
+        };
+        let err = r.units.resolve_unit_expr(&expr).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                UnitResolveError::InvalidScale {
+                    reason: PositiveFiniteScaleError::NonFinite,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
     }
 
     #[test]

@@ -8,19 +8,37 @@
 use crate::dimension::Rational;
 #[must_use]
 pub fn format_number(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let abs = value.abs();
+    if value.fract() == 0.0 && abs < 1e15 {
         #[expect(
             clippy::cast_possible_truncation,
             reason = "value.abs() < 1e15 guarantees it fits in i64"
         )]
         let int_val = value as i64;
         format!("{int_val}")
+    } else if abs < 5e-7 {
+        format_scientific(value)
     } else {
         let s = format!("{value:.6}");
         let s = s.trim_end_matches('0');
         let s = s.trim_end_matches('.');
         s.to_string()
     }
+}
+
+fn format_scientific(value: f64) -> String {
+    let formatted = format!("{value:.6e}");
+    let Some((mantissa, exponent)) = formatted.split_once('e') else {
+        return formatted;
+    };
+    let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+    let exponent = exponent
+        .parse::<i32>()
+        .map_or_else(|_| exponent.to_string(), |n| n.to_string());
+    format!("{mantissa}e{exponent}")
 }
 
 /// Render a unit/dimension exponent suffix: `^2` for integers,
@@ -105,20 +123,21 @@ pub fn format_unit_expr_canonical(expr: &crate::syntax::ast::UnitExpr) -> String
     use crate::syntax::ast::MulDivOp;
     use std::collections::BTreeMap;
 
-    let mut exponents: BTreeMap<String, Rational> = BTreeMap::new();
+    let mut exponents: BTreeMap<crate::syntax::dimension::UnitRef, Rational> = BTreeMap::new();
     for item in &expr.terms {
         let pow = item.power.unwrap_or(Rational::ONE);
         let signed = match item.op {
             MulDivOp::Mul => pow,
             MulDivOp::Div => negate_exponent(pow),
         };
-        let name = item.name.value.to_string();
-        let entry = exponents.entry(name).or_insert(Rational::ZERO);
+        let entry = exponents
+            .entry(item.name.value.clone())
+            .or_insert(Rational::ZERO);
         // Saturate on overflow: this is a display label, not a value.
         *entry = (*entry + signed).unwrap_or(*entry);
     }
 
-    let render = |name: &str, exp: Rational| -> String {
+    let render = |name: &crate::syntax::dimension::UnitRef, exp: Rational| -> String {
         if exp == Rational::ONE {
             name.to_string()
         } else {

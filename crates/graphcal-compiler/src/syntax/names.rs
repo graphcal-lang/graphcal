@@ -520,6 +520,31 @@ impl NamePath {
         (!qualifier.is_empty()).then_some((qualifier, leaf))
     }
 
+    /// Construct a bare path from external text.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NameAtomError`] when the string is empty or contains a path
+    /// separator. Use [`Self::qualified_path`] when the input is genuinely a
+    /// path with multiple segments.
+    pub fn try_local(s: impl Into<String>) -> Result<Self, NameAtomError> {
+        NameAtom::parse(s).map(Self::local)
+    }
+
+    /// Construct a bare path from trusted leaf text, panicking if invalid.
+    ///
+    /// Prefer [`Self::try_local`] for external input. Keeping the panicking
+    /// policy in an explicitly named constructor avoids surprising `From`
+    /// conversions that abort on dotted paths.
+    #[expect(
+        clippy::panic,
+        reason = "trusted constructor centralizes explicit panic policy"
+    )]
+    pub fn expect_local(s: impl Into<String>) -> Self {
+        Self::try_local(s)
+            .unwrap_or_else(|err| panic!("trusted NamePath leaf must be valid: {err}"))
+    }
+
     /// Human-readable path string for diagnostics and formatting boundaries.
     #[must_use]
     pub fn display_path(&self) -> String {
@@ -534,24 +559,6 @@ impl NamePath {
 impl From<NameAtom> for NamePath {
     fn from(atom: NameAtom) -> Self {
         Self::local(atom)
-    }
-}
-
-impl From<String> for NamePath {
-    #[expect(
-        clippy::panic,
-        reason = "From<String> is a convenience for trusted leaf names"
-    )]
-    fn from(s: String) -> Self {
-        Self::local(NameAtom::parse(s).unwrap_or_else(|err| {
-            panic!("invalid NamePath leaf name: {err}");
-        }))
-    }
-}
-
-impl From<&str> for NamePath {
-    fn from(s: &str) -> Self {
-        Self::from(s.to_string())
     }
 }
 
@@ -661,6 +668,14 @@ mod tests {
         let a = TestDeclName::expect_valid("alpha");
         let b = TestDeclName::expect_valid("beta");
         assert!(a < b);
+    }
+
+    #[test]
+    fn name_path_try_local_rejects_dotted_paths() {
+        assert_eq!(
+            NamePath::try_local("module.Value").unwrap_err(),
+            NameAtomError::ContainsDot
+        );
     }
 
     #[test]

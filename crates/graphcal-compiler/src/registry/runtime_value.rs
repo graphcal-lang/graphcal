@@ -23,7 +23,9 @@ pub enum RuntimeValueKind {
     Indexed {
         index_name: IndexTypeRef,
     },
-    RangeLabel,
+    RangeLabel {
+        index_name: IndexTypeRef,
+    },
     Datetime,
 }
 
@@ -42,7 +44,7 @@ impl std::fmt::Display for RuntimeValueKind {
             }
             Self::Struct { type_name } => write!(f, "struct `{type_name}`"),
             Self::Indexed { index_name } => write!(f, "indexed value `{index_name}[...]`"),
-            Self::RangeLabel => write!(f, "RangeLabel"),
+            Self::RangeLabel { index_name } => write!(f, "range label `{index_name}`"),
             Self::Datetime => write!(f, "Datetime"),
         }
     }
@@ -99,9 +101,10 @@ pub enum RuntimeValue {
         index_name: IndexTypeRef,
         entries: IndexMap<IndexVariantName, Self>,
     },
-    /// A range index label during `Unfold` iteration.
-    /// Carries the step index and SI value (for arithmetic like `t - prev_t`).
+    /// A range index label during range-index iteration.
+    /// Carries the index identity, step index, and SI value (for arithmetic like `t - prev_t`).
     RangeLabel {
+        index_name: IndexTypeRef,
         step_index: usize,
         value: f64,
     },
@@ -178,7 +181,9 @@ impl RuntimeValue {
             Self::Indexed { index_name, .. } => RuntimeValueKind::Indexed {
                 index_name: index_name.clone(),
             },
-            Self::RangeLabel { .. } => RuntimeValueKind::RangeLabel,
+            Self::RangeLabel { index_name, .. } => RuntimeValueKind::RangeLabel {
+                index_name: index_name.clone(),
+            },
             Self::Datetime(_) => RuntimeValueKind::Datetime,
         }
     }

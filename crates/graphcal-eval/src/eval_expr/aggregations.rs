@@ -12,6 +12,9 @@ pub(super) enum AggregationError {
     /// An indexed entry was not scalar-like.
     #[error(transparent)]
     ElementType(#[from] RuntimeValueError),
+    /// `min()` / `max()` have no identity element.
+    #[error("{function}() over an empty Indexed value is undefined")]
+    EmptyExtremum { function: &'static str },
     /// `mean()` has no identity element.
     #[error("mean() over an empty Indexed value is undefined")]
     EmptyMean,
@@ -54,6 +57,9 @@ fn aggregate_sum(
 fn aggregate_min(
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
 ) -> Result<f64, AggregationError> {
+    if entries.is_empty() {
+        return Err(AggregationError::EmptyExtremum { function: "min" });
+    }
     let min = entries.values().try_fold(
         f64::INFINITY,
         |acc, value| -> Result<f64, AggregationError> {
@@ -66,6 +72,9 @@ fn aggregate_min(
 fn aggregate_max(
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
 ) -> Result<f64, AggregationError> {
+    if entries.is_empty() {
+        return Err(AggregationError::EmptyExtremum { function: "max" });
+    }
     let max = entries.values().try_fold(
         f64::NEG_INFINITY,
         |acc, value| -> Result<f64, AggregationError> {
@@ -104,4 +113,22 @@ fn aggregate_count(
     )]
     let count = entries.len() as f64;
     numeric::computed_finite_scalar(count, "count()").map_err(AggregationError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_min_max_report_empty_collection() {
+        let entries = IndexMap::new();
+        assert!(matches!(
+            aggregate_min(&entries),
+            Err(AggregationError::EmptyExtremum { function: "min" })
+        ));
+        assert!(matches!(
+            aggregate_max(&entries),
+            Err(AggregationError::EmptyExtremum { function: "max" })
+        ));
+    }
 }

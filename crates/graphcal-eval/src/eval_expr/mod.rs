@@ -69,11 +69,11 @@ pub struct EvalContext<'a> {
 
 /// Context required to evaluate an `unfold(...)` expression inline.
 ///
-/// Provides the self-referencing node name and declared types needed
+/// Provides the self-referencing runtime key and declared type needed
 /// to look up the range index for iterative evaluation.
 pub struct UnfoldContext<'a> {
-    pub self_name: &'a str,
-    pub declared_types: &'a HashMap<ScopedName, DeclaredType>,
+    pub self_key: RuntimeDeclKey,
+    pub self_declared_type: &'a DeclaredType,
 }
 
 pub fn index_ref_matches_resolved(

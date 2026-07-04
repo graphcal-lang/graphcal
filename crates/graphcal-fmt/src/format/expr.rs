@@ -7,8 +7,8 @@ use graphcal_compiler::syntax::span::Spanned;
 use pretty::RcDoc;
 
 use super::{
-    Formatter, INDENT, flat_alt_group, format_unit_expr_inline, prepend_comments,
-    render_doc_to_string, soft_parenthesized, soft_parenthesized_list,
+    Formatter, INDENT, display_width, flat_alt_group, format_unit_expr_inline, pad_left_to_width,
+    prepend_comments, render_doc_to_string, soft_parenthesized, soft_parenthesized_list,
 };
 
 // ---------------------------------------------------------------------------
@@ -19,6 +19,11 @@ pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
     // Recursion choke point: formatting recurses once per tree level
     // (unbounded for left-nested operator chains).
     graphcal_compiler::stack::with_stack_growth(|| format_expr_inner(fmt, expr))
+}
+
+fn render_table_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
+    let mut cell_fmt = fmt.fork_skipping_comments_before(expr.span.offset());
+    render_doc_to_string(&format_expr(&mut cell_fmt, expr))
 }
 
 fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
@@ -237,7 +242,7 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
             lhs_doc
                 .append(RcDoc::text(op_str(op)))
                 .append(comment)
-                .append(rhs_doc)
+                .append(RcDoc::line().append(rhs_doc).nest(INDENT))
         }
     }
 }
@@ -250,22 +255,41 @@ pub fn format_fn_call_expr(
     args: &[Expr],
 ) -> RcDoc<'static> {
     let mut arg_docs: Vec<RcDoc<'static>> = Vec::new();
+    let mut arg_docs_with_commas: Vec<RcDoc<'static>> = Vec::new();
+    let mut has_trailing_comment = false;
     for arg in args {
         // Drain leading comments before this argument
         let leading = fmt.drain_comments_before(arg.span.offset());
         let arg_doc = format_expr(fmt, arg);
         // Drain trailing comment after this argument
         let arg_end = arg.span.offset() + arg.span.len();
-        let trailing = fmt
-            .drain_trailing_comment(arg_end)
-            .unwrap_or_else(RcDoc::nil);
-        arg_docs.push(prepend_comments(leading, arg_doc.append(trailing)));
+        let trailing = fmt.drain_trailing_comment(arg_end);
+        has_trailing_comment |= trailing.is_some();
+
+        let plain_doc = trailing.clone().map_or_else(
+            || arg_doc.clone(),
+            |comment| arg_doc.clone().append(comment),
+        );
+        let comma_doc = match trailing {
+            Some(comment) => arg_doc.append(RcDoc::text(",")).append(comment),
+            None => arg_doc.append(RcDoc::text(",")),
+        };
+        arg_docs.push(prepend_comments(leading.clone(), plain_doc));
+        arg_docs_with_commas.push(prepend_comments(leading, comma_doc));
     }
     let mut doc = RcDoc::text(callee.display_path());
     if !type_args.is_empty() {
         doc = doc.append(format_generic_args(fmt, type_args));
     }
-    doc.append(soft_parenthesized_list(arg_docs, false))
+    if has_trailing_comment {
+        let body = RcDoc::intersperse(arg_docs_with_commas, RcDoc::hardline());
+        doc.append(RcDoc::text("("))
+            .append(RcDoc::hardline().append(body).nest(INDENT))
+            .append(RcDoc::hardline())
+            .append(RcDoc::text(")"))
+    } else {
+        doc.append(soft_parenthesized_list(arg_docs, false))
+    }
 }
 
 fn format_generic_args(
@@ -433,7 +457,7 @@ fn format_table_1d(
     } else {
         entries
             .iter()
-            .map(|e| e.keys[0].variant.value.as_str().len())
+            .map(|e| display_width(e.keys[0].variant.value.as_str()))
             .max()
             .unwrap_or(0)
     };
@@ -441,13 +465,13 @@ fn format_table_1d(
     // Render each cell value to a string for width computation
     let rendered_values: Vec<String> = entries
         .iter()
-        .map(|e| render_doc_to_string(&format_expr(fmt, &e.value)))
+        .map(|e| render_table_cell_value(fmt, &e.value))
         .collect();
 
     // Compute max value width for right-alignment
     let max_value_width = rendered_values
         .iter()
-        .map(std::string::String::len)
+        .map(|value| display_width(value))
         .max()
         .unwrap_or(0);
 
@@ -457,12 +481,12 @@ fn format_table_1d(
         // key spans may point to the index declaration, not the table row)
         let leading = fmt.drain_comments_before(e.value.span.offset());
 
-        let value_padding = max_value_width - rendered.len();
+        let value_padding = max_value_width - display_width(rendered);
         let row_text = if nat_range {
             format!("{}{};", " ".repeat(value_padding), rendered)
         } else {
             let label = e.keys[0].variant.value.as_str();
-            let padding = max_label_width - label.len();
+            let padding = max_label_width - display_width(label);
             format!(
                 "{}:{} {};",
                 label,
@@ -509,6 +533,10 @@ fn format_table_2d(
 
 /// Format the inner body of a 2D table (header row + data rows).
 /// Shared between 2D tables and 3D+ slice sections.
+#[expect(
+    clippy::too_many_lines,
+    reason = "table body formatting keeps header, row, and comment layout together"
+)]
 fn format_table_2d_body(
     fmt: &mut Formatter<'_>,
     indexes: &[TableIndexSpec],
@@ -554,7 +582,7 @@ fn format_table_2d_body(
         let Some(ci) = col_labels.iter().position(|c| c == col_label) else {
             continue;
         };
-        grid[ri][ci] = render_doc_to_string(&format_expr(fmt, &e.value));
+        grid[ri][ci] = render_table_cell_value(fmt, &e.value);
         entry_indices[ri][ci] = Some(ei);
     }
 
@@ -563,8 +591,16 @@ fn format_table_2d_body(
     // do not contribute to width.
     let col_widths: Vec<usize> = (0..num_cols)
         .map(|ci| {
-            let label_width = if col_is_nat { 0 } else { col_labels[ci].len() };
-            let max_cell = grid.iter().map(|row| row[ci].len()).max().unwrap_or(0);
+            let label_width = if col_is_nat {
+                0
+            } else {
+                display_width(&col_labels[ci])
+            };
+            let max_cell = grid
+                .iter()
+                .map(|row| display_width(&row[ci]))
+                .max()
+                .unwrap_or(0);
             label_width.max(max_cell)
         })
         .collect();
@@ -575,7 +611,7 @@ fn format_table_2d_body(
     } else {
         row_labels
             .iter()
-            .map(std::string::String::len)
+            .map(|label| display_width(label))
             .max()
             .unwrap_or(0)
     };
@@ -587,7 +623,7 @@ fn format_table_2d_body(
         let header_cells: Vec<String> = col_labels
             .iter()
             .enumerate()
-            .map(|(ci, label)| format!("{:>width$}", label, width = col_widths[ci]))
+            .map(|(ci, label)| pad_left_to_width(label, col_widths[ci]))
             .collect();
         let header_line = if row_is_nat {
             // No row labels — just `: Col1, Col2, ...;` at the row start.
@@ -611,12 +647,12 @@ fn format_table_2d_body(
             .and_then(|ei| fmt.drain_comments_before(entries[ei].value.span.offset()));
 
         let cells: Vec<String> = (0..num_cols)
-            .map(|ci| format!("{:>width$}", grid[ri][ci], width = col_widths[ci]))
+            .map(|ci| pad_left_to_width(&grid[ri][ci], col_widths[ci]))
             .collect();
         let row_line = if row_is_nat {
             format!("{};", cells.join(", "))
         } else {
-            let label_padding = max_row_label_width - row_label.len();
+            let label_padding = max_row_label_width - display_width(row_label);
             format!(
                 "{}:{} {};",
                 row_label,
@@ -667,13 +703,11 @@ fn format_table_sliced(
             })
             .collect();
 
-        if let Some(last) = slices.last_mut()
-            && last.1 == slice_key
-        {
-            last.0.push(idx);
-            continue;
+        if let Some((entry_indices, _)) = slices.iter_mut().find(|(_, key)| key == &slice_key) {
+            entry_indices.push(idx);
+        } else {
+            slices.push((vec![idx], slice_key));
         }
-        slices.push((vec![idx], slice_key));
     }
 
     // Build each slice doc and nest it for indentation.

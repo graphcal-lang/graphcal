@@ -117,10 +117,9 @@ impl PartialOrd for Monomial {
 
 impl Ord for Monomial {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Compare by iterating entries in sorted order (BTreeMap guarantees this).
-        let a: Vec<_> = self.0.iter().collect();
-        let b: Vec<_> = other.0.iter().collect();
-        a.cmp(&b)
+        // Compare by iterating entries in sorted order (BTreeMap guarantees this)
+        // without allocating temporary vectors for every polynomial map lookup.
+        self.0.iter().cmp(other.0.iter())
     }
 }
 
@@ -134,9 +133,6 @@ pub struct NatPolyForm {
     /// Monomial → coefficient mapping (only non-zero coefficients).
     pub(crate) terms: BTreeMap<Monomial, u64>,
 }
-
-/// Backward-compatible alias for code that still speaks in linear Nat forms.
-pub type NatLinearForm = NatPolyForm;
 
 impl NatPolyForm {
     /// Create a polynomial from a constant.

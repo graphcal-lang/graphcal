@@ -13,7 +13,7 @@
 //! [`json_input`]: crate::json_input
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use graphcal_compiler::desugar::desugared_ast::Expr;
@@ -86,6 +86,11 @@ pub enum OverrideParseError {
         #[source]
         source: Box<ParseError>,
     },
+
+    /// The same override name was provided more than once.
+    #[error("duplicate override for `{name}`")]
+    #[diagnostic(code(graphcal::cli::O008))]
+    DuplicateOverride { name: DeclName },
 
     /// An `--input` JSON file could not be opened / read.
     #[error("cannot read input file {}: {source}", path.display())]
@@ -169,33 +174,18 @@ pub fn parse_overrides(
                 name: name.to_string(),
                 source: Box::new(e),
             })?;
-        overrides.insert(override_name, resolve_override_expr(raw_expr));
+        let previous = overrides.insert(override_name.clone(), resolve_override_expr(raw_expr));
+        if previous.is_some() {
+            return Err(OverrideParseError::DuplicateOverride {
+                name: override_name,
+            });
+        }
     }
 
     if let Some(input_path) = input {
         let limit = input_max_bytes.unwrap_or(DEFAULT_INPUT_MAX_BYTES);
 
-        // Check size before reading the whole file into memory. `metadata`
-        // follows symlinks, which matches `read_to_string`'s behavior.
-        let metadata =
-            std::fs::metadata(input_path).map_err(|e| OverrideParseError::InputFileRead {
-                path: input_path.to_path_buf(),
-                source: e,
-            })?;
-        let size = metadata.len();
-        if size > limit {
-            return Err(OverrideParseError::InputFileTooLarge {
-                path: input_path.to_path_buf(),
-                size,
-                limit,
-            });
-        }
-
-        let json_str =
-            std::fs::read_to_string(input_path).map_err(|e| OverrideParseError::InputFileRead {
-                path: input_path.to_path_buf(),
-                source: e,
-            })?;
+        let json_str = read_input_file_limited(input_path, limit)?;
         let json_overrides = json_input::json_to_overrides(&json_str).map_err(|e| {
             OverrideParseError::InputFileParse {
                 path: input_path.to_path_buf(),
@@ -210,6 +200,49 @@ pub fn parse_overrides(
     }
 
     Ok(overrides)
+}
+
+fn read_input_file_limited(path: &Path, limit: u64) -> Result<String, OverrideParseError> {
+    let mut file =
+        std::fs::File::open(path).map_err(|source| OverrideParseError::InputFileRead {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let metadata = file
+        .metadata()
+        .map_err(|source| OverrideParseError::InputFileRead {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let size = metadata.len();
+    if size > limit {
+        return Err(OverrideParseError::InputFileTooLarge {
+            path: path.to_path_buf(),
+            size,
+            limit,
+        });
+    }
+
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|source| OverrideParseError::InputFileRead {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let read_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if read_size > limit {
+        return Err(OverrideParseError::InputFileTooLarge {
+            path: path.to_path_buf(),
+            size: read_size,
+            limit,
+        });
+    }
+    String::from_utf8(bytes).map_err(|source| OverrideParseError::InputFileRead {
+        path: path.to_path_buf(),
+        source: io::Error::new(io::ErrorKind::InvalidData, source),
+    })
 }
 
 /// Lift a raw override expression into the desugared AST.
@@ -252,6 +285,15 @@ mod tests {
         assert!(
             matches!(err, OverrideParseError::InvalidFormat { .. }),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_overrides_rejects_duplicate_set_name() {
+        let set = vec!["x=1".to_string(), "x=2".to_string()];
+        let err = parse_overrides(&set, None, None).unwrap_err();
+        assert!(
+            matches!(err, OverrideParseError::DuplicateOverride { name } if name.as_str() == "x")
         );
     }
 

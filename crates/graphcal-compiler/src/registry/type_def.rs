@@ -127,15 +127,6 @@ impl TypeDef {
         };
         (only.name.as_str() == self.name.as_str()).then_some(only.fields.as_slice())
     }
-
-    /// Backward-compatible accessor that returns the record-shaped
-    /// fields (empty when the type is multi-variant or a required
-    /// stub). Prefer [`record_fields`](Self::record_fields) at new call
-    /// sites — it makes the single-variant precondition explicit.
-    #[must_use]
-    pub fn fields(&self) -> &[StructField] {
-        self.record_fields().unwrap_or(&[])
-    }
 }
 
 /// Type registry: maps type names to `TypeDef` and provides

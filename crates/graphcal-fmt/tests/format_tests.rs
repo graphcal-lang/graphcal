@@ -119,6 +119,40 @@ fn preserves_blank_line_between_declarations() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn formats_fn_call_argument_trailing_comment_before_comma() {
+    let source = "node x: Dimensionless = min(\n    1.0, // first\n    2.0,\n);\n";
+    let formatted = format_source(source).expect("format_source should succeed");
+    assert!(
+        formatted.contains("1.0, // first"),
+        "comma must come before trailing line comment: {formatted}"
+    );
+    graphcal_compiler::syntax::parser::Parser::new(&formatted)
+        .parse_file()
+        .expect("formatted output should parse");
+}
+
+#[test]
+fn binop_rhs_after_trailing_comment_is_indented() {
+    let source = "node x: Dimensionless = 1.0 + // rhs\n2.0;\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("\n    2.0") && !formatted.contains("\n2.0"),
+        "rhs should stay in the expression indentation: {formatted}"
+    );
+}
+
+#[test]
+fn file_trailing_comment_has_single_final_newline() {
+    let source = "param x: Dimensionless = 1.0;\n// tail\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.ends_with("// tail\n") && !formatted.ends_with("// tail\n\n"),
+        "trailing comment newline should converge: {formatted:?}"
+    );
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
 fn trailing_newline() {
     let source = "param x: Dimensionless = 1.0;";
     let formatted = format_source(source).unwrap();
@@ -933,6 +967,31 @@ param dv: Dimensionless[Maneuver] = table[Maneuver] {
 }
 
 #[test]
+fn preserves_leading_comment_before_2d_table_row_without_embedding_in_cell() {
+    let source = r"
+index Phase = { Launch, Cruise };
+index Maneuver = { Departure };
+param m: Dimensionless[Phase, Maneuver] = table[Phase, Maneuver] {
+    : Departure;
+    Launch:  1.0;
+    // note about cruise
+    Cruise: 3.0 + 4.0;
+};
+";
+    let formatted = format_source(source).unwrap();
+    let comment_pos = formatted.find("// note about cruise").unwrap();
+    let row_pos = formatted.find("Cruise:").unwrap();
+    assert!(
+        comment_pos < row_pos,
+        "leading row comment should stay before row: {formatted}"
+    );
+    assert!(
+        !formatted.contains("+ // note about cruise"),
+        "row comment must not be embedded inside the cell expression: {formatted}"
+    );
+}
+
+#[test]
 fn preserves_comment_in_match_arms() {
     let source = r"
 index Phase = { Coast, Burn };
@@ -1012,6 +1071,34 @@ param dv: Dimensionless[Maneuver] = {
     assert!(
         comment_pos < entry_pos,
         "Leading comment should appear before map entry: {formatted}"
+    );
+}
+
+#[test]
+fn format_3d_table_merges_non_contiguous_slice_headers() {
+    let source = r"
+index Scenario = { Nominal, Contingency };
+index Phase = { Launch, Cruise };
+index Maneuver = { Departure };
+param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver] {
+    [Scenario.Nominal]
+           : Departure;
+    Launch:  5000.0;
+
+    [Scenario.Contingency]
+           : Departure;
+    Launch:  4800.0;
+
+    [Scenario.Nominal]
+           : Departure;
+    Cruise:  4500.0;
+};
+";
+    let formatted = format_source(source).unwrap();
+    assert_eq!(
+        formatted.matches("[Scenario.Nominal]").count(),
+        1,
+        "duplicate Nominal slice header after formatting: {formatted}"
     );
 }
 
@@ -1097,6 +1184,35 @@ param      duty:  Dimensionless[Component]
     assert!(
         formatted.contains("// explains row A") && formatted.contains("// explains row B"),
         "comments inside multi-decl bodies must survive formatting:\n{formatted}"
+    );
+}
+
+#[test]
+fn multi_decl_inside_dag_body_is_nested() {
+    let source = "\
+index Component = { A, B };
+dag d {
+    param      power: Dimensionless[Component],
+    param      duty:  Dimensionless[Component]
+        = table[Component, (_, _)] {
+             : _, _;
+            A: 1.0, 2.0;
+            B: 3.0, 4.0;
+        };
+}
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("\n    param power:"),
+        "first slot should be nested in dag body:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("\n    param duty:"),
+        "continuation slot should be nested in dag body:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("\nparam duty:"),
+        "continuation slot escaped to column 0:\n{formatted}"
     );
 }
 

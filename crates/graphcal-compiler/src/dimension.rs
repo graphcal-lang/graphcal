@@ -141,13 +141,12 @@ impl std::ops::Sub for Rational {
 
 impl std::ops::Neg for Rational {
     type Output = Self;
-    #[expect(
-        clippy::expect_used,
-        reason = "Rational values are normalized from valid i32 exponents; negation overflow is impossible"
-    )]
+
     fn neg(self) -> Self {
-        self.checked_neg()
-            .expect("valid Rational exponent negation should not overflow")
+        self.checked_neg().unwrap_or(Self {
+            num: i32::MAX,
+            den: self.den,
+        })
     }
 }
 
@@ -239,6 +238,15 @@ impl Dimension {
     #[must_use]
     pub fn is_dimensionless(&self) -> bool {
         self.exponents.is_empty()
+    }
+
+    /// Returns true when this dimension cannot be represented by a single base
+    /// dimension to the first power.
+    #[must_use]
+    pub fn is_compound(&self) -> bool {
+        !self.exponents.is_empty()
+            && (self.exponents.len() != 1
+                || self.exponents.values().next().copied() != Some(Rational::ONE))
     }
 
     /// Get the exponent for a specific base dimension (zero if absent).
@@ -508,6 +516,15 @@ mod tests {
 
         // -1/2
         assert_eq!(-half, r(-1, 2));
+    }
+
+    #[test]
+    fn rational_negation_does_not_panic_on_min_i32() {
+        let min = Rational {
+            num: i32::MIN,
+            den: 1,
+        };
+        assert_eq!((-min).num(), i32::MAX);
     }
 
     #[test]

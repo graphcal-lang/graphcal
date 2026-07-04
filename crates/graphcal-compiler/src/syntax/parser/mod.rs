@@ -74,6 +74,19 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
+    #[error("duplicate domain constraint `{bound}`")]
+    #[diagnostic(
+        code(graphcal::P021),
+        help("each domain constraint may appear at most once")
+    )]
+    DuplicateDomainBound {
+        bound: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate bound here")]
+        span: SourceSpan,
+    },
+
     #[error("stray character in source")]
     #[diagnostic(
         code(graphcal::P006),
@@ -125,15 +138,15 @@ pub enum ParseError {
     },
 
     #[error(
-        "multi-decl row `{row_label}` has {got} value(s), but the multi-decl declares {slot_count} slot{}",
-        if *slot_count == 1 { "" } else { "s" }
+        "multi-decl row `{row_label}` has {got} value(s), but the header row declares {expected_count} value column{}",
+        if *expected_count == 1 { "" } else { "s" }
     )]
     #[diagnostic(
         code(graphcal::P009),
-        help("each row must have exactly one value per slot")
+        help("each row must have exactly one value per header column")
     )]
     MultiDeclRowArity {
-        slot_count: usize,
+        expected_count: usize,
         got: usize,
         row_label: String,
         #[source_code]
@@ -306,6 +319,7 @@ impl ParseError {
             | Self::InvalidNumber { src, .. }
             | Self::TableRowLengthMismatch { src, .. }
             | Self::InvalidDomainBoundKey { src, .. }
+            | Self::DuplicateDomainBound { src, .. }
             | Self::UnknownToken { src, .. }
             | Self::MultiDeclTupleArity { src, .. }
             | Self::MultiDeclHeaderArity { src, .. }
@@ -602,7 +616,10 @@ impl<'src> Parser<'src> {
     /// Parse any identifier regardless of casing.
     pub(super) fn parse_any_ident(&mut self) -> Result<Ident, ParseError> {
         match self.lexer.next_token() {
-            Some((Token::Ident, span)) => Ok(Ident {
+            Some((
+                Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step,
+                span,
+            )) => Ok(Ident {
                 name: NameAtom::new_unchecked_for_parser(self.lexer.slice_at(span).to_string()),
                 span,
             }),

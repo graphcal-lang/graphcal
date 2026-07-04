@@ -42,10 +42,12 @@ dag compute {
     param v: Velocity;
 
     node a: Velocity = @v * // compute first intermediate
-    2.0;
+
+        2.0;
 
     node b: Velocity = @a + // compute second intermediate
-    1.0 m/s;
+
+        1.0 m/s;
 
     node result: Velocity = @b;
 }

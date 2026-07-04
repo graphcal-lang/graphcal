@@ -25,8 +25,9 @@ use crate::ir::resolve::{
 };
 use crate::ir::resolve::{ImportedNames, resolve_with_imports};
 use crate::registry::declared_type::DeclaredType;
+use crate::registry::dimension_registry::DimensionResolveError;
 use crate::registry::error::GraphcalError;
-use crate::registry::format::format_unit_expr;
+use crate::registry::format::format_unit_expr_with_config;
 use crate::registry::prelude::load_prelude;
 use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{
@@ -509,18 +510,15 @@ pub(crate) fn lower_to_builder(
     let resolved = resolve_with_imports(ast, src, imported)?;
 
     // Step 2: Extract type annotations from AST + imported declarations.
-    // Imported lists still carry flat-string names (a wider typing pass is
-    // tracked separately); wrap them at the boundary so the map stays
-    // DeclName-keyed.
     let mut type_anns = extract_type_annotations(ast);
     for (name, type_ann, _, _) in &imported.consts {
-        type_anns.insert(DeclName::expect_valid(name.clone()), type_ann.clone());
+        type_anns.insert(name.clone(), type_ann.clone());
     }
     for (name, type_ann, _, _) in &imported.params {
-        type_anns.insert(DeclName::expect_valid(name.clone()), type_ann.clone());
+        type_anns.insert(name.clone(), type_ann.clone());
     }
     for (name, type_ann, _, _) in &imported.nodes {
-        type_anns.insert(DeclName::expect_valid(name.clone()), type_ann.clone());
+        type_anns.insert(name.clone(), type_ann.clone());
     }
 
     // Step 3: Build registry, augment deps, and construct IR
@@ -811,6 +809,24 @@ fn scoped_name_to_name_path(
     })
 }
 
+fn resolve_existing_synthetic_child_decl(
+    resolver: &crate::syntax::module_resolve::ModuleResolver,
+    owner: &crate::dag_id::DagId,
+    name: &ScopedName,
+) -> Option<ResolvedDeclName> {
+    let mut qualifier = name.qualifier().iter();
+    let first = qualifier.next()?;
+    let synthetic_owner = qualifier.fold(owner.child(first.as_ref()), |owner, segment| {
+        owner.child(segment.as_ref())
+    });
+    let decl_name = DeclName::expect_valid(name.member());
+    resolver
+        .modules()
+        .get(&synthetic_owner)
+        .and_then(|module| module.decls().contains_key(&decl_name).then_some(()))
+        .map(|()| ResolvedDeclName::from_def(synthetic_owner, decl_name))
+}
+
 /// Shared implementation for `lower_to_builder` and `lower_to_builder_with_imported_values`.
 ///
 /// Builds the registry, augments runtime deps for dynamic units, pairs resolved
@@ -857,15 +873,12 @@ fn build_ir_from_resolved(
     }
     register_file_declarations(ast, &mut builder, src, dag_id)?;
 
-    // Pair resolved declarations with type annotations. The resolved entries
-    // still carry flat-string names (a wider typing pass is tracked separately);
-    // wrap each into a `DeclName` once so both `take_type_ann` and the
-    // `ScopedName::from` lift see the typed form.
+    // Pair resolved declarations with type annotations.
     let consts = resolved
         .consts
         .into_iter()
         .map(|entry| {
-            let decl_name = DeclName::expect_valid(entry.name);
+            let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenConstEntry {
                 name: ScopedName::from(decl_name),
@@ -882,7 +895,7 @@ fn build_ir_from_resolved(
         .params
         .into_iter()
         .map(|entry| {
-            let decl_name = DeclName::expect_valid(entry.name);
+            let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenParamEntry {
                 name: ScopedName::from(decl_name),
@@ -899,7 +912,7 @@ fn build_ir_from_resolved(
         .nodes
         .into_iter()
         .map(|entry| {
-            let decl_name = DeclName::expect_valid(entry.name);
+            let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenNodeEntry {
                 name: ScopedName::from(decl_name),
@@ -921,7 +934,7 @@ fn build_ir_from_resolved(
             .asserts
             .into_iter()
             .map(|entry| UnfrozenAssertEntry {
-                name: ScopedName::local(entry.name),
+                name: ScopedName::from(entry.name),
                 body: entry.body,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
@@ -935,7 +948,7 @@ fn build_ir_from_resolved(
                 let is_pub = resolved.pub_names.contains(entry.name.as_str());
                 let displayed = !resolved.hidden_plots.contains(entry.name.as_str());
                 UnfrozenPlotEntry {
-                    name: ScopedName::local(entry.name),
+                    name: ScopedName::from(entry.name),
                     decl: entry.decl,
                     body_resolution_owner: dag_id.clone(),
                     span: entry.span,
@@ -948,7 +961,7 @@ fn build_ir_from_resolved(
             .figures
             .into_iter()
             .map(|entry| UnfrozenFigureEntry {
-                name: ScopedName::local(entry.name),
+                name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
@@ -958,7 +971,7 @@ fn build_ir_from_resolved(
             .layers
             .into_iter()
             .map(|entry| UnfrozenLayerEntry {
-                name: ScopedName::local(entry.name),
+                name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
@@ -1076,16 +1089,24 @@ impl UnfrozenIR {
         }
         for name in self.imported_values.keys() {
             let path = scoped_name_to_name_path(name, src)?;
-            let canonical = resolver
-                .resolve_decl_path(owner, &path)
-                .unwrap_or_else(|_| {
-                    crate::hir::diagnostics::resolved_decl_key(owner, name).unwrap_or_else(|| {
-                        ResolvedDeclName::from_def(
-                            owner.clone(),
-                            DeclName::expect_valid(name.member()),
-                        )
-                    })
-                });
+            let canonical = match resolver.resolve_decl_path(owner, &path) {
+                Ok(target_decl) => target_decl,
+                Err(err) => match self.imported_value_sources.get(name) {
+                    Some(source) => ResolvedDeclName::from_def(
+                        source.dag_id.clone(),
+                        source.source_name.clone(),
+                    ),
+                    None => resolve_existing_synthetic_child_decl(resolver, owner, name)
+                        .or_else(|| crate::hir::diagnostics::resolved_decl_key(owner, name))
+                        .ok_or_else(|| GraphcalError::InternalError {
+                            message: format!(
+                                "imported value `{name}` is not present in module resolver: {err}"
+                            ),
+                            src: src.clone(),
+                            span: Span::new(0, 0).into(),
+                        })?,
+                },
+            };
             decl_bindings.insert(name.clone(), canonical);
         }
         for (name, source) in &self.imported_value_sources {
@@ -1306,13 +1327,9 @@ impl UnfrozenIR {
 
     /// Replace a param's default expression with an override.
     ///
-    /// Returns `false` when no param entry with that leaf name exists.
-    pub fn override_param_default(&mut self, name: &str, expr: Expr) -> bool {
-        match self
-            .params
-            .iter_mut()
-            .find(|entry| entry.name.member() == name)
-        {
+    /// Returns `false` when no param entry with that scoped name exists.
+    pub fn override_param_default(&mut self, name: &ScopedName, expr: Expr) -> bool {
+        match self.params.iter_mut().find(|entry| &entry.name == name) {
             Some(entry) => {
                 entry.default_expr = Some(expr);
                 true
@@ -2260,7 +2277,7 @@ pub fn substitute_type_expr_index_names(
                     && let Some(atom) = path.value.as_bare()
                     && let Some(new_name) = bindings.get(atom.as_str())
                 {
-                    path.value = crate::syntax::names::NamePath::from(new_name.as_str());
+                    path.value = crate::syntax::names::NamePath::expect_local(new_name.as_str());
                 }
             }
             substitute_type_expr_index_names(base, bindings);
@@ -2306,7 +2323,8 @@ where
                 if let Some(atom) = item.term.name.value.as_bare()
                     && let Some(new_name) = bindings.get(atom.as_str())
                 {
-                    item.term.name.value = crate::syntax::names::NamePath::from(new_name.as_ref());
+                    item.term.name.value =
+                        crate::syntax::names::NamePath::expect_local(new_name.as_ref());
                 }
             }
         }
@@ -2317,7 +2335,7 @@ where
             if let Some(atom) = name.value.as_bare()
                 && let Some(new_name) = bindings.get(atom.as_str())
             {
-                name.value = crate::syntax::names::NamePath::from(new_name.as_ref());
+                name.value = crate::syntax::names::NamePath::expect_local(new_name.as_ref());
             }
             for arg in type_args {
                 substitute_type_expr_nominal_names(arg, bindings);
@@ -2656,11 +2674,7 @@ fn register_declarations_impl(
                     collect_nat_ranges_from_expr(value, registry, src)?;
                 }
             }
-            DeclKind::Node(d) => {
-                collect_nat_ranges_from_type_expr(&d.type_ann, registry, src)?;
-                collect_nat_ranges_from_expr(&d.value, registry, src)?;
-            }
-            DeclKind::ConstNode(d) => {
+            DeclKind::Node(d) | DeclKind::ConstNode(d) => {
                 collect_nat_ranges_from_type_expr(&d.type_ann, registry, src)?;
                 collect_nat_ranges_from_expr(&d.value, registry, src)?;
             }
@@ -2823,16 +2837,8 @@ fn register_dimension_decl(
         return Ok(());
     };
     let dim = registry
-        .resolve_dim_expr(definition)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: d.name.span.into(),
-        })?
-        .ok_or_else(|| GraphcalError::UnknownDimension {
-            name: d.name.value.clone(),
-            src: src.clone(),
-            span: d.name.span.into(),
-        })?;
+        .resolve_dim_expr_detailed(definition)
+        .map_err(|err| dimension_resolve_error(err, src, definition.span))?;
     registry.register_dimension(d.name.value.clone(), dim);
     Ok(())
 }
@@ -2862,6 +2868,24 @@ fn registry_build_error(
         message: format!("registry build failed: {err}"),
         src: src.clone(),
         span: Span::new(0, 0).into(),
+    }
+}
+
+fn dimension_resolve_error(
+    err: DimensionResolveError,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    match err {
+        DimensionResolveError::UnknownDimension { name } => GraphcalError::UnknownDimension {
+            name,
+            src: src.clone(),
+            span: span.into(),
+        },
+        DimensionResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
+            src: src.clone(),
+            span: span.into(),
+        },
     }
 }
 
@@ -2908,16 +2932,8 @@ fn register_unit_decl(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let dim = registry
-        .resolve_dim_expr(&u.dim_type)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: u.name.span.into(),
-        })?
-        .ok_or_else(|| GraphcalError::UnknownDimension {
-            name: DimName::expect_valid(u.name.value.as_str()),
-            src: src.clone(),
-            span: u.name.span.into(),
-        })?;
+        .resolve_dim_expr_detailed(&u.dim_type)
+        .map_err(|err| dimension_resolve_error(err, src, u.dim_type.span))?;
     if u.definition.is_some() && registry.is_affine_prone(&dim) {
         return Err(GraphcalError::AffineProneUnitDefinition {
             dim: registry.format_dimension(&dim),
@@ -3065,6 +3081,17 @@ fn unit_resolve_to_graphcal(
             src: src.clone(),
             span: span.into(),
         },
+        UnitResolveError::InvalidScale { value, reason } => {
+            let reason = match reason {
+                PositiveFiniteScaleError::NonFinite => "must be finite",
+                PositiveFiniteScaleError::NonPositive => "must be greater than zero",
+            };
+            GraphcalError::EvalError {
+                message: format!("compound unit scale {reason}, got {value}"),
+                src: src.clone(),
+                span: span.into(),
+            }
+        }
         UnitResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
             src: src.clone(),
             span: span.into(),
@@ -3236,16 +3263,8 @@ fn register_index_decl(
         }
         crate::desugar::desugared_ast::IndexDeclKind::RequiredRange { dimension } => {
             let dim = registry
-                .resolve_dim_expr(dimension)
-                .map_err(|_| GraphcalError::DimensionOverflow {
-                    src: src.clone(),
-                    span: dimension.span.into(),
-                })?
-                .ok_or_else(|| GraphcalError::UnknownDimension {
-                    name: crate::syntax::dimension::DimName::expect_valid(idx.name.value.as_str()),
-                    src: src.clone(),
-                    span: dimension.span.into(),
-                })?;
+                .resolve_dim_expr_detailed(dimension)
+                .map_err(|err| dimension_resolve_error(err, src, dimension.span))?;
             types::IndexKind::RequiredRange { dimension: dim }
         }
     };
@@ -3548,13 +3567,24 @@ fn lower_range_index(
                         src,
                         unit.span,
                     )?;
-                    (Some(format_unit_expr(unit)), scale.get())
+                    (Some(format_unit_expr_with_config(unit, true)), scale.get())
                 }
                 Err(crate::registry::types::UnitResolveError::Overflow(_)) => {
                     return Err(GraphcalError::DimensionOverflow {
                         src: src.clone(),
                         span: unit.span.into(),
                     });
+                }
+                Err(crate::registry::types::UnitResolveError::InvalidScale { value, reason }) => {
+                    let reason = match reason {
+                        PositiveFiniteScaleError::NonFinite => "must be finite",
+                        PositiveFiniteScaleError::NonPositive => "must be greater than zero",
+                    };
+                    return Err(eval_error(
+                        format!("range display unit scale {reason}, got {value}"),
+                        src,
+                        unit.span,
+                    ));
                 }
                 Err(_) => (None, 1.0),
             }
@@ -3660,6 +3690,24 @@ mod tests {
         let err = parse_and_lower("param x: Dimensionless = 1.0;\nnode x: Dimensionless = 2.0;")
             .unwrap_err();
         assert!(matches!(err, GraphcalError::DuplicateName { .. }));
+    }
+
+    #[test]
+    fn unknown_unit_dimension_reports_referenced_dimension() {
+        let err = parse_and_lower("unit foo: Blah = 1.0 m;").unwrap_err();
+        assert!(matches!(
+            err,
+            GraphcalError::UnknownDimension { name, .. } if name.as_str() == "Blah"
+        ));
+    }
+
+    #[test]
+    fn unknown_derived_dimension_term_reports_referenced_dimension() {
+        let err = parse_and_lower("dim Foo = Bar * Baz;").unwrap_err();
+        assert!(matches!(
+            err,
+            GraphcalError::UnknownDimension { name, .. } if name.as_str() == "Bar"
+        ));
     }
 
     #[test]

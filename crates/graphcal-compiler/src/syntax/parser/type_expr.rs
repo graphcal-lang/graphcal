@@ -146,6 +146,8 @@ impl Parser<'_> {
     ) -> Result<Vec<crate::syntax::ast::DomainBound>, ParseError> {
         let (_, _lparen_span) = self.expect(Token::LParen)?;
         let mut constraints = Vec::new();
+        let mut min_span = None;
+        let mut max_span = None;
         loop {
             if self.lexer.peek() == Some(&Token::RParen) {
                 break;
@@ -163,6 +165,17 @@ impl Parser<'_> {
                     });
                 }
             };
+            let seen_span = match kind {
+                crate::syntax::ast::DomainBoundKind::Min => &mut min_span,
+                crate::syntax::ast::DomainBoundKind::Max => &mut max_span,
+            };
+            if seen_span.replace(kind_span).is_some() {
+                return Err(ParseError::DuplicateDomainBound {
+                    bound: kind.to_string(),
+                    src: self.named_source(),
+                    span: kind_span.into(),
+                });
+            }
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             let bound_span = kind_span.merge(value.span);
@@ -433,10 +446,19 @@ impl Parser<'_> {
             // an identifier or `(` (parenthesized group). Otherwise, leave the
             // operator for the expression parser to handle as arithmetic
             // (e.g., `459.3 W / (1.0 m^2)`).
-            if !matches!(
-                self.lexer.peek_second(),
-                Some(&Token::Ident | &Token::LParen)
-            ) {
+            let can_continue_unit = match self.lexer.peek_second() {
+                Some(&Token::Ident) => true,
+                // `/(m * s)` continues the unit expression, but `/(1.0 m^2)`
+                // is arithmetic division by a parenthesized numeric value.
+                Some(&Token::LParen) => {
+                    matches!(
+                        self.lexer.peek_third(),
+                        Some(&Token::Ident | &Token::LParen)
+                    )
+                }
+                _ => false,
+            };
+            if !can_continue_unit {
                 break;
             }
 
@@ -696,7 +718,9 @@ impl Parser<'_> {
                 })?;
                 Ok(IndexExprAtom::Nat(NatExpr::Literal(value, span)))
             }
-            Some(Token::Ident) => Ok(IndexExprAtom::Path(self.parse_ident_path()?)),
+            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
+                Ok(IndexExprAtom::Path(self.parse_ident_path()?))
+            }
             _ => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token(
@@ -1005,6 +1029,22 @@ mod tests {
             }
             _ => panic!("expected param"),
         }
+    }
+
+    #[test]
+    fn parse_unit_literal_stops_before_parenthesized_arithmetic_divisor() {
+        let source = "node x: Dimensionless = 459.3 W / (1.0 m^2);";
+        Parser::new(source).parse_file().unwrap();
+    }
+
+    #[test]
+    fn parse_rejects_duplicate_domain_bound() {
+        let source = "param m: Mass(min: 1.0 kg, min: 2.0 kg) = 1.5 kg;";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        assert!(
+            matches!(err, ParseError::DuplicateDomainBound { ref bound, .. } if bound == "min"),
+            "got {err:?}"
+        );
     }
 
     #[test]

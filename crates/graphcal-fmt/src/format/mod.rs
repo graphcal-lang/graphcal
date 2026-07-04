@@ -20,6 +20,33 @@ pub use type_expr::{format_dim_expr_inline, format_type_expr_inline, format_unit
 /// effectively crate-internal.
 pub const INDENT: isize = 4;
 
+fn display_width(text: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(text)
+}
+
+fn pad_left_to_width(text: &str, width: usize) -> String {
+    let padding = width.saturating_sub(display_width(text));
+    format!("{}{}", " ".repeat(padding), text)
+}
+
+fn pad_right_to_width(text: &str, width: usize) -> String {
+    let padding = width.saturating_sub(display_width(text));
+    format!("{}{}", text, " ".repeat(padding))
+}
+
+fn text_with_hardlines(text: &str) -> RcDoc<'static> {
+    RcDoc::intersperse(
+        text.split('\n').map(|line| {
+            if line.is_empty() {
+                RcDoc::nil()
+            } else {
+                RcDoc::text(line.to_string())
+            }
+        }),
+        RcDoc::hardline(),
+    )
+}
+
 /// State for tracking comments during formatting.
 ///
 /// `pub` is module-scoped (parent module is private).
@@ -112,6 +139,30 @@ impl<'src> Formatter<'src> {
             self.next_comment += 1;
         }
     }
+
+    /// Make a speculative formatter for pre-rendering aligned table cells.
+    ///
+    /// Cell width pre-rendering must not consume row/slice comments from the
+    /// real formatter cursor. Comments before the cell value are skipped in the
+    /// fork so row-level drains can decide where they belong; comments inside
+    /// the cell remain undrained in the real formatter and trigger the usual
+    /// declaration-level verbatim fallback.
+    pub fn fork_skipping_comments_before(&self, offset: usize) -> Self {
+        let mut next_comment = self.next_comment;
+        while self
+            .metadata
+            .comments()
+            .get(next_comment)
+            .is_some_and(|comment| comment.span.offset() < offset)
+        {
+            next_comment += 1;
+        }
+        Self {
+            source: self.source,
+            metadata: self.metadata,
+            next_comment,
+        }
+    }
 }
 
 /// Format a declaration list (file body or `dag` body) into doc parts.
@@ -157,7 +208,7 @@ fn format_decl_sequence(
         let decl_doc = if fmt.has_comment_before(emit_end) {
             fmt.next_comment = comment_snapshot;
             fmt.skip_comments_before(emit_end);
-            RcDoc::text(fmt.slice(decl.span).to_string())
+            text_with_hardlines(fmt.slice(decl.span))
         } else {
             formatted
         };
@@ -178,14 +229,22 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
     let mut fmt = Formatter::new(source, metadata);
     let mut docs = format_decl_sequence(&mut fmt, &file.declarations);
 
-    // Drain any remaining comments at end of file
-    if let Some(remaining) = fmt.drain_comments_before(usize::MAX) {
-        docs.push(RcDoc::hardline());
-        docs.push(remaining);
-    }
+    // Drain any remaining comments at end of file. `drain_comments_before`
+    // already appends a hardline after every emitted comment, so that hardline
+    // is the final newline when trailing comments exist.
+    let had_remaining = fmt
+        .drain_comments_before(usize::MAX)
+        .is_some_and(|remaining| {
+            if !docs.is_empty() {
+                docs.push(RcDoc::hardline());
+            }
+            docs.push(remaining);
+            true
+        });
 
-    // Final newline
-    docs.push(RcDoc::hardline());
+    if !had_remaining {
+        docs.push(RcDoc::hardline());
+    }
 
     RcDoc::concat(docs)
 }
@@ -262,4 +321,35 @@ pub fn render_doc_to_string(doc: &RcDoc<'static>) -> String {
         reason = "doc bytes are always valid UTF-8 by construction"
     )]
     String::from_utf8(buf).expect("rendered doc must be valid UTF-8")
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty::RcDoc;
+
+    use super::{display_width, pad_left_to_width, pad_right_to_width, text_with_hardlines};
+
+    #[test]
+    fn alignment_helpers_use_display_width_not_bytes() {
+        assert_eq!(display_width("界"), 2);
+        assert_eq!("界".len(), 3);
+        assert_eq!(pad_left_to_width("界", 4), "  界");
+        assert_eq!(pad_right_to_width("界", 4), "界  ");
+    }
+
+    #[test]
+    fn multiline_text_uses_hardlines_for_nesting() {
+        let doc = RcDoc::text("{")
+            .append(
+                RcDoc::hardline()
+                    .append(text_with_hardlines("a\nb"))
+                    .nest(4),
+            )
+            .append(RcDoc::hardline())
+            .append(RcDoc::text("}"));
+        let mut out = Vec::new();
+        doc.render(80, &mut out).unwrap();
+        let rendered = String::from_utf8(out).unwrap();
+        assert_eq!(rendered, "{\n    a\n    b\n}");
+    }
 }

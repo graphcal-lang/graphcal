@@ -84,7 +84,7 @@ impl Parser<'_> {
                 })?;
                 Ok(TableIndexSpec::NatRange(value, span))
             }
-            Some(Token::Ident) => {
+            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
                 let ident = self.parse_any_ident()?;
                 Ok(TableIndexSpec::Named(ident.into_spanned::<NamePath>()))
             }
@@ -331,8 +331,15 @@ impl Parser<'_> {
                     self.expect(Token::Comma)?;
                 }
                 match slice_index {
-                    TableIndexSpec::Named(_) => {
+                    TableIndexSpec::Named(axis) => {
                         let index_ident = self.parse_any_ident()?;
+                        if index_ident.name != axis.value.leaf().as_str() {
+                            return Err(self.unexpected_token(
+                                &format!("slice axis `{}`", axis.value.display_path()),
+                                index_ident.name.as_str(),
+                                index_ident.span,
+                            ));
+                        }
                         self.expect(Token::Dot)?;
                         let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
                         prefix_keys.push(MapEntryKey {
@@ -729,6 +736,43 @@ mod tests {
             },
             _ => panic!("expected param"),
         }
+    }
+
+    #[test]
+    fn parse_table_contextual_keyword_index_name() {
+        let source = r"param m: Dimensionless[step] = table[step] {
+        A: 1.0;
+    };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
+                    assert_eq!(indexes.len(), 1);
+                    assert_eq!(named_index_name(&indexes[0]), "step");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "step");
+                }
+                other => panic!("expected TableLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_table_3d_rejects_wrong_slice_axis_qualifier() {
+        let source = r"param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
+        [Phase.T1]
+        : Departure;
+        Launch: 5000.0 kg;
+    };";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        assert!(matches!(
+            err,
+            ParseError::UnexpectedToken { expected, found, .. }
+                if expected == "slice axis `Time`" && found == "Phase"
+        ));
     }
 
     #[test]

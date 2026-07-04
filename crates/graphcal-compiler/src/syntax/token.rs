@@ -170,7 +170,7 @@ pub(crate) enum LexicalToken {
     Ident,
 
     // Numeric literal (with _ separators and scientific notation)
-    #[regex(r"[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?")]
+    #[regex(r"[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9][0-9_]*)?")]
     Number,
 }
 

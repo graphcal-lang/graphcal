@@ -15,7 +15,7 @@ use crate::registry::types::{DimensionRegistry, NatRangeIndex, NatRangeIndexErro
 /// Every semantic type reference has a canonical owner. Leaf-only names belong
 /// at syntax/display boundaries; once a value crosses into the functional core,
 /// it must carry a [`ResolvedName`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct TypeNameRef<Ns: NameNamespace> {
     name: NameDef<Ns>,
     resolved: ResolvedName<Ns>,
@@ -76,6 +76,20 @@ impl<Ns: NameNamespace> TypeNameRef<Ns> {
     #[must_use]
     pub fn to_unowned_name(&self) -> NameDef<Ns> {
         self.name.clone()
+    }
+}
+
+impl<Ns: NameNamespace> PartialEq for TypeNameRef<Ns> {
+    fn eq(&self, other: &Self) -> bool {
+        self.resolved == other.resolved
+    }
+}
+
+impl<Ns: NameNamespace> Eq for TypeNameRef<Ns> {}
+
+impl<Ns: NameNamespace> std::hash::Hash for TypeNameRef<Ns> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.resolved.hash(state);
     }
 }
 
@@ -287,6 +301,26 @@ impl std::fmt::Display for IndexTypeRef {
 
 /// Type-level reference to a struct/tagged-union definition.
 pub type StructTypeRef = TypeNameRef<StructTypeNameNamespace>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::type_name::StructTypeName;
+
+    #[test]
+    fn type_name_ref_equality_uses_canonical_identity_not_display_leaf() {
+        let owner = DagId::root_in_package("test", "main");
+        let resolved = ResolvedName::from_def(owner, StructTypeName::expect_valid("Result"));
+        let canonical = StructTypeRef::from_resolved(resolved.clone());
+        let display_variant =
+            StructTypeRef::with_display_leaf(StructTypeName::expect_valid("Success"), resolved);
+
+        assert_eq!(canonical, display_variant);
+        let mut set = std::collections::HashSet::new();
+        set.insert(canonical);
+        assert!(set.contains(&display_variant));
+    }
+}
 
 /// The declared type of a const/param/node: either a scalar with a dimension, a bool, or a struct.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -163,6 +163,12 @@ pub(super) fn binop_rule(
             if lhs_elem == rhs_elem || (lhs_elem.is_int_like() && rhs_elem.is_int_like()) {
                 return Ok(bool_with_axes(&axes));
             }
+            if let (Some(lhs_dim), Some(rhs_dim)) =
+                (lhs_elem.scalar_dimension(), rhs_elem.scalar_dimension())
+                && lhs_dim == rhs_dim
+            {
+                return Ok(bool_with_axes(&axes));
+            }
             Err(GraphcalError::DimensionMismatch {
                 expected: format_inferred_type(lhs_elem, registry),
                 found: format_inferred_type(rhs_elem, registry),
@@ -475,18 +481,26 @@ pub(super) fn unary_rule(
             }
             Ok(InferredType::Bool)
         }
-        UnaryOp::Neg => {
-            if operand.ty == InferredType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "numeric type".to_string(),
-                    found: "Bool".to_string(),
-                    help: "negation requires a numeric operand, not Bool".to_string(),
-                    src: src.clone(),
-                    span: operand.span.into(),
-                });
+        UnaryOp::Neg => match &operand.ty {
+            InferredType::Scalar(_) | InferredType::Int => Ok(operand.ty.clone()),
+            InferredType::RangeIndexLabel { dimension, .. } => {
+                Ok(InferredType::Scalar(dimension.clone()))
             }
-            // Negation preserves the type (Scalar or Int)
-            Ok(operand.ty.clone())
+            InferredType::Fin(_) => Err(GraphcalError::DimensionMismatch {
+                expected: "Int or Scalar".to_string(),
+                found: format_inferred_type(&operand.ty, registry),
+                help: "range(N) loop variables are bounded natural indexes; convert explicitly before negating"
+                    .to_string(),
+                src: src.clone(),
+                span: operand.span.into(),
+            }),
+            other => Err(GraphcalError::DimensionMismatch {
+                expected: "Int or Scalar".to_string(),
+                found: format_inferred_type(other, registry),
+                help: "negation requires a numeric scalar or Int operand".to_string(),
+                src: src.clone(),
+                span: operand.span.into(),
+            }),
         }
     }
 }
@@ -548,6 +562,11 @@ pub(super) fn resolve_unit_dimension_or_diagnose(
             }
             UnitResolveError::DynamicScale(name) => GraphcalError::EvalError {
                 message: format!("unit `{name}` has a dynamic scale"),
+                src: src.clone(),
+                span: unit.span.into(),
+            },
+            UnitResolveError::InvalidScale { value, reason } => GraphcalError::EvalError {
+                message: format!("compound unit scale {reason}, got {value}"),
                 src: src.clone(),
                 span: unit.span.into(),
             },

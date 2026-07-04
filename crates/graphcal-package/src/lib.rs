@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::{Component, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
 use toml_spanner::{Item, Table};
@@ -223,15 +223,24 @@ fn is_valid_name(value: &str) -> bool {
 }
 
 fn url_has_userinfo(value: &str) -> bool {
-    let Some(scheme_idx) = value.find("://") else {
-        return false;
-    };
-    let authority_start = scheme_idx + 3;
-    let authority = value[authority_start..]
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
-    authority.contains('@')
+    if let Some(scheme_idx) = value.find("://") {
+        let scheme = &value[..scheme_idx];
+        let authority_start = scheme_idx + 3;
+        let authority = value[authority_start..]
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or_default();
+        return authority.rsplit_once('@').is_some_and(|(userinfo, _)| {
+            userinfo.contains(':') || !(scheme == "ssh" && userinfo == "git")
+        });
+    }
+
+    value.split_once('@').is_some_and(|(userinfo, _)| {
+        let at_is_before_path = value
+            .find(['/', '?', '#'])
+            .is_none_or(|path_start| value.find('@').is_some_and(|at| at < path_start));
+        at_is_before_path && userinfo.contains(':')
+    })
 }
 
 /// Parsed `graphcal.toml` package section and direct dependencies.
@@ -528,7 +537,22 @@ impl Lockfile {
                 }
             }
         }
+        self.reject_dependency_cycles()?;
         self.reject_duplicate_canonical_instances()?;
+        Ok(())
+    }
+
+    fn reject_dependency_cycles(&self) -> Result<(), LockValidationError> {
+        let packages = self
+            .packages
+            .iter()
+            .map(|package| (&package.id, package))
+            .collect::<BTreeMap<_, _>>();
+        let mut visiting = BTreeSet::new();
+        let mut visited = BTreeSet::new();
+        for package in &self.packages {
+            visit_lock_package_for_cycles(&package.id, &packages, &mut visiting, &mut visited)?;
+        }
         Ok(())
     }
 
@@ -576,8 +600,12 @@ impl Lockfile {
     }
 
     /// Serialize the lockfile in deterministic TOML form.
-    #[must_use]
-    pub fn to_deterministic_toml(&self) -> String {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LockfileSerializeError`] if a path cannot be represented
+    /// losslessly in the UTF-8 TOML lockfile format.
+    pub fn to_deterministic_toml(&self) -> Result<String, LockfileSerializeError> {
         let mut out = String::new();
         push_kv_u64(&mut out, "lock_version", self.lock_version);
         push_kv_string(&mut out, "created_by", &self.created_by);
@@ -594,7 +622,7 @@ impl Lockfile {
             push_kv_string(
                 &mut out,
                 "source_dir",
-                package.source_dir.to_string_lossy().as_ref(),
+                path_to_lockfile_str(&package.source_dir)?,
             );
             out.push_str("\n[package.source]\n");
             match &package.source {
@@ -626,8 +654,47 @@ impl Lockfile {
                 }
             }
         }
-        out
+        Ok(out)
     }
+}
+
+fn path_to_lockfile_str(path: &Path) -> Result<&str, LockfileSerializeError> {
+    path.to_str()
+        .ok_or_else(|| LockfileSerializeError::NonUtf8Path {
+            path: path.to_path_buf(),
+        })
+}
+
+/// Lockfile serialization error.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum LockfileSerializeError {
+    /// `source_dir` cannot be represented as a TOML string without loss.
+    #[error("path `{}` is not valid UTF-8 and cannot be written to graphcal.lock", path.display())]
+    NonUtf8Path { path: PathBuf },
+}
+
+fn visit_lock_package_for_cycles<'a>(
+    id: &'a PackageInstanceId,
+    packages: &BTreeMap<&'a PackageInstanceId, &'a LockedPackage>,
+    visiting: &mut BTreeSet<&'a PackageInstanceId>,
+    visited: &mut BTreeSet<&'a PackageInstanceId>,
+) -> Result<(), LockValidationError> {
+    if visited.contains(id) {
+        return Ok(());
+    }
+    if !visiting.insert(id) {
+        return Err(LockValidationError::DependencyCycle {
+            package: id.clone(),
+        });
+    }
+    if let Some(package) = packages.get(id) {
+        for target in package.dependencies.values() {
+            visit_lock_package_for_cycles(target, packages, visiting, visited)?;
+        }
+    }
+    visiting.remove(id);
+    visited.insert(id);
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -743,6 +810,9 @@ pub enum LockValidationError {
         package: PackageInstanceId,
         dependency: DependencyName,
     },
+    /// The locked dependency graph contains a cycle.
+    #[error("dependency cycle involving package `{package}` in graphcal.lock")]
+    DependencyCycle { package: PackageInstanceId },
     /// Two ids describe the same canonical package instance.
     #[error("package ids `{first}` and `{second}` describe the same canonical package instance")]
     DuplicateCanonicalPackage {
@@ -1207,6 +1277,12 @@ fn push_escaped_string(out: &mut String, value: &str) {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            other if other.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04X}", other as u32);
+            }
             other => out.push(other),
         }
     }
@@ -1339,6 +1415,18 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
     }
 
     #[test]
+    fn manifest_accepts_standard_ssh_git_user_url() {
+        GitUrl::new("ssh://git@github.com/acme/orbital.git").unwrap();
+        GitUrl::new("git@github.com:acme/orbital.git").unwrap();
+    }
+
+    #[test]
+    fn manifest_rejects_scp_like_credential_url() {
+        let err = GitUrl::new("user:token@example.com/acme/orbital.git").unwrap_err();
+        assert_eq!(err.reason, GitUrlErrorReason::Credentials);
+    }
+
+    #[test]
     fn manifest_rejects_credential_url() {
         let err = parse_manifest_str(
             r#"
@@ -1428,6 +1516,26 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             LockValidationError::MissingDependencyTarget { target, .. }
                 if target == id("pkg-missing")
         ));
+    }
+
+    #[test]
+    fn lockfile_rejects_dependency_cycles() {
+        let mut root_deps = BTreeMap::new();
+        root_deps.insert(dep("orbital"), id("pkg-orbital"));
+        let mut orbital_deps = BTreeMap::new();
+        orbital_deps.insert(dep("mission_dep"), id("pkg-mission"));
+        let lock = lockfile(vec![
+            package("pkg-mission", "mission", path_source(), root_deps),
+            package(
+                "pkg-orbital",
+                "orbital",
+                git_source("https://github.com/acme/orbital.git", 'a'),
+                orbital_deps,
+            ),
+        ]);
+
+        let err = lock.validate(GRAPHCAL_VERSION, STDLIB_VERSION).unwrap_err();
+        assert!(matches!(err, LockValidationError::DependencyCycle { .. }));
     }
 
     #[test]
@@ -1558,16 +1666,31 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             ),
         ]);
 
-        let toml = lock.to_deterministic_toml();
+        let toml = lock.to_deterministic_toml().unwrap();
         let reparsed = parse_lockfile_str(&toml).unwrap();
 
-        assert_eq!(reparsed.to_deterministic_toml(), toml);
+        assert_eq!(reparsed.to_deterministic_toml().unwrap(), toml);
         assert_eq!(reparsed.root, lock.root);
         assert!(
             toml.find("pkg-mission").unwrap() < toml.find("pkg-units-v1").unwrap()
                 && toml.find("pkg-units-v1").unwrap() < toml.find("pkg-units-v2").unwrap()
         );
         assert!(toml.contains("units_v1 = \"pkg-units-v1\"\nunits_v2 = \"pkg-units-v2\""));
+    }
+
+    #[test]
+    fn lockfile_toml_escapes_control_characters() {
+        let mut package = package("pkg-mission", "mission", path_source(), BTreeMap::new());
+        package.source_dir = PathBuf::from("src/line\nfeed");
+        let lock = lockfile(vec![package]);
+
+        let toml = lock.to_deterministic_toml().unwrap();
+        assert!(toml.contains("source_dir = \"src/line\\nfeed\""));
+        let reparsed = parse_lockfile_str(&toml).unwrap();
+        assert_eq!(
+            reparsed.packages[0].source_dir,
+            PathBuf::from("src/line\nfeed")
+        );
     }
 
     #[test]

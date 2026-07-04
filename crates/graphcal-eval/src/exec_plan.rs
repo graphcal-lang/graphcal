@@ -590,11 +590,7 @@ fn resolve_constraint_from_bounds(
         let rv = eval_hir_expr(&bound.value, values, &empty_locals, ctx)?;
         let si_value = match &rv {
             RuntimeValue::Scalar(v) => *v,
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "domain bound integers are small"
-            )]
-            RuntimeValue::Int(i) => *i as f64,
+            RuntimeValue::Int(i) => exact_domain_int_bound(*i, src, bound.value.span)?,
             _ => {
                 return Err(GraphcalError::EvalError {
                     message: scalar_err_msg(bound.kind),
@@ -950,13 +946,38 @@ fn validate_constraint_target(
 /// For simple expressions (numbers, unit literals, unary negation), the
 /// original syntactic form is preserved. For complex expressions, the
 /// pre-evaluated SI value is displayed as a fallback — no re-evaluation needed.
+fn exact_domain_int_bound(
+    value: i64,
+    src: &NamedSource<Arc<String>>,
+    span: graphcal_compiler::syntax::span::Span,
+) -> Result<f64, GraphcalError> {
+    const MAX_EXACT_F64_INT: u64 = 1_u64 << f64::MANTISSA_DIGITS;
+    if value.unsigned_abs() > MAX_EXACT_F64_INT {
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "domain bound integer {value} is too large for exact scalar comparison"
+            ),
+            src: src.clone(),
+            span: span.into(),
+        });
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "integer magnitude is checked to be exactly representable before casting"
+    )]
+    {
+        Ok(value as f64)
+    }
+}
+
 fn format_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> String {
     use graphcal_compiler::hir::ExprKind;
     match &expr.kind {
         ExprKind::Number(n) => graphcal_compiler::registry::format::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
         ExprKind::UnitLiteral { value, unit } => {
-            let unit_str = graphcal_compiler::registry::format::format_unit_expr(unit);
+            let unit_str =
+                graphcal_compiler::registry::format::format_unit_expr_with_config(unit, true);
             let val_str = graphcal_compiler::registry::format::format_number(*value);
             format!("{val_str} {unit_str}")
         }

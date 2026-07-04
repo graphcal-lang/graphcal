@@ -6,29 +6,27 @@
 //!
 //! # Architecture
 //!
-//! Each surface sugar implements [`DesugarSugar`] — a node-level transform
-//! that maps one raw sugar variant to its desugared equivalent. The generic
-//! walker in this module traverses the AST, dispatching `Sugar(_)` arms to
-//! the appropriate [`DesugarSugar`] impl while every other variant is
-//! rebuilt phase-by-phase with its children desugared recursively.
+//! The concrete walker in [`convert`] traverses the AST, dispatching
+//! `Sugar(_)` arms to explicit conversion functions while every other
+//! variant is rebuilt phase-by-phase with its children desugared
+//! recursively.
 //!
 //! ```text
-//! File<Raw> ──┬─► (walker) ──┬─► File<Desugared>
-//!             │               │
-//!             ├─ MultiDecl ───┘ via DesugarSugar
-//!             └─ TableLiteral ──► (desugar to MapLiteral)
+//! File<Raw> ──┬─► convert ──┬─► File<Desugared>
+//!             │             │
+//!             ├─ MultiDecl ─┘ (one-to-many declarations)
+//!             └─ TableLiteral ─► MapLiteral
 //! ```
 //!
-//! # Adding a new customer
+//! # Adding new sugar
 //!
 //! 1. Add a variant to [`crate::syntax::ast::RawDeclSugar`] or
 //!    [`crate::syntax::ast::RawExprSugar`].
-//! 2. Implement [`DesugarSugar`] for that variant in a submodule of this
-//!    module.
+//! 2. Add the corresponding conversion helper in [`convert`].
 //! 3. Wire it into the walker's `Sugar(_)` dispatch.
 //!
 //! No changes to downstream consumers are needed — they only see
-//! `File<Desugared>` and never observed the sugar in the first place.
+//! `File<Desugared>` and never observe the sugar in the first place.
 //!
 //! # Span fidelity
 //!
@@ -38,20 +36,3 @@
 
 pub mod convert;
 pub mod desugared_ast;
-
-/// Single-node desugaring step.
-///
-/// Implementors map one surface sugar form to its desugared equivalent.
-/// The output type is generic so different sugars can desugar to different
-/// shapes — e.g., `MultiDecl` desugars to `Vec<Declaration<Desugared>>`,
-/// while `TableLiteral` desugars to `ExprKind<Desugared>`.
-pub trait DesugarSugar {
-    /// The raw surface form being desugared.
-    type RawNode;
-    /// The shape produced by desugaring (often a single node, sometimes
-    /// a `Vec` for one-to-many expansions).
-    type DesugaredOut;
-
-    /// Perform the desugaring.
-    fn desugar_sugar(raw: Self::RawNode) -> Self::DesugaredOut;
-}

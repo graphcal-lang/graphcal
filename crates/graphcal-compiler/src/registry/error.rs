@@ -28,7 +28,9 @@ pub enum GraphcalError {
     #[error("{kind} `{name}` shadows a built-in name")]
     #[diagnostic(
         code(graphcal::N009),
-        help("choose a different name; built-in dimensions, types, and units cannot be redefined")
+        help(
+            "choose a different name; built-in dimensions, types, units, constants, and time scales cannot be redefined"
+        )
     )]
     BuiltinNameShadowed {
         kind: &'static str,
@@ -699,7 +701,7 @@ pub enum GraphcalError {
 
     #[error("invalid source path `{path}`: {reason}")]
     #[diagnostic(
-        code(graphcal::M000),
+        code(graphcal::M020),
         help("Graphcal source files must be UTF-8 `.gcl` files")
     )]
     InvalidSourcePath { path: String, reason: String },
@@ -1064,6 +1066,16 @@ pub enum GraphcalError {
     )]
     OverrideUnknownParam { name: DeclName },
 
+    #[error("ambiguous parameter `{name}` in --set override")]
+    #[diagnostic(
+        code(graphcal::O004),
+        help("the override name matches multiple merged parameter instances")
+    )]
+    OverrideAmbiguousParam {
+        name: DeclName,
+        candidates: Vec<crate::syntax::module_name::ScopedName>,
+    },
+
     #[error("required param `{name}` has no value")]
     #[diagnostic(
         code(graphcal::O003),
@@ -1197,7 +1209,7 @@ pub enum GraphcalError {
 
     #[error("index binding `{dep_index} = {value}`: `{value}` is not a known index")]
     #[diagnostic(
-        code(graphcal::M017),
+        code(graphcal::M019),
         help(
             "the right-hand side of an index binding must be a `cat` or `range` index declared in the importing file or its transitive imports"
         )
@@ -1635,7 +1647,8 @@ impl GraphcalError {
             | Self::CircularImport { .. }
             | Self::ManifestError { .. }
             | Self::OverrideNotAParam { .. }
-            | Self::OverrideUnknownParam { .. } => return None,
+            | Self::OverrideUnknownParam { .. }
+            | Self::OverrideAmbiguousParam { .. } => return None,
             Self::DuplicateName { src, .. }
             | Self::BuiltinNameShadowed { src, .. }
             | Self::ConflictingImportedUnit { src, .. }

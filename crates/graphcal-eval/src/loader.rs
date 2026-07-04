@@ -11,6 +11,7 @@ use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, ImportKind, IncludeDecl, ModulePath};
+use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::phase::Phase;
 use graphcal_io::{FileSystemReader, RealFileSystem};
 use graphcal_package::{
@@ -400,10 +401,10 @@ fn link_instantiated_include_indexes(
             // target is already reported elsewhere).
             continue;
         }
-        let bound: HashSet<&str> = include
+        let bound: HashSet<IndexName> = include
             .param_bindings
             .iter()
-            .map(|binding| binding.name.name.as_str())
+            .map(|binding| IndexName::from_atom(binding.name.name.clone()))
             .collect();
         resolver.inline_instantiated_include_indexes(owner, &synthetic, &bound)?;
     }

@@ -11,8 +11,8 @@ use graphcal_eval::loader::discover_project_root;
 use graphcal_io::RealFileSystem;
 use graphcal_package::{
     DependencyName, DependencySpec, GitCommitHash, GitUrl, LOCK_VERSION, LockedPackage, Lockfile,
-    PackageGraph, PackageInstanceId, PackageManifest, PackageName, PackageSource, STDLIB_VERSION,
-    SourceTreeHashes, parse_manifest_str,
+    LockfileSerializeError, PackageGraph, PackageInstanceId, PackageManifest, PackageName,
+    PackageSource, STDLIB_VERSION, SourceTreeHashes, parse_manifest_str,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -59,15 +59,14 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
     let graph = lockfile.package_graph(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)?;
     ensure_lock_graph_loadable(&graph)?;
 
-    let content = lockfile.to_deterministic_toml();
+    let content = lockfile
+        .to_deterministic_toml()
+        .map_err(DepsError::LockfileSerialize)?;
     let lockfile_path = root.join("graphcal.lock");
     let changed = match std::fs::read_to_string(&lockfile_path) {
         Ok(existing) if existing == content => false,
         Ok(_) | Err(_) => {
-            std::fs::write(&lockfile_path, content).map_err(|source| DepsError::WriteFile {
-                path: lockfile_path.clone(),
-                source,
-            })?;
+            write_file_atomic(&root, &lockfile_path, content.as_bytes())?;
             true
         }
     };
@@ -76,6 +75,33 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
         lockfile_path,
         changed,
     })
+}
+
+fn write_file_atomic(root: &Path, final_path: &Path, bytes: &[u8]) -> Result<(), DepsError> {
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".graphcal-lock-")
+        .tempfile_in(root)
+        .map_err(|source| DepsError::CreateTempDir {
+            path: root.to_path_buf(),
+            source,
+        })?;
+    std::io::Write::write_all(&mut tmp, bytes).map_err(|source| DepsError::WriteFile {
+        path: tmp.path().to_path_buf(),
+        source,
+    })?;
+    tmp.as_file()
+        .sync_all()
+        .map_err(|source| DepsError::WriteFile {
+            path: tmp.path().to_path_buf(),
+            source,
+        })?;
+    let tmp_path = tmp.path().to_path_buf();
+    tmp.persist(final_path).map_err(|err| DepsError::Rename {
+        from: tmp_path,
+        to: final_path.to_path_buf(),
+        source: err.error,
+    })?;
+    Ok(())
 }
 
 fn ensure_lock_graph_loadable(graph: &PackageGraph) -> Result<(), DepsError> {
@@ -220,10 +246,7 @@ impl LockResolver {
         rev: &GitCommitHash,
     ) -> Result<MaterializedGit, DepsError> {
         let path = self.cache_dir.join("git").join(cache_key(url, rev));
-        if path.is_dir() {
-            let sha256 = hash_source_tree(&path)?;
-            return Ok(MaterializedGit { root: path, sha256 });
-        }
+        remove_existing_cache_checkout(&path)?;
 
         let parent = path.parent().ok_or_else(|| {
             DepsError::Internal(format!("cache path {} has no parent", path.display()))
@@ -242,13 +265,38 @@ impl LockResolver {
         let tmp_path = tmp.path().to_path_buf();
         materialize_git_revision(url, rev, &tmp_path)?;
         let sha256 = hash_source_tree(&tmp_path)?;
-        std::fs::rename(&tmp_path, &path).map_err(|source| DepsError::Rename {
-            from: tmp_path,
-            to: path.clone(),
-            source,
-        })?;
+        match std::fs::rename(&tmp_path, &path) {
+            Ok(()) => Ok(MaterializedGit { root: path, sha256 }),
+            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {
+                let sha256 = hash_source_tree(&path)?;
+                Ok(MaterializedGit { root: path, sha256 })
+            }
+            Err(source) => Err(DepsError::Rename {
+                from: tmp_path,
+                to: path.clone(),
+                source,
+            }),
+        }
+    }
+}
 
-        Ok(MaterializedGit { root: path, sha256 })
+fn remove_existing_cache_checkout(path: &Path) -> Result<(), DepsError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            std::fs::remove_dir_all(path).map_err(|source| DepsError::RemoveDir {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            Ok(())
+        }
+        Ok(_) => Err(DepsError::UnsupportedSourceEntry {
+            path: path.to_path_buf(),
+        }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(DepsError::Metadata {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 
@@ -357,6 +405,13 @@ struct MaterializedGit {
 
 fn read_manifest(root: &Path) -> Result<PackageManifest, DepsError> {
     let path = root.join("graphcal.toml");
+    let metadata = std::fs::symlink_metadata(&path).map_err(|source| DepsError::Metadata {
+        path: path.clone(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(DepsError::UnsupportedSourceEntry { path });
+    }
     let content = std::fs::read_to_string(&path).map_err(|source| DepsError::ReadFile {
         path: path.clone(),
         source,
@@ -428,7 +483,7 @@ fn collect_hash_files(
         return Ok(());
     }
     let path = root.join(relative);
-    let metadata = std::fs::metadata(&path).map_err(|source| DepsError::Metadata {
+    let metadata = std::fs::symlink_metadata(&path).map_err(|source| DepsError::Metadata {
         path: path.clone(),
         source,
     })?;
@@ -545,6 +600,12 @@ pub enum DepsError {
         to: PathBuf,
         source: std::io::Error,
     },
+    /// Directory removal failed.
+    #[error("could not remove directory `{}`: {source}", path.display())]
+    RemoveDir {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     /// Unsupported file type in source hash input.
     #[error("unsupported source entry `{}`", path.display())]
     UnsupportedSourceEntry { path: PathBuf },
@@ -557,6 +618,9 @@ pub enum DepsError {
     /// Lock validation failed.
     #[error("{0}")]
     LockValidation(#[from] graphcal_package::LockValidationError),
+    /// Lockfile serialization failed.
+    #[error("could not serialize graphcal.lock: {0}")]
+    LockfileSerialize(#[from] LockfileSerializeError),
     /// Generated package id was invalid.
     #[error(transparent)]
     PackageId(graphcal_package::PackageInstanceIdError),
@@ -583,4 +647,51 @@ pub enum DepsError {
     /// Internal invariant violation.
     #[error("internal deps lock error: {0}")]
     Internal(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_temp_dir() -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be after UNIX_EPOCH")
+            .as_nanos();
+        std::env::temp_dir().join(format!("graphcal-deps-test-{}-{nanos}", std::process::id()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hash_source_tree_rejects_symlinked_source_file() {
+        let root = unique_temp_dir();
+        let outside = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(
+            root.join("graphcal.toml"),
+            "[package]\nname = \"mission\"\nsource_dir = \"src\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/mission.gcl"),
+            "node x: Dimensionless = 1.0;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            outside.join("secret.gcl"),
+            "node secret: Dimensionless = 2.0;\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.gcl"), root.join("src/evil.gcl")).unwrap();
+
+        let err = hash_source_tree(&root).unwrap_err();
+        assert!(matches!(
+            err,
+            DepsError::UnsupportedSourceEntry { path } if path.ends_with("src/evil.gcl")
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
 }

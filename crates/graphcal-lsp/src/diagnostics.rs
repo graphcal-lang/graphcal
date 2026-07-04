@@ -31,7 +31,7 @@ pub fn eval_result_to_diagnostics(
             Err(err) => {
                 let range = symbol_table
                     .definitions
-                    .get(&SymbolKey::TopLevel(name.to_string()))
+                    .get(&SymbolKey::from_scoped_name(name))
                     .map_or_else(Range::default, |def| lines.span_to_range(def.name_span));
                 Some(Diagnostic {
                     range,

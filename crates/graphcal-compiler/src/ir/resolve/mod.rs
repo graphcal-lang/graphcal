@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::builtin::BuiltinConst;
 use crate::desugar::desugared_ast::{
     AssertBody, AttributeArg, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeDeclBody,
     TypeExpr, TypeExprKind,
@@ -34,7 +35,7 @@ pub use crate::registry::resolve_types::{
 pub use crate::syntax::module_name::ScopedName;
 
 // Re-export items from submodules (crate-internal only).
-pub use deps::{collect_graph_ref_names, collect_graph_refs, contains_graph_ref};
+pub use deps::contains_graph_ref;
 
 // Import helpers from submodules for use within this file.
 use names::parse_expected_fail_args;
@@ -58,32 +59,20 @@ fn register_value_namespace_name(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExclusiveUniverse {
-    Type,
-    Index,
-    Value,
-}
-
-type ExclusiveUniverseBinding = (ExclusiveUniverse, Span);
-
 fn register_exclusive_universe_name(
-    occupied: &mut HashMap<NameAtom, ExclusiveUniverseBinding>,
+    occupied: &mut HashMap<NameAtom, Span>,
     atom: &NameAtom,
-    universe: ExclusiveUniverse,
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    occupied
-        .insert(atom.clone(), (universe, span))
-        .map_or(Ok(()), |first| {
-            Err(GraphcalError::DuplicateName {
-                name: atom.to_string(),
-                src: src.clone(),
-                duplicate: span.into(),
-                first: first.1.into(),
-            })
+    occupied.insert(atom.clone(), span).map_or(Ok(()), |first| {
+        Err(GraphcalError::DuplicateName {
+            name: atom.to_string(),
+            src: src.clone(),
+            duplicate: span.into(),
+            first: first.into(),
         })
+    })
 }
 
 fn check_builtin_name_shadowing(
@@ -107,6 +96,15 @@ fn check_builtin_name_shadowing(
             DeclKind::Unit(u) if PRELUDE_UNIT_NAMES.contains(&u.name.value.as_str()) => {
                 Some(("unit", u.name.value.to_string(), u.name.span))
             }
+            DeclKind::Param(p) if is_builtin_value_name(p.name.value.as_str()) => {
+                Some(("param", p.name.value.to_string(), p.name.span))
+            }
+            DeclKind::Node(n) if is_builtin_value_name(n.name.value.as_str()) => {
+                Some(("node", n.name.value.to_string(), n.name.span))
+            }
+            DeclKind::ConstNode(c) if is_builtin_value_name(c.name.value.as_str()) => {
+                Some(("const node", c.name.value.to_string(), c.name.span))
+            }
             _ => None,
         };
 
@@ -127,6 +125,10 @@ fn is_builtin_type_name(name: &str) -> bool {
     PRELUDE_DIMENSION_NAMES.contains(&name) || PRELUDE_BUILTIN_TYPE_NAMES.contains(&name)
 }
 
+fn is_builtin_value_name(name: &str) -> bool {
+    BuiltinConst::parse(name).is_some() || is_time_scale_name(name)
+}
+
 fn check_exclusive_universe_collisions(
     file: &File,
     src: &NamedSource<Arc<String>>,
@@ -135,43 +137,34 @@ fn check_exclusive_universe_collisions(
     let mut occupied = names
         .iter()
         .filter(|(name, _)| !name.is_qualified())
-        .map(|(name, span)| {
-            (
-                DeclName::expect_valid(name.member()).into_atom(),
-                (ExclusiveUniverse::Value, *span),
-            )
-        })
+        .map(|(name, span)| (DeclName::expect_valid(name.member()).into_atom(), *span))
         .collect::<HashMap<_, _>>();
 
-    for (atom, universe, span) in file
+    for (atom, span) in file
         .declarations
         .iter()
         .filter_map(|decl| exclusive_universe_decl(&decl.kind))
     {
-        register_exclusive_universe_name(&mut occupied, atom, universe, span, src)?;
+        register_exclusive_universe_name(&mut occupied, atom, span, src)?;
     }
 
     Ok(())
 }
 
-fn exclusive_universe_decl(decl: &DeclKind) -> Option<(&NameAtom, ExclusiveUniverse, Span)> {
+fn exclusive_universe_decl(decl: &DeclKind) -> Option<(&NameAtom, Span)> {
     match decl {
-        DeclKind::Param(p) => Some((p.name.value.atom(), ExclusiveUniverse::Value, p.name.span)),
-        DeclKind::Node(n) => Some((n.name.value.atom(), ExclusiveUniverse::Value, n.name.span)),
-        DeclKind::ConstNode(c) => {
-            Some((c.name.value.atom(), ExclusiveUniverse::Value, c.name.span))
-        }
-        DeclKind::Assert(a) => Some((a.name.value.atom(), ExclusiveUniverse::Value, a.name.span)),
-        DeclKind::Plot(p) => Some((p.name.value.atom(), ExclusiveUniverse::Value, p.name.span)),
-        DeclKind::Figure(f) => Some((f.name.value.atom(), ExclusiveUniverse::Value, f.name.span)),
-        DeclKind::Layer(l) => Some((l.name.value.atom(), ExclusiveUniverse::Value, l.name.span)),
-        DeclKind::Dag(d) => Some((d.name.value.atom(), ExclusiveUniverse::Value, d.name.span)),
-        DeclKind::BaseDimension(d) => {
-            Some((d.name.value.atom(), ExclusiveUniverse::Type, d.name.span))
-        }
-        DeclKind::Dimension(d) => Some((d.name.value.atom(), ExclusiveUniverse::Type, d.name.span)),
-        DeclKind::Type(t) => Some((t.name.value.atom(), ExclusiveUniverse::Type, t.name.span)),
-        DeclKind::Index(i) => Some((i.name.value.atom(), ExclusiveUniverse::Index, i.name.span)),
+        DeclKind::Param(p) => Some((p.name.value.atom(), p.name.span)),
+        DeclKind::Node(n) => Some((n.name.value.atom(), n.name.span)),
+        DeclKind::ConstNode(c) => Some((c.name.value.atom(), c.name.span)),
+        DeclKind::Assert(a) => Some((a.name.value.atom(), a.name.span)),
+        DeclKind::Plot(p) => Some((p.name.value.atom(), p.name.span)),
+        DeclKind::Figure(f) => Some((f.name.value.atom(), f.name.span)),
+        DeclKind::Layer(l) => Some((l.name.value.atom(), l.name.span)),
+        DeclKind::Dag(d) => Some((d.name.value.atom(), d.name.span)),
+        DeclKind::BaseDimension(d) => Some((d.name.value.atom(), d.name.span)),
+        DeclKind::Dimension(d) => Some((d.name.value.atom(), d.name.span)),
+        DeclKind::Type(t) => Some((t.name.value.atom(), t.name.span)),
+        DeclKind::Index(i) => Some((i.name.value.atom(), i.name.span)),
         DeclKind::Unit(_) | DeclKind::Import(_) | DeclKind::Include(_) => None,
         DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
     }
@@ -301,8 +294,7 @@ fn collect_local_declarations(
     for decl in &file.declarations {
         let is_visible = match &decl.kind {
             DeclKind::Param(_) => true,
-            DeclKind::Node(d) => d.visibility.is_public(),
-            DeclKind::ConstNode(d) => d.visibility.is_public(),
+            DeclKind::Node(d) | DeclKind::ConstNode(d) => d.visibility.is_public(),
             DeclKind::BaseDimension(d) => d.visibility.is_public(),
             DeclKind::Dimension(d) => d.visibility.is_public(),
             DeclKind::Unit(d) => d.visibility.is_public(),
@@ -435,49 +427,49 @@ fn collect_local_declarations(
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
             DeclKind::Assert(a) => {
                 asserts.push(ResolvedAssertEntry {
-                    name: a.name.value.to_string(),
+                    name: a.name.value.clone(),
                     body: a.body.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Plot(p) => {
                 plots.push(ResolvedPlotEntry {
-                    name: p.name.value.to_string(),
+                    name: p.name.value.clone(),
                     decl: p.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Figure(f) => {
                 figures.push(ResolvedFigureEntry {
-                    name: f.name.value.to_string(),
+                    name: f.name.value.clone(),
                     decl: f.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Layer(l) => {
                 layers.push(ResolvedLayerEntry {
-                    name: l.name.value.to_string(),
+                    name: l.name.value.clone(),
                     decl: l.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Param(p) => {
                 params.push(ResolvedParamEntry {
-                    name: p.name.value.to_string(),
+                    name: p.name.value.clone(),
                     default_expr: p.value.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::ConstNode(c) => {
                 consts.push(ResolvedConstEntry {
-                    name: c.name.value.to_string(),
+                    name: c.name.value.clone(),
                     expr: c.value.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Node(n) => {
                 nodes.push(ResolvedNodeEntry {
-                    name: n.name.value.to_string(),
+                    name: n.name.value.clone(),
                     expr: n.value.clone(),
                     span: decl.span,
                 });
@@ -771,8 +763,7 @@ fn validate_private_in_public(
         // explicitly marked `pub` / `pub(bind)`.
         let is_visible = match &decl.kind {
             DeclKind::Param(_) => true,
-            DeclKind::Node(d) => d.visibility.is_public(),
-            DeclKind::ConstNode(d) => d.visibility.is_public(),
+            DeclKind::Node(d) | DeclKind::ConstNode(d) => d.visibility.is_public(),
             DeclKind::BaseDimension(d) => d.visibility.is_public(),
             DeclKind::Dimension(d) => d.visibility.is_public(),
             DeclKind::Unit(d) => d.visibility.is_public(),
@@ -912,10 +903,10 @@ fn ref_kind_for(file: &File, ref_name: &str) -> &'static str {
 /// These are treated as if they were declared locally, appearing before local declarations.
 #[derive(Debug, Default)]
 pub(crate) struct ImportedNames {
-    pub consts: Vec<(String, TypeExpr, Expr, Span)>,
-    pub params: Vec<(String, TypeExpr, Expr, Span)>,
-    pub nodes: Vec<(String, TypeExpr, Expr, Span)>,
-    pub asserts: Vec<(String, AssertBody, Span)>,
+    pub consts: Vec<(DeclName, TypeExpr, Expr, Span)>,
+    pub params: Vec<(DeclName, TypeExpr, Expr, Span)>,
+    pub nodes: Vec<(DeclName, TypeExpr, Expr, Span)>,
+    pub asserts: Vec<(DeclName, AssertBody, Span)>,
 }
 
 /// Collect declaration entries and validate declaration shells.
@@ -969,7 +960,7 @@ pub(crate) fn resolve_with_imports(
     // Build assert names (imported + local) for attribute validation
     let mut all_assert_names: HashSet<DeclName> = HashSet::new();
     for (name, _, _) in &imported.asserts {
-        all_assert_names.insert(DeclName::expect_valid(name.as_str()));
+        all_assert_names.insert(name.clone());
     }
     all_assert_names.extend(local.assert_names.iter().cloned());
 

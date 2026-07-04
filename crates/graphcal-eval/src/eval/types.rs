@@ -602,11 +602,13 @@ pub struct EvalResult {
 }
 
 impl EvalResult {
-    /// Returns `true` if any param/node evaluation failed or any assertion failed.
+    /// Returns `true` if any const/param/node/plot evaluation failed or any assertion failed.
     #[must_use]
     pub fn has_errors(&self) -> bool {
-        self.params.iter().any(|(_, r)| r.is_err())
+        self.consts.iter().any(|(_, r)| r.is_err())
+            || self.params.iter().any(|(_, r)| r.is_err())
             || self.nodes.iter().any(|(_, r)| r.is_err())
+            || !self.plot_errors.is_empty()
             || self.assertions.iter().any(|(_, r, _)| {
                 matches!(r, AssertResult::Fail { .. } | AssertResult::Error { .. })
             })
@@ -748,6 +750,34 @@ mod tests {
             (dim_id("Length"), "m".to_string()),
             (dim_id("Time"), "s".to_string()),
         ])
+    }
+
+    fn empty_eval_result() -> EvalResult {
+        EvalResult {
+            consts: Vec::new(),
+            params: Vec::new(),
+            nodes: Vec::new(),
+            all: Vec::new(),
+            assertions: Vec::new(),
+            plots: Vec::new(),
+            plot_errors: Vec::new(),
+            figures: Vec::new(),
+            layers: Vec::new(),
+            assumes_map: std::collections::HashMap::new(),
+            base_dim_symbols: BTreeMap::new(),
+            domain_constraints: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn has_errors_counts_plot_errors() {
+        let mut result = empty_eval_result();
+        result.plot_errors.push(PlotError {
+            name: ScopedName::local("p"),
+            message: "bad plot".to_string(),
+        });
+
+        assert!(result.has_errors());
     }
 
     #[test]

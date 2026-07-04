@@ -8,6 +8,7 @@ use crate::registry::builtins::{DimSignature, ParamDim, ResultDim};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::DimVarName;
+use crate::syntax::function_name::FnName;
 use crate::syntax::span::Span;
 
 pub(super) fn infer_fn_dim_from_spans(
@@ -18,6 +19,21 @@ pub(super) fn infer_fn_dim_from_spans(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
+    if arg_dims.len() != sig.params.len() {
+        return Err(GraphcalError::WrongArity {
+            name: FnName::expect_valid(fn_name),
+            expected: sig.params.len(),
+            got: arg_dims.len(),
+            src: src.clone(),
+            span: arg_spans
+                .get(sig.params.len())
+                .or_else(|| arg_spans.last())
+                .copied()
+                .unwrap_or_else(|| Span::new(0, 0))
+                .into(),
+        });
+    }
+
     let mut bindings: HashMap<DimVarName, &Dimension> = HashMap::new();
 
     for (i, param) in sig.params.iter().enumerate() {

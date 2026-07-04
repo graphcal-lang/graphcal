@@ -7,6 +7,7 @@
 )]
 use super::*;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
+use graphcal_compiler::syntax::attribute::AttributeName;
 
 /// What kind of "other declaration" a binding name resolves to in the dep file
 /// when it is not a param / type / dim / index.
@@ -150,37 +151,66 @@ fn include_value_decl(
     }
 }
 
-/// Validate an include item's attributes and return whether it carries
-/// `#[hidden]` (#847). `#[hidden]` is only valid on plot items; other
-/// attributes keep their existing per-item semantics (e.g.
-/// `#[expected_fail]` on included asserts).
-fn include_item_hidden_flag(
+/// Validate an include/import item's attributes and return whether it carries
+/// `#[hidden]` (#847). Per-item attributes are intentionally limited:
+/// `#[hidden]` is plot-only, and `#[expected_fail]` is assertion-only.
+fn validate_include_item_attributes(
     import_item: &graphcal_compiler::desugar::desugared_ast::ImportItem,
     is_plot: bool,
+    is_assert: bool,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<bool, CompileError> {
     let mut hidden = false;
     for attr in &import_item.attributes {
-        if attr.name.name.as_str() != "hidden" {
-            continue;
-        }
-        if !is_plot {
-            return Err(CompileError::Eval(
-                GraphcalError::HiddenIncludeItemNotAPlot {
-                    name: import_item.name.name.to_string(),
-                    src: file_src.clone(),
-                    span: attr.span.into(),
-                },
-            ));
-        }
-        if !attr.args.is_empty() {
-            return Err(CompileError::Eval(GraphcalError::EvalError {
-                message: "`#[hidden]` takes no arguments".to_string(),
+        let attr_name = attr.name.name.parse::<AttributeName>().map_err(|err| {
+            CompileError::Eval(GraphcalError::UnknownAttribute {
+                name: err.into_raw(),
                 src: file_src.clone(),
                 span: attr.span.into(),
-            }));
+            })
+        })?;
+        match attr_name {
+            AttributeName::Hidden => {
+                if !is_plot {
+                    return Err(CompileError::Eval(
+                        GraphcalError::HiddenIncludeItemNotAPlot {
+                            name: import_item.name.name.to_string(),
+                            src: file_src.clone(),
+                            span: attr.span.into(),
+                        },
+                    ));
+                }
+                if !attr.args.is_empty() {
+                    return Err(CompileError::Eval(GraphcalError::EvalError {
+                        message: "`#[hidden]` takes no arguments".to_string(),
+                        src: file_src.clone(),
+                        span: attr.span.into(),
+                    }));
+                }
+                hidden = true;
+            }
+            AttributeName::ExpectedFail => {
+                if !is_assert {
+                    return Err(CompileError::Eval(
+                        GraphcalError::InvalidExpectedFailTarget {
+                            kind: "include/import item".to_string(),
+                            src: file_src.clone(),
+                            span: attr.span.into(),
+                        },
+                    ));
+                }
+            }
+            AttributeName::Assumes => {
+                return Err(CompileError::Eval(GraphcalError::InvalidAssumesTarget {
+                    kind: "include/import item".to_string(),
+                    src: file_src.clone(),
+                    span: attr.span.into(),
+                }));
+            }
+            AttributeName::Lazy => {
+                // Recognized but semantics deferred, matching declaration-level validation.
+            }
         }
-        hidden = true;
     }
     Ok(hidden)
 }
@@ -433,21 +463,31 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                     DeclKind::Index(idx) if idx.name.value.as_str() == rhs_name => Some(idx),
                     _ => None,
                 });
-        // Check 2: already-compiled dependency registries.
-        let importer_idx_from_registry = if importer_idx_ast.is_none() {
-            ctx.extra_registry_builders
+        // Check 2: already-compiled dependency registries. Collect every
+        // same-leaf match instead of taking the first `HashMap` iteration hit:
+        // if two dependencies expose the same index name with different kinds,
+        // acceptance must not depend on map order.
+        let importer_registry_index_kinds = if importer_idx_ast.is_none() {
+            let mut kinds = ctx
+                .extra_registry_builders
                 .iter()
-                .find_map(|import| import.registry.indexes.get_index(&rhs_name))
-                .or_else(|| {
-                    evaluated_files
-                        .values()
-                        .find_map(|ef| ef.registry.indexes.get_index(&rhs_name))
-                })
+                .filter_map(|import| import.registry.indexes.get_index(&rhs_name))
+                .map(graphcal_compiler::registry::types::IndexDef::is_named)
+                .collect::<Vec<_>>();
+            kinds.extend(
+                evaluated_files
+                    .values()
+                    .filter_map(|ef| ef.registry.indexes.get_index(&rhs_name))
+                    .map(graphcal_compiler::registry::types::IndexDef::is_named),
+            );
+            kinds.sort_unstable();
+            kinds.dedup();
+            kinds
         } else {
-            None
+            Vec::new()
         };
 
-        if importer_idx_ast.is_none() && importer_idx_from_registry.is_none() {
+        if importer_idx_ast.is_none() && importer_registry_index_kinds.is_empty() {
             return Err(CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
                 dep_index: binding_name.to_string(),
                 value: rhs_name,
@@ -463,10 +503,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 | graphcal_compiler::desugar::desugared_ast::IndexDeclKind::RequiredNamed
         );
         let imp_is_named = importer_idx_ast.map_or_else(
-            || {
-                importer_idx_from_registry
-                    .map(graphcal_compiler::registry::types::IndexDef::is_named)
-            },
+            || importer_registry_index_kinds.first().copied(),
             |imp_idx| {
                 Some(matches!(
                     imp_idx.kind,
@@ -475,14 +512,21 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 ))
             },
         );
-        if let Some(imp_named) = imp_is_named
-            && dep_is_named != imp_named
+        let ambiguous_registry_kind =
+            importer_idx_ast.is_none() && importer_registry_index_kinds.len() > 1;
+        if ambiguous_registry_kind
+            || matches!(imp_is_named, Some(imp_named) if dep_is_named != imp_named)
         {
             return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
                 dep_index: binding_name.to_string(),
                 dep_kind: if dep_is_named { "named" } else { "range" }.to_string(),
                 bound_index: rhs_name,
-                bound_kind: if imp_named { "named" } else { "range" }.to_string(),
+                bound_kind: match (ambiguous_registry_kind, imp_is_named) {
+                    (true, _) => "ambiguous".to_string(),
+                    (false, Some(true)) => "named".to_string(),
+                    (false, Some(false)) => "range".to_string(),
+                    (false, None) => "unknown".to_string(),
+                },
                 src: file_src.clone(),
                 span: binding.name.span.into(),
             }));
@@ -516,10 +560,12 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                     import_item.name.span,
                 )?;
 
-                let is_plot = import_item.namespace
-                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Default
-                    && dep_index.is_plot(orig_name);
-                let hidden = include_item_hidden_flag(import_item, is_plot, file_src)?;
+                let is_default_namespace = import_item.namespace
+                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Default;
+                let is_plot = is_default_namespace && dep_index.is_plot(orig_name);
+                let is_assert = is_default_namespace && dep_index.is_assert(orig_name);
+                let hidden =
+                    validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
                     // The requested plot merges into the root namespace under
                     // its local alias, evaluating against this instance (#847).
@@ -744,12 +790,18 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                     import_item.name.span,
                 )?;
 
-                let is_plot = import_item.namespace
-                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Default
+                let is_default_namespace = import_item.namespace
+                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Default;
+                let is_plot = is_default_namespace
                     && dag_body.declarations.iter().any(|d| {
                         matches!(&d.kind, DeclKind::Plot(pl) if pl.name.value.as_str() == orig_name.as_str())
                     });
-                let hidden = include_item_hidden_flag(import_item, is_plot, file_src)?;
+                let is_assert = is_default_namespace
+                    && dag_body.declarations.iter().any(|d| {
+                        matches!(&d.kind, DeclKind::Assert(assert) if assert.name.value.as_str() == orig_name.as_str())
+                    });
+                let hidden =
+                    validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
                     requested_plots.insert(
                         DeclName::expect_valid(orig_name),
@@ -970,7 +1022,9 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                 // default instance); its evaluated spec travels as data,
                 // renamed to the local alias.
                 let is_plot = is_default_namespace && dep_index.is_plot(orig_name);
-                let hidden = include_item_hidden_flag(import_item, is_plot, file_src)?;
+                let is_assert = is_default_namespace && dep_index.is_assert(orig_name);
+                let hidden =
+                    validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
                     if is_import {
                         return Err(CompileError::Eval(GraphcalError::ImportPlotItem {
@@ -1152,11 +1206,11 @@ pub(in crate::eval::project) fn check_dag_recursion(
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
     fn dfs<'a>(
-        node: &'a str,
-        deps: &HashMap<&str, Vec<&'a str>>,
-        visited: &mut HashSet<&'a str>,
-        in_stack: &mut HashSet<&'a str>,
-        path: &mut Vec<&'a str>,
+        node: &'a DeclName,
+        deps: &HashMap<&'a DeclName, Vec<&'a DeclName>>,
+        visited: &mut HashSet<&'a DeclName>,
+        in_stack: &mut HashSet<&'a DeclName>,
+        path: &mut Vec<&'a DeclName>,
     ) -> Option<Vec<String>> {
         if in_stack.contains(node) {
             #[expect(
@@ -1169,7 +1223,7 @@ pub(in crate::eval::project) fn check_dag_recursion(
                 .expect("DFS invariant: in_stack ⇒ node is on path");
             let mut cycle: Vec<String> = path[cycle_start..]
                 .iter()
-                .map(ToString::to_string)
+                .map(std::string::ToString::to_string)
                 .collect();
             cycle.push(node.to_string());
             return Some(cycle);
@@ -1195,32 +1249,26 @@ pub(in crate::eval::project) fn check_dag_recursion(
     }
 
     // Build adjacency list: dag_name -> set of dag names it includes.
-    let mut deps: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut deps: HashMap<&DeclName, Vec<&DeclName>> = HashMap::new();
     for (name, dag) in dag_definitions {
         let mut includes = Vec::new();
         for decl in &dag.body {
             if let DeclKind::Include(inc) = &decl.kind
                 && inc.path.segments.len() == 1
             {
-                let target = inc.path.segments[0].name.as_str();
-                if dag_definitions.contains_key(target) {
-                    includes.push(target);
+                let target = DeclName::from_atom(inc.path.segments[0].name.clone());
+                if let Some((target_name, _)) = dag_definitions.get_key_value(&target) {
+                    includes.push(target_name);
                 }
             }
         }
-        deps.insert(name.as_str(), includes);
+        deps.insert(name, includes);
     }
 
-    let mut visited: HashSet<&str> = HashSet::new();
-    let mut in_stack: HashSet<&str> = HashSet::new();
+    let mut visited: HashSet<&DeclName> = HashSet::new();
+    let mut in_stack: HashSet<&DeclName> = HashSet::new();
     for name in dag_definitions.keys() {
-        if let Some(cycle) = dfs(
-            name.as_str(),
-            &deps,
-            &mut visited,
-            &mut in_stack,
-            &mut Vec::new(),
-        ) {
+        if let Some(cycle) = dfs(name, &deps, &mut visited, &mut in_stack, &mut Vec::new()) {
             let cycle_str = cycle.join(" -> ");
             return Err(CompileError::Eval(GraphcalError::EvalError {
                 message: format!("recursive DAG instantiation: {cycle_str}"),

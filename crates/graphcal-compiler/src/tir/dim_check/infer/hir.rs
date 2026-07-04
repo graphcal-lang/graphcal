@@ -24,7 +24,7 @@ use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVarian
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{FieldName, GenericParamName};
-use crate::tir::typed::NatLinearForm;
+use crate::tir::typed::NatPolyForm;
 
 use super::super::builtins::infer_fn_dim_from_spans;
 use super::super::helpers::{
@@ -599,13 +599,27 @@ fn infer_hir_fn_call(
                 src,
             )?;
             if let InferredType::Indexed { element, .. } = arg_type {
-                return Ok(match kind {
-                    AggregationFn::Count => InferredType::Scalar(Dimension::dimensionless()),
+                return match kind {
+                    AggregationFn::Count => Ok(InferredType::Scalar(Dimension::dimensionless())),
                     AggregationFn::Sum
                     | AggregationFn::Min
                     | AggregationFn::Max
-                    | AggregationFn::Mean => *element,
-                });
+                    | AggregationFn::Mean => element.scalar_dimension().cloned().map_or_else(
+                        || {
+                            Err(GraphcalError::DimensionMismatch {
+                                expected: "indexed scalar collection".to_string(),
+                                found: format_inferred_type(&element, registry),
+                                help: format!(
+                                    "{}() requires every indexed element to be scalar",
+                                    name.as_str()
+                                ),
+                                src: src.clone(),
+                                span: args[0].span.into(),
+                            })
+                        },
+                        |dimension| Ok(InferredType::Scalar(dimension)),
+                    ),
+                };
             }
             infer_hir_builtin_fn(
                 name,
@@ -691,7 +705,9 @@ fn infer_hir_fn_call(
                 src,
             )?;
             match &arg_type {
-                InferredType::Scalar(dim) if dim.is_dimensionless() => {}
+                t if t
+                    .scalar_dimension()
+                    .is_some_and(Dimension::is_dimensionless) => {}
                 t if t.is_int_like() => {}
                 _ => {
                     return Err(GraphcalError::DimensionMismatch {
@@ -1247,10 +1263,10 @@ fn infer_hir_binop(
     )
 }
 
-fn hir_nat_to_linear_form(expr: &hir::NatExpr) -> Result<NatLinearForm, NatOverflowError> {
+fn hir_nat_to_linear_form(expr: &hir::NatExpr) -> Result<NatPolyForm, NatOverflowError> {
     match expr {
-        hir::NatExpr::Literal(n, _) => Ok(NatLinearForm::from_constant(*n)),
-        hir::NatExpr::Param(param) => Ok(NatLinearForm::from_var(param.value.name.clone())),
+        hir::NatExpr::Literal(n, _) => Ok(NatPolyForm::from_constant(*n)),
+        hir::NatExpr::Param(param) => Ok(NatPolyForm::from_var(param.value.name.clone())),
         hir::NatExpr::Add(lhs, rhs, _) => {
             hir_nat_to_linear_form(lhs)?.add(&hir_nat_to_linear_form(rhs)?)
         }
@@ -1314,13 +1330,19 @@ fn infer_hir_for_comp(
                         InferredType::NamedIndex(index_identity)
                     }
                     crate::registry::types::IndexKind::Range(data) => {
-                        InferredType::Scalar(data.dimension.clone())
+                        InferredType::RangeIndexLabel {
+                            index: index_identity,
+                            dimension: data.dimension.clone(),
+                        }
                     }
                     crate::registry::types::IndexKind::RequiredRange { dimension } => {
-                        InferredType::Scalar(dimension.clone())
+                        InferredType::RangeIndexLabel {
+                            index: index_identity,
+                            dimension: dimension.clone(),
+                        }
                     }
                     crate::registry::types::IndexKind::NatRange { size } => {
-                        InferredType::Fin(NatLinearForm::from_constant(size.get() as u64))
+                        InferredType::Fin(NatPolyForm::from_constant(size.get() as u64))
                     }
                 }
             }
@@ -1425,23 +1447,60 @@ fn infer_hir_index_access(
                             });
                         }
                     }
-                    InferredType::Scalar(_) => {
+                    InferredType::RangeIndexLabel {
+                        index: label_index,
+                        dimension: label_dimension,
+                    } => {
                         let idx_def = super::index_def_for_inferred(&index, Some(dag), registry)
                             .ok_or_else(|| GraphcalError::UnknownIndex {
                                 name: index.name(),
                                 src: src.clone(),
                                 span: local.span.into(),
                             })?;
-                        if !idx_def.is_range() {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "range-index loop variable cannot index into non-range index `{}`",
-                                    index.name()
-                                ),
+                        let expected_dimension = match &idx_def.kind {
+                            crate::registry::types::IndexKind::Range(data) => &data.dimension,
+                            crate::registry::types::IndexKind::RequiredRange { dimension } => {
+                                dimension
+                            }
+                            _ => {
+                                return Err(GraphcalError::EvalError {
+                                    message: format!(
+                                        "range-index loop variable cannot index into non-range index `{}`",
+                                        index.name()
+                                    ),
+                                    src: src.clone(),
+                                    span: local.span.into(),
+                                });
+                            }
+                        };
+                        if label_index != &index {
+                            return Err(GraphcalError::IndexMismatch {
+                                expected: index.name(),
+                                found: label_index.name(),
                                 src: src.clone(),
                                 span: local.span.into(),
                             });
                         }
+                        if label_dimension != expected_dimension {
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: registry.dimensions.format_dimension(expected_dimension),
+                                found: registry.dimensions.format_dimension(label_dimension),
+                                help: "range-index loop variable dimension must match the indexed range"
+                                    .to_string(),
+                                src: src.clone(),
+                                span: local.span.into(),
+                            });
+                        }
+                    }
+                    InferredType::Scalar(_) => {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "scalar local cannot index into range index `{}`; use that range index's loop variable",
+                                index.name()
+                            ),
+                            src: src.clone(),
+                            span: local.span.into(),
+                        });
                     }
                     InferredType::Int => {
                         if let Some(idx_def) =
@@ -1466,7 +1525,7 @@ fn infer_hir_index_access(
                                     if !idx_def.is_nat_range() {
                                         return None;
                                     }
-                                    idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                                    idx_def.nat_range_size().map(NatPolyForm::from_constant)
                                 },
                             );
                         let Some(index_form) = index_form else {
@@ -1523,7 +1582,7 @@ fn infer_hir_index_access(
                             if !idx_def.is_nat_range() {
                                 return None;
                             }
-                            idx_def.nat_range_size().map(NatLinearForm::from_constant)
+                            idx_def.nat_range_size().map(NatPolyForm::from_constant)
                         },
                     );
                 let Some(index_form) = index_form else {
@@ -1574,7 +1633,7 @@ fn infer_hir_index_access(
 
 fn check_constant_nat_range_index(
     index_expr: &hir::Expr,
-    index_form: &NatLinearForm,
+    index_form: &NatPolyForm,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let Some(index) = try_const_int(index_expr) else {
@@ -2346,7 +2405,7 @@ fn resolve_constructor_generic_args(
 enum MapLiteralVariantKey {
     Declared(ResolvedIndexVariant),
     NatRange {
-        form: NatLinearForm,
+        form: NatPolyForm,
         variant: IndexVariantName,
     },
 }
@@ -2398,7 +2457,7 @@ fn inferred_index_for_hir_map_key(
             variant.variant.index().clone(),
         )),
         hir::expr::MapEntryKey::NatRangeVariant { size, variant } => {
-            InferredIndex::from_nat_range_form(NatLinearForm::from_constant(*size))
+            InferredIndex::from_nat_range_form(NatPolyForm::from_constant(*size))
                 .map_err(|err| nat_range_error(err, src, variant.span))
         }
     }
@@ -2808,8 +2867,20 @@ fn infer_hir_unfold(
         }
     };
     let scan_locals = local_types.child(vec![
-        (prev.id, InferredType::Scalar(dimension.clone())),
-        (curr.id, InferredType::Scalar(dimension)),
+        (
+            prev.id,
+            InferredType::RangeIndexLabel {
+                index: index.clone(),
+                dimension: dimension.clone(),
+            },
+        ),
+        (
+            curr.id,
+            InferredType::RangeIndexLabel {
+                index: index.clone(),
+                dimension,
+            },
+        ),
     ]);
     let body_type = infer_hir_type(
         body,

@@ -25,7 +25,7 @@ pub(super) fn is_bool_type(ty: &InferredType) -> bool {
 /// equality is by name and type-argument list only.
 pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> bool {
     match (declared, inferred) {
-        (DeclaredType::Scalar(d), InferredType::Scalar(i)) => d == i,
+        (DeclaredType::Scalar(d), inferred) => inferred.scalar_dimension() == Some(d),
         (DeclaredType::Bool, InferredType::Bool) => true,
         (DeclaredType::Int, inferred) if inferred.is_int_like() => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
@@ -59,13 +59,17 @@ pub(super) fn resolved_type_matches_inferred(
     inferred: &InferredType,
 ) -> bool {
     match (resolved, inferred) {
-        (ResolvedTypeExpr::Dimensionless, InferredType::Scalar(d)) => d.is_dimensionless(),
+        (ResolvedTypeExpr::Dimensionless, inferred) => inferred
+            .scalar_dimension()
+            .is_some_and(Dimension::is_dimensionless),
         (ResolvedTypeExpr::Bool, InferredType::Bool) => true,
         (ResolvedTypeExpr::Int, inferred) => inferred.is_int_like(),
         (ResolvedTypeExpr::Datetime(expected), InferredType::Datetime(actual)) => {
             expected == actual
         }
-        (ResolvedTypeExpr::Scalar(expected), InferredType::Scalar(actual)) => expected == actual,
+        (ResolvedTypeExpr::Scalar(expected), inferred) => {
+            inferred.scalar_dimension() == Some(expected)
+        }
         (ResolvedTypeExpr::IndexArg(expected), InferredType::NamedIndex(actual)) => {
             resolved_index_matches_inferred(expected, actual)
         }
@@ -138,16 +142,16 @@ pub(super) fn format_declared_type(dt: &DeclaredType, registry: &Registry) -> St
 
 /// Look up the definition for an inferred struct identity.
 ///
-/// Prefer canonical semantic TIR type definitions, then consult the leaf-keyed
-/// registry for boundary-created synthetic owners.
+/// This lookup is canonical-owner based only. Falling back from a resolved
+/// identity to a bare leaf would make diamond imports with same-named types
+/// nondeterministic.
 pub(super) fn struct_type_def_for_inferred<'a>(
     ty: &InferredStructType,
     dag: Option<&'a crate::tir::typed::DagTIR>,
-    registry: &'a Registry,
+    _registry: &'a Registry,
 ) -> Option<&'a TypeDef> {
     dag.map(|dag| &dag.semantic.type_defs)
         .and_then(|defs| defs.struct_types.get(ty.resolved()))
-        .or_else(|| registry.types.get_type(ty.name().as_str()))
 }
 
 /// Format an inferred type for display in diagnostics.
@@ -162,7 +166,9 @@ pub fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
 impl From<&InferredType> for DeclaredType {
     fn from(it: &InferredType) -> Self {
         match it {
-            InferredType::Scalar(d) => Self::Scalar(d.clone()),
+            InferredType::Scalar(d) | InferredType::RangeIndexLabel { dimension: d, .. } => {
+                Self::Scalar(d.clone())
+            }
             InferredType::Bool => Self::Bool,
             InferredType::Int | InferredType::Fin(_) => Self::Int,
             InferredType::Datetime(scale) => Self::Datetime(*scale),
@@ -207,7 +213,9 @@ pub fn expect_scalar(
     span: crate::syntax::span::Span,
 ) -> Result<Dimension, GraphcalError> {
     let found_kind = match inferred {
-        InferredType::Scalar(d) => return Ok(d.clone()),
+        InferredType::Scalar(d) | InferredType::RangeIndexLabel { dimension: d, .. } => {
+            return Ok(d.clone());
+        }
         InferredType::Bool => "a Bool value",
         InferredType::Int | InferredType::Fin(_) => "an Int value",
         InferredType::Datetime(_) => "a Datetime value",

@@ -6,22 +6,42 @@ use crate::desugar::desugared_ast::{DimExpr, MulDivOp, TypeExpr, TypeExprKind};
 use crate::dimension::{BaseDimId, Dimension, MissingBaseDimensionName, Rational, RationalError};
 use crate::syntax::dimension::DimName;
 
+/// Error returned when resolving a `DimExpr` to a concrete [`Dimension`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DimensionResolveError {
+    /// A referenced dimension name is not registered.
+    #[error("unknown dimension `{name}`")]
+    UnknownDimension { name: DimName },
+    /// Dimension exponent arithmetic overflowed.
+    #[error(transparent)]
+    Overflow(#[from] RationalError),
+}
+
 /// Shared implementation for resolving a `DimExpr` to a concrete `Dimension`.
 pub(crate) fn resolve_dim_expr_impl(
     dimensions: &HashMap<DimName, Dimension>,
     expr: &DimExpr,
 ) -> Result<Option<Dimension>, RationalError> {
+    match resolve_dim_expr_detailed_impl(dimensions, expr) {
+        Ok(dim) => Ok(Some(dim)),
+        Err(DimensionResolveError::UnknownDimension { .. }) => Ok(None),
+        Err(DimensionResolveError::Overflow(err)) => Err(err),
+    }
+}
+
+/// Shared implementation for resolving a `DimExpr` while preserving the failing name.
+pub(crate) fn resolve_dim_expr_detailed_impl(
+    dimensions: &HashMap<DimName, Dimension>,
+    expr: &DimExpr,
+) -> Result<Dimension, DimensionResolveError> {
     expr.terms
         .iter()
-        .try_fold(Some(Dimension::dimensionless()), |acc, item| {
-            let Some(acc) = acc else {
-                return Ok(None);
-            };
-            let Some(atom) = item.term.name.value.as_bare() else {
-                return Ok(None);
-            };
-            let Some(base) = dimensions.get(atom.as_str()) else {
-                return Ok(None);
+        .try_fold(Dimension::dimensionless(), |acc, item| {
+            let name = item.term.name.value.leaf();
+            let Some(base) = dimensions.get(name.as_str()) else {
+                return Err(DimensionResolveError::UnknownDimension {
+                    name: DimName::from_atom(name.clone()),
+                });
             };
             let exp = item.term.power.unwrap_or(Rational::ONE);
             let powered = base.pow(exp)?;
@@ -29,7 +49,7 @@ pub(crate) fn resolve_dim_expr_impl(
                 MulDivOp::Mul => acc * powered,
                 MulDivOp::Div => acc / powered,
             }
-            .map(Some)
+            .map_err(DimensionResolveError::from)
         })
 }
 
@@ -63,9 +83,8 @@ fn format_dimension_preferring_alias(
 ) -> Result<String, MissingBaseDimensionName> {
     let canonical = dim.try_format_with(base_dim_names)?;
     // Base dimensions and Dimensionless render as a single bare name already;
-    // only compound renderings benefit from an alias.
-    let is_compound = canonical.contains([' ', '^', '*', '/']);
-    if is_compound
+    // only compound dimensions benefit from an alias.
+    if dim.is_compound()
         && let Some(alias) = dimensions
             .iter()
             .filter(|(_, d)| *d == dim)
@@ -176,6 +195,15 @@ impl DimensionRegistry {
     /// dimension exponent arithmetic overflows `i32`.
     pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RationalError> {
         resolve_dim_expr_impl(&self.dimensions, expr)
+    }
+
+    /// Resolve a `DimExpr` AST node to a concrete `Dimension`, preserving the
+    /// unknown referenced dimension name in the error.
+    pub fn resolve_dim_expr_detailed(
+        &self,
+        expr: &DimExpr,
+    ) -> Result<Dimension, DimensionResolveError> {
+        resolve_dim_expr_detailed_impl(&self.dimensions, expr)
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.

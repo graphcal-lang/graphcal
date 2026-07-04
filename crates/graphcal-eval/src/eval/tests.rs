@@ -745,6 +745,31 @@ fn indexed_si_values(value: &Value) -> Vec<(&str, f64)> {
 }
 
 #[test]
+fn epoch_constructor_applies_explicit_scale_without_suffix_concat() {
+    let result =
+        compile_and_eval(r#"node tt: Datetime<TT> = epoch("2000-01-01T12:00:00", TT);"#).unwrap();
+    let Value::Datetime { epoch, .. } = find_entry(&result, "tt") else {
+        panic!("expected datetime value");
+    };
+    let expected =
+        hifitime::Epoch::maybe_from_gregorian(2000, 1, 1, 12, 0, 0, 0, hifitime::TimeScale::TT)
+            .unwrap();
+    assert_eq!(epoch, expected);
+}
+
+#[test]
+fn epoch_constructor_rejects_embedded_scale_suffix() {
+    let result =
+        compile_and_eval(r#"node bad: Datetime<TT> = epoch("2000-01-01T12:00:00 UTC", TT);"#)
+            .unwrap();
+    let err = result.nodes[0].1.as_ref().unwrap_err().to_string();
+    assert!(
+        err.contains("must not include a time scale"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn eval_indexed_milestone() {
     let source = include_str!("../../../../tests/fixtures/valid/indexed.gcl");
     let result = compile_and_eval(source).unwrap();
@@ -803,6 +828,22 @@ fn eval_indexed_milestone() {
 
     // total_check (generic function): same as total_dv
     assert!((find_value(&result, "total_check") - 4410.0).abs() < 0.01);
+}
+
+#[test]
+fn eval_scan_uses_index_order_for_map_literals() {
+    let source = r"
+index Phase = { A, B };
+node x: Dimensionless[Phase] = { Phase.B: 10.0, Phase.A: 1.0 };
+node y: Dimensionless[Phase] = scan(@x, 0.0, |acc, val| acc + val);
+";
+    let result = compile_and_eval(source).unwrap();
+    let x = find_entry(&result, "x");
+    let y = find_entry(&result, "y");
+    let x_vals = indexed_si_values(&x);
+    let y_vals = indexed_si_values(&y);
+    assert_eq!(x_vals, [("A", 1.0), ("B", 10.0)]);
+    assert_eq!(y_vals, [("A", 1.0), ("B", 11.0)]);
 }
 
 #[test]
@@ -1333,6 +1374,36 @@ fn project_instantiated_import_graph_ref() {
         (result_val - expected_delta_v).abs() < 0.01,
         "result = {result_val}, expected = {expected_delta_v}"
     );
+}
+
+#[test]
+fn project_selective_import_item_rejects_unknown_attribute() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/attr");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"attr\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("lib.gcl"),
+        "pub node x: Dimensionless = 1.0;\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import attr.lib.{ #[bogus] x };\nnode y: Dimensionless = @x;\n",
+    )
+    .unwrap();
+
+    match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::UnknownAttribute { name, .. })) => {
+            assert_eq!(name, "bogus");
+        }
+        other => panic!("expected UnknownAttribute, got {other:?}"),
+    }
 }
 
 #[test]

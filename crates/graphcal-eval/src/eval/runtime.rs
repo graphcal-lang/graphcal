@@ -92,7 +92,10 @@ pub(super) fn runtime_to_value(
                 .iter()
                 .map(|(field_name, field_rv)| {
                     let field_declared = type_def.and_then(|td| {
-                        td.fields()
+                        td.union_members()?
+                            .iter()
+                            .find(|member| member.name.as_str() == public_type_name.as_str())?
+                            .fields
                             .iter()
                             .find(|f| f.name == *field_name)
                             .and_then(|f| resolve_field_declared_type(f, &generic_sub, registry))
@@ -177,6 +180,16 @@ pub(super) struct EvalLoopResult {
     pub errors: HashMap<RuntimeDeclKey, NodeError>,
 }
 
+fn declared_type_for_runtime_key<'a>(
+    dag: &graphcal_compiler::tir::typed::DagTIR,
+    declared_types: &'a HashMap<ScopedName, DeclaredType>,
+    key: &RuntimeDeclKey,
+) -> Option<&'a DeclaredType> {
+    declared_types.iter().find_map(|(name, declared_type)| {
+        (RuntimeDeclKey::for_visible_name(dag, name) == *key).then_some(declared_type)
+    })
+}
+
 /// Core evaluation loop shared by `evaluate_plan` and `extract_runtime_values`.
 ///
 /// Inserts imported and const values, then iterates in topological order.
@@ -211,7 +224,6 @@ pub(super) fn run_eval_loop(
     // Evaluate in topological order (params first, then nodes that depend on them).
     // Top-level declarations in a single file are always `Local`-form names.
     for name in &plan.topo_order {
-        let name_str = name.member().to_string();
         if values.contains_key(name) {
             continue;
         }
@@ -227,10 +239,22 @@ pub(super) fn run_eval_loop(
             continue;
         }
 
+        let Some(self_declared_type) =
+            declared_type_for_runtime_key(tir.root(), declared_types, name)
+        else {
+            errors.insert(
+                name.clone(),
+                NodeError::EvalFailed {
+                    message: format!("declared type map missing runtime key `{name}`"),
+                },
+            );
+            continue;
+        };
+
         // Build eval context with unfold support for this node.
         let unfold_ctx = UnfoldContext {
-            self_name: &name_str,
-            declared_types,
+            self_key: name.clone(),
+            self_declared_type,
         };
         let ctx = EvalContext {
             builtin_consts,
@@ -366,7 +390,6 @@ pub(super) fn evaluate_plan_with_values(
 ) -> (EvalResult, RuntimeValueMap) {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
-    let _empty_locals: HashMap<String, RuntimeValue> = HashMap::new();
     let empty_hir_locals = HirLocalValueMap::root();
 
     let EvalLoopResult { values, errors } =

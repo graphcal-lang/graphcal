@@ -1,16 +1,16 @@
 use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
-    Encoding, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl, IncludeDecl,
-    IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis, MultiSlotKind,
-    NodeDecl, ParamBinding, ParamDecl, PlotDecl, TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr,
-    UnitConstness, UnitDecl, UnitDef, Visibility,
+    Encoding, Expr, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl,
+    IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis,
+    MultiSlotKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TableIndexSpec, TypeDecl,
+    TypeDeclBody, TypeExpr, UnitConstness, UnitDecl, UnitDef, Visibility,
 };
 use pretty::RcDoc;
 
 use super::{
-    Formatter, INDENT, flat_alt_group, format_dim_expr_inline, format_expr,
-    format_type_expr_inline, format_unit_expr_inline, render_doc_to_string, soft_parenthesized,
-    soft_parenthesized_list,
+    Formatter, INDENT, display_width, flat_alt_group, format_dim_expr_inline, format_expr,
+    format_type_expr_inline, format_unit_expr_inline, pad_left_to_width, pad_right_to_width,
+    render_doc_to_string, soft_parenthesized, soft_parenthesized_list, text_with_hardlines,
 };
 
 // ---------------------------------------------------------------------------
@@ -61,8 +61,7 @@ fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
         DeclKind::Dimension(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Type(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Index(d) => bindable_visibility_prefix(d.visibility),
-        DeclKind::Node(d) => visibility_prefix(d.visibility),
-        DeclKind::ConstNode(d) => visibility_prefix(d.visibility),
+        DeclKind::Node(d) | DeclKind::ConstNode(d) => visibility_prefix(d.visibility),
         DeclKind::BaseDimension(d) => visibility_prefix(d.visibility),
         DeclKind::Unit(d) => visibility_prefix(d.visibility),
         DeclKind::Import(d) => visibility_prefix(d.visibility),
@@ -804,10 +803,9 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
             .iter()
             .enumerate()
             .map(|(ci, cell)| {
-                format!(
-                    "{:>w$}",
-                    header_cell_text(cell),
-                    w = col_widths.get(ci).copied().unwrap_or(0),
+                pad_left_to_width(
+                    &header_cell_text(cell),
+                    col_widths.get(ci).copied().unwrap_or(0),
                 )
             })
             .collect();
@@ -823,18 +821,15 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
             let cells: Vec<String> = rendered_rows[si][ri]
                 .iter()
                 .enumerate()
-                .map(|(ci, text)| {
-                    format!("{:>w$}", text, w = col_widths.get(ci).copied().unwrap_or(0))
-                })
+                .map(|(ci, text)| pad_left_to_width(text, col_widths.get(ci).copied().unwrap_or(0)))
                 .collect();
             out.push('\n');
             out.push_str(&body_indent);
             let _ = write!(
                 out,
-                "{:<w$}: {};",
-                row.label.value.as_str(),
+                "{}: {};",
+                pad_right_to_width(row.label.value.as_str(), max_row_label),
                 cells.join(", "),
-                w = max_row_label,
             );
         }
     }
@@ -843,11 +838,16 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
     out.push_str(&" ".repeat(INDENT as usize));
     out.push_str("};");
 
-    RcDoc::text(out)
+    text_with_hardlines(&out)
+}
+
+fn render_multi_decl_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
+    let mut cell_fmt = fmt.fork_skipping_comments_before(expr.span.offset());
+    render_doc_to_string(&format_expr(&mut cell_fmt, expr))
 }
 
 fn compute_multi_decl_layout(
-    fmt: &mut Formatter<'_>,
+    fmt: &Formatter<'_>,
     info: &MultiDecl,
 ) -> (usize, Vec<usize>, Vec<Vec<Vec<String>>>) {
     let num_cols = info.slices.first().map_or(0, |s| s.header_cells.len());
@@ -857,8 +857,9 @@ fn compute_multi_decl_layout(
     for slice in &info.slices {
         for (ci, cell) in slice.header_cells.iter().enumerate() {
             let text = header_cell_text(cell);
-            if ci < col_widths.len() && text.len() > col_widths[ci] {
-                col_widths[ci] = text.len();
+            let width = display_width(&text);
+            if ci < col_widths.len() && width > col_widths[ci] {
+                col_widths[ci] = width;
             }
         }
     }
@@ -873,7 +874,7 @@ fn compute_multi_decl_layout(
                 .map(|row| {
                     row.values
                         .iter()
-                        .map(|v| render_doc_to_string(&format_expr(fmt, v)))
+                        .map(|v| render_multi_decl_cell_value(fmt, v))
                         .collect()
                 })
                 .collect()
@@ -882,8 +883,9 @@ fn compute_multi_decl_layout(
     for slice_rows in &rendered_rows {
         for row_cells in slice_rows {
             for (ci, cell) in row_cells.iter().enumerate() {
-                if ci < col_widths.len() && cell.len() > col_widths[ci] {
-                    col_widths[ci] = cell.len();
+                let width = display_width(cell);
+                if ci < col_widths.len() && width > col_widths[ci] {
+                    col_widths[ci] = width;
                 }
             }
         }
@@ -893,7 +895,7 @@ fn compute_multi_decl_layout(
         .slices
         .iter()
         .flat_map(|s| s.rows.iter())
-        .map(|r| r.label.value.as_str().len())
+        .map(|r| display_width(r.label.value.as_str()))
         .max()
         .unwrap_or(0);
 

@@ -17,7 +17,7 @@ use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::Registry;
-use crate::tir::typed::{NatLinearForm, NatRangeIndexIdentity};
+use crate::tir::typed::{NatPolyForm, NatRangeIndexIdentity};
 
 pub(crate) use helpers::{expect_scalar, format_inferred_type};
 
@@ -85,7 +85,7 @@ impl InferredIndex {
     ///
     /// Returns an error when the form is a concrete invalid Nat range size.
     pub fn from_nat_range_form(
-        form: NatLinearForm,
+        form: NatPolyForm,
     ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
         Self::from_nat_range_identity(&NatRangeIndexIdentity::try_from_form(form)?)
     }
@@ -111,7 +111,7 @@ impl InferredIndex {
     }
 
     #[must_use]
-    pub fn nat_range_form(&self) -> Option<NatLinearForm> {
+    pub fn nat_range_form(&self) -> Option<NatPolyForm> {
         self.reference.nat_range_form()
     }
 
@@ -217,6 +217,15 @@ impl std::ops::Deref for InferredStructType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InferredType {
     Scalar(Dimension),
+    /// A scalar value produced by iterating a declared range index.
+    ///
+    /// Range labels can participate in scalar arithmetic, but retain the
+    /// originating index identity so `@series[t]` can prove that `t` belongs
+    /// to the same range axis as `series` instead of reading positionally.
+    RangeIndexLabel {
+        index: InferredIndex,
+        dimension: Dimension,
+    },
     Bool,
     Int,
     /// A bounded natural number `Fin(N)`: the type of loop variables over `range(N)`.
@@ -226,7 +235,7 @@ pub enum InferredType {
     ///
     /// `Fin(N)` is not a user-declarable type — it only arises as the type of loop
     /// variables in `for i: range(N) { ... }`.
-    Fin(NatLinearForm),
+    Fin(NatPolyForm),
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
     /// A named index identity in an index-only position.
@@ -247,6 +256,14 @@ impl InferredType {
     #[must_use]
     pub const fn is_int_like(&self) -> bool {
         matches!(self, Self::Int | Self::Fin(_))
+    }
+
+    #[must_use]
+    pub const fn scalar_dimension(&self) -> Option<&Dimension> {
+        match self {
+            Self::Scalar(dimension) | Self::RangeIndexLabel { dimension, .. } => Some(dimension),
+            _ => None,
+        }
     }
 }
 
@@ -611,7 +628,9 @@ fn check_hir_assert_body(
 
             let tolerance_ok = if *is_relative {
                 tolerance_elem.is_int_like()
-                    || matches!(tolerance_elem, InferredType::Scalar(d) if d.is_dimensionless())
+                    || tolerance_elem
+                        .scalar_dimension()
+                        .is_some_and(Dimension::is_dimensionless)
             } else {
                 let tolerance_dim = expect_scalar(tolerance_elem, registry, src, tolerance.span)?;
                 tolerance_dim == actual_dim
@@ -1030,17 +1049,16 @@ fn check_one_bound(
     match expected {
         ExpectedBound::Scalar(target_dim) => {
             let ok = match inferred {
-                InferredType::Scalar(d) => d == target_dim,
                 InferredType::Int => target_dim.is_dimensionless(),
-                _ => false,
+                other => other.scalar_dimension() == Some(target_dim),
             };
             if ok {
                 return Ok(());
             }
-            let bound_dim_str = match inferred {
-                InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
-                other => format_inferred_type(other, registry),
-            };
+            let bound_dim_str = inferred.scalar_dimension().map_or_else(
+                || format_inferred_type(inferred, registry),
+                |d| registry.dimensions.format_dimension(d),
+            );
             Err(GraphcalError::DomainDimensionMismatch {
                 name: name.to_string(),
                 type_dim: registry.dimensions.format_dimension(target_dim),
@@ -1053,8 +1071,9 @@ fn check_one_bound(
         ExpectedBound::Int => {
             let ok = match inferred {
                 InferredType::Int => true,
-                InferredType::Scalar(d) => d.is_dimensionless(),
-                _ => false,
+                other => other
+                    .scalar_dimension()
+                    .is_some_and(Dimension::is_dimensionless),
             };
             if ok {
                 return Ok(());
@@ -1351,17 +1370,16 @@ fn check_one_bound_with_display_name(
     match expected {
         ExpectedBound::Scalar(target_dim) => {
             let ok = match inferred {
-                InferredType::Scalar(d) => d == target_dim,
                 InferredType::Int => target_dim.is_dimensionless(),
-                _ => false,
+                other => other.scalar_dimension() == Some(target_dim),
             };
             if ok {
                 return Ok(());
             }
-            let bound_dim_str = match inferred {
-                InferredType::Scalar(d) => registry.dimensions.format_dimension(d),
-                other => format_inferred_type(other, registry),
-            };
+            let bound_dim_str = inferred.scalar_dimension().map_or_else(
+                || format_inferred_type(inferred, registry),
+                |d| registry.dimensions.format_dimension(d),
+            );
             Err(GraphcalError::DomainDimensionMismatch {
                 name: display_name.to_string(),
                 type_dim: registry.dimensions.format_dimension(target_dim),
@@ -1374,8 +1392,9 @@ fn check_one_bound_with_display_name(
         ExpectedBound::Int => {
             let ok = match inferred {
                 InferredType::Int => true,
-                InferredType::Scalar(d) => d.is_dimensionless(),
-                _ => false,
+                other => other
+                    .scalar_dimension()
+                    .is_some_and(Dimension::is_dimensionless),
             };
             if ok {
                 return Ok(());
@@ -1423,8 +1442,10 @@ fn check_no_constraints_on_generic_type_args(
         }
     }
     for type_def in tir.registry.types.all_types() {
-        for field in type_def.fields() {
-            walk(&field.type_ann)?;
+        if let Some(members) = type_def.union_members() {
+            for field in members.iter().flat_map(|member| &member.fields) {
+                walk(&field.type_ann)?;
+            }
         }
     }
     Ok(())

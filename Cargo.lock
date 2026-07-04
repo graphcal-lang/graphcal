@@ -1644,6 +1644,7 @@ dependencies = [
  "pretty",
  "stacker",
  "thiserror",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

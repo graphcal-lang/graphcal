@@ -33,9 +33,26 @@ impl Parser<'_> {
                 break;
             }
             arms.push(self.parse_match_arm()?);
-            // Optional comma between arms
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
+            match self.lexer.peek_with_span() {
+                Some((Token::Comma, _)) => {
+                    self.lexer.next_token();
+                }
+                Some((Token::RBrace, _)) => {}
+                Some((tok, span)) => {
+                    let found = tok.to_string();
+                    return Err(self.unexpected_token(
+                        "`,` between match arms or `}` after the final arm",
+                        &found,
+                        span,
+                    ));
+                }
+                None => {
+                    return Err(self.unexpected_token(
+                        "`,` between match arms or `}` after the final arm",
+                        "EOF",
+                        Span::new(0, 0),
+                    ));
+                }
             }
         }
         Ok(arms)
@@ -249,7 +266,7 @@ impl Parser<'_> {
                 })?;
                 Ok(NatExpr::Literal(value, span))
             }
-            Some(Token::Ident) => {
+            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
                 let ident = self.parse_any_ident()?;
                 Ok(NatExpr::Var(ident))
             }
@@ -337,6 +354,30 @@ mod tests {
                 dim.terms[0].term.name.value.leaf().as_str()
             }
             other => panic!("expected DimExpr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_comma_between_match_arms_is_reported_at_next_pattern() {
+        let source = r"
+node x: Dimensionless = match @r {
+    Ok => 1.0
+    Err => 2.0,
+};
+";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        match err {
+            ParseError::UnexpectedToken {
+                expected,
+                found,
+                span,
+                ..
+            } => {
+                assert!(expected.contains("match arms"));
+                assert_eq!(found, "identifier");
+                assert_eq!(span.offset(), source.find("Err").unwrap());
+            }
+            other => panic!("expected UnexpectedToken, got {other:?}"),
         }
     }
 

@@ -141,6 +141,18 @@ fn resolve_rejects_builtin_unit_shadowing() {
 }
 
 #[test]
+fn resolve_rejects_builtin_value_shadowing() {
+    let err = parse_and_resolve("const node E: Dimensionless = 2.0;").unwrap_err();
+    assert!(matches!(err, GraphcalError::BuiltinNameShadowed { name, .. } if name == "E"));
+}
+
+#[test]
+fn resolve_rejects_time_scale_value_shadowing() {
+    let err = parse_and_resolve("node UTC: Dimensionless = 0.0;").unwrap_err();
+    assert!(matches!(err, GraphcalError::BuiltinNameShadowed { name, .. } if name == "UTC"));
+}
+
+#[test]
 fn resolve_unknown_graph_ref() {
     // Unknown `@` targets are rejected by HIR lowering during type
     // resolution — the IR collection pass no longer classifies references.
@@ -443,6 +455,20 @@ fn resolve_unfold_self_edge_excluded() {
     assert!(
         !dep_names_of(&deps.runtime_deps, "x").contains(&"x"),
         "unfold self-reference should be excluded from runtime_deps"
+    );
+}
+
+#[test]
+fn resolve_unfold_init_self_edge_retained() {
+    let source = r"
+        index TimeStep = { First, Second, Third };
+        node x: Dimensionless[TimeStep] = unfold(sum(@x), |prev_t, t| @x[prev_t] * 2.0);
+    ";
+    let tir = compile_to_tir(source).unwrap();
+    let deps = &tir.root().semantic.dependencies;
+    assert!(
+        dep_names_of(&deps.runtime_deps, "x").contains(&"x"),
+        "unfold init self-reference must remain a runtime dependency"
     );
 }
 

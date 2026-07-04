@@ -9,6 +9,32 @@ use crate::syntax::type_name::FieldName;
 
 use super::{ParseError, Parser};
 
+fn skip_ws_and_line_comments(bytes: &[u8], mut pos: usize) -> usize {
+    loop {
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'/' {
+            while pos < bytes.len() && bytes[pos] != b'\n' {
+                pos += 1;
+            }
+            continue;
+        }
+        return pos;
+    }
+}
+
+fn scan_ascii_ident(bytes: &[u8], pos: usize) -> Option<usize> {
+    if pos >= bytes.len() || (!bytes[pos].is_ascii_alphabetic() && bytes[pos] != b'_') {
+        return None;
+    }
+    let mut end = pos + 1;
+    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+        end += 1;
+    }
+    Some(end)
+}
+
 /// Map comparison tokens to their corresponding `BinOp`.
 pub(super) const fn token_to_comparison_op(token: Token) -> Option<BinOp> {
     match token {
@@ -316,7 +342,7 @@ impl Parser<'_> {
     }
 
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
-        match self.lexer.peek() {
+        match self.lexer.peek().copied() {
             Some(Token::Number) => self.parse_number_expr(),
             Some(Token::True) => {
                 let (_, span) = self.advance()?;
@@ -334,15 +360,17 @@ impl Parser<'_> {
                 Ok(Expr::new(ExprKind::StringLiteral(text), span))
             }
             Some(Token::At) => self.parse_at_expr(),
-            Some(Token::Scan) => {
+            Some(Token::Scan) if self.lexer.peek_second() == Some(&Token::LParen) => {
                 let (_, span) = self.advance()?;
                 self.parse_scan(span)
             }
-            Some(Token::Unfold) => {
+            Some(Token::Unfold) if self.lexer.peek_second() == Some(&Token::LParen) => {
                 let (_, span) = self.advance()?;
                 self.parse_unfold(span)
             }
-            Some(Token::Ident) => self.parse_identifier_expr(),
+            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
+                self.parse_identifier_expr()
+            }
             Some(Token::For) => {
                 // For comprehension: for m: Maneuver { expr }
                 self.parse_for_comp()
@@ -509,7 +537,13 @@ impl Parser<'_> {
 
         if is_integer {
             // Integer literal: no decimal point or scientific notation
-            if self.lexer.peek() == Some(&Token::Ident) {
+            let next_ident_span = match self.lexer.peek_with_span() {
+                Some((Token::Ident, next_span)) => Some(next_span),
+                _ => None,
+            };
+            if next_ident_span
+                .is_some_and(|next_span| !self.has_line_break_between(span, next_span))
+            {
                 // Integer followed by unit is an error: must use float
                 return Err(ParseError::InvalidNumber {
                     reason: format!("integer literal cannot have units; write `{text}.0` instead"),
@@ -529,8 +563,17 @@ impl Parser<'_> {
             // Float literal: has decimal point or scientific notation
             let value = self.parse_finite_f64_literal(&text, span)?;
 
-            // Check if followed by an identifier (unit literal): `400.0 km`
-            if self.lexer.peek() == Some(&Token::Ident) {
+            // Check if followed by an identifier on the same line (unit
+            // literal): `400.0 km`. A newline starts the next syntactic item;
+            // without this guard, a missing comma between match arms could be
+            // misread as `1.0 NextArm`.
+            let next_ident_span = match self.lexer.peek_with_span() {
+                Some((Token::Ident, next_span)) => Some(next_span),
+                _ => None,
+            };
+            if next_ident_span
+                .is_some_and(|next_span| !self.has_line_break_between(span, next_span))
+            {
                 let unit_expr = self.parse_unit_expr()?;
                 let full_span = span.merge(unit_expr.span);
                 Ok(Expr::new(
@@ -544,6 +587,14 @@ impl Parser<'_> {
                 Ok(Expr::new(ExprKind::Number(value), span))
             }
         }
+    }
+
+    fn has_line_break_between(&self, left: Span, right: Span) -> bool {
+        let start = left.offset() + left.len();
+        let end = right.offset();
+        self.source
+            .get(start..end)
+            .is_some_and(|gap| gap.contains('\n') || gap.contains('\r'))
     }
 
     /// Parse an identifier-based expression.
@@ -622,14 +673,14 @@ impl Parser<'_> {
                     // Map literal: { Index.Variant: expr, ... }
                     self.parse_map_literal_after_first_entry(start_span, index, variant)
                 } else {
-                    let found = self
-                        .lexer
-                        .peek()
-                        .map_or_else(|| "EOF".to_string(), std::string::ToString::to_string);
+                    let (found, found_span) = self.lexer.peek_with_span().map_or_else(
+                        || ("EOF".to_string(), start_span),
+                        |(tok, span)| (tok.to_string(), span),
+                    );
                     Err(self.unexpected_token(
                         "`:` after variant in map literal",
                         &found,
-                        start_span,
+                        found_span,
                     ))
                 }
             } else {
@@ -637,21 +688,21 @@ impl Parser<'_> {
                 Err(self.unexpected_token(
                     "map literal (`{ Index.Variant: expr, ... }`)",
                     &saved_text,
-                    start_span,
+                    ident_span,
                 ))
             }
         } else if self.lexer.peek() == Some(&Token::LParen) {
             // Could be tuple-key map literal: { (Index.Variant, ...): expr, ... }
             self.parse_tuple_key_map_literal(start_span)
         } else {
-            let found = self
-                .lexer
-                .peek()
-                .map_or_else(|| "EOF".to_string(), std::string::ToString::to_string);
+            let (found, found_span) = self.lexer.peek_with_span().map_or_else(
+                || ("EOF".to_string(), start_span),
+                |(tok, span)| (tok.to_string(), span),
+            );
             Err(self.unexpected_token(
                 "map literal (`{ Index.Variant: expr, ... }`)",
                 &found,
-                start_span,
+                found_span,
             ))
         }
     }
@@ -713,17 +764,16 @@ impl Parser<'_> {
         let expr = self.parse_expr()?;
 
         // If it's a bare name reference, use IndexArg::Var for backward compatibility.
-        match expr.kind {
-            ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
-                match path.into_bare() {
-                    Ok(ident) => Ok(IndexArg::Var(ident)),
-                    Err(path) => Ok(IndexArg::Expr(Box::new(Expr::new(
-                        ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)),
-                        expr.span,
-                    )))),
-                }
+        if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) = &expr.kind {
+            match path.clone().into_bare() {
+                Ok(ident) => Ok(IndexArg::Var(ident)),
+                Err(path) => Ok(IndexArg::Expr(Box::new(Expr::new(
+                    ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)),
+                    expr.span,
+                )))),
             }
-            other => Ok(IndexArg::Expr(Box::new(Expr::new(other, expr.span)))),
+        } else {
+            Ok(IndexArg::Expr(Box::new(expr)))
         }
     }
 
@@ -734,8 +784,8 @@ impl Parser<'_> {
     /// unbalanced, or a byte that can never occur inside a generic-argument
     /// list shows up first — in that case the `<` is a comparison operator,
     /// so an ordinary boolean expression like `a < b && c > (d)` is not
-    /// misparsed as turbofish. Comments are skipped so their contents affect
-    /// neither the bracket balance nor the operator bail-out.
+    /// misparsed as turbofish. Line comments are skipped so their contents
+    /// affect neither the bracket balance nor the operator bail-out.
     fn is_type_args_followed_by(&mut self, expected: u8) -> bool {
         let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
             return false;
@@ -749,10 +799,7 @@ impl Parser<'_> {
                 b'>' => {
                     depth -= 1;
                     if depth == 0 {
-                        let mut p = pos + 1;
-                        while p < bytes.len() && bytes[p].is_ascii_whitespace() {
-                            p += 1;
-                        }
+                        let p = skip_ws_and_line_comments(bytes, pos + 1);
                         return p < bytes.len() && bytes[p] == expected;
                     }
                 }
@@ -760,14 +807,6 @@ impl Parser<'_> {
                     while pos < bytes.len() && bytes[pos] != b'\n' {
                         pos += 1;
                     }
-                    continue;
-                }
-                b'/' if bytes.get(pos + 1) == Some(&b'*') => {
-                    pos += 2;
-                    while pos + 1 < bytes.len() && !(bytes[pos] == b'*' && bytes[pos + 1] == b'/') {
-                        pos += 1;
-                    }
-                    pos += 2;
                     continue;
                 }
                 // Generic arguments are type expressions or Nat literals;
@@ -783,8 +822,8 @@ impl Parser<'_> {
     /// Look ahead to check if `(` starts tuple-key sugar: `(ident, ident, ...) =>`.
     ///
     /// Scans the raw source string from the current position without consuming tokens.
-    /// Returns `true` only if the `(...)` contains only identifiers and commas,
-    /// followed by `)` then `=>`.
+    /// Returns `true` only if the `(...)` contains only identifiers, commas,
+    /// whitespace, and line comments, followed by `)` then `=>`.
     pub(super) fn is_tuple_key_sugar(&mut self) -> bool {
         let Some((&Token::LParen, lp_span)) = self.lexer.peek_with_span() else {
             return false;
@@ -792,34 +831,23 @@ impl Parser<'_> {
         let bytes = self.source.as_bytes();
         let mut pos = lp_span.offset() + lp_span.len(); // byte after `(`
 
-        // Scan for matching `)`: expect only identifiers, commas, and whitespace inside.
+        // Scan for matching `)`: expect only identifiers, commas, whitespace,
+        // and line comments inside.
         loop {
-            // Skip whitespace
-            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
+            pos = skip_ws_and_line_comments(bytes, pos);
             if pos >= bytes.len() {
                 return false;
             }
             if bytes[pos] == b')' {
                 // Found `)`, now check for `=>`
                 pos += 1;
-                while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-                    pos += 1;
-                }
+                pos = skip_ws_and_line_comments(bytes, pos);
                 return pos + 1 < bytes.len() && bytes[pos] == b'=' && bytes[pos + 1] == b'>';
             }
-            // Expect an identifier (ASCII alphanumeric or underscore, starting with letter/underscore)
-            if !bytes[pos].is_ascii_alphabetic() && bytes[pos] != b'_' {
+            let Some(ident_end) = scan_ascii_ident(bytes, pos) else {
                 return false;
-            }
-            while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-                pos += 1;
-            }
-            // Skip whitespace after identifier
-            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
+            };
+            pos = skip_ws_and_line_comments(bytes, ident_end);
             if pos >= bytes.len() {
                 return false;
             }
@@ -858,34 +886,15 @@ impl Parser<'_> {
         let bytes = self.source.as_bytes();
         let mut pos = lp_span.offset() + lp_span.len();
 
-        // Skip whitespace and line comments.
-        loop {
-            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
-            if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'/' {
-                while pos < bytes.len() && bytes[pos] != b'\n' {
-                    pos += 1;
-                }
-                continue;
-            }
-            break;
-        }
+        pos = skip_ws_and_line_comments(bytes, pos);
         if pos >= bytes.len() {
             return false;
         }
 
-        // First char of the first arg must be an identifier-start.
-        if !bytes[pos].is_ascii_alphabetic() && bytes[pos] != b'_' {
+        let Some(ident_end) = scan_ascii_ident(bytes, pos) else {
             return false;
-        }
-        while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-            pos += 1;
-        }
-        // Skip whitespace.
-        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-            pos += 1;
-        }
+        };
+        pos = skip_ws_and_line_comments(bytes, ident_end);
         if pos >= bytes.len() {
             return false;
         }
@@ -917,7 +926,8 @@ impl Parser<'_> {
         if let Some((&Token::Number, _)) = self.lexer.peek_with_span() {
             let (_, lit_span) = self.advance()?;
             let text = self.lexer.slice_at(lit_span);
-            let value: u64 = text.parse().map_err(|_| {
+            let normalized = text.replace('_', "");
+            let value: u64 = normalized.parse().map_err(|_| {
                 self.unexpected_token("a valid non-negative integer", text, lit_span)
             })?;
             Ok(GenericArg::Nat(NatExpr::Literal(value, lit_span)))
@@ -987,6 +997,19 @@ mod tests {
             vec!["1.0"; 10_000].join(" + ")
         );
         Parser::new(&src).parse_file().unwrap();
+    }
+
+    #[test]
+    fn brace_expr_error_points_at_offending_token() {
+        let source = "node x: Dimensionless = { nope };";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        match err {
+            ParseError::UnexpectedToken { found, span, .. } => {
+                assert_eq!(found, "nope");
+                assert_eq!(span.offset(), source.find("nope").unwrap());
+            }
+            other => panic!("expected UnexpectedToken, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1256,6 +1279,19 @@ mod tests {
                 crate::syntax::ast::GenericArg::Nat(crate::syntax::ast::NatExpr::Literal(3, _))
             ));
             assert_eq!(args.len(), 0);
+        } else {
+            panic!("expected FnCall, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn parse_turbofish_nat_arg_with_separators() {
+        let expr = parse_node_expr("eye<1_000>()");
+        if let ExprKind::FnCall { type_args, .. } = &expr.kind {
+            assert!(matches!(
+                &type_args[0],
+                crate::syntax::ast::GenericArg::Nat(crate::syntax::ast::NatExpr::Literal(1000, _))
+            ));
         } else {
             panic!("expected FnCall, got {:?}", expr.kind);
         }

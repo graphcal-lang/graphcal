@@ -473,25 +473,39 @@ pub(in crate::eval::project) fn apply_overrides(
 ) -> Result<(), CompileError> {
     for (override_name, override_expr) in overrides {
         let name_str = override_name.as_str();
-        if let Some((_, cat)) = ir.source_order.iter().find(|(n, _)| n.member() == name_str) {
-            match cat {
-                DeclCategory::Param => {}
-                non_param_cat => {
+        let matches = ir
+            .source_order
+            .iter()
+            .filter(|(name, _)| name.member() == name_str)
+            .collect::<Vec<_>>();
+        let param_matches = matches
+            .iter()
+            .filter_map(|(name, cat)| matches!(cat, DeclCategory::Param).then_some((*name).clone()))
+            .collect::<Vec<_>>();
+        let target_name = match param_matches.as_slice() {
+            [name] => name,
+            [] => {
+                if let Some((_, non_param_cat)) = matches.first() {
                     return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
                         name: override_name.clone(),
                         actual_kind: *non_param_cat,
                     }));
                 }
+                return Err(CompileError::Eval(GraphcalError::OverrideUnknownParam {
+                    name: override_name.clone(),
+                }));
             }
-        } else {
-            return Err(CompileError::Eval(GraphcalError::OverrideUnknownParam {
-                name: override_name.clone(),
-            }));
-        }
+            candidates => {
+                return Err(CompileError::Eval(GraphcalError::OverrideAmbiguousParam {
+                    name: override_name.clone(),
+                    candidates: candidates.to_vec(),
+                }));
+            }
+        };
 
         // Runtime dependencies are recomputed from the lowered HIR at the
         // freeze boundary, so the replaced default needs no dep bookkeeping.
-        ir.override_param_default(name_str, override_expr.clone());
+        ir.override_param_default(target_name, override_expr.clone());
     }
     Ok(())
 }

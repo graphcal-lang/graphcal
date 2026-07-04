@@ -1024,28 +1024,55 @@ pub(super) fn collect_resolved_decl_bindings(
         })?;
         let resolved = match ctx.resolver.resolve_decl_path(ctx.owner, &path) {
             Ok(resolved) => resolved,
-            Err(_err)
-                if imported_values.contains_key(name) || imported_decl_types.contains_key(name) =>
-            {
-                // Instantiated inline-DAG includes can carry hidden imported
-                // values from the included DAG body into the importer. Those
-                // aliases are not import declarations in the importer's module
-                // scope, but they are explicit IR inputs, so bind them as
-                // synthetic declarations owned by the current DAG.
-                let synthetic_owner = name
-                    .qualifier()
-                    .iter()
-                    .fold(ctx.owner.clone(), |owner, segment| {
-                        owner.child(segment.as_ref())
-                    });
-                ResolvedDeclName::from_def(synthetic_owner, DeclName::expect_valid(name.member()))
+            Err(err) => {
+                if let Some(source) = imported_value_sources.get(name) {
+                    ResolvedDeclName::from_def(source.dag_id.clone(), source.source_name.clone())
+                } else if imported_values.contains_key(name)
+                    || imported_decl_types.contains_key(name)
+                {
+                    // Instantiated inline-DAG includes can carry hidden imported
+                    // values from the included DAG body into the importer. Those
+                    // aliases are not import declarations in the importer's module
+                    // scope, but they are explicit IR inputs, so bind them as
+                    // synthetic declarations owned by the current DAG — only when
+                    // that synthetic declaration actually exists in the resolver.
+                    resolve_existing_synthetic_child_decl(ctx, name)
+                        .or_else(|| resolved_decl_key(ctx.owner, name))
+                        .ok_or_else(|| {
+                            internal_error(
+                                format!(
+                                    "visible declaration `{name}` is absent from module resolver: {err}"
+                                ),
+                                src,
+                                Span::new(0, 0),
+                            )
+                        })?
+                } else {
+                    return Err(module_resolve_error(&err, src, Span::new(0, 0)));
+                }
             }
-            Err(err) => return Err(module_resolve_error(&err, src, Span::new(0, 0))),
         };
         bindings.insert(name.clone(), resolved);
     }
 
     Ok(bindings)
+}
+
+fn resolve_existing_synthetic_child_decl(
+    ctx: ModuleTypeContext<'_>,
+    name: &ScopedName,
+) -> Option<ResolvedDeclName> {
+    let mut qualifier = name.qualifier().iter();
+    let first = qualifier.next()?;
+    let synthetic_owner = qualifier.fold(ctx.owner.child(first.as_ref()), |owner, segment| {
+        owner.child(segment.as_ref())
+    });
+    let decl_name = DeclName::expect_valid(name.member());
+    ctx.resolver
+        .modules()
+        .get(&synthetic_owner)
+        .and_then(|module| module.decls().contains_key(&decl_name).then_some(()))
+        .map(|()| ResolvedDeclName::from_def(synthetic_owner, decl_name))
 }
 
 fn scoped_name_to_name_path(name: &ScopedName) -> Option<NamePath> {

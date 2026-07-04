@@ -32,11 +32,11 @@
 //! eliminates them entirely via `expand_multi_decl`.
 
 use crate::syntax::ast::{
-    AssertBody, AssertDecl, ConstNodeDecl, DagDecl, DeclKind, Declaration, DomainBound, Encoding,
-    Expr, ExprKind, FieldDecl, FieldInit, FigureDecl, File, GenericArg, GenericParam, IncludeDecl,
-    IndexArg, IndexDecl, IndexDeclKind, LayerDecl, MapEntry, MarkSpec, MatchArm, NodeDecl,
-    ParamBinding, ParamDecl, PlotDecl, PlotField, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind,
-    UnionMember, UnitDecl, UnitDef,
+    AssertBody, AssertDecl, DagDecl, DeclKind, Declaration, DomainBound, Encoding, Expr, ExprKind,
+    FieldDecl, FieldInit, FigureDecl, File, GenericArg, GenericParam, IncludeDecl, IndexArg,
+    IndexDecl, IndexDeclKind, LayerDecl, MapEntry, MarkSpec, MatchArm, ParamBinding, ParamDecl,
+    PlotDecl, PlotField, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember, UnitDecl,
+    UnitDef, ValueDecl,
 };
 use crate::syntax::ast::{RawDeclSugar, RawExprSugar};
 use crate::syntax::phase::{Desugared, Raw};
@@ -147,24 +147,13 @@ impl From<ParamDecl<Raw>> for ParamDecl<Desugared> {
     }
 }
 
-impl From<NodeDecl<Raw>> for NodeDecl<Desugared> {
-    fn from(n: NodeDecl<Raw>) -> Self {
+impl From<ValueDecl<Raw>> for ValueDecl<Desugared> {
+    fn from(decl: ValueDecl<Raw>) -> Self {
         Self {
-            visibility: n.visibility,
-            name: n.name,
-            type_ann: n.type_ann.into(),
-            value: n.value.into(),
-        }
-    }
-}
-
-impl From<ConstNodeDecl<Raw>> for ConstNodeDecl<Desugared> {
-    fn from(c: ConstNodeDecl<Raw>) -> Self {
-        Self {
-            visibility: c.visibility,
-            name: c.name,
-            type_ann: c.type_ann.into(),
-            value: c.value.into(),
+            visibility: decl.visibility,
+            name: decl.name,
+            type_ann: decl.type_ann.into(),
+            value: decl.value.into(),
         }
     }
 }
@@ -457,7 +446,7 @@ impl From<Expr<Raw>> for Expr<Desugared> {
     fn from(e: Expr<Raw>) -> Self {
         // Recursion choke point: conversion recurses once per tree level
         // (unbounded for left-nested operator chains).
-        crate::stack::with_stack_growth(|| Self::new(e.kind.into(), e.span))
+        crate::stack::with_stack_growth(|| Self::new(e.kind.clone().into(), e.span))
     }
 }
 

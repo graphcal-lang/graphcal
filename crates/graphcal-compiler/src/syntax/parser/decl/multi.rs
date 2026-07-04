@@ -476,7 +476,7 @@ impl Parser<'_> {
 
             if values.len() != header_cells.len() {
                 return Err(ParseError::MultiDeclRowArity {
-                    slot_count: header_cells.len(),
+                    expected_count: header_cells.len(),
                     got: values.len(),
                     row_label: row_label.value.as_str().to_string(),
                     src: self.named_source(),
@@ -541,7 +541,7 @@ impl Parser<'_> {
                 })?;
                 Ok(TableIndexSpec::NatRange(value, span))
             }
-            Some(Token::Ident) => {
+            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
                 let ident = self.parse_any_ident()?;
                 Ok(TableIndexSpec::Named(ident.into_spanned::<NamePath>()))
             }
@@ -581,7 +581,7 @@ impl Parser<'_> {
                 self.advance()?;
                 Ok(SlotAxis::Underscore)
             }
-            Some(Token::Ident) => {
+            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
                 let ident = self.parse_any_ident()?;
                 Ok(SlotAxis::Axis(ident.into_spanned::<IndexName>()))
             }
@@ -619,7 +619,7 @@ impl Parser<'_> {
                 let (_, span) = self.advance()?;
                 Ok(HeaderCell::Underscore(span))
             }
-            Some(Token::Ident) => {
+            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
                 let ident = self.parse_any_ident()?;
                 if self.lexer.peek() == Some(&Token::Dot) {
                     self.lexer.next_token();
@@ -782,12 +782,12 @@ param a: Int[Component], param b: Int[Component]
         let err = Parser::new(source).parse_file().unwrap_err();
         match err {
             ParseError::MultiDeclRowArity {
-                slot_count,
+                expected_count,
                 got,
                 row_label,
                 ..
             } => {
-                assert_eq!(slot_count, 2);
+                assert_eq!(expected_count, 2);
                 assert_eq!(got, 1);
                 assert_eq!(row_label, "X");
             }

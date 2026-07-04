@@ -15,7 +15,7 @@
 //! Default implementations recurse into child expressions. Implementors override
 //! only the leaf methods they care about.
 
-use crate::syntax::ast::{Expr, ExprKind, IndexArg};
+use crate::syntax::ast::{Expr, ExprKind, GenericArg, IndexArg, TypeExpr, TypeExprKind};
 use crate::syntax::phase::Phase;
 
 /// Read-only visitor for [`Expr`] trees, generic over [`Phase`].
@@ -53,7 +53,12 @@ pub(crate) trait ExprVisitor<P: Phase> {
             ExprKind::GraphRef(_) => self.visit_graph_ref(expr),
             ExprKind::InlineDagRef { args, .. } => self.visit_inline_dag_ref(expr, args),
 
-            ExprKind::FnCall { args, .. } => self.visit_fn_call(expr, args),
+            ExprKind::FnCall {
+                type_args, args, ..
+            } => {
+                self.visit_generic_args(type_args)?;
+                self.visit_fn_call(expr, args)
+            }
 
             ExprKind::BinOp { lhs, rhs, .. } => self.visit_bin_op(expr, lhs, rhs),
             ExprKind::UnaryOp { operand, .. } => self.visit_unary_op(expr, operand),
@@ -80,7 +85,14 @@ pub(crate) trait ExprVisitor<P: Phase> {
                 Ok(())
             }
 
-            ExprKind::ConstructorCall { fields, .. } => self.visit_constructor_call(expr, fields),
+            ExprKind::ConstructorCall {
+                generic_args,
+                fields,
+                ..
+            } => {
+                self.visit_generic_args(generic_args)?;
+                self.visit_constructor_call(expr, fields)
+            }
 
             ExprKind::MapLiteral { entries } => self.visit_map_entries(expr, entries),
 
@@ -139,6 +151,36 @@ pub(crate) trait ExprVisitor<P: Phase> {
     }
 
     // -- Container handlers (default: recurse into children) --
+
+    fn visit_generic_args(&mut self, args: &[GenericArg<P>]) -> Result<(), Self::Error> {
+        for arg in args {
+            if let GenericArg::Type(type_expr) = arg {
+                self.visit_type_expr(type_expr)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn visit_type_expr(&mut self, type_expr: &TypeExpr<P>) -> Result<(), Self::Error> {
+        for bound in &type_expr.constraints {
+            self.visit_expr(&bound.value)?;
+        }
+        match &type_expr.kind {
+            TypeExprKind::DatetimeApplication { type_args }
+            | TypeExprKind::TypeApplication { type_args, .. } => {
+                for arg in type_args {
+                    self.visit_type_expr(arg)?;
+                }
+            }
+            TypeExprKind::Indexed { base, .. } => self.visit_type_expr(base)?,
+            TypeExprKind::Dimensionless
+            | TypeExprKind::Bool
+            | TypeExprKind::Int
+            | TypeExprKind::Datetime
+            | TypeExprKind::DimExpr(_) => {}
+        }
+        Ok(())
+    }
 
     fn visit_fn_call(&mut self, _expr: &Expr<P>, args: &[Expr<P>]) -> Result<(), Self::Error> {
         for arg in args {
@@ -291,7 +333,12 @@ pub trait ExprVisitorMut<P: Phase> {
 
             ExprKind::IndexAccess { .. } => self.visit_index_access_mut(expr),
 
-            ExprKind::ConstructorCall { fields, .. } => {
+            ExprKind::ConstructorCall {
+                generic_args,
+                fields,
+                ..
+            } => {
+                Self::visit_generic_args_mut(self, generic_args)?;
                 for field in fields {
                     self.visit_expr_mut(&mut field.value)?;
                 }
@@ -331,10 +378,44 @@ pub trait ExprVisitorMut<P: Phase> {
     }
 
     fn visit_fn_call_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        if let ExprKind::FnCall { args, .. } = &mut expr.kind {
+        if let ExprKind::FnCall {
+            type_args, args, ..
+        } = &mut expr.kind
+        {
+            Self::visit_generic_args_mut(self, type_args)?;
             for arg in args {
                 self.visit_expr_mut(arg)?;
             }
+        }
+        Ok(())
+    }
+
+    fn visit_generic_args_mut(&mut self, args: &mut [GenericArg<P>]) -> Result<(), Self::Error> {
+        for arg in args {
+            if let GenericArg::Type(type_expr) = arg {
+                self.visit_type_expr_mut(type_expr)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn visit_type_expr_mut(&mut self, type_expr: &mut TypeExpr<P>) -> Result<(), Self::Error> {
+        for bound in &mut type_expr.constraints {
+            self.visit_expr_mut(&mut bound.value)?;
+        }
+        match &mut type_expr.kind {
+            TypeExprKind::DatetimeApplication { type_args }
+            | TypeExprKind::TypeApplication { type_args, .. } => {
+                for arg in type_args {
+                    self.visit_type_expr_mut(arg)?;
+                }
+            }
+            TypeExprKind::Indexed { base, .. } => self.visit_type_expr_mut(base)?,
+            TypeExprKind::Dimensionless
+            | TypeExprKind::Bool
+            | TypeExprKind::Int
+            | TypeExprKind::Datetime
+            | TypeExprKind::DimExpr(_) => {}
         }
         Ok(())
     }

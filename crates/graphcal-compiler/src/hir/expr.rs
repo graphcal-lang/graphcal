@@ -635,10 +635,12 @@ pub fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedDeclName) -> bool {
     // left-nested operator chains).
     crate::stack::with_stack_growth(|| match &expr.kind {
         ExprKind::GraphRef(target) => target.value == *name,
-        // Unfold: anything inside accesses the previous step. The rest are
-        // leaves without graph references.
-        ExprKind::Unfold { .. }
-        | ExprKind::Error
+        // Unfold body self-references access the previous step and are not a
+        // dependency cycle, but `init` is evaluated before the previous-step
+        // overlay exists, so self-references there are genuine cycles.
+        ExprKind::Unfold { init, .. } => has_ref_outside_unfold(init, name),
+        // The rest are leaves without graph references.
+        ExprKind::Error
         | ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
@@ -1472,11 +1474,13 @@ impl<'a> ExprLowerer<'a> {
             .fold(self.ctx.owner.clone(), |owner, segment| {
                 owner.child(segment.as_str())
             });
-        self.ctx
-            .resolver
-            .modules()
-            .contains_key(&owner)
-            .then(|| ResolvedDeclName::from_def(owner, DeclName::from_atom(leaf.clone())))
+        self.ctx.resolver.modules().get(&owner).and_then(|module| {
+            let decl_name = DeclName::from_atom(leaf.clone());
+            module
+                .decls()
+                .contains_key(&decl_name)
+                .then(|| ResolvedDeclName::from_def(owner, decl_name))
+        })
     }
 
     /// Validate a built-in call's argument count against the registry's

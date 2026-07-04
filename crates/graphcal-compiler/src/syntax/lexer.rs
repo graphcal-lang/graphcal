@@ -358,6 +358,16 @@ mod tests {
     }
 
     #[test]
+    fn lexer_accepts_exponent_digit_separators() {
+        let input = "1e1_0";
+        let mut lexer = Lexer::new(input);
+        let (tok, span) = lexer.next_token().unwrap();
+        assert_eq!(tok, Token::Number);
+        assert_eq!(lexer.slice_at(span), "1e1_0");
+        assert!(lexer.next_token().is_none());
+    }
+
+    #[test]
     fn exhaust_lexer() {
         let input = "42";
         let mut lexer = Lexer::new(input);

@@ -6,6 +6,7 @@ use graphcal_compiler::ir::resolve::DeclCategory;
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{IndexDef, IndexKind};
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -453,8 +454,9 @@ fn eval_hir_fn_call(
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let num = match arg_val {
                 RuntimeValue::Scalar(v) => v,
-                #[expect(clippy::cast_precision_loss, reason = "Julian/Unix values fit f64")]
-                RuntimeValue::Int(v) => v as f64,
+                RuntimeValue::Int(v) => {
+                    exact_numeric_datetime_arg(v, name.as_str(), args[0].span, ctx)?
+                }
                 _ => {
                     return Err(ctx.internal_error(
                         format!("{}() received non-numeric argument", name.as_str()),
@@ -545,6 +547,28 @@ fn eval_hir_conversion_fn(
     }
 }
 
+fn exact_numeric_datetime_arg(
+    value: i64,
+    fn_name: &str,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<f64, GraphcalError> {
+    const MAX_EXACT_F64_INT: u64 = 1_u64 << f64::MANTISSA_DIGITS;
+    if value.unsigned_abs() > MAX_EXACT_F64_INT {
+        return Err(ctx.eval_error(
+            format!("{fn_name}() integer argument {value} is too large for exact conversion"),
+            span,
+        ));
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "integer magnitude is checked to be exactly representable before casting"
+    )]
+    {
+        Ok(value as f64)
+    }
+}
+
 fn eval_hir_datetime_constructor(
     kind: DatetimeConstructorFn,
     span: Span,
@@ -626,8 +650,14 @@ fn eval_hir_datetime_constructor(
                     span: args[1].span.into(),
                 });
             };
-            let with_scale = format!("{s} {scale}");
-            let epoch = hifitime::Epoch::from_gregorian_str(&with_scale).map_err(|e| {
+            if has_time_scale_suffix(s) {
+                return Err(GraphcalError::EvalError {
+                    message: "epoch() date string must not include a time scale; pass it as the second argument".to_string(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
+            }
+            let epoch = epoch_from_gregorian_str_at_scale(s, *scale).map_err(|e| {
                 GraphcalError::EvalError {
                     message: format!("invalid epoch string: {e}"),
                     src: src.clone(),
@@ -637,6 +667,30 @@ fn eval_hir_datetime_constructor(
             Ok(RuntimeValue::Datetime(epoch))
         }
     }
+}
+
+fn has_time_scale_suffix(s: &str) -> bool {
+    s.split_whitespace()
+        .last()
+        .is_some_and(|suffix| suffix.parse::<TimeScale>().is_ok())
+}
+
+fn epoch_from_gregorian_str_at_scale(
+    s: &str,
+    scale: TimeScale,
+) -> Result<hifitime::Epoch, hifitime::HifitimeError> {
+    let parsed = hifitime::Epoch::from_gregorian_str(s)?;
+    let (year, month, day, hour, minute, second, nanos) = parsed.to_gregorian_utc();
+    hifitime::Epoch::maybe_from_gregorian(
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        nanos,
+        scale.to_hifitime(),
+    )
 }
 
 fn eval_hir_builtin_fn(
@@ -871,11 +925,26 @@ fn eval_hir_map_literal(
     let idx_name = map_entry_index_ref(first_key, ctx)?;
 
     if arity == 1 {
-        let mut result = IndexMap::new();
+        let idx_def = map_entry_index_def(first_key, &idx_name, ctx).ok_or_else(|| {
+            ctx.internal_error(format!("unknown index `{idx_name}`"), Span::new(0, 0))
+        })?;
+        let mut evaluated = IndexMap::new();
         for entry in entries {
             let key = entry.keys.first();
             let variant = map_entry_variant_for_axis(key, &idx_name, ctx)?;
             let val = eval_hir_expr(&entry.value, values, local_values, ctx)?;
+            evaluated.insert(variant, val);
+        }
+        let mut result = IndexMap::new();
+        for variant in idx_def.variants() {
+            let val = evaluated.swap_remove(&variant).ok_or_else(|| {
+                ctx.internal_error(
+                    format!(
+                        "map literal for index `{idx_name}` is missing entry for variant `{variant}`"
+                    ),
+                    Span::new(0, 0),
+                )
+            })?;
             result.insert(variant, val);
         }
         return Ok(RuntimeValue::Indexed {
@@ -1013,6 +1082,7 @@ fn eval_hir_for_comp(
                 variant: variant.clone(),
             },
             IndexKind::Range(data) => RuntimeValue::RangeLabel {
+                index_name: idx_name.clone(),
                 step_index,
                 value: data.step_value(step_index),
             },
@@ -1089,10 +1159,32 @@ fn eval_hir_index_access(
                     RuntimeValue::Struct { type_name, .. } => {
                         IndexVariantName::expect_valid(type_name.as_str())
                     }
-                    RuntimeValue::RangeLabel { step_index, .. } => {
+                    RuntimeValue::RangeLabel {
+                        index_name: label_index,
+                        step_index,
+                        ..
+                    } => {
+                        if !index_name.matches_ref(label_index) {
+                            return Err(ctx.eval_error(
+                                format!(
+                                    "index argument belongs to `{}`, but value is indexed by `{}`",
+                                    label_index.display_name(),
+                                    index_name.display_name()
+                                ),
+                                local.span,
+                            ));
+                        }
                         IndexVariantName::range_step(step_index)
                     }
-                    RuntimeValue::Int(n) => IndexVariantName::range_step(n),
+                    RuntimeValue::Int(n) => {
+                        if *n < 0 {
+                            return Err(ctx.eval_error(
+                                format!("index variable evaluated to negative value: {n}"),
+                                local.span,
+                            ));
+                        }
+                        IndexVariantName::range_step(n)
+                    }
                     _ => return Err(ctx.eval_error("value is not a loop variable", local.span)),
                 }
             }
@@ -1170,27 +1262,18 @@ fn eval_hir_unfold(
 ) -> Result<RuntimeValue, GraphcalError> {
     let unfold_ctx = ctx.unfold_context.as_ref().ok_or_else(|| {
         ctx.eval_error(
-            "unfold expression requires evaluation context with self_name and declared_types",
+            "unfold expression requires evaluation context with self_key and declared type",
             span,
         )
     })?;
-    let self_name = unfold_ctx.self_name;
-    let declared = unfold_ctx
-        .declared_types
-        .get(&ScopedName::local(self_name))
-        .ok_or_else(|| {
-            ctx.eval_error(
-                format!("no declared type for node `{self_name}`"),
-                Span::new(0, 0),
-            )
-        })?;
-    let index_ref = match declared {
+    let self_key = unfold_ctx.self_key.clone();
+    let index_ref = match unfold_ctx.self_declared_type {
         graphcal_compiler::registry::declared_type::DeclaredType::Indexed { index, .. } => {
             index.clone()
         }
         _ => {
             return Err(ctx.eval_error(
-                format!("node `{self_name}` must have an indexed type for time scan"),
+                format!("node `{self_key}` must have an indexed type for time scan"),
                 Span::new(0, 0),
             ));
         }
@@ -1210,11 +1293,6 @@ fn eval_hir_unfold(
     let mut result_entries = IndexMap::new();
     result_entries.insert(variants[0].clone(), init_val);
 
-    let self_scoped = ScopedName::local(self_name);
-    let self_key = RuntimeDeclKey::for_local_decl(
-        ctx.current_dag.unwrap_or_else(|| ctx.tir.root()),
-        &self_scoped,
-    );
     let mut overlay_values = values.clone();
     overlay_values.insert(
         self_key.clone(),
@@ -1236,6 +1314,7 @@ fn eval_hir_unfold(
         scan_locals.bind(
             prev.id,
             RuntimeValue::RangeLabel {
+                index_name: index_ref.clone(),
                 step_index: previous_step_index,
                 value: range_data.step_value(previous_step_index),
             },
@@ -1243,6 +1322,7 @@ fn eval_hir_unfold(
         scan_locals.bind(
             curr.id,
             RuntimeValue::RangeLabel {
+                index_name: index_ref.clone(),
                 step_index: i,
                 value: range_data.step_value(i),
             },
