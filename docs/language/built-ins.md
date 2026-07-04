@@ -6,6 +6,8 @@ icon: material/package-variant
 
 This page lists all dimensions, units, constants, and functions provided by the Graphcal prelude. These are available in every `.gcl` file without any `import` declarations.
 
+The set of bare-callable functions is closed: user code cannot add to it. Externally-provided functions are declared with `import plugin` blocks and called qualified through their alias — see [Extern Functions (Plugins)](extern-functions.md).
+
 ## Built-in Constants
 
 | Name | Type | Value |
