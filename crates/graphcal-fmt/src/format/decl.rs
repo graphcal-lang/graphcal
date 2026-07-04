@@ -58,7 +58,8 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
 
 fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
     match kind {
-        DeclKind::Param(_) | DeclKind::Sugar(_) => RcDoc::nil(),
+        // Plugin imports carry no visibility annotation.
+        DeclKind::Param(_) | DeclKind::Sugar(_) | DeclKind::PluginImport(_) => RcDoc::nil(),
         DeclKind::Dimension(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Type(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Index(d) => bindable_visibility_prefix(d.visibility),
@@ -66,8 +67,6 @@ fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
         DeclKind::BaseDimension(d) => visibility_prefix(d.visibility),
         DeclKind::Unit(d) => visibility_prefix(d.visibility),
         DeclKind::Import(d) => visibility_prefix(d.visibility),
-        // Plugin imports carry no visibility annotation.
-        DeclKind::PluginImport(_) => RcDoc::nil(),
         DeclKind::Include(d) => visibility_prefix(d.visibility),
         DeclKind::Dag(d) => visibility_prefix(d.visibility),
         DeclKind::Assert(d) => visibility_prefix(d.visibility),

@@ -22,7 +22,7 @@ pub struct BuiltinFunction {
 impl BuiltinFunction {
     /// Returns the arity (number of parameters) of this function.
     #[must_use]
-    pub fn arity(&self) -> usize {
+    pub const fn arity(&self) -> usize {
         self.signature.arity()
     }
 }

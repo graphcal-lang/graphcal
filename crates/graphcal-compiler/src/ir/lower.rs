@@ -387,6 +387,12 @@ pub struct IR {
     /// Source bindings for imported values whose runtime value is supplied
     /// outside this IR.
     pub imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    /// Resolved extern function signatures declared by `import plugin`
+    /// blocks, keyed by canonical plugin identity plus function name.
+    pub extern_functions: HashMap<
+        crate::syntax::plugin::ExternFnKey,
+        ExternFunctionEntry,
+    >,
     /// Names of declarations marked `pub` (or `pub(bind)`) in the file.
     ///
     /// Carried through from the resolver so downstream stages — most
@@ -1007,6 +1013,14 @@ fn build_ir_from_resolved(
         imported_decl_types,
         imported_value_sources,
         pub_names: resolved.pub_names,
+        plugin_imports: ast
+            .declarations
+            .iter()
+            .filter_map(|decl| match &decl.kind {
+                DeclKind::PluginImport(plugin) => Some(plugin.clone()),
+                _ => None,
+            })
+            .collect(),
     };
 
     Ok((builder, unfrozen))
@@ -1040,6 +1054,9 @@ pub struct UnfrozenIR {
     // params). Used by `preprocess_dag_body_self_imports` to enforce
     // visibility on dag-body `import <self>.{...}` items.
     pub_names: HashSet<DeclName>,
+    /// Plugin-import declarations, awaiting signature resolution against the
+    /// frozen registry in [`UnfrozenIR::freeze`].
+    plugin_imports: Vec<crate::desugar::desugared_ast::PluginImportDecl>,
 }
 
 impl UnfrozenIR {
@@ -1304,7 +1321,10 @@ impl UnfrozenIR {
             })
             .collect();
 
+        let extern_functions = resolve_plugin_imports(&self.plugin_imports, &registry, src)?;
+
         Ok(IR {
+            extern_functions,
             registry,
             consts,
             params,
@@ -3622,6 +3642,213 @@ fn extract_type_annotations(ast: &File) -> HashMap<DeclName, TypeExpr> {
         }
     }
     type_anns
+}
+
+// ---------------------------------------------------------------------------
+// Extern plugin functions
+// ---------------------------------------------------------------------------
+
+/// A resolved extern function declared by an `import plugin` block.
+///
+/// The signature is stored in structural (base-dimension exponent) form —
+/// this is what Phase B of the plugin plan (#25) compares against embedded
+/// plugin manifests.
+#[derive(Debug, Clone)]
+pub struct ExternFunctionEntry {
+    /// Canonical plugin identity (the `import plugin "…"` path string).
+    pub plugin: crate::syntax::plugin::PluginPath,
+    /// The alias the declaring file bound the plugin to (diagnostics only).
+    pub alias: crate::syntax::module_name::ModuleAliasName,
+    /// The function leaf name.
+    pub name: crate::syntax::function_name::FnName,
+    /// The resolved dimensional signature.
+    pub signature: crate::function_signature::FunctionSignature,
+    /// Span of the function name inside the declaring block.
+    pub name_span: Span,
+    /// Span of the whole `fn ...;` declaration.
+    pub decl_span: Span,
+}
+
+/// Resolve every `import plugin` block's declared signatures against the
+/// frozen registry.
+///
+/// Dimension names resolve in the importing scope (prelude + user dims);
+/// dimension variables come from each function's explicit `<...>` binders.
+fn resolve_plugin_imports(
+    decls: &[crate::desugar::desugared_ast::PluginImportDecl],
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<
+    HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>,
+    GraphcalError,
+> {
+    use std::collections::hash_map::Entry;
+
+    let mut map = HashMap::new();
+    for decl in decls {
+        for function in &decl.functions {
+            let dim_vars: Vec<crate::syntax::dimension::DimVarName> = function
+                .dim_vars
+                .iter()
+                .map(|var| var.value.clone())
+                .collect();
+            let params = function
+                .params
+                .iter()
+                .map(|param| {
+                    let kind =
+                        resolve_extern_value_kind(&param.type_ann, &dim_vars, registry, src)?;
+                    Ok(crate::function_signature::FunctionParam {
+                        name: param.name.value.clone(),
+                        kind,
+                    })
+                })
+                .collect::<Result<Vec<_>, GraphcalError>>()?;
+            let result = resolve_extern_value_kind(&function.result, &dim_vars, registry, src)?;
+            let signature =
+                crate::function_signature::FunctionSignature::try_new(dim_vars, params, result)
+                    .map_err(|err| GraphcalError::InvalidExternSignature {
+                        message: err.to_string(),
+                        src: src.clone(),
+                        span: function.span.into(),
+                    })?;
+            let key = crate::syntax::plugin::ExternFnKey {
+                plugin: decl.path.value.clone(),
+                name: function.name.value.clone(),
+            };
+            let entry = ExternFunctionEntry {
+                plugin: decl.path.value.clone(),
+                alias: decl.alias.value.clone(),
+                name: function.name.value.clone(),
+                signature,
+                name_span: function.name.span,
+                decl_span: function.span,
+            };
+            match map.entry(key) {
+                Entry::Occupied(existing) => {
+                    // The same plugin function may be declared under several
+                    // aliases, but its signature is a single fact about the
+                    // plugin — conflicting declarations are rejected.
+                    let existing: &ExternFunctionEntry = existing.get();
+                    if existing.signature != entry.signature {
+                        return Err(GraphcalError::InvalidExternSignature {
+                            message: format!(
+                                "function `{}` of plugin \"{}\" is declared elsewhere with a different signature",
+                                entry.name, entry.plugin
+                            ),
+                            src: src.clone(),
+                            span: function.span.into(),
+                        });
+                    }
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(entry);
+                }
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// Resolve one extern-signature type annotation to a [`crate::function_signature::ValueKind`].
+fn resolve_extern_value_kind(
+    type_ann: &TypeExpr,
+    dim_vars: &[crate::syntax::dimension::DimVarName],
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::function_signature::ValueKind, GraphcalError> {
+    use crate::desugar::desugared_ast::TypeExprKind;
+    use crate::function_signature::ValueKind;
+
+    if !type_ann.constraints.is_empty() {
+        return Err(GraphcalError::InvalidExternSignature {
+            message: "domain constraints are not allowed in extern function signatures"
+                .to_string(),
+            src: src.clone(),
+            span: type_ann.span.into(),
+        });
+    }
+    match &type_ann.kind {
+        TypeExprKind::Bool => Ok(ValueKind::Bool),
+        TypeExprKind::Int => Ok(ValueKind::Int),
+        TypeExprKind::Dimensionless => Ok(ValueKind::dimensionless()),
+        TypeExprKind::DimExpr(dim_expr) => {
+            resolve_extern_dim_monomial(dim_expr, dim_vars, registry, src)
+                .map(ValueKind::Scalar)
+        }
+        TypeExprKind::Datetime
+        | TypeExprKind::DatetimeApplication { .. }
+        | TypeExprKind::Indexed { .. }
+        | TypeExprKind::TypeApplication { .. } => Err(GraphcalError::InvalidExternSignature {
+            message:
+                "extern function signatures support only Bool, Int, and scalar dimension types in this phase"
+                    .to_string(),
+            src: src.clone(),
+            span: type_ann.span.into(),
+        }),
+    }
+}
+
+/// Resolve a dimension expression over declared dim variables and in-scope
+/// dimensions into a [`crate::function_signature::DimMonomial`].
+fn resolve_extern_dim_monomial(
+    dim_expr: &crate::desugar::desugared_ast::DimExpr,
+    dim_vars: &[crate::syntax::dimension::DimVarName],
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::function_signature::DimMonomial, GraphcalError> {
+    use crate::function_signature::DimVarPower;
+    use crate::syntax::ast::MulDivOp;
+
+    let overflow = |span: Span| GraphcalError::DimensionOverflow {
+        src: src.clone(),
+        span: span.into(),
+    };
+
+    let mut vars: Vec<DimVarPower> = Vec::new();
+    let mut fixed = crate::dimension::Dimension::dimensionless();
+    for item in &dim_expr.terms {
+        let term = &item.term;
+        let power = term.power.unwrap_or(Rational::ONE);
+        let path = &term.name.value;
+        if let Some(atom) = path.as_bare()
+            && let Some(var) = dim_vars.iter().find(|v| v.as_str() == atom.as_str())
+        {
+            let power = match item.op {
+                MulDivOp::Mul => power,
+                MulDivOp::Div => power.checked_neg().map_err(|_| overflow(term.span))?,
+            };
+            vars.push(DimVarPower {
+                var: var.clone(),
+                power,
+            });
+            continue;
+        }
+        let Some(leaf) = path.as_bare() else {
+            return Err(GraphcalError::InvalidExternSignature {
+                message: format!(
+                    "module-qualified dimension `{}` is not supported in extern function signatures",
+                    path.display_path()
+                ),
+                src: src.clone(),
+                span: term.span.into(),
+            });
+        };
+        let Some(dim) = registry.dimensions.get_dimension(leaf.as_str()) else {
+            return Err(GraphcalError::UnknownDimension {
+                name: DimName::from_atom(leaf.clone()),
+                src: src.clone(),
+                span: term.name.span.into(),
+            });
+        };
+        let powered = dim.pow(power).map_err(|_| overflow(term.span))?;
+        fixed = match item.op {
+            MulDivOp::Mul => fixed.checked_mul(&powered),
+            MulDivOp::Div => fixed.checked_div(&powered),
+        }
+        .map_err(|_| overflow(term.span))?;
+    }
+    Ok(crate::function_signature::DimMonomial { vars, fixed })
 }
 
 #[cfg(test)]

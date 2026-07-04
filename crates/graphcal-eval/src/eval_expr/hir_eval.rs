@@ -379,7 +379,12 @@ fn eval_hir_fn_call(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let FunctionRef::Builtin(name) = callee.value;
+    let name = match &callee.value {
+        FunctionRef::Builtin(name) => *name,
+        FunctionRef::External(ext) => {
+            return eval_hir_extern_fn(expr, ext, args, values, local_values, ctx);
+        }
+    };
     match eval_rule_for_builtin(name) {
         EvalBuiltinRule::CollectionAggregation(kind) if args.len() == 1 => {
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
@@ -691,6 +696,160 @@ fn epoch_from_gregorian_str_at_scale(
         nanos,
         scale.to_hifitime(),
     )
+}
+
+/// Evaluate an extern (plugin) function call through the embedder-injected
+/// host function registry.
+///
+/// The Phase A host ABI is `fn(&[f64]) -> Result<f64, HostFnError>`: Int
+/// arguments convert exactly, Bool arguments become `1.0`/`0.0`, and the
+/// result converts back per the declared result kind. A closure error or a
+/// non-finite scalar result becomes a per-node evaluation failure naming the
+/// plugin alias and function; dependents report `DependencyFailed` through
+/// the ordinary per-node fault isolation.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single linear path: lookup, argument conversion, call, result conversion"
+)]
+fn eval_hir_extern_fn(
+    expr: &hir::Expr,
+    ext: &hir::ExternFnRef,
+    args: &[hir::Expr],
+    values: &RuntimeValueMap,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    use graphcal_compiler::function_signature::ValueKind;
+
+    let Some(registry) = ctx.host_fns else {
+        return Err(ctx.eval_error(
+            format!("extern function `{ext}` cannot be evaluated in this context (no host function registry)"),
+            expr.span,
+        ));
+    };
+    let key = ext.key();
+    let Some(host_fn) = registry.get(&key) else {
+        return Err(ctx.eval_error(
+            format!(
+                "extern function `{}` (plugin \"{}\") is not provided by the host",
+                ext.name, ext.plugin
+            ),
+            expr.span,
+        ));
+    };
+    let Some(function) = ctx.tir.extern_functions.get(&key) else {
+        return Err(ctx.internal_error(
+            format!("extern function `{ext}` has no resolved signature after dimension checking"),
+            expr.span,
+        ));
+    };
+    let signature = &function.signature;
+    if args.len() != signature.arity() {
+        return Err(ctx.eval_error(
+            format!(
+                "extern function `{ext}` expects {} argument(s) but got {}",
+                signature.arity(),
+                args.len()
+            ),
+            expr.span,
+        ));
+    }
+
+    let arg_values: Vec<f64> = signature
+        .params()
+        .iter()
+        .zip(args)
+        .map(|(param, arg)| {
+            let value = eval_hir_expr(arg, values, local_values, ctx)?;
+            match (&param.kind, value) {
+                (ValueKind::Scalar(_), value) => value
+                    .expect_scalar("extern function argument")
+                    .map_err(|e| ctx.eval_error(e.to_string(), arg.span)),
+                (ValueKind::Int, RuntimeValue::Int(i)) => {
+                    exact_numeric_extern_arg(i, ext, arg.span, ctx)
+                }
+                (ValueKind::Bool, RuntimeValue::Bool(b)) => Ok(if b { 1.0 } else { 0.0 }),
+                (ValueKind::Int | ValueKind::Bool, _) => Err(ctx.internal_error(
+                    format!(
+                        "extern function `{ext}` parameter `{}` received a value of the wrong kind after dimension checking",
+                        param.name
+                    ),
+                    arg.span,
+                )),
+            }
+        })
+        .collect::<Result<_, _>>()?;
+
+    let result = host_fn(&arg_values).map_err(|err| {
+        ctx.eval_error(
+            format!(
+                "extern function `{}` (plugin \"{}\") failed: {}",
+                ext, ext.plugin, err.message
+            ),
+            expr.span,
+        )
+    })?;
+
+    match signature.result() {
+        ValueKind::Scalar(_) => {
+            let display = ext.to_string();
+            Ok(RuntimeValue::Scalar(super::arithmetic::check_finite(
+                result, &display, ctx, expr.span,
+            )?))
+        }
+        ValueKind::Int => super::conversions::checked_f64_to_i64(result)
+            .map(RuntimeValue::Int)
+            .map_err(|err| {
+                ctx.eval_error(
+                    format!("extern function `{ext}` returned a non-Int value: {err}"),
+                    expr.span,
+                )
+            }),
+        ValueKind::Bool => {
+            #[expect(
+                clippy::float_cmp,
+                reason = "the Bool host ABI is exactly 0.0/1.0; anything else is a plugin bug"
+            )]
+            if result == 0.0 {
+                Ok(RuntimeValue::Bool(false))
+            } else if result == 1.0 {
+                Ok(RuntimeValue::Bool(true))
+            } else {
+                Err(ctx.eval_error(
+                    format!(
+                        "extern function `{ext}` declared a Bool result but returned {result} (expected 0.0 or 1.0)"
+                    ),
+                    expr.span,
+                ))
+            }
+        }
+    }
+}
+
+/// Convert an Int argument to the scalar host ABI, rejecting magnitudes that
+/// are not exactly representable in `f64`.
+fn exact_numeric_extern_arg(
+    value: i64,
+    ext: &hir::ExternFnRef,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<f64, GraphcalError> {
+    const MAX_EXACT_F64_INT: u64 = 1_u64 << f64::MANTISSA_DIGITS;
+    if value.unsigned_abs() > MAX_EXACT_F64_INT {
+        return Err(ctx.eval_error(
+            format!(
+                "extern function `{ext}` integer argument {value} is too large for exact conversion"
+            ),
+            span,
+        ));
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "integer magnitude is checked to be exactly representable before casting"
+    )]
+    {
+        Ok(value as f64)
+    }
 }
 
 fn eval_hir_builtin_fn(
@@ -1468,6 +1627,7 @@ fn eval_hir_inline_dag_call(
         current_dag: Some(dag_tir),
         root_values: ctx.root_values,
         struct_field_constraints: ctx.struct_field_constraints,
+        host_fns: ctx.host_fns,
     };
     let empty_hir_locals = HirLocalValueMap::root();
 

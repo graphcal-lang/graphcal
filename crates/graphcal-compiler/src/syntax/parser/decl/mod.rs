@@ -47,7 +47,9 @@ const fn decl_accepts_bindable_visibility(decl: &Declaration) -> bool {
 
 const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibility) {
     match &mut decl.kind {
-        DeclKind::Param(_) | DeclKind::Sugar(_) => {}
+        // Params and sugar carry no visibility field; plugin imports carry
+        // no visibility at all (extern functions cannot be re-exported).
+        DeclKind::Param(_) | DeclKind::Sugar(_) | DeclKind::PluginImport(_) => {}
         DeclKind::Node(d) | DeclKind::ConstNode(d) => {
             d.visibility = visibility_without_bindability(visibility);
         }
@@ -57,9 +59,6 @@ const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibil
         DeclKind::Type(d) => d.visibility = visibility,
         DeclKind::Index(d) => d.visibility = visibility,
         DeclKind::Import(d) => d.visibility = visibility_without_bindability(visibility),
-        // Plugin imports carry no visibility: extern functions are only
-        // callable through their own alias and cannot be re-exported.
-        DeclKind::PluginImport(_) => {}
         DeclKind::Include(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Dag(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Assert(d) => d.visibility = visibility_without_bindability(visibility),

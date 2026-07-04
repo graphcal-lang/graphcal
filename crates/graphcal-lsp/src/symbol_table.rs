@@ -456,12 +456,21 @@ impl<'a> HirRefCollector<'a> {
                 type_args,
                 args,
             } => {
-                let hir::FunctionRef::Builtin(builtin) = callee.value;
-                Self::reference(
-                    table,
-                    callee.span,
-                    SymbolKey::TopLevel(builtin.as_str().to_string()),
-                );
+                match &callee.value {
+                    hir::FunctionRef::Builtin(builtin) => Self::reference(
+                        table,
+                        callee.span,
+                        SymbolKey::TopLevel(builtin.as_str().to_string()),
+                    ),
+                    hir::FunctionRef::External(ext) => Self::reference(
+                        table,
+                        callee.span,
+                        SymbolKey::Qualified {
+                            module: vec![ext.alias.to_string()],
+                            name: ext.name.to_string(),
+                        },
+                    ),
+                }
                 for type_arg in type_args {
                     if let hir::expr::GenericArg::Type(type_expr) = type_arg {
                         self.walk_type(type_expr, table);

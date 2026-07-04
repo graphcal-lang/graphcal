@@ -336,6 +336,7 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
     file_src: &NamedSource<Arc<String>>,
     pub_names: HashSet<DeclName>,
     evaluated_files: &mut HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> Result<(), CompileError> {
     let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
     // One eval-loop run yields both the public result and the raw values
@@ -346,6 +347,7 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
         &plan,
         &compiled.declared_types,
         file_src,
+        host_fns,
     );
     let file_runtime_values = filter_local_runtime_values(&compiled.tir, &runtime_values);
     let top_level_consts = top_level_const_values(&compiled.tir, &plan.const_values);
@@ -410,6 +412,7 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
 pub(in crate::eval::project) fn evaluate_project_perfile(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> Result<EvalResult, CompileError> {
     // Pre-compute override routing: map each override name to the file that owns
     // the param. Walk root file's imports to find the owning file for each override.
@@ -427,6 +430,10 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
             overrides,
             &override_targets,
         )?;
+
+        // Load-time verification: every declared extern function must have a
+        // host registry entry (this becomes "manifest mismatch" in Phase B).
+        verify_host_functions(&compiled.tir, &project.files[file_dag_id].named_source, host_fns)?;
 
         // Files with required params (no default) or required indexes cannot be
         // evaluated standalone. They are only consumed via instantiated imports
@@ -463,8 +470,13 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
             }
             let file_src = &project.files[file_dag_id].named_source;
             let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
-            let eval_result =
-                evaluate_plan(&compiled.tir, &plan, &compiled.declared_types, file_src);
+            let eval_result = evaluate_plan(
+                &compiled.tir,
+                &plan,
+                &compiled.declared_types,
+                file_src,
+                host_fns,
+            );
 
             // Build a mapping from each dependency file path to the root-level
             // import statement span that (directly or transitively) brought it in.
@@ -571,6 +583,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
             file_src,
             pub_names,
             &mut evaluated_files,
+            host_fns,
         )?;
     }
 
@@ -581,6 +594,35 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
         src: internal_src,
         span: (0, 0).into(),
     }))
+}
+
+/// Load-time verification that every extern function declared by a file has
+/// a host registry entry.
+///
+/// Reported against the declaration's `fn` name span in the declaring file.
+/// In Phase B this check becomes "manifest mismatch" against the WASM
+/// module's embedded manifest.
+fn verify_host_functions(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+) -> Result<(), CompileError> {
+    // Deterministic reporting order: earliest declaration first.
+    let mut missing: Vec<_> = tir
+        .extern_functions
+        .iter()
+        .filter(|(key, _)| !host_fns.contains(key))
+        .collect();
+    missing.sort_by_key(|(_, function)| function.name_span.offset());
+    if let Some((_, function)) = missing.first() {
+        return Err(CompileError::Eval(GraphcalError::MissingHostFunction {
+            plugin: function.plugin.clone(),
+            name: function.name.clone(),
+            src: src.clone(),
+            span: function.name_span.into(),
+        }));
+    }
+    Ok(())
 }
 
 /// Map each dependency file to the root-level import statement span that brought it in.
@@ -648,6 +690,10 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
     let empty_overrides = HashMap::new();
     let empty_targets = HashMap::new();
+    // Compile-only consumers (LSP analysis, graph commands) still evaluate
+    // dependency files for downstream imports; use the Phase A default
+    // registry so dep extern calls behave the same as in full evaluation.
+    let host_fns = crate::host_fns::demo_registry();
     let mut evaluated_files: HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile> =
         HashMap::new();
 
@@ -688,6 +734,7 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
             file_src,
             pub_names,
             &mut evaluated_files,
+            &host_fns,
         )?;
     }
 

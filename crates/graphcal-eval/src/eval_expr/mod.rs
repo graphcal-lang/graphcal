@@ -65,6 +65,13 @@ pub struct EvalContext<'a> {
     /// constraints yet, e.g. const-bound evaluation inside `exec_plan`).
     pub struct_field_constraints:
         Option<&'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>,
+    /// Embedder-injected host functions backing extern (plugin) calls.
+    ///
+    /// `None` in contexts that must not reach extern calls (const
+    /// evaluation, display-unit resolution); dimension checking rejects
+    /// extern calls in those positions, so hitting an extern call with
+    /// `None` here surfaces as an evaluation error naming the function.
+    pub host_fns: Option<&'a crate::host_fns::HostFunctionRegistry>,
 }
 
 /// Context required to evaluate an `unfold(...)` expression inline.

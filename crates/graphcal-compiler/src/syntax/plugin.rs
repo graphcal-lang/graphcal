@@ -32,3 +32,14 @@ impl std::fmt::Display for PluginPath {
         f.write_str(&self.0)
     }
 }
+
+/// Canonical identity of one extern function: the plugin it belongs to plus
+/// its leaf name. Host function registries and resolved signature tables key
+/// on this.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ExternFnKey {
+    /// The owning plugin.
+    pub plugin: PluginPath,
+    /// The function leaf name.
+    pub name: crate::syntax::function_name::FnName,
+}

@@ -585,7 +585,23 @@ fn infer_hir_fn_call(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let FunctionRef::Builtin(name) = callee.value;
+    let name = match &callee.value {
+        FunctionRef::Builtin(name) => *name,
+        FunctionRef::External(ext) => {
+            return infer_extern_fn_call(
+                ext,
+                callee.span,
+                args,
+                declared_types,
+                local_types,
+                dag,
+                tir,
+                registry,
+                builtin_fns,
+                src,
+            );
+        }
+    };
     match type_rule_for_builtin(name) {
         BuiltinTypeRule::CollectionAggregation(kind) if args.len() == 1 => {
             let arg_type = infer_arg(
@@ -752,6 +768,109 @@ fn infer_hir_fn_call(
                 builtin_fns,
                 src,
             )
+        }
+    }
+}
+
+/// Check an extern (plugin) function call against its declared
+/// [`crate::function_signature::FunctionSignature`], using the same
+/// bind/check dimension-variable walk as built-in signatures.
+#[expect(clippy::too_many_arguments, reason = "function-call context")]
+fn infer_extern_fn_call(
+    ext: &hir::ExternFnRef,
+    callee_span: Span,
+    args: &[hir::Expr],
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    local_types: &HirLocalTypes<'_>,
+    dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    use crate::function_signature::ValueKind;
+
+    use super::super::builtins::{check_scalar_param, eval_result_monomial};
+
+    let Some(function) = tir.extern_functions.get(&ext.key()) else {
+        return Err(GraphcalError::UnknownExternFunction {
+            alias: ext.alias.clone(),
+            name: ext.name.clone(),
+            src: src.clone(),
+            span: callee_span.into(),
+        });
+    };
+    let sig = &function.signature;
+    if args.len() != sig.arity() {
+        return Err(GraphcalError::WrongArity {
+            name: ext.name.clone(),
+            expected: sig.arity(),
+            got: args.len(),
+            src: src.clone(),
+            span: callee_span.into(),
+        });
+    }
+
+    // Boundary rendering for diagnostics only.
+    let display_name = ext.to_string();
+    let mut bindings: HashMap<crate::syntax::dimension::DimVarName, Dimension> = HashMap::new();
+    for (param, arg) in sig.params().iter().zip(args) {
+        let arg_type = infer_arg(
+            arg,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        )?;
+        match &param.kind {
+            ValueKind::Bool => {
+                if !matches!(arg_type, InferredType::Bool) {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Bool".to_string(),
+                        found: format_inferred_type(&arg_type, registry),
+                        help: format!("parameter `{}` requires Bool", param.name),
+                        src: src.clone(),
+                        span: arg.span.into(),
+                    });
+                }
+            }
+            ValueKind::Int => {
+                if !arg_type.is_int_like() {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Int".to_string(),
+                        found: format_inferred_type(&arg_type, registry),
+                        help: format!("parameter `{}` requires Int", param.name),
+                        src: src.clone(),
+                        span: arg.span.into(),
+                    });
+                }
+            }
+            ValueKind::Scalar(monomial) => {
+                let arg_dim = expect_scalar(&arg_type, registry, src, arg.span)?;
+                check_scalar_param(
+                    &display_name,
+                    sig,
+                    &param.name,
+                    monomial,
+                    &arg_dim,
+                    &mut bindings,
+                    registry,
+                    src,
+                    arg.span,
+                )?;
+            }
+        }
+    }
+
+    match sig.result() {
+        ValueKind::Bool => Ok(InferredType::Bool),
+        ValueKind::Int => Ok(InferredType::Int),
+        ValueKind::Scalar(monomial) => {
+            eval_result_monomial(&display_name, monomial, &bindings, src, callee_span)
+                .map(InferredType::Scalar)
         }
     }
 }

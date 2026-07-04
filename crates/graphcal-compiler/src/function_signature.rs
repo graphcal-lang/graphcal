@@ -94,7 +94,7 @@ impl DimMonomial {
 
     /// Returns whether this monomial references no dimension variables.
     #[must_use]
-    pub fn is_concrete(&self) -> bool {
+    pub const fn is_concrete(&self) -> bool {
         self.vars.is_empty()
     }
 
@@ -283,7 +283,7 @@ impl FunctionSignature {
 
     /// The number of parameters.
     #[must_use]
-    pub fn arity(&self) -> usize {
+    pub const fn arity(&self) -> usize {
         self.params.len()
     }
 

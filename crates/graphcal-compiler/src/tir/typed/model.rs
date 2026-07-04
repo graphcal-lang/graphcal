@@ -740,6 +740,13 @@ pub struct TIR {
     /// canonical key under which the dep's DAGs were inserted by
     /// `merge_dep_dag_tirs`.
     pub module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
+    /// Resolved extern function signatures declared by `import plugin`
+    /// blocks in this file (and, after `merge_dep_dag_tirs`, its deps),
+    /// keyed by canonical plugin identity plus function name.
+    pub extern_functions: HashMap<
+        crate::syntax::plugin::ExternFnKey,
+        crate::ir::lower::ExternFunctionEntry,
+    >,
 }
 
 impl TIR {

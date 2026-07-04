@@ -192,6 +192,7 @@ fn type_resolve_impl(
         root_dag_id,
         dags,
         module_aliases: HashMap::new(),
+        extern_functions: ir.extern_functions,
     })
 }
 
@@ -827,6 +828,30 @@ fn check_hir_body_policies(
                 checker.check_expr(&bound.value, true, local(key))?;
             }
         }
+        // Domain bounds are evaluated without a host function registry, so
+        // extern calls are rejected in all of them (const and runtime alike).
+        for bound in bounds {
+            if let Some((ext, span)) = hir::find_extern_call(&bound.value) {
+                return Err(GraphcalError::ExternCallNotAllowed {
+                    name: ext.to_string(),
+                    context: "domain bound".to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            }
+        }
+    }
+    // Dynamic unit scales resolve in contexts that carry no host function
+    // registry (including dependency export); reject extern calls there.
+    for expr in semantic.dynamic_unit_scales.values() {
+        if let Some((ext, span)) = hir::find_extern_call(expr) {
+            return Err(GraphcalError::ExternCallNotAllowed {
+                name: ext.to_string(),
+                context: "unit scale expression".to_string(),
+                src: src.clone(),
+                span: span.into(),
+            });
+        }
     }
     for (key, expr) in &semantic.expressions.nodes {
         checker.check_expr(expr, false, local(key))?;
@@ -894,6 +919,10 @@ impl HirPolicyChecker<'_> {
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive ExprKind policy walk"
+    )]
     fn check_expr_inner(
         &self,
         expr: &hir::Expr,
@@ -934,7 +963,19 @@ impl HirPolicyChecker<'_> {
                 self.check_const_unit_expr(target, const_body)?;
                 recurse(operand)
             }
-            hir::ExprKind::FnCall { args, .. } => args.iter().try_for_each(recurse),
+            hir::ExprKind::FnCall { callee, args, .. } => {
+                // Extern functions are runtime-provided; const expressions
+                // evaluate at compile time without a host function registry.
+                if const_body && let hir::FunctionRef::External(ext) = &callee.value {
+                    return Err(GraphcalError::ExternCallNotAllowed {
+                        name: ext.to_string(),
+                        context: "const expression".to_string(),
+                        src: self.src.clone(),
+                        span: callee.span.into(),
+                    });
+                }
+                args.iter().try_for_each(recurse)
+            }
             hir::ExprKind::If {
                 condition,
                 then_branch,
