@@ -48,8 +48,9 @@ const fn decl_accepts_bindable_visibility(decl: &Declaration) -> bool {
 const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibility) {
     match &mut decl.kind {
         DeclKind::Param(_) | DeclKind::Sugar(_) => {}
-        DeclKind::Node(d) => d.visibility = visibility_without_bindability(visibility),
-        DeclKind::ConstNode(d) => d.visibility = visibility_without_bindability(visibility),
+        DeclKind::Node(d) | DeclKind::ConstNode(d) => {
+            d.visibility = visibility_without_bindability(visibility);
+        }
         DeclKind::BaseDimension(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Dimension(d) => d.visibility = visibility,
         DeclKind::Unit(d) => d.visibility = visibility_without_bindability(visibility),

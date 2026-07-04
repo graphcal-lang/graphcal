@@ -266,10 +266,10 @@ pub fn format_fn_call_expr(
         let trailing = fmt.drain_trailing_comment(arg_end);
         has_trailing_comment |= trailing.is_some();
 
-        let plain_doc = match trailing.clone() {
-            Some(comment) => arg_doc.clone().append(comment),
-            None => arg_doc.clone(),
-        };
+        let plain_doc = trailing.clone().map_or_else(
+            || arg_doc.clone(),
+            |comment| arg_doc.clone().append(comment),
+        );
         let comma_doc = match trailing {
             Some(comment) => arg_doc.append(RcDoc::text(",")).append(comment),
             None => arg_doc.append(RcDoc::text(",")),
@@ -533,6 +533,10 @@ fn format_table_2d(
 
 /// Format the inner body of a 2D table (header row + data rows).
 /// Shared between 2D tables and 3D+ slice sections.
+#[expect(
+    clippy::too_many_lines,
+    reason = "table body formatting keeps header, row, and comment layout together"
+)]
 fn format_table_2d_body(
     fmt: &mut Formatter<'_>,
     indexes: &[TableIndexSpec],

@@ -1945,10 +1945,10 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                 if let Some(type_def) = registry.types.get_type(name)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
-                    let desc = match type_def.union_members() {
-                        None => format!("{} (required)", type_def.name),
-                        Some(members) => match type_def.record_fields() {
-                            Some(fields) if fields.is_empty() => type_def.name.to_string(),
+                    let desc = type_def.union_members().map_or_else(
+                        || format!("{} (required)", type_def.name),
+                        |members| match type_def.record_fields() {
+                            Some([]) => type_def.name.to_string(),
                             Some(fields) => {
                                 let field_descs: Vec<String> =
                                     fields.iter().map(|f| f.name.to_string()).collect();
@@ -1961,7 +1961,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                                 member_descs.join(" | ")
                             }
                         },
-                    };
+                    );
                     def_mut.type_description = Some(desc);
                 }
             }

@@ -1223,7 +1223,7 @@ pub(in crate::eval::project) fn check_dag_recursion(
                 .expect("DFS invariant: in_stack ⇒ node is on path");
             let mut cycle: Vec<String> = path[cycle_start..]
                 .iter()
-                .map(|name| name.to_string())
+                .map(std::string::ToString::to_string)
                 .collect();
             cycle.push(node.to_string());
             return Some(cycle);

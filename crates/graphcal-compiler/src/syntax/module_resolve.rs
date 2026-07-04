@@ -2541,11 +2541,11 @@ mod tests {
             .register_import(&main_id, imports[0].0, imports[0].1, &lib_id)
             .unwrap();
 
-        let resolved = resolver
+        let index_variant = resolver
             .resolve_bare_index_variant(&main_id, &IndexVariantName::expect_valid("Burn"))
             .unwrap();
-        assert_eq!(resolved.index().as_str(), "Phase");
-        assert_eq!(resolved.variant().as_str(), "Burn");
+        assert_eq!(index_variant.index().as_str(), "Phase");
+        assert_eq!(index_variant.variant().as_str(), "Burn");
     }
 
     #[test]

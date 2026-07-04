@@ -342,7 +342,7 @@ impl Parser<'_> {
     }
 
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
-        match self.lexer.peek().cloned() {
+        match self.lexer.peek().copied() {
             Some(Token::Number) => self.parse_number_expr(),
             Some(Token::True) => {
                 let (_, span) = self.advance()?;

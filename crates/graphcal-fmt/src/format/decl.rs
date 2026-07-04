@@ -61,8 +61,7 @@ fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
         DeclKind::Dimension(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Type(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Index(d) => bindable_visibility_prefix(d.visibility),
-        DeclKind::Node(d) => visibility_prefix(d.visibility),
-        DeclKind::ConstNode(d) => visibility_prefix(d.visibility),
+        DeclKind::Node(d) | DeclKind::ConstNode(d) => visibility_prefix(d.visibility),
         DeclKind::BaseDimension(d) => visibility_prefix(d.visibility),
         DeclKind::Unit(d) => visibility_prefix(d.visibility),
         DeclKind::Import(d) => visibility_prefix(d.visibility),
@@ -848,7 +847,7 @@ fn render_multi_decl_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
 }
 
 fn compute_multi_decl_layout(
-    fmt: &mut Formatter<'_>,
+    fmt: &Formatter<'_>,
     info: &MultiDecl,
 ) -> (usize, Vec<usize>, Vec<Vec<Vec<String>>>) {
     let num_cols = info.slices.first().map_or(0, |s| s.header_cells.len());

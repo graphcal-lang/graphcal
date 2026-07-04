@@ -344,13 +344,14 @@ fn reject_unknown_keys(
     param_name: &str,
     allowed: &[&str],
 ) -> Result<(), JsonInputError> {
-    match obj.keys().find(|key| !allowed.contains(&key.as_str())) {
-        Some(key) => Err(JsonInputError::UnknownObjectKey {
-            param: param_name.to_string(),
-            key: key.clone(),
-        }),
-        None => Ok(()),
-    }
+    obj.keys()
+        .find(|key| !allowed.contains(&key.as_str()))
+        .map_or(Ok(()), |key| {
+            Err(JsonInputError::UnknownObjectKey {
+                param: param_name.to_string(),
+                key: key.clone(),
+            })
+        })
 }
 
 /// Convert `{"variant": "Name", "fields": {...}}` to a `ConstructorCall` expr.

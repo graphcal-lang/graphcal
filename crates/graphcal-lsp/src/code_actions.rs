@@ -188,10 +188,6 @@ fn keyword_matches(trimmed: &str, keyword: &str) -> bool {
         .is_none_or(|ch| ch.is_whitespace() || ch == '(')
 }
 
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "line numbers fit in usize for typical source files"
-)]
 fn line_start_offset(source: &str, line: u32) -> Option<usize> {
     let mut offset = 0usize;
     for (idx, segment) in source.split_inclusive('\n').enumerate() {

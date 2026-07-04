@@ -1090,7 +1090,7 @@ impl UnfrozenIR {
         for name in self.imported_values.keys() {
             let path = scoped_name_to_name_path(name, src)?;
             let canonical = match resolver.resolve_decl_path(owner, &path) {
-                Ok(resolved) => resolved,
+                Ok(target_decl) => target_decl,
                 Err(err) => match self.imported_value_sources.get(name) {
                     Some(source) => ResolvedDeclName::from_def(
                         source.dag_id.clone(),
@@ -2674,11 +2674,7 @@ fn register_declarations_impl(
                     collect_nat_ranges_from_expr(value, registry, src)?;
                 }
             }
-            DeclKind::Node(d) => {
-                collect_nat_ranges_from_type_expr(&d.type_ann, registry, src)?;
-                collect_nat_ranges_from_expr(&d.value, registry, src)?;
-            }
-            DeclKind::ConstNode(d) => {
+            DeclKind::Node(d) | DeclKind::ConstNode(d) => {
                 collect_nat_ranges_from_type_expr(&d.type_ann, registry, src)?;
                 collect_nat_ranges_from_expr(&d.value, registry, src)?;
             }

@@ -37,7 +37,7 @@ fn format_scientific(value: f64) -> String {
     let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
     let exponent = exponent
         .parse::<i32>()
-        .map_or(exponent.to_string(), |n| n.to_string());
+        .map_or_else(|_| exponent.to_string(), |n| n.to_string());
     format!("{mantissa}e{exponent}")
 }
 

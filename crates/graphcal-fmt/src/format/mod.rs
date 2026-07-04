@@ -20,21 +20,21 @@ pub use type_expr::{format_dim_expr_inline, format_type_expr_inline, format_unit
 /// effectively crate-internal.
 pub const INDENT: isize = 4;
 
-pub(super) fn display_width(text: &str) -> usize {
+fn display_width(text: &str) -> usize {
     unicode_width::UnicodeWidthStr::width(text)
 }
 
-pub(super) fn pad_left_to_width(text: &str, width: usize) -> String {
+fn pad_left_to_width(text: &str, width: usize) -> String {
     let padding = width.saturating_sub(display_width(text));
     format!("{}{}", " ".repeat(padding), text)
 }
 
-pub(super) fn pad_right_to_width(text: &str, width: usize) -> String {
+fn pad_right_to_width(text: &str, width: usize) -> String {
     let padding = width.saturating_sub(display_width(text));
     format!("{}{}", text, " ".repeat(padding))
 }
 
-pub(super) fn text_with_hardlines(text: &str) -> RcDoc<'static> {
+fn text_with_hardlines(text: &str) -> RcDoc<'static> {
     RcDoc::intersperse(
         text.split('\n').map(|line| {
             if line.is_empty() {
@@ -232,15 +232,15 @@ pub fn format_file(file: &File, source: &str, metadata: &SourceMetadata) -> RcDo
     // Drain any remaining comments at end of file. `drain_comments_before`
     // already appends a hardline after every emitted comment, so that hardline
     // is the final newline when trailing comments exist.
-    let had_remaining = if let Some(remaining) = fmt.drain_comments_before(usize::MAX) {
-        if !docs.is_empty() {
-            docs.push(RcDoc::hardline());
-        }
-        docs.push(remaining);
-        true
-    } else {
-        false
-    };
+    let had_remaining = fmt
+        .drain_comments_before(usize::MAX)
+        .is_some_and(|remaining| {
+            if !docs.is_empty() {
+                docs.push(RcDoc::hardline());
+            }
+            docs.push(remaining);
+            true
+        });
 
     if !had_remaining {
         docs.push(RcDoc::hardline());

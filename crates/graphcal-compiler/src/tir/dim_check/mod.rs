@@ -1055,10 +1055,10 @@ fn check_one_bound(
             if ok {
                 return Ok(());
             }
-            let bound_dim_str = match inferred.scalar_dimension() {
-                Some(d) => registry.dimensions.format_dimension(d),
-                None => format_inferred_type(inferred, registry),
-            };
+            let bound_dim_str = inferred.scalar_dimension().map_or_else(
+                || format_inferred_type(inferred, registry),
+                |d| registry.dimensions.format_dimension(d),
+            );
             Err(GraphcalError::DomainDimensionMismatch {
                 name: name.to_string(),
                 type_dim: registry.dimensions.format_dimension(target_dim),
@@ -1376,10 +1376,10 @@ fn check_one_bound_with_display_name(
             if ok {
                 return Ok(());
             }
-            let bound_dim_str = match inferred.scalar_dimension() {
-                Some(d) => registry.dimensions.format_dimension(d),
-                None => format_inferred_type(inferred, registry),
-            };
+            let bound_dim_str = inferred.scalar_dimension().map_or_else(
+                || format_inferred_type(inferred, registry),
+                |d| registry.dimensions.format_dimension(d),
+            );
             Err(GraphcalError::DomainDimensionMismatch {
                 name: display_name.to_string(),
                 type_dim: registry.dimensions.format_dimension(target_dim),

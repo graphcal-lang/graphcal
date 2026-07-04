@@ -359,12 +359,12 @@ mod tests {
 
     #[test]
     fn missing_comma_between_match_arms_is_reported_at_next_pattern() {
-        let source = r#"
+        let source = r"
 node x: Dimensionless = match @r {
     Ok => 1.0
     Err => 2.0,
 };
-"#;
+";
         let err = Parser::new(source).parse_file().unwrap_err();
         match err {
             ParseError::UnexpectedToken {

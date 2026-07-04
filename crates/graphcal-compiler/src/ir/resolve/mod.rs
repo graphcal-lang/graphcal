@@ -294,8 +294,7 @@ fn collect_local_declarations(
     for decl in &file.declarations {
         let is_visible = match &decl.kind {
             DeclKind::Param(_) => true,
-            DeclKind::Node(d) => d.visibility.is_public(),
-            DeclKind::ConstNode(d) => d.visibility.is_public(),
+            DeclKind::Node(d) | DeclKind::ConstNode(d) => d.visibility.is_public(),
             DeclKind::BaseDimension(d) => d.visibility.is_public(),
             DeclKind::Dimension(d) => d.visibility.is_public(),
             DeclKind::Unit(d) => d.visibility.is_public(),
@@ -764,8 +763,7 @@ fn validate_private_in_public(
         // explicitly marked `pub` / `pub(bind)`.
         let is_visible = match &decl.kind {
             DeclKind::Param(_) => true,
-            DeclKind::Node(d) => d.visibility.is_public(),
-            DeclKind::ConstNode(d) => d.visibility.is_public(),
+            DeclKind::Node(d) | DeclKind::ConstNode(d) => d.visibility.is_public(),
             DeclKind::BaseDimension(d) => d.visibility.is_public(),
             DeclKind::Dimension(d) => d.visibility.is_public(),
             DeclKind::Unit(d) => d.visibility.is_public(),

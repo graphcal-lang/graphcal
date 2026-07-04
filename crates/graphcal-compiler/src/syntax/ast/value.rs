@@ -498,8 +498,8 @@ impl<P: Phase> Drop for Expr<P> {
         // avoiding a double-drop while letting recursive child drops run under
         // the stack-growth guard.
         unsafe {
-            let kind = std::ptr::read(&self.kind);
-            std::ptr::write(&mut self.kind, ExprKind::Number(0.0));
+            let kind = std::ptr::read(std::ptr::addr_of!(self.kind));
+            std::ptr::write(std::ptr::addr_of_mut!(self.kind), ExprKind::Number(0.0));
             crate::stack::with_stack_growth(|| drop(kind));
         }
     }
@@ -884,7 +884,7 @@ impl NatExpr {
 }
 
 impl NatExpr {
-    fn precedence(&self) -> u8 {
+    const fn precedence(&self) -> u8 {
         match self {
             Self::Add(..) => 1,
             Self::Mul(..) => 2,
