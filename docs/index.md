@@ -6,6 +6,10 @@ icon: material/home
 
 Graphcal is a **type-safe, unit-aware, Git-friendly reactive programming language** for engineering calculations. It replaces spreadsheets and ad-hoc scripts with a single typed, version-controlled computation graph.
 
+![Graphcal in Helix showing inline computed values for a rocket equation calculation](assets/rocket-screenshot.png)
+
+*Graphcal's language server shows computed node values inline, so a plain-text calculation file feels like a live engineering worksheet.*
+
 ## Quick Example
 
 The Tsiolkovsky rocket equation in Graphcal:

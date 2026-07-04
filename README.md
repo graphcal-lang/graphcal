@@ -7,6 +7,10 @@
 
 Graphcal replaces the spreadsheets and ad-hoc scripts that engineers reluctantly depend on -- Excel mass budgets, throwaway Python notebooks -- with a single typed, version-controlled, reactive computation graph. The compiler tracks physical dimensions through every operation, so a stray `km + kg` or a missing unit conversion fails at compile time, not in flight. Remember the [Mars Climate Orbiter](https://en.wikipedia.org/wiki/Mars_Climate_Orbiter).
 
+![Graphcal in Helix showing inline computed values for a rocket equation calculation](docs/assets/rocket-screenshot.png)
+
+*Graphcal's language server shows computed node values inline, so a plain-text calculation file feels like a live engineering worksheet.*
+
 ```gcl
 // rocket.gcl -- the Tsiolkovsky equation
 dim Velocity = Length / Time;
