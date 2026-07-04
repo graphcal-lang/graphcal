@@ -721,3 +721,108 @@ fn error_private_in_public() {
     let rendered = render_error(source, "private_in_public.gcl");
     insta::assert_snapshot!(rendered);
 }
+
+// ---------------------------------------------------------------------------
+// Extern plugin functions (#943)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn error_extern_arity() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_arity.gcl");
+    let rendered = render_error(source, "extern_arity.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_dim_var_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_dim_var_mismatch.gcl");
+    let rendered = render_error(source, "extern_dim_var_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_unqualified_call() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_unqualified_call.gcl");
+    let rendered = render_error(source, "extern_unqualified_call.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_unknown_fn() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_unknown_fn.gcl");
+    let rendered = render_error(source, "extern_unknown_fn.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_unresolved_alias() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_unresolved_alias.gcl");
+    let rendered = render_error(source, "extern_unresolved_alias.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_in_const() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_in_const.gcl");
+    let rendered = render_error(source, "extern_in_const.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_use_before_binding() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_use_before_binding.gcl");
+    let rendered = render_error(source, "extern_use_before_binding.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_unknown_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_unknown_dimension.gcl");
+    let rendered = render_error(source, "extern_unknown_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_conflicting_signature() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_conflicting_signature.gcl");
+    let rendered = render_error(source, "extern_conflicting_signature.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_missing_host_fn() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/extern_missing_host_fn.gcl");
+    let rendered = render_error(source, "extern_missing_host_fn.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_fn_failure_is_contained_per_node() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/extern_fn_failure.gcl");
+    let message = render_node_error(source, "extern_fn_failure.gcl", "bad");
+    insta::assert_snapshot!(message);
+}
+
+#[test]
+fn error_extern_fn_failure_dependents_report_dependency_failed() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/extern_fn_failure.gcl");
+    let result = compile_and_eval_named(source, "extern_fn_failure.gcl").unwrap();
+    let (_, ok_result, _) = result
+        .all
+        .iter()
+        .find(|(n, _, _)| n.to_string() == "ok")
+        .unwrap();
+    assert!(ok_result.is_ok(), "sibling `ok` must still evaluate");
+    let (_, downstream, _) = result
+        .all
+        .iter()
+        .find(|(n, _, _)| n.to_string() == "downstream")
+        .unwrap();
+    match downstream {
+        Err(NodeError::DependencyFailed { failed_deps }) => {
+            assert_eq!(failed_deps.len(), 1);
+            assert_eq!(failed_deps[0].as_str(), "bad");
+        }
+        other => panic!("expected DependencyFailed for `downstream`, got {other:?}"),
+    }
+}

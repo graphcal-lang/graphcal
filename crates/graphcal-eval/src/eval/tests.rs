@@ -4061,3 +4061,24 @@ node out: Length = @with_const(v: @src).result;
     let out = find_value(&result, "out");
     assert!((out - 12.0).abs() < 1e-10, "expected 12.0, got {out}");
 }
+
+#[test]
+fn eval_extern_plugin_fixture() {
+    // Extern functions (#943 Phase A): dim-variable polymorphism, rational
+    // result powers, and cross-variable monomial results all evaluate through
+    // the demo host registry.
+    let source = include_str!("../../../../tests/fixtures/valid/plugin_extern.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    assert!((find_value(&result, "v_mid") - 150.0).abs() < 1e-9);
+    assert!((find_value(&result, "pace") - (1.0 / 150.0)).abs() < 1e-12);
+    assert!((find_value(&result, "scale") - 6.0).abs() < 1e-12);
+    assert!(
+        result
+            .assertions
+            .iter()
+            .all(|(_, r, _)| matches!(r, super::types::AssertResult::Pass)),
+        "all fixture assertions must pass: {:?}",
+        result.assertions
+    );
+}

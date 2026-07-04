@@ -1752,3 +1752,95 @@ fn layer_with_empty_plots_is_rejected() {
         "expected EmptyCompositionPlots, got {err:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Extern plugin imports (#943)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_plugin_import_block() {
+    let file = Parser::new(
+        "import plugin \"plugins/coolprop.wasm\" as fluids {\n    fn density(p: Pressure, t: Temperature) -> Density;\n    fn smooth<D>(x: D, window: Dimensionless) -> D;\n    fn torque<D1, D2>(f: D1, arm: D2) -> D1 * D2;\n}\n",
+    )
+    .parse_file()
+    .unwrap();
+    assert_eq!(file.declarations.len(), 1);
+    let DeclKind::PluginImport(plugin) = &file.declarations[0].kind else {
+        panic!("expected PluginImport, got {:?}", file.declarations[0].kind);
+    };
+    assert_eq!(plugin.path.value.as_str(), "plugins/coolprop.wasm");
+    assert_eq!(plugin.alias.value.as_str(), "fluids");
+    assert_eq!(plugin.functions.len(), 3);
+
+    let density = &plugin.functions[0];
+    assert_eq!(density.name.value.as_str(), "density");
+    assert!(density.dim_vars.is_empty());
+    assert_eq!(density.params.len(), 2);
+    assert_eq!(density.params[0].name.value.as_str(), "p");
+    assert_eq!(dim_expr_name(&density.params[0].type_ann), "Pressure");
+    assert_eq!(dim_expr_name(&density.result), "Density");
+
+    let smooth = &plugin.functions[1];
+    assert_eq!(smooth.dim_vars.len(), 1);
+    assert_eq!(smooth.dim_vars[0].value.as_str(), "D");
+    assert!(matches!(
+        smooth.params[1].type_ann.kind,
+        TypeExprKind::Dimensionless
+    ));
+
+    let torque = &plugin.functions[2];
+    assert_eq!(torque.dim_vars.len(), 2);
+    let TypeExprKind::DimExpr(result) = &torque.result.kind else {
+        panic!("expected DimExpr result");
+    };
+    assert_eq!(result.terms.len(), 2);
+}
+
+#[test]
+fn parse_plugin_import_requires_alias() {
+    let err = Parser::new("import plugin \"p\" { fn f(x: Dimensionless) -> Dimensionless; }")
+        .parse_file()
+        .unwrap_err();
+    assert!(format!("{err:?}").contains("as"), "{err:?}");
+}
+
+#[test]
+fn parse_plugin_import_rejects_pub() {
+    let err = Parser::new(
+        "pub import plugin \"p\" as x { fn f(a: Dimensionless) -> Dimensionless; }",
+    )
+    .parse_file()
+    .unwrap_err();
+    assert!(
+        format!("{err:?}").contains("cannot be re-exported"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn parse_plugin_import_rejects_non_fn_body() {
+    let err = Parser::new("import plugin \"p\" as x { node y: Dimensionless = 1.0; }")
+        .parse_file()
+        .unwrap_err();
+    assert!(format!("{err:?}").contains("fn"), "{err:?}");
+}
+
+#[test]
+fn parse_import_of_module_path_starting_with_plugin_stays_an_import() {
+    // `plugin` is contextual: without a following string literal, this is an
+    // ordinary module path whose first segment happens to be `plugin`.
+    let file = Parser::new("import plugin.tools as t;").parse_file().unwrap();
+    let DeclKind::Import(import) = &file.declarations[0].kind else {
+        panic!("expected ordinary Import");
+    };
+    assert_eq!(import.path.display_path(), "plugin.tools");
+}
+
+#[test]
+fn parse_plugin_import_allows_empty_block() {
+    let file = Parser::new("import plugin \"p\" as x {}").parse_file().unwrap();
+    let DeclKind::PluginImport(plugin) = &file.declarations[0].kind else {
+        panic!("expected PluginImport");
+    };
+    assert!(plugin.functions.is_empty());
+}

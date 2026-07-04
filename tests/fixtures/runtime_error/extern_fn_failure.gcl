@@ -1,0 +1,8 @@
+// runtime error: the host closure fails for a zero argument; the failure is
+// contained per-node and dependents report DependencyFailed.
+import plugin "graphcal:demo" as demo {
+    fn inverse<D>(x: D) -> D^-1;
+}
+node ok: Time / Length = demo.inverse(2.0 m/s);
+node bad: Time / Length = demo.inverse(0.0 m/s);
+node downstream: Dimensionless = @bad * 1.0 m/s;
