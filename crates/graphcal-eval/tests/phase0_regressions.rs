@@ -378,3 +378,50 @@ fn fully_qualified_self_import_is_not_a_circular_import() {
         "self-import must not be reported as a circular import: {message}"
     );
 }
+
+#[test]
+fn cross_file_inline_dag_call_using_extern_functions_evaluates() {
+    // #943: a dep file's dag body may call the dep's own extern (plugin)
+    // functions. The importer's merged TIR must carry the dep's resolved
+    // extern signatures so a qualified inline call evaluates end-to-end.
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("lib.gcl"),
+        r#"
+import plugin "graphcal:demo" as demo {
+    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+}
+
+pub dag mid {
+    param a: Length;
+    param b: Length;
+    pub node m: Length = demo.lerp(@a, @b, 0.5);
+}
+"#,
+    )
+    .unwrap();
+    let root = package_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        r"
+import pkg.lib as lib;
+node m: Length = @lib.mid(a: 1.0 m, b: 3.0 m).m;
+",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_or_else(|err| panic!("cross-file extern call failed to compile/eval: {err:?}"));
+    let value = value_for(&result, "m");
+    assert!(
+        (value.si_value().unwrap() - 2.0).abs() < 1e-12,
+        "expected lerp midpoint 2 m, got {value:?}"
+    );
+}

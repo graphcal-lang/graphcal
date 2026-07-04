@@ -310,6 +310,7 @@ pub(in crate::eval::project) fn store_compiled_file_artifact(
     let const_values = crate::exec_plan::eval_consts_from_tir(&compiled.tir, file_src)?;
     let top_level_consts = top_level_const_values(&compiled.tir, &const_values);
     let dag_tirs = compiled.tir.dags.clone();
+    let extern_functions = compiled.tir.extern_functions.clone();
 
     evaluated_files.insert(
         file_dag_id.clone(),
@@ -324,6 +325,7 @@ pub(in crate::eval::project) fn store_compiled_file_artifact(
             pub_names,
             resolved_dynamic_unit_scales: HashMap::new(),
             dag_tirs,
+            extern_functions,
         },
     );
     Ok(())
@@ -363,6 +365,7 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
     // Capture dag TIRs so cross-file qualified inline calls can merge them
     // into the importer's TIR::dags under module-prefixed keys.
     let dag_tirs = compiled.tir.dags.clone();
+    let extern_functions = compiled.tir.extern_functions.clone();
 
     // Evaluated plot specs, requestable by consumers through include brace
     // lists (#847). Includes this file's own plots and the ones it included
@@ -392,6 +395,7 @@ pub(in crate::eval::project) fn evaluate_and_store_file(
             pub_names,
             resolved_dynamic_unit_scales,
             dag_tirs,
+            extern_functions,
         },
     );
     Ok(())

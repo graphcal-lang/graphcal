@@ -179,6 +179,14 @@ pub(in crate::eval::project) struct EvaluatedFile {
     /// same-file inline calls. The internal `::` separator avoids collisions
     /// with user-visible `.`-separated names.
     pub(in crate::eval::project) dag_tirs: graphcal_compiler::tir::typed::DagRegistry,
+    /// Resolved extern function signatures declared by this file's
+    /// `import plugin` blocks. Merged into importers' TIRs alongside
+    /// `dag_tirs` so cross-file qualified inline calls into dag bodies that
+    /// use extern functions can resolve their signatures at eval time.
+    pub(in crate::eval::project) extern_functions: HashMap<
+        graphcal_compiler::syntax::plugin::ExternFnKey,
+        graphcal_compiler::ir::lower::ExternFunctionEntry,
+    >,
 }
 
 impl EvaluatedFile {

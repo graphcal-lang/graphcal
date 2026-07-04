@@ -523,6 +523,16 @@ pub(in crate::eval::project) fn merge_dep_dag_tirs(
         let Some(dep_eval) = evaluated_files.get(dep_dag_id) else {
             continue;
         };
+        // Extern signatures travel with the dep's dag bodies: a qualified
+        // inline call into a dep dag that uses extern functions resolves its
+        // signature from the importer's merged TIR at eval time. First
+        // insertion wins; conflicting cross-file redeclarations are rejected
+        // when the declaring files themselves compile.
+        for (key, function) in &dep_eval.extern_functions {
+            tir.extern_functions
+                .entry(key.clone())
+                .or_insert_with(|| function.clone());
+        }
         for (dep_id, dag_tir) in &dep_eval.dag_tirs {
             // Visibility check: only carry across `pub` dags. The dep's
             // own root is treated as accessible (it's the file itself).
