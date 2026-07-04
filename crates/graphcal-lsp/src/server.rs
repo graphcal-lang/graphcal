@@ -85,6 +85,10 @@ pub(crate) struct AnalysisResult {
     /// Structured function signatures, keyed by function name.
     /// Points to a lazily-initialized static map (builtins never change).
     pub(crate) fn_signatures: &'static HashMap<String, FnSignatureInfo>,
+    /// Extern (plugin) function signatures from this file's `import plugin`
+    /// blocks, keyed by the qualified `alias.name` call spelling. Per-file,
+    /// unlike the static builtin map.
+    pub(crate) extern_fn_signatures: HashMap<String, FnSignatureInfo>,
     /// Loader-resolved import links (for Document Links).
     pub(crate) import_links: Vec<ResolvedImportLink>,
     /// `false` when this result is a parse-failure fallback: the buffer did
@@ -149,6 +153,10 @@ impl std::fmt::Debug for AnalysisResult {
             )
             .field("eval_values_count", &self.eval_values.len())
             .field("fn_signatures_count", &self.fn_signatures.len())
+            .field(
+                "extern_fn_signatures_count",
+                &self.extern_fn_signatures.len(),
+            )
             .field("import_links_count", &self.import_links.len())
             .field("buffer_parsed", &self.buffer_parsed)
             .finish()
@@ -524,6 +532,7 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
                 diagnostics: Arc::new(diagnostics),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
+                extern_fn_signatures: HashMap::new(),
                 import_links: Vec::new(),
                 buffer_parsed,
             };
@@ -549,6 +558,7 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
             let imported_definitions =
                 collect_imported_definitions(uri, &project, Some(&tir), &module_resolver);
             let fn_signatures = build_fn_signatures();
+            let extern_fn_signatures = build_extern_fn_signatures(&tir);
             // Library files (required param/index not yet bound) cannot be evaluated
             // standalone. Skip the eval pipeline so editors don't surface false-positive
             // `RequiredIndexNotBound` / `RequiredParamNotProvided` diagnostics when the
@@ -567,6 +577,7 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
                 diagnostics: Arc::new(diagnostics),
                 eval_values,
                 fn_signatures,
+                extern_fn_signatures,
                 import_links,
                 buffer_parsed: true,
             }
@@ -587,6 +598,7 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
                 diagnostics: Arc::new(diagnostics),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
+                extern_fn_signatures: HashMap::new(),
                 import_links,
                 buffer_parsed: true,
             }
@@ -642,6 +654,77 @@ fn collect_import_links(project: &LoadedProject) -> Vec<ResolvedImportLink> {
             })
         })
         .collect()
+}
+
+/// Build extern (plugin) function signatures for Signature Help, keyed by
+/// the qualified `alias.name` call spelling.
+///
+/// Unlike builtins, extern signatures are per-file (they depend on the
+/// file's `import plugin` blocks and its registry's dimension names).
+fn build_extern_fn_signatures(
+    tir: &graphcal_compiler::tir::typed::TIR,
+) -> HashMap<String, FnSignatureInfo> {
+    use graphcal_compiler::function_signature::ValueKind as ExternValueKind;
+
+    let mut sigs = HashMap::new();
+    for function in tir.extern_functions.values() {
+        let format_kind = |kind: &ExternValueKind| match kind {
+            ExternValueKind::Bool => "Bool".to_string(),
+            ExternValueKind::Int => "Int".to_string(),
+            ExternValueKind::Scalar(monomial) => {
+                let mut parts: Vec<String> = monomial
+                    .vars
+                    .iter()
+                    .map(|factor| {
+                        if factor.power == Rational::ONE {
+                            factor.var.to_string()
+                        } else {
+                            format!("{}^({})", factor.var, factor.power)
+                        }
+                    })
+                    .collect();
+                if !monomial.fixed.is_dimensionless() {
+                    parts.push(tir.registry.dimensions.format_dimension(&monomial.fixed));
+                }
+                if parts.is_empty() {
+                    "Dimensionless".to_string()
+                } else {
+                    parts.join(" * ")
+                }
+            }
+        };
+        let parameters: Vec<String> = function
+            .signature
+            .params()
+            .iter()
+            .map(|param| format!("{}: {}", param.name, format_kind(&param.kind)))
+            .collect();
+        let binders = if function.signature.dim_vars().is_empty() {
+            String::new()
+        } else {
+            let vars: Vec<&str> = function
+                .signature
+                .dim_vars()
+                .iter()
+                .map(graphcal_compiler::syntax::dimension::DimVarName::as_str)
+                .collect();
+            format!("<{}>", vars.join(", "))
+        };
+        let qualified = format!("{}.{}", function.alias, function.name);
+        let label = format!(
+            "fn {qualified}{binders}({}) -> {}",
+            parameters.join(", "),
+            format_kind(function.signature.result())
+        );
+        sigs.insert(
+            qualified,
+            FnSignatureInfo {
+                label,
+                parameters,
+            },
+        );
+    }
+    sigs
 }
 
 /// Get builtin function signatures for Signature Help.
@@ -2243,6 +2326,7 @@ node bad: Mass = mass + length;
             diagnostics: Arc::new(diags),
             eval_values: HashMap::new(),
             fn_signatures: build_fn_signatures(),
+            extern_fn_signatures: HashMap::new(),
             import_links: Vec::new(),
             buffer_parsed: true,
         }

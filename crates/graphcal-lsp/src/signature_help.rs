@@ -24,7 +24,12 @@ pub fn signature_help(
     offset: usize,
 ) -> Option<SignatureHelp> {
     let ctx = find_fn_call_context(source, offset)?;
-    let sig_info = analysis.fn_signatures.get(&ctx.fn_name)?;
+    // Extern signatures are keyed by their qualified `alias.name` spelling
+    // and shadow nothing: builtins are always bare names.
+    let sig_info = analysis
+        .extern_fn_signatures
+        .get(&ctx.fn_name)
+        .or_else(|| analysis.fn_signatures.get(&ctx.fn_name))?;
 
     let active_param = ctx.active_param as u32;
 
