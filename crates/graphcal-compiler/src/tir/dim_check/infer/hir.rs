@@ -776,10 +776,10 @@ fn infer_hir_builtin_fn(
             span: callee_span.into(),
         });
     };
-    if args.len() != func.dim_sig.params.len() {
+    if args.len() != func.signature.arity() {
         return Err(GraphcalError::WrongArity {
             name: crate::syntax::function_name::FnName::expect_valid(name.as_str()),
-            expected: func.dim_sig.params.len(),
+            expected: func.signature.arity(),
             got: args.len(),
             src: src.clone(),
             span: callee_span.into(),
@@ -804,7 +804,7 @@ fn infer_hir_builtin_fn(
     let arg_spans: Vec<Span> = args.iter().map(|arg| arg.span).collect();
     infer_fn_dim_from_spans(
         name.as_str(),
-        &func.dim_sig,
+        &func.signature,
         &arg_dims,
         &arg_spans,
         registry,

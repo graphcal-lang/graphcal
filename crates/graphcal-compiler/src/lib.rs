@@ -8,6 +8,7 @@ pub mod builtin;
 pub mod dag_id;
 pub mod desugar;
 pub mod dimension;
+pub mod function_signature;
 pub mod hir;
 pub mod ir;
 pub mod nat;

@@ -2,179 +2,28 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use crate::dimension::{BaseDimId, Dimension, Rational};
-use crate::syntax::dimension::DimVarName;
-
-/// Describes how a single parameter's dimension is constrained.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParamDim {
-    /// Must be a specific fixed dimension (e.g., dimensionless, Angle).
-    Fixed(Dimension),
-    /// Introduces a new dimension variable. The variable is bound to
-    /// the argument's actual dimension.
-    Bind(DimVarName),
-    /// Must match the dimension already bound to this variable name.
-    Ref(DimVarName),
-}
-
-/// Describes how the result dimension is computed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResultDim {
-    /// A specific fixed dimension.
-    Fixed(Dimension),
-    /// The dimension bound to the named variable.
-    Var(DimVarName),
-    /// The dimension bound to the named variable, raised to a rational power.
-    VarPow(DimVarName, Rational),
-}
-
-/// A parameter with its display name and dimension constraint.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParamSig {
-    /// Display name (e.g., "x", "a", "min").
-    pub name: String,
-    /// Dimension constraint.
-    pub dim: ParamDim,
-}
-
-/// Describes how a built-in function interacts with dimensions.
-///
-/// Each parameter has an independent constraint, and the result dimension
-/// is computed from fixed values or dimension variables bound by the parameters.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DimSignature {
-    /// Per-parameter constraints, in order. Length determines arity.
-    pub params: Vec<ParamSig>,
-    /// How the result dimension is computed.
-    pub result: ResultDim,
-}
+use crate::function_signature::FunctionSignature;
 
 const fn dimensionless() -> Dimension {
     Dimension::dimensionless()
-}
-
-fn dim_var_d() -> DimVarName {
-    DimVarName::expect_valid("D")
 }
 
 fn angle() -> Dimension {
     Dimension::base(BaseDimId::Prelude("Angle".to_string()))
 }
 
-impl DimSignature {
-    /// All params must be dimensionless, result is dimensionless.
-    #[must_use]
-    pub fn all_dimensionless(names: &[&str]) -> Self {
-        Self {
-            params: names
-                .iter()
-                .map(|&n| ParamSig {
-                    name: n.to_string(),
-                    dim: ParamDim::Fixed(dimensionless()),
-                })
-                .collect(),
-            result: ResultDim::Fixed(dimensionless()),
-        }
-    }
-
-    /// Single fixed-dimension param, fixed-dimension result.
-    #[must_use]
-    pub fn fixed_to_fixed(name: &str, input: Dimension, output: Dimension) -> Self {
-        Self {
-            params: vec![ParamSig {
-                name: name.to_string(),
-                dim: ParamDim::Fixed(input),
-            }],
-            result: ResultDim::Fixed(output),
-        }
-    }
-
-    /// Single free param D, result is D.
-    #[must_use]
-    pub fn passthrough(name: &str) -> Self {
-        Self {
-            params: vec![ParamSig {
-                name: name.to_string(),
-                dim: ParamDim::Bind(dim_var_d()),
-            }],
-            result: ResultDim::Var(dim_var_d()),
-        }
-    }
-
-    /// Single free param D, result is a fixed dimension.
-    #[must_use]
-    pub fn free_to_fixed(name: &str, output: Dimension) -> Self {
-        Self {
-            params: vec![ParamSig {
-                name: name.to_string(),
-                dim: ParamDim::Bind(dim_var_d()),
-            }],
-            result: ResultDim::Fixed(output),
-        }
-    }
-
-    /// Single free param D, result is D^power.
-    #[must_use]
-    pub fn free_to_pow(name: &str, power: Rational) -> Self {
-        Self {
-            params: vec![ParamSig {
-                name: name.to_string(),
-                dim: ParamDim::Bind(dim_var_d()),
-            }],
-            result: ResultDim::VarPow(dim_var_d(), power),
-        }
-    }
-
-    /// N params all same dimension D, result is D.
-    #[must_use]
-    pub fn same_dim(names: &[&str]) -> Self {
-        Self {
-            params: names
-                .iter()
-                .enumerate()
-                .map(|(i, &n)| ParamSig {
-                    name: n.to_string(),
-                    dim: if i == 0 {
-                        ParamDim::Bind(dim_var_d())
-                    } else {
-                        ParamDim::Ref(dim_var_d())
-                    },
-                })
-                .collect(),
-            result: ResultDim::Var(dim_var_d()),
-        }
-    }
-
-    /// N params all same dimension D, result is a fixed dimension.
-    #[must_use]
-    pub fn same_dim_to_fixed(names: &[&str], output: Dimension) -> Self {
-        Self {
-            params: names
-                .iter()
-                .enumerate()
-                .map(|(i, &n)| ParamSig {
-                    name: n.to_string(),
-                    dim: if i == 0 {
-                        ParamDim::Bind(dim_var_d())
-                    } else {
-                        ParamDim::Ref(dim_var_d())
-                    },
-                })
-                .collect(),
-            result: ResultDim::Fixed(output),
-        }
-    }
-}
-
+/// A built-in scalar function: an evaluation kernel paired with its
+/// [`FunctionSignature`].
 pub struct BuiltinFunction {
     pub eval: fn(&[f64]) -> f64,
-    pub dim_sig: DimSignature,
+    pub signature: FunctionSignature,
 }
 
 impl BuiltinFunction {
     /// Returns the arity (number of parameters) of this function.
     #[must_use]
-    pub const fn arity(&self) -> usize {
-        self.dim_sig.params.len()
+    pub fn arity(&self) -> usize {
+        self.signature.arity()
     }
 }
 
@@ -185,14 +34,14 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
         "sqrt",
         BuiltinFunction {
             eval: |a| a[0].sqrt(),
-            dim_sig: DimSignature::free_to_pow("x", Rational::HALF),
+            signature: FunctionSignature::free_to_pow("x", Rational::HALF),
         },
     );
     m.insert(
         "cbrt",
         BuiltinFunction {
             eval: |a| a[0].cbrt(),
-            dim_sig: DimSignature::free_to_pow("x", Rational::THIRD),
+            signature: FunctionSignature::free_to_pow("x", Rational::THIRD),
         },
     );
     // Exponential and logarithmic functions (all dimensionless)
@@ -200,49 +49,49 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
         "exp",
         BuiltinFunction {
             eval: |a| a[0].exp(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     m.insert(
         "expm1",
         BuiltinFunction {
             eval: |a| a[0].exp_m1(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     m.insert(
         "ln",
         BuiltinFunction {
             eval: |a| a[0].ln(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     m.insert(
         "log10",
         BuiltinFunction {
             eval: |a| a[0].log10(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     m.insert(
         "log2",
         BuiltinFunction {
             eval: |a| a[0].log2(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     m.insert(
         "log",
         BuiltinFunction {
             eval: |a| a[0].log(a[1]),
-            dim_sig: DimSignature::all_dimensionless(&["x", "base"]),
+            signature: FunctionSignature::all_dimensionless(&["x", "base"]),
         },
     );
     m.insert(
         "log1p",
         BuiltinFunction {
             eval: |a| a[0].ln_1p(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     // Trigonometric functions (Angle -> Dimensionless)
@@ -250,21 +99,21 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
         "sin",
         BuiltinFunction {
             eval: |a| a[0].sin(),
-            dim_sig: DimSignature::fixed_to_fixed("x", angle(), dimensionless()),
+            signature: FunctionSignature::fixed_to_fixed("x", angle(), dimensionless()),
         },
     );
     m.insert(
         "cos",
         BuiltinFunction {
             eval: |a| a[0].cos(),
-            dim_sig: DimSignature::fixed_to_fixed("x", angle(), dimensionless()),
+            signature: FunctionSignature::fixed_to_fixed("x", angle(), dimensionless()),
         },
     );
     m.insert(
         "tan",
         BuiltinFunction {
             eval: |a| a[0].tan(),
-            dim_sig: DimSignature::fixed_to_fixed("x", angle(), dimensionless()),
+            signature: FunctionSignature::fixed_to_fixed("x", angle(), dimensionless()),
         },
     );
     // Inverse trigonometric functions (Dimensionless -> Angle)
@@ -272,28 +121,28 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
         "asin",
         BuiltinFunction {
             eval: |a| a[0].asin(),
-            dim_sig: DimSignature::fixed_to_fixed("x", dimensionless(), angle()),
+            signature: FunctionSignature::fixed_to_fixed("x", dimensionless(), angle()),
         },
     );
     m.insert(
         "acos",
         BuiltinFunction {
             eval: |a| a[0].acos(),
-            dim_sig: DimSignature::fixed_to_fixed("x", dimensionless(), angle()),
+            signature: FunctionSignature::fixed_to_fixed("x", dimensionless(), angle()),
         },
     );
     m.insert(
         "atan",
         BuiltinFunction {
             eval: |a| a[0].atan(),
-            dim_sig: DimSignature::fixed_to_fixed("x", dimensionless(), angle()),
+            signature: FunctionSignature::fixed_to_fixed("x", dimensionless(), angle()),
         },
     );
     m.insert(
         "atan2",
         BuiltinFunction {
             eval: |a| a[0].atan2(a[1]),
-            dim_sig: DimSignature::same_dim_to_fixed(&["y", "x"], angle()),
+            signature: FunctionSignature::same_dim_to_fixed(&["y", "x"], angle()),
         },
     );
     // Hyperbolic functions (all dimensionless)
@@ -301,42 +150,42 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
         "sinh",
         BuiltinFunction {
             eval: |a| a[0].sinh(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     m.insert(
         "cosh",
         BuiltinFunction {
             eval: |a| a[0].cosh(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     m.insert(
         "tanh",
         BuiltinFunction {
             eval: |a| a[0].tanh(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     m.insert(
         "asinh",
         BuiltinFunction {
             eval: |a| a[0].asinh(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     m.insert(
         "acosh",
         BuiltinFunction {
             eval: |a| a[0].acosh(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     m.insert(
         "atanh",
         BuiltinFunction {
             eval: |a| a[0].atanh(),
-            dim_sig: DimSignature::all_dimensionless(&["x"]),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     // Rounding and sign functions (passthrough dimension)
@@ -344,35 +193,35 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
         "abs",
         BuiltinFunction {
             eval: |a| a[0].abs(),
-            dim_sig: DimSignature::passthrough("x"),
+            signature: FunctionSignature::passthrough("x"),
         },
     );
     m.insert(
         "floor",
         BuiltinFunction {
             eval: |a| a[0].floor(),
-            dim_sig: DimSignature::passthrough("x"),
+            signature: FunctionSignature::passthrough("x"),
         },
     );
     m.insert(
         "ceil",
         BuiltinFunction {
             eval: |a| a[0].ceil(),
-            dim_sig: DimSignature::passthrough("x"),
+            signature: FunctionSignature::passthrough("x"),
         },
     );
     m.insert(
         "round",
         BuiltinFunction {
             eval: |a| a[0].round(),
-            dim_sig: DimSignature::passthrough("x"),
+            signature: FunctionSignature::passthrough("x"),
         },
     );
     m.insert(
         "trunc",
         BuiltinFunction {
             eval: |a| a[0].trunc(),
-            dim_sig: DimSignature::passthrough("x"),
+            signature: FunctionSignature::passthrough("x"),
         },
     );
     m.insert(
@@ -383,7 +232,7 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
                 Some(std::cmp::Ordering::Less) => -1.0,
                 Some(std::cmp::Ordering::Equal) | None => 0.0,
             },
-            dim_sig: DimSignature::free_to_fixed("x", dimensionless()),
+            signature: FunctionSignature::free_to_fixed("x", dimensionless()),
         },
     );
     // Multi-argument same-dimension functions
@@ -391,21 +240,21 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
         "min",
         BuiltinFunction {
             eval: |a| a[0].min(a[1]),
-            dim_sig: DimSignature::same_dim(&["a", "b"]),
+            signature: FunctionSignature::same_dim(&["a", "b"]),
         },
     );
     m.insert(
         "max",
         BuiltinFunction {
             eval: |a| a[0].max(a[1]),
-            dim_sig: DimSignature::same_dim(&["a", "b"]),
+            signature: FunctionSignature::same_dim(&["a", "b"]),
         },
     );
     m.insert(
         "hypot",
         BuiltinFunction {
             eval: |a| a[0].hypot(a[1]),
-            dim_sig: DimSignature::same_dim(&["a", "b"]),
+            signature: FunctionSignature::same_dim(&["a", "b"]),
         },
     );
     m.insert(
@@ -423,7 +272,7 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
                     x.max(lo).min(hi)
                 }
             },
-            dim_sig: DimSignature::same_dim(&["x", "min", "max"]),
+            signature: FunctionSignature::same_dim(&["x", "min", "max"]),
         },
     );
     m

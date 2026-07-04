@@ -26,7 +26,8 @@ use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
-use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
+use graphcal_compiler::function_signature::{DimMonomial, FunctionSignature, ValueKind};
+use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
@@ -650,7 +651,7 @@ pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo>
     static FN_SIGS: LazyLock<HashMap<String, FnSignatureInfo>> = LazyLock::new(|| {
         let mut sigs = HashMap::new();
         for (name, f) in builtin_functions() {
-            let (params, ret) = builtin_signature_parts(&f.dim_sig).unwrap_or_else(|err| {
+            let (params, ret) = builtin_signature_parts(&f.signature).unwrap_or_else(|err| {
                 (
                     vec![format!("<invalid builtin signature: {err}>")],
                     "<invalid>".to_string(),
@@ -705,27 +706,46 @@ fn builtin_base_dim_name(id: &BaseDimId) -> std::result::Result<&str, String> {
 
 /// Generate human-readable parameter and return type strings for a builtin function.
 fn builtin_signature_parts(
-    sig: &DimSignature,
+    sig: &FunctionSignature,
 ) -> std::result::Result<(Vec<String>, String), String> {
     let params: Vec<String> = sig
-        .params
+        .params()
         .iter()
-        .map(|p| {
-            let type_str = match &p.dim {
-                ParamDim::Fixed(dim) => format_dim_display(dim)?,
-                ParamDim::Bind(var) | ParamDim::Ref(var) => var.to_string(),
-            };
-            Ok(format!("{}: {type_str}", p.name))
-        })
+        .map(|p| Ok(format!("{}: {}", p.name, value_kind_display(&p.kind)?)))
         .collect::<std::result::Result<_, String>>()?;
 
-    let ret = match &sig.result {
-        ResultDim::Fixed(dim) => format_dim_display(dim)?,
-        ResultDim::Var(name) => name.to_string(),
-        ResultDim::VarPow(name, power) => format!("{name}^({power})"),
-    };
+    let ret = value_kind_display(sig.result())?;
 
     Ok((params, ret))
+}
+
+fn value_kind_display(kind: &ValueKind) -> std::result::Result<String, String> {
+    match kind {
+        ValueKind::Bool => Ok("Bool".to_string()),
+        ValueKind::Int => Ok("Int".to_string()),
+        ValueKind::Scalar(monomial) => monomial_display(monomial),
+    }
+}
+
+fn monomial_display(monomial: &DimMonomial) -> std::result::Result<String, String> {
+    let mut parts: Vec<String> = monomial
+        .vars
+        .iter()
+        .map(|factor| {
+            if factor.power == Rational::ONE {
+                factor.var.to_string()
+            } else {
+                format!("{}^({})", factor.var, factor.power)
+            }
+        })
+        .collect();
+    if !monomial.fixed.is_dimensionless() {
+        parts.push(format_dim_display(&monomial.fixed)?);
+    }
+    if parts.is_empty() {
+        return Ok("Dimensionless".to_string());
+    }
+    Ok(parts.join(" * "))
 }
 
 /// Format all successfully evaluated values into display strings.
