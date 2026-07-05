@@ -17,6 +17,7 @@ mod display;
 mod json_input;
 mod overrides;
 mod plot;
+mod plugin;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
@@ -130,6 +131,11 @@ enum Commands {
         #[command(subcommand)]
         command: DepsCommands,
     },
+    /// Scaffold and test WASM plugin modules (experimental)
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommands,
+    },
     /// Start the Language Server Protocol (LSP) server
     Lsp,
 }
@@ -141,6 +147,31 @@ enum DepsCommands {
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PluginCommands {
+    /// Scaffold a new plugin crate using the graphcal-plugin Rust SDK
+    New {
+        /// Crate name for the new plugin (lowercase letters, digits, `-`, `_`)
+        name: String,
+        /// Target directory (default: ./<name>; must not exist yet)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Validate a built .wasm module against the plugin ABI and print its
+    /// signatures as a paste-ready import block
+    Test {
+        /// Path to the .wasm plugin module
+        module: PathBuf,
+        /// Call one provided function after validation
+        #[arg(long, value_name = "FUNCTION")]
+        call: Option<String>,
+        /// Arguments for --call: numbers in SI base units for scalar
+        /// parameters, `true`/`false` for Bool, integers for Int
+        #[arg(requires = "call", allow_negative_numbers = true, value_name = "ARG")]
+        args: Vec<String>,
     },
 }
 
@@ -225,6 +256,14 @@ fn run_command(cli: Cli) {
                 run_deps_lock(root.as_deref());
             }
         },
+        Commands::Plugin { command } => match command {
+            PluginCommands::New { name, dir } => {
+                run_plugin_new(&name, dir.as_deref());
+            }
+            PluginCommands::Test { module, call, args } => {
+                run_plugin_test(&module, call.as_deref(), &args);
+            }
+        },
         Commands::Lsp => {
             #[expect(
                 clippy::expect_used,
@@ -259,6 +298,126 @@ fn run_command(cli: Cli) {
                 root.as_deref(),
                 plot_output.as_ref(),
             );
+        }
+    }
+}
+
+/// `graphcal plugin new`: materialize the scaffold plan.
+///
+/// Exit codes: 2 for invalid names, existing targets, or write failures.
+fn run_plugin_new(name: &str, dir: Option<&Path>) {
+    let plan = match plugin::scaffold_plan(name, dir) {
+        Ok(plan) => plan,
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::exit(2);
+        }
+    };
+    if plan.root.exists() {
+        eprintln!(
+            "error: `{}` already exists; pick another name or --dir",
+            plan.root.display()
+        );
+        process::exit(2);
+    }
+    for file in &plan.files {
+        let path = plan.root.join(file.relative_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+                bail_with(&format!("could not create {}", parent.display()), e, 2)
+            });
+        }
+        std::fs::write(&path, &file.contents)
+            .unwrap_or_else(|e| bail_with(&format!("could not write {}", path.display()), e, 2));
+    }
+    println!("created plugin crate `{name}` at {}", plan.root.display());
+    println!("next steps:");
+    println!("  cd {}", plan.root.display());
+    println!("  cargo build --release --target wasm32-unknown-unknown");
+    println!("  graphcal plugin test target/wasm32-unknown-unknown/release/<name>.wasm");
+}
+
+/// `graphcal plugin test`: load and validate a module (all ABI checks run
+/// before any plugin code), print its identity and signatures, and
+/// optionally call one function under the default resource limits.
+///
+/// Exit codes: 1 when the module fails validation or the called function
+/// fails or returns a value violating its declared kind; 2 for unreadable
+/// files or unusable --call arguments.
+fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
+    let bytes = std::fs::read(module_path)
+        .unwrap_or_else(|e| bail_with(&format!("could not read {}", module_path.display()), e, 2));
+
+    let host = graphcal_plugin_host::PluginHost::new();
+    let module = match host.load(&bytes) {
+        Ok(module) => module,
+        Err(e) => {
+            eprintln!("error: {}: {e}", module_path.display());
+            process::exit(1);
+        }
+    };
+
+    println!("plugin: {}", module_path.display());
+    println!("sha256: {}", module.sha256_hex());
+    println!(
+        "abi: version {}, {} function(s)",
+        module.manifest().abi_version,
+        module.functions().len()
+    );
+    println!();
+    let path_hint = module_path.display().to_string().replace('\\', "/");
+    let alias = plugin::suggest_alias(module_path);
+    println!(
+        "{}",
+        plugin::render_import_block(&path_hint, &alias, &module)
+    );
+    eprintln!();
+    eprintln!("note: adjust the import path to the module's vendored location in your project");
+
+    let Some(function_name) = call else { return };
+    let looked_up =
+        graphcal_compiler::syntax::function_name::FnName::try_new(function_name.to_string())
+            .ok()
+            .and_then(|name| {
+                module
+                    .signature(&name)
+                    .cloned()
+                    .map(|signature| (name, signature))
+            });
+    let Some((function, signature)) = looked_up else {
+        eprintln!(
+            "error: the module does not provide `{function_name}`; it provides: {}",
+            module
+                .functions()
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        process::exit(2);
+    };
+
+    let abi_args = match plugin::parse_call_args(function.as_str(), &signature, args) {
+        Ok(values) => values,
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::exit(2);
+        }
+    };
+
+    println!();
+    let call_display = format!("{}({})", function.as_str(), args.join(", "));
+    match module.call(&function, &abi_args) {
+        Ok(raw) => match plugin::render_result(&signature, raw) {
+            Ok(rendered) => println!("{call_display} = {rendered}"),
+            Err(e) => {
+                eprintln!("error: {call_display} returned {raw}: {e}");
+                process::exit(1);
+            }
+        },
+        Err(e) => {
+            eprintln!("error: calling `{}` failed: {e}", function.as_str());
+            process::exit(1);
         }
     }
 }
