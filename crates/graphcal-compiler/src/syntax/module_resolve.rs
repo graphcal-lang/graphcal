@@ -2171,8 +2171,7 @@ fn register_plugin_imports(
         }
         let mut functions = HashMap::new();
         for function in &plugin.functions {
-            if let Some(first) = functions.insert(function.name.value.clone(), function.name.span)
-            {
+            if let Some(first) = functions.insert(function.name.value.clone(), function.name.span) {
                 return Err(ModuleResolveError::DuplicateSymbol {
                     owner: owner.clone(),
                     namespace: crate::syntax::function_name::FnNameNamespace::DISPLAY_NAME,

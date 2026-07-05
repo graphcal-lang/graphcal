@@ -805,7 +805,8 @@ fn eval_hir_extern_fn(
                     expr.span,
                 )
             }),
-        ValueKind::Bool => {
+        ValueKind::Bool =>
+        {
             #[expect(
                 clippy::float_cmp,
                 reason = "the Bool host ABI is exactly 0.0/1.0; anything else is a plugin bug"

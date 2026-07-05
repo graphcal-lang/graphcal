@@ -437,7 +437,11 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
 
         // Load-time verification: every declared extern function must have a
         // host registry entry (this becomes "manifest mismatch" in Phase B).
-        verify_host_functions(&compiled.tir, &project.files[file_dag_id].named_source, host_fns)?;
+        verify_host_functions(
+            &compiled.tir,
+            &project.files[file_dag_id].named_source,
+            host_fns,
+        )?;
 
         // Files with required params (no default) or required indexes cannot be
         // evaluated standalone. They are only consumed via instantiated imports

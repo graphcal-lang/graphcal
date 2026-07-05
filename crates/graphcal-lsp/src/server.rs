@@ -716,13 +716,7 @@ fn build_extern_fn_signatures(
             parameters.join(", "),
             format_kind(function.signature.result())
         );
-        sigs.insert(
-            qualified,
-            FnSignatureInfo {
-                label,
-                parameters,
-            },
-        );
+        sigs.insert(qualified, FnSignatureInfo { label, parameters });
     }
     sigs
 }

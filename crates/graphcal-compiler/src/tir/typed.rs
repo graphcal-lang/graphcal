@@ -919,10 +919,7 @@ impl HirPolicyChecker<'_> {
         })
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "exhaustive ExprKind policy walk"
-    )]
+    #[expect(clippy::too_many_lines, reason = "exhaustive ExprKind policy walk")]
     fn check_expr_inner(
         &self,
         expr: &hir::Expr,

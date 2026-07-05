@@ -214,7 +214,9 @@ pub enum GraphcalError {
     #[error("plugin alias `{alias}` does not declare a function `{name}`")]
     #[diagnostic(
         code(graphcal::P002),
-        help("extern functions must be declared in the plugin's `import plugin ... {{ ... }}` block")
+        help(
+            "extern functions must be declared in the plugin's `import plugin ... {{ ... }}` block"
+        )
     )]
     UnknownExternFunction {
         alias: crate::syntax::module_name::ModuleAliasName,

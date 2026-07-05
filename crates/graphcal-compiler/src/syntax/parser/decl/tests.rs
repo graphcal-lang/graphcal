@@ -1806,11 +1806,10 @@ fn parse_plugin_import_requires_alias() {
 
 #[test]
 fn parse_plugin_import_rejects_pub() {
-    let err = Parser::new(
-        "pub import plugin \"p\" as x { fn f(a: Dimensionless) -> Dimensionless; }",
-    )
-    .parse_file()
-    .unwrap_err();
+    let err =
+        Parser::new("pub import plugin \"p\" as x { fn f(a: Dimensionless) -> Dimensionless; }")
+            .parse_file()
+            .unwrap_err();
     assert!(
         format!("{err:?}").contains("cannot be re-exported"),
         "{err:?}"
@@ -1829,7 +1828,9 @@ fn parse_plugin_import_rejects_non_fn_body() {
 fn parse_import_of_module_path_starting_with_plugin_stays_an_import() {
     // `plugin` is contextual: without a following string literal, this is an
     // ordinary module path whose first segment happens to be `plugin`.
-    let file = Parser::new("import plugin.tools as t;").parse_file().unwrap();
+    let file = Parser::new("import plugin.tools as t;")
+        .parse_file()
+        .unwrap();
     let DeclKind::Import(import) = &file.declarations[0].kind else {
         panic!("expected ordinary Import");
     };
@@ -1838,7 +1839,9 @@ fn parse_import_of_module_path_starting_with_plugin_stays_an_import() {
 
 #[test]
 fn parse_plugin_import_allows_empty_block() {
-    let file = Parser::new("import plugin \"p\" as x {}").parse_file().unwrap();
+    let file = Parser::new("import plugin \"p\" as x {}")
+        .parse_file()
+        .unwrap();
     let DeclKind::PluginImport(plugin) = &file.declarations[0].kind else {
         panic!("expected PluginImport");
     };

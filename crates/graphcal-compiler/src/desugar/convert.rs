@@ -138,7 +138,9 @@ fn convert_decl_kind_non_sugar(k: DeclKind<Raw>) -> DeclKind<Desugared> {
 // Decl-specific structs
 // ---------------------------------------------------------------------------
 
-impl From<crate::syntax::ast::PluginImportDecl<Raw>> for crate::syntax::ast::PluginImportDecl<Desugared> {
+impl From<crate::syntax::ast::PluginImportDecl<Raw>>
+    for crate::syntax::ast::PluginImportDecl<Desugared>
+{
     fn from(p: crate::syntax::ast::PluginImportDecl<Raw>) -> Self {
         Self {
             path: p.path,

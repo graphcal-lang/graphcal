@@ -11,9 +11,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::dimension::Dimension;
-use crate::function_signature::{
-    DimMonomial, DimMonomialEvalError, FunctionSignature, ValueKind,
-};
+use crate::function_signature::{DimMonomial, DimMonomialEvalError, FunctionSignature, ValueKind};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::dimension::DimVarName;
@@ -179,32 +177,32 @@ fn eval_monomial(
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<Dimension, GraphcalError> {
-    monomial.eval(|var| bindings.get(var)).map_err(|err| match err {
-        // A missing binding here means the signature is malformed (a compound
-        // use or result without a matching bare binding occurrence) — the
-        // signature validator rejects that shape, so surface an internal
-        // error rather than panicking.
-        DimMonomialEvalError::UnboundVar { var } => GraphcalError::InternalError {
-            message: format!(
-                "builtin `{fn_name}` references unbound dim variable `{var}` in its signature"
-            ),
-            src: src.clone(),
-            span: span.into(),
-        },
-        DimMonomialEvalError::Overflow(_) => GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: span.into(),
-        },
-    })
+    monomial
+        .eval(|var| bindings.get(var))
+        .map_err(|err| match err {
+            // A missing binding here means the signature is malformed (a compound
+            // use or result without a matching bare binding occurrence) — the
+            // signature validator rejects that shape, so surface an internal
+            // error rather than panicking.
+            DimMonomialEvalError::UnboundVar { var } => GraphcalError::InternalError {
+                message: format!(
+                    "builtin `{fn_name}` references unbound dim variable `{var}` in its signature"
+                ),
+                src: src.clone(),
+                span: span.into(),
+            },
+            DimMonomialEvalError::Overflow(_) => GraphcalError::DimensionOverflow {
+                src: src.clone(),
+                span: span.into(),
+            },
+        })
 }
 
 /// Find the display name of the first parameter that binds `var` as a bare
 /// variable, for "must have the same dimension as `x`" diagnostics.
 fn first_binding_param<'a>(sig: &'a FunctionSignature, var: &DimVarName) -> Option<&'a str> {
     sig.params().iter().find_map(|p| match &p.kind {
-        ValueKind::Scalar(monomial) if monomial.as_bare_var() == Some(var) => {
-            Some(p.name.as_str())
-        }
+        ValueKind::Scalar(monomial) if monomial.as_bare_var() == Some(var) => Some(p.name.as_str()),
         _ => None,
     })
 }

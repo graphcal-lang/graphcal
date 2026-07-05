@@ -818,9 +818,7 @@ fn find_extern_call_inner(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
             }
             args.iter().find_map(find_extern_call)
         }
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            find_extern_call(lhs).or_else(|| find_extern_call(rhs))
-        }
+        ExprKind::BinOp { lhs, rhs, .. } => find_extern_call(lhs).or_else(|| find_extern_call(rhs)),
         ExprKind::UnaryOp { operand, .. }
         | ExprKind::Convert { expr: operand, .. }
         | ExprKind::DisplayTimezone { expr: operand, .. }

@@ -21,10 +21,8 @@ impl Parser<'_> {
         // `plugin` followed by a string literal selects the extern-plugin
         // form; `import plugin.foo;` (a module path whose first segment is
         // spelled `plugin`) stays an ordinary import.
-        if let Some((Token::Ident, ident_span)) = self
-            .lexer
-            .peek_with_span()
-            .map(|(tok, span)| (*tok, span))
+        if let Some((Token::Ident, ident_span)) =
+            self.lexer.peek_with_span().map(|(tok, span)| (*tok, span))
             && self.lexer.slice_at(ident_span) == "plugin"
             && self.lexer.peek_second() == Some(&Token::StringLiteral)
         {
@@ -118,9 +116,7 @@ impl Parser<'_> {
                 ));
             }
             None => {
-                return Err(
-                    self.unexpected_eof("`fn` to declare an extern function, or `}`")
-                );
+                return Err(self.unexpected_eof("`fn` to declare an extern function, or `}`"));
             }
         };
 

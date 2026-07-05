@@ -146,19 +146,15 @@ pub fn demo_registry() -> HostFunctionRegistry {
         }
         Ok(args[0].recip())
     });
-    registry.register(
-        plugin,
-        FnName::expect_valid("geometric_mean"),
-        |args| {
-            let product = args[0] * args[1];
-            if product < 0.0 {
-                return Err(HostFnError::new(
-                    "geometric mean of a negative product is undefined",
-                ));
-            }
-            Ok(product.sqrt())
-        },
-    );
+    registry.register(plugin, FnName::expect_valid("geometric_mean"), |args| {
+        let product = args[0] * args[1];
+        if product < 0.0 {
+            return Err(HostFnError::new(
+                "geometric mean of a negative product is undefined",
+            ));
+        }
+        Ok(product.sqrt())
+    });
     registry
 }
 

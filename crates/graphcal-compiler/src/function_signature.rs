@@ -608,7 +608,10 @@ mod tests {
             vec![
                 param(
                     "x",
-                    ValueKind::Scalar(DimMonomial::var_pow(var("D"), Rational::try_new(2, 1).unwrap())),
+                    ValueKind::Scalar(DimMonomial::var_pow(
+                        var("D"),
+                        Rational::try_new(2, 1).unwrap(),
+                    )),
                 ),
                 param("y", ValueKind::Scalar(DimMonomial::var(var("D")))),
             ],

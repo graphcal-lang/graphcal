@@ -389,10 +389,7 @@ pub struct IR {
     pub imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     /// Resolved extern function signatures declared by `import plugin`
     /// blocks, keyed by canonical plugin identity plus function name.
-    pub extern_functions: HashMap<
-        crate::syntax::plugin::ExternFnKey,
-        ExternFunctionEntry,
-    >,
+    pub extern_functions: HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>,
     /// Names of declarations marked `pub` (or `pub(bind)`) in the file.
     ///
     /// Carried through from the resolver so downstream stages — most
@@ -3678,10 +3675,7 @@ fn resolve_plugin_imports(
     decls: &[crate::desugar::desugared_ast::PluginImportDecl],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<
-    HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>,
-    GraphcalError,
-> {
+) -> Result<HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>, GraphcalError> {
     use std::collections::hash_map::Entry;
 
     let mut map = HashMap::new();
@@ -3762,8 +3756,7 @@ fn resolve_extern_value_kind(
 
     if !type_ann.constraints.is_empty() {
         return Err(GraphcalError::InvalidExternSignature {
-            message: "domain constraints are not allowed in extern function signatures"
-                .to_string(),
+            message: "domain constraints are not allowed in extern function signatures".to_string(),
             src: src.clone(),
             span: type_ann.span.into(),
         });
