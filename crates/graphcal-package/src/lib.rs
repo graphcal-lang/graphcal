@@ -472,6 +472,93 @@ pub struct Lockfile {
     pub root: PackageInstanceId,
     /// Locked package instances.
     pub packages: Vec<LockedPackage>,
+    /// Pinned wasm plugin artifacts of the root package.
+    ///
+    /// Dependency packages need no entries: a vendored `.wasm` inside a Git
+    /// dependency is already covered by that package's source tree hash.
+    pub plugins: Vec<LockedPlugin>,
+}
+
+/// One pinned wasm plugin artifact: the root-package-relative path exactly
+/// as spelled by `import plugin "…"`, plus the SHA-256 of the file bytes.
+///
+/// The lockfile is the trust boundary for plugin code (issue #25): new or
+/// changed plugin binaries can only enter a project through a reviewable
+/// pin diff, and a mismatch at load time is a hard error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockedPlugin {
+    path: String,
+    sha256: String,
+}
+
+impl LockedPlugin {
+    /// Construct a validated plugin pin.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LockedPluginError`] when `path` is not a plain relative
+    /// `.wasm` path (no `.`/`..`/absolute/prefix components, `/` separators
+    /// only) or `sha256` is not 64 lowercase hex digits.
+    #[expect(
+        clippy::case_sensitive_file_extension_comparisons,
+        reason = "deliberately matches the loader's case-sensitive `.wasm` plugin-path classification"
+    )]
+    pub fn new(
+        path: impl Into<String>,
+        sha256: impl Into<String>,
+    ) -> Result<Self, LockedPluginError> {
+        let path = path.into();
+        let plain_relative = !path.contains('\\')
+            && Path::new(&path)
+                .components()
+                .any(|component| matches!(component, Component::Normal(_)))
+            && Path::new(&path)
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)));
+        if !plain_relative || !path.ends_with(".wasm") {
+            return Err(LockedPluginError::InvalidPath { path });
+        }
+        let sha256 = sha256.into();
+        let valid_sha = sha256.len() == 64
+            && sha256
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
+        if !valid_sha {
+            return Err(LockedPluginError::InvalidSha256 { value: sha256 });
+        }
+        Ok(Self { path, sha256 })
+    }
+
+    /// The root-package-relative plugin path, exactly as imported.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Lowercase-hex SHA-256 of the plugin file bytes.
+    #[must_use]
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+}
+
+/// Validation error from [`LockedPlugin::new`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum LockedPluginError {
+    /// The path is not a plain relative `.wasm` path.
+    #[error(
+        "invalid plugin path `{path}`: must be a plain relative path to a `.wasm` file inside the package root"
+    )]
+    InvalidPath {
+        /// The rejected path.
+        path: String,
+    },
+    /// The digest is not 64 lowercase hex digits.
+    #[error("invalid plugin sha256 `{value}`: must be 64 lowercase hex digits")]
+    InvalidSha256 {
+        /// The rejected digest string.
+        value: String,
+    },
 }
 
 impl Lockfile {
@@ -539,6 +626,15 @@ impl Lockfile {
         }
         self.reject_dependency_cycles()?;
         self.reject_duplicate_canonical_instances()?;
+
+        let mut plugin_paths = BTreeSet::new();
+        for plugin in &self.plugins {
+            if !plugin_paths.insert(plugin.path.as_str()) {
+                return Err(LockValidationError::DuplicatePluginPath {
+                    path: plugin.path.clone(),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -653,6 +749,14 @@ impl Lockfile {
                     push_kv_string(&mut out, name.as_str(), target.as_str());
                 }
             }
+        }
+
+        let mut plugins = self.plugins.clone();
+        plugins.sort_by(|a, b| a.path.cmp(&b.path));
+        for plugin in plugins {
+            out.push_str("\n[[plugin]]\n");
+            push_kv_string(&mut out, "path", plugin.path());
+            push_kv_string(&mut out, "sha256", plugin.sha256());
         }
         Ok(out)
     }
@@ -818,6 +922,12 @@ pub enum LockValidationError {
     DuplicateCanonicalPackage {
         first: PackageInstanceId,
         second: PackageInstanceId,
+    },
+    /// Two plugin pins name the same path.
+    #[error("duplicate plugin pin for `{path}` in graphcal.lock")]
+    DuplicatePluginPath {
+        /// The duplicated plugin path.
+        path: String,
     },
     /// A lock edge was not declared by the importing manifest.
     #[error("package `{package}` dependency `{dependency}` is not declared in its manifest")]
@@ -1072,6 +1182,9 @@ pub enum LockfileParseError {
     /// Package source type was not recognized.
     #[error("unsupported package source type `{source_type}` in graphcal.lock")]
     UnsupportedSourceType { source_type: String },
+    /// Plugin pin validation failed.
+    #[error(transparent)]
+    Plugin(#[from] LockedPluginError),
 }
 
 /// Parse a lockfile from TOML text.
@@ -1101,6 +1214,11 @@ pub fn parse_lockfile_str(content: &str) -> Result<Lockfile, LockfileParseError>
         .enumerate()
         .map(|(index, package)| parse_locked_package(index, package))
         .collect::<Result<Vec<_>, _>>()?;
+    let plugins = root["plugin"]
+        .item()
+        .map(parse_locked_plugins)
+        .transpose()?
+        .unwrap_or_default();
 
     Ok(Lockfile {
         lock_version,
@@ -1109,7 +1227,32 @@ pub fn parse_lockfile_str(content: &str) -> Result<Lockfile, LockfileParseError>
         stdlib_version,
         root: root_id,
         packages,
+        plugins,
     })
+}
+
+fn parse_locked_plugins(item: &Item<'_>) -> Result<Vec<LockedPlugin>, LockfileParseError> {
+    let Some(array) = item.as_array() else {
+        return Err(LockfileParseError::InvalidType {
+            field: "plugin".to_string(),
+            expected: "an array of tables",
+        });
+    };
+    array
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let Some(table) = entry.as_table() else {
+                return Err(LockfileParseError::InvalidType {
+                    field: format!("plugin[{index}]"),
+                    expected: "a table",
+                });
+            };
+            let path = required_string(table.get("path"), "plugin.path")?;
+            let sha256 = required_string(table.get("sha256"), "plugin.sha256")?;
+            Ok(LockedPlugin::new(path, sha256)?)
+        })
+        .collect()
 }
 
 fn parse_locked_package(
@@ -1353,6 +1496,7 @@ mod tests {
             graphcal_version: GRAPHICAL_VERSION.to_string(),
             stdlib_version: STDLIB_VERSION.to_string(),
             root: id("pkg-mission"),
+            plugins: Vec::new(),
             packages,
         }
     }
@@ -1691,6 +1835,96 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             reparsed.packages[0].source_dir,
             PathBuf::from("src/line\nfeed")
         );
+    }
+
+    #[test]
+    fn plugin_pins_roundtrip_sorted_through_deterministic_toml() {
+        let sha_a = "a".repeat(64);
+        let sha_b = "b".repeat(64);
+        let mut lock = lockfile(vec![package(
+            "pkg-mission",
+            "mission",
+            path_source(),
+            BTreeMap::new(),
+        )]);
+        lock.plugins = vec![
+            LockedPlugin::new("plugins/zeta.wasm", sha_a.clone()).unwrap(),
+            LockedPlugin::new("plugins/alpha.wasm", sha_b.clone()).unwrap(),
+        ];
+
+        let toml = lock.to_deterministic_toml().unwrap();
+        let alpha_at = toml.find("plugins/alpha.wasm").unwrap();
+        let zeta_at = toml.find("plugins/zeta.wasm").unwrap();
+        assert!(alpha_at < zeta_at, "pins must serialize sorted by path");
+
+        let reparsed = parse_lockfile_str(&toml).unwrap();
+        reparsed
+            .validate(GRAPHICAL_VERSION, STDLIB_VERSION)
+            .unwrap();
+        assert_eq!(reparsed.plugins.len(), 2);
+        assert_eq!(reparsed.plugins[0].path(), "plugins/alpha.wasm");
+        assert_eq!(reparsed.plugins[0].sha256(), sha_b);
+        assert_eq!(reparsed.plugins[1].path(), "plugins/zeta.wasm");
+        assert_eq!(reparsed.plugins[1].sha256(), sha_a);
+    }
+
+    #[test]
+    fn lockfiles_without_plugin_pins_parse_as_empty() {
+        let lock = lockfile(vec![package(
+            "pkg-mission",
+            "mission",
+            path_source(),
+            BTreeMap::new(),
+        )]);
+        let toml = lock.to_deterministic_toml().unwrap();
+        assert!(!toml.contains("[[plugin]]"));
+        assert!(parse_lockfile_str(&toml).unwrap().plugins.is_empty());
+    }
+
+    #[test]
+    fn plugin_pin_paths_and_digests_are_validated() {
+        let sha = "0".repeat(64);
+        for bad_path in [
+            "/abs/plugin.wasm",
+            "../escape.wasm",
+            "./dotted.wasm",
+            "not-wasm.dll",
+            "back\\slash.wasm",
+            "",
+        ] {
+            assert!(
+                matches!(
+                    LockedPlugin::new(bad_path, sha.clone()),
+                    Err(LockedPluginError::InvalidPath { .. })
+                ),
+                "path `{bad_path}` must be rejected"
+            );
+        }
+        for bad_sha in ["", "abc", &"A".repeat(64), &"g".repeat(64)] {
+            assert!(matches!(
+                LockedPlugin::new("plugins/x.wasm", bad_sha.to_string()),
+                Err(LockedPluginError::InvalidSha256 { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn duplicate_plugin_pins_are_rejected_by_validation() {
+        let sha = "0".repeat(64);
+        let mut lock = lockfile(vec![package(
+            "pkg-mission",
+            "mission",
+            path_source(),
+            BTreeMap::new(),
+        )]);
+        lock.plugins = vec![
+            LockedPlugin::new("plugins/x.wasm", sha.clone()).unwrap(),
+            LockedPlugin::new("plugins/x.wasm", sha).unwrap(),
+        ];
+        assert!(matches!(
+            lock.validate(GRAPHICAL_VERSION, STDLIB_VERSION),
+            Err(LockValidationError::DuplicatePluginPath { .. })
+        ));
     }
 
     #[test]

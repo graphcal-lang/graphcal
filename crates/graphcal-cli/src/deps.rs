@@ -10,9 +10,10 @@ use std::sync::atomic::AtomicBool;
 use graphcal_eval::loader::discover_project_root;
 use graphcal_io::RealFileSystem;
 use graphcal_package::{
-    DependencyName, DependencySpec, GitCommitHash, GitUrl, LOCK_VERSION, LockedPackage, Lockfile,
-    LockfileSerializeError, PackageGraph, PackageInstanceId, PackageManifest, PackageName,
-    PackageSource, STDLIB_VERSION, SourceTreeHashes, parse_manifest_str,
+    DependencyName, DependencySpec, GitCommitHash, GitUrl, LOCK_VERSION, LockedPackage,
+    LockedPlugin, LockedPluginError, Lockfile, LockfileSerializeError, PackageGraph,
+    PackageInstanceId, PackageManifest, PackageName, PackageSource, STDLIB_VERSION,
+    SourceTreeHashes, parse_manifest_str,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -47,6 +48,8 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
 
     let resolver = LockResolver::new(cache);
     let lock = resolver.resolve_root(&root)?;
+    let manifest = read_manifest(&root)?;
+    let plugins = resolve_plugin_pins(&root, &manifest.source_dir)?;
     let lockfile = Lockfile {
         lock_version: LOCK_VERSION,
         created_by: "graphcal".to_string(),
@@ -54,6 +57,7 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
         stdlib_version: STDLIB_VERSION.to_string(),
         root: lock.root,
         packages: lock.packages,
+        plugins,
     };
 
     let graph = lockfile.package_graph(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)?;
@@ -75,6 +79,74 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
         lockfile_path,
         changed,
     })
+}
+
+/// Scan the root package's `.gcl` sources for wasm plugin imports and pin
+/// each referenced file by its SHA-256.
+///
+/// Scanning covers every `.gcl` file under the manifest's source directory
+/// (not just files reachable from one entry point — packages have no single
+/// entry), so a pin exists for every plugin any file of the package can
+/// load. Host-registry plugin identities (no `.wasm` suffix) are not
+/// artifacts and get no pins.
+fn resolve_plugin_pins(root: &Path, source_dir: &Path) -> Result<Vec<LockedPlugin>, DepsError> {
+    use graphcal_compiler::syntax::plugin::PluginSourceKind;
+
+    let scan_dir = root.join(source_dir);
+    let (mut gcl_files, walk_errors) = if scan_dir.is_dir() {
+        graphcal::format::collect_gcl_files(&scan_dir)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    // Unreadable directories would silently drop pins; that must be a hard
+    // error, unlike formatting where a warning suffices.
+    if let Some(err) = walk_errors.into_iter().next() {
+        return Err(DepsError::ReadDir {
+            path: err
+                .path()
+                .map_or_else(|| scan_dir.clone(), Path::to_path_buf),
+            source: err.into(),
+        });
+    }
+    gcl_files.sort();
+
+    let mut plugin_paths = BTreeSet::new();
+    for file in &gcl_files {
+        let source = std::fs::read_to_string(file).map_err(|source| DepsError::ReadFile {
+            path: file.clone(),
+            source,
+        })?;
+        let display = file.display().to_string();
+        let raw = graphcal_compiler::syntax::parser::Parser::with_name(&source, &display)
+            .parse_file()
+            .map_err(|err| DepsError::PluginScanParse {
+                path: file.clone(),
+                message: err.to_string(),
+            })?;
+        let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw);
+        for decl in &ast.declarations {
+            if let graphcal_compiler::desugar::desugared_ast::DeclKind::PluginImport(plugin) =
+                &decl.kind
+                && plugin.path.value.source_kind() == PluginSourceKind::WasmModule
+            {
+                plugin_paths.insert(plugin.path.value.as_str().to_string());
+            }
+        }
+    }
+
+    plugin_paths
+        .into_iter()
+        .map(|path| {
+            let file = root.join(&path);
+            let bytes = std::fs::read(&file).map_err(|source| DepsError::PluginFileUnreadable {
+                plugin: path.clone(),
+                path: file.clone(),
+                source,
+            })?;
+            let sha256 = hex_string(&Sha256::digest(&bytes));
+            LockedPlugin::new(path, sha256).map_err(DepsError::PluginPin)
+        })
+        .collect()
 }
 
 fn write_file_atomic(root: &Path, final_path: &Path, bytes: &[u8]) -> Result<(), DepsError> {
@@ -593,6 +665,22 @@ pub enum DepsError {
         path: PathBuf,
         source: std::io::Error,
     },
+    /// A source file failed to parse while scanning for plugin imports.
+    #[error("could not scan `{}` for plugin imports: {message}", path.display())]
+    PluginScanParse { path: PathBuf, message: String },
+    /// A referenced plugin file could not be read for pinning.
+    #[error(
+        "could not read plugin \"{plugin}\" at `{}` to pin it: {source}",
+        path.display()
+    )]
+    PluginFileUnreadable {
+        plugin: String,
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// A plugin pin failed validation.
+    #[error(transparent)]
+    PluginPin(#[from] LockedPluginError),
     /// Cache materialization rename failed.
     #[error("could not move `{}` to `{}`: {source}", from.display(), to.display())]
     Rename {
@@ -654,11 +742,80 @@ mod tests {
     use super::*;
 
     fn unique_temp_dir() -> PathBuf {
+        // Parallel test threads can observe the same wall-clock tick, so a
+        // monotonically increasing counter makes the directory unique even
+        // when two tests start in the same nanosecond.
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock should be after UNIX_EPOCH")
             .as_nanos();
-        std::env::temp_dir().join(format!("graphcal-deps-test-{}-{nanos}", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "graphcal-deps-test-{}-{nanos}-{sequence}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn resolve_plugin_pins_scans_sources_and_hashes_files() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src/mission")).unwrap();
+        std::fs::create_dir_all(root.join("plugins")).unwrap();
+        std::fs::write(
+            root.join("src/mission/main.gcl"),
+            r#"
+import plugin "plugins/demo.wasm" as demo {
+    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+}
+import plugin "graphcal:demo" as native {
+    fn inverse<D>(x: D) -> D^-1;
+}
+node x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);
+"#,
+        )
+        .unwrap();
+        let plugin_bytes = b"not-really-wasm; pinning hashes bytes only";
+        std::fs::write(root.join("plugins/demo.wasm"), plugin_bytes).unwrap();
+
+        let pins = resolve_plugin_pins(&root, Path::new("src")).unwrap();
+        assert_eq!(pins.len(), 1, "host-registry identities get no pins");
+        assert_eq!(pins[0].path(), "plugins/demo.wasm");
+        assert_eq!(pins[0].sha256(), hex_string(&Sha256::digest(plugin_bytes)));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_plugin_pins_errors_on_missing_plugin_file() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("src/lib.gcl"),
+            r#"
+import plugin "plugins/nope.wasm" as demo {
+    fn f(x: Dimensionless) -> Dimensionless;
+}
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            resolve_plugin_pins(&root, Path::new("src")).unwrap_err(),
+            DepsError::PluginFileUnreadable { plugin, .. } if plugin == "plugins/nope.wasm"
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_plugin_pins_errors_on_unparsable_source() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/broken.gcl"), "import plugin \"x.wasm").unwrap();
+        assert!(matches!(
+            resolve_plugin_pins(&root, Path::new("src")).unwrap_err(),
+            DepsError::PluginScanParse { .. }
+        ));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]

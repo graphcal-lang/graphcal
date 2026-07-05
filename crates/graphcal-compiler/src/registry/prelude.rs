@@ -11,6 +11,41 @@ use crate::registry::types::{PositiveFiniteScale, RegistryBuilder};
 /// [`DagId`] is that owner at the compiler boundary.
 pub const PRELUDE_DAG_ID_SEGMENT: &str = "__graphcal_prelude__";
 
+/// Names of the prelude *base* dimensions, in registration order.
+///
+/// This is the dimension alphabet of boundaries that carry dimensions
+/// structurally as base-dimension exponent vectors — in particular WASM
+/// plugin manifests (ABI v1, #25), which may reference these names and
+/// nothing else. Every other dimension (prelude-derived or user-defined
+/// derived) reduces to exponents over base dimensions; user-defined *base*
+/// dimensions are scoped to their defining module and never cross such
+/// boundaries.
+pub const PRELUDE_BASE_DIMENSION_NAMES: [&str; 8] = [
+    "Length",
+    "Time",
+    "Mass",
+    "Temperature",
+    "ElectricCurrent",
+    "Amount",
+    "LuminousIntensity",
+    "Angle",
+];
+
+/// Look up a prelude *base* dimension by name.
+///
+/// Returns the single-factor [`Dimension`] for one of
+/// [`PRELUDE_BASE_DIMENSION_NAMES`], without needing a loaded registry, and
+/// `None` for every other name (including prelude-derived dimensions, which
+/// exist only through registry resolution).
+#[must_use]
+pub fn prelude_base_dimension(name: &str) -> Option<Dimension> {
+    use crate::dimension::BaseDimId;
+
+    PRELUDE_BASE_DIMENSION_NAMES
+        .contains(&name)
+        .then(|| Dimension::base(BaseDimId::Prelude(name.to_string())))
+}
+
 /// Dimension names provided by the Graphcal prelude.
 pub const PRELUDE_DIMENSION_NAMES: &[&str] = &[
     "Length",
@@ -457,6 +492,23 @@ mod tests {
         assert_eq!(names.len(), 8);
         assert_eq!(names.get(&length_id()), Some(&"Length".to_string()));
         assert_eq!(names.get(&time_id()), Some(&"Time".to_string()));
+    }
+
+    #[test]
+    fn base_dimension_names_const_matches_registrations() {
+        assert_eq!(
+            PRELUDE_DIMENSION_NAMES[..PRELUDE_BASE_DIMENSION_NAMES.len()],
+            PRELUDE_BASE_DIMENSION_NAMES
+        );
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b).unwrap();
+        let r = b.try_build().unwrap();
+        for name in PRELUDE_BASE_DIMENSION_NAMES {
+            let expected = prelude_base_dimension(name).unwrap();
+            assert_eq!(r.dimensions.get_dimension(name), Some(&expected));
+        }
+        assert_eq!(prelude_base_dimension("Velocity"), None);
+        assert_eq!(prelude_base_dimension("NotADimension"), None);
     }
 
     #[test]

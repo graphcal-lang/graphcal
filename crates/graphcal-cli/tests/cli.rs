@@ -4519,3 +4519,119 @@ fn hidden_on_non_plot_include_item_is_an_error() {
         "expected A018: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// WASM plugins (#25 Phase B)
+// ---------------------------------------------------------------------------
+
+/// Build a minimal lerp plugin: WAT compiled at test time with the manifest
+/// embedded through the ABI crate (no binary fixtures in the repository).
+fn lerp_plugin_wasm() -> Vec<u8> {
+    use graphcal_plugin_abi::{
+        ManifestFunction, ManifestMonomial, ManifestParam, ManifestRational, ManifestValueKind,
+        ManifestVarPower, PluginManifest,
+    };
+
+    let var = |name: &str| {
+        ManifestValueKind::Scalar(ManifestMonomial {
+            vars: vec![ManifestVarPower {
+                var: name.to_string(),
+                pow: ManifestRational { num: 1, den: 1 },
+            }],
+            fixed: Vec::new(),
+        })
+    };
+    let manifest = PluginManifest {
+        abi_version: graphcal_plugin_abi::ABI_VERSION,
+        functions: vec![ManifestFunction {
+            name: "lerp".to_string(),
+            dim_vars: vec!["D".to_string()],
+            params: vec![
+                ManifestParam {
+                    name: "a".to_string(),
+                    kind: var("D"),
+                },
+                ManifestParam {
+                    name: "b".to_string(),
+                    kind: var("D"),
+                },
+                ManifestParam {
+                    name: "t".to_string(),
+                    kind: ManifestValueKind::Scalar(ManifestMonomial::default()),
+                },
+            ],
+            result: var("D"),
+        }],
+    };
+    let wasm = wat::parse_str(
+        r#"
+        (module
+          (func (export "lerp") (param f64 f64 f64) (result f64)
+            (f64.add
+              (local.get 0)
+              (f64.mul (f64.sub (local.get 1) (local.get 0)) (local.get 2)))))
+        "#,
+    )
+    .unwrap();
+    manifest.embed_into(&wasm).unwrap()
+}
+
+const PLUGIN_EVAL_SOURCE: &str = r#"
+import plugin "plugins/demo.wasm" as demo {
+    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+}
+node mid: Length = demo.lerp(1.0 m, 3.0 m, 0.5);
+"#;
+
+#[test]
+fn eval_runs_a_vendored_wasm_plugin() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("plugins")).unwrap();
+    std::fs::write(dir.path().join("plugins/demo.wasm"), lerp_plugin_wasm()).unwrap();
+    let main = dir.path().join("main.gcl");
+    std::fs::write(&main, PLUGIN_EVAL_SOURCE).unwrap();
+
+    let output = graphcal_bin()
+        .arg("eval")
+        .arg(&main)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("mid"), "stdout: {stdout}");
+    assert!(stdout.contains('2'), "stdout: {stdout}");
+}
+
+#[test]
+fn eval_requires_a_lock_pin_in_package_projects() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"proj\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("src/proj")).unwrap();
+    std::fs::create_dir_all(dir.path().join("plugins")).unwrap();
+    std::fs::write(dir.path().join("plugins/demo.wasm"), lerp_plugin_wasm()).unwrap();
+    let main = dir.path().join("src/proj/main.gcl");
+    std::fs::write(&main, PLUGIN_EVAL_SOURCE).unwrap();
+
+    let output = graphcal_bin()
+        .arg("eval")
+        .arg(&main)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        !output.status.success(),
+        "unpinned plugin must not evaluate"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not pinned") && stderr.contains("graphcal deps lock"),
+        "stderr: {stderr}"
+    );
+}

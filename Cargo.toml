@@ -26,6 +26,8 @@ graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.0.1-alpha.15" }
 graphcal-io = { path = "crates/graphcal-io", version = "0.0.1-alpha.15" }
 graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.0.1-alpha.15" }
 graphcal-package = { path = "crates/graphcal-package", version = "0.0.1-alpha.15" }
+graphcal-plugin-abi = { path = "crates/graphcal-plugin-abi", version = "0.0.1-alpha.15" }
+graphcal-plugin-host = { path = "crates/graphcal-plugin-host", version = "0.0.1-alpha.15" }
 hifitime = "4.2.4"
 indexmap = "2.13.0"
 insta = "1.46.3"
@@ -51,6 +53,8 @@ toml-spanner = "1.0.0"
 tower-lsp = "0.20"
 unicode-width = "0.2.2"
 walkdir = "2.5.0"
+wasmi = "1.1.0"
+wat = "1.252.0"
 
 [workspace.lints.clippy]
 all = "warn"

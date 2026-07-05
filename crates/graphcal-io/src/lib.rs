@@ -25,6 +25,10 @@ pub trait FileSystemReader {
     /// Read the entire contents of a file as a UTF-8 string.
     fn read_to_string(&self, path: &Path) -> Result<String, io::Error>;
 
+    /// Read the entire contents of a file as raw bytes (e.g. a vendored
+    /// `.wasm` plugin module).
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, io::Error>;
+
     /// Return the canonical, absolute form of a path.
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error>;
 

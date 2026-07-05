@@ -7,6 +7,10 @@
     clippy::print_stdout,
     reason = "CLI binary; stdout/stderr are the user-facing output channels"
 )]
+#![expect(
+    clippy::result_large_err,
+    reason = "GraphcalError is inherently large and only constructed on the error path"
+)]
 
 mod deps;
 mod display;
@@ -20,9 +24,11 @@ use std::process;
 
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::eval::{
-    EvalResult, compile_and_eval_project, compile_to_tir_project, format_number,
+    CompileError, EvalResult, compile_and_eval_from_project_with_host_fns,
+    compile_to_tir_from_project_with_host_fns, format_number,
 };
-use graphcal_eval::loader::build_rooted_filesystem;
+use graphcal_eval::host_fns::HostFunctionRegistry;
+use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, load_project};
 
 use graphcal::format::{FormatStatus, collect_gcl_files, format_status};
 
@@ -297,7 +303,10 @@ fn handle_eval(
     // precedence; otherwise walk up from `file`'s parent looking for
     // `graphcal.toml`, falling back to an unrooted FS for loose files.
     let fs = build_rooted_filesystem(file, root);
-    match compile_and_eval_project(file, overrides, root, &fs) {
+    let outcome = load_project_with_plugins(file, root, &fs).and_then(|(project, host_fns)| {
+        compile_and_eval_from_project_with_host_fns(&project, overrides, &host_fns)
+    });
+    match outcome {
         Ok(result) => {
             let plot_json_only = matches!(plot_output, Some(PlotOutput::Json));
             if !plot_json_only {
@@ -425,6 +434,24 @@ fn collect_with_warnings(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// Load a project and build the host function registry backing its extern
+/// (plugin) declarations: the built-in demo plugin plus every wasm plugin
+/// the project vendors, loaded through one plugin host per invocation.
+fn load_project_with_plugins<F: graphcal_io::FileSystemReader>(
+    file: &Path,
+    project_root: Option<&Path>,
+    fs: &F,
+) -> Result<(LoadedProject, HostFunctionRegistry), CompileError> {
+    let project = load_project(file, project_root, fs)?;
+    let mut host_fns = graphcal_eval::host_fns::demo_registry();
+    graphcal_plugin_host::register_project_plugins(
+        &graphcal_plugin_host::PluginHost::new(),
+        &project,
+        &mut host_fns,
+    );
+    Ok((project, host_fns))
+}
+
 fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
     let targets = resolve_target_files(paths);
 
@@ -436,7 +463,11 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
     let mut error_count = 0;
     for file in &targets {
         let fs = build_rooted_filesystem(file, project_root);
-        match compile_to_tir_project(file, project_root, &fs) {
+        let outcome =
+            load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
+                compile_to_tir_from_project_with_host_fns(&project, &host_fns)
+            });
+        match outcome {
             Ok(_) => {
                 println!("ok: {}", file.display());
             }
@@ -462,8 +493,12 @@ fn run_graph(file: &Path, format: &GraphFormat, project_root: Option<&Path>) {
         "warning: `graphcal graph` is experimental; its output and CLI surface may change in any release"
     );
     let fs = build_rooted_filesystem(file, project_root);
-    match compile_to_tir_project(file, project_root, &fs) {
-        Ok((tir, _project)) => {
+    let outcome =
+        load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
+            compile_to_tir_from_project_with_host_fns(&project, &host_fns)
+        });
+    match outcome {
+        Ok(tir) => {
             let ir = graphcal_eval::graph_ir::project_tir(&tir);
             match format {
                 GraphFormat::Dot => print!("{}", graphcal_eval::graph_ir::dot::render(&ir)),

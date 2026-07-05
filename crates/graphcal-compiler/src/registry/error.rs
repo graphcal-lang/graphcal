@@ -274,6 +274,108 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error(
+        "extern function `{name}` is declared with signature {declared}, but plugin \"{plugin}\" provides {provided}"
+    )]
+    #[diagnostic(
+        code(graphcal::P005),
+        help(
+            "the extern declaration must structurally match the signature in the plugin's manifest (dimension-variable and parameter names may differ; the dimensional shape may not); note that plugin manifests cannot express user-defined base dimensions"
+        )
+    )]
+    ExternSignatureMismatch {
+        plugin: crate::syntax::plugin::PluginPath,
+        name: crate::syntax::function_name::FnName,
+        declared: String,
+        provided: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("signature does not match the plugin manifest")]
+        span: SourceSpan,
+    },
+
+    #[error("failed to load plugin \"{plugin}\": {reason}")]
+    #[diagnostic(
+        code(graphcal::P006),
+        help(
+            "plugin paths ending in `.wasm` resolve relative to the project root and must name a vendored WebAssembly module with an embedded graphcal manifest"
+        )
+    )]
+    PluginLoadFailed {
+        plugin: crate::syntax::plugin::PluginPath,
+        reason: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("plugin failed to load")]
+        span: SourceSpan,
+    },
+
+    #[error("plugin \"{plugin}\" imports `{import_module}::{import_name}`, which is not allowed")]
+    #[diagnostic(
+        code(graphcal::P007),
+        help(
+            "graphcal plugins must be pure: they may import nothing except `graphcal::fail`. A module importing WASI or other host APIs is not a graphcal plugin (rebuild for a bare wasm32 target or stub the imports out)"
+        )
+    )]
+    PluginForbiddenImport {
+        plugin: crate::syntax::plugin::PluginPath,
+        import_module: String,
+        import_name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("plugin declares a forbidden import")]
+        span: SourceSpan,
+    },
+
+    #[error("plugin \"{plugin}\" is imported by a dependency package")]
+    #[diagnostic(
+        code(graphcal::P008),
+        help(
+            "WebAssembly plugin files can currently be imported only by the root package; dependency packages may still use embedder-provided (host registry) plugins"
+        )
+    )]
+    PluginInDependencyPackage {
+        plugin: crate::syntax::plugin::PluginPath,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("wasm plugin import in a dependency package")]
+        span: SourceSpan,
+    },
+
+    #[error("plugin \"{plugin}\" is not pinned in graphcal.lock")]
+    #[diagnostic(
+        code(graphcal::P009),
+        help(
+            "projects with a graphcal.toml load plugin binaries only through lockfile pins; run `graphcal deps lock` to record this plugin's hash"
+        )
+    )]
+    PluginNotPinned {
+        plugin: crate::syntax::plugin::PluginPath,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("plugin has no graphcal.lock pin")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "plugin \"{plugin}\" does not match its graphcal.lock pin: file hashes to {actual}, lockfile pins {expected}"
+    )]
+    #[diagnostic(
+        code(graphcal::P010),
+        help(
+            "the lockfile is the trust boundary for plugin code — a changed binary must arrive together with a reviewed pin update; if this change is intentional, rerun `graphcal deps lock`"
+        )
+    )]
+    PluginHashMismatch {
+        plugin: crate::syntax::plugin::PluginPath,
+        expected: String,
+        actual: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("plugin file does not match its pin")]
+        span: SourceSpan,
+    },
+
     #[error("graph reference `@{name}` not allowed in const expression")]
     #[diagnostic(
         code(graphcal::N005),
@@ -1727,6 +1829,12 @@ impl GraphcalError {
             | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }
             | Self::UnknownExternFunction { src, .. }
+            | Self::ExternSignatureMismatch { src, .. }
+            | Self::PluginLoadFailed { src, .. }
+            | Self::PluginForbiddenImport { src, .. }
+            | Self::PluginInDependencyPackage { src, .. }
+            | Self::PluginNotPinned { src, .. }
+            | Self::PluginHashMismatch { src, .. }
             | Self::InvalidExternSignature { src, .. }
             | Self::MissingHostFunction { src, .. }
             | Self::ExternCallNotAllowed { src, .. }

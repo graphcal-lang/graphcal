@@ -3664,6 +3664,9 @@ pub struct ExternFunctionEntry {
     pub name_span: Span,
     /// Span of the whole `fn ...;` declaration.
     pub decl_span: Span,
+    /// Span of the `import plugin "…"` path string, for diagnostics about
+    /// the plugin as a whole (unloadable file, hash mismatch, …).
+    pub path_span: Span,
 }
 
 /// Resolve every `import plugin` block's declared signatures against the
@@ -3717,14 +3720,17 @@ fn resolve_plugin_imports(
                 signature,
                 name_span: function.name.span,
                 decl_span: function.span,
+                path_span: decl.path.span,
             };
             match map.entry(key) {
                 Entry::Occupied(existing) => {
                     // The same plugin function may be declared under several
                     // aliases, but its signature is a single fact about the
                     // plugin — conflicting declarations are rejected.
+                    // Comparison is structural: renaming dimension variables
+                    // or parameters does not make a different signature.
                     let existing: &ExternFunctionEntry = existing.get();
-                    if existing.signature != entry.signature {
+                    if !existing.signature.structurally_equivalent(&entry.signature) {
                         return Err(GraphcalError::InvalidExternSignature {
                             message: format!(
                                 "function `{}` of plugin \"{}\" is declared elsewhere with a different signature",

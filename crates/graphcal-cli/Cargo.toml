@@ -19,6 +19,7 @@ graphcal-fmt = { workspace = true }
 graphcal-io = { workspace = true }
 graphcal-lsp = { workspace = true }
 graphcal-package = { workspace = true }
+graphcal-plugin-host.workspace = true
 miette = { workspace = true, features = ["fancy"] }
 open = { workspace = true }
 serde_json = { workspace = true }
@@ -31,9 +32,11 @@ tokio = { workspace = true }
 walkdir = { workspace = true }
 
 [dev-dependencies]
+graphcal-plugin-abi.workspace = true
 indexmap.workspace = true
 insta.workspace = true
 serde_json.workspace = true
+wat.workspace = true
 
 [lints]
 workspace = true

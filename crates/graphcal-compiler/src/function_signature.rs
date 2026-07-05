@@ -319,6 +319,105 @@ impl FunctionSignature {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Structural equivalence
+// ---------------------------------------------------------------------------
+
+impl FunctionSignature {
+    /// Whether `self` and `other` denote the same calling contract.
+    ///
+    /// Two signatures are structurally equivalent when their parameter and
+    /// result kinds match up to a bijective renaming of dimension variables
+    /// and reordering of the factors within each monomial. Parameter names do
+    /// not participate: they are documentation, and the extern declaration
+    /// (not a plugin manifest) is their authoritative source. The order of
+    /// the binder list itself is likewise cosmetic; what matters is which
+    /// parameters share a variable and with what powers.
+    ///
+    /// This is the comparison the plugin loader uses to verify an extern
+    /// declaration against the signature embedded in a plugin's manifest
+    /// (Phase B of #25).
+    #[must_use]
+    pub fn structurally_equivalent(&self, other: &Self) -> bool {
+        self.canonical_form() == other.canonical_form()
+    }
+
+    /// Rewrite this signature with dimension variables numbered by first
+    /// occurrence across the parameter list and monomial factors sorted by
+    /// that numbering.
+    ///
+    /// The use-before-binding invariant makes first occurrence well-defined
+    /// and rename-invariant: a variable's first appearance in parameter order
+    /// is always its bare binding occurrence.
+    fn canonical_form(&self) -> CanonicalSignature {
+        let mut order: Vec<&DimVarName> = Vec::new();
+        let params = self
+            .params
+            .iter()
+            .map(|param| canonical_kind(&param.kind, &mut order))
+            .collect();
+        let result = canonical_kind(&self.result, &mut order);
+        CanonicalSignature {
+            dim_var_count: self.dim_vars.len(),
+            params,
+            result,
+        }
+    }
+}
+
+/// A [`FunctionSignature`] with dimension variables replaced by occurrence
+/// indices; equality on this form is structural equivalence.
+#[derive(PartialEq, Eq)]
+struct CanonicalSignature {
+    dim_var_count: usize,
+    params: Vec<CanonicalValueKind>,
+    result: CanonicalValueKind,
+}
+
+/// [`ValueKind`] in canonical form.
+#[derive(PartialEq, Eq)]
+enum CanonicalValueKind {
+    Scalar(CanonicalMonomial),
+    Bool,
+    Int,
+}
+
+/// [`DimMonomial`] in canonical form: variable factors as
+/// `(occurrence index, power)` sorted by index.
+#[derive(PartialEq, Eq)]
+struct CanonicalMonomial {
+    vars: Vec<(usize, Rational)>,
+    fixed: Dimension,
+}
+
+fn canonical_kind<'a>(kind: &'a ValueKind, order: &mut Vec<&'a DimVarName>) -> CanonicalValueKind {
+    match kind {
+        ValueKind::Bool => CanonicalValueKind::Bool,
+        ValueKind::Int => CanonicalValueKind::Int,
+        ValueKind::Scalar(monomial) => {
+            let mut vars: Vec<(usize, Rational)> = monomial
+                .vars
+                .iter()
+                .map(|factor| {
+                    let index = order
+                        .iter()
+                        .position(|seen| **seen == factor.var)
+                        .unwrap_or_else(|| {
+                            order.push(&factor.var);
+                            order.len() - 1
+                        });
+                    (index, factor.power)
+                })
+                .collect();
+            vars.sort_unstable_by_key(|(index, _)| *index);
+            CanonicalValueKind::Scalar(CanonicalMonomial {
+                vars,
+                fixed: monomial.fixed.clone(),
+            })
+        }
+    }
+}
+
 fn format_value_kind(
     kind: &ValueKind,
     format_dim: &mut impl FnMut(&Dimension) -> String,
@@ -659,6 +758,119 @@ mod tests {
         let sig = FunctionSignature::free_to_pow("x", Rational::HALF);
         let rendered = sig.format_with(|dim| format!("{dim:?}"));
         assert_eq!(rendered, "<D>(x: D) -> D^(1/2)");
+    }
+
+    /// `<vars>(params) -> result` shorthand for equivalence tests.
+    fn sig(dim_vars: &[&str], params: &[ValueKind], result: ValueKind) -> FunctionSignature {
+        FunctionSignature::try_new(
+            dim_vars.iter().map(|v| var(v)).collect(),
+            params
+                .iter()
+                .enumerate()
+                .map(|(i, kind)| param(&format!("p{i}"), kind.clone()))
+                .collect(),
+            result,
+        )
+        .unwrap()
+    }
+
+    fn bare(name: &str) -> ValueKind {
+        ValueKind::Scalar(DimMonomial::var(var(name)))
+    }
+
+    #[test]
+    fn equivalence_ignores_variable_names_and_param_names() {
+        let declared = FunctionSignature::try_new(
+            vec![var("D")],
+            vec![
+                param("a", bare("D")),
+                param("b", bare("D")),
+                param("t", ValueKind::dimensionless()),
+            ],
+            bare("D"),
+        )
+        .unwrap();
+        let manifest = FunctionSignature::try_new(
+            vec![var("T")],
+            vec![
+                param("lo", bare("T")),
+                param("hi", bare("T")),
+                param("frac", ValueKind::dimensionless()),
+            ],
+            bare("T"),
+        )
+        .unwrap();
+        assert!(declared.structurally_equivalent(&manifest));
+    }
+
+    #[test]
+    fn equivalence_ignores_monomial_factor_order_and_binder_order() {
+        let product = |first: &str, second: &str| {
+            ValueKind::Scalar(DimMonomial {
+                vars: vec![
+                    DimVarPower {
+                        var: var(first),
+                        power: Rational::ONE,
+                    },
+                    DimVarPower {
+                        var: var(second),
+                        power: Rational::ONE,
+                    },
+                ],
+                fixed: Dimension::dimensionless(),
+            })
+        };
+        let a = sig(
+            &["D1", "D2"],
+            &[bare("D1"), bare("D2")],
+            product("D1", "D2"),
+        );
+        let b = sig(
+            &["E2", "E1"],
+            &[bare("E2"), bare("E1")],
+            product("E1", "E2"),
+        );
+        assert!(a.structurally_equivalent(&b));
+    }
+
+    #[test]
+    fn equivalence_distinguishes_variable_identification() {
+        // (x: D, y: D) forces both dimensions equal; (x: D1, y: D2) does not.
+        let same = sig(&["D"], &[bare("D"), bare("D")], bare("D"));
+        let free = sig(&["D1", "D2"], &[bare("D1"), bare("D2")], bare("D1"));
+        assert!(!same.structurally_equivalent(&free));
+        assert!(!free.structurally_equivalent(&same));
+    }
+
+    #[test]
+    fn equivalence_distinguishes_kinds_powers_dims_and_arity() {
+        let passthrough = FunctionSignature::passthrough("x");
+        assert!(
+            !passthrough
+                .structurally_equivalent(&FunctionSignature::free_to_pow("x", Rational::HALF))
+        );
+        assert!(
+            !FunctionSignature::fixed_to_fixed("x", length(), time()).structurally_equivalent(
+                &FunctionSignature::fixed_to_fixed("x", length(), length())
+            )
+        );
+        assert!(
+            !sig(&[], &[ValueKind::Bool], ValueKind::Int).structurally_equivalent(&sig(
+                &[],
+                &[ValueKind::Int],
+                ValueKind::Int
+            ))
+        );
+        assert!(
+            !FunctionSignature::same_dim(&["a", "b"])
+                .structurally_equivalent(&FunctionSignature::passthrough("x"))
+        );
+    }
+
+    #[test]
+    fn equivalence_accepts_identical_signatures() {
+        let sig = FunctionSignature::same_dim_to_fixed(&["y", "x"], length());
+        assert!(sig.structurally_equivalent(&sig.clone()));
     }
 
     #[test]
