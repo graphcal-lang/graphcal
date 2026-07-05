@@ -30,7 +30,8 @@ use graphcal_compiler::function_signature::{DimMonomial, FunctionSignature, Valu
 use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_eval::eval::{
-    CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
+    CompileError, EvalResult, Value, compile_and_eval_from_project_with_host_fns,
+    compile_to_tir_from_project_with_host_fns,
 };
 use graphcal_eval::loader::LoadedProject;
 
@@ -127,6 +128,10 @@ pub struct Backend {
     /// trigger-character completion, signature help, formatting — must read
     /// this instead of the analyzed snapshot.
     latest_text: Arc<RwLock<HashMap<Url, Arc<String>>>>,
+    /// WASM plugin host shared across analysis passes, so re-analysis on
+    /// every debounced keystroke hits the content-hash module cache instead
+    /// of recompiling unchanged plugins.
+    plugin_host: Arc<graphcal_plugin_host::PluginHost>,
 }
 
 #[cfg(test)]
@@ -223,6 +228,7 @@ impl Backend {
             &self.documents,
             &self.change_generations,
             &self.latest_text,
+            Arc::clone(&self.plugin_host),
             uri,
             text,
             generation,
@@ -240,6 +246,7 @@ impl Backend {
         let documents = self.documents.clone();
         let generations = self.change_generations.clone();
         let latest_text = self.latest_text.clone();
+        let plugin_host = Arc::clone(&self.plugin_host);
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
@@ -254,6 +261,7 @@ impl Backend {
                 &documents,
                 &generations,
                 &latest_text,
+                plugin_host,
                 uri,
                 text,
                 generation,
@@ -277,11 +285,16 @@ impl Backend {
 /// Run the (blocking, timeout-guarded) analysis for `uri` and store/publish
 /// the result. Shared by the immediate (`did_open`/`did_save`) and debounced
 /// (`did_change`) paths so the panic/timeout/store sequence lives once.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site per trigger; the arguments are the Backend's shared state"
+)]
 async fn analyze_store_publish(
     client: &Client,
     documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
     latest_text: &Arc<RwLock<HashMap<Url, Arc<String>>>>,
+    plugin_host: Arc<graphcal_plugin_host::PluginHost>,
     uri: Url,
     text: String,
     generation: u64,
@@ -303,8 +316,9 @@ async fn analyze_store_publish(
         })
         .collect();
     let uri_for_analysis = uri.clone();
-    let task =
-        tokio::task::spawn_blocking(move || run_analysis(&uri_for_analysis, &text, &open_buffers));
+    let task = tokio::task::spawn_blocking(move || {
+        run_analysis(&uri_for_analysis, &text, &open_buffers, &plugin_host)
+    });
     let analysis = match tokio::time::timeout(ANALYSIS_TIMEOUT, task).await {
         Ok(Ok(a)) => a,
         Ok(Err(e)) => {
@@ -498,10 +512,15 @@ fn diagnostics_for_active_uri(uri: &Url, diags: Vec<Diagnostic>) -> HashMap<Url,
 /// Both stages use the same source text, eliminating data provenance mismatches.
 #[cfg(test)]
 pub(crate) fn run_analysis_for_test(uri: &Url, text: &str) -> AnalysisResult {
-    run_analysis(uri, text, &[])
+    run_analysis(uri, text, &[], tests::test_plugin_host())
 }
 
-fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisResult {
+fn run_analysis(
+    uri: &Url,
+    text: &str,
+    open_buffers: &[OpenBuffer],
+    plugin_host: &graphcal_plugin_host::PluginHost,
+) -> AnalysisResult {
     // Stage 1: Build project (parse + load imports).
     // If this fails, no AST is available for the multi-file pipeline. Fall
     // back to parsing just the active buffer so hover/goto-def on the active
@@ -547,8 +566,14 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
     // an empty resolver — references then surface via the spelling fallback.
     let module_resolver = project.build_module_resolver().unwrap_or_default();
 
+    // Extern (plugin) registry for this pass: the built-in demo plugin plus
+    // the project's vendored wasm plugins. The plugin host outlives passes,
+    // so unchanged modules come from its content-hash cache.
+    let mut host_fns = graphcal_eval::host_fns::demo_registry();
+    graphcal_plugin_host::register_project_plugins(plugin_host, &project, &mut host_fns);
+
     // Stage 2: Compile TIR from the project.
-    match compile_to_tir_from_project(&project) {
+    match compile_to_tir_from_project_with_host_fns(&project, &host_fns) {
         Ok(tir) => {
             // Full success: symbol table from AST + TIR enrichment.
             let mut symbol_table =
@@ -566,7 +591,7 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
             let (mut diagnostics, eval_values) = if tir.is_library() {
                 (HashMap::new(), HashMap::new())
             } else {
-                run_eval_from_project(&project, uri, text, &symbol_table)
+                run_eval_from_project(&project, uri, text, &symbol_table, &host_fns)
             };
             diagnostics.entry(uri.clone()).or_default();
 
@@ -612,8 +637,9 @@ fn run_eval_from_project(
     uri: &Url,
     text: &str,
     symbol_table: &SymbolTable,
+    host_fns: &graphcal_eval::host_fns::HostFunctionRegistry,
 ) -> (HashMap<Url, Vec<Diagnostic>>, HashMap<ScopedName, String>) {
-    match compile_and_eval_from_project(project, &HashMap::new()) {
+    match compile_and_eval_from_project_with_host_fns(project, &HashMap::new(), host_fns) {
         Ok(result) => {
             let diagnostics = eval_result_to_diagnostics(&result, text, symbol_table);
             let values = format_eval_values(&result);
@@ -1603,6 +1629,7 @@ pub async fn run() {
         documents: Arc::new(RwLock::new(HashMap::new())),
         change_generations: Arc::new(RwLock::new(HashMap::new())),
         latest_text: Arc::new(RwLock::new(HashMap::new())),
+        plugin_host: Arc::new(graphcal_plugin_host::PluginHost::new()),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
@@ -1618,6 +1645,14 @@ mod tests {
     use indexmap::IndexMap;
 
     use super::*;
+
+    /// One plugin host shared by every analysis test, mirroring the
+    /// Backend's process-wide host (and keeping the module cache warm).
+    pub fn test_plugin_host() -> &'static graphcal_plugin_host::PluginHost {
+        static HOST: std::sync::OnceLock<graphcal_plugin_host::PluginHost> =
+            std::sync::OnceLock::new();
+        HOST.get_or_init(graphcal_plugin_host::PluginHost::new)
+    }
 
     fn empty_symbols() -> BTreeMap<graphcal_compiler::dimension::BaseDimId, String> {
         BTreeMap::new()
@@ -1699,7 +1734,7 @@ mod tests {
     #[test]
     fn inlay_hints_use_constructor_call_syntax_for_algebraic_values() {
         let text = include_str!("../../../tests/fixtures/valid/tagged_union.gcl");
-        let analysis = run_analysis(&untitled_uri(), text, &[]);
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -1913,7 +1948,7 @@ pub(bind) index Phase;
 pub(bind) index Step: Time;
 pub(bind) index Accel: Length / Time^2;
 ";
-        let analysis = run_analysis(&untitled_uri(), text, &[]);
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
             "library file should have no diagnostics, got: {:?}",
@@ -1926,7 +1961,7 @@ pub(bind) index Accel: Length / Time^2;
         let text = "\
 param mass: Mass;
 ";
-        let analysis = run_analysis(&untitled_uri(), text, &[]);
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
             "file with required param should have no diagnostics, got: {:?}",
@@ -1943,7 +1978,7 @@ param mass: Mass = 1.0 kg;
 param length: Length = 1.0 m;
 node bad: Mass = mass + length;
 ";
-        let analysis = run_analysis(&untitled_uri(), text, &[]);
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
         assert!(
             !analysis.has_no_diagnostics(),
             "dim mismatch in executable file must still produce a diagnostic",
@@ -1978,7 +2013,7 @@ node bad: Mass = mass + length;
         let main_path = dir.path().join("src/lib/main.gcl");
         let uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&uri, &text, &[]);
+        let analysis = run_analysis(&uri, &text, &[], test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -2014,7 +2049,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(main_path.canonicalize().unwrap()).unwrap();
         let helper_uri = Url::from_file_path(helper_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text, &[]);
+        let analysis = run_analysis(&main_uri, &text, &[], test_plugin_host());
 
         let helper_diags = analysis
             .diagnostics
@@ -2074,7 +2109,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(main_path.canonicalize().unwrap()).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text, &[]);
+        let analysis = run_analysis(&main_uri, &text, &[], test_plugin_host());
 
         let lib_diags = analysis
             .diagnostics
@@ -2113,7 +2148,7 @@ node bad: Mass = mass + length;
         let main_path = dir.path().join("src/helper/main.gcl");
         let uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&uri, &text, &[]);
+        let analysis = run_analysis(&uri, &text, &[], test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -2156,7 +2191,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text, &[]);
+        let analysis = run_analysis(&main_uri, &text, &[], test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -2213,7 +2248,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text, &[]);
+        let analysis = run_analysis(&main_uri, &text, &[], test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -2253,7 +2288,7 @@ node bad: Mass = mass + length;
         let main_path = dir.path().join("src/lib/main.gcl");
         let uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&uri, &text, &[]);
+        let analysis = run_analysis(&uri, &text, &[], test_plugin_host());
 
         let palette_red_key = crate::symbol_table::SymbolKey::Variant {
             parent: crate::symbol_table::SymbolPath::local("Palette"),
@@ -2292,7 +2327,7 @@ node bad: Mass = mass + length;
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text, &[]);
+        let analysis = run_analysis(&main_uri, &text, &[], test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -2433,13 +2468,13 @@ param mass: Mass = 100.0 kg;
 param velocity: Velocity = 50.0 m/s;
 node momentum: Force * Time = @mass * @velocity;
 ";
-        let good = run_analysis(&uri, good_text, &[]);
+        let good = run_analysis(&uri, good_text, &[], test_plugin_host());
         assert!(good.buffer_parsed);
         assert!(good.has_no_diagnostics());
 
         // Mid-edit: the buffer no longer parses.
         let broken_text = format!("{good_text}node next: Mass = @");
-        let broken = run_analysis(&uri, &broken_text, &[]);
+        let broken = run_analysis(&uri, &broken_text, &[], test_plugin_host());
         assert!(!broken.buffer_parsed, "broken buffer must be flagged");
         assert!(
             !broken.has_no_diagnostics(),
@@ -2496,7 +2531,7 @@ node momentum: Force * Time = @mass * @velocity;
 
         // Control: without the overlay, the stale disk content produces
         // diagnostics (on lib.gcl's URI).
-        let stale = run_analysis(&main_uri, &text, &[]);
+        let stale = run_analysis(&main_uri, &text, &[], test_plugin_host());
         assert!(
             !stale.has_no_diagnostics(),
             "expected diagnostics from the broken on-disk lib.gcl"
@@ -2506,7 +2541,7 @@ node momentum: Force * Time = @mass * @velocity;
             path: lib_path,
             text: Arc::new("pub const node g0: Acceleration = 9.80665 m/s^2;\n".to_string()),
         }];
-        let analysis = run_analysis(&main_uri, &text, &open_buffers);
+        let analysis = run_analysis(&main_uri, &text, &open_buffers, test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
             "the fixed editor buffer must shadow the broken disk content, got: {:?}",
@@ -2536,7 +2571,7 @@ node momentum: Force * Time = @mass * @velocity;
         let main_path = dir.path().join("src/gotom/main.gcl");
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text, &[]);
+        let analysis = run_analysis(&main_uri, &text, &[], test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -2605,7 +2640,7 @@ node momentum: Force * Time = @mass * @velocity;
         let a_uri = Url::from_file_path(a_path.canonicalize().unwrap()).unwrap();
         let b_uri = Url::from_file_path(b_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = run_analysis(&main_uri, &text, &[]);
+        let analysis = run_analysis(&main_uri, &text, &[], test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",

@@ -742,11 +742,19 @@ mod tests {
     use super::*;
 
     fn unique_temp_dir() -> PathBuf {
+        // Parallel test threads can observe the same wall-clock tick, so a
+        // monotonically increasing counter makes the directory unique even
+        // when two tests start in the same nanosecond.
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock should be after UNIX_EPOCH")
             .as_nanos();
-        std::env::temp_dir().join(format!("graphcal-deps-test-{}-{nanos}", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "graphcal-deps-test-{}-{nanos}-{sequence}",
+            std::process::id()
+        ))
     }
 
     #[test]
