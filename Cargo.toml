@@ -26,8 +26,10 @@ graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.0.1-alpha.15" }
 graphcal-io = { path = "crates/graphcal-io", version = "0.0.1-alpha.15" }
 graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.0.1-alpha.15" }
 graphcal-package = { path = "crates/graphcal-package", version = "0.0.1-alpha.15" }
+graphcal-plugin = { path = "crates/graphcal-plugin", version = "0.0.1-alpha.15" }
 graphcal-plugin-abi = { path = "crates/graphcal-plugin-abi", version = "0.0.1-alpha.15" }
 graphcal-plugin-host = { path = "crates/graphcal-plugin-host", version = "0.0.1-alpha.15" }
+graphcal-plugin-macros = { path = "crates/graphcal-plugin-macros", version = "0.0.1-alpha.15" }
 hifitime = "4.2.4"
 indexmap = "2.13.0"
 insta = "1.46.3"
@@ -37,12 +39,15 @@ miette = "7.6.0"
 open = "5.3.3"
 petgraph = "0.8.3"
 pretty = "0.12.5"
+proc-macro2 = "1.0.106"
 proptest = "1.10.0"
+quote = "1.0.46"
 rand = "0.10.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.11.0"
 stacker = "0.1.24"
+syn = "2.0.118"
 tabled = "0.21.0"
 tempfile = "3.25.0"
 thiserror = "2.0.18"
