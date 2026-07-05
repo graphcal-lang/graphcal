@@ -51,6 +51,12 @@ with a full commit-hash `rev`, fetches any missing sources, records a
 graph-shaped package-instance lockfile, and writes nothing when the deterministic
 lockfile contents are already up to date.
 
+The command also scans the package's `.gcl` sources for
+[WASM plugin imports](language/extern-functions.md#trust-lockfile-pins) and
+pins each referenced `.wasm` file's SHA-256 as a `[[plugin]]` entry. Loading
+enforces the pins: an unpinned or hash-mismatched plugin is a hard error, so
+plugin binaries can only change together with a reviewable lockfile diff.
+
 Dependency-consuming commands (`check`, `eval`, `graph`, and the LSP) are
 read-only with respect to packages: they read `graphcal.lock` and cached
 sources, but they do not fetch, create, or update lockfile entries. If the

@@ -196,11 +196,12 @@ Note: `eval/types.rs`, `eval/display.rs`, `loader.rs`, `eval/plot_data.rs`, `eva
 
 ## Stage 14 - WASM plugin host (`graphcal-plugin-host`)
 
-Note: `lib.rs` re-exports the three modules; `convert.rs` is the untrusted-boundary leaf, `module.rs` builds on it, and `host.rs` wraps both with the engine and cache.
+Note: `lib.rs` re-exports the four modules; `convert.rs` is the untrusted-boundary leaf, `module.rs` builds on it, `host.rs` wraps both with the engine and cache, and `registry.rs` bridges loaded projects to the evaluator's registry.
 
 - [ ] `crates/graphcal-plugin-host/src/convert.rs`
 - [ ] `crates/graphcal-plugin-host/src/module.rs`
 - [ ] `crates/graphcal-plugin-host/src/host.rs`
+- [ ] `crates/graphcal-plugin-host/src/registry.rs`
 - [ ] `crates/graphcal-plugin-host/src/lib.rs`
 
 ## Stage 15 - Formatter (`graphcal-fmt`)
@@ -255,5 +256,7 @@ Note: the feature modules from `resolve.rs` onward and `server.rs` are mutually 
 - [ ] `crates/graphcal-eval/tests/edge_case_bugs.rs`
 - [ ] `crates/graphcal-eval/tests/phase0_regressions.rs`
 - [ ] `crates/graphcal-eval/tests/error_snapshots.rs`
+- [ ] `crates/graphcal-plugin-host/tests/runtime.rs`
+- [ ] `crates/graphcal-plugin-host/tests/project_eval.rs`
 - [ ] `crates/graphcal-fmt/tests/format_tests.rs`
 - [ ] `crates/graphcal-cli/tests/cli.rs`
