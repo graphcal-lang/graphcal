@@ -43,6 +43,7 @@ CRATE_ORDER = [
     "graphcal-package",
     "graphcal-plugin-abi",
     "graphcal-eval",
+    "graphcal-plugin-host",
     "graphcal-fmt",
     "graphcal-lsp",
     "graphcal-cli",

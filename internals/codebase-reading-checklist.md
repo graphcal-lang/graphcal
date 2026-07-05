@@ -194,7 +194,16 @@ Note: `eval/types.rs`, `eval/display.rs`, `loader.rs`, `eval/plot_data.rs`, `eva
 - [ ] `crates/graphcal-eval/src/graph_ir/mod.rs`
 - [ ] `crates/graphcal-eval/src/graph_ir/dot.rs`
 
-## Stage 14 - Formatter (`graphcal-fmt`)
+## Stage 14 - WASM plugin host (`graphcal-plugin-host`)
+
+Note: `lib.rs` re-exports the three modules; `convert.rs` is the untrusted-boundary leaf, `module.rs` builds on it, and `host.rs` wraps both with the engine and cache.
+
+- [ ] `crates/graphcal-plugin-host/src/convert.rs`
+- [ ] `crates/graphcal-plugin-host/src/module.rs`
+- [ ] `crates/graphcal-plugin-host/src/host.rs`
+- [ ] `crates/graphcal-plugin-host/src/lib.rs`
+
+## Stage 15 - Formatter (`graphcal-fmt`)
 
 Note: `format/type_expr.rs`, `format/expr.rs`, `format/decl.rs`, and `format/mod.rs` form a mutually dependent group.
 
@@ -204,7 +213,7 @@ Note: `format/type_expr.rs`, `format/expr.rs`, `format/decl.rs`, and `format/mod
 - [ ] `crates/graphcal-fmt/src/format/mod.rs`
 - [ ] `crates/graphcal-fmt/src/lib.rs`
 
-## Stage 15 - LSP prelude and CLI shell
+## Stage 16 - LSP prelude and CLI shell
 
 Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent group. `main.rs` consumes the `graphcal` library target's `format` module as well as binary-local modules, so the CLI package is ordered as one shell group here.
 
@@ -222,7 +231,7 @@ Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent g
 - [ ] `crates/graphcal-cli/src/main.rs`
 - [ ] `crates/graphcal-cli/src/lib.rs`
 
-## Stage 16 - Language server (`graphcal-lsp`)
+## Stage 17 - Language server (`graphcal-lsp`)
 
 Note: the feature modules from `resolve.rs` onward and `server.rs` are mutually dependent (each feature references `server::Backend`); the features come first because `server.rs` orchestrates them all.
 
@@ -240,7 +249,7 @@ Note: the feature modules from `resolve.rs` onward and `server.rs` are mutually 
 - [ ] `crates/graphcal-lsp/src/hover.rs`
 - [ ] `crates/graphcal-lsp/src/server.rs`
 
-## Stage 17 - Integration tests
+## Stage 18 - Integration tests
 
 - [ ] `crates/graphcal-eval/tests/declaration_order.rs`
 - [ ] `crates/graphcal-eval/tests/edge_case_bugs.rs`
