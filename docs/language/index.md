@@ -73,6 +73,15 @@ The language has a layered type system:
 
     [:octicons-arrow-right-24: DAG Blocks](functions.md)
 
+- :material-power-plug:{ .lg .middle } **Extern Functions (Plugins)**
+
+    ---
+
+    `import plugin` blocks: externally-provided functions with declared
+    dimensional signatures.
+
+    [:octicons-arrow-right-24: Extern functions](extern-functions.md)
+
 - :material-code-parentheses:{ .lg .middle } **Expressions**
 
     ---

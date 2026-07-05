@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 754
+expression: rendered
+---
+plugin alias `demo` does not declare a function `missing`
+    Diagnostic severity: error
+Begin snippet for extern_unknown_fn.gcl starting at line 4, column 1
+
+snippet line 4: }
+snippet line 5: node x: Dimensionless = demo.missing(1.0);
+    label at line 5, columns 25 to 36: unknown extern function
+diagnostic help: extern functions must be declared in the plugin's `import plugin ... { ... }` block
+diagnostic code: graphcal::P002

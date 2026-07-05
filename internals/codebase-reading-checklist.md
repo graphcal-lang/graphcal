@@ -31,6 +31,7 @@ Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 - [ ] `crates/graphcal-compiler/src/syntax/comments.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/lexer.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/function_name.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/plugin.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/index_name.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/local_name.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/module_name.rs`
@@ -74,6 +75,7 @@ Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent. `registry/types.rs` now owns only the aggregate registry and builder while re-exporting the domain registries for compatibility.
 
 - [ ] `crates/graphcal-compiler/src/registry/format.rs`
+- [ ] `crates/graphcal-compiler/src/function_signature.rs`
 - [ ] `crates/graphcal-compiler/src/registry/dag.rs`
 - [ ] `crates/graphcal-compiler/src/registry/dimension_registry.rs`
 - [ ] `crates/graphcal-compiler/src/registry/index.rs`
@@ -149,6 +151,7 @@ Note: all four files are mutually dependent; `lib.rs` comes last because it re-e
 
 Note: `eval_expr/arithmetic.rs`, `eval_expr/unit_scale.rs`, `eval_expr/hir_eval.rs`, and `eval_expr/mod.rs` form a mutually dependent group.
 
+- [ ] `crates/graphcal-eval/src/host_fns.rs`
 - [ ] `crates/graphcal-eval/src/decl_key.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/numeric.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/builtin_call.rs`

@@ -53,6 +53,14 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
+        hir::ExprLowerError::UnknownExternFunction { alias, name, span } => {
+            return GraphcalError::UnknownExternFunction {
+                alias: alias.clone(),
+                name: name.clone(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
         hir::ExprLowerError::WrongArity {
             name,
             expected,
@@ -145,6 +153,7 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::ExtraMapVariant { span, .. }
         | hir::ExprLowerError::UnknownPattern { span, .. }
         | hir::ExprLowerError::UnknownFunction { span, .. }
+        | hir::ExprLowerError::UnknownExternFunction { span, .. }
         | hir::ExprLowerError::WrongArity { span, .. } => *span,
         hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. } => *duplicate,
     };

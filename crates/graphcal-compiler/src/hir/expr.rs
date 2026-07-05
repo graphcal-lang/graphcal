@@ -31,7 +31,7 @@ use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::local_name::LocalName;
-use crate::syntax::module_name::ScopedName;
+use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::module_resolve::{DeclSymbolKind, ModuleResolveError, ModuleResolver};
 use crate::syntax::names::{NameAtom, NameAtomError, NameNamespace, NamePath};
 use crate::syntax::non_empty::NonEmpty;
@@ -95,6 +95,13 @@ pub enum ExprLowerError {
     /// A function call could not be resolved to a built-in function.
     #[error("unknown function `{path}`")]
     UnknownFunction { path: String, span: Span },
+    /// A plugin alias is in scope, but does not declare the called function.
+    #[error("plugin alias `{alias}` does not declare a function `{name}`")]
+    UnknownExternFunction {
+        alias: ModuleAliasName,
+        name: crate::syntax::function_name::FnName,
+        span: Span,
+    },
     /// A built-in function was called with the wrong number of arguments.
     #[error("function `{name}` expects {expected} argument(s), got {got}")]
     WrongArity {
@@ -741,9 +748,115 @@ pub enum ConstRef {
 }
 
 /// Function call target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionRef {
     Builtin(BuiltinFnName),
+    /// An externally-provided function declared by an `import plugin` block.
+    External(ExternFnRef),
+}
+
+/// A resolved reference to an extern (plugin) function.
+///
+/// Carries the canonical plugin identity plus the source alias the call was
+/// qualified with. The alias is for diagnostics and IDE features; semantic
+/// lookups key on [`ExternFnRef::key`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternFnRef {
+    /// Canonical plugin identity (the `import plugin "…"` path string).
+    pub plugin: crate::syntax::plugin::PluginPath,
+    /// The module alias the call site was qualified with.
+    pub alias: ModuleAliasName,
+    /// The function leaf name.
+    pub name: crate::syntax::function_name::FnName,
+}
+
+impl ExternFnRef {
+    /// The canonical `(plugin, function)` lookup key.
+    #[must_use]
+    pub fn key(&self) -> crate::syntax::plugin::ExternFnKey {
+        crate::syntax::plugin::ExternFnKey {
+            plugin: self.plugin.clone(),
+            name: self.name.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for ExternFnRef {
+    /// Renders `alias.name` for diagnostics and display boundaries only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.alias, self.name)
+    }
+}
+
+/// Find the first extern (plugin) function call in an expression tree.
+///
+/// Extern functions are runtime-provided; contexts that evaluate without a
+/// host function registry (const expressions, domain bounds, dynamic unit
+/// scales) use this to reject them with a spanned diagnostic.
+#[must_use]
+pub fn find_extern_call(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
+    // Recursion choke point: recurses once per tree level.
+    crate::stack::with_stack_growth(|| find_extern_call_inner(expr))
+}
+
+fn find_extern_call_inner(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
+    match &expr.kind {
+        ExprKind::Error
+        | ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::TypeSystemRef(_)
+        | ExprKind::GraphRef(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::LocalRef(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::VariantLiteral(_) => None,
+        ExprKind::FnCall { callee, args, .. } => {
+            if let FunctionRef::External(ext) = &callee.value {
+                return Some((ext, callee.span));
+            }
+            args.iter().find_map(find_extern_call)
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => find_extern_call(lhs).or_else(|| find_extern_call(rhs)),
+        ExprKind::UnaryOp { operand, .. }
+        | ExprKind::Convert { expr: operand, .. }
+        | ExprKind::DisplayTimezone { expr: operand, .. }
+        | ExprKind::FieldAccess { expr: operand, .. } => find_extern_call(operand),
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => find_extern_call(condition)
+            .or_else(|| find_extern_call(then_branch))
+            .or_else(|| find_extern_call(else_branch)),
+        ExprKind::ConstructorCall { fields, .. } => fields
+            .iter()
+            .find_map(|field| find_extern_call(&field.value)),
+        ExprKind::MapLiteral { entries } => entries
+            .iter()
+            .find_map(|entry| find_extern_call(&entry.value)),
+        ExprKind::ForComp { body, .. } => find_extern_call(body),
+        ExprKind::IndexAccess { expr: inner, args } => find_extern_call(inner).or_else(|| {
+            args.iter().find_map(|arg| match arg {
+                IndexArg::Expr(e) => find_extern_call(e),
+                IndexArg::Variant(_) | IndexArg::Var(_) => None,
+            })
+        }),
+        ExprKind::Scan {
+            source, init, body, ..
+        } => find_extern_call(source)
+            .or_else(|| find_extern_call(init))
+            .or_else(|| find_extern_call(body)),
+        ExprKind::Unfold { init, body, .. } => {
+            find_extern_call(init).or_else(|| find_extern_call(body))
+        }
+        ExprKind::Match { scrutinee, arms } => find_extern_call(scrutinee)
+            .or_else(|| arms.iter().find_map(|arm| find_extern_call(&arm.body))),
+        ExprKind::InlineDagRef { args, .. } => args
+            .iter()
+            .find_map(|binding| find_extern_call(&binding.value)),
+    }
 }
 
 /// A lowered assertion body.
@@ -946,8 +1059,8 @@ impl<'a> ExprLowerer<'a> {
                 args,
             } => ExprKind::FnCall {
                 callee: {
-                    let function_ref = Self::lower_function_ref(callee)?;
-                    Self::check_function_arity(function_ref, args.len(), callee.span())?;
+                    let function_ref = self.lower_function_ref(callee)?;
+                    Self::check_function_arity(&function_ref, args.len(), callee.span())?;
                     Spanned::new(function_ref, callee.span())
                 },
                 type_args: type_args
@@ -1487,11 +1600,16 @@ impl<'a> ExprLowerer<'a> {
     /// arity table. Aggregations are variadic over collections and skip the
     /// check; their argument shapes are validated during type checking.
     fn check_function_arity(
-        function_ref: FunctionRef,
+        function_ref: &FunctionRef,
         got: usize,
         span: Span,
     ) -> Result<(), ExprLowerError> {
-        let FunctionRef::Builtin(builtin) = function_ref;
+        let FunctionRef::Builtin(builtin) = function_ref else {
+            // Extern call shapes (arity, kinds) are validated against the
+            // resolved FunctionSignature during dimension checking.
+            return Ok(());
+        };
+        let builtin = *builtin;
         if builtin_has_type_checker_arity(builtin) {
             return Ok(());
         }
@@ -1511,20 +1629,43 @@ impl<'a> ExprLowerer<'a> {
     }
 
     fn lower_function_ref(
+        &self,
         callee: &crate::syntax::ast::IdentPath,
     ) -> Result<FunctionRef, ExprLowerError> {
-        let Some(ident) = callee.as_bare() else {
-            return Err(ExprLowerError::UnknownFunction {
-                path: callee.display_path(),
-                span: callee.span(),
-            });
-        };
-        BuiltinFnName::parse(ident.name.as_str())
-            .map(FunctionRef::Builtin)
-            .ok_or_else(|| ExprLowerError::UnknownFunction {
-                path: callee.display_path(),
-                span: callee.span(),
-            })
+        if let Some(ident) = callee.as_bare() {
+            return BuiltinFnName::parse(ident.name.as_str())
+                .map(FunctionRef::Builtin)
+                .ok_or_else(|| ExprLowerError::UnknownFunction {
+                    path: callee.display_path(),
+                    span: callee.span(),
+                });
+        }
+        // `alias.name(...)`: an extern call when `alias` is a plugin alias in
+        // scope. Extern functions are only callable in this qualified form.
+        if let [qualifier, leaf] = callee.segments()
+            && let Some(target) = self
+                .ctx
+                .resolver
+                .plugin_alias(self.ctx.owner, qualifier.name.as_str())
+        {
+            let name = crate::syntax::function_name::FnName::from_atom(leaf.name.clone());
+            if !target.functions().contains_key(&name) {
+                return Err(ExprLowerError::UnknownExternFunction {
+                    alias: ModuleAliasName::from_atom(qualifier.name.clone()),
+                    name,
+                    span: callee.span(),
+                });
+            }
+            return Ok(FunctionRef::External(ExternFnRef {
+                plugin: target.path().clone(),
+                alias: ModuleAliasName::from_atom(qualifier.name.clone()),
+                name,
+            }));
+        }
+        Err(ExprLowerError::UnknownFunction {
+            path: callee.display_path(),
+            span: callee.span(),
+        })
     }
 
     fn lower_map_entry(

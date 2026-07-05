@@ -47,7 +47,9 @@ const fn decl_accepts_bindable_visibility(decl: &Declaration) -> bool {
 
 const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibility) {
     match &mut decl.kind {
-        DeclKind::Param(_) | DeclKind::Sugar(_) => {}
+        // Params and sugar carry no visibility field; plugin imports carry
+        // no visibility at all (extern functions cannot be re-exported).
+        DeclKind::Param(_) | DeclKind::Sugar(_) | DeclKind::PluginImport(_) => {}
         DeclKind::Node(d) | DeclKind::ConstNode(d) => {
             d.visibility = visibility_without_bindability(visibility);
         }
@@ -328,6 +330,20 @@ impl Parser<'_> {
             }
             None => Err(self.unexpected_eof(expected)),
         }?;
+
+        // Plugin imports cannot carry visibility: extern functions are only
+        // callable qualified through their own alias, so there is nothing to
+        // re-export.
+        if visibility != BindableVisibility::Private
+            && matches!(decl.kind, DeclKind::PluginImport(_))
+            && let Some(vis_span) = visibility_span
+        {
+            return Err(self.unexpected_token(
+                "no visibility annotation (plugin imports cannot be re-exported)",
+                "`pub`",
+                vis_span,
+            ));
+        }
 
         // Set visibility
         if visibility == BindableVisibility::PublicBind

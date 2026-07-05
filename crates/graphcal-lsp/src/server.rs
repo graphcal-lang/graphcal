@@ -26,7 +26,8 @@ use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
-use graphcal_compiler::registry::builtins::{DimSignature, ParamDim, ResultDim, builtin_functions};
+use graphcal_compiler::function_signature::{DimMonomial, FunctionSignature, ValueKind};
+use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval_from_project, compile_to_tir_from_project,
@@ -84,6 +85,10 @@ pub(crate) struct AnalysisResult {
     /// Structured function signatures, keyed by function name.
     /// Points to a lazily-initialized static map (builtins never change).
     pub(crate) fn_signatures: &'static HashMap<String, FnSignatureInfo>,
+    /// Extern (plugin) function signatures from this file's `import plugin`
+    /// blocks, keyed by the qualified `alias.name` call spelling. Per-file,
+    /// unlike the static builtin map.
+    pub(crate) extern_fn_signatures: HashMap<String, FnSignatureInfo>,
     /// Loader-resolved import links (for Document Links).
     pub(crate) import_links: Vec<ResolvedImportLink>,
     /// `false` when this result is a parse-failure fallback: the buffer did
@@ -148,6 +153,10 @@ impl std::fmt::Debug for AnalysisResult {
             )
             .field("eval_values_count", &self.eval_values.len())
             .field("fn_signatures_count", &self.fn_signatures.len())
+            .field(
+                "extern_fn_signatures_count",
+                &self.extern_fn_signatures.len(),
+            )
             .field("import_links_count", &self.import_links.len())
             .field("buffer_parsed", &self.buffer_parsed)
             .finish()
@@ -523,6 +532,7 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
                 diagnostics: Arc::new(diagnostics),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
+                extern_fn_signatures: HashMap::new(),
                 import_links: Vec::new(),
                 buffer_parsed,
             };
@@ -548,6 +558,7 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
             let imported_definitions =
                 collect_imported_definitions(uri, &project, Some(&tir), &module_resolver);
             let fn_signatures = build_fn_signatures();
+            let extern_fn_signatures = build_extern_fn_signatures(&tir);
             // Library files (required param/index not yet bound) cannot be evaluated
             // standalone. Skip the eval pipeline so editors don't surface false-positive
             // `RequiredIndexNotBound` / `RequiredParamNotProvided` diagnostics when the
@@ -566,6 +577,7 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
                 diagnostics: Arc::new(diagnostics),
                 eval_values,
                 fn_signatures,
+                extern_fn_signatures,
                 import_links,
                 buffer_parsed: true,
             }
@@ -586,6 +598,7 @@ fn run_analysis(uri: &Url, text: &str, open_buffers: &[OpenBuffer]) -> AnalysisR
                 diagnostics: Arc::new(diagnostics),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
+                extern_fn_signatures: HashMap::new(),
                 import_links,
                 buffer_parsed: true,
             }
@@ -643,6 +656,71 @@ fn collect_import_links(project: &LoadedProject) -> Vec<ResolvedImportLink> {
         .collect()
 }
 
+/// Build extern (plugin) function signatures for Signature Help, keyed by
+/// the qualified `alias.name` call spelling.
+///
+/// Unlike builtins, extern signatures are per-file (they depend on the
+/// file's `import plugin` blocks and its registry's dimension names).
+fn build_extern_fn_signatures(
+    tir: &graphcal_compiler::tir::typed::TIR,
+) -> HashMap<String, FnSignatureInfo> {
+    use graphcal_compiler::function_signature::ValueKind as ExternValueKind;
+
+    let mut sigs = HashMap::new();
+    for function in tir.extern_functions.values() {
+        let format_kind = |kind: &ExternValueKind| match kind {
+            ExternValueKind::Bool => "Bool".to_string(),
+            ExternValueKind::Int => "Int".to_string(),
+            ExternValueKind::Scalar(monomial) => {
+                let mut parts: Vec<String> = monomial
+                    .vars
+                    .iter()
+                    .map(|factor| {
+                        if factor.power == Rational::ONE {
+                            factor.var.to_string()
+                        } else {
+                            format!("{}^({})", factor.var, factor.power)
+                        }
+                    })
+                    .collect();
+                if !monomial.fixed.is_dimensionless() {
+                    parts.push(tir.registry.dimensions.format_dimension(&monomial.fixed));
+                }
+                if parts.is_empty() {
+                    "Dimensionless".to_string()
+                } else {
+                    parts.join(" * ")
+                }
+            }
+        };
+        let parameters: Vec<String> = function
+            .signature
+            .params()
+            .iter()
+            .map(|param| format!("{}: {}", param.name, format_kind(&param.kind)))
+            .collect();
+        let binders = if function.signature.dim_vars().is_empty() {
+            String::new()
+        } else {
+            let vars: Vec<&str> = function
+                .signature
+                .dim_vars()
+                .iter()
+                .map(graphcal_compiler::syntax::dimension::DimVarName::as_str)
+                .collect();
+            format!("<{}>", vars.join(", "))
+        };
+        let qualified = format!("{}.{}", function.alias, function.name);
+        let label = format!(
+            "fn {qualified}{binders}({}) -> {}",
+            parameters.join(", "),
+            format_kind(function.signature.result())
+        );
+        sigs.insert(qualified, FnSignatureInfo { label, parameters });
+    }
+    sigs
+}
+
 /// Get builtin function signatures for Signature Help.
 ///
 /// Computed once and cached in a static. Builtins never change at runtime.
@@ -650,7 +728,7 @@ pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo>
     static FN_SIGS: LazyLock<HashMap<String, FnSignatureInfo>> = LazyLock::new(|| {
         let mut sigs = HashMap::new();
         for (name, f) in builtin_functions() {
-            let (params, ret) = builtin_signature_parts(&f.dim_sig).unwrap_or_else(|err| {
+            let (params, ret) = builtin_signature_parts(&f.signature).unwrap_or_else(|err| {
                 (
                     vec![format!("<invalid builtin signature: {err}>")],
                     "<invalid>".to_string(),
@@ -705,27 +783,46 @@ fn builtin_base_dim_name(id: &BaseDimId) -> std::result::Result<&str, String> {
 
 /// Generate human-readable parameter and return type strings for a builtin function.
 fn builtin_signature_parts(
-    sig: &DimSignature,
+    sig: &FunctionSignature,
 ) -> std::result::Result<(Vec<String>, String), String> {
     let params: Vec<String> = sig
-        .params
+        .params()
         .iter()
-        .map(|p| {
-            let type_str = match &p.dim {
-                ParamDim::Fixed(dim) => format_dim_display(dim)?,
-                ParamDim::Bind(var) | ParamDim::Ref(var) => var.to_string(),
-            };
-            Ok(format!("{}: {type_str}", p.name))
-        })
+        .map(|p| Ok(format!("{}: {}", p.name, value_kind_display(&p.kind)?)))
         .collect::<std::result::Result<_, String>>()?;
 
-    let ret = match &sig.result {
-        ResultDim::Fixed(dim) => format_dim_display(dim)?,
-        ResultDim::Var(name) => name.to_string(),
-        ResultDim::VarPow(name, power) => format!("{name}^({power})"),
-    };
+    let ret = value_kind_display(sig.result())?;
 
     Ok((params, ret))
+}
+
+fn value_kind_display(kind: &ValueKind) -> std::result::Result<String, String> {
+    match kind {
+        ValueKind::Bool => Ok("Bool".to_string()),
+        ValueKind::Int => Ok("Int".to_string()),
+        ValueKind::Scalar(monomial) => monomial_display(monomial),
+    }
+}
+
+fn monomial_display(monomial: &DimMonomial) -> std::result::Result<String, String> {
+    let mut parts: Vec<String> = monomial
+        .vars
+        .iter()
+        .map(|factor| {
+            if factor.power == Rational::ONE {
+                factor.var.to_string()
+            } else {
+                format!("{}^({})", factor.var, factor.power)
+            }
+        })
+        .collect();
+    if !monomial.fixed.is_dimensionless() {
+        parts.push(format_dim_display(&monomial.fixed)?);
+    }
+    if parts.is_empty() {
+        return Ok("Dimensionless".to_string());
+    }
+    Ok(parts.join(" * "))
 }
 
 /// Format all successfully evaluated values into display strings.
@@ -2223,6 +2320,7 @@ node bad: Mass = mass + length;
             diagnostics: Arc::new(diags),
             eval_values: HashMap::new(),
             fn_signatures: build_fn_signatures(),
+            extern_fn_signatures: HashMap::new(),
             import_links: Vec::new(),
             buffer_parsed: true,
         }

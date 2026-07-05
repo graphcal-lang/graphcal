@@ -179,6 +179,14 @@ pub(in crate::eval::project) struct EvaluatedFile {
     /// same-file inline calls. The internal `::` separator avoids collisions
     /// with user-visible `.`-separated names.
     pub(in crate::eval::project) dag_tirs: graphcal_compiler::tir::typed::DagRegistry,
+    /// Resolved extern function signatures declared by this file's
+    /// `import plugin` blocks. Merged into importers' TIRs alongside
+    /// `dag_tirs` so cross-file qualified inline calls into dag bodies that
+    /// use extern functions can resolve their signatures at eval time.
+    pub(in crate::eval::project) extern_functions: HashMap<
+        graphcal_compiler::syntax::plugin::ExternFnKey,
+        graphcal_compiler::ir::lower::ExternFunctionEntry,
+    >,
 }
 
 impl EvaluatedFile {
@@ -549,7 +557,32 @@ pub fn compile_and_eval_from_project(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
-    pipeline::evaluate_project_perfile(project, overrides)
+    // Phase A default: no real plugins exist yet, so the built-in demo
+    // registry is the standard embedder injection (see `crate::host_fns`).
+    compile_and_eval_from_project_with_host_fns(
+        project,
+        overrides,
+        &crate::host_fns::demo_registry(),
+    )
+}
+
+/// Like [`compile_and_eval_from_project`], with an embedder-supplied host
+/// function registry backing extern (plugin) calls.
+///
+/// Every extern function declared by an `import plugin` block must have a
+/// registry entry; a missing entry is a load-time
+/// [`MissingHostFunction`](graphcal_compiler::registry::error::GraphcalError::MissingHostFunction)
+/// diagnostic.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if any pipeline stage fails.
+pub fn compile_and_eval_from_project_with_host_fns(
+    project: &crate::loader::LoadedProject,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+) -> Result<EvalResult, CompileError> {
+    pipeline::evaluate_project_perfile(project, overrides, host_fns)
 }
 
 /// Full pipeline for multi-file projects with parameter overrides.

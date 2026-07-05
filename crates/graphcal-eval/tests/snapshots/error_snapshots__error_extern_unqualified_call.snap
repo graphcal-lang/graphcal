@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 747
+expression: rendered
+---
+unknown function `lerp`
+    Diagnostic severity: error
+Begin snippet for extern_unqualified_call.gcl starting at line 4, column 1
+
+snippet line 4: }
+snippet line 5: node x: Dimensionless = lerp(1.0, 2.0, 0.5);
+    label at line 5, columns 25 to 28: unknown function
+diagnostic help: check function name and ensure it is defined
+diagnostic code: graphcal::N004

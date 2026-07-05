@@ -201,7 +201,7 @@ fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
     let mut items = keyword_items(&["true", "false"]);
     items.extend(build_definition_items(analysis, |cat| match cat {
         SymbolCategory::Const | SymbolCategory::BuiltinConst => Some(CompletionItemKind::CONSTANT),
-        SymbolCategory::BuiltinFn => Some(CompletionItemKind::FUNCTION),
+        SymbolCategory::BuiltinFn | SymbolCategory::ExternFn => Some(CompletionItemKind::FUNCTION),
         SymbolCategory::Constructor => Some(CompletionItemKind::CONSTRUCTOR),
         _ => None,
     }));

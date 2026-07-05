@@ -42,6 +42,7 @@ fn run_mutated_tir_values(
         &src,
         builtin_consts,
         builtin_fns,
+        &crate::host_fns::demo_registry(),
     )
     .values
 }
@@ -159,7 +160,13 @@ fn eval_assertions_use_hir_body_after_syntax_mutation() {
     let src = miette::NamedSource::new("test.gcl", std::sync::Arc::new(source.to_string()));
     let plan = crate::exec_plan::compile(&tir, &src).unwrap();
     let declared_types = tir.build_declared_types(&src).unwrap();
-    let result = super::runtime::evaluate_plan(&tir, &plan, &declared_types, &src);
+    let result = super::runtime::evaluate_plan(
+        &tir,
+        &plan,
+        &declared_types,
+        &src,
+        &crate::host_fns::demo_registry(),
+    );
 
     assert!(matches!(
         result.assertions.as_slice(),
@@ -1850,6 +1857,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         current_dag: Some(tir.root()),
         root_values: Some(&values),
         struct_field_constraints: None,
+        host_fns: None,
     };
 
     let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
@@ -1915,6 +1923,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         current_dag: Some(tir.root()),
         root_values: Some(&values),
         struct_field_constraints: None,
+        host_fns: None,
     };
 
     let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
@@ -2483,6 +2492,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         current_dag: Some(tir.root()),
         root_values: Some(&values),
         struct_field_constraints: None,
+        host_fns: None,
     };
 
     let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
@@ -2549,6 +2559,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         current_dag: Some(tir.root()),
         root_values: Some(&values),
         struct_field_constraints: None,
+        host_fns: None,
     };
 
     let err =
@@ -4049,4 +4060,25 @@ node out: Length = @with_const(v: @src).result;
     let result = compile_and_eval(source).unwrap();
     let out = find_value(&result, "out");
     assert!((out - 12.0).abs() < 1e-10, "expected 12.0, got {out}");
+}
+
+#[test]
+fn eval_extern_plugin_fixture() {
+    // Extern functions (#943 Phase A): dim-variable polymorphism, rational
+    // result powers, and cross-variable monomial results all evaluate through
+    // the demo host registry.
+    let source = include_str!("../../../../tests/fixtures/valid/plugin_extern.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    assert!((find_value(&result, "v_mid") - 150.0).abs() < 1e-9);
+    assert!((find_value(&result, "pace") - (1.0 / 150.0)).abs() < 1e-12);
+    assert!((find_value(&result, "scale") - 6.0).abs() < 1e-12);
+    assert!(
+        result
+            .assertions
+            .iter()
+            .all(|(_, r, _)| matches!(r, super::types::AssertResult::Pass)),
+        "all fixture assertions must pass: {:?}",
+        result.assertions
+    );
 }

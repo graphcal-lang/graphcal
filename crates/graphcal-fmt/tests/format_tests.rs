@@ -1260,3 +1260,8 @@ node b: Dimensionless = if 1.0 > 0.0 {
         "comment count in == out:\n{formatted}"
     );
 }
+
+// Extern plugin imports (#943): the block form formats idempotently and
+// round-trips through the parser.
+idempotency_test!(idempotent_extern_plugin, "invalid/extern_arity.gcl");
+roundtrip_test!(roundtrip_extern_plugin, "invalid/extern_arity.gcl");

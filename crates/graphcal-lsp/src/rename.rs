@@ -237,6 +237,7 @@ mod tests {
             diagnostics: Arc::new(HashMap::new()),
             eval_values: HashMap::new(),
             fn_signatures: build_fn_signatures(),
+            extern_fn_signatures: HashMap::new(),
             import_links: Vec::new(),
             buffer_parsed: true,
         }

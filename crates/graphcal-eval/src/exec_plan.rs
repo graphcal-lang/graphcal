@@ -278,6 +278,7 @@ pub fn eval_consts_from_tir(
             current_dag: Some(tir.root()),
             root_values: Some(&visible_values),
             struct_field_constraints: None,
+            host_fns: None,
         };
         let hir_expr = dag
             .semantic
@@ -507,6 +508,9 @@ pub fn resolve_domain_constraints(
         current_dag: Some(tir.root()),
         root_values: Some(&visible_const_values),
         struct_field_constraints: None,
+        // Compile-time contexts carry no host registry; dimension checking
+        // rejects extern calls in const and unit-scale positions.
+        host_fns: None,
     };
 
     let mut constraints = HashMap::new();
@@ -667,6 +671,9 @@ pub fn resolve_struct_field_constraints(
         current_dag: Some(tir.root()),
         root_values: Some(&visible_const_values),
         struct_field_constraints: None,
+        // Compile-time contexts carry no host registry; dimension checking
+        // rejects extern calls in const and unit-scale positions.
+        host_fns: None,
     };
 
     let mut constraints = HashMap::new();

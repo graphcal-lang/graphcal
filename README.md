@@ -47,6 +47,7 @@ delta_v    = 3778.220768 m/s
 - **Algebraic types and generics.** Structs, tagged unions with `match`, and generic types with phantom parameters for things like reference frames (`Vec3<Length, Eci>` vs `Vec3<Length, Body>`).
 - **Indexed values.** First-class index sets, `for` comprehensions, aggregations (`sum`, `mean`, ...), and `unfold` for time-series and recurrences.
 - **Reusable computation.** `dag` blocks parameterize sub-graphs and instantiate them as expressions or via `include`; inline DAG bodies use explicit `import`/`include` edges just like file DAGs. Multi-file projects compose with module-qualified type/index/constructor paths and a two-axis (`pub` / `pub(bind)`) visibility system.
+- **Extern functions (plugins, phase 1).** `import plugin` blocks declare externally-provided scalar functions with full dimensional signatures -- including dimension-variable polymorphism with rational powers (`fn geometric_mean<D1, D2>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2)`). Backed today by an embedder-injected host function registry; the WebAssembly runtime arrives in a later phase.
 - **Built-in plotting.** `plot` and `figure` declarations render to interactive [Vega-Lite](https://vega.github.io/vega-lite/) charts.
 - **Live editor experience.** The LSP server provides diagnostics, symbols, hover, owner-aware go-to-definition for imports, and inlay hints that show computed values inline -- your editor becomes a live calculation sheet.
 

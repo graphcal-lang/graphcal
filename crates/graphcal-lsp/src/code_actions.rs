@@ -227,6 +227,7 @@ mod tests {
             diagnostics: Arc::new(StdHashMap::new()),
             eval_values: StdHashMap::new(),
             fn_signatures: build_fn_signatures(),
+            extern_fn_signatures: StdHashMap::new(),
             import_links: Vec::new(),
             buffer_parsed: true,
         }

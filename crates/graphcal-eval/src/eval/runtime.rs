@@ -204,6 +204,7 @@ pub(super) fn run_eval_loop(
     src: &NamedSource<Arc<String>>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, BuiltinFunction>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> EvalLoopResult {
     let empty_hir_locals = HirLocalValueMap::root();
 
@@ -266,6 +267,7 @@ pub(super) fn run_eval_loop(
             current_dag: Some(tir.root()),
             root_values: Some(&values),
             struct_field_constraints: Some(&plan.struct_field_constraints),
+            host_fns: Some(host_fns),
         };
 
         let result = tir
@@ -358,6 +360,8 @@ pub(super) fn export_dynamic_unit_scales(
         current_dag: Some(tir.root()),
         root_values: Some(values),
         struct_field_constraints: Some(&plan.struct_field_constraints),
+        // Dimension checking rejects extern calls in unit scale expressions.
+        host_fns: None,
     };
     crate::eval_expr::resolve_exportable_dynamic_unit_scales(values, &ctx)
 }
@@ -371,8 +375,9 @@ pub(super) fn evaluate_plan(
     plan: &crate::exec_plan::ExecPlan,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> EvalResult {
-    evaluate_plan_with_values(tir, plan, declared_types, src).0
+    evaluate_plan_with_values(tir, plan, declared_types, src, host_fns).0
 }
 
 /// Like [`evaluate_plan`], but also returns the raw runtime-value map so
@@ -387,13 +392,21 @@ pub(super) fn evaluate_plan_with_values(
     plan: &crate::exec_plan::ExecPlan,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> (EvalResult, RuntimeValueMap) {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_hir_locals = HirLocalValueMap::root();
 
-    let EvalLoopResult { values, errors } =
-        run_eval_loop(plan, tir, declared_types, src, builtin_consts, builtin_fns);
+    let EvalLoopResult { values, errors } = run_eval_loop(
+        plan,
+        tir,
+        declared_types,
+        src,
+        builtin_consts,
+        builtin_fns,
+        host_fns,
+    );
 
     let ctx = EvalContext {
         builtin_consts,
@@ -405,6 +418,7 @@ pub(super) fn evaluate_plan_with_values(
         current_dag: Some(tir.root()),
         root_values: Some(&values),
         struct_field_constraints: Some(&plan.struct_field_constraints),
+        host_fns: Some(host_fns),
     };
 
     // Build a map from name -> HIR expression for display unit extraction.

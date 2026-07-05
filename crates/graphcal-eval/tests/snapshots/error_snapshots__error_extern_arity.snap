@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 733
+expression: rendered
+---
+function `lerp` expects 3 argument(s), got 2
+    Diagnostic severity: error
+Begin snippet for extern_arity.gcl starting at line 4, column 1
+
+snippet line 4: }
+snippet line 5: node x: Dimensionless = demo.lerp(1.0, 2.0);
+    label at line 5, columns 25 to 33: wrong number of arguments
+diagnostic code: graphcal::N006

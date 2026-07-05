@@ -31,7 +31,7 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
         let kind = match def.category {
             SymbolCategory::Param | SymbolCategory::Node => SymbolKind::VARIABLE,
             SymbolCategory::Const | SymbolCategory::Unit => SymbolKind::CONSTANT,
-            SymbolCategory::Dag => SymbolKind::FUNCTION,
+            SymbolCategory::Dag | SymbolCategory::ExternFn => SymbolKind::FUNCTION,
             SymbolCategory::StructType => SymbolKind::STRUCT,
             SymbolCategory::Constructor => SymbolKind::CONSTRUCTOR,
             SymbolCategory::Dimension => SymbolKind::TYPE_PARAMETER,

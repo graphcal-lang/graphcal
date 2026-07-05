@@ -1,0 +1,5 @@
+// error: `Wobble` is neither a declared dim variable nor a dimension in scope
+import plugin "graphcal:demo" as demo {
+    fn f(p: Wobble) -> Dimensionless;
+}
+node y: Dimensionless = 1.0;

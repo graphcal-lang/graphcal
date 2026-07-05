@@ -1,0 +1,5 @@
+// error: the plugin block does not declare `missing`
+import plugin "graphcal:demo" as demo {
+    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+}
+node x: Dimensionless = demo.missing(1.0);

@@ -28,6 +28,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
         DeclKind::Type(d) => format_type_decl(fmt, d),
         DeclKind::Index(d) => format_index_decl(fmt, d),
         DeclKind::Import(d) => format_import_decl(fmt, d),
+        DeclKind::PluginImport(d) => format_plugin_import_decl(fmt, d),
         DeclKind::Include(d) => format_include_decl(fmt, d),
         DeclKind::Dag(d) => format_dag_decl(fmt, d),
         DeclKind::Assert(d) => format_assert_decl(fmt, d),
@@ -57,7 +58,8 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
 
 fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
     match kind {
-        DeclKind::Param(_) | DeclKind::Sugar(_) => RcDoc::nil(),
+        // Plugin imports carry no visibility annotation.
+        DeclKind::Param(_) | DeclKind::Sugar(_) | DeclKind::PluginImport(_) => RcDoc::nil(),
         DeclKind::Dimension(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Type(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Index(d) => bindable_visibility_prefix(d.visibility),
@@ -264,6 +266,66 @@ fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
         .append(RcDoc::hardline().append(body).nest(INDENT))
         .append(RcDoc::hardline())
         .append(RcDoc::text("}"))
+}
+
+/// `import plugin "path" as alias { fn name<D>(p: T, ...) -> T; ... }`
+fn format_plugin_import_decl(
+    fmt: &mut Formatter<'_>,
+    d: &graphcal_compiler::syntax::ast::PluginImportDecl,
+) -> RcDoc<'static> {
+    let header = RcDoc::text("import plugin \"")
+        .append(RcDoc::text(d.path.value.as_str().to_string()))
+        .append(RcDoc::text("\" as "))
+        .append(RcDoc::text(d.alias.value.as_str().to_string()));
+
+    if d.functions.is_empty() {
+        return header.append(RcDoc::text(" {}"));
+    }
+
+    let fn_docs: Vec<RcDoc<'static>> = d
+        .functions
+        .iter()
+        .map(|f| format_extern_fn_decl(fmt, f))
+        .collect();
+    let body = RcDoc::intersperse(fn_docs, RcDoc::hardline());
+    header
+        .append(RcDoc::text(" {"))
+        .append(RcDoc::hardline().append(body).nest(INDENT))
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("}"))
+}
+
+/// `fn smooth<D>(x: D, window: Dimensionless) -> D;`
+fn format_extern_fn_decl(
+    fmt: &mut Formatter<'_>,
+    f: &graphcal_compiler::syntax::ast::ExternFnDecl,
+) -> RcDoc<'static> {
+    let mut doc = RcDoc::text("fn ").append(RcDoc::text(f.name.value.as_str().to_string()));
+    if !f.dim_vars.is_empty() {
+        let var_docs: Vec<RcDoc<'static>> = f
+            .dim_vars
+            .iter()
+            .map(|v| RcDoc::text(v.value.as_str().to_string()))
+            .collect();
+        doc = doc
+            .append(RcDoc::text("<"))
+            .append(RcDoc::intersperse(var_docs, RcDoc::text(", ")))
+            .append(RcDoc::text(">"));
+    }
+    let param_docs: Vec<RcDoc<'static>> = f
+        .params
+        .iter()
+        .map(|p| {
+            RcDoc::text(p.name.value.as_str().to_string())
+                .append(RcDoc::text(": "))
+                .append(format_type_expr_inline(fmt, &p.type_ann))
+        })
+        .collect();
+    doc.append(RcDoc::text("("))
+        .append(RcDoc::intersperse(param_docs, RcDoc::text(", ")))
+        .append(RcDoc::text(") -> "))
+        .append(format_type_expr_inline(fmt, &f.result))
+        .append(RcDoc::text(";"))
 }
 
 fn format_single_field_decl(fmt: &mut Formatter<'_>, f: &FieldDecl) -> RcDoc<'static> {

@@ -96,7 +96,7 @@ fn format_hover(def: &DefinitionInfo) -> String {
                 format!("`{}` ({detail})", def.name)
             }
         }
-        SymbolCategory::BuiltinFn => {
+        SymbolCategory::BuiltinFn | SymbolCategory::ExternFn => {
             let fallback = format!("fn {}", def.name);
             let sig = def.type_description.as_deref().unwrap_or(&fallback);
             let detail = def.detail.as_deref().unwrap_or("");

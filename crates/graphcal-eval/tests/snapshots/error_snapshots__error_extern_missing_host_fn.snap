@@ -1,0 +1,15 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 796
+expression: rendered
+---
+extern function `not_provided` (plugin "graphcal:demo") is not provided by the host
+    Diagnostic severity: error
+Begin snippet for extern_missing_host_fn.gcl starting at line 3, column 1
+
+snippet line 3: import plugin "graphcal:demo" as demo {
+snippet line 4:     fn not_provided(x: Dimensionless) -> Dimensionless;
+    label at line 4, columns 8 to 19: missing host function
+snippet line 5: }
+diagnostic help: the embedder's host function registry has no entry for this declared extern function
+diagnostic code: graphcal::P003

@@ -102,15 +102,31 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
             }
             Token::LParen => {
                 if depth == 0 {
-                    // Found unmatched `(`. Check if preceded by identifier.
+                    // Found unmatched `(`. Check if preceded by identifier,
+                    // walking back over `alias.` qualifier segments so
+                    // extern calls (`fluids.density(`) keep their qualified
+                    // name.
                     if i > 0
                         && let (Token::Ident, name_span) = &tokens[i - 1]
                     {
-                        let fn_name = source
-                            [name_span.offset()..name_span.offset() + name_span.len()]
-                            .to_string();
+                        let mut segments = vec![
+                            source[name_span.offset()..name_span.offset() + name_span.len()]
+                                .to_string(),
+                        ];
+                        let mut j = i - 1;
+                        while j >= 2
+                            && tokens[j - 1].0 == Token::Dot
+                            && let (Token::Ident, seg_span) = &tokens[j - 2]
+                        {
+                            segments.push(
+                                source[seg_span.offset()..seg_span.offset() + seg_span.len()]
+                                    .to_string(),
+                            );
+                            j -= 2;
+                        }
+                        segments.reverse();
                         return Some(FnCallContext {
-                            fn_name,
+                            fn_name: segments.join("."),
                             active_param: comma_count,
                         });
                     }

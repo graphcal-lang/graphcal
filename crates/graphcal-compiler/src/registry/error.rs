@@ -211,6 +211,69 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("plugin alias `{alias}` does not declare a function `{name}`")]
+    #[diagnostic(
+        code(graphcal::P002),
+        help(
+            "extern functions must be declared in the plugin's `import plugin ... {{ ... }}` block"
+        )
+    )]
+    UnknownExternFunction {
+        alias: crate::syntax::module_name::ModuleAliasName,
+        name: crate::syntax::function_name::FnName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("unknown extern function")]
+        span: SourceSpan,
+    },
+
+    #[error("invalid extern function signature: {message}")]
+    #[diagnostic(
+        code(graphcal::P001),
+        help(
+            "extern signatures support Bool, Int, and scalar dimension types; each dimension variable must be declared in the `<...>` binder list and bound by a bare-variable parameter before compound uses"
+        )
+    )]
+    InvalidExternSignature {
+        message: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("invalid signature")]
+        span: SourceSpan,
+    },
+
+    #[error("extern function `{name}` (plugin \"{plugin}\") is not provided by the host")]
+    #[diagnostic(
+        code(graphcal::P003),
+        help(
+            "the embedder's host function registry has no entry for this declared extern function"
+        )
+    )]
+    MissingHostFunction {
+        plugin: crate::syntax::plugin::PluginPath,
+        name: crate::syntax::function_name::FnName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("missing host function")]
+        span: SourceSpan,
+    },
+
+    #[error("extern function call `{name}` not allowed in {context}")]
+    #[diagnostic(
+        code(graphcal::P004),
+        help(
+            "extern functions are runtime-provided and can only be called from runtime expressions (nodes, param defaults, and asserts)"
+        )
+    )]
+    ExternCallNotAllowed {
+        name: String,
+        context: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("extern call not allowed here")]
+        span: SourceSpan,
+    },
+
     #[error("graph reference `@{name}` not allowed in const expression")]
     #[diagnostic(
         code(graphcal::N005),
@@ -1663,6 +1726,10 @@ impl GraphcalError {
             | Self::UnknownGraphRef { src, .. }
             | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }
+            | Self::UnknownExternFunction { src, .. }
+            | Self::InvalidExternSignature { src, .. }
+            | Self::MissingHostFunction { src, .. }
+            | Self::ExternCallNotAllowed { src, .. }
             | Self::GraphRefInConst { src, .. }
             | Self::GraphRefInConstUnit { src, .. }
             | Self::NonConstUnitInConst { src, .. }

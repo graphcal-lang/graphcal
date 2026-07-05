@@ -11,7 +11,7 @@ use crate::registry::time_scale::TimeScale;
 /// How HIR type inference should check a built-in function call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BuiltinTypeRule {
-    /// Use [`crate::registry::builtins::BuiltinFunction::dim_sig`].
+    /// Use [`crate::registry::builtins::BuiltinFunction::signature`].
     RegistrySignature,
     /// One-argument reductions over indexed values.
     CollectionAggregation(AggregationFn),

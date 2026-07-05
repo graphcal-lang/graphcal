@@ -1,0 +1,19 @@
+// Extern plugin functions (issue #943, Phase A): declared signatures are
+// checked with full dimension safety and evaluated through the embedder's
+// host function registry ("graphcal:demo" is the Phase A built-in demo).
+import plugin "graphcal:demo" as demo {
+    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn inverse<D>(x: D) -> D^-1;
+    fn geometric_mean<D1, D2>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
+}
+
+param t_frac: Dimensionless = 0.25;
+param v0: Velocity = 100.0 m/s;
+param v1: Velocity = 300.0 m/s;
+
+node v_mid: Velocity = demo.lerp(@v0, @v1, @t_frac);
+node pace: Time / Length = demo.inverse(@v_mid);
+node scale: Length = demo.geometric_mean(4.0 m, 9.0 m);
+
+assert v_mid_interpolates = @v_mid == 150.0 m/s;
+assert scale_is_geometric = @scale == 6.0 m;
