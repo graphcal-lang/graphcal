@@ -310,10 +310,10 @@ pub enum PluginFileError {
 
 /// Enforce `graphcal.lock` pins on successfully read plugin files.
 ///
-/// The lockfile is the trust boundary for plugin code: in a manifest-ful
-/// project, a plugin binary loads only when its bytes hash to the pinned
-/// digest. Missing or mismatched pins replace the loaded entry with a hard
-/// error surfaced at the declaring import.
+/// The lockfile is the trust boundary for plugin code: in a project with a
+/// `graphcal.toml` manifest, a plugin binary loads only when its bytes hash
+/// to the pinned digest. Missing or mismatched pins replace the loaded
+/// entry with a hard error surfaced at the declaring import.
 fn apply_plugin_pins(
     plugins: &mut HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>,
     pins: &BTreeMap<String, String>,

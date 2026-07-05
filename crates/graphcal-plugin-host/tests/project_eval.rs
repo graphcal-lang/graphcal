@@ -332,9 +332,9 @@ node dependent: Dimensionless = @bad + 1.0;
     assert!(dependent.1.is_err(), "dependent must fail transitively");
 }
 
-/// Evaluate a manifest-ful (package-mode) project: `graphcal.toml`, the
-/// root file under the package namespace, a vendored plugin, and optionally
-/// a `graphcal.lock` pinning the plugin to `pinned_sha`.
+/// Evaluate a package-mode project (one with a `graphcal.toml`): the root
+/// file under the package namespace, a vendored plugin, and optionally a
+/// `graphcal.lock` pinning the plugin to `pinned_sha`.
 fn eval_package_project(
     dir: &Path,
     plugin_bytes: &[u8],
