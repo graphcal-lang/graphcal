@@ -41,6 +41,7 @@ CRATE_ORDER = [
     "graphcal-compiler",
     "graphcal-io",
     "graphcal-package",
+    "graphcal-plugin-abi",
     "graphcal-eval",
     "graphcal-fmt",
     "graphcal-lsp",
