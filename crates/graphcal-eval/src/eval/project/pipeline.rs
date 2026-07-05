@@ -823,6 +823,19 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
             &empty_targets,
         )?;
 
+        // Compile-only consumers (`graphcal check`, LSP analysis) must
+        // report the same load-time extern diagnostics evaluation does
+        // (P003, P005–P010): a declaration whose plugin is missing or
+        // whose manifest disagrees is a compile error, not something to
+        // discover on the first evaluation.
+        verify_host_functions(
+            project,
+            file_dag_id,
+            &compiled.tir,
+            &project.files[file_dag_id].named_source,
+            host_fns,
+        )?;
+
         if is_root {
             return Ok(compiled.tir);
         }
