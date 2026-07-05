@@ -162,28 +162,29 @@ fuel are reported the same way, without a custom message.
 Compiled modules are cached by content hash, so re-analysis in the
 language server does not recompile unchanged plugins.
 
-### Authoring (until the SDK lands)
+### Authoring
 
-The Rust authoring SDK with a signature-declaring macro is planned as a
-later phase. Until then, a plugin is any toolchain output that satisfies
-the ABI. In Rust, target `wasm32-unknown-unknown`, export one
-`extern "C"` function per kernel, and embed the manifest with
-`#[link_section]`:
+The `graphcal-plugin` Rust SDK declares each function once — signature in
+graphcal's extern-declaration syntax, body in Rust — and generates both
+the wasm export and the embedded manifest from that single source of
+truth:
 
 ```rust
-#[unsafe(no_mangle)]
-pub extern "C" fn lerp(a: f64, b: f64, t: f64) -> f64 {
-    a + (b - a) * t
+graphcal_plugin::plugin! {
+    /// Linear interpolation between `a` and `b`.
+    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D {
+        (b - a).mul_add(t, a)
+    }
 }
-
-#[used]
-#[unsafe(link_section = "graphcal-manifest")]
-static MANIFEST: [u8; 332] = *br#"{"abi_version":1,"functions":[{"name":"lerp","dim_vars":["D"],"params":[{"name":"a","kind":{"scalar":{"vars":[{"var":"D","pow":{"num":1,"den":1}}]}}},{"name":"b","kind":{"scalar":{"vars":[{"var":"D","pow":{"num":1,"den":1}}]}}},{"name":"t","kind":{"scalar":{}}}],"result":{"scalar":{"vars":[{"var":"D","pow":{"num":1,"den":1}}]}}}]}"#;
 ```
 
-(The byte count must match the JSON length; a build script or the future
-SDK removes this bookkeeping. The `graphcal-plugin-abi` crate provides the
-manifest model and an `embed_manifest` helper for build tooling.)
+`graphcal plugin new` scaffolds a ready-to-build crate and
+`graphcal plugin test` validates and calls the built module. See the
+[Plugin Authoring](../authoring-plugins.md) guide for the full workflow —
+including failure reporting, native testing, and authoring without the
+SDK (a plugin is any toolchain output satisfying the module contract
+above; the `graphcal-plugin-abi` crate provides the manifest model and an
+`embed_manifest` helper for build tooling).
 
 ## Trust: Lockfile Pins
 
