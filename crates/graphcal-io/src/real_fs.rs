@@ -82,6 +82,15 @@ impl FileSystemReader for RealFileSystem {
         }
     }
 
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, io::Error> {
+        if self.root.is_some() {
+            let canonical = self.check_access(path)?;
+            std::fs::read(canonical)
+        } else {
+            std::fs::read(path)
+        }
+    }
+
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
         if self.root.is_some() {
             self.check_access(path)

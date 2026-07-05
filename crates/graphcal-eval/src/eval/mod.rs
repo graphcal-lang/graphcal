@@ -12,8 +12,9 @@ mod types;
 
 pub use graphcal_compiler::registry::format::format_number;
 pub use project::{
-    compile_and_eval_from_project, compile_and_eval_project, compile_to_tir,
-    compile_to_tir_from_project, compile_to_tir_project,
+    compile_and_eval_from_project, compile_and_eval_from_project_with_host_fns,
+    compile_and_eval_project, compile_to_tir, compile_to_tir_from_project,
+    compile_to_tir_from_project_with_host_fns, compile_to_tir_project,
 };
 pub use types::{
     AssertResult, AxisMeta, CompileError, CompositionProperty, DeclType, DisplayUnit, EvalResult,

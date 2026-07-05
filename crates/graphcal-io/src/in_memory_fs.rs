@@ -17,6 +17,7 @@ use crate::FileSystemReader;
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryFileSystem {
     files: HashMap<PathBuf, String>,
+    binary_files: HashMap<PathBuf, Vec<u8>>,
 }
 
 impl InMemoryFileSystem {
@@ -37,17 +38,51 @@ impl InMemoryFileSystem {
         self.files.insert(path, content);
     }
 
+    /// Insert a binary file (e.g. a `.wasm` plugin module) with the given
+    /// path and content. `path` must be absolute — see the type-level
+    /// invariant.
+    pub fn add_binary_file(&mut self, path: PathBuf, content: Vec<u8>) {
+        debug_assert!(
+            path.is_absolute(),
+            "InMemoryFileSystem requires absolute paths, got `{}`",
+            path.display()
+        );
+        self.binary_files.insert(path, content);
+    }
+
+    fn contains(&self, path: &Path) -> bool {
+        self.files.contains_key(path) || self.binary_files.contains_key(path)
+    }
+
     /// Returns `true` if `path` is a directory-like prefix of any stored file.
     fn is_dir(&self, path: &Path) -> bool {
-        self.files.keys().any(|k| k.starts_with(path) && k != path)
+        self.files
+            .keys()
+            .chain(self.binary_files.keys())
+            .any(|k| k.starts_with(path) && k != path)
     }
 }
 
 impl FileSystemReader for InMemoryFileSystem {
     fn read_to_string(&self, path: &Path) -> Result<String, io::Error> {
-        self.files
+        match self.files.get(path) {
+            Some(content) => Ok(content.clone()),
+            None if self.binary_files.contains_key(path) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{} is a binary file, not UTF-8 text", path.display()),
+            )),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{}", path.display()),
+            )),
+        }
+    }
+
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, io::Error> {
+        self.binary_files
             .get(path)
             .cloned()
+            .or_else(|| self.files.get(path).map(|text| text.clone().into_bytes()))
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{}", path.display())))
     }
 
@@ -76,7 +111,7 @@ impl FileSystemReader for InMemoryFileSystem {
                 other => normalized.push(other),
             }
         }
-        if self.files.contains_key(&normalized) || self.is_dir(&normalized) {
+        if self.contains(&normalized) || self.is_dir(&normalized) {
             return Ok(normalized);
         }
         Err(io::Error::new(
@@ -86,11 +121,11 @@ impl FileSystemReader for InMemoryFileSystem {
     }
 
     fn is_file(&self, path: &Path) -> bool {
-        self.files.contains_key(path)
+        self.contains(path)
     }
 
     fn exists(&self, path: &Path) -> bool {
-        self.files.contains_key(path) || self.is_dir(path)
+        self.contains(path) || self.is_dir(path)
     }
 }
 

@@ -436,8 +436,11 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
         )?;
 
         // Load-time verification: every declared extern function must have a
-        // host registry entry (this becomes "manifest mismatch" in Phase B).
+        // host registry entry, and wasm-plugin declarations must match the
+        // module's embedded manifest.
         verify_host_functions(
+            project,
+            file_dag_id,
             &compiled.tir,
             &project.files[file_dag_id].named_source,
             host_fns,
@@ -604,33 +607,125 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
     }))
 }
 
-/// Load-time verification that every extern function declared by a file has
-/// a host registry entry.
+/// Load-time verification of every extern function declared by a file.
 ///
-/// Reported against the declaration's `fn` name span in the declaring file.
-/// In Phase B this check becomes "manifest mismatch" against the WASM
-/// module's embedded manifest.
+/// Checks run per declaration in source order, root cause first:
+///
+/// 1. For wasm plugins: the declaring file must belong to the root package,
+///    the plugin file must have been read by the loader, and the plugin
+///    host must have registered the module (its recorded failure is
+///    reported otherwise).
+/// 2. The registry must provide the function (`MissingHostFunction`, P003).
+/// 3. When the registry entry carries a manifest-provided signature, the
+///    declared signature must be structurally equivalent to it (P005) —
+///    this is the "declaration verified against the embedded manifest"
+///    guarantee of the plugin design (#25).
 fn verify_host_functions(
+    project: &crate::loader::LoadedProject,
+    file_dag_id: &graphcal_compiler::dag_id::DagId,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> Result<(), CompileError> {
+    use graphcal_compiler::syntax::plugin::PluginSourceKind;
+
     // Deterministic reporting order: earliest declaration first.
-    let mut missing: Vec<_> = tir
-        .extern_functions
-        .iter()
-        .filter(|(key, _)| !host_fns.contains(key))
-        .collect();
-    missing.sort_by_key(|(_, function)| function.name_span.offset());
-    if let Some((_, function)) = missing.first() {
-        return Err(CompileError::Eval(GraphcalError::MissingHostFunction {
-            plugin: function.plugin.clone(),
-            name: function.name.clone(),
-            src: src.clone(),
-            span: function.name_span.into(),
-        }));
+    let mut declared: Vec<_> = tir.extern_functions.iter().collect();
+    declared.sort_by_key(|(_, function)| function.name_span.offset());
+
+    for (key, function) in declared {
+        if key.plugin.source_kind() == PluginSourceKind::WasmModule {
+            verify_wasm_plugin(project, file_dag_id, function, src, host_fns)?;
+        }
+        if !host_fns.contains(key) {
+            return Err(CompileError::Eval(GraphcalError::MissingHostFunction {
+                plugin: function.plugin.clone(),
+                name: function.name.clone(),
+                src: src.clone(),
+                span: function.name_span.into(),
+            }));
+        }
+        if let Some(provided) = host_fns.provided_signature(key)
+            && !function.signature.structurally_equivalent(provided)
+        {
+            let render = |signature: &graphcal_compiler::function_signature::FunctionSignature| {
+                signature.format_with(|dim| tir.registry.dimensions.format_dimension(dim))
+            };
+            return Err(CompileError::Eval(GraphcalError::ExternSignatureMismatch {
+                plugin: function.plugin.clone(),
+                name: function.name.clone(),
+                declared: render(&function.signature),
+                provided: render(provided),
+                src: src.clone(),
+                span: function.decl_span.into(),
+            }));
+        }
     }
     Ok(())
+}
+
+/// The wasm-plugin-specific half of [`verify_host_functions`]: file-level
+/// failures recorded by the loader and module-level failures recorded by
+/// the embedder's plugin host, reported at the import path's span.
+fn verify_wasm_plugin(
+    project: &crate::loader::LoadedProject,
+    file_dag_id: &graphcal_compiler::dag_id::DagId,
+    function: &graphcal_compiler::ir::lower::ExternFunctionEntry,
+    src: &NamedSource<Arc<String>>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+) -> Result<(), CompileError> {
+    if file_dag_id.package() != project.root.package() {
+        return Err(CompileError::Eval(
+            GraphcalError::PluginInDependencyPackage {
+                plugin: function.plugin.clone(),
+                src: src.clone(),
+                span: function.path_span.into(),
+            },
+        ));
+    }
+
+    match project.plugins.get(&function.plugin) {
+        Some(Err(file_error)) => {
+            return Err(CompileError::Eval(GraphcalError::PluginLoadFailed {
+                plugin: function.plugin.clone(),
+                reason: file_error.to_string(),
+                src: src.clone(),
+                span: function.path_span.into(),
+            }));
+        }
+        // Defensive: the loader records an entry for every root-package wasm
+        // import, so an absent entry means an embedder skipped `load_project`.
+        None => {
+            return Err(CompileError::Eval(GraphcalError::PluginLoadFailed {
+                plugin: function.plugin.clone(),
+                reason: "the project loader provided no bytes for this plugin".to_string(),
+                src: src.clone(),
+                span: function.path_span.into(),
+            }));
+        }
+        Some(Ok(_)) => {}
+    }
+
+    match host_fns.plugin_failure(&function.plugin) {
+        Some(crate::host_fns::PluginRegistrationError::ForbiddenImport { module, name }) => {
+            Err(CompileError::Eval(GraphcalError::PluginForbiddenImport {
+                plugin: function.plugin.clone(),
+                import_module: module.clone(),
+                import_name: name.clone(),
+                src: src.clone(),
+                span: function.path_span.into(),
+            }))
+        }
+        Some(crate::host_fns::PluginRegistrationError::LoadFailed { reason }) => {
+            Err(CompileError::Eval(GraphcalError::PluginLoadFailed {
+                plugin: function.plugin.clone(),
+                reason: reason.clone(),
+                src: src.clone(),
+                span: function.path_span.into(),
+            }))
+        }
+        None => Ok(()),
+    }
 }
 
 /// Map each dependency file to the root-level import statement span that brought it in.
@@ -695,13 +790,10 @@ pub(in crate::eval::project) fn build_dep_import_spans(
 /// The root file stops at TIR and returns it.
 pub(in crate::eval::project) fn compile_to_tir_project_perfile(
     project: &crate::loader::LoadedProject,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
     let empty_overrides = HashMap::new();
     let empty_targets = HashMap::new();
-    // Compile-only consumers (LSP analysis, graph commands) still evaluate
-    // dependency files for downstream imports; use the Phase A default
-    // registry so dep extern calls behave the same as in full evaluation.
-    let host_fns = crate::host_fns::demo_registry();
     let mut evaluated_files: HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile> =
         HashMap::new();
 
@@ -742,7 +834,7 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
             file_src,
             pub_names,
             &mut evaluated_files,
-            &host_fns,
+            host_fns,
         )?;
     }
 

@@ -179,6 +179,119 @@ pub struct LoadedProject {
     /// Topological load order: dependencies before dependents.
     /// The root file is last.
     pub load_order: Vec<DagId>,
+    /// WASM plugin files referenced by `import plugin "….wasm"` declarations
+    /// in root-package files, keyed by the verbatim plugin path.
+    ///
+    /// Paths resolve relative to the root package's source root and are
+    /// sandboxed inside it. A failed read is recorded (not fatal here) so
+    /// compile-only consumers keep working; the evaluation pipeline surfaces
+    /// the stored error with the declaring import's span. Host-registry
+    /// plugin identities (e.g. `graphcal:demo`) never appear in this map,
+    /// and neither do wasm imports declared by dependency packages (those
+    /// are rejected at verification time).
+    pub plugins: HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>,
+}
+
+/// Outcome of locating and reading one wasm plugin file.
+pub type PluginFileEntry = Result<LoadedPlugin, PluginFileError>;
+
+/// The wasm plugin paths declared by one file's `import plugin` blocks.
+fn wasm_plugin_paths(
+    ast: &graphcal_compiler::desugar::desugared_ast::File,
+) -> impl Iterator<Item = &graphcal_compiler::syntax::plugin::PluginPath> {
+    use graphcal_compiler::syntax::plugin::PluginSourceKind;
+
+    ast.declarations.iter().filter_map(|decl| match &decl.kind {
+        DeclKind::PluginImport(plugin)
+            if plugin.path.value.source_kind() == PluginSourceKind::WasmModule =>
+        {
+            Some(&plugin.path.value)
+        }
+        _ => None,
+    })
+}
+
+/// Resolve and read every wasm plugin declared by the given file ASTs.
+///
+/// Read failures are recorded per plugin rather than failing the load, so
+/// compile-only consumers (hover, symbols) keep working; evaluation surfaces
+/// the stored error at the declaring import.
+fn read_wasm_plugins<'a, F: FileSystemReader>(
+    file_asts: impl Iterator<Item = &'a graphcal_compiler::desugar::desugared_ast::File>,
+    package_root: &Path,
+    fs: &F,
+) -> HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry> {
+    let mut plugins = HashMap::new();
+    for ast in file_asts {
+        for path in wasm_plugin_paths(ast) {
+            plugins
+                .entry(path.clone())
+                .or_insert_with(|| read_plugin_file(package_root, path, fs));
+        }
+    }
+    plugins
+}
+
+/// Resolve one plugin path against the package root and read its bytes.
+///
+/// Only plain relative paths are accepted (no `.`, `..`, absolute, or
+/// prefix components), which keeps the resolved path inside the package
+/// root lexically; a rooted filesystem reader additionally rejects symlink
+/// escapes on canonicalization.
+fn read_plugin_file<F: FileSystemReader>(
+    package_root: &Path,
+    plugin: &graphcal_compiler::syntax::plugin::PluginPath,
+    fs: &F,
+) -> PluginFileEntry {
+    let relative = Path::new(plugin.as_str());
+    if relative
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(PluginFileError::OutsideRoot);
+    }
+    let resolved = package_root.join(relative);
+    match fs.read_bytes(&resolved) {
+        Ok(bytes) => Ok(LoadedPlugin {
+            sha256_hex: hex_string(&Sha256::digest(&bytes)),
+            bytes: bytes.into(),
+            resolved_path: resolved,
+        }),
+        Err(err) => Err(PluginFileError::Unreadable {
+            resolved,
+            message: err.to_string(),
+        }),
+    }
+}
+
+/// A successfully read wasm plugin file, ready for the plugin host.
+#[derive(Debug, Clone)]
+pub struct LoadedPlugin {
+    /// The resolved on-disk path (inside the root package).
+    pub resolved_path: PathBuf,
+    /// The raw module bytes.
+    pub bytes: Arc<[u8]>,
+    /// Lowercase-hex SHA-256 of the bytes — the form `graphcal.lock` pins.
+    pub sha256_hex: String,
+}
+
+/// Why a wasm plugin file could not be provided to the plugin host.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PluginFileError {
+    /// The plugin path is absolute or leaves the package root.
+    #[error("plugin paths must be relative and stay inside the package root")]
+    OutsideRoot,
+    /// The resolved file is missing or unreadable.
+    #[error("cannot read `{}`: {message}", resolved.display())]
+    Unreadable {
+        /// The path the plugin string resolved to.
+        resolved: PathBuf,
+        /// The underlying I/O error.
+        message: String,
+    },
+    /// The project was built from in-memory source with no filesystem.
+    #[error("plugin files cannot be loaded without a project on disk")]
+    NoProjectFilesystem,
 }
 
 impl LoadedProject {
@@ -211,6 +324,11 @@ impl LoadedProject {
         // No project root or manifest in single-file mode — only the
         // file-stem self-reference (Concept 7) can be detected here.
         let inline_dags = lift_inline_dags_by_stem(&ast, &path, &dag_id);
+        // No filesystem to read wasm plugin files from; the entries carry
+        // the reason so evaluation can report it at the import site.
+        let plugins = wasm_plugin_paths(&ast)
+            .map(|plugin| (plugin.clone(), Err(PluginFileError::NoProjectFilesystem)))
+            .collect();
         let loaded_file = LoadedFile {
             path,
             dag_id: dag_id.clone(),
@@ -226,6 +344,7 @@ impl LoadedProject {
             files,
             root: dag_id.clone(),
             load_order: vec![dag_id],
+            plugins,
         })
     }
 
@@ -569,10 +688,14 @@ pub fn load_project<F: FileSystemReader>(
     )?;
 
     let root_dag_id = path_to_dag_id[&root_canonical].clone();
+    // Single-package project: every loaded file belongs to the root package,
+    // so every declared wasm plugin resolves against the project root.
+    let plugins = read_wasm_plugins(files.values().map(|file| &file.ast), &project_root, fs);
     Ok(LoadedProject {
         files,
         root: root_dag_id,
         load_order,
+        plugins,
     })
 }
 
@@ -619,11 +742,25 @@ fn load_locked_package_project<F: FileSystemReader>(
         &mut stack,
     )?;
 
-    let root_dag_id = path_to_dag_id[&(root_package, root_canonical.to_path_buf())].clone();
+    let root_dag_id = path_to_dag_id[&(root_package.clone(), root_canonical.to_path_buf())].clone();
+    // Wasm plugin files may only be declared by the root package (dependency
+    // packages' declarations are rejected at verification); resolve and read
+    // them against the root package's source root.
+    let root_package_root = context.root_for(&root_package)?.to_path_buf();
+    let root_dag_package = root_dag_id.package().clone();
+    let plugins = read_wasm_plugins(
+        files
+            .values()
+            .filter(|file| *file.dag_id.package() == root_dag_package)
+            .map(|file| &file.ast),
+        &root_package_root,
+        fs,
+    );
     Ok(LoadedProject {
         files,
         root: root_dag_id,
         load_order,
+        plugins,
     })
 }
 

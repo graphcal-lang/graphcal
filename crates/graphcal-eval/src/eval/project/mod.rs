@@ -535,7 +535,27 @@ pub(in crate::eval::project) fn apply_overrides(
 pub fn compile_to_tir_from_project(
     project: &crate::loader::LoadedProject,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    pipeline::compile_to_tir_project_perfile(project)
+    // Phase A default: dependency-file extern calls evaluate through the
+    // built-in demo registry (see `crate::host_fns`).
+    compile_to_tir_from_project_with_host_fns(project, &crate::host_fns::demo_registry())
+}
+
+/// Like [`compile_to_tir_from_project`], with an embedder-supplied host
+/// function registry backing extern (plugin) calls in dependency files.
+///
+/// Compile-only consumers still evaluate standalone dependency files so
+/// importers can bind their values; a dependency node calling an extern
+/// function needs the same registry evaluation uses, or its value (and
+/// everything importing it) degrades to a per-node failure.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if lowering, resolution, or checking fails.
+pub fn compile_to_tir_from_project_with_host_fns(
+    project: &crate::loader::LoadedProject,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
+    pipeline::compile_to_tir_project_perfile(project, host_fns)
 }
 
 /// Compile and evaluate a [`LoadedProject`](crate::loader::LoadedProject).
@@ -577,6 +597,10 @@ pub fn compile_and_eval_from_project(
 /// # Errors
 ///
 /// Returns a [`CompileError`] if any pipeline stage fails.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "public API accepts HashMap without requiring specific hasher"
+)]
 pub fn compile_and_eval_from_project_with_host_fns(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,

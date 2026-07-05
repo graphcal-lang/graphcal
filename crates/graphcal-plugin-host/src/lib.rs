@@ -31,7 +31,9 @@
 pub mod convert;
 pub mod host;
 pub mod module;
+pub mod registry;
 
 pub use convert::{ConvertErrorKind, ManifestConvertError, convert_function, convert_manifest};
 pub use host::{PluginHost, PluginLimits};
 pub use module::{PluginCallError, PluginLoadError, PluginModule};
+pub use registry::register_project_plugins;

@@ -95,6 +95,16 @@ impl<F: FileSystemReader> FileSystemReader for OverlayFileSystem<F> {
         )
     }
 
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, io::Error> {
+        // Overlays hold UTF-8 editor buffers; binary reads normally fall
+        // through to disk, but an overlaid path still serves its buffer so
+        // the two read methods never disagree about a file's existence.
+        self.overlay(path).map_or_else(
+            || self.base.read_bytes(path),
+            |entry| Ok(entry.content.clone().into_bytes()),
+        )
+    }
+
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
         // Short-circuit for overlays so unsaved buffers (which do not exist
         // on disk) still resolve to a stable identity.

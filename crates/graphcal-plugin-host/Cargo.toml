@@ -12,6 +12,7 @@ categories.workspace = true
 
 [dependencies]
 graphcal-compiler = { workspace = true }
+graphcal-eval = { workspace = true }
 graphcal-plugin-abi = { workspace = true }
 sha2.workspace = true
 thiserror.workspace = true
@@ -21,4 +22,6 @@ wasmi.workspace = true
 workspace = true
 
 [dev-dependencies]
+graphcal-io = { workspace = true }
+tempfile.workspace = true
 wat.workspace = true

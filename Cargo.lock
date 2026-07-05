@@ -1692,8 +1692,11 @@ name = "graphcal-plugin-host"
 version = "0.0.1-alpha.15"
 dependencies = [
  "graphcal-compiler",
+ "graphcal-eval",
+ "graphcal-io",
  "graphcal-plugin-abi",
  "sha2",
+ "tempfile",
  "thiserror",
  "wasmi",
  "wat",

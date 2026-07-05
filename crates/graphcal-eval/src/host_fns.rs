@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use graphcal_compiler::function_signature::FunctionSignature;
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::plugin::{ExternFnKey, PluginPath};
 
@@ -62,21 +63,58 @@ impl From<&str> for HostFnError {
 /// A host-native extern function implementation.
 pub type HostFn = Arc<dyn Fn(&[f64]) -> Result<f64, HostFnError> + Send + Sync>;
 
+/// One registered extern function: the callable closure plus, for
+/// plugin-backed entries, the signature the plugin's manifest declared.
+struct HostFnEntry {
+    function: HostFn,
+    provided_signature: Option<FunctionSignature>,
+}
+
+/// Why a plugin failed to register its functions.
+///
+/// Recorded by the embedder while building the registry (the WASM plugin
+/// host discovers these when compiling/validating the module); surfaced by
+/// the evaluation pipeline as load-time diagnostics with the import's span.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginRegistrationError {
+    /// The module declares an import other than `graphcal::fail` — the
+    /// purity rule every graphcal plugin must satisfy.
+    ForbiddenImport {
+        /// Wasm module name of the forbidden import.
+        module: String,
+        /// Wasm field name of the forbidden import.
+        name: String,
+    },
+    /// Any other validation failure (missing/malformed manifest, invalid
+    /// module, wrong export types, …), rendered by the plugin host.
+    LoadFailed {
+        /// Human-readable failure description.
+        reason: String,
+    },
+}
+
 /// Registry mapping resolved extern function references to host closures.
 ///
 /// Injected by the embedder; evaluation looks functions up by
 /// [`ExternFnKey`]. A declared extern function with no registry entry is a
-/// load-time diagnostic (`MissingHostFunction`), which becomes "manifest
-/// mismatch" when Phase B replaces the backend with real WASM modules.
+/// load-time diagnostic (`MissingHostFunction`). Entries registered from a
+/// WASM plugin manifest carry their provided [`FunctionSignature`], which
+/// the pipeline verifies structurally against each declaration; host-native
+/// entries (like the demo plugin) carry none and trust the declaration.
 #[derive(Clone, Default)]
 pub struct HostFunctionRegistry {
-    fns: HashMap<ExternFnKey, HostFn>,
+    fns: HashMap<ExternFnKey, Arc<HostFnEntry>>,
+    failed_plugins: HashMap<PluginPath, PluginRegistrationError>,
 }
 
 impl std::fmt::Debug for HostFunctionRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HostFunctionRegistry")
             .field("functions", &self.fns.keys().collect::<Vec<_>>())
+            .field(
+                "failed_plugins",
+                &self.failed_plugins.keys().collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -88,7 +126,8 @@ impl HostFunctionRegistry {
         Self::default()
     }
 
-    /// Register a host closure for one extern function.
+    /// Register a host-native closure for one extern function, with no
+    /// provided signature (the declaration is trusted).
     ///
     /// Re-registering the same `(plugin, name)` replaces the previous
     /// closure — the embedder owns the registry contents.
@@ -98,14 +137,61 @@ impl HostFunctionRegistry {
         name: FnName,
         function: impl Fn(&[f64]) -> Result<f64, HostFnError> + Send + Sync + 'static,
     ) {
-        self.fns
-            .insert(ExternFnKey { plugin, name }, Arc::new(function));
+        self.fns.insert(
+            ExternFnKey { plugin, name },
+            Arc::new(HostFnEntry {
+                function: Arc::new(function),
+                provided_signature: None,
+            }),
+        );
+    }
+
+    /// Register a plugin-backed closure together with the signature its
+    /// manifest declares; the pipeline verifies declarations against it.
+    pub fn register_with_signature(
+        &mut self,
+        plugin: PluginPath,
+        name: FnName,
+        signature: FunctionSignature,
+        function: impl Fn(&[f64]) -> Result<f64, HostFnError> + Send + Sync + 'static,
+    ) {
+        self.fns.insert(
+            ExternFnKey { plugin, name },
+            Arc::new(HostFnEntry {
+                function: Arc::new(function),
+                provided_signature: Some(signature),
+            }),
+        );
+    }
+
+    /// Record that a plugin's functions could not be registered at all.
+    ///
+    /// The pipeline reports this (with the import site's span) before any
+    /// per-function "missing host function" diagnostic, so users see the
+    /// root cause.
+    pub fn record_plugin_failure(&mut self, plugin: PluginPath, error: PluginRegistrationError) {
+        self.failed_plugins.insert(plugin, error);
+    }
+
+    /// The recorded registration failure for `plugin`, if any.
+    #[must_use]
+    pub fn plugin_failure(&self, plugin: &PluginPath) -> Option<&PluginRegistrationError> {
+        self.failed_plugins.get(plugin)
     }
 
     /// Look up the host closure for an extern function.
     #[must_use]
     pub fn get(&self, key: &ExternFnKey) -> Option<&HostFn> {
-        self.fns.get(key)
+        self.fns.get(key).map(|entry| &entry.function)
+    }
+
+    /// The manifest-provided signature for an extern function, when its
+    /// entry came from a WASM plugin.
+    #[must_use]
+    pub fn provided_signature(&self, key: &ExternFnKey) -> Option<&FunctionSignature> {
+        self.fns
+            .get(key)
+            .and_then(|entry| entry.provided_signature.as_ref())
     }
 
     /// Returns whether the registry provides an implementation for `key`.
