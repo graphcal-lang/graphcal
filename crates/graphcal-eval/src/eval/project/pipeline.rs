@@ -685,6 +685,22 @@ fn verify_wasm_plugin(
     }
 
     match project.plugins.get(&function.plugin) {
+        Some(Err(crate::loader::PluginFileError::NotPinned)) => {
+            return Err(CompileError::Eval(GraphcalError::PluginNotPinned {
+                plugin: function.plugin.clone(),
+                src: src.clone(),
+                span: function.path_span.into(),
+            }));
+        }
+        Some(Err(crate::loader::PluginFileError::HashMismatch { expected, actual })) => {
+            return Err(CompileError::Eval(GraphcalError::PluginHashMismatch {
+                plugin: function.plugin.clone(),
+                expected: expected.clone(),
+                actual: actual.clone(),
+                src: src.clone(),
+                span: function.path_span.into(),
+            }));
+        }
         Some(Err(file_error)) => {
             return Err(CompileError::Eval(GraphcalError::PluginLoadFailed {
                 plugin: function.plugin.clone(),

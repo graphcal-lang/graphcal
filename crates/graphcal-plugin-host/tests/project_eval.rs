@@ -332,6 +332,128 @@ node dependent: Dimensionless = @bad + 1.0;
     assert!(dependent.1.is_err(), "dependent must fail transitively");
 }
 
+/// Evaluate a manifest-ful (package-mode) project: `graphcal.toml`, the
+/// root file under the package namespace, a vendored plugin, and optionally
+/// a `graphcal.lock` pinning the plugin to `pinned_sha`.
+fn eval_package_project(
+    dir: &Path,
+    plugin_bytes: &[u8],
+    pinned_sha: Option<&str>,
+) -> Result<EvalResult, CompileError> {
+    std::fs::write(dir.join("graphcal.toml"), "[package]\nname = \"proj\"\n").unwrap();
+    std::fs::create_dir_all(dir.join("src/proj")).unwrap();
+    std::fs::create_dir_all(dir.join("plugins")).unwrap();
+    std::fs::write(dir.join("plugins/demo.wasm"), plugin_bytes).unwrap();
+    let root = dir.join("src/proj/main.gcl");
+    std::fs::write(
+        &root,
+        format!("{LERP_IMPORT}\nnode mid: Length = demo.lerp(1.0 m, 3.0 m, 0.5);\n"),
+    )
+    .unwrap();
+
+    if let Some(sha) = pinned_sha {
+        let lockfile = graphcal_package::Lockfile {
+            lock_version: graphcal_package::LOCK_VERSION,
+            created_by: "test".to_string(),
+            graphcal_version: env!("CARGO_PKG_VERSION").to_string(),
+            stdlib_version: graphcal_package::STDLIB_VERSION.to_string(),
+            root: graphcal_package::PackageInstanceId::new("pkg-proj").unwrap(),
+            packages: vec![graphcal_package::LockedPackage {
+                id: graphcal_package::PackageInstanceId::new("pkg-proj").unwrap(),
+                name: graphcal_package::PackageName::new("proj").unwrap(),
+                source_dir: "src".into(),
+                source: graphcal_package::PackageSource::Path {
+                    path: ".".to_string(),
+                },
+                dependencies: std::collections::BTreeMap::new(),
+            }],
+            plugins: vec![graphcal_package::LockedPlugin::new("plugins/demo.wasm", sha).unwrap()],
+        };
+        std::fs::write(
+            dir.join("graphcal.lock"),
+            lockfile.to_deterministic_toml().unwrap(),
+        )
+        .unwrap();
+    }
+
+    let fs = RealFileSystem::default();
+    let project = load_project(&root, None, &fs)?;
+    let mut registry = HostFunctionRegistry::new();
+    register_project_plugins(&PluginHost::new(), &project, &mut registry);
+    graphcal_eval::eval::compile_and_eval_from_project_with_host_fns(
+        &project,
+        &HashMap::new(),
+        &registry,
+    )
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .fold(String::new(), |mut out, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+}
+
+#[test]
+fn unpinned_plugins_are_rejected_in_package_projects() {
+    let dir = tempfile::tempdir().unwrap();
+    let err = eval_package_project(dir.path(), &lerp_plugin(), None).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CompileError::Eval(GraphcalError::PluginNotPinned { ref plugin, .. })
+                if plugin.as_str() == "plugins/demo.wasm"
+        ),
+        "expected PluginNotPinned, got {err:?}"
+    );
+}
+
+#[test]
+fn hash_mismatches_against_the_pin_are_hard_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let wrong_sha = "0".repeat(64);
+    let err = eval_package_project(dir.path(), &lerp_plugin(), Some(&wrong_sha)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CompileError::Eval(GraphcalError::PluginHashMismatch { ref expected, .. })
+                if *expected == wrong_sha
+        ),
+        "expected PluginHashMismatch, got {err:?}"
+    );
+}
+
+#[test]
+fn correctly_pinned_plugins_evaluate() {
+    let dir = tempfile::tempdir().unwrap();
+    let bytes = lerp_plugin();
+    let sha = sha256_hex(&bytes);
+    let result = eval_package_project(dir.path(), &bytes, Some(&sha)).unwrap();
+    let value = value_for(&result, "mid");
+    assert!((value.si_value().unwrap() - 2.0).abs() < 1e-12, "{value:?}");
+}
+
+#[test]
+fn virtual_projects_without_a_manifest_load_unpinned() {
+    // No graphcal.toml → no lockfile regime; the sandbox and limits still
+    // apply. Covered end-to-end by `wasm_plugin_evaluates_end_to_end`; this
+    // test documents the boundary by contrast: same layout plus a manifest
+    // demands a pin (see `unpinned_plugins_are_rejected_in_package_projects`).
+    let dir = tempfile::tempdir().unwrap();
+    let source = format!("{LERP_IMPORT}\nnode mid: Length = demo.lerp(1.0 m, 3.0 m, 0.5);\n");
+    let result = eval_project_with_plugin(
+        dir.path(),
+        &source,
+        Some(("plugins/demo.wasm", lerp_plugin())),
+    )
+    .unwrap();
+    assert!((value_for(&result, "mid").si_value().unwrap() - 2.0).abs() < 1e-12);
+}
+
 #[test]
 fn host_registry_plugins_coexist_with_wasm_plugins() {
     let dir = tempfile::tempdir().unwrap();

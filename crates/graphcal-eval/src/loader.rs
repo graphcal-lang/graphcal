@@ -292,6 +292,47 @@ pub enum PluginFileError {
     /// The project was built from in-memory source with no filesystem.
     #[error("plugin files cannot be loaded without a project on disk")]
     NoProjectFilesystem,
+    /// The project has a manifest but `graphcal.lock` does not pin this
+    /// plugin.
+    #[error("the plugin is not pinned in graphcal.lock; run `graphcal deps lock`")]
+    NotPinned,
+    /// The plugin file's hash does not match its `graphcal.lock` pin.
+    #[error(
+        "the plugin file's SHA-256 ({actual}) does not match the graphcal.lock pin ({expected})"
+    )]
+    HashMismatch {
+        /// The digest recorded in `graphcal.lock`.
+        expected: String,
+        /// The digest of the file actually on disk.
+        actual: String,
+    },
+}
+
+/// Enforce `graphcal.lock` pins on successfully read plugin files.
+///
+/// The lockfile is the trust boundary for plugin code: in a manifest-ful
+/// project, a plugin binary loads only when its bytes hash to the pinned
+/// digest. Missing or mismatched pins replace the loaded entry with a hard
+/// error surfaced at the declaring import.
+fn apply_plugin_pins(
+    plugins: &mut HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>,
+    pins: &BTreeMap<String, String>,
+) {
+    for (path, entry) in plugins.iter_mut() {
+        let Ok(loaded) = entry.as_ref() else {
+            continue;
+        };
+        match pins.get(path.as_str()) {
+            None => *entry = Err(PluginFileError::NotPinned),
+            Some(expected) if *expected != loaded.sha256_hex => {
+                *entry = Err(PluginFileError::HashMismatch {
+                    expected: expected.clone(),
+                    actual: loaded.sha256_hex.clone(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
 }
 
 impl LoadedProject {
@@ -690,13 +731,53 @@ pub fn load_project<F: FileSystemReader>(
     let root_dag_id = path_to_dag_id[&root_canonical].clone();
     // Single-package project: every loaded file belongs to the root package,
     // so every declared wasm plugin resolves against the project root.
-    let plugins = read_wasm_plugins(files.values().map(|file| &file.ast), &project_root, fs);
+    let mut plugins = read_wasm_plugins(files.values().map(|file| &file.ast), &project_root, fs);
+    // A manifest opts the project into the lockfile trust regime: wasm
+    // plugins must be pinned in graphcal.lock even when there are no
+    // package dependencies. Virtual (manifest-less) projects load unpinned —
+    // the sandbox and resource limits still bound what a plugin can do.
+    if manifest.is_some() && !plugins.is_empty() {
+        let pins = load_plugin_pins(&project_root, fs)?;
+        apply_plugin_pins(&mut plugins, &pins);
+    }
     Ok(LoadedProject {
         files,
         root: root_dag_id,
         load_order,
         plugins,
     })
+}
+
+/// Read the root package's plugin pins from `graphcal.lock`, when present.
+///
+/// A missing lockfile yields zero pins (every plugin then reports "not
+/// pinned"); an unreadable or invalid lockfile is a hard error, matching
+/// the dependency-loading path.
+fn load_plugin_pins<F: FileSystemReader>(
+    project_root: &Path,
+    fs: &F,
+) -> Result<BTreeMap<String, String>, CompileError> {
+    let lockfile_path = project_root.join("graphcal.lock");
+    let Ok(lockfile_text) = fs.read_to_string(&lockfile_path) else {
+        return Ok(BTreeMap::new());
+    };
+    let lockfile = parse_lockfile_str(&lockfile_text).map_err(|e| {
+        CompileError::Eval(GraphcalError::ManifestError {
+            message: e.to_string(),
+        })
+    })?;
+    lockfile
+        .validate(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
+        .map_err(|e| {
+            CompileError::Eval(GraphcalError::ManifestError {
+                message: e.to_string(),
+            })
+        })?;
+    Ok(lockfile
+        .plugins
+        .iter()
+        .map(|plugin| (plugin.path().to_string(), plugin.sha256().to_string()))
+        .collect())
 }
 
 fn load_package_manifest_for_root<F: FileSystemReader>(
@@ -748,7 +829,7 @@ fn load_locked_package_project<F: FileSystemReader>(
     // them against the root package's source root.
     let root_package_root = context.root_for(&root_package)?.to_path_buf();
     let root_dag_package = root_dag_id.package().clone();
-    let plugins = read_wasm_plugins(
+    let mut plugins = read_wasm_plugins(
         files
             .values()
             .filter(|file| *file.dag_id.package() == root_dag_package)
@@ -756,6 +837,7 @@ fn load_locked_package_project<F: FileSystemReader>(
         &root_package_root,
         fs,
     );
+    apply_plugin_pins(&mut plugins, &context.plugin_pins);
     Ok(LoadedProject {
         files,
         root: root_dag_id,
@@ -767,6 +849,8 @@ fn load_locked_package_project<F: FileSystemReader>(
 struct PackageLoadContext {
     graph: PackageGraph,
     roots: BTreeMap<PackageInstanceId, PathBuf>,
+    /// Root-package plugin pins from `graphcal.lock`: path → SHA-256.
+    plugin_pins: BTreeMap<String, String>,
 }
 
 impl PackageLoadContext {
@@ -818,7 +902,16 @@ impl PackageLoadContext {
                 message: e.to_string(),
             })
         })?;
-        Ok(Self { graph, roots })
+        let plugin_pins = lockfile
+            .plugins
+            .iter()
+            .map(|plugin| (plugin.path().to_string(), plugin.sha256().to_string()))
+            .collect();
+        Ok(Self {
+            graph,
+            roots,
+            plugin_pins,
+        })
     }
 
     fn root_for(&self, package: &PackageInstanceId) -> Result<&Path, CompileError> {

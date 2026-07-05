@@ -342,6 +342,40 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("plugin \"{plugin}\" is not pinned in graphcal.lock")]
+    #[diagnostic(
+        code(graphcal::P009),
+        help(
+            "projects with a graphcal.toml load plugin binaries only through lockfile pins; run `graphcal deps lock` to record this plugin's hash"
+        )
+    )]
+    PluginNotPinned {
+        plugin: crate::syntax::plugin::PluginPath,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("plugin has no graphcal.lock pin")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "plugin \"{plugin}\" does not match its graphcal.lock pin: file hashes to {actual}, lockfile pins {expected}"
+    )]
+    #[diagnostic(
+        code(graphcal::P010),
+        help(
+            "the lockfile is the trust boundary for plugin code — a changed binary must arrive together with a reviewed pin update; if this change is intentional, rerun `graphcal deps lock`"
+        )
+    )]
+    PluginHashMismatch {
+        plugin: crate::syntax::plugin::PluginPath,
+        expected: String,
+        actual: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("plugin file does not match its pin")]
+        span: SourceSpan,
+    },
+
     #[error("graph reference `@{name}` not allowed in const expression")]
     #[diagnostic(
         code(graphcal::N005),
@@ -1799,6 +1833,8 @@ impl GraphcalError {
             | Self::PluginLoadFailed { src, .. }
             | Self::PluginForbiddenImport { src, .. }
             | Self::PluginInDependencyPackage { src, .. }
+            | Self::PluginNotPinned { src, .. }
+            | Self::PluginHashMismatch { src, .. }
             | Self::InvalidExternSignature { src, .. }
             | Self::MissingHostFunction { src, .. }
             | Self::ExternCallNotAllowed { src, .. }

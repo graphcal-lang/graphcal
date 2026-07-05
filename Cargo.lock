@@ -1694,6 +1694,7 @@ dependencies = [
  "graphcal-compiler",
  "graphcal-eval",
  "graphcal-io",
+ "graphcal-package",
  "graphcal-plugin-abi",
  "sha2",
  "tempfile",

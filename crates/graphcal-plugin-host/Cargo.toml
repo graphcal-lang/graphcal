@@ -23,5 +23,6 @@ workspace = true
 
 [dev-dependencies]
 graphcal-io = { workspace = true }
+graphcal-package = { workspace = true }
 tempfile.workspace = true
 wat.workspace = true
