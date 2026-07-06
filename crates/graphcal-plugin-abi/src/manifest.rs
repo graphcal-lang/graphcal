@@ -65,7 +65,8 @@ pub struct ManifestParam {
 /// The kind of a parameter or result value.
 ///
 /// JSON encoding is externally tagged: `{"scalar": {…}}`, `"bool"`, `"int"`,
-/// `{"array": {"element": {…}, "index": "I"}}`.
+/// `{"array": {"element": {…}, "index": "I"}}`,
+/// `{"struct": {"fields": [{"name": "root", "kind": {"scalar": {}}}]}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestValueKind {
@@ -84,6 +85,38 @@ pub enum ManifestValueKind {
         /// [`ManifestFunction::index_vars`].
         index: String,
     },
+    /// A record described by its flattened field layout (result-only;
+    /// crosses the ABI as one `f64` slot per field, in declaration order).
+    /// The shape is structural — the record's graphcal type name never
+    /// enters the manifest.
+    Struct {
+        /// The named fields, in declaration order.
+        fields: Vec<ManifestField>,
+    },
+}
+
+/// One field of a struct result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManifestField {
+    /// The field name (part of the calling contract).
+    pub name: String,
+    /// The field's kind.
+    pub kind: ManifestFieldKind,
+}
+
+/// The kind of one struct-result field: concrete scalars only (no
+/// dimension variables), or `Bool`/`Int` with the usual slot encodings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManifestFieldKind {
+    /// A scalar whose dimension is fixed (the monomial must have no
+    /// dimension-variable factors).
+    Scalar(ManifestMonomial),
+    /// A boolean slot (`1.0`/`0.0`).
+    Bool,
+    /// An integer slot (exactly-representable `f64`).
+    Int,
 }
 
 /// A dimension monomial: a product of dimension-variable powers and fixed
@@ -306,9 +339,57 @@ fn validate_kind(
             }
             element
         }
+        ManifestValueKind::Struct { fields } => return validate_struct(function, fields),
         ManifestValueKind::Bool | ManifestValueKind::Int => return Ok(()),
     };
 
+    validate_monomial(function, monomial)
+}
+
+fn validate_struct(
+    function: &ManifestFunction,
+    fields: &[ManifestField],
+) -> Result<(), ManifestValidationError> {
+    if fields.is_empty() {
+        return Err(ManifestValidationError::EmptyStruct {
+            function: function.name.clone(),
+        });
+    }
+    let mut seen_fields: Vec<&str> = Vec::new();
+    for field in fields {
+        if field.name.is_empty() {
+            return Err(ManifestValidationError::EmptyName {
+                function: Some(function.name.clone()),
+                role: NameRole::Field,
+            });
+        }
+        if seen_fields.contains(&field.name.as_str()) {
+            return Err(ManifestValidationError::DuplicateStructField {
+                function: function.name.clone(),
+                field: field.name.clone(),
+            });
+        }
+        seen_fields.push(&field.name);
+        match &field.kind {
+            ManifestFieldKind::Bool | ManifestFieldKind::Int => {}
+            ManifestFieldKind::Scalar(monomial) => {
+                if !monomial.vars.is_empty() {
+                    return Err(ManifestValidationError::StructFieldWithDimVars {
+                        function: function.name.clone(),
+                        field: field.name.clone(),
+                    });
+                }
+                validate_monomial(function, monomial)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_monomial(
+    function: &ManifestFunction,
+    monomial: &ManifestMonomial,
+) -> Result<(), ManifestValidationError> {
     let mut seen_vars: Vec<&str> = Vec::new();
     for factor in &monomial.vars {
         if factor.var.is_empty() {
@@ -375,6 +456,8 @@ pub enum NameRole {
     DimVar,
     /// A declared or referenced index variable.
     IndexVar,
+    /// A struct-result field name.
+    Field,
     /// A parameter name.
     Param,
     /// A dimension variable referenced by a monomial factor.
@@ -389,6 +472,7 @@ impl std::fmt::Display for NameRole {
             Self::Function => "function name",
             Self::DimVar => "dimension variable",
             Self::IndexVar => "index variable",
+            Self::Field => "struct field name",
             Self::Param => "parameter name",
             Self::MonomialVar => "monomial dimension variable",
             Self::FixedDim => "fixed dimension name",
@@ -466,6 +550,30 @@ pub enum ManifestValidationError {
         function: String,
         /// The repeated variable.
         var: String,
+    },
+    /// A struct result declares no fields.
+    #[error("function `{function}` declares a struct result with no fields")]
+    EmptyStruct {
+        /// The declaring function.
+        function: String,
+    },
+    /// A struct result repeats a field name.
+    #[error("function `{function}` declares struct field `{field}` more than once")]
+    DuplicateStructField {
+        /// The declaring function.
+        function: String,
+        /// The repeated field name.
+        field: String,
+    },
+    /// A struct field's monomial references dimension variables.
+    #[error(
+        "function `{function}` struct field `{field}` references dimension variables; struct-result fields must have fixed dimensions"
+    )]
+    StructFieldWithDimVars {
+        /// The declaring function.
+        function: String,
+        /// The offending field.
+        field: String,
     },
     /// A function declares the same parameter name twice.
     #[error("function `{function}` declares parameter `{param}` more than once")]

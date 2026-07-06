@@ -277,16 +277,83 @@ fn validate_name(name: &str) -> Result<(), ScaffoldNameError> {
 
 /// Render one function as a `.gcl` extern declaration line (no leading
 /// indentation): `fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;`.
+///
+/// A struct-returning function names its result type: the manifest is
+/// structural, so a suggested record name is derived from the function
+/// (`solve` → `SolveResult`) and the caller pairs the declaration with
+/// [`render_result_type_decl`].
 pub fn render_declaration(name: &str, signature: &FunctionSignature) -> String {
-    format!("fn {name}{};", signature.format_with(render_dimension))
+    let rendered = signature.format_with(render_dimension);
+    if matches!(signature.result(), ValueKind::Struct(_))
+        && let Some((head, _)) = rendered.rsplit_once(" -> ")
+    {
+        return format!("fn {name}{head} -> {};", suggest_result_type_name(name));
+    }
+    format!("fn {name}{rendered};")
 }
 
-/// Render the paste-ready `import plugin` block for a loaded module.
-///
-/// `path` is the verbatim path string for the import (callers pass the
-/// CLI argument; users adjust it to the vendored location).
+/// The suggested record type name for a struct-returning function:
+/// `solve_orbit` → `SolveOrbitResult`.
+#[must_use]
+pub fn suggest_result_type_name(function: &str) -> String {
+    let mut out = String::new();
+    for part in function.split('_').filter(|part| !part.is_empty()) {
+        let mut chars = part.chars();
+        if let Some(first) = chars.next() {
+            out.extend(first.to_uppercase());
+            out.push_str(chars.as_str());
+        }
+    }
+    out.push_str("Result");
+    out
+}
+
+/// Render the suggested `.gcl` record declaration for a struct-returning
+/// function, e.g. `type SolveResult { SolveResult(root: Dimensionless, iters: Int) }`.
+#[must_use]
+pub fn render_result_type_decl(
+    function: &str,
+    shape: &graphcal_compiler::function_signature::StructShape,
+) -> String {
+    use graphcal_compiler::function_signature::StructFieldKind;
+
+    let type_name = suggest_result_type_name(function);
+    let fields: Vec<String> = shape
+        .fields()
+        .iter()
+        .map(|field| {
+            let kind = match &field.kind {
+                StructFieldKind::Bool => "Bool".to_string(),
+                StructFieldKind::Int => "Int".to_string(),
+                StructFieldKind::Scalar(dim) => {
+                    if dim.is_dimensionless() {
+                        "Dimensionless".to_string()
+                    } else {
+                        render_dimension(dim)
+                    }
+                }
+            };
+            format!("{}: {kind}", field.name)
+        })
+        .collect();
+    format!("type {type_name} {{ {type_name}({}) }}", fields.join(", "))
+}
+
+/// Render the paste-ready `import plugin` block for a loaded module,
+/// preceded by suggested record declarations for struct-returning
+/// functions (their names are suggestions — rename freely, the loader
+/// compares shapes, not names).
 pub fn render_import_block(path: &str, alias: &str, module: &PluginModule) -> String {
-    let mut out = format!("import plugin \"{path}\" as {alias} {{\n");
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    for (name, signature) in module.functions() {
+        if let ValueKind::Struct(shape) = signature.result() {
+            out.push_str(&render_result_type_decl(name.as_str(), shape));
+            out.push_str("\n\n");
+        }
+    }
+    let _ = writeln!(out, "import plugin \"{path}\" as {alias} {{");
     for (name, signature) in module.functions() {
         out.push_str("    ");
         out.push_str(&render_declaration(name.as_str(), signature));
@@ -399,6 +466,8 @@ pub fn parse_call_args(
                     .parse::<f64>()
                     .map(HostFnValue::Scalar)
                     .map_err(|_| invalid("expected a number (in SI base units)")),
+                // Struct parameters never pass signature validation.
+                ValueKind::Struct(_) => Err(invalid("struct parameters are not supported")),
                 ValueKind::Indexed { .. } => {
                     let inner = text
                         .strip_prefix('[')
@@ -477,6 +546,52 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
                 || format!("[{rendered}]"),
                 |dim| format!("[{rendered}] [{dim}, SI base units]"),
             ))
+        }
+        ValueKind::Struct(shape) => {
+            use graphcal_compiler::function_signature::StructFieldKind;
+
+            let HostFnValue::Buffer(slots) = value else {
+                return Err("declared a struct result but returned a scalar".to_string());
+            };
+            if slots.len() != shape.fields().len() {
+                return Err(format!(
+                    "declared a struct result with {} field(s) but returned {} slot(s)",
+                    shape.fields().len(),
+                    slots.len()
+                ));
+            }
+            let fields = shape
+                .fields()
+                .iter()
+                .zip(slots)
+                .map(|(field, slot)| {
+                    let rendered = match &field.kind {
+                        StructFieldKind::Bool => {
+                            if slot.to_bits() == 1.0_f64.to_bits() {
+                                "true".to_string()
+                            } else if slot.to_bits() == 0.0_f64.to_bits() {
+                                "false".to_string()
+                            } else {
+                                return Err(format!(
+                                    "field `{}`: declared Bool is not encoded as 1.0/0.0: got {slot}",
+                                    field.name
+                                ));
+                            }
+                        }
+                        StructFieldKind::Int => int_from_abi(*slot)
+                            .map(|value| value.to_string())
+                            .ok_or_else(|| {
+                                format!(
+                                    "field `{}`: declared Int is not an exactly-representable integer: got {slot}",
+                                    field.name
+                                )
+                            })?,
+                        StructFieldKind::Scalar(_) => format_number(*slot),
+                    };
+                    Ok(format!("{}: {rendered}", field.name))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(format!("{{ {} }} [SI base units]", fields.join(", ")))
         }
     }
 }

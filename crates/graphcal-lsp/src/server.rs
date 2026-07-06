@@ -722,6 +722,10 @@ fn build_extern_fn_signatures(
             ExternValueKind::Indexed { element, index } => {
                 format!("{}[{index}]", format_monomial(element))
             }
+            ExternValueKind::Struct(_) => function
+                .result_struct
+                .as_ref()
+                .map_or_else(|| "{ … }".to_string(), |s| s.resolved.as_str().to_string()),
         };
         let parameters: Vec<String> = function
             .signature
@@ -843,6 +847,9 @@ fn value_kind_display(kind: &ValueKind) -> std::result::Result<String, String> {
         ValueKind::Indexed { element, index } => {
             Ok(format!("{}[{index}]", monomial_display(element)?))
         }
+        // Builtins never declare struct results; extern hovers render the
+        // nominal type through their own path above.
+        ValueKind::Struct(_) => Err("struct results are extern-only".to_string()),
     }
 }
 

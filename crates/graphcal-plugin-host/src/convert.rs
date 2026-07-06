@@ -10,7 +10,8 @@
 
 use graphcal_compiler::dimension::{Dimension, Rational, RationalError};
 use graphcal_compiler::function_signature::{
-    DimMonomial, DimVarPower, FunctionParam, FunctionSignature, SignatureError, ValueKind,
+    DimMonomial, DimVarPower, FunctionParam, FunctionSignature, SignatureError, StructFieldKind,
+    StructShape, StructShapeField, ValueKind,
 };
 use graphcal_compiler::registry::prelude::{PRELUDE_BASE_DIMENSION_NAMES, prelude_base_dimension};
 use graphcal_compiler::syntax::dimension::DimVarName;
@@ -18,7 +19,8 @@ use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
 use graphcal_compiler::syntax::index_name::IndexVarName;
 use graphcal_compiler::syntax::names::NameAtomError;
 use graphcal_plugin_abi::{
-    ManifestFunction, ManifestMonomial, ManifestRational, ManifestValueKind, PluginManifest,
+    ManifestField, ManifestFieldKind, ManifestFunction, ManifestMonomial, ManifestRational,
+    ManifestValueKind, PluginManifest,
 };
 use thiserror::Error;
 
@@ -111,7 +113,34 @@ fn convert_kind(kind: &ManifestValueKind) -> Result<ValueKind, ConvertErrorKind>
             element: convert_monomial(element)?,
             index: convert_index_var(index)?,
         }),
+        ManifestValueKind::Struct { fields } => {
+            let fields = fields
+                .iter()
+                .map(convert_struct_field)
+                .collect::<Result<Vec<_>, _>>()?;
+            let shape = StructShape::try_new(fields).map_err(ConvertErrorKind::Signature)?;
+            Ok(ValueKind::Struct(shape))
+        }
     }
+}
+
+fn convert_struct_field(field: &ManifestField) -> Result<StructShapeField, ConvertErrorKind> {
+    let name = graphcal_compiler::syntax::type_name::FieldName::try_new(field.name.clone())
+        .map_err(|source| ConvertErrorKind::InvalidFieldName {
+            name: field.name.clone(),
+            source,
+        })?;
+    let kind = match &field.kind {
+        ManifestFieldKind::Bool => StructFieldKind::Bool,
+        ManifestFieldKind::Int => StructFieldKind::Int,
+        ManifestFieldKind::Scalar(monomial) => {
+            // Wire validation already rejects dimension-variable factors in
+            // struct fields, so the converted monomial is concrete.
+            let monomial = convert_monomial(monomial)?;
+            StructFieldKind::Scalar(monomial.fixed)
+        }
+    };
+    Ok(StructShapeField { name, kind })
 }
 
 fn convert_monomial(monomial: &ManifestMonomial) -> Result<DimMonomial, ConvertErrorKind> {
@@ -176,6 +205,14 @@ pub enum ConvertErrorKind {
     /// A declared or referenced index variable is not a valid name.
     #[error("`{name}` is not a valid index variable name: {source}")]
     InvalidIndexVarName {
+        /// The rejected name.
+        name: String,
+        /// Why the name was rejected.
+        source: NameAtomError,
+    },
+    /// A struct field name is not a valid name.
+    #[error("`{name}` is not a valid field name: {source}")]
+    InvalidFieldName {
         /// The rejected name.
         name: String,
         /// Why the name was rejected.

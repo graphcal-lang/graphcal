@@ -411,7 +411,10 @@ impl PluginModule {
                     )]
                     params.push(wasmi::Val::I32(values.len() as i32));
                 }
-                (ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int, _)
+                (
+                    ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int | ValueKind::Struct(_),
+                    _,
+                )
                 | (ValueKind::Indexed { .. }, HostFnValue::Scalar(_)) => {
                     return Err(PluginCallError::Internal {
                         message: format!(
@@ -443,6 +446,15 @@ impl PluginModule {
                             "function `{function}` result index `{index}` is not bound by any argument"
                         ),
                     })?;
+                let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
+                let ptr = buffers.alloc(live, self.limits.fuel_per_call, len)?;
+                params.push(wasmi::Val::I32(ptr));
+                Some(OutBuffer { ptr, len })
+            }
+            // A struct result is a fixed-size out-buffer: one f64 slot per
+            // flattened field, in declaration order.
+            ValueKind::Struct(shape) => {
+                let len = shape.fields().len();
                 let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
                 let ptr = buffers.alloc(live, self.limits.fuel_per_call, len)?;
                 params.push(wasmi::Val::I32(ptr));
@@ -608,7 +620,7 @@ fn signature_uses_buffers(signature: &FunctionSignature) -> bool {
         .iter()
         .map(|param| &param.kind)
         .chain(std::iter::once(signature.result()))
-        .any(|kind| matches!(kind, ValueKind::Indexed { .. }))
+        .any(|kind| matches!(kind, ValueKind::Indexed { .. } | ValueKind::Struct(_)))
 }
 
 /// The wasm function type the ABI requires for one signature.
@@ -637,7 +649,9 @@ fn expected_wasm_type(signature: &FunctionSignature) -> ExpectedWasmType {
             ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int => {
                 params.push(wasmi::ValType::F64);
             }
-            ValueKind::Indexed { .. } => {
+            // Struct parameters never pass signature validation; folding
+            // them into the buffer arm keeps this total without a panic path.
+            ValueKind::Indexed { .. } | ValueKind::Struct(_) => {
                 params.push(wasmi::ValType::I32);
                 params.push(wasmi::ValType::I32);
             }
@@ -645,7 +659,7 @@ fn expected_wasm_type(signature: &FunctionSignature) -> ExpectedWasmType {
     }
     let results = match signature.result() {
         ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int => vec![wasmi::ValType::F64],
-        ValueKind::Indexed { .. } => {
+        ValueKind::Indexed { .. } | ValueKind::Struct(_) => {
             params.push(wasmi::ValType::I32);
             Vec::new()
         }

@@ -310,6 +310,55 @@ mod tests {
     }
 
     #[test]
+    fn struct_results_roundtrip_to_the_manifest() {
+        let manifest = manifest_of(quote! {
+            fn span<D: Dim, I: Index>(xs: D[I]) -> { lo: Pressure, ok: Bool, n: Int } {
+                SpanOutput { lo: xs[0], ok: true, n: xs.len() as i64 }
+            }
+        });
+        let function = &manifest.functions[0];
+        let ManifestValueKind::Struct { fields } = &function.result else {
+            panic!("expected a struct result, got {:?}", function.result);
+        };
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].name, "lo");
+        assert!(matches!(
+            &fields[0].kind,
+            graphcal_plugin_abi::ManifestFieldKind::Scalar(monomial) if monomial.vars.is_empty()
+        ));
+        assert!(matches!(
+            &fields[1].kind,
+            graphcal_plugin_abi::ManifestFieldKind::Bool
+        ));
+        assert!(matches!(
+            &fields[2].kind,
+            graphcal_plugin_abi::ManifestFieldKind::Int
+        ));
+    }
+
+    #[test]
+    fn struct_discipline_is_enforced() {
+        let message = error_of(quote! {
+            fn f(x: Dimensionless) -> { } { unreachable!() }
+        });
+        assert!(message.contains("at least one field"), "got: {message}");
+
+        let message = error_of(quote! {
+            fn f(x: Dimensionless) -> { a: Dimensionless, a: Int } { unreachable!() }
+        });
+        assert!(
+            message.contains("field `a` is declared more than once"),
+            "got: {message}"
+        );
+
+        // Struct fields have no dimension variables in scope.
+        let message = error_of(quote! {
+            fn f<D: Dim>(x: D) -> { lo: D } { unreachable!() }
+        });
+        assert!(message.contains("unknown dimension `D`"), "got: {message}");
+    }
+
+    #[test]
     fn array_discipline_is_enforced() {
         let message = error_of(quote! {
             fn f<D: Dim>(xs: D[I]) -> D { xs.iter().sum() }

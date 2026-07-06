@@ -21,7 +21,7 @@ use proc_macro2::{Span, TokenStream};
 
 use crate::dims;
 use crate::parse::{
-    DimExprAst, DimTermAst, ExponentAst, MulOp, PluginFnDecl, PluginInput, TypeAst,
+    DimExprAst, DimTermAst, ExponentAst, MulOp, PluginFnDecl, PluginInput, ResultAst, TypeAst,
 };
 use crate::rational::Rational;
 
@@ -50,13 +50,14 @@ pub struct FunctionIr {
 }
 
 impl FunctionIr {
-    /// Whether this function takes or returns an array.
+    /// Whether this function moves values through plugin-memory buffers
+    /// (array parameters/results or a struct result).
     pub fn uses_buffers(&self) -> bool {
         self.params
             .iter()
             .map(|param| &param.kind)
             .chain(std::iter::once(&self.result))
-            .any(|kind| matches!(kind, KindIr::Array { .. }))
+            .any(|kind| matches!(kind, KindIr::Array { .. } | KindIr::Struct(_)))
     }
 }
 
@@ -75,6 +76,21 @@ pub enum KindIr {
         element: MonomialIr,
         index: syn::Ident,
     },
+    /// A struct-shaped result (never a parameter).
+    Struct(Vec<FieldIr>),
+}
+
+/// One validated field of a struct-shaped result.
+pub struct FieldIr {
+    pub name: syn::Ident,
+    pub kind: FieldKindIr,
+}
+
+/// A struct field's kind: concrete scalars only (no dimension variables).
+pub enum FieldKindIr {
+    Bool,
+    Int,
+    Scalar(MonomialIr),
 }
 
 /// A folded dimension monomial: dimension-variable powers in
@@ -207,7 +223,8 @@ fn lower_params(
                 used_indexes.insert(index.to_string());
                 Some(element)
             }
-            KindIr::Bool | KindIr::Int => None,
+            // The parser only accepts struct shapes in result position.
+            KindIr::Bool | KindIr::Int | KindIr::Struct(_) => None,
         };
         if let Some(monomial) = monomial {
             match monomial.as_bare_var() {
@@ -251,7 +268,7 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
         used_indexes,
     } = lower_params(decl, &binders, &index_binders)?;
 
-    let result = lower_type(&decl.result, &binders, &index_binders)?;
+    let result = lower_result(&decl.result, &binders, &index_binders)?;
     let result_monomial = match &result {
         KindIr::Scalar(monomial) => Some(monomial),
         KindIr::Array { element, index } => {
@@ -266,7 +283,7 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
             }
             Some(element)
         }
-        KindIr::Bool | KindIr::Int => None,
+        KindIr::Bool | KindIr::Int | KindIr::Struct(_) => None,
     };
     if let Some(monomial) = result_monomial {
         for factor in &monomial.vars {
@@ -312,6 +329,98 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
         result,
         body: decl.body.clone(),
     })
+}
+
+/// Lower the result position: a value type, or a braced struct shape.
+fn lower_result(
+    result: &ResultAst,
+    binders: &HashSet<String>,
+    index_binders: &HashSet<String>,
+) -> syn::Result<KindIr> {
+    match result {
+        ResultAst::Value(ty) => lower_type(ty, binders, index_binders),
+        ResultAst::Struct(fields) => {
+            if fields.is_empty() {
+                return Err(syn::Error::new(
+                    Span::call_site(),
+                    "a struct result must declare at least one field",
+                ));
+            }
+            let mut seen: HashSet<String> = HashSet::new();
+            let lowered = fields
+                .iter()
+                .map(|field| {
+                    if !seen.insert(field.name.to_string()) {
+                        return Err(syn::Error::new(
+                            field.name.span(),
+                            format!("struct field `{}` is declared more than once", field.name),
+                        ));
+                    }
+                    // Fields lower with no binders in scope: struct-result
+                    // fields must have concrete dimensions, so a dimension
+                    // variable here reads as an unknown dimension.
+                    let empty = HashSet::new();
+                    let kind = match lower_type(
+                        &TypeAst {
+                            element: clone_dim_expr(&field.ty),
+                            index: None,
+                        },
+                        &empty,
+                        &empty,
+                    )? {
+                        KindIr::Bool => FieldKindIr::Bool,
+                        KindIr::Int => FieldKindIr::Int,
+                        KindIr::Scalar(monomial) => FieldKindIr::Scalar(monomial),
+                        KindIr::Array { .. } | KindIr::Struct(_) => {
+                            return Err(syn::Error::new(
+                                field.name.span(),
+                                "struct fields must be Bool, Int, or scalar dimension types",
+                            ));
+                        }
+                    };
+                    Ok(FieldIr {
+                        name: field.name.clone(),
+                        kind,
+                    })
+                })
+                .collect::<syn::Result<Vec<_>>>()?;
+            Ok(KindIr::Struct(lowered))
+        }
+    }
+}
+
+/// Clone a parsed dimension expression (the parse AST is not `Clone`; the
+/// struct-field path re-lowers through the shared `TypeAst` shape).
+fn clone_dim_expr(expr: &DimExprAst) -> DimExprAst {
+    DimExprAst {
+        first: clone_dim_term(&expr.first),
+        rest: expr
+            .rest
+            .iter()
+            .map(|(op, term)| (*op, clone_dim_term(term)))
+            .collect(),
+    }
+}
+
+fn clone_dim_term(term: &DimTermAst) -> DimTermAst {
+    match term {
+        DimTermAst::Named { name, pow } => DimTermAst::Named {
+            name: name.clone(),
+            pow: pow.as_ref().map(clone_exponent),
+        },
+        DimTermAst::Group { inner, pow } => DimTermAst::Group {
+            inner: Box::new(clone_dim_expr(inner)),
+            pow: pow.as_ref().map(clone_exponent),
+        },
+    }
+}
+
+const fn clone_exponent(exponent: &ExponentAst) -> ExponentAst {
+    ExponentAst {
+        num: exponent.num,
+        den: exponent.den,
+        span: exponent.span,
+    }
 }
 
 /// Lower one type position: a lone `Bool`/`Int`, a dimension monomial, or

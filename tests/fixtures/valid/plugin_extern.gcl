@@ -8,6 +8,13 @@ import plugin "graphcal:demo" as demo {
     fn inverse<D: Dim>(x: D) -> D^-1;
     fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
     fn normalize<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
+    fn dv_range<I: Index>(xs: Velocity[I]) -> DvRange;
+}
+
+// A struct-returning extern function names a record type in scope; the
+// plugin's manifest carries only the flattened field shape.
+type DvRange {
+    DvRange(min: Velocity, max: Velocity),
 }
 
 index Maneuver = { Departure, Correction, Insertion };
@@ -30,5 +37,9 @@ node dv_share_total: Dimensionless = sum(@dv_share);
 
 assert v_mid_interpolates = @v_mid == 150.0 m/s;
 assert scale_is_geometric = @scale == 6.0 m;
+node dv_span: DvRange = demo.dv_range(@delta_v);
+node dv_spread: Velocity = @dv_span.max - @dv_span.min;
+
 assert departure_share = @dv_share[Maneuver.Departure] == 0.5;
 assert shares_sum_to_one = @dv_share_total == 1.0;
+assert spread_is_range = @dv_spread == 1.5 km/s;

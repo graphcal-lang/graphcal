@@ -62,9 +62,10 @@ pub mod manifest;
 pub mod section;
 
 pub use manifest::{
-    ManifestDecodeError, ManifestDimPower, ManifestEmbedError, ManifestEncodeError,
-    ManifestFromWasmError, ManifestFunction, ManifestMonomial, ManifestParam, ManifestRational,
-    ManifestValidationError, ManifestValueKind, ManifestVarPower, NameRole, PluginManifest,
+    ManifestDecodeError, ManifestDimPower, ManifestEmbedError, ManifestEncodeError, ManifestField,
+    ManifestFieldKind, ManifestFromWasmError, ManifestFunction, ManifestMonomial, ManifestParam,
+    ManifestRational, ManifestValidationError, ManifestValueKind, ManifestVarPower, NameRole,
+    PluginManifest,
 };
 pub use section::{SectionError, embed_manifest, extract_manifest};
 

@@ -815,7 +815,10 @@ fn eval_hir_extern_fn(
                 }
                 HostFnValue::Buffer(buffer)
             }
-            (ValueKind::Int | ValueKind::Bool | ValueKind::Indexed { .. }, _) => {
+            (
+                ValueKind::Int | ValueKind::Bool | ValueKind::Indexed { .. } | ValueKind::Struct(_),
+                _,
+            ) => {
                 return Err(ctx.internal_error(
                     format!(
                         "extern function `{ext}` parameter `{}` received a value of the wrong kind after dimension checking",
@@ -929,6 +932,85 @@ fn eval_hir_extern_fn(
             Ok(RuntimeValue::Indexed {
                 index_name: bound.index_name,
                 entries,
+            })
+        }
+        ValueKind::Struct(shape) => {
+            use graphcal_compiler::function_signature::StructFieldKind;
+            use graphcal_compiler::registry::declared_type::StructTypeRef;
+
+            let HostFnValue::Buffer(buffer) = result else {
+                return Err(ctx.eval_error(
+                    format!(
+                        "extern function `{ext}` declared a struct result but returned a scalar"
+                    ),
+                    expr.span,
+                ));
+            };
+            let Some(result_struct) = &function.result_struct else {
+                return Err(ctx.internal_error(
+                    format!(
+                        "extern function `{ext}` declares a struct result without a resolved record type"
+                    ),
+                    expr.span,
+                ));
+            };
+            if buffer.len() != shape.fields().len() {
+                return Err(ctx.eval_error(
+                    format!(
+                        "extern function `{ext}` returned {} field slot(s), expected {}",
+                        buffer.len(),
+                        shape.fields().len()
+                    ),
+                    expr.span,
+                ));
+            }
+            let display = ext.to_string();
+            let fields = shape
+                .fields()
+                .iter()
+                .zip(buffer)
+                .map(|(field, slot)| {
+                    let value = match &field.kind {
+                        StructFieldKind::Scalar(_) => RuntimeValue::Scalar(
+                            super::arithmetic::check_finite(slot, &display, ctx, expr.span)?,
+                        ),
+                        StructFieldKind::Int => super::conversions::checked_f64_to_i64(slot)
+                            .map(RuntimeValue::Int)
+                            .map_err(|err| {
+                                ctx.eval_error(
+                                    format!(
+                                        "extern function `{ext}` returned a non-Int value for field `{}`: {err}",
+                                        field.name
+                                    ),
+                                    expr.span,
+                                )
+                            })?,
+                        StructFieldKind::Bool => {
+                            #[expect(
+                                clippy::float_cmp,
+                                reason = "the Bool host ABI is exactly 0.0/1.0; anything else is a plugin bug"
+                            )]
+                            if slot == 0.0 {
+                                RuntimeValue::Bool(false)
+                            } else if slot == 1.0 {
+                                RuntimeValue::Bool(true)
+                            } else {
+                                return Err(ctx.eval_error(
+                                    format!(
+                                        "extern function `{ext}` returned {slot} for Bool field `{}` (expected 0.0 or 1.0)",
+                                        field.name
+                                    ),
+                                    expr.span,
+                                ));
+                            }
+                        }
+                    };
+                    Ok((field.name.clone(), value))
+                })
+                .collect::<Result<indexmap::IndexMap<_, _>, GraphcalError>>()?;
+            Ok(RuntimeValue::Struct {
+                type_name: StructTypeRef::from_resolved(result_struct.resolved.clone()),
+                fields,
             })
         }
     }

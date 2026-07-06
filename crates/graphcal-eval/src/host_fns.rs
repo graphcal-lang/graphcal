@@ -265,6 +265,7 @@ pub const DEMO_PLUGIN_PATH: &str = "graphcal:demo";
 ///     fn inverse<D: Dim>(x: D) -> D^-1;
 ///     fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
 ///     fn normalize<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
+///     fn dv_range<I: Index>(xs: Velocity[I]) -> DvRange;
 /// }
 /// ```
 #[must_use]
@@ -299,7 +300,7 @@ pub fn demo_registry() -> HostFunctionRegistry {
             Ok(HostFnValue::Scalar(product.sqrt()))
         },
     );
-    registry.register(plugin, FnName::expect_valid("normalize"), |args| {
+    registry.register(plugin.clone(), FnName::expect_valid("normalize"), |args| {
         let xs = args[0].expect_buffer(0)?;
         let total: f64 = xs.iter().sum();
         if total == 0.0 {
@@ -308,6 +309,16 @@ pub fn demo_registry() -> HostFunctionRegistry {
             ));
         }
         Ok(HostFnValue::Buffer(xs.iter().map(|x| x / total).collect()))
+    });
+    registry.register(plugin, FnName::expect_valid("dv_range"), |args| {
+        let xs = args[0].expect_buffer(0)?;
+        let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
+        for x in xs {
+            min = min.min(*x);
+            max = max.max(*x);
+        }
+        // Struct results cross as one f64 slot per field, in field order.
+        Ok(HostFnValue::Buffer(vec![min, max]))
     });
     registry
 }
@@ -330,7 +341,7 @@ mod tests {
     #[test]
     fn demo_registry_provides_documented_functions() {
         let registry = demo_registry();
-        for name in ["lerp", "inverse", "geometric_mean", "normalize"] {
+        for name in ["lerp", "inverse", "geometric_mean", "normalize", "dv_range"] {
             assert!(registry.contains(&key(name)), "missing demo fn `{name}`");
         }
     }

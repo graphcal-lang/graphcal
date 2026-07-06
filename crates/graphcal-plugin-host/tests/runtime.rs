@@ -719,3 +719,105 @@ fn manifests_with_duplicate_index_vars_are_rejected() {
         graphcal_plugin_abi::ManifestValidationError::DuplicateIndexVar { .. }
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Struct returns (issue #25 Phase D)
+// ---------------------------------------------------------------------------
+
+/// The buffer-protocol plugin extended with `span(xs: D[I]) -> {min, max}`.
+const STRUCT_WAT: &str = r#"
+(module
+  (memory (export "memory") 1)
+  (global $bump (mut i32) (i32.const 1024))
+  (func (export "graphcal_alloc") (param $size i32) (result i32)
+    (local $ptr i32)
+    (local.set $ptr (global.get $bump))
+    (global.set $bump
+      (i32.add
+        (global.get $bump)
+        (i32.and (i32.add (local.get $size) (i32.const 7)) (i32.const -8))))
+    (local.get $ptr))
+  (func (export "graphcal_free") (param i32 i32))
+  (func (export "span") (param $ptr i32) (param $len i32) (param $out i32)
+    (local $i i32)
+    (local $x f64)
+    (local $min f64)
+    (local $max f64)
+    (local.set $min (f64.load (local.get $ptr)))
+    (local.set $max (f64.load (local.get $ptr)))
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_s (local.get $i) (local.get $len)))
+        (local.set $x
+          (f64.load (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 8)))))
+        (local.set $min (f64.min (local.get $min) (local.get $x)))
+        (local.set $max (f64.max (local.get $max) (local.get $x)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (f64.store (local.get $out) (local.get $min))
+    (f64.store (i32.add (local.get $out) (i32.const 8)) (local.get $max))))
+"#;
+
+fn struct_manifest() -> PluginManifest {
+    use graphcal_plugin_abi::{ManifestField, ManifestFieldKind};
+
+    let mut function = array_function("span", &[("xs", array_kind("D", "I"))], scalar_var("D"));
+    function.result = ManifestValueKind::Struct {
+        fields: vec![
+            ManifestField {
+                name: "min".to_string(),
+                kind: ManifestFieldKind::Scalar(ManifestMonomial::default()),
+            },
+            ManifestField {
+                name: "max".to_string(),
+                kind: ManifestFieldKind::Scalar(ManifestMonomial::default()),
+            },
+        ],
+    };
+    manifest(vec![function])
+}
+
+#[test]
+fn calls_a_struct_returning_kernel() {
+    let host = PluginHost::new();
+    let module = host.load(&plugin(STRUCT_WAT, &struct_manifest())).unwrap();
+    let result = module
+        .call(
+            &fn_name("span"),
+            &[HostFnValue::Buffer(vec![3.0, -1.5, 2.0])],
+        )
+        .unwrap();
+    assert_eq!(result, HostFnValue::Buffer(vec![-1.5, 3.0]));
+}
+
+#[test]
+fn struct_field_monomials_with_dim_vars_are_rejected() {
+    use graphcal_plugin_abi::{ManifestField, ManifestFieldKind};
+
+    let mut function = array_function("span", &[("xs", array_kind("D", "I"))], scalar_var("D"));
+    function.result = ManifestValueKind::Struct {
+        fields: vec![ManifestField {
+            name: "min".to_string(),
+            kind: ManifestFieldKind::Scalar(ManifestMonomial {
+                vars: vec![ManifestVarPower {
+                    var: "D".to_string(),
+                    pow: ManifestRational { num: 1, den: 1 },
+                }],
+                fixed: Vec::new(),
+            }),
+        }],
+    };
+    let err = PluginHost::new()
+        .load(&plugin(STRUCT_WAT, &manifest(vec![function])))
+        .unwrap_err();
+    let PluginLoadError::Manifest(ManifestFromWasmError::Decode(ManifestDecodeError::Invalid(
+        invalid,
+    ))) = err
+    else {
+        panic!("expected a manifest validation error, got {err:?}");
+    };
+    assert!(matches!(
+        invalid,
+        graphcal_plugin_abi::ManifestValidationError::StructFieldWithDimVars { .. }
+    ));
+}

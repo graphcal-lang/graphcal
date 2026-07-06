@@ -18,7 +18,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::lower::{FunctionIr, KindIr, PluginIr};
+use crate::lower::{FieldKindIr, FunctionIr, KindIr, PluginIr};
 
 /// Generate the full expansion from the validated IR and its manifest
 /// payload.
@@ -87,7 +87,7 @@ fn generate_scalar_function(function: &FunctionIr) -> TokenStream {
         let name = &param.name;
         let name_str = param.name.to_string();
         match param.kind {
-            KindIr::Scalar(_) | KindIr::Array { .. } => None,
+            KindIr::Scalar(_) | KindIr::Array { .. } | KindIr::Struct(_) => None,
             KindIr::Bool => Some(quote! {
                 let #name: bool = ::graphcal_plugin::__rt::bool_from_abi(#name, #name_str);
             }),
@@ -97,7 +97,9 @@ fn generate_scalar_function(function: &FunctionIr) -> TokenStream {
         }
     });
     let (result_ty, to_abi) = match function.result {
-        KindIr::Scalar(_) | KindIr::Array { .. } => (quote! { f64 }, quote! { __graphcal_result }),
+        KindIr::Scalar(_) | KindIr::Array { .. } | KindIr::Struct(_) => {
+            (quote! { f64 }, quote! { __graphcal_result })
+        }
         KindIr::Bool => (
             quote! { bool },
             quote! { ::graphcal_plugin::__rt::bool_to_abi(__graphcal_result) },
@@ -140,7 +142,10 @@ fn wrapper_pieces(function: &FunctionIr) -> WrapperPieces {
         let pname = &param.name;
         let pname_str = pname.to_string();
         match &param.kind {
-            KindIr::Scalar(_) => {
+            // Struct parameters cannot be written (the parser only accepts
+            // the braced shape in result position); the arm keeps the match
+            // total without a panic path.
+            KindIr::Scalar(_) | KindIr::Struct(_) => {
                 raw_params.push(quote! { #pname: f64 });
                 natural_args.push(quote! { #pname });
             }
@@ -185,23 +190,50 @@ fn wrapper_pieces(function: &FunctionIr) -> WrapperPieces {
 fn generate_buffer_function(function: &FunctionIr) -> TokenStream {
     let docs = &function.docs;
     let name = &function.name;
-    let name_str = name.to_string();
     let body = &function.body;
 
     let natural_params = function.params.iter().map(|param| {
         let pname = &param.name;
         match &param.kind {
-            KindIr::Scalar(_) => quote! { #pname: f64 },
+            KindIr::Scalar(_) | KindIr::Struct(_) => quote! { #pname: f64 },
             KindIr::Bool => quote! { #pname: bool },
             KindIr::Int => quote! { #pname: i64 },
             KindIr::Array { .. } => quote! { #pname: &[f64] },
         }
     });
+    let output_ident = output_struct_ident(name);
     let natural_result_ty = match &function.result {
         KindIr::Scalar(_) => quote! { f64 },
         KindIr::Bool => quote! { bool },
         KindIr::Int => quote! { i64 },
         KindIr::Array { .. } => quote! { ::std::vec::Vec<f64> },
+        KindIr::Struct(_) => quote! { #output_ident },
+    };
+    // A struct-shaped result gets a named output type: positional tuples
+    // would let two same-kind fields swap silently.
+    let output_struct = match &function.result {
+        KindIr::Struct(fields) => {
+            let field_defs = fields.iter().map(|field| {
+                let fname = &field.name;
+                let ty = match &field.kind {
+                    FieldKindIr::Scalar(_) => quote! { f64 },
+                    FieldKindIr::Bool => quote! { bool },
+                    FieldKindIr::Int => quote! { i64 },
+                };
+                quote! { pub #fname: #ty }
+            });
+            let doc = format!(
+                "The result of [`{name}`], one field per declared struct field (scalars in SI                  base units)."
+            );
+            Some(quote! {
+                #[doc = #doc]
+                #[derive(Debug, Clone, Copy, PartialEq)]
+                pub struct #output_ident {
+                    #(#field_defs),*
+                }
+            })
+        }
+        _ => None,
     };
 
     let WrapperPieces {
@@ -210,8 +242,32 @@ fn generate_buffer_function(function: &FunctionIr) -> TokenStream {
         natural_args,
     } = wrapper_pieces(function);
 
+    let wrapper = generate_buffer_wrapper(function, &raw_params, &decodes, &natural_args);
+
+    quote! {
+        #(#docs)*
+        #output_struct
+
+        pub fn #name(#(#natural_params),*) -> #natural_result_ty {
+            ::graphcal_plugin::__rt::install_failure_hook();
+            #body
+        }
+
+        #wrapper
+    }
+}
+
+/// The `wasm32`-only export wrapper for one buffer-moving function.
+fn generate_buffer_wrapper(
+    function: &FunctionIr,
+    raw_params: &[TokenStream],
+    decodes: &[TokenStream],
+    natural_args: &[TokenStream],
+) -> TokenStream {
+    let name = &function.name;
+    let name_str = name.to_string();
     let wrapper_ident = format_ident!("__graphcal_export_{name}");
-    let wrapper = match &function.result {
+    match &function.result {
         KindIr::Array { index, .. } => {
             // The out-buffer length is the input array bound to the result's
             // index variable; lowering guarantees one exists.
@@ -275,15 +331,55 @@ fn generate_buffer_function(function: &FunctionIr) -> TokenStream {
                 ::graphcal_plugin::__rt::int_to_abi(#name(#(#natural_args),*))
             }
         },
-    };
-
-    quote! {
-        #(#docs)*
-        pub fn #name(#(#natural_params),*) -> #natural_result_ty {
-            ::graphcal_plugin::__rt::install_failure_hook();
-            #body
+        KindIr::Struct(fields) => {
+            let slot_count = u32::try_from(fields.len()).unwrap_or(u32::MAX);
+            let slots = fields.iter().map(|field| {
+                let fname = &field.name;
+                match &field.kind {
+                    FieldKindIr::Scalar(_) => quote! { __graphcal_result.#fname },
+                    FieldKindIr::Bool => quote! {
+                        ::graphcal_plugin::__rt::bool_to_abi(__graphcal_result.#fname)
+                    },
+                    FieldKindIr::Int => quote! {
+                        ::graphcal_plugin::__rt::int_to_abi(__graphcal_result.#fname)
+                    },
+                }
+            });
+            quote! {
+                #[cfg(target_arch = "wasm32")]
+                #[unsafe(export_name = #name_str)]
+                extern "C-unwind" fn #wrapper_ident(
+                    #(#raw_params,)*
+                    __graphcal_out: *mut f64,
+                ) {
+                    ::graphcal_plugin::__rt::install_failure_hook();
+                    #(#decodes)*
+                    let __graphcal_result = #name(#(#natural_args),*);
+                    let __graphcal_slots: [f64; #slot_count as usize] = [#(#slots),*];
+                    // SAFETY: the host allocated one slot per declared field.
+                    unsafe {
+                        ::graphcal_plugin::__rt::write_array_result(
+                            &__graphcal_slots,
+                            __graphcal_out,
+                            #slot_count,
+                            #name_str,
+                        );
+                    }
+                }
+            }
         }
-
-        #wrapper
     }
+}
+
+/// `solve_orbit` → `SolveOrbitOutput`.
+fn output_struct_ident(name: &syn::Ident) -> syn::Ident {
+    let mut camel = String::new();
+    for part in name.to_string().split('_').filter(|part| !part.is_empty()) {
+        let mut chars = part.chars();
+        if let Some(first) = chars.next() {
+            camel.extend(first.to_uppercase());
+            camel.push_str(chars.as_str());
+        }
+    }
+    format_ident!("{camel}Output", span = name.span())
 }

@@ -10,5 +10,5 @@ snippet line 5: import plugin "graphcal:demo" as demo {
 snippet line 6:     fn boost(xs: Velocity[Maneuver]) -> Velocity;
     label at line 6, columns 27 to 34: invalid signature
 snippet line 7: }
-diagnostic help: extern signatures support Bool, Int, scalar dimension types, and arrays of scalars over a declared index variable; each dimension variable must be declared in the `<...>` binder list and bound by a bare scalar parameter or bare array element before compound uses, and a result array must reuse an index variable that indexes some parameter
+diagnostic help: extern signatures support Bool, Int, scalar dimension types, arrays of scalars over a declared index variable, and record struct returns with concrete fields; each dimension variable must be declared in the `<...>` binder list and bound by a bare scalar parameter or bare array element before compound uses, and a result array must reuse an index variable that indexes some parameter
 diagnostic code: graphcal::P001

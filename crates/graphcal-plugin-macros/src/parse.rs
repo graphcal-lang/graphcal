@@ -33,9 +33,26 @@ pub struct PluginFnDecl {
     /// Index-variable binders (`I: Index`), in declaration order.
     pub index_vars: Vec<syn::Ident>,
     pub params: Vec<ParamDecl>,
-    pub result: TypeAst,
+    pub result: ResultAst,
     /// The tokens inside the body's braces.
     pub body: TokenStream,
+}
+
+/// A result position: a value type, or a braced struct shape
+/// (`-> { root: Dimensionless, iters: Int }`).
+///
+/// The struct shape is the one place the Rust and `.gcl` spellings differ:
+/// the `.gcl` declaration names a record type in scope, while the plugin —
+/// which cannot see graphcal type names — declares the shape structurally.
+pub enum ResultAst {
+    Value(TypeAst),
+    Struct(Vec<FieldDecl>),
+}
+
+/// One `name: type` field of a struct-shaped result.
+pub struct FieldDecl {
+    pub name: syn::Ident,
+    pub ty: DimExprAst,
 }
 
 /// One `name: type` parameter.
@@ -123,45 +140,7 @@ impl Parse for PluginFnDecl {
         input.parse::<Token![fn]>()?;
         let name: syn::Ident = input.parse()?;
 
-        let mut dim_vars = Vec::new();
-        let mut index_vars = Vec::new();
-        if input.peek(Token![<]) {
-            let open_span = input.span();
-            input.parse::<Token![<]>()?;
-            loop {
-                if input.peek(Token![>]) {
-                    break;
-                }
-                let var = input.parse::<syn::Ident>()?;
-                input.parse::<Token![:]>()?;
-                let constraint = input.parse::<syn::Ident>()?;
-                if constraint == "Dim" {
-                    dim_vars.push(var);
-                } else if constraint == "Index" {
-                    index_vars.push(var);
-                } else {
-                    return Err(syn::Error::new(
-                        constraint.span(),
-                        format!(
-                            "unsupported binder constraint `{constraint}`; extern signatures \
-                             support `Dim` and `Index` (write `{var}: Dim` or `{var}: Index`)"
-                        ),
-                    ));
-                }
-                if input.peek(Token![,]) {
-                    input.parse::<Token![,]>()?;
-                } else {
-                    break;
-                }
-            }
-            input.parse::<Token![>]>()?;
-            if dim_vars.is_empty() && index_vars.is_empty() {
-                return Err(syn::Error::new(
-                    open_span,
-                    "empty dimension-variable binder list; drop the `<>` or declare a variable",
-                ));
-            }
-        }
+        let (dim_vars, index_vars) = parse_binders(input)?;
 
         let params_content;
         syn::parenthesized!(params_content in input);
@@ -181,7 +160,29 @@ impl Parse for PluginFnDecl {
         }
 
         input.parse::<Token![->]>()?;
-        let result: TypeAst = input.parse()?;
+        // A brace directly after `->` is a struct shape: the (mandatory)
+        // result type would otherwise be missing entirely.
+        let result = if input.peek(syn::token::Brace) {
+            let shape_content;
+            syn::braced!(shape_content in input);
+            let mut fields = Vec::new();
+            while !shape_content.is_empty() {
+                let name: syn::Ident = shape_content.parse()?;
+                shape_content.parse::<Token![:]>()?;
+                let ty: DimExprAst = shape_content.parse()?;
+                fields.push(FieldDecl { name, ty });
+                if shape_content.peek(Token![,]) {
+                    shape_content.parse::<Token![,]>()?;
+                } else if shape_content.is_empty() {
+                    break;
+                } else {
+                    return Err(shape_content.error("expected `,` between struct fields"));
+                }
+            }
+            ResultAst::Struct(fields)
+        } else {
+            ResultAst::Value(input.parse()?)
+        };
 
         if input.peek(Token![;]) {
             return Err(input.error(
@@ -203,6 +204,50 @@ impl Parse for PluginFnDecl {
             body,
         })
     }
+}
+
+/// Parse the optional `<D: Dim, I: Index>` binder list.
+fn parse_binders(input: ParseStream) -> syn::Result<(Vec<syn::Ident>, Vec<syn::Ident>)> {
+    let mut dim_vars = Vec::new();
+    let mut index_vars = Vec::new();
+    if input.peek(Token![<]) {
+        let open_span = input.span();
+        input.parse::<Token![<]>()?;
+        loop {
+            if input.peek(Token![>]) {
+                break;
+            }
+            let var = input.parse::<syn::Ident>()?;
+            input.parse::<Token![:]>()?;
+            let constraint = input.parse::<syn::Ident>()?;
+            if constraint == "Dim" {
+                dim_vars.push(var);
+            } else if constraint == "Index" {
+                index_vars.push(var);
+            } else {
+                return Err(syn::Error::new(
+                    constraint.span(),
+                    format!(
+                        "unsupported binder constraint `{constraint}`; extern signatures \
+                         support `Dim` and `Index` (write `{var}: Dim` or `{var}: Index`)"
+                    ),
+                ));
+            }
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            } else {
+                break;
+            }
+        }
+        input.parse::<Token![>]>()?;
+        if dim_vars.is_empty() && index_vars.is_empty() {
+            return Err(syn::Error::new(
+                open_span,
+                "empty dimension-variable binder list; drop the `<>` or declare a variable",
+            ));
+        }
+    }
+    Ok((dim_vars, index_vars))
 }
 
 impl Parse for TypeAst {

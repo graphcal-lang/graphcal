@@ -662,3 +662,143 @@ node bad: Dimensionless[Phase] = arrays.scale(@xs, 2.0);
         "<D: Dim, I: Index>(xs: D[I], k: Dimensionless) -> D[I]"
     );
 }
+
+/// The struct-returning plugin: `span<D: Dim, I: Index>(xs: D[I]) -> {lo, hi}`
+/// (concrete Velocity fields in the manifest).
+fn span_plugin() -> Vec<u8> {
+    use graphcal_plugin_abi::{ManifestDimPower, ManifestField, ManifestFieldKind};
+
+    let velocity = ManifestMonomial {
+        vars: Vec::new(),
+        fixed: vec![
+            ManifestDimPower {
+                dim: "Length".to_string(),
+                pow: ManifestRational { num: 1, den: 1 },
+            },
+            ManifestDimPower {
+                dim: "Time".to_string(),
+                pow: ManifestRational { num: -1, den: 1 },
+            },
+        ],
+    };
+    let mut function = manifest_fn(
+        "span",
+        &["D"],
+        &[(
+            "xs",
+            ManifestValueKind::Array {
+                element: ManifestMonomial {
+                    vars: vec![ManifestVarPower {
+                        var: "D".to_string(),
+                        pow: ManifestRational { num: 1, den: 1 },
+                    }],
+                    fixed: Vec::new(),
+                },
+                index: "I".to_string(),
+            },
+        )],
+        ManifestValueKind::Struct {
+            fields: vec![
+                ManifestField {
+                    name: "lo".to_string(),
+                    kind: ManifestFieldKind::Scalar(velocity.clone()),
+                },
+                ManifestField {
+                    name: "hi".to_string(),
+                    kind: ManifestFieldKind::Scalar(velocity),
+                },
+            ],
+        },
+    );
+    function.index_vars = vec!["I".to_string()];
+    plugin_bytes(
+        r#"
+        (module
+          (memory (export "memory") 1)
+          (global $bump (mut i32) (i32.const 1024))
+          (func (export "graphcal_alloc") (param $size i32) (result i32)
+            (local $ptr i32)
+            (local.set $ptr (global.get $bump))
+            (global.set $bump
+              (i32.add
+                (global.get $bump)
+                (i32.and (i32.add (local.get $size) (i32.const 7)) (i32.const -8))))
+            (local.get $ptr))
+          (func (export "graphcal_free") (param i32 i32))
+          (func (export "span") (param $ptr i32) (param $len i32) (param $out i32)
+            (local $i i32)
+            (local $x f64)
+            (local $lo f64)
+            (local $hi f64)
+            (local.set $lo (f64.load (local.get $ptr)))
+            (local.set $hi (f64.load (local.get $ptr)))
+            (block $done
+              (loop $loop
+                (br_if $done (i32.ge_s (local.get $i) (local.get $len)))
+                (local.set $x
+                  (f64.load (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 8)))))
+                (local.set $lo (f64.min (local.get $lo) (local.get $x)))
+                (local.set $hi (f64.max (local.get $hi) (local.get $x)))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $loop)))
+            (f64.store (local.get $out) (local.get $lo))
+            (f64.store (i32.add (local.get $out) (i32.const 8)) (local.get $hi))))
+        "#,
+        vec![function],
+    )
+}
+
+#[test]
+fn wasm_struct_plugin_evaluates_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = r#"
+import plugin "plugins/span.wasm" as stats {
+    fn span<D: Dim, I: Index>(xs: D[I]) -> DvSpan;
+}
+
+type DvSpan { DvSpan(lo: Velocity, hi: Velocity) }
+
+index Phase = { Boost, Coast };
+node dv: Velocity[Phase] = { Phase.Boost: 2.0 km/s, Phase.Coast: 0.5 km/s };
+node span: DvSpan = stats.span(@dv);
+node spread: Velocity = @span.hi - @span.lo;
+"#;
+    let result = eval_project_with_plugin(
+        dir.path(),
+        source,
+        Some(("plugins/span.wasm", span_plugin())),
+    )
+    .unwrap();
+    let value = value_for(&result, "spread");
+    assert!(
+        (value.si_value().unwrap() - 1500.0).abs() < 1e-9,
+        "{value:?}"
+    );
+}
+
+#[test]
+fn declared_struct_shape_must_match_the_manifest_field_names() {
+    // Same kinds, different field names: names are part of the contract.
+    let dir = tempfile::tempdir().unwrap();
+    let source = r#"
+import plugin "plugins/span.wasm" as stats {
+    fn span<D: Dim, I: Index>(xs: D[I]) -> DvSpan;
+}
+
+type DvSpan { DvSpan(minimum: Velocity, maximum: Velocity) }
+
+index Phase = { Boost, Coast };
+node dv: Velocity[Phase] = { Phase.Boost: 2.0 km/s, Phase.Coast: 0.5 km/s };
+node span: DvSpan = stats.span(@dv);
+"#;
+    let err = eval_project_with_plugin(
+        dir.path(),
+        source,
+        Some(("plugins/span.wasm", span_plugin())),
+    )
+    .unwrap_err();
+    let CompileError::Eval(GraphcalError::ExternSignatureMismatch { declared, .. }) = err else {
+        panic!("expected ExternSignatureMismatch, got {err:?}");
+    };
+    assert!(declared.contains("minimum:"), "{declared}");
+}

@@ -4074,6 +4074,8 @@ fn eval_extern_plugin_fixture() {
     assert!((find_value(&result, "pace") - (1.0 / 150.0)).abs() < 1e-12);
     assert!((find_value(&result, "scale") - 6.0).abs() < 1e-12);
     assert!((find_value(&result, "dv_share_total") - 1.0).abs() < 1e-12);
+    // Struct results rebuild as ordinary record values: field access works.
+    assert!((find_value(&result, "dv_spread") - 1500.0).abs() < 1e-9);
     assert!(
         result
             .assertions

@@ -1,0 +1,12 @@
+// Extern struct returns must be record types: a multi-variant union has no
+// single flattened field layout to cross the boundary.
+type Outcome {
+    Converged(root: Dimensionless),
+    Diverged,
+}
+
+import plugin "graphcal:demo" as demo {
+    fn solve(x: Dimensionless) -> Outcome;
+}
+
+node y: Dimensionless = 1.0;

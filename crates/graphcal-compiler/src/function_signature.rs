@@ -163,6 +163,75 @@ pub enum ValueKind {
         /// The index variable naming the array's index.
         index: IndexVarName,
     },
+    /// A record value described by its flattened field shape.
+    ///
+    /// Result-only: [`FunctionSignature::try_new`] rejects struct
+    /// parameters (callers pass fields as separate arguments). The shape is
+    /// structural — the manifest never learns the graphcal type's name; the
+    /// declaration site binds the shape to a record type in scope.
+    Struct(StructShape),
+}
+
+/// The flattened field layout of a record return: named fields of concrete
+/// scalar, boolean, or integer kinds, in declaration order.
+///
+/// Constructed through [`StructShape::try_new`], which rejects empty shapes
+/// and duplicate field names. Field names and order are part of the calling
+/// contract (they are labels users access, not binders), so structural
+/// equivalence compares them verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructShape {
+    fields: Vec<StructShapeField>,
+}
+
+/// One named field of a [`StructShape`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructShapeField {
+    /// The field name (part of the contract).
+    pub name: crate::syntax::type_name::FieldName,
+    /// The field's value kind.
+    pub kind: StructFieldKind,
+}
+
+/// The kind of one struct field: concrete scalars only — dimension
+/// variables cannot appear in struct returns in this phase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StructFieldKind {
+    /// A scalar with a concrete fixed dimension.
+    Scalar(Dimension),
+    /// A boolean value.
+    Bool,
+    /// An integer value.
+    Int,
+}
+
+impl StructShape {
+    /// Build a validated shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SignatureError`] when the shape has no fields or repeats
+    /// a field name.
+    pub fn try_new(fields: Vec<StructShapeField>) -> Result<Self, SignatureError> {
+        if fields.is_empty() {
+            return Err(SignatureError::EmptyStructShape);
+        }
+        let mut seen: HashSet<&crate::syntax::type_name::FieldName> = HashSet::new();
+        for field in &fields {
+            if !seen.insert(&field.name) {
+                return Err(SignatureError::DuplicateStructField {
+                    field: field.name.clone(),
+                });
+            }
+        }
+        Ok(Self { fields })
+    }
+
+    /// The fields, in declaration order.
+    #[must_use]
+    pub fn fields(&self) -> &[StructShapeField] {
+        &self.fields
+    }
 }
 
 impl ValueKind {
@@ -253,6 +322,11 @@ impl FunctionSignature {
                     used_indexes.insert(index);
                     element
                 }
+                ValueKind::Struct(_) => {
+                    return Err(SignatureError::StructParam {
+                        param: param.name.clone(),
+                    });
+                }
                 ValueKind::Bool | ValueKind::Int => continue,
             };
             validate_monomial_factors(monomial)?;
@@ -287,7 +361,9 @@ impl FunctionSignature {
                 }
                 Some(element)
             }
-            ValueKind::Bool | ValueKind::Int => None,
+            // Struct fields are concrete (validated by StructShape::try_new);
+            // no variables to bind.
+            ValueKind::Bool | ValueKind::Int | ValueKind::Struct(_) => None,
         };
         if let Some(monomial) = result_monomial {
             validate_monomial_factors(monomial)?;
@@ -454,6 +530,9 @@ enum CanonicalValueKind {
         element: CanonicalMonomial,
         index: usize,
     },
+    /// Struct shapes carry no variables; field names, order, and kinds are
+    /// the contract and compare verbatim.
+    Struct(StructShape),
 }
 
 /// [`DimMonomial`] in canonical form: variable factors as
@@ -482,6 +561,7 @@ fn canonical_kind<'a>(kind: &'a ValueKind, order: &mut CanonicalOrder<'a>) -> Ca
             element: canonical_monomial(element, order),
             index: occurrence_index(&mut order.indexes, index),
         },
+        ValueKind::Struct(shape) => CanonicalValueKind::Struct(shape.clone()),
     }
 }
 
@@ -521,6 +601,28 @@ fn format_value_kind(
         ValueKind::Scalar(monomial) => format_monomial(monomial, format_dim),
         ValueKind::Indexed { element, index } => {
             format!("{}[{index}]", format_monomial(element, format_dim))
+        }
+        ValueKind::Struct(shape) => {
+            let fields: Vec<String> = shape
+                .fields()
+                .iter()
+                .map(|field| {
+                    let kind = match &field.kind {
+                        StructFieldKind::Bool => "Bool".to_string(),
+                        StructFieldKind::Int => "Int".to_string(),
+                        StructFieldKind::Scalar(dim) => {
+                            let rendered = format_dim(dim);
+                            if rendered.is_empty() {
+                                "Dimensionless".to_string()
+                            } else {
+                                rendered
+                            }
+                        }
+                    };
+                    format!("{}: {kind}", field.name)
+                })
+                .collect();
+            format!("{{ {} }}", fields.join(", "))
         }
     }
 }
@@ -650,6 +752,23 @@ pub enum SignatureError {
     IndexVarNeverUsed {
         /// The never-used variable.
         var: IndexVarName,
+    },
+    /// A struct appeared in parameter position.
+    #[error(
+        "parameter `{param}` has a struct type; struct values only cross the plugin boundary as results — pass the fields as separate parameters"
+    )]
+    StructParam {
+        /// The offending parameter.
+        param: FnParamName,
+    },
+    /// A struct shape declared no fields.
+    #[error("a struct return must have at least one field")]
+    EmptyStructShape,
+    /// A struct shape repeated a field name.
+    #[error("struct field `{field}` is declared more than once")]
+    DuplicateStructField {
+        /// The repeated field.
+        field: crate::syntax::type_name::FieldName,
     },
 }
 
@@ -1167,6 +1286,99 @@ mod tests {
         .unwrap();
         let scalar = FunctionSignature::passthrough("xs");
         assert!(!arr.structurally_equivalent(&scalar));
+    }
+
+    // -- Struct-return shapes ----------------------------------------------
+
+    fn shape(fields: &[(&str, StructFieldKind)]) -> StructShape {
+        StructShape::try_new(
+            fields
+                .iter()
+                .map(|(name, kind)| StructShapeField {
+                    name: crate::syntax::type_name::FieldName::expect_valid(*name),
+                    kind: kind.clone(),
+                })
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn struct_shapes_reject_empty_and_duplicate_fields() {
+        assert!(matches!(
+            StructShape::try_new(Vec::new()).unwrap_err(),
+            SignatureError::EmptyStructShape
+        ));
+        let field = StructShapeField {
+            name: crate::syntax::type_name::FieldName::expect_valid("x"),
+            kind: StructFieldKind::Int,
+        };
+        assert!(matches!(
+            StructShape::try_new(vec![field.clone(), field]).unwrap_err(),
+            SignatureError::DuplicateStructField { .. }
+        ));
+    }
+
+    #[test]
+    fn struct_params_are_rejected() {
+        let err = FunctionSignature::try_new(
+            Vec::new(),
+            Vec::new(),
+            vec![param(
+                "x",
+                ValueKind::Struct(shape(&[("lo", StructFieldKind::Int)])),
+            )],
+            ValueKind::Int,
+        )
+        .unwrap_err();
+        assert!(matches!(err, SignatureError::StructParam { .. }));
+    }
+
+    #[test]
+    fn struct_results_compare_field_names_and_order() {
+        let lo_hi = |names: (&str, &str)| {
+            FunctionSignature::try_new(
+                vec![var("D")],
+                vec![ivar("I")],
+                vec![param("xs", array("D", "I"))],
+                ValueKind::Struct(shape(&[
+                    (names.0, StructFieldKind::Scalar(length())),
+                    (names.1, StructFieldKind::Scalar(length())),
+                ])),
+            )
+            .unwrap()
+        };
+        let declared = lo_hi(("lo", "hi"));
+        assert!(declared.structurally_equivalent(&lo_hi(("lo", "hi"))));
+        // Field names are labels users access — part of the contract.
+        assert!(!declared.structurally_equivalent(&lo_hi(("minimum", "maximum"))));
+        // So is their order.
+        assert!(!declared.structurally_equivalent(&lo_hi(("hi", "lo"))));
+    }
+
+    #[test]
+    fn format_with_renders_struct_shapes() {
+        let sig = FunctionSignature::try_new(
+            vec![var("D")],
+            vec![ivar("I")],
+            vec![param("xs", array("D", "I"))],
+            ValueKind::Struct(shape(&[
+                ("lo", StructFieldKind::Scalar(Dimension::dimensionless())),
+                ("ok", StructFieldKind::Bool),
+            ])),
+        )
+        .unwrap();
+        let rendered = sig.format_with(|dim| {
+            if dim.is_dimensionless() {
+                String::new()
+            } else {
+                format!("{dim:?}")
+            }
+        });
+        assert_eq!(
+            rendered,
+            "<D: Dim, I: Index>(xs: D[I]) -> { lo: Dimensionless, ok: Bool }"
+        );
     }
 
     #[test]

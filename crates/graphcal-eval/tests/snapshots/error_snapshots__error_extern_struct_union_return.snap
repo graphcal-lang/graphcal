@@ -2,13 +2,13 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-invalid extern function signature: result array is indexed by `I`, which no array parameter uses; a function cannot invent its output length
+invalid extern function signature: `Outcome` is not a record type; extern struct returns need a single constructor named after the type
     Diagnostic severity: error
-Begin snippet for extern_array_unbound_result_index.gcl starting at line 3, column 1
+Begin snippet for extern_struct_union_return.gcl starting at line 8, column 1
 
-snippet line 3: import plugin "graphcal:demo" as demo {
-snippet line 4:     fn make<D: Dim, I: Index>(x: D) -> D[I];
-    label at line 4, columns 5 to 44: invalid signature
-snippet line 5: }
+snippet line 8: import plugin "graphcal:demo" as demo {
+snippet line 9:     fn solve(x: Dimensionless) -> Outcome;
+    label at line 9, columns 35 to 41: invalid signature
+snippet line 10: }
 diagnostic help: extern signatures support Bool, Int, scalar dimension types, arrays of scalars over a declared index variable, and record struct returns with concrete fields; each dimension variable must be declared in the `<...>` binder list and bound by a bare scalar parameter or bare array element before compound uses, and a result array must reuse an index variable that indexes some parameter
 diagnostic code: graphcal::P001

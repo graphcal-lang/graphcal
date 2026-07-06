@@ -864,6 +864,16 @@ fn infer_extern_fn_call(
                     arg.span,
                 )?;
             }
+            ValueKind::Struct(_) => {
+                // FunctionSignature::try_new rejects struct parameters.
+                return Err(GraphcalError::InternalError {
+                    message: format!(
+                        "extern function `{display_name}` carries a struct parameter past signature validation"
+                    ),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            }
             ValueKind::Indexed { element, index } => {
                 let InferredType::Indexed {
                     element: arg_element,
@@ -953,6 +963,24 @@ fn infer_extern_fn_call(
                 element: Box::new(InferredType::Scalar(dim)),
                 index: bound.clone(),
             })
+        }
+        ValueKind::Struct(_) => {
+            // The nominal identity lives on the entry (the shape in the
+            // signature is the manifest-facing contract); extern struct
+            // returns are non-generic records, so the argument list is empty.
+            let Some(result_struct) = &function.result_struct else {
+                return Err(GraphcalError::InternalError {
+                    message: format!(
+                        "extern function `{display_name}` declares a struct result without a resolved record type"
+                    ),
+                    src: src.clone(),
+                    span: callee_span.into(),
+                });
+            };
+            Ok(InferredType::Struct(
+                InferredStructType::from_resolved(result_struct.resolved.clone()),
+                Vec::new(),
+            ))
         }
     }
 }

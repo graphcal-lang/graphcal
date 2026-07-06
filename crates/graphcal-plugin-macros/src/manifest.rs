@@ -12,7 +12,7 @@ use graphcal_plugin_abi::{
 use proc_macro2::Span;
 
 use crate::dims;
-use crate::lower::{FunctionIr, KindIr, MonomialIr, PluginIr};
+use crate::lower::{FieldKindIr, FunctionIr, KindIr, MonomialIr, PluginIr};
 use crate::rational::Rational;
 
 /// Serialize the signature IR as the manifest JSON payload.
@@ -68,6 +68,25 @@ fn kind_to_manifest(kind: &KindIr, fallback_span: Span) -> syn::Result<ManifestV
         KindIr::Array { element, index } => ManifestValueKind::Array {
             element: monomial_to_manifest(element, fallback_span)?,
             index: index.to_string(),
+        },
+        KindIr::Struct(fields) => ManifestValueKind::Struct {
+            fields: fields
+                .iter()
+                .map(|field| {
+                    Ok(graphcal_plugin_abi::ManifestField {
+                        name: field.name.to_string(),
+                        kind: match &field.kind {
+                            FieldKindIr::Bool => graphcal_plugin_abi::ManifestFieldKind::Bool,
+                            FieldKindIr::Int => graphcal_plugin_abi::ManifestFieldKind::Int,
+                            FieldKindIr::Scalar(monomial) => {
+                                graphcal_plugin_abi::ManifestFieldKind::Scalar(
+                                    monomial_to_manifest(monomial, field.name.span())?,
+                                )
+                            }
+                        },
+                    })
+                })
+                .collect::<syn::Result<Vec<_>>>()?,
         },
     })
 }

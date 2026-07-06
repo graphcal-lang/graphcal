@@ -54,6 +54,14 @@ graphcal_plugin::plugin! {
     fn total<D: Dim, I: Index>(xs: D[I]) -> D {
         xs.iter().sum()
     }
+
+    /// Struct results are declared structurally (concrete field types) and
+    /// returned through a generated named output type (issue #25 Phase D).
+    fn span<I: Index>(xs: Pressure[I]) -> { lo: Pressure, hi: Pressure } {
+        let lo = xs.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        SpanOutput { lo, hi }
+    }
 }
 
 fn decoded_manifest() -> PluginManifest {
@@ -105,6 +113,12 @@ fn array_kernels_run_natively_with_slices_and_vecs() {
 }
 
 #[test]
+fn struct_kernels_return_the_generated_output_type() {
+    let span = span(&[3.0, -1.5, 2.0]);
+    assert_eq!(span, SpanOutput { lo: -1.5, hi: 3.0 });
+}
+
+#[test]
 fn manifest_matches_the_declarations() {
     let manifest = decoded_manifest();
     let names: Vec<&str> = manifest
@@ -121,12 +135,19 @@ fn manifest_matches_the_declarations() {
             "is_probability",
             "unrepresentable",
             "rescale",
-            "total"
+            "total",
+            "span"
         ]
     );
 
     let rescale = &manifest.functions[5];
     assert_eq!(rescale.index_vars, ["I"]);
+    let span = &manifest.functions[7];
+    assert!(matches!(
+        &span.result,
+        graphcal_plugin_abi::ManifestValueKind::Struct { fields }
+            if fields.len() == 2 && fields[0].name == "lo" && fields[1].name == "hi"
+    ));
     assert!(matches!(
         &rescale.params[0].kind,
         graphcal_plugin_abi::ManifestValueKind::Array { index, .. } if index == "I"
