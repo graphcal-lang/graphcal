@@ -126,11 +126,12 @@ Datetime values follow **point-vs-vector** semantics:
 |-----------|--------|-------|
 | `Datetime - Datetime` | `Time` (scalar) | Both must be the same time scale |
 | `Datetime + Time` | `Datetime` | Add a duration |
+| `Time + Datetime` | `Datetime` | Add a duration (commuted form) |
 | `Datetime - Time` | `Datetime` | Subtract a duration |
 | `Datetime == Datetime` | `Bool` | Equality comparison |
 | `Datetime < Datetime` | `Bool` | Ordering comparison |
 
-Datetime values cannot be added together, multiplied, or divided.
+Datetime values cannot be added together, multiplied, divided, or used as the right-hand operand of duration subtraction (`Time - Datetime`).
 
 Cross-scale operations are type errors: `Datetime<UTC> - Datetime<TT>` does not compile. Use explicit time scale conversion functions (`to_utc`, `to_tt`, etc.) first.
 
@@ -487,7 +488,7 @@ The compiler determines the dimension of the result of each arithmetic operation
 Examples:
 
 - `Length * Length` = `Length^2`
-- `Length / Time` = `Velocity` (if `dim Velocity = Length / Time;`)
+- `Length / Time` = `Velocity` (a prelude derived dimension)
 - `Length / Length` = `Dimensionless`
 - `(Mass * Length / Time^2) * (Length / Time)` = `Mass * Length^2 / Time^3`
 
@@ -503,11 +504,12 @@ Built-in math functions have specific dimension constraints:
 |----------|--------------------|------------------|
 | `sqrt(x)` | Any `D` | `D^(1/2)` (exponents halved) |
 | `sin(x)`, `cos(x)`, `tan(x)` | `Angle` | `Dimensionless` |
-| `asin(x)`, `acos(x)`, `atan2(y, x)` | `Dimensionless` | `Angle` |
+| `asin(x)`, `acos(x)` | `Dimensionless` | `Angle` |
+| `atan2(y, x)` | Both same `D` | `Angle` |
 | `exp(x)`, `ln(x)`, `log10(x)` | `Dimensionless` | `Dimensionless` |
 | `abs(x)` | Any `D` | `D` |
 | `min(a, b)`, `max(a, b)` | Both same `D` | `D` |
-| `floor(x)`, `ceil(x)`, `round(x)` | `Dimensionless` | `Dimensionless` |
+| `floor(x)`, `ceil(x)`, `round(x)`, `trunc(x)` | Any `D` | `D` |
 
 ## Unit Conversion
 
@@ -590,7 +592,7 @@ function_name(arg1, arg2, ...)
 ```
 
 - Arguments are matched positionally against the function's parameter types.
-- For generic functions, type parameters are inferred from the argument types (see [Generics](#generics) below).
+- For generic functions, type parameters are unified from the argument types (see [Generics](#generics) below).
 - The result type is the function's return type after generic substitution.
 
 ### Field Access
@@ -759,9 +761,7 @@ Generic parameters can have defaults:
 
 ```
 type Vec3<D: Dim, F: Type = Unframed> {
-    x: D,
-    y: D,
-    z: D,
+    Vec3(x: D, y: D, z: D),
 }
 
 // These are equivalent:
@@ -769,9 +769,9 @@ param pos: Vec3<Length> = ...;
 param pos: Vec3<Length, Unframed> = ...;
 ```
 
-### Generic Type Inference
+### Generic Parameter Unification
 
-When using generic types, type parameters are inferred from context:
+When using generic types, type parameters are unified from context:
 
 ```
 param pos: Vec3<Length, Eci> = Vec3<Length, Eci>(x: 1.0 km, y: 0.0 km, z: 0.0 km);

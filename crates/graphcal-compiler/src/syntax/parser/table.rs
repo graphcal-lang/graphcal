@@ -40,6 +40,9 @@ impl Parser<'_> {
             indexes.push(self.parse_table_index_spec()?);
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
+                if self.lexer.peek() == Some(&Token::RBracket) {
+                    break;
+                }
             } else {
                 break;
             }
@@ -599,6 +602,31 @@ mod tests {
                     assert_eq!(entries[1].keys[1].variant.value.as_str(), "Correction");
                     assert_eq!(entries[8].keys[0].variant.value.as_str(), "Arrival");
                     assert_eq!(entries[8].keys[1].variant.value.as_str(), "Insertion");
+                }
+                other => panic!("expected TableLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_table_index_list_allows_trailing_comma() {
+        let source = r"param m: Mass[Phase, Maneuver] = table[Phase, Maneuver,] {
+        : Departure, Correction;
+        Launch:  5000.0 kg, 0.0 kg;
+        Cruise:  0.0 kg, 4500.0 kg;
+    };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
+                    assert_eq!(indexes.len(), 2);
+                    assert_eq!(named_index_name(&indexes[0]), "Phase");
+                    assert_eq!(named_index_name(&indexes[1]), "Maneuver");
+                    assert_eq!(entries.len(), 4);
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
             },

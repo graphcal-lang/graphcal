@@ -15,8 +15,7 @@ The [Mars Climate Orbiter](https://en.wikipedia.org/wiki/Mars_Climate_Orbiter) w
 Create `rocket.gcl`:
 
 ```
-dim Velocity = Length / Time;
-dim Acceleration = Length / Time^2;
+// `Velocity` and `Acceleration` are prelude dimensions.
 
 param dry_mass: Mass = 1200.0 kg;
 param fuel_mass: Mass = 2800.0 kg;
@@ -41,15 +40,13 @@ delta_v    = 3778.220768 m/s
 
 ## Defining Dimensions
 
-Graphcal has 7 built-in base dimensions: `Length`, `Time`, `Mass`, `Temperature`, `ElectricCurrent`, `Amount`, `LuminousIntensity`, plus `Angle`.
+Graphcal has 8 built-in base dimensions: `Length`, `Time`, `Mass`, `Temperature`, `ElectricCurrent`, `Amount`, `LuminousIntensity`, and `Angle`.
 
-You define derived dimensions using algebraic expressions over base dimensions:
+The prelude also provides common derived dimensions such as `Velocity`, `Acceleration`, `Force`, and `Energy`. Define your own derived dimensions only for project-specific quantity kinds:
 
 ```
-dim Velocity = Length / Time;
-dim Acceleration = Length / Time^2;
-dim Force = Mass * Length / Time^2;
-dim Energy = Mass * Length^2 / Time^2;
+dim GravParam = Length^3 / Time^2;
+dim Jerk = Length / Time^3;
 ```
 
 ## Using Units
@@ -86,9 +83,10 @@ Use `const unit` for custom units whose scale is known at compile time:
 
 ```
 const unit mile: Length = 1609.344 m;
-const unit hour: Time = 3600.0 s;
 const unit mph: Velocity = 1.0 mile / hour;
 ```
+
+`hour` is already a prelude unit, so the `mph` definition can reuse it directly.
 
 ## Unit Conversion
 

@@ -17,8 +17,6 @@ A tagged union lists its **constructors** inside the braced body of a
 (declared with parens or braces) or is a bare unit constructor:
 
 ```
-dim Force = Mass * Length / Time^2;
-
 type ManeuverKind {
     Impulsive(delta_v: Velocity),
     LowThrust(thrust: Force, duration: Time),
@@ -36,8 +34,6 @@ Record-shaped data is written as a single-variant union whose sole
 constructor's name equals the type's name:
 
 ```
-dim Velocity = Length / Time;
-
 type TransferResult {
     TransferResult(dv1: Velocity, dv2: Velocity, total_dv: Velocity, tof: Time),
 }

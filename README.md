@@ -13,8 +13,7 @@ Graphcal replaces the spreadsheets and ad-hoc scripts that engineers reluctantly
 
 ```gcl
 // rocket.gcl -- the Tsiolkovsky equation
-dim Velocity = Length / Time;
-dim Acceleration = Length / Time^2;
+// `Velocity` and `Acceleration` are prelude dimensions.
 
 param dry_mass: Mass = 1200.0 kg;
 param fuel_mass: Mass = 2800.0 kg;
@@ -108,7 +107,7 @@ The [`docs/`](docs/) directory contains the Zensical source for the site. You ca
 
 Graphcal is heading toward:
 
-- **Dynamic simulation** -- `scan` over a time axis for system dynamics
+- **Dynamic simulation** -- higher-level integration and solver workflows built on `scan`/`unfold` over time axes
 - **Python interop** -- parameter sweeps and Monte Carlo at native speed
 - **Spreadsheet bridges** -- keep `.gcl` as the source of truth, let domain experts stay in Excel
 
