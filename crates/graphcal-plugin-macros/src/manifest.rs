@@ -48,6 +48,9 @@ fn function_to_manifest(function: &FunctionIr) -> syn::Result<ManifestFunction> 
     Ok(ManifestFunction {
         name: function.name.to_string(),
         dim_vars: function.dim_vars.iter().map(ToString::to_string).collect(),
+        // Array kinds (and their index binders) reach the SDK in the Phase D
+        // authoring checkpoint; the macro emits scalar signatures until then.
+        index_vars: Vec::new(),
         params,
         result: kind_to_manifest(&function.result, function.name.span())?,
     })

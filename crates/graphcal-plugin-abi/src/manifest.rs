@@ -43,6 +43,9 @@ pub struct ManifestFunction {
     /// Declared dimension variables, in declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dim_vars: Vec<String>,
+    /// Declared index variables, in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub index_vars: Vec<String>,
     /// Named parameters, in declaration order.
     pub params: Vec<ManifestParam>,
     /// The result kind.
@@ -61,7 +64,8 @@ pub struct ManifestParam {
 
 /// The kind of a parameter or result value.
 ///
-/// JSON encoding is externally tagged: `{"scalar": {…}}`, `"bool"`, `"int"`.
+/// JSON encoding is externally tagged: `{"scalar": {…}}`, `"bool"`, `"int"`,
+/// `{"array": {"element": {…}, "index": "I"}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestValueKind {
@@ -71,6 +75,15 @@ pub enum ManifestValueKind {
     Bool,
     /// An integer value (crosses the ABI as an exactly-representable `f64`).
     Int,
+    /// An array of scalars over an index variable (crosses the ABI as a
+    /// dense `f64` buffer in index order).
+    Array {
+        /// The element dimension monomial.
+        element: ManifestMonomial,
+        /// The index variable, matching an entry in
+        /// [`ManifestFunction::index_vars`].
+        index: String,
+    },
 }
 
 /// A dimension monomial: a product of dimension-variable powers and fixed
@@ -240,6 +253,23 @@ fn validate_function(function: &ManifestFunction) -> Result<(), ManifestValidati
         seen_vars.push(var);
     }
 
+    let mut seen_index_vars: Vec<&str> = Vec::new();
+    for var in &function.index_vars {
+        if var.is_empty() {
+            return Err(ManifestValidationError::EmptyName {
+                function: Some(function.name.clone()),
+                role: NameRole::IndexVar,
+            });
+        }
+        if seen_index_vars.contains(&var.as_str()) {
+            return Err(ManifestValidationError::DuplicateIndexVar {
+                function: function.name.clone(),
+                var: var.clone(),
+            });
+        }
+        seen_index_vars.push(var);
+    }
+
     let mut seen_params: Vec<&str> = Vec::new();
     for param in &function.params {
         if param.name.is_empty() {
@@ -265,8 +295,18 @@ fn validate_kind(
     function: &ManifestFunction,
     kind: &ManifestValueKind,
 ) -> Result<(), ManifestValidationError> {
-    let ManifestValueKind::Scalar(monomial) = kind else {
-        return Ok(());
+    let monomial = match kind {
+        ManifestValueKind::Scalar(monomial) => monomial,
+        ManifestValueKind::Array { element, index } => {
+            if index.is_empty() {
+                return Err(ManifestValidationError::EmptyName {
+                    function: Some(function.name.clone()),
+                    role: NameRole::IndexVar,
+                });
+            }
+            element
+        }
+        ManifestValueKind::Bool | ManifestValueKind::Int => return Ok(()),
     };
 
     let mut seen_vars: Vec<&str> = Vec::new();
@@ -333,6 +373,8 @@ pub enum NameRole {
     Function,
     /// A declared dimension variable.
     DimVar,
+    /// A declared or referenced index variable.
+    IndexVar,
     /// A parameter name.
     Param,
     /// A dimension variable referenced by a monomial factor.
@@ -346,6 +388,7 @@ impl std::fmt::Display for NameRole {
         f.write_str(match self {
             Self::Function => "function name",
             Self::DimVar => "dimension variable",
+            Self::IndexVar => "index variable",
             Self::Param => "parameter name",
             Self::MonomialVar => "monomial dimension variable",
             Self::FixedDim => "fixed dimension name",
@@ -411,6 +454,14 @@ pub enum ManifestValidationError {
     /// A function declares the same dimension variable twice.
     #[error("function `{function}` declares dimension variable `{var}` more than once")]
     DuplicateDimVar {
+        /// The declaring function.
+        function: String,
+        /// The repeated variable.
+        var: String,
+    },
+    /// A function declares the same index variable twice.
+    #[error("function `{function}` declares index variable `{var}` more than once")]
+    DuplicateIndexVar {
         /// The declaring function.
         function: String,
         /// The repeated variable.
@@ -508,6 +559,7 @@ mod tests {
             functions: vec![ManifestFunction {
                 name: "lerp".to_string(),
                 dim_vars: vec!["D".to_string()],
+                index_vars: Vec::new(),
                 params: vec![
                     ManifestParam {
                         name: "a".to_string(),
@@ -534,6 +586,7 @@ mod tests {
             functions: vec![ManifestFunction {
                 name: "density".to_string(),
                 dim_vars: Vec::new(),
+                index_vars: Vec::new(),
                 params: vec![
                     ManifestParam {
                         name: "pressure".to_string(),
@@ -586,7 +639,7 @@ mod tests {
 
     #[test]
     fn dimensionless_scalar_is_the_empty_monomial() {
-        let json = r#"{"abi_version":1,"functions":[
+        let json = r#"{"abi_version":2,"functions":[
             {"name":"tanh","params":[{"name":"x","kind":{"scalar":{}}}],"result":{"scalar":{}}}
         ]}"#;
         let manifest = PluginManifest::from_json(json.as_bytes()).unwrap();
@@ -599,7 +652,7 @@ mod tests {
 
     #[test]
     fn unit_kinds_decode_from_bare_strings() {
-        let json = r#"{"abi_version":1,"functions":[
+        let json = r#"{"abi_version":2,"functions":[
             {"name":"f","params":[{"name":"n","kind":"int"},{"name":"b","kind":"bool"}],"result":"int"}
         ]}"#;
         let manifest = PluginManifest::from_json(json.as_bytes()).unwrap();
@@ -614,12 +667,12 @@ mod tests {
     #[test]
     fn future_abi_version_is_reported_before_shape_errors() {
         // The future shape is unknown; only `abi_version` must be readable.
-        let json = r#"{"abi_version":2,"modules":{"totally":"different"}}"#;
+        let json = r#"{"abi_version":3,"modules":{"totally":"different"}}"#;
         let err = PluginManifest::from_json(json.as_bytes()).unwrap_err();
         assert_eq!(
             err,
             ManifestDecodeError::UnsupportedAbiVersion {
-                found: 2,
+                found: 3,
                 supported: crate::ABI_VERSION,
             }
         );
@@ -627,7 +680,7 @@ mod tests {
 
     #[test]
     fn unknown_fields_are_rejected() {
-        let json = r#"{"abi_version":1,"functions":[],"extra":true}"#;
+        let json = r#"{"abi_version":2,"functions":[],"extra":true}"#;
         assert!(matches!(
             PluginManifest::from_json(json.as_bytes()).unwrap_err(),
             ManifestDecodeError::Json { .. }
@@ -636,7 +689,7 @@ mod tests {
 
     #[test]
     fn empty_function_list_is_rejected() {
-        let json = r#"{"abi_version":1,"functions":[]}"#;
+        let json = r#"{"abi_version":2,"functions":[]}"#;
         assert_eq!(
             PluginManifest::from_json(json.as_bytes()).unwrap_err(),
             ManifestDecodeError::Invalid(ManifestValidationError::NoFunctions)
@@ -783,5 +836,86 @@ mod tests {
         let wasm = manifest.embed_into(&crate::section::EMPTY_MODULE).unwrap();
         let decoded = PluginManifest::from_wasm(&wasm).unwrap();
         assert_eq!(decoded, manifest);
+    }
+
+    fn smooth_manifest() -> PluginManifest {
+        PluginManifest {
+            abi_version: crate::ABI_VERSION,
+            functions: vec![ManifestFunction {
+                name: "smooth".to_string(),
+                dim_vars: vec!["D".to_string()],
+                index_vars: vec!["I".to_string()],
+                params: vec![
+                    ManifestParam {
+                        name: "xs".to_string(),
+                        kind: ManifestValueKind::Array {
+                            element: ManifestMonomial {
+                                vars: vec![ManifestVarPower {
+                                    var: "D".to_string(),
+                                    pow: rational(1, 1),
+                                }],
+                                fixed: Vec::new(),
+                            },
+                            index: "I".to_string(),
+                        },
+                    },
+                    ManifestParam {
+                        name: "window".to_string(),
+                        kind: ManifestValueKind::Scalar(ManifestMonomial::default()),
+                    },
+                ],
+                result: ManifestValueKind::Array {
+                    element: ManifestMonomial {
+                        vars: vec![ManifestVarPower {
+                            var: "D".to_string(),
+                            pow: rational(1, 1),
+                        }],
+                        fixed: Vec::new(),
+                    },
+                    index: "I".to_string(),
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn array_kinds_roundtrip_through_json() {
+        let manifest = smooth_manifest();
+        let json = manifest.to_json().unwrap();
+        assert!(json.contains(r#""index_vars":["I"]"#), "{json}");
+        assert!(json.contains(r#""array""#), "{json}");
+        let decoded = PluginManifest::from_json(json.as_bytes()).unwrap();
+        assert_eq!(decoded, manifest);
+    }
+
+    #[test]
+    fn duplicate_index_vars_are_rejected() {
+        let mut manifest = smooth_manifest();
+        manifest.functions[0].index_vars = vec!["I".to_string(), "I".to_string()];
+        let json = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::DuplicateIndexVar {
+                function: "smooth".to_string(),
+                var: "I".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn empty_array_index_names_are_rejected() {
+        let mut manifest = smooth_manifest();
+        manifest.functions[0].result = ManifestValueKind::Array {
+            element: ManifestMonomial::default(),
+            index: String::new(),
+        };
+        let json = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::EmptyName {
+                function: Some("smooth".to_string()),
+                role: NameRole::IndexVar,
+            })
+        );
     }
 }

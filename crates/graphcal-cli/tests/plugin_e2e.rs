@@ -11,6 +11,7 @@
 
 #![cfg(test)]
 
+use graphcal_eval::host_fns::HostFnValue;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -284,10 +285,17 @@ panic = "abort"
     let module = host.load(&bytes).expect("panic-probe must validate");
 
     let name = graphcal_compiler::syntax::function_name::FnName::expect_valid("probe");
-    let ok = module.call(&name, &[9.0]).expect("probe(9) succeeds");
+    let ok = module
+        .call(&name, &[HostFnValue::Scalar(9.0)])
+        .expect("probe(9) succeeds");
+    let graphcal_eval::host_fns::HostFnValue::Scalar(ok) = ok else {
+        panic!("expected a scalar result, got {ok:?}");
+    };
     assert!((ok - 3.0).abs() < 1e-12);
 
-    let err = module.call(&name, &[-1.0]).expect_err("probe(-1) fails");
+    let err = module
+        .call(&name, &[HostFnValue::Scalar(-1.0)])
+        .expect_err("probe(-1) fails");
     let graphcal_plugin_host::PluginCallError::Failed { message } = &err else {
         panic!("expected a Failed error with the panic message, got {err:?}");
     };

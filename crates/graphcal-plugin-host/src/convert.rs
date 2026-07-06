@@ -15,6 +15,7 @@ use graphcal_compiler::function_signature::{
 use graphcal_compiler::registry::prelude::{PRELUDE_BASE_DIMENSION_NAMES, prelude_base_dimension};
 use graphcal_compiler::syntax::dimension::DimVarName;
 use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
+use graphcal_compiler::syntax::index_name::IndexVarName;
 use graphcal_compiler::syntax::names::NameAtomError;
 use graphcal_plugin_abi::{
     ManifestFunction, ManifestMonomial, ManifestRational, ManifestValueKind, PluginManifest,
@@ -59,6 +60,12 @@ pub fn convert_function(
         .map(|var| convert_dim_var(var))
         .collect::<Result<Vec<_>, _>>()
         .map_err(&in_function)?;
+    let index_vars = function
+        .index_vars
+        .iter()
+        .map(|var| convert_index_var(var))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(&in_function)?;
     let params = function
         .params
         .iter()
@@ -76,9 +83,7 @@ pub fn convert_function(
         .map_err(&in_function)?;
     let result = convert_kind(&function.result).map_err(&in_function)?;
 
-    // ABI v1 manifests declare no index variables; the array kinds arrive
-    // with ABI v2 (issue #25 Phase D).
-    let signature = FunctionSignature::try_new(dim_vars, Vec::new(), params, result)
+    let signature = FunctionSignature::try_new(dim_vars, index_vars, params, result)
         .map_err(|source| in_function(ConvertErrorKind::Signature(source)))?;
     Ok((name, signature))
 }
@@ -90,11 +95,22 @@ fn convert_dim_var(var: &str) -> Result<DimVarName, ConvertErrorKind> {
     })
 }
 
+fn convert_index_var(var: &str) -> Result<IndexVarName, ConvertErrorKind> {
+    IndexVarName::try_new(var.to_string()).map_err(|source| ConvertErrorKind::InvalidIndexVarName {
+        name: var.to_string(),
+        source,
+    })
+}
+
 fn convert_kind(kind: &ManifestValueKind) -> Result<ValueKind, ConvertErrorKind> {
     match kind {
         ManifestValueKind::Bool => Ok(ValueKind::Bool),
         ManifestValueKind::Int => Ok(ValueKind::Int),
         ManifestValueKind::Scalar(monomial) => Ok(ValueKind::Scalar(convert_monomial(monomial)?)),
+        ManifestValueKind::Array { element, index } => Ok(ValueKind::Indexed {
+            element: convert_monomial(element)?,
+            index: convert_index_var(index)?,
+        }),
     }
 }
 
@@ -152,6 +168,14 @@ pub enum ConvertErrorKind {
     /// A declared dimension variable is not a valid name.
     #[error("`{name}` is not a valid dimension variable name: {source}")]
     InvalidDimVarName {
+        /// The rejected name.
+        name: String,
+        /// Why the name was rejected.
+        source: NameAtomError,
+    },
+    /// A declared or referenced index variable is not a valid name.
+    #[error("`{name}` is not a valid index variable name: {source}")]
+    InvalidIndexVarName {
         /// The rejected name.
         name: String,
         /// Why the name was rejected.
@@ -223,6 +247,7 @@ mod tests {
         let function = ManifestFunction {
             name: "root".to_string(),
             dim_vars: vec!["D".to_string()],
+            index_vars: Vec::new(),
             params: vec![param("x", scalar_var("D", 1, 1))],
             result: scalar_var("D", 1, 2),
         };
@@ -239,6 +264,7 @@ mod tests {
         let function = ManifestFunction {
             name: "period".to_string(),
             dim_vars: Vec::new(),
+            index_vars: Vec::new(),
             params: vec![param("length", fixed_dim("Length", 1, 1))],
             result: fixed_dim("Time", 1, 1),
         };
@@ -258,6 +284,7 @@ mod tests {
         let function = ManifestFunction {
             name: "speed".to_string(),
             dim_vars: Vec::new(),
+            index_vars: Vec::new(),
             params: vec![param("x", fixed_dim("Velocity", 1, 1))],
             result: ManifestValueKind::Scalar(ManifestMonomial::default()),
         };
@@ -274,6 +301,7 @@ mod tests {
         let function = ManifestFunction {
             name: "has.dot".to_string(),
             dim_vars: Vec::new(),
+            index_vars: Vec::new(),
             params: Vec::new(),
             result: ManifestValueKind::Int,
         };
@@ -289,6 +317,7 @@ mod tests {
         let function = ManifestFunction {
             name: "sq".to_string(),
             dim_vars: vec!["D".to_string()],
+            index_vars: Vec::new(),
             params: vec![param("x", scalar_var("D", 2, 1))],
             result: scalar_var("D", 1, 1),
         };

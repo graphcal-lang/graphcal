@@ -12,6 +12,7 @@ use graphcal_compiler::dimension::{BaseDimId, Dimension};
 use graphcal_compiler::function_signature::{FunctionSignature, ValueKind};
 use graphcal_compiler::registry::format::format_exponent;
 use graphcal_eval::eval::format_number;
+use graphcal_eval::host_fns::HostFnValue;
 use graphcal_plugin_host::PluginModule;
 use thiserror::Error;
 
@@ -341,12 +342,13 @@ pub enum CallArgError {
 }
 
 /// Parse `--call` arguments against the signature's parameter kinds:
-/// scalars as (SI) floats, `Bool` as `true`/`false`, `Int` as an integer.
+/// scalars as (SI) floats, `Bool` as `true`/`false`, `Int` as an integer,
+/// arrays as bracketed comma-separated (SI) floats (`[1.0,2.5,3]`).
 pub fn parse_call_args(
     function: &str,
     signature: &FunctionSignature,
     raw: &[String],
-) -> Result<Vec<f64>, CallArgError> {
+) -> Result<Vec<HostFnValue>, CallArgError> {
     if raw.len() != signature.arity() {
         return Err(CallArgError::ArityMismatch {
             function: function.to_string(),
@@ -366,35 +368,56 @@ pub fn parse_call_args(
             };
             match &param.kind {
                 ValueKind::Bool => match text.as_str() {
-                    "true" => Ok(1.0),
-                    "false" => Ok(0.0),
+                    "true" => Ok(HostFnValue::Scalar(1.0)),
+                    "false" => Ok(HostFnValue::Scalar(0.0)),
                     _ => Err(invalid("expected `true` or `false`")),
                 },
                 ValueKind::Int => {
                     let value: i64 = text.parse().map_err(|_| invalid("expected an integer"))?;
                     int_to_abi(value)
+                        .map(HostFnValue::Scalar)
                         .ok_or_else(|| invalid("integer is not exactly representable as an f64"))
                 }
                 ValueKind::Scalar(_) => text
                     .parse::<f64>()
+                    .map(HostFnValue::Scalar)
                     .map_err(|_| invalid("expected a number (in SI base units)")),
-                // ABI v1 manifests cannot declare arrays; `--call` support
-                // arrives with the ABI v2 buffer protocol (issue #25 Phase D).
-                ValueKind::Indexed { .. } => Err(invalid(
-                    "array parameters are not supported by `--call` yet",
-                )),
+                ValueKind::Indexed { .. } => {
+                    let inner = text
+                        .strip_prefix('[')
+                        .and_then(|rest| rest.strip_suffix(']'))
+                        .ok_or_else(|| {
+                            invalid("expected a bracketed array like `[1.0,2.5,3]` (SI base units)")
+                        })?;
+                    let elements = inner
+                        .split(',')
+                        .map(|element| element.trim().parse::<f64>())
+                        .collect::<Result<Vec<f64>, _>>()
+                        .map_err(|_| {
+                            invalid("expected a bracketed array like `[1.0,2.5,3]` (SI base units)")
+                        })?;
+                    if elements.is_empty() {
+                        return Err(invalid("arrays cannot be empty (indexes are non-empty)"));
+                    }
+                    Ok(HostFnValue::Buffer(elements))
+                }
             }
         })
         .collect()
 }
 
-/// Render a call's raw `f64` result per the declared result kind.
+/// Render a call's result value per the declared result kind.
 ///
 /// Returns `Err` with a description when the value violates the declared
 /// kind's encoding (a plugin bug worth surfacing, not reinterpreting).
-pub fn render_result(signature: &FunctionSignature, raw: f64) -> Result<String, String> {
+pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Result<String, String> {
+    let scalar = |value: &HostFnValue| match value {
+        HostFnValue::Scalar(raw) => Ok(*raw),
+        HostFnValue::Buffer(_) => Err("declared a scalar result but returned an array".to_string()),
+    };
     match signature.result() {
         ValueKind::Bool => {
+            let raw = scalar(value)?;
             if raw.to_bits() == 1.0_f64.to_bits() {
                 Ok("true".to_string())
             } else if raw.to_bits() == 0.0_f64.to_bits() {
@@ -405,23 +428,38 @@ pub fn render_result(signature: &FunctionSignature, raw: f64) -> Result<String, 
                 ))
             }
         }
-        ValueKind::Int => int_from_abi(raw)
-            .map(|value| value.to_string())
-            .ok_or_else(|| {
-                format!("declared Int result is not an exactly-representable integer: got {raw}")
-            }),
+        ValueKind::Int => {
+            let raw = scalar(value)?;
+            int_from_abi(raw)
+                .map(|value| value.to_string())
+                .ok_or_else(|| {
+                    format!(
+                        "declared Int result is not an exactly-representable integer: got {raw}"
+                    )
+                })
+        }
         ValueKind::Scalar(monomial) => {
-            let rendered = format_number(raw);
+            let rendered = format_number(scalar(value)?);
             let dim = render_scalar_result_dimension(monomial);
             Ok(match dim {
                 Some(dim) => format!("{rendered} [{dim}, SI base units]"),
                 None => rendered,
             })
         }
-        // Unreachable until the ABI v2 buffer protocol lands (issue #25
-        // Phase D): v1 manifests cannot declare array results.
-        ValueKind::Indexed { .. } => {
-            Err("array results are not supported by `--call` yet".to_string())
+        ValueKind::Indexed { element, .. } => {
+            let HostFnValue::Buffer(values) = value else {
+                return Err("declared an array result but returned a scalar".to_string());
+            };
+            let rendered = values
+                .iter()
+                .map(|value| format_number(*value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let dim = render_scalar_result_dimension(element);
+            Ok(dim.map_or_else(
+                || format!("[{rendered}]"),
+                |dim| format!("[{rendered}] [{dim}, SI base units]"),
+            ))
         }
     }
 }
@@ -629,11 +667,18 @@ mod tests {
             &["1.0".into(), "3.0".into(), "0.5".into()],
         )
         .unwrap();
-        assert_eq!(args, [1.0, 3.0, 0.5]);
+        assert_eq!(
+            args,
+            [
+                HostFnValue::Scalar(1.0),
+                HostFnValue::Scalar(3.0),
+                HostFnValue::Scalar(0.5)
+            ]
+        );
 
         let args =
             parse_call_args("step", &step_signature(), &["5".into(), "true".into()]).unwrap();
-        assert_eq!(args, [5.0, 1.0]);
+        assert_eq!(args, [HostFnValue::Scalar(5.0), HostFnValue::Scalar(1.0)]);
 
         assert!(matches!(
             parse_call_args("step", &step_signature(), &["5".into()]).unwrap_err(),
@@ -655,8 +700,11 @@ mod tests {
 
     #[test]
     fn results_render_per_kind() {
-        assert_eq!(render_result(&step_signature(), 42.0).unwrap(), "42");
-        assert!(render_result(&step_signature(), 42.5).is_err());
+        assert_eq!(
+            render_result(&step_signature(), &HostFnValue::Scalar(42.0)).unwrap(),
+            "42"
+        );
+        assert!(render_result(&step_signature(), &HostFnValue::Scalar(42.5)).is_err());
 
         let bool_result = FunctionSignature::try_new(
             Vec::new(),
@@ -668,9 +716,15 @@ mod tests {
             ValueKind::Bool,
         )
         .expect("valid signature");
-        assert_eq!(render_result(&bool_result, 1.0).unwrap(), "true");
-        assert_eq!(render_result(&bool_result, 0.0).unwrap(), "false");
-        assert!(render_result(&bool_result, 0.5).is_err());
+        assert_eq!(
+            render_result(&bool_result, &HostFnValue::Scalar(1.0)).unwrap(),
+            "true"
+        );
+        assert_eq!(
+            render_result(&bool_result, &HostFnValue::Scalar(0.0)).unwrap(),
+            "false"
+        );
+        assert!(render_result(&bool_result, &HostFnValue::Scalar(0.5)).is_err());
 
         let velocity = prelude_base_dimension("Length")
             .unwrap()
@@ -687,7 +741,7 @@ mod tests {
         )
         .expect("valid signature");
         assert_eq!(
-            render_result(&scalar_result, 2.5).unwrap(),
+            render_result(&scalar_result, &HostFnValue::Scalar(2.5)).unwrap(),
             "2.5 [Length * Time^-1, SI base units]"
         );
     }

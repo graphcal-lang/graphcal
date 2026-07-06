@@ -50,6 +50,7 @@ fn test_module_bytes() -> Vec<u8> {
             ManifestFunction {
                 name: "lerp".to_string(),
                 dim_vars: vec!["D".to_string()],
+                index_vars: Vec::new(),
                 params: vec![
                     ManifestParam {
                         name: "a".to_string(),
@@ -69,6 +70,7 @@ fn test_module_bytes() -> Vec<u8> {
             ManifestFunction {
                 name: "step".to_string(),
                 dim_vars: Vec::new(),
+                index_vars: Vec::new(),
                 params: vec![
                     ManifestParam {
                         name: "n".to_string(),
@@ -110,7 +112,7 @@ fn plugin_test_reports_identity_and_import_block() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("sha256: "), "{stdout}");
-    assert!(stdout.contains("abi: version 1, 2 function(s)"), "{stdout}");
+    assert!(stdout.contains("abi: version 2, 2 function(s)"), "{stdout}");
     assert!(stdout.contains("as kernels {"), "{stdout}");
     assert!(
         stdout.contains("fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;"),

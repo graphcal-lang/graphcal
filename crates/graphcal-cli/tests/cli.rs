@@ -4546,6 +4546,7 @@ fn lerp_plugin_wasm() -> Vec<u8> {
         functions: vec![ManifestFunction {
             name: "lerp".to_string(),
             dim_vars: vec!["D".to_string()],
+            index_vars: Vec::new(),
             params: vec![
                 ManifestParam {
                     name: "a".to_string(),

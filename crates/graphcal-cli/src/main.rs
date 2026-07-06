@@ -408,10 +408,10 @@ fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
     println!();
     let call_display = format!("{}({})", function.as_str(), args.join(", "));
     match module.call(&function, &abi_args) {
-        Ok(raw) => match plugin::render_result(&signature, raw) {
+        Ok(raw) => match plugin::render_result(&signature, &raw) {
             Ok(rendered) => println!("{call_display} = {rendered}"),
             Err(e) => {
-                eprintln!("error: {call_display} returned {raw}: {e}");
+                eprintln!("error: {call_display} returned {raw:?}: {e}");
                 process::exit(1);
             }
         },

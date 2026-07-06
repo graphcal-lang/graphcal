@@ -44,6 +44,7 @@ fn manifest_fn(
     ManifestFunction {
         name: name.to_string(),
         dim_vars: dim_vars.iter().map(|&v| v.to_string()).collect(),
+        index_vars: Vec::new(),
         params: params
             .iter()
             .map(|(name, kind)| ManifestParam {
@@ -523,4 +524,141 @@ node b: Length = wasm.lerp(1.0 m, 3.0 m, 0.5);
 
     assert!((value_for(&result, "a").si_value().unwrap() - 0.25).abs() < 1e-12);
     assert!((value_for(&result, "b").si_value().unwrap() - 2.0).abs() < 1e-12);
+}
+
+// ---------------------------------------------------------------------------
+// Arrays over index variables (issue #25 Phase D)
+// ---------------------------------------------------------------------------
+
+/// The buffer-protocol plugin: a bump allocator plus
+/// `scale<D: Dim, I: Index>(xs: D[I], k: Dimensionless) -> D[I]`.
+fn scale_plugin() -> Vec<u8> {
+    let mut function = manifest_fn(
+        "scale",
+        &["D"],
+        &[
+            (
+                "xs",
+                ManifestValueKind::Array {
+                    element: ManifestMonomial {
+                        vars: vec![ManifestVarPower {
+                            var: "D".to_string(),
+                            pow: ManifestRational { num: 1, den: 1 },
+                        }],
+                        fixed: Vec::new(),
+                    },
+                    index: "I".to_string(),
+                },
+            ),
+            ("k", dimensionless()),
+        ],
+        ManifestValueKind::Array {
+            element: ManifestMonomial {
+                vars: vec![ManifestVarPower {
+                    var: "D".to_string(),
+                    pow: ManifestRational { num: 1, den: 1 },
+                }],
+                fixed: Vec::new(),
+            },
+            index: "I".to_string(),
+        },
+    );
+    function.index_vars = vec!["I".to_string()];
+    plugin_bytes(
+        r#"
+        (module
+          (memory (export "memory") 1)
+          (global $bump (mut i32) (i32.const 1024))
+          (func (export "graphcal_alloc") (param $size i32) (result i32)
+            (local $ptr i32)
+            (local.set $ptr (global.get $bump))
+            (global.set $bump
+              (i32.add
+                (global.get $bump)
+                (i32.and (i32.add (local.get $size) (i32.const 7)) (i32.const -8))))
+            (local.get $ptr))
+          (func (export "graphcal_free") (param i32 i32))
+          (func (export "scale") (param $ptr i32) (param $len i32) (param $k f64) (param $out i32)
+            (local $i i32)
+            (block $done
+              (loop $loop
+                (br_if $done (i32.ge_s (local.get $i) (local.get $len)))
+                (f64.store
+                  (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 8)))
+                  (f64.mul
+                    (f64.load (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 8))))
+                    (local.get $k)))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $loop)))))
+        "#,
+        vec![function],
+    )
+}
+
+#[test]
+fn wasm_array_plugin_evaluates_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = r#"
+import plugin "plugins/arrays.wasm" as arrays {
+    fn scale<D: Dim, I: Index>(xs: D[I], k: Dimensionless) -> D[I];
+}
+
+index Maneuver = { Departure, Correction, Insertion };
+
+node dv: Velocity[Maneuver] = {
+    Maneuver.Departure: 2.0 km/s,
+    Maneuver.Correction: 0.5 km/s,
+    Maneuver.Insertion: 1.5 km/s,
+};
+node margined: Velocity[Maneuver] = arrays.scale(@dv, 1.25);
+node margin_total: Velocity = sum(@margined);
+"#;
+    let result = eval_project_with_plugin(
+        dir.path(),
+        source,
+        Some(("plugins/arrays.wasm", scale_plugin())),
+    )
+    .unwrap();
+    let value = value_for(&result, "margin_total");
+    // (2000 + 500 + 1500) m/s * 1.25 = 5000 m/s.
+    assert!(
+        (value.si_value().unwrap() - 5000.0).abs() < 1e-9,
+        "{value:?}"
+    );
+}
+
+#[test]
+fn declared_array_signature_must_match_the_manifest() {
+    // The declaration says the result reuses the input's index variable but
+    // over a *different* element dimension — structural mismatch, P005.
+    let dir = tempfile::tempdir().unwrap();
+    let source = r#"
+import plugin "plugins/arrays.wasm" as arrays {
+    fn scale<D: Dim, I: Index>(xs: D[I], k: Dimensionless) -> Dimensionless[I];
+}
+
+index Phase = { Boost, Coast };
+node xs: Length[Phase] = { Phase.Boost: 1.0 m, Phase.Coast: 2.0 m };
+node bad: Dimensionless[Phase] = arrays.scale(@xs, 2.0);
+"#;
+    let err = eval_project_with_plugin(
+        dir.path(),
+        source,
+        Some(("plugins/arrays.wasm", scale_plugin())),
+    )
+    .unwrap_err();
+    let CompileError::Eval(GraphcalError::ExternSignatureMismatch {
+        declared, provided, ..
+    }) = err
+    else {
+        panic!("expected ExternSignatureMismatch, got {err:?}");
+    };
+    assert_eq!(
+        declared,
+        "<D: Dim, I: Index>(xs: D[I], k: Dimensionless) -> Dimensionless[I]"
+    );
+    assert_eq!(
+        provided,
+        "<D: Dim, I: Index>(xs: D[I], k: Dimensionless) -> D[I]"
+    );
 }

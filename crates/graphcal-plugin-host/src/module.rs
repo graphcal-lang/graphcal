@@ -10,11 +10,12 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use graphcal_compiler::function_signature::FunctionSignature;
+use graphcal_compiler::function_signature::{FunctionSignature, ValueKind};
 use graphcal_compiler::syntax::function_name::FnName;
+use graphcal_eval::host_fns::HostFnValue;
 use graphcal_plugin_abi::{
-    FAIL_IMPORT_MODULE, FAIL_IMPORT_NAME, MAX_FAIL_MESSAGE_BYTES, ManifestFromWasmError,
-    PluginManifest,
+    ALLOC_EXPORT, FAIL_IMPORT_MODULE, FAIL_IMPORT_NAME, FREE_EXPORT, MAX_FAIL_MESSAGE_BYTES,
+    ManifestFromWasmError, PluginManifest,
 };
 use sha2::Digest as _;
 use thiserror::Error;
@@ -134,21 +135,45 @@ impl PluginModule {
                     function: name.clone(),
                 }
             })?;
-            let arity = signature.arity();
+            let expected = expected_wasm_type(signature);
             let matches_abi = matches!(
                 &export,
                 wasmi::ExternType::Func(ty)
-                    if ty.params().len() == arity
-                        && ty.params().iter().all(|param| *param == wasmi::ValType::F64)
-                        && ty.results() == [wasmi::ValType::F64]
+                    if ty.params() == expected.params.as_slice()
+                        && ty.results() == expected.results.as_slice()
             );
             if !matches_abi {
                 return Err(PluginLoadError::FunctionTypeMismatch {
                     function: name.clone(),
-                    expected: format!("(f64 x {arity}) -> f64"),
+                    expected: expected.describe(),
                     found: describe_extern_type(&export),
                 });
             }
+        }
+
+        // Modules whose signatures move arrays need the buffer protocol:
+        // an exported memory the host can read/write plus the allocator
+        // pair it places buffers with.
+        if functions
+            .iter()
+            .any(|(_, signature)| signature_uses_buffers(signature))
+        {
+            if !matches!(
+                module.get_export("memory"),
+                Some(wasmi::ExternType::Memory(_))
+            ) {
+                return Err(PluginLoadError::MissingBufferProtocolExport {
+                    export: "memory".to_string(),
+                    expected: "an exported linear memory".to_string(),
+                });
+            }
+            check_buffer_protocol_func(
+                &module,
+                ALLOC_EXPORT,
+                &[wasmi::ValType::I32],
+                &[wasmi::ValType::I32],
+            )?;
+            check_buffer_protocol_func(&module, FREE_EXPORT, &[wasmi::ValType::I32; 2], &[])?;
         }
 
         Ok(Self {
@@ -203,27 +228,38 @@ impl PluginModule {
             })
     }
 
-    /// Call one plugin function with SI-normalized scalar arguments.
+    /// Call one plugin function with SI-normalized values: scalars cross as
+    /// raw `f64`s, arrays as dense buffers the host places in (and reads
+    /// back from) the plugin's memory through the allocator exports.
     ///
-    /// The call runs under the module's fuel and memory limits. A non-finite
-    /// result is returned as-is — policing non-finite values is the
-    /// evaluator's job, shared with every other arithmetic path.
+    /// The call — including the allocator round-trips it needs — runs under
+    /// the module's fuel and memory limits. A non-finite result is returned
+    /// as-is; policing non-finite values is the evaluator's job, shared with
+    /// every other arithmetic path.
     ///
     /// # Errors
     ///
     /// Returns [`PluginCallError`] when the plugin reports a failure through
-    /// `graphcal::fail`, traps, exhausts its fuel, or violates the scalar
-    /// ABI.
-    pub fn call(&self, function: &FnName, args: &[f64]) -> Result<f64, PluginCallError> {
+    /// `graphcal::fail`, traps, exhausts its fuel, or violates the ABI.
+    pub fn call(
+        &self,
+        function: &FnName,
+        args: &[HostFnValue],
+    ) -> Result<HostFnValue, PluginCallError> {
+        let signature =
+            self.signature(function)
+                .ok_or_else(|| PluginCallError::UnknownFunction {
+                    function: function.clone(),
+                })?;
         let mut slot = self.instance.lock().unwrap_or_else(PoisonError::into_inner);
         let mut live = match slot.take() {
             Some(live) => live,
             None => self.instantiate()?,
         };
         // A failed call may leave the instance arbitrarily damaged
-        // (poisoned memory, mid-unwind state); it is dropped and the next
-        // call starts from a fresh instantiation.
-        let value = self.call_in(&mut live, function, args)?;
+        // (poisoned memory, mid-unwind state, leaked buffers); it is dropped
+        // and the next call starts from a fresh instantiation.
+        let value = self.call_in(&mut live, function, signature, args)?;
         *slot = Some(live);
         drop(slot);
         Ok(value)
@@ -264,8 +300,18 @@ impl PluginModule {
         &self,
         live: &mut LiveInstance,
         function: &FnName,
-        args: &[f64],
-    ) -> Result<f64, PluginCallError> {
+        signature: &FunctionSignature,
+        args: &[HostFnValue],
+    ) -> Result<HostFnValue, PluginCallError> {
+        if args.len() != signature.arity() {
+            return Err(PluginCallError::Internal {
+                message: format!(
+                    "function `{function}` called with {} argument(s), signature takes {}",
+                    args.len(),
+                    signature.arity()
+                ),
+            });
+        }
         let func = live
             .instance
             .get_export(&live.store, function.as_str())
@@ -274,25 +320,366 @@ impl PluginModule {
                 function: function.clone(),
             })?;
 
+        // One fuel budget covers the whole logical call: the allocator
+        // round-trips below and the function body itself.
         set_fuel(&mut live.store, self.limits.fuel_per_call)?;
         live.store.data_mut().fail_message = None;
 
-        let params: Vec<wasmi::Val> = args
-            .iter()
-            .map(|value| wasmi::Val::F64((*value).into()))
-            .collect();
-        let mut results = [wasmi::Val::F64(0.0.into())];
+        let mut buffers = if signature_uses_buffers(signature) {
+            Some(BufferProtocol::resolve(live, function)?)
+        } else {
+            None
+        };
+
+        let (params, out_buffer) =
+            self.marshal_params(live, function, signature, args, &mut buffers)?;
+
+        let mut results = if out_buffer.is_some() {
+            Vec::new()
+        } else {
+            vec![wasmi::Val::F64(0.0.into())]
+        };
         func.call(&mut live.store, &params, &mut results)
             .map_err(|err| error_from_wasm(&mut live.store, &err, self.limits.fuel_per_call))?;
 
-        match results[0] {
-            wasmi::Val::F64(value) => Ok(value.into()),
-            ref other => Err(PluginCallError::Internal {
-                message: format!(
-                    "function `{function}` returned a non-f64 value ({other:?}) despite load-time type checks"
-                ),
-            }),
+        let value = match (out_buffer, buffers.as_ref()) {
+            (Some(out), Some(buffers)) => {
+                HostFnValue::Buffer(buffers.read_buffer(live, out.ptr, out.len)?)
+            }
+            (Some(_), None) => {
+                return Err(PluginCallError::Internal {
+                    message: format!(
+                        "function `{function}` produced an out-buffer without the buffer protocol"
+                    ),
+                });
+            }
+            (None, _) => match results.first() {
+                Some(wasmi::Val::F64(value)) => HostFnValue::Scalar(f64::from(*value)),
+                other => {
+                    return Err(PluginCallError::Internal {
+                        message: format!(
+                            "function `{function}` returned {other:?} despite load-time type checks"
+                        ),
+                    });
+                }
+            },
+        };
+
+        // Return every buffer to the plugin's allocator so the pooled
+        // instance does not leak across calls. A failing free damages the
+        // instance like any other trap; the caller discards it.
+        if let Some(buffers) = buffers {
+            buffers.free_all(live, self.limits.fuel_per_call)?;
         }
+        Ok(value)
+    }
+
+    /// Build the wasm parameter list for one call: scalars as `f64`s, arrays
+    /// written into plugin memory as `(ptr, len)` pairs, plus the trailing
+    /// out-pointer (returned with its element count) when the result is an
+    /// array — its length is the input array bound to the result's index
+    /// variable.
+    fn marshal_params(
+        &self,
+        live: &mut LiveInstance,
+        function: &FnName,
+        signature: &FunctionSignature,
+        args: &[HostFnValue],
+        buffers: &mut Option<BufferProtocol>,
+    ) -> Result<(Vec<wasmi::Val>, Option<OutBuffer>), PluginCallError> {
+        let protocol_missing = || PluginCallError::Internal {
+            message: format!(
+                "function `{function}` moves buffers without the buffer protocol resolved"
+            ),
+        };
+
+        let mut params: Vec<wasmi::Val> = Vec::with_capacity(args.len() + 2);
+        for (param, arg) in signature.params().iter().zip(args) {
+            match (&param.kind, arg) {
+                (
+                    ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int,
+                    HostFnValue::Scalar(value),
+                ) => params.push(wasmi::Val::F64((*value).into())),
+                (ValueKind::Indexed { .. }, HostFnValue::Buffer(values)) => {
+                    let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
+                    let ptr = buffers.write_buffer(live, self.limits.fuel_per_call, values)?;
+                    params.push(wasmi::Val::I32(ptr));
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_possible_wrap,
+                        reason = "write_buffer bounds the length to the 32-bit plugin address space"
+                    )]
+                    params.push(wasmi::Val::I32(values.len() as i32));
+                }
+                (ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int, _)
+                | (ValueKind::Indexed { .. }, HostFnValue::Scalar(_)) => {
+                    return Err(PluginCallError::Internal {
+                        message: format!(
+                            "function `{function}` parameter `{}` received a value of the wrong shape",
+                            param.name
+                        ),
+                    });
+                }
+            }
+        }
+
+        let out_buffer = match signature.result() {
+            ValueKind::Indexed { index, .. } => {
+                let len = signature
+                    .params()
+                    .iter()
+                    .zip(args)
+                    .find_map(|(param, arg)| match (&param.kind, arg) {
+                        (
+                            ValueKind::Indexed {
+                                index: param_index, ..
+                            },
+                            HostFnValue::Buffer(values),
+                        ) if param_index == index => Some(values.len()),
+                        _ => None,
+                    })
+                    .ok_or_else(|| PluginCallError::Internal {
+                        message: format!(
+                            "function `{function}` result index `{index}` is not bound by any argument"
+                        ),
+                    })?;
+                let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
+                let ptr = buffers.alloc(live, self.limits.fuel_per_call, len)?;
+                params.push(wasmi::Val::I32(ptr));
+                Some(OutBuffer { ptr, len })
+            }
+            ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int => None,
+        };
+        Ok((params, out_buffer))
+    }
+}
+
+/// The host-allocated out-pointer an array-returning call hands the plugin.
+struct OutBuffer {
+    ptr: i32,
+    len: usize,
+}
+
+/// The per-call handles of the array buffer protocol: the plugin's memory
+/// and allocator exports, plus the allocations to release after the call.
+struct BufferProtocol {
+    memory: wasmi::Memory,
+    alloc: wasmi::Func,
+    free: wasmi::Func,
+    /// `(ptr, size_bytes)` of every host-requested allocation, freed after
+    /// the call completes.
+    allocations: Vec<(i32, i32)>,
+}
+
+impl BufferProtocol {
+    /// Resolve the memory/allocator exports (validated present at load).
+    fn resolve(live: &LiveInstance, function: &FnName) -> Result<Self, PluginCallError> {
+        let missing = |export: &str| PluginCallError::Internal {
+            message: format!(
+                "function `{function}` needs buffer export `{export}` despite load-time checks"
+            ),
+        };
+        let memory = live
+            .instance
+            .get_export(&live.store, "memory")
+            .and_then(wasmi::Extern::into_memory)
+            .ok_or_else(|| missing("memory"))?;
+        let alloc = live
+            .instance
+            .get_export(&live.store, ALLOC_EXPORT)
+            .and_then(wasmi::Extern::into_func)
+            .ok_or_else(|| missing(ALLOC_EXPORT))?;
+        let free = live
+            .instance
+            .get_export(&live.store, FREE_EXPORT)
+            .and_then(wasmi::Extern::into_func)
+            .ok_or_else(|| missing(FREE_EXPORT))?;
+        Ok(Self {
+            memory,
+            alloc,
+            free,
+            allocations: Vec::new(),
+        })
+    }
+
+    /// Allocate space for `len` `f64` elements inside the plugin's memory.
+    fn alloc(
+        &mut self,
+        live: &mut LiveInstance,
+        fuel: u64,
+        len: usize,
+    ) -> Result<i32, PluginCallError> {
+        let size = i32::try_from(len)
+            .ok()
+            .and_then(|len| len.checked_mul(8))
+            .ok_or(PluginCallError::BufferTooLarge { elements: len })?;
+        let mut results = [wasmi::Val::I32(0)];
+        self.alloc
+            .call(&mut live.store, &[wasmi::Val::I32(size)], &mut results)
+            .map_err(|err| error_from_wasm(&mut live.store, &err, fuel))?;
+        let ptr = match results[0] {
+            wasmi::Val::I32(ptr) => ptr,
+            ref other => {
+                return Err(PluginCallError::Internal {
+                    message: format!("allocator returned {other:?} despite load-time type checks"),
+                });
+            }
+        };
+        self.allocations.push((ptr, size));
+        Ok(ptr)
+    }
+
+    /// Allocate and fill one input buffer; returns its plugin-memory pointer.
+    fn write_buffer(
+        &mut self,
+        live: &mut LiveInstance,
+        fuel: u64,
+        values: &[f64],
+    ) -> Result<i32, PluginCallError> {
+        let ptr = self.alloc(live, fuel, values.len())?;
+        let mut bytes = Vec::with_capacity(values.len() * 8);
+        for value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "a negative allocator pointer is out of bounds and rejected by the write below"
+        )]
+        self.memory
+            .write(&mut live.store, ptr as usize, &bytes)
+            .map_err(|_| PluginCallError::Trap {
+                message: format!(
+                    "plugin allocator returned an out-of-bounds buffer (ptr {ptr}, {} bytes)",
+                    bytes.len()
+                ),
+            })?;
+        Ok(ptr)
+    }
+
+    /// Read the out-buffer the plugin filled.
+    fn read_buffer(
+        &self,
+        live: &LiveInstance,
+        ptr: i32,
+        len: usize,
+    ) -> Result<Vec<f64>, PluginCallError> {
+        let mut bytes = vec![0_u8; len * 8];
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "a negative allocator pointer is out of bounds and rejected by the read below"
+        )]
+        self.memory
+            .read(&live.store, ptr as usize, &mut bytes)
+            .map_err(|_| PluginCallError::Trap {
+                message: format!(
+                    "plugin result buffer is out of bounds (ptr {ptr}, {} bytes)",
+                    bytes.len()
+                ),
+            })?;
+        Ok(bytes
+            .chunks_exact(8)
+            .map(|chunk| {
+                let mut raw = [0_u8; 8];
+                raw.copy_from_slice(chunk);
+                f64::from_le_bytes(raw)
+            })
+            .collect())
+    }
+
+    /// Release every allocation made for this call.
+    fn free_all(self, live: &mut LiveInstance, fuel: u64) -> Result<(), PluginCallError> {
+        for (ptr, size) in self.allocations {
+            self.free
+                .call(
+                    &mut live.store,
+                    &[wasmi::Val::I32(ptr), wasmi::Val::I32(size)],
+                    &mut [],
+                )
+                .map_err(|err| error_from_wasm(&mut live.store, &err, fuel))?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether any parameter or the result of `signature` crosses as a buffer.
+fn signature_uses_buffers(signature: &FunctionSignature) -> bool {
+    signature
+        .params()
+        .iter()
+        .map(|param| &param.kind)
+        .chain(std::iter::once(signature.result()))
+        .any(|kind| matches!(kind, ValueKind::Indexed { .. }))
+}
+
+/// The wasm function type the ABI requires for one signature.
+struct ExpectedWasmType {
+    params: Vec<wasmi::ValType>,
+    results: Vec<wasmi::ValType>,
+}
+
+impl ExpectedWasmType {
+    fn describe(&self) -> String {
+        let list = |types: &[wasmi::ValType]| {
+            types
+                .iter()
+                .map(|ty| format!("{ty:?}").to_lowercase())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        format!("({}) -> ({})", list(&self.params), list(&self.results))
+    }
+}
+
+fn expected_wasm_type(signature: &FunctionSignature) -> ExpectedWasmType {
+    let mut params = Vec::new();
+    for param in signature.params() {
+        match &param.kind {
+            ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int => {
+                params.push(wasmi::ValType::F64);
+            }
+            ValueKind::Indexed { .. } => {
+                params.push(wasmi::ValType::I32);
+                params.push(wasmi::ValType::I32);
+            }
+        }
+    }
+    let results = match signature.result() {
+        ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int => vec![wasmi::ValType::F64],
+        ValueKind::Indexed { .. } => {
+            params.push(wasmi::ValType::I32);
+            Vec::new()
+        }
+    };
+    ExpectedWasmType { params, results }
+}
+
+/// Require a buffer-protocol function export with the exact wasm type.
+fn check_buffer_protocol_func(
+    module: &wasmi::Module,
+    export: &str,
+    params: &[wasmi::ValType],
+    results: &[wasmi::ValType],
+) -> Result<(), PluginLoadError> {
+    let expected = ExpectedWasmType {
+        params: params.to_vec(),
+        results: results.to_vec(),
+    };
+    match module.get_export(export) {
+        Some(wasmi::ExternType::Func(ty))
+            if ty.params() == expected.params.as_slice()
+                && ty.results() == expected.results.as_slice() =>
+        {
+            Ok(())
+        }
+        Some(other) => Err(PluginLoadError::BufferProtocolExportTypeMismatch {
+            export: export.to_string(),
+            expected: expected.describe(),
+            found: describe_extern_type(&other),
+        }),
+        None => Err(PluginLoadError::MissingBufferProtocolExport {
+            export: export.to_string(),
+            expected: expected.describe(),
+        }),
     }
 }
 
@@ -440,6 +827,27 @@ pub enum PluginLoadError {
         /// The wasm type (or non-function export) actually found.
         found: String,
     },
+    /// The manifest declares arrays but a buffer-protocol export is missing.
+    #[error(
+        "plugin declares array parameters or results but does not export `{export}` \
+         ({expected})"
+    )]
+    MissingBufferProtocolExport {
+        /// The missing export.
+        export: String,
+        /// What the ABI requires the export to be.
+        expected: String,
+    },
+    /// A buffer-protocol export exists with the wrong type.
+    #[error("plugin exports `{export}` as {found}, but the buffer protocol requires {expected}")]
+    BufferProtocolExportTypeMismatch {
+        /// The mistyped export.
+        export: String,
+        /// The wasm type the ABI requires.
+        expected: String,
+        /// The wasm type (or non-function export) actually found.
+        found: String,
+    },
 }
 
 /// Error from calling a plugin function.
@@ -470,6 +878,12 @@ pub enum PluginCallError {
     UnknownFunction {
         /// The unknown function.
         function: FnName,
+    },
+    /// An array argument exceeds the plugin's 32-bit address space.
+    #[error("an array of {elements} element(s) cannot fit in plugin memory")]
+    BufferTooLarge {
+        /// The element count of the oversized array.
+        elements: usize,
     },
     /// An internal invariant of the host itself failed.
     #[error("plugin host internal error: {message}")]
