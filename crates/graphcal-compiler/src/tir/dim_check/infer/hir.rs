@@ -814,6 +814,8 @@ fn infer_extern_fn_call(
     // Boundary rendering for diagnostics only.
     let display_name = ext.to_string();
     let mut bindings: HashMap<crate::syntax::dimension::DimVarName, Dimension> = HashMap::new();
+    let mut index_bindings: HashMap<crate::syntax::index_name::IndexVarName, InferredIndex> =
+        HashMap::new();
     for (param, arg) in sig.params().iter().zip(args) {
         let arg_type = infer_arg(
             arg,
@@ -862,6 +864,68 @@ fn infer_extern_fn_call(
                     arg.span,
                 )?;
             }
+            ValueKind::Indexed { element, index } => {
+                let InferredType::Indexed {
+                    element: arg_element,
+                    index: arg_index,
+                } = &arg_type
+                else {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "an indexed scalar collection".to_string(),
+                        found: format_inferred_type(&arg_type, registry),
+                        help: format!(
+                            "parameter `{}` of `{display_name}` takes an array over index variable `{index}`",
+                            param.name
+                        ),
+                        src: src.clone(),
+                        span: arg.span.into(),
+                    });
+                };
+                let Some(arg_dim) = arg_element.scalar_dimension().cloned() else {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "an indexed scalar collection".to_string(),
+                        found: format_inferred_type(&arg_type, registry),
+                        help: format!(
+                            "parameter `{}` of `{display_name}` requires every indexed element to be scalar",
+                            param.name
+                        ),
+                        src: src.clone(),
+                        span: arg.span.into(),
+                    });
+                };
+                check_scalar_param(
+                    &display_name,
+                    sig,
+                    &param.name,
+                    element,
+                    &arg_dim,
+                    &mut bindings,
+                    registry,
+                    src,
+                    arg.span,
+                )?;
+                match index_bindings.entry(index.clone()) {
+                    std::collections::hash_map::Entry::Vacant(slot) => {
+                        slot.insert(arg_index.clone());
+                    }
+                    std::collections::hash_map::Entry::Occupied(bound) => {
+                        if bound.get() != arg_index {
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: format!(
+                                    "an array over index `{}` (index variable `{index}` was bound by an earlier argument)",
+                                    bound.get()
+                                ),
+                                found: format_inferred_type(&arg_type, registry),
+                                help: format!(
+                                    "arguments sharing the index variable `{index}` of `{display_name}` must range over the same index"
+                                ),
+                                src: src.clone(),
+                                span: arg.span.into(),
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -871,6 +935,24 @@ fn infer_extern_fn_call(
         ValueKind::Scalar(monomial) => {
             eval_result_monomial(&display_name, monomial, &bindings, src, callee_span)
                 .map(InferredType::Scalar)
+        }
+        ValueKind::Indexed { element, index } => {
+            let dim = eval_result_monomial(&display_name, element, &bindings, src, callee_span)?;
+            let Some(bound) = index_bindings.get(index) else {
+                // try_new guarantees the result index variable indexes some
+                // parameter, so an unbound variable here is a compiler bug.
+                return Err(GraphcalError::InternalError {
+                    message: format!(
+                        "result index variable `{index}` of `{display_name}` was not bound by any argument"
+                    ),
+                    src: src.clone(),
+                    span: callee_span.into(),
+                });
+            };
+            Ok(InferredType::Indexed {
+                element: Box::new(InferredType::Scalar(dim)),
+                index: bound.clone(),
+            })
         }
     }
 }

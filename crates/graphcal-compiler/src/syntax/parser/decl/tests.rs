@@ -1774,22 +1774,25 @@ fn parse_plugin_import_block() {
 
     let density = &plugin.functions[0];
     assert_eq!(density.name.value.as_str(), "density");
-    assert!(density.dim_vars.is_empty());
+    assert!(density.generics.is_empty());
     assert_eq!(density.params.len(), 2);
     assert_eq!(density.params[0].name.value.as_str(), "p");
     assert_eq!(dim_expr_name(&density.params[0].type_ann), "Pressure");
     assert_eq!(dim_expr_name(&density.result), "Density");
 
     let smooth = &plugin.functions[1];
-    assert_eq!(smooth.dim_vars.len(), 1);
-    assert_eq!(smooth.dim_vars[0].value.as_str(), "D");
+    assert_eq!(smooth.generics.len(), 1);
+    assert!(matches!(
+        &smooth.generics[0],
+        crate::syntax::ast::ExternGenericBinder::Dim(var) if var.value.as_str() == "D"
+    ));
     assert!(matches!(
         smooth.params[1].type_ann.kind,
         TypeExprKind::Dimensionless
     ));
 
     let torque = &plugin.functions[2];
-    assert_eq!(torque.dim_vars.len(), 2);
+    assert_eq!(torque.generics.len(), 2);
     let TypeExprKind::DimExpr(result) = &torque.result.kind else {
         panic!("expected DimExpr result");
     };

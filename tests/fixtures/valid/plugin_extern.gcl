@@ -1,11 +1,16 @@
 // Extern plugin functions (issue #943, Phase A): declared signatures are
 // checked with full dimension safety and evaluated through the embedder's
 // host function registry ("graphcal:demo" is the Phase A built-in demo).
+// Array parameters and results over index variables (issue #25 Phase D)
+// cross the boundary as dense buffers in index order.
 import plugin "graphcal:demo" as demo {
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
     fn inverse<D: Dim>(x: D) -> D^-1;
     fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
+    fn normalize<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
 }
+
+index Maneuver = { Departure, Correction, Insertion };
 
 param t_frac: Dimensionless = 0.25;
 param v0: Velocity = 100.0 m/s;
@@ -15,5 +20,15 @@ node v_mid: Velocity = demo.lerp(@v0, @v1, @t_frac);
 node pace: Time / Length = demo.inverse(@v_mid);
 node scale: Length = demo.geometric_mean(4.0 m, 9.0 m);
 
+node delta_v: Velocity[Maneuver] = {
+    Maneuver.Departure: 2.0 km/s,
+    Maneuver.Correction: 0.5 km/s,
+    Maneuver.Insertion: 1.5 km/s,
+};
+node dv_share: Dimensionless[Maneuver] = demo.normalize(@delta_v);
+node dv_share_total: Dimensionless = sum(@dv_share);
+
 assert v_mid_interpolates = @v_mid == 150.0 m/s;
 assert scale_is_geometric = @scale == 6.0 m;
+assert departure_share = @dv_share[Maneuver.Departure] == 0.5;
+assert shares_sum_to_one = @dv_share_total == 1.0;

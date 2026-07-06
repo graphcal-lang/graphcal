@@ -76,7 +76,9 @@ pub fn convert_function(
         .map_err(&in_function)?;
     let result = convert_kind(&function.result).map_err(&in_function)?;
 
-    let signature = FunctionSignature::try_new(dim_vars, params, result)
+    // ABI v1 manifests declare no index variables; the array kinds arrive
+    // with ABI v2 (issue #25 Phase D).
+    let signature = FunctionSignature::try_new(dim_vars, Vec::new(), params, result)
         .map_err(|source| in_function(ConvertErrorKind::Signature(source)))?;
     Ok((name, signature))
 }

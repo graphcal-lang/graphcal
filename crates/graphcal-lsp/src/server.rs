@@ -694,29 +694,33 @@ fn build_extern_fn_signatures(
 
     let mut sigs = HashMap::new();
     for function in tir.extern_functions.values() {
+        let format_monomial = |monomial: &graphcal_compiler::function_signature::DimMonomial| {
+            let mut parts: Vec<String> = monomial
+                .vars
+                .iter()
+                .map(|factor| {
+                    if factor.power == Rational::ONE {
+                        factor.var.to_string()
+                    } else {
+                        format!("{}^({})", factor.var, factor.power)
+                    }
+                })
+                .collect();
+            if !monomial.fixed.is_dimensionless() {
+                parts.push(tir.registry.dimensions.format_dimension(&monomial.fixed));
+            }
+            if parts.is_empty() {
+                "Dimensionless".to_string()
+            } else {
+                parts.join(" * ")
+            }
+        };
         let format_kind = |kind: &ExternValueKind| match kind {
             ExternValueKind::Bool => "Bool".to_string(),
             ExternValueKind::Int => "Int".to_string(),
-            ExternValueKind::Scalar(monomial) => {
-                let mut parts: Vec<String> = monomial
-                    .vars
-                    .iter()
-                    .map(|factor| {
-                        if factor.power == Rational::ONE {
-                            factor.var.to_string()
-                        } else {
-                            format!("{}^({})", factor.var, factor.power)
-                        }
-                    })
-                    .collect();
-                if !monomial.fixed.is_dimensionless() {
-                    parts.push(tir.registry.dimensions.format_dimension(&monomial.fixed));
-                }
-                if parts.is_empty() {
-                    "Dimensionless".to_string()
-                } else {
-                    parts.join(" * ")
-                }
+            ExternValueKind::Scalar(monomial) => format_monomial(monomial),
+            ExternValueKind::Indexed { element, index } => {
+                format!("{}[{index}]", format_monomial(element))
             }
         };
         let parameters: Vec<String> = function
@@ -725,7 +729,9 @@ fn build_extern_fn_signatures(
             .iter()
             .map(|param| format!("{}: {}", param.name, format_kind(&param.kind)))
             .collect();
-        let binders = if function.signature.dim_vars().is_empty() {
+        let binders = if function.signature.dim_vars().is_empty()
+            && function.signature.index_vars().is_empty()
+        {
             String::new()
         } else {
             let vars: Vec<String> = function
@@ -733,6 +739,13 @@ fn build_extern_fn_signatures(
                 .dim_vars()
                 .iter()
                 .map(|var| format!("{}: Dim", var.as_str()))
+                .chain(
+                    function
+                        .signature
+                        .index_vars()
+                        .iter()
+                        .map(|var| format!("{}: Index", var.as_str())),
+                )
                 .collect();
             format!("<{}>", vars.join(", "))
         };
@@ -827,6 +840,9 @@ fn value_kind_display(kind: &ValueKind) -> std::result::Result<String, String> {
         ValueKind::Bool => Ok("Bool".to_string()),
         ValueKind::Int => Ok("Int".to_string()),
         ValueKind::Scalar(monomial) => monomial_display(monomial),
+        ValueKind::Indexed { element, index } => {
+            Ok(format!("{}[{index}]", monomial_display(element)?))
+        }
     }
 }
 

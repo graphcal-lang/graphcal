@@ -154,7 +154,7 @@ impl From<crate::syntax::ast::ExternFnDecl<Raw>> for crate::syntax::ast::ExternF
     fn from(f: crate::syntax::ast::ExternFnDecl<Raw>) -> Self {
         Self {
             name: f.name,
-            dim_vars: f.dim_vars,
+            generics: f.generics,
             params: f.params.into_iter().map(Into::into).collect(),
             result: f.result.into(),
             span: f.span,

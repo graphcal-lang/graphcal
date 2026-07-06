@@ -378,6 +378,11 @@ pub fn parse_call_args(
                 ValueKind::Scalar(_) => text
                     .parse::<f64>()
                     .map_err(|_| invalid("expected a number (in SI base units)")),
+                // ABI v1 manifests cannot declare arrays; `--call` support
+                // arrives with the ABI v2 buffer protocol (issue #25 Phase D).
+                ValueKind::Indexed { .. } => Err(invalid(
+                    "array parameters are not supported by `--call` yet",
+                )),
             }
         })
         .collect()
@@ -412,6 +417,11 @@ pub fn render_result(signature: &FunctionSignature, raw: f64) -> Result<String, 
                 Some(dim) => format!("{rendered} [{dim}, SI base units]"),
                 None => rendered,
             })
+        }
+        // Unreachable until the ABI v2 buffer protocol lands (issue #25
+        // Phase D): v1 manifests cannot declare array results.
+        ValueKind::Indexed { .. } => {
+            Err("array results are not supported by `--call` yet".to_string())
         }
     }
 }
@@ -465,6 +475,7 @@ mod tests {
         let var = || DimVarName::expect_valid("D");
         FunctionSignature::try_new(
             vec![var()],
+            Vec::new(),
             vec![
                 FunctionParam {
                     name: FnParamName::expect_valid("a"),
@@ -486,6 +497,7 @@ mod tests {
 
     fn step_signature() -> FunctionSignature {
         FunctionSignature::try_new(
+            Vec::new(),
             Vec::new(),
             vec![
                 FunctionParam {
@@ -586,6 +598,7 @@ mod tests {
             .unwrap();
         let signature = FunctionSignature::try_new(
             Vec::new(),
+            Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("p"),
                 kind: ValueKind::Scalar(DimMonomial::fixed(pressure)),
@@ -647,6 +660,7 @@ mod tests {
 
         let bool_result = FunctionSignature::try_new(
             Vec::new(),
+            Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("x"),
                 kind: ValueKind::dimensionless(),
@@ -663,6 +677,7 @@ mod tests {
             .checked_mul(&prelude_base_dimension("Time").unwrap().pow(-1).unwrap())
             .unwrap();
         let scalar_result = FunctionSignature::try_new(
+            Vec::new(),
             Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("x"),

@@ -18,6 +18,14 @@ impl NameNamespace for IndexVariantNameNamespace {
     const DISPLAY_NAME: &'static str = "IndexVariantName";
 }
 
+/// Index variable namespace marker (extern signature `<I: Index>` binders).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum IndexVarNameNamespace {}
+
+impl NameNamespace for IndexVarNameNamespace {
+    const DISPLAY_NAME: &'static str = "IndexVarName";
+}
+
 /// Name of an index type (e.g., `"Maneuver"`).
 pub type IndexName = NameDef<IndexNameNamespace>;
 
@@ -26,6 +34,10 @@ pub type ResolvedIndexName = ResolvedName<IndexNameNamespace>;
 
 /// Name of an index variant (e.g., `"Departure"`, `"Correction"`).
 pub type IndexVariantName = NameDef<IndexVariantNameNamespace>;
+
+/// Name of an index variable declared by an extern signature's `<I: Index>`
+/// binder (parallel to [`crate::syntax::dimension::DimVarName`] for `<D: Dim>`).
+pub type IndexVarName = NameDef<IndexVarNameNamespace>;
 
 impl From<IndexName> for NamePath {
     fn from(name: IndexName) -> Self {

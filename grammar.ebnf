@@ -435,12 +435,16 @@ import_decl
 
    Each `fn` may declare generic variables in explicit angle-bracket
    binders using the same `name: constraint` form as `generic_params`
-   (restricted to `Dim`). Parameter and result types are `Bool`, `Int`,
-   or dimension expressions over dimensions in scope and the declared
-   dim variables, with rational powers and cross-variable products
-   (e.g. `fn torque<D1: Dim, D2: Dim>(f: D1, arm: D2) -> D1 * D2;`).
-   Each dim variable must first appear as a bare `var` parameter (its
-   binding occurrence) before any compound use.
+   (restricted to `Dim` and `Index`). Parameter and result types are
+   `Bool`, `Int`, dimension expressions over dimensions in scope and the
+   declared dim variables — with rational powers and cross-variable
+   products (e.g. `fn torque<D1: Dim, D2: Dim>(f: D1, arm: D2) -> D1 * D2;`)
+   — or arrays of scalars over one declared index variable
+   (e.g. `fn smooth<D: Dim, I: Index>(xs: D[I], w: Dimensionless) -> D[I];`).
+   Each dim variable must first appear as a bare `var` parameter or bare
+   array element (its binding occurrence) before any compound use. A
+   result array must reuse an index variable that indexes some array
+   parameter: extern functions can never invent their output length.
 
    In Phase A the path string carries no filesystem semantics; it names
    the plugin in the embedder's host function registry. *)
@@ -457,7 +461,7 @@ extern_generic_binders
    = "<", extern_generic_binder, { ",", extern_generic_binder }, [ "," ], ">";
 
 extern_generic_binder
-   = IDENT, ":", "Dim";
+   = IDENT, ":", ( "Dim" | "Index" );
 
 extern_fn_param
    = IDENT, ":", type_expr;

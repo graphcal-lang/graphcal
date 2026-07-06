@@ -10,5 +10,5 @@ snippet line 2: import plugin "graphcal:demo" as demo {
 snippet line 3:     fn sq<D: Dim>(x: D^2) -> D;
     label at line 3, columns 5 to 31: invalid signature
 snippet line 4: }
-diagnostic help: extern signatures support Bool, Int, and scalar dimension types; each dimension variable must be declared in the `<...>` binder list and bound by a bare-variable parameter before compound uses
+diagnostic help: extern signatures support Bool, Int, scalar dimension types, and arrays of scalars over a declared index variable; each dimension variable must be declared in the `<...>` binder list and bound by a bare scalar parameter or bare array element before compound uses, and a result array must reuse an index variable that indexes some parameter
 diagnostic code: graphcal::P001

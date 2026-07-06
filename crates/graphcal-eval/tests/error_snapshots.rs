@@ -790,6 +790,35 @@ fn error_extern_conflicting_signature() {
 }
 
 #[test]
+fn error_extern_array_unbound_result_index() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/extern_array_unbound_result_index.gcl");
+    let rendered = render_error(source, "extern_array_unbound_result_index.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_array_concrete_index() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_array_concrete_index.gcl");
+    let rendered = render_error(source, "extern_array_concrete_index.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_array_index_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_array_index_mismatch.gcl");
+    let rendered = render_error(source, "extern_array_index_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_array_scalar_argument() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_array_scalar_argument.gcl");
+    let rendered = render_error(source, "extern_array_scalar_argument.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_extern_missing_host_fn() {
     let source = include_str!("../../../tests/fixtures/invalid/extern_missing_host_fn.gcl");
     let rendered = render_error(source, "extern_missing_host_fn.gcl");

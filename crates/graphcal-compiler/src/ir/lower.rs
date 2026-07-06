@@ -3684,31 +3684,65 @@ fn resolve_plugin_imports(
     let mut map = HashMap::new();
     for decl in decls {
         for function in &decl.functions {
+            // Binder idents share one lexical namespace regardless of
+            // constraint: `<D: Dim, D: Index>` is a duplicate declaration.
+            let mut seen_binders: std::collections::HashSet<&str> =
+                std::collections::HashSet::new();
+            for binder in &function.generics {
+                if !seen_binders.insert(binder.name_str()) {
+                    return Err(GraphcalError::InvalidExternSignature {
+                        message: format!(
+                            "generic binder `{}` is declared more than once",
+                            binder.name_str()
+                        ),
+                        src: src.clone(),
+                        span: binder.span().into(),
+                    });
+                }
+            }
             let dim_vars: Vec<crate::syntax::dimension::DimVarName> = function
-                .dim_vars
+                .generics
                 .iter()
-                .map(|var| var.value.clone())
+                .filter_map(|binder| match binder {
+                    crate::syntax::ast::ExternGenericBinder::Dim(var) => Some(var.value.clone()),
+                    crate::syntax::ast::ExternGenericBinder::Index(_) => None,
+                })
+                .collect();
+            let index_vars: Vec<crate::syntax::index_name::IndexVarName> = function
+                .generics
+                .iter()
+                .filter_map(|binder| match binder {
+                    crate::syntax::ast::ExternGenericBinder::Index(var) => Some(var.value.clone()),
+                    crate::syntax::ast::ExternGenericBinder::Dim(_) => None,
+                })
                 .collect();
             let params = function
                 .params
                 .iter()
                 .map(|param| {
-                    let kind =
-                        resolve_extern_value_kind(&param.type_ann, &dim_vars, registry, src)?;
+                    let kind = resolve_extern_value_kind(
+                        &param.type_ann,
+                        &dim_vars,
+                        &index_vars,
+                        registry,
+                        src,
+                    )?;
                     Ok(crate::function_signature::FunctionParam {
                         name: param.name.value.clone(),
                         kind,
                     })
                 })
                 .collect::<Result<Vec<_>, GraphcalError>>()?;
-            let result = resolve_extern_value_kind(&function.result, &dim_vars, registry, src)?;
-            let signature =
-                crate::function_signature::FunctionSignature::try_new(dim_vars, params, result)
-                    .map_err(|err| GraphcalError::InvalidExternSignature {
-                        message: err.to_string(),
-                        src: src.clone(),
-                        span: function.span.into(),
-                    })?;
+            let result =
+                resolve_extern_value_kind(&function.result, &dim_vars, &index_vars, registry, src)?;
+            let signature = crate::function_signature::FunctionSignature::try_new(
+                dim_vars, index_vars, params, result,
+            )
+            .map_err(|err| GraphcalError::InvalidExternSignature {
+                message: err.to_string(),
+                src: src.clone(),
+                span: function.span.into(),
+            })?;
             let key = crate::syntax::plugin::ExternFnKey {
                 plugin: decl.path.value.clone(),
                 name: function.name.value.clone(),
@@ -3754,6 +3788,7 @@ fn resolve_plugin_imports(
 fn resolve_extern_value_kind(
     type_ann: &TypeExpr,
     dim_vars: &[crate::syntax::dimension::DimVarName],
+    index_vars: &[crate::syntax::index_name::IndexVarName],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::ValueKind, GraphcalError> {
@@ -3775,16 +3810,98 @@ fn resolve_extern_value_kind(
             resolve_extern_dim_monomial(dim_expr, dim_vars, registry, src)
                 .map(ValueKind::Scalar)
         }
+        TypeExprKind::Indexed { base, indexes } => {
+            resolve_extern_array_kind(base, indexes, dim_vars, index_vars, registry, src)
+        }
         TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }
-        | TypeExprKind::Indexed { .. }
         | TypeExprKind::TypeApplication { .. } => Err(GraphcalError::InvalidExternSignature {
             message:
-                "extern function signatures support only Bool, Int, and scalar dimension types in this phase"
+                "extern function signatures support Bool, Int, scalar dimension types, and arrays of scalars over a declared index variable in this phase"
                     .to_string(),
             src: src.clone(),
             span: type_ann.span.into(),
         }),
+    }
+}
+
+/// Resolve an array type annotation (`D[I]`, `Velocity[I]`) to
+/// [`crate::function_signature::ValueKind::Indexed`].
+///
+/// The index position must name exactly one of the signature's `Index`
+/// binders: concrete index names, Nat lengths, and multi-axis forms are all
+/// rejected — an extern function is generic over the index it receives, and
+/// its result length always comes from an input.
+fn resolve_extern_array_kind(
+    base: &TypeExpr,
+    indexes: &[crate::syntax::ast::IndexExpr],
+    dim_vars: &[crate::syntax::dimension::DimVarName],
+    index_vars: &[crate::syntax::index_name::IndexVarName],
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::function_signature::ValueKind, GraphcalError> {
+    use crate::desugar::desugared_ast::TypeExprKind;
+    use crate::function_signature::{DimMonomial, ValueKind};
+    use crate::syntax::ast::IndexExpr;
+
+    let [index_expr] = indexes else {
+        return Err(GraphcalError::InvalidExternSignature {
+            message: "extern arrays take exactly one index variable in this phase".to_string(),
+            src: src.clone(),
+            span: type_ann_indexes_span(indexes, base),
+        });
+    };
+    let index_var = match index_expr {
+        IndexExpr::Name(name) => name.value.as_bare().and_then(|atom| {
+            index_vars
+                .iter()
+                .find(|var| var.as_str() == atom.as_str())
+                .cloned()
+        }),
+        IndexExpr::NatExpr(_) => None,
+    };
+    let Some(index) = index_var else {
+        return Err(GraphcalError::InvalidExternSignature {
+            message: "extern array indexes must name one of the signature's `Index` binders \
+                      (concrete indexes and Nat lengths cannot cross the plugin boundary)"
+                .to_string(),
+            src: src.clone(),
+            span: index_expr.span().into(),
+        });
+    };
+
+    if !base.constraints.is_empty() {
+        return Err(GraphcalError::InvalidExternSignature {
+            message: "domain constraints are not allowed in extern function signatures".to_string(),
+            src: src.clone(),
+            span: base.span.into(),
+        });
+    }
+    let element = match &base.kind {
+        TypeExprKind::Dimensionless => DimMonomial::dimensionless(),
+        TypeExprKind::DimExpr(dim_expr) => {
+            resolve_extern_dim_monomial(dim_expr, dim_vars, registry, src)?
+        }
+        _ => {
+            return Err(GraphcalError::InvalidExternSignature {
+                message: "extern array elements must be scalars in this phase".to_string(),
+                src: src.clone(),
+                span: base.span.into(),
+            });
+        }
+    };
+    Ok(ValueKind::Indexed { element, index })
+}
+
+/// Span covering an array annotation's index list (falls back to the base
+/// type's span when the list is empty, which the parser never produces).
+fn type_ann_indexes_span(
+    indexes: &[crate::syntax::ast::IndexExpr],
+    base: &TypeExpr,
+) -> miette::SourceSpan {
+    match (indexes.first(), indexes.last()) {
+        (Some(first), Some(last)) => first.span().merge(last.span()).into(),
+        _ => base.span.into(),
     }
 }
 

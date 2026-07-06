@@ -124,29 +124,38 @@ impl Parser<'_> {
             .parse_any_ident()?
             .into_spanned::<crate::syntax::function_name::FnName>();
 
-        // Optional explicit generic binders: `<D1: Dim, D2: Dim>`. The
+        // Optional explicit generic binders: `<D: Dim, I: Index>`. The
         // `name: constraint` form mirrors `generic_params` on `type`
-        // declarations; extern signatures support the `Dim` constraint.
-        let mut dim_vars = Vec::new();
+        // declarations; extern signatures support `Dim` and `Index`.
+        let mut generics = Vec::new();
         if self.lexer.peek() == Some(&Token::Lt) {
             self.advance()?;
             loop {
                 let var = self.parse_any_ident()?;
                 self.expect(Token::Colon)?;
                 let constraint = self.parse_any_ident()?;
-                match constraint.name.as_str() {
-                    "Dim" => dim_vars.push(crate::syntax::span::Spanned::new(
-                        crate::syntax::dimension::DimVarName::from_atom(var.name),
-                        var.span,
-                    )),
+                let binder = match constraint.name.as_str() {
+                    "Dim" => crate::syntax::ast::ExternGenericBinder::Dim(
+                        crate::syntax::span::Spanned::new(
+                            crate::syntax::dimension::DimVarName::from_atom(var.name),
+                            var.span,
+                        ),
+                    ),
+                    "Index" => crate::syntax::ast::ExternGenericBinder::Index(
+                        crate::syntax::span::Spanned::new(
+                            crate::syntax::index_name::IndexVarName::from_atom(var.name),
+                            var.span,
+                        ),
+                    ),
                     other => {
                         return Err(self.unexpected_token(
-                            "`Dim` as the binder constraint (extern signatures support dimension variables)",
+                            "`Dim` or `Index` as the binder constraint",
                             other,
                             constraint.span,
                         ));
                     }
-                }
+                };
+                generics.push(binder);
                 match self.lexer.peek() {
                     Some(Token::Comma) => {
                         self.advance()?;
@@ -177,7 +186,7 @@ impl Parser<'_> {
 
         Ok(crate::syntax::ast::ExternFnDecl {
             name,
-            dim_vars,
+            generics,
             params,
             result,
             span: fn_ident.merge(end_span),

@@ -698,15 +698,25 @@ fn epoch_from_gregorian_str_at_scale(
     )
 }
 
+/// The concrete index an extern call bound to one of its index variables:
+/// the index identity plus the variant keys of the binding argument, in
+/// declaration order. Result arrays are rebuilt over exactly these keys.
+struct BoundExternIndex {
+    index_name: graphcal_compiler::registry::declared_type::IndexTypeRef,
+    keys: Vec<graphcal_compiler::syntax::index_name::IndexVariantName>,
+}
+
 /// Evaluate an extern (plugin) function call through the embedder-injected
 /// host function registry.
 ///
-/// The Phase A host ABI is `fn(&[f64]) -> Result<f64, HostFnError>`: Int
-/// arguments convert exactly, Bool arguments become `1.0`/`0.0`, and the
-/// result converts back per the declared result kind. A closure error or a
-/// non-finite scalar result becomes a per-node evaluation failure naming the
-/// plugin alias and function; dependents report `DependencyFailed` through
-/// the ordinary per-node fault isolation.
+/// The host ABI is `fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError>`:
+/// scalars cross as SI `f64`s (Int arguments convert exactly, Bool arguments
+/// become `1.0`/`0.0`), arrays cross as dense element buffers in index
+/// order, and the result converts back per the declared result kind — a
+/// result array is rebuilt over the same index the binding argument
+/// supplied. A closure error or a non-finite scalar becomes a per-node
+/// evaluation failure naming the plugin alias and function; dependents
+/// report `DependencyFailed` through the ordinary per-node fault isolation.
 #[expect(
     clippy::too_many_lines,
     reason = "single linear path: lookup, argument conversion, call, result conversion"
@@ -720,6 +730,8 @@ fn eval_hir_extern_fn(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::function_signature::ValueKind;
+
+    use crate::host_fns::HostFnValue;
 
     let Some(registry) = ctx.host_fns else {
         return Err(ctx.eval_error(
@@ -755,30 +767,66 @@ fn eval_hir_extern_fn(
         ));
     }
 
-    let arg_values: Vec<f64> = signature
-        .params()
-        .iter()
-        .zip(args)
-        .map(|(param, arg)| {
-            let value = eval_hir_expr(arg, values, local_values, ctx)?;
-            match (&param.kind, value) {
-                (ValueKind::Scalar(_), value) => value
-                    .expect_scalar("extern function argument")
-                    .map_err(|e| ctx.eval_error(e.to_string(), arg.span)),
-                (ValueKind::Int, RuntimeValue::Int(i)) => {
-                    exact_numeric_extern_arg(i, ext, arg.span, ctx)
+    let mut bound_indexes: std::collections::HashMap<
+        graphcal_compiler::syntax::index_name::IndexVarName,
+        BoundExternIndex,
+    > = std::collections::HashMap::new();
+    let mut arg_values: Vec<HostFnValue> = Vec::with_capacity(args.len());
+    for (param, arg) in signature.params().iter().zip(args) {
+        let value = eval_hir_expr(arg, values, local_values, ctx)?;
+        let converted = match (&param.kind, value) {
+            (ValueKind::Scalar(_), value) => value
+                .expect_scalar("extern function argument")
+                .map(HostFnValue::Scalar)
+                .map_err(|e| ctx.eval_error(e.to_string(), arg.span))?,
+            (ValueKind::Int, RuntimeValue::Int(i)) => {
+                HostFnValue::Scalar(exact_numeric_extern_arg(i, ext, arg.span, ctx)?)
+            }
+            (ValueKind::Bool, RuntimeValue::Bool(b)) => {
+                HostFnValue::Scalar(if b { 1.0 } else { 0.0 })
+            }
+            (
+                ValueKind::Indexed { index, .. },
+                RuntimeValue::Indexed {
+                    index_name,
+                    entries,
+                },
+            ) => {
+                let mut keys = Vec::with_capacity(entries.len());
+                let mut buffer = Vec::with_capacity(entries.len());
+                for (variant, element) in &entries {
+                    keys.push(variant.clone());
+                    buffer.push(
+                        element
+                            .expect_scalar("extern function array element")
+                            .map_err(|e| ctx.eval_error(e.to_string(), arg.span))?,
+                    );
                 }
-                (ValueKind::Bool, RuntimeValue::Bool(b)) => Ok(if b { 1.0 } else { 0.0 }),
-                (ValueKind::Int | ValueKind::Bool, _) => Err(ctx.internal_error(
+                let bound = BoundExternIndex { index_name, keys };
+                if let Some(previous) = bound_indexes.insert(index.clone(), bound)
+                    && previous.keys.len() != entries.len()
+                {
+                    return Err(ctx.internal_error(
+                        format!(
+                            "extern function `{ext}` received arrays of different lengths for index variable `{index}` after dimension checking"
+                        ),
+                        arg.span,
+                    ));
+                }
+                HostFnValue::Buffer(buffer)
+            }
+            (ValueKind::Int | ValueKind::Bool | ValueKind::Indexed { .. }, _) => {
+                return Err(ctx.internal_error(
                     format!(
                         "extern function `{ext}` parameter `{}` received a value of the wrong kind after dimension checking",
                         param.name
                     ),
                     arg.span,
-                )),
+                ));
             }
-        })
-        .collect::<Result<_, _>>()?;
+        };
+        arg_values.push(converted);
+    }
 
     let result = host_fn(&arg_values).map_err(|err| {
         ctx.eval_error(
@@ -790,14 +838,27 @@ fn eval_hir_extern_fn(
         )
     })?;
 
+    let scalar_result = |result: &HostFnValue| -> Result<f64, GraphcalError> {
+        match result {
+            HostFnValue::Scalar(value) => Ok(*value),
+            HostFnValue::Buffer(_) => Err(ctx.eval_error(
+                format!("extern function `{ext}` declared a scalar result but returned an array"),
+                expr.span,
+            )),
+        }
+    };
+
     match signature.result() {
         ValueKind::Scalar(_) => {
             let display = ext.to_string();
             Ok(RuntimeValue::Scalar(super::arithmetic::check_finite(
-                result, &display, ctx, expr.span,
+                scalar_result(&result)?,
+                &display,
+                ctx,
+                expr.span,
             )?))
         }
-        ValueKind::Int => super::conversions::checked_f64_to_i64(result)
+        ValueKind::Int => super::conversions::checked_f64_to_i64(scalar_result(&result)?)
             .map(RuntimeValue::Int)
             .map_err(|err| {
                 ctx.eval_error(
@@ -805,8 +866,8 @@ fn eval_hir_extern_fn(
                     expr.span,
                 )
             }),
-        ValueKind::Bool =>
-        {
+        ValueKind::Bool => {
+            let result = scalar_result(&result)?;
             #[expect(
                 clippy::float_cmp,
                 reason = "the Bool host ABI is exactly 0.0/1.0; anything else is a plugin bug"
@@ -823,6 +884,52 @@ fn eval_hir_extern_fn(
                     expr.span,
                 ))
             }
+        }
+        ValueKind::Indexed { index, .. } => {
+            let HostFnValue::Buffer(buffer) = result else {
+                return Err(ctx.eval_error(
+                    format!(
+                        "extern function `{ext}` declared an array result but returned a scalar"
+                    ),
+                    expr.span,
+                ));
+            };
+            let Some(bound) = bound_indexes.remove(index) else {
+                return Err(ctx.internal_error(
+                    format!(
+                        "extern function `{ext}` result index variable `{index}` was not bound by any argument"
+                    ),
+                    expr.span,
+                ));
+            };
+            if buffer.len() != bound.keys.len() {
+                return Err(ctx.eval_error(
+                    format!(
+                        "extern function `{ext}` returned {} element(s) for an array over `{index}`, expected {}",
+                        buffer.len(),
+                        bound.keys.len()
+                    ),
+                    expr.span,
+                ));
+            }
+            let display = ext.to_string();
+            let entries = bound
+                .keys
+                .into_iter()
+                .zip(buffer)
+                .map(|(variant, element)| {
+                    Ok((
+                        variant,
+                        RuntimeValue::Scalar(super::arithmetic::check_finite(
+                            element, &display, ctx, expr.span,
+                        )?),
+                    ))
+                })
+                .collect::<Result<indexmap::IndexMap<_, _>, GraphcalError>>()?;
+            Ok(RuntimeValue::Indexed {
+                index_name: bound.index_name,
+                entries,
+            })
         }
     }
 }

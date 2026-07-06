@@ -1,0 +1,11 @@
+// Two arguments sharing one index variable must range over the same index.
+index Maneuver = { Departure, Correction, Insertion };
+index Phase = { Boost, Coast };
+
+import plugin "graphcal:demo" as demo {
+    fn dot<D: Dim, I: Index>(xs: D[I], ys: D[I]) -> D;
+}
+
+node a: Velocity[Maneuver] = { Maneuver.Departure: 1.0 km/s, Maneuver.Correction: 0.5 km/s, Maneuver.Insertion: 1.5 km/s };
+node b: Velocity[Phase] = { Phase.Boost: 2.0 km/s, Phase.Coast: 0.1 km/s };
+node bad: Velocity = demo.dot(@a, @b);

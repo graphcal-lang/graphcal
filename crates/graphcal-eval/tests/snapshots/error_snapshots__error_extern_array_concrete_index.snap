@@ -2,13 +2,13 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-invalid extern function signature: function `lerp` of plugin "graphcal:demo" is declared elsewhere with a different signature
+invalid extern function signature: extern array indexes must name one of the signature's `Index` binders (concrete indexes and Nat lengths cannot cross the plugin boundary)
     Diagnostic severity: error
-Begin snippet for extern_conflicting_signature.gcl starting at line 5, column 1
+Begin snippet for extern_array_concrete_index.gcl starting at line 5, column 1
 
-snippet line 5: import plugin "graphcal:demo" as b {
-snippet line 6:     fn lerp(a: Dimensionless, b: Dimensionless, t: Dimensionless) -> Dimensionless;
-    label at line 6, columns 5 to 83: invalid signature
+snippet line 5: import plugin "graphcal:demo" as demo {
+snippet line 6:     fn boost(xs: Velocity[Maneuver]) -> Velocity;
+    label at line 6, columns 27 to 34: invalid signature
 snippet line 7: }
 diagnostic help: extern signatures support Bool, Int, scalar dimension types, and arrays of scalars over a declared index variable; each dimension variable must be declared in the `<...>` binder list and bound by a bare scalar parameter or bare array element before compound uses, and a result array must reuse an index variable that indexes some parameter
 diagnostic code: graphcal::P001

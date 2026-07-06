@@ -82,7 +82,8 @@ fn registry_from_embedded_manifest() -> HostFunctionRegistry {
     let plugin = PluginPath::new("graphcal:sdk-drift");
     let mut registry = HostFunctionRegistry::new();
     for (name, signature) in functions {
-        registry.register_with_signature(plugin.clone(), name, signature, |args| Ok(args[0]));
+        registry
+            .register_with_signature(plugin.clone(), name, signature, |args| Ok(args[0].clone()));
     }
     registry
 }

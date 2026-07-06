@@ -4073,6 +4073,7 @@ fn eval_extern_plugin_fixture() {
     assert!((find_value(&result, "v_mid") - 150.0).abs() < 1e-9);
     assert!((find_value(&result, "pace") - (1.0 / 150.0)).abs() < 1e-12);
     assert!((find_value(&result, "scale") - 6.0).abs() < 1e-12);
+    assert!((find_value(&result, "dv_share_total") - 1.0).abs() < 1e-12);
     assert!(
         result
             .assertions

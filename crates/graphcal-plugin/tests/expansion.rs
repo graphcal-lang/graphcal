@@ -116,6 +116,7 @@ fn manifest_converts_to_the_compiler_signature_ir() {
     let var = || DimVarName::expect_valid("D");
     let expected_lerp = FunctionSignature::try_new(
         vec![var()],
+        Vec::new(),
         vec![
             FunctionParam {
                 name: FnParamName::expect_valid("a"),
@@ -147,6 +148,7 @@ fn manifest_converts_to_the_compiler_signature_ir() {
         .expect("step is in the manifest")
         .1;
     let expected_step = FunctionSignature::try_new(
+        Vec::new(),
         Vec::new(),
         vec![
             FunctionParam {

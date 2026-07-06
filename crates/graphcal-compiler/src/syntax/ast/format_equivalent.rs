@@ -111,6 +111,7 @@ format_equivalent_via_eq!(
     ModuleAliasName,
     crate::syntax::dimension::UnitRef,
     crate::syntax::dimension::DimVarName,
+    crate::syntax::index_name::IndexVarName,
     crate::syntax::function_name::FnName,
     crate::syntax::function_name::FnParamName,
     crate::syntax::plugin::PluginPath,
@@ -457,22 +458,32 @@ impl FormatEquivalent for crate::syntax::ast::ExternFnDecl {
     fn format_equivalent(&self, other: &Self) -> bool {
         let Self {
             name,
-            dim_vars,
+            generics,
             params,
             result,
             span: _,
         } = self;
         let Self {
             name: other_name,
-            dim_vars: other_dim_vars,
+            generics: other_generics,
             params: other_params,
             result: other_result,
             span: _,
         } = other;
         name.format_equivalent(other_name)
-            && dim_vars.format_equivalent(other_dim_vars)
+            && generics.format_equivalent(other_generics)
             && params.format_equivalent(other_params)
             && result.format_equivalent(other_result)
+    }
+}
+
+impl FormatEquivalent for crate::syntax::ast::ExternGenericBinder {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Dim(a), Self::Dim(b)) => a.format_equivalent(b),
+            (Self::Index(a), Self::Index(b)) => a.format_equivalent(b),
+            (Self::Dim(_) | Self::Index(_), _) => false,
+        }
     }
 }
 

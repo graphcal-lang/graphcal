@@ -11,7 +11,9 @@
 
 use std::sync::Arc;
 
-use graphcal_eval::host_fns::{HostFnError, HostFunctionRegistry, PluginRegistrationError};
+use graphcal_eval::host_fns::{
+    HostFnError, HostFnValue, HostFunctionRegistry, PluginRegistrationError,
+};
 use graphcal_eval::loader::LoadedProject;
 
 use crate::host::PluginHost;
@@ -70,8 +72,16 @@ fn register_module_functions(
             name.clone(),
             signature.clone(),
             move |args| {
+                // ABI v1 modules are scalar-only; array-capable manifests
+                // arrive with the buffer protocol (issue #25 Phase D).
+                let scalars: Vec<f64> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(position, value)| value.expect_scalar(position))
+                    .collect::<Result<_, _>>()?;
                 module
-                    .call(&function_name, args)
+                    .call(&function_name, &scalars)
+                    .map(HostFnValue::Scalar)
                     .map_err(|err| HostFnError::new(err.to_string()))
             },
         );
