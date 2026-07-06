@@ -145,7 +145,7 @@ fn scaffolded_plugin_builds_locks_and_evaluates() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;"),
+        stdout.contains("fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;"),
         "{stdout}"
     );
     assert!(stdout.contains("= 2"), "{stdout}");
@@ -159,7 +159,7 @@ fn scaffolded_plugin_builds_locks_and_evaluates() {
     std::fs::write(
         project.join("src/e2e/main.gcl"),
         r#"import plugin "plugins/e2e_kernels.wasm" as kernels {
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
     fn checked_sqrt(x: Dimensionless) -> Dimensionless;
 }
 

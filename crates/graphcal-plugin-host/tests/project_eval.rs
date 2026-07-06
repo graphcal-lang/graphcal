@@ -125,7 +125,7 @@ fn value_for<'a>(result: &'a EvalResult, name: &str) -> &'a Value {
 
 const LERP_IMPORT: &str = r#"
 import plugin "plugins/demo.wasm" as demo {
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
 "#;
 
@@ -151,7 +151,7 @@ fn declared_signature_must_match_the_manifest() {
     // Result declared as D^2: dimensionally different from the manifest's D.
     let source = r#"
 import plugin "plugins/demo.wasm" as demo {
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D^2;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2;
 }
 node x: Dimensionless = demo.lerp(1.0, 3.0, 0.5);
 "#;
@@ -181,7 +181,7 @@ fn param_and_dim_var_renaming_is_not_a_mismatch() {
     // Same structure as the manifest, different variable and param names.
     let source = r#"
 import plugin "plugins/demo.wasm" as demo {
-    fn lerp<T>(lo: T, hi: T, frac: Dimensionless) -> T;
+    fn lerp<T: Dim>(lo: T, hi: T, frac: Dimensionless) -> T;
 }
 node mid: Length = demo.lerp(1.0 m, 3.0 m, 0.5);
 "#;
@@ -204,7 +204,7 @@ fn check_path_reports_signature_mismatch_without_evaluating() {
     let dir = tempfile::tempdir().unwrap();
     let source = r#"
 import plugin "plugins/demo.wasm" as demo {
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D^2;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2;
 }
 node x: Dimensionless = 1.0;
 "#;
@@ -282,7 +282,7 @@ fn plugin_paths_may_not_leave_the_project_root() {
     let dir = tempfile::tempdir().unwrap();
     let source = r#"
 import plugin "../outside.wasm" as demo {
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
 node x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);
 "#;
@@ -335,7 +335,7 @@ fn plugin_failures_are_contained_per_node() {
     );
     let source = r#"
 import plugin "plugins/inv.wasm" as inv {
-    fn inverse<D>(x: D) -> D^-1;
+    fn inverse<D: Dim>(x: D) -> D^-1;
 }
 param zero: Dimensionless = 0.0;
 node bad: Dimensionless = inv.inverse(@zero);
@@ -494,10 +494,10 @@ fn host_registry_plugins_coexist_with_wasm_plugins() {
     let dir = tempfile::tempdir().unwrap();
     let source = r#"
 import plugin "graphcal:demo" as native {
-    fn inverse<D>(x: D) -> D^-1;
+    fn inverse<D: Dim>(x: D) -> D^-1;
 }
 import plugin "plugins/demo.wasm" as wasm {
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
 node a: Dimensionless = native.inverse(4.0);
 node b: Length = wasm.lerp(1.0 m, 3.0 m, 0.5);

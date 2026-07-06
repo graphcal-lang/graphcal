@@ -268,7 +268,7 @@ fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
         .append(RcDoc::text("}"))
 }
 
-/// `import plugin "path" as alias { fn name<D>(p: T, ...) -> T; ... }`
+/// `import plugin "path" as alias { fn name<D: Dim>(p: T, ...) -> T; ... }`
 fn format_plugin_import_decl(
     fmt: &mut Formatter<'_>,
     d: &graphcal_compiler::syntax::ast::PluginImportDecl,
@@ -295,7 +295,7 @@ fn format_plugin_import_decl(
         .append(RcDoc::text("}"))
 }
 
-/// `fn smooth<D>(x: D, window: Dimensionless) -> D;`
+/// `fn smooth<D: Dim>(x: D, window: Dimensionless) -> D;`
 fn format_extern_fn_decl(
     fmt: &mut Formatter<'_>,
     f: &graphcal_compiler::syntax::ast::ExternFnDecl,
@@ -305,7 +305,7 @@ fn format_extern_fn_decl(
         let var_docs: Vec<RcDoc<'static>> = f
             .dim_vars
             .iter()
-            .map(|v| RcDoc::text(v.value.as_str().to_string()))
+            .map(|v| RcDoc::text(format!("{}: Dim", v.value.as_str())))
             .collect();
         doc = doc
             .append(RcDoc::text("<"))

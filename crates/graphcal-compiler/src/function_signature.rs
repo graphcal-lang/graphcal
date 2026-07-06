@@ -287,8 +287,8 @@ impl FunctionSignature {
         self.params.len()
     }
 
-    /// Render this signature as `<D1, D2>(name: kind, ...) -> kind`, using
-    /// `format_dim` to render concrete dimensions.
+    /// Render this signature as `<D1: Dim, D2: Dim>(name: kind, ...) -> kind`,
+    /// using `format_dim` to render concrete dimensions.
     ///
     /// This is a display boundary (hover, signature help, diagnostics); the
     /// checker and evaluator pattern-match the typed parts instead.
@@ -298,7 +298,11 @@ impl FunctionSignature {
 
         let mut out = String::new();
         if !self.dim_vars.is_empty() {
-            let vars: Vec<&str> = self.dim_vars.iter().map(DimVarName::as_str).collect();
+            let vars: Vec<String> = self
+                .dim_vars
+                .iter()
+                .map(|var| format!("{}: Dim", var.as_str()))
+                .collect();
             let _ = write!(out, "<{}>", vars.join(", "));
         }
         out.push('(');
@@ -757,7 +761,7 @@ mod tests {
     fn format_with_renders_binders_params_and_result() {
         let sig = FunctionSignature::free_to_pow("x", Rational::HALF);
         let rendered = sig.format_with(|dim| format!("{dim:?}"));
-        assert_eq!(rendered, "<D>(x: D) -> D^(1/2)");
+        assert_eq!(rendered, "<D: Dim>(x: D) -> D^(1/2)");
     }
 
     /// `<vars>(params) -> result` shorthand for equivalence tests.

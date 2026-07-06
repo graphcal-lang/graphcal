@@ -17,7 +17,7 @@ use graphcal_plugin_abi::PluginManifest;
 
 graphcal_plugin::plugin! {
     /// Linear interpolation between `a` and `b`.
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D {
         (b - a).mul_add(t, a)
     }
 

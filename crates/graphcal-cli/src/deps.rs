@@ -766,10 +766,10 @@ mod tests {
             root.join("src/mission/main.gcl"),
             r#"
 import plugin "plugins/demo.wasm" as demo {
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
 import plugin "graphcal:demo" as native {
-    fn inverse<D>(x: D) -> D^-1;
+    fn inverse<D: Dim>(x: D) -> D^-1;
 }
 node x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);
 "#,

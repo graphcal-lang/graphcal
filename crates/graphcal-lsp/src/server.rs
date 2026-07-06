@@ -728,11 +728,11 @@ fn build_extern_fn_signatures(
         let binders = if function.signature.dim_vars().is_empty() {
             String::new()
         } else {
-            let vars: Vec<&str> = function
+            let vars: Vec<String> = function
                 .signature
                 .dim_vars()
                 .iter()
-                .map(graphcal_compiler::syntax::dimension::DimVarName::as_str)
+                .map(|var| format!("{}: Dim", var.as_str()))
                 .collect();
             format!("<{}>", vars.join(", "))
         };

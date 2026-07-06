@@ -1,6 +1,5 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
-assertion_line: 775
 expression: rendered
 ---
 invalid extern function signature: dimension variable `D` is used in a compound form in parameter `x` before any parameter binds it as a bare variable
@@ -8,8 +7,8 @@ invalid extern function signature: dimension variable `D` is used in a compound 
 Begin snippet for extern_use_before_binding.gcl starting at line 2, column 1
 
 snippet line 2: import plugin "graphcal:demo" as demo {
-snippet line 3:     fn sq<D>(x: D^2) -> D;
-    label at line 3, columns 5 to 26: invalid signature
+snippet line 3:     fn sq<D: Dim>(x: D^2) -> D;
+    label at line 3, columns 5 to 31: invalid signature
 snippet line 4: }
 diagnostic help: extern signatures support Bool, Int, and scalar dimension types; each dimension variable must be declared in the `<...>` binder list and bound by a bare-variable parameter before compound uses
 diagnostic code: graphcal::P001

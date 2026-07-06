@@ -433,11 +433,12 @@ import_decl
    through it (`fluids.density(...)`), never bare. No `pub`: plugin
    functions cannot be re-exported.
 
-   Each `fn` may declare dimension variables in explicit angle-bracket
-   binders. Parameter and result types are `Bool`, `Int`, or dimension
-   expressions over dimensions in scope and the declared dim variables,
-   with rational powers and cross-variable products
-   (e.g. `fn torque<D1, D2>(f: D1, arm: D2) -> D1 * D2;`).
+   Each `fn` may declare generic variables in explicit angle-bracket
+   binders using the same `name: constraint` form as `generic_params`
+   (restricted to `Dim`). Parameter and result types are `Bool`, `Int`,
+   or dimension expressions over dimensions in scope and the declared
+   dim variables, with rational powers and cross-variable products
+   (e.g. `fn torque<D1: Dim, D2: Dim>(f: D1, arm: D2) -> D1 * D2;`).
    Each dim variable must first appear as a bare `var` parameter (its
    binding occurrence) before any compound use.
 
@@ -448,12 +449,15 @@ plugin_import_decl
      "{", { extern_fn_decl }, "}";
 
 extern_fn_decl
-   = "fn", IDENT, [ extern_dim_var_binders ],
+   = "fn", IDENT, [ extern_generic_binders ],
      "(", [ extern_fn_param, { ",", extern_fn_param }, [ "," ] ], ")",
      "->", type_expr, ";";
 
-extern_dim_var_binders
-   = "<", IDENT, { ",", IDENT }, [ "," ], ">";
+extern_generic_binders
+   = "<", extern_generic_binder, { ",", extern_generic_binder }, [ "," ], ">";
+
+extern_generic_binder
+   = IDENT, ":", "Dim";
 
 extern_fn_param
    = IDENT, ":", type_expr;

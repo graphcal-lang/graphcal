@@ -28,8 +28,8 @@ the import site:
 ```
 import plugin "plugins/fluids.wasm" as fluids {
     fn density(p: Pressure, t: Temperature) -> Mass * Length^-3;
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
-    fn geometric_mean<D1, D2>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+    fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
 }
 ```
 
@@ -60,7 +60,7 @@ A signature may declare *dimension variables* in explicit angle-bracket
 binders, making a function polymorphic over dimensions:
 
 ```
-fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 ```
 
 At each call site, `D` binds to the actual argument dimension, every
@@ -69,7 +69,7 @@ from the binding. Result types may combine several variables with
 rational powers — full cross-variable dimension algebra:
 
 ```
-fn geometric_mean<D1, D2>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
+fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
 ```
 
 ```
@@ -78,7 +78,7 @@ node scale: Length = demo.geometric_mean(4.0 m, 9.0 m);   // = 6 m
 
 One rule keeps checking decidable: **every dimension variable must first
 appear as a bare parameter** (`x: D`) before it is used in a compound form
-(`D^2`, `D1 * D2`) or in the result. A signature like `fn sq<D>(x: D^2) -> D`
+(`D^2`, `D1 * D2`) or in the result. A signature like `fn sq<D: Dim>(x: D^2) -> D`
 is rejected — it would require solving for `D` rather than binding it.
 
 Dimension polymorphism is deliberately *parametric*: the plugin never
@@ -172,7 +172,7 @@ truth:
 ```rust
 graphcal_plugin::plugin! {
     /// Linear interpolation between `a` and `b`.
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D {
         (b - a).mul_add(t, a)
     }
 }

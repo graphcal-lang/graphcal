@@ -113,7 +113,7 @@ fn plugin_test_reports_identity_and_import_block() {
     assert!(stdout.contains("abi: version 1, 2 function(s)"), "{stdout}");
     assert!(stdout.contains("as kernels {"), "{stdout}");
     assert!(
-        stdout.contains("fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;"),
+        stdout.contains("fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;"),
         "{stdout}"
     );
     assert!(

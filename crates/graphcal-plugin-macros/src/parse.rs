@@ -121,7 +121,19 @@ impl Parse for PluginFnDecl {
                 if input.peek(Token![>]) {
                     break;
                 }
-                dim_vars.push(input.parse::<syn::Ident>()?);
+                let var = input.parse::<syn::Ident>()?;
+                input.parse::<Token![:]>()?;
+                let constraint = input.parse::<syn::Ident>()?;
+                if constraint != "Dim" {
+                    return Err(syn::Error::new(
+                        constraint.span(),
+                        format!(
+                            "unsupported binder constraint `{constraint}`; extern signatures \
+                             support `Dim` (write `{var}: Dim`)"
+                        ),
+                    ));
+                }
+                dim_vars.push(var);
                 if input.peek(Token![,]) {
                     input.parse::<Token![,]>()?;
                 } else {

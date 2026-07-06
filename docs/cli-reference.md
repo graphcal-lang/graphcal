@@ -178,7 +178,7 @@ abi: version 1, 2 function(s)
 
 import plugin "plugins/fluid_props.wasm" as fluid_props {
     fn air_density(p: Length^-1 * Mass * Time^-2, t: Temperature) -> Length^-3 * Mass;
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
 
 lerp(1.0, 3.0, 0.5) = 2

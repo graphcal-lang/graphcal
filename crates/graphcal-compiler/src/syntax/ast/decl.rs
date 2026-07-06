@@ -294,7 +294,7 @@ pub struct ImportDecl {
 /// ```text
 /// import plugin "plugins/coolprop.wasm" as fluids {
 ///     fn density(p: Pressure, t: Temperature) -> Density;
-///     fn smooth<D>(x: D, window: Dimensionless) -> D;
+///     fn smooth<D: Dim>(x: D, window: Dimensionless) -> D;
 /// }
 /// ```
 ///
@@ -314,7 +314,7 @@ pub struct PluginImportDecl<P: Phase = Raw> {
 }
 
 /// One extern function signature inside an `import plugin` block:
-/// `fn smooth<D>(x: D, window: Dimensionless) -> D;`
+/// `fn smooth<D: Dim>(x: D, window: Dimensionless) -> D;`
 #[derive(Debug, Clone)]
 pub struct ExternFnDecl<P: Phase = Raw> {
     /// The function name.

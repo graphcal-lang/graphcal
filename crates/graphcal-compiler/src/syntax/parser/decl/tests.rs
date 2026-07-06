@@ -1760,7 +1760,7 @@ fn layer_with_empty_plots_is_rejected() {
 #[test]
 fn parse_plugin_import_block() {
     let file = Parser::new(
-        "import plugin \"plugins/coolprop.wasm\" as fluids {\n    fn density(p: Pressure, t: Temperature) -> Density;\n    fn smooth<D>(x: D, window: Dimensionless) -> D;\n    fn torque<D1, D2>(f: D1, arm: D2) -> D1 * D2;\n}\n",
+        "import plugin \"plugins/coolprop.wasm\" as fluids {\n    fn density(p: Pressure, t: Temperature) -> Density;\n    fn smooth<D: Dim>(x: D, window: Dimensionless) -> D;\n    fn torque<D1: Dim, D2: Dim>(f: D1, arm: D2) -> D1 * D2;\n}\n",
     )
     .parse_file()
     .unwrap();
@@ -1794,6 +1794,26 @@ fn parse_plugin_import_block() {
         panic!("expected DimExpr result");
     };
     assert_eq!(result.terms.len(), 2);
+}
+
+#[test]
+fn parse_extern_binder_requires_constraint() {
+    // The bare Phase A form `<D>` was removed in favor of the same
+    // `name: constraint` binder grammar that `type` generics use.
+    let err = Parser::new("import plugin \"p\" as x { fn f<D>(a: D) -> D; }")
+        .parse_file()
+        .unwrap_err();
+    assert!(format!("{err:?}").contains(':'), "{err:?}");
+}
+
+#[test]
+fn parse_extern_binder_rejects_non_dim_constraint() {
+    let err = Parser::new(
+        "import plugin \"p\" as x { fn f<N: Nat>(a: Dimensionless) -> Dimensionless; }",
+    )
+    .parse_file()
+    .unwrap_err();
+    assert!(format!("{err:?}").contains("Dim"), "{err:?}");
 }
 
 #[test]

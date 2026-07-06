@@ -10,7 +10,7 @@
 //! ```
 //! graphcal_plugin::plugin! {
 //!     /// Linear interpolation between `a` and `b`.
-//!     fn lerp<D>(a: D, b: D, t: Dimensionless) -> D {
+//!     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D {
 //!         a + (b - a) * t
 //!     }
 //! }
@@ -23,7 +23,7 @@
 //!
 //! ```text
 //! import plugin "plugins/my_plugin.wasm" as my_plugin {
-//!     fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+//!     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 //! }
 //! ```
 //!
@@ -80,7 +80,7 @@
 ///     }
 ///
 ///     /// Cube root, dimensionally exact.
-///     fn cbrt<D>(x: D) -> D^(1/3) {
+///     fn cbrt<D: Dim>(x: D) -> D^(1/3) {
 ///         x.cbrt()
 ///     }
 /// }

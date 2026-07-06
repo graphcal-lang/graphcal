@@ -1,5 +1,5 @@
 // error: D first occurs in the compound form D^2 — no bare binding occurrence
 import plugin "graphcal:demo" as demo {
-    fn sq<D>(x: D^2) -> D;
+    fn sq<D: Dim>(x: D^2) -> D;
 }
 node y: Dimensionless = 1.0;

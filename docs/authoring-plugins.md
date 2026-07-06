@@ -57,7 +57,7 @@ graphcal_plugin::plugin! {
     }
 
     /// Linear interpolation, polymorphic over the dimension of `a`/`b`.
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D {
         (b - a).mul_add(t, a)
     }
 }
@@ -154,7 +154,7 @@ declarations, and pin:
 ```text
 import plugin "plugins/fluid_props.wasm" as fluids {
     fn air_density(p: Pressure, t: Temperature) -> Mass / Volume;
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
 
 node rho: Mass / Volume = fluids.air_density(@chamber_p, @chamber_t);

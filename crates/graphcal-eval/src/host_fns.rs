@@ -213,9 +213,9 @@ pub const DEMO_PLUGIN_PATH: &str = "graphcal:demo";
 ///
 /// ```gcl
 /// import plugin "graphcal:demo" as demo {
-///     fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
-///     fn inverse<D>(x: D) -> D^-1;
-///     fn geometric_mean<D1, D2>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
+///     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+///     fn inverse<D: Dim>(x: D) -> D^-1;
+///     fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
 /// }
 /// ```
 #[must_use]

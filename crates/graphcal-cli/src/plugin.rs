@@ -153,7 +153,7 @@ fn lib_rs_file() -> ScaffoldFile {
 
 graphcal_plugin::plugin! {
     /// Linear interpolation between `a` and `b`.
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D {
         (b - a).mul_add(t, a)
     }
 
@@ -219,7 +219,7 @@ Vendor the module (for example under `plugins/`), declare it, and pin it:
 
 ```text
 import plugin "plugins/{artifact}.wasm" as {artifact} {{
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
     fn checked_sqrt(x: Dimensionless) -> Dimensionless;
 }}
 
@@ -258,7 +258,7 @@ fn validate_name(name: &str) -> Result<(), ScaffoldNameError> {
 // ---------------------------------------------------------------------------
 
 /// Render one function as a `.gcl` extern declaration line (no leading
-/// indentation): `fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;`.
+/// indentation): `fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;`.
 pub fn render_declaration(name: &str, signature: &FunctionSignature) -> String {
     format!("fn {name}{};", signature.format_with(render_dimension))
 }
@@ -567,7 +567,7 @@ mod tests {
     fn declarations_render_in_gcl_syntax() {
         assert_eq!(
             render_declaration("lerp", &lerp_signature()),
-            "fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;"
+            "fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;"
         );
         assert_eq!(
             render_declaration("step", &step_signature()),
