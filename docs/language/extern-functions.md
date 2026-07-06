@@ -43,7 +43,10 @@ import plugin "plugins/fluids.wasm" as fluids {
   mirrors the explicitness of module imports and keeps the built-in
   function namespace closed.
 - Each `fn` declares **named parameters** and a **result type**. Parameter
-  and result types may be `Bool`, `Int`, or scalar dimension expressions.
+  and result types may be `Bool`, `Int`, scalar dimension expressions, or
+  arrays of scalars over a declared index variable (`xs: D[I]`); the result
+  may additionally be a record type in scope (see
+  [Struct Returns](#struct-returns)).
 
 Signatures are declared explicitly rather than inferred from the plugin:
 the declaration in your source is the contract your project type-checks
@@ -86,6 +89,75 @@ learns which dimension `D` was bound to, so it cannot branch on units —
 the implicit behavior graphcal bans stays banned across the plugin
 boundary.
 
+## Arrays over Index Variables
+
+A signature may also declare *index variables* (`I: Index`) and take or
+return arrays of scalars over them:
+
+```
+import plugin "plugins/dsp.wasm" as dsp {
+    fn smooth<D: Dim, I: Index>(xs: D[I], window: Dimensionless) -> D[I];
+    fn total<D: Dim, I: Index>(xs: D[I]) -> D;
+}
+
+index Maneuver = { Departure, Correction, Insertion };
+node dv: Velocity[Maneuver] = { Maneuver.Departure: 2.0 km/s, Maneuver.Correction: 0.5 km/s, Maneuver.Insertion: 1.5 km/s };
+node dv_smooth: Velocity[Maneuver] = dsp.smooth(@dv, 3.0);
+```
+
+Index variables follow the same explicit discipline as dimension
+variables:
+
+- An array's index position must name one of the declared `Index` binders
+  — concrete indexes (`Velocity[Maneuver]`) and Nat lengths (`D[3]`)
+  cannot cross the plugin boundary. Like dimension variables, index
+  variables are parametric: the plugin sees each array only as a dense
+  buffer of SI values in index order, never the index's identity.
+- Two parameters sharing an index variable must be passed arrays over the
+  *same* index.
+- A **result array must reuse an index variable that indexes some
+  parameter** — its length is always determined by an input, so a plugin
+  can never invent its output length. Results are rebuilt over exactly the
+  binding argument's index, ready for `sum`, indexing, and `for`
+  comprehensions like any other indexed value.
+- A bare array element (`xs: D[I]`) is a binding occurrence for `D`, just
+  like a bare scalar parameter.
+- Array elements are scalars in this phase (`Bool[I]`/`Int[I]` and
+  multi-axis arrays are not supported).
+
+## Struct Returns
+
+A function may return several named values at once by declaring a
+**record type in scope** as its result:
+
+```
+import plugin "plugins/stats.wasm" as stats {
+    fn span<D: Dim, I: Index>(xs: D[I]) -> DvSpan;
+}
+
+type DvSpan { DvSpan(lo: Velocity, hi: Velocity) }
+
+node dv_span: DvSpan = stats.span(@dv);
+node spread: Velocity = @dv_span.lo - @dv_span.hi;
+```
+
+The plugin's manifest never learns the type's *name* — it declares the
+flattened field shape (names, order, and kinds), and the declaration
+binds that shape to the nominal record type. Field names and order are
+part of the contract: a plugin declaring `{min, max}` does not match a
+declaration whose record has `{lo, hi}` (P005). The result evaluates to
+an ordinary struct value with working field access and matching.
+
+Restrictions in this phase, each with a dedicated compile error:
+
+- The named type must be a **record** — a single constructor named after
+  the type. Multi-variant unions have no flattened layout to cross the
+  boundary.
+- Fields must be `Bool`, `Int`, or **concrete** scalar dimensions —
+  generic records and dimension-variable fields cannot cross yet.
+- Structs are result-only. A struct *parameter* should be passed as
+  separate scalar parameters instead.
+
 ## Calling Extern Functions
 
 Extern calls look like qualified function calls and participate in the
@@ -124,19 +196,30 @@ deterministic interpreter. The module must satisfy the ABI, all checked
 at load time before any plugin code runs:
 
 - **Manifest.** The module embeds a JSON manifest in a custom section
-  named `graphcal-manifest`, declaring `abi_version: 1` and each provided
-  function's dimensional signature. Fixed dimensions are spelled
-  structurally over the eight prelude base dimensions (`Length`, `Time`,
-  `Mass`, `Temperature`, `ElectricCurrent`, `Amount`, `LuminousIntensity`,
-  `Angle`) with rational exponents — `Velocity` is
-  `Length^1 * Time^-1`. User-defined base dimensions cannot cross the
-  binary boundary.
-- **Scalar ABI.** Every manifest function is exported with wasm type
-  `(f64 × arity) -> f64`. Values cross the boundary as raw `f64`s in SI
-  base units — no serialization. `Int` arguments arrive as
-  exactly-representable integers, `Bool` arguments as `1.0`/`0.0`, and
-  the result converts back per the declared result kind. A non-finite
-  result flows into graphcal's ordinary non-finite containment.
+  named `graphcal-manifest`, declaring `abi_version: 2` and each provided
+  function's dimensional signature (dimension and index variables, named
+  parameters, the result — including array kinds and struct field
+  layouts). Fixed dimensions are spelled structurally over the eight
+  prelude base dimensions (`Length`, `Time`, `Mass`, `Temperature`,
+  `ElectricCurrent`, `Amount`, `LuminousIntensity`, `Angle`) with rational
+  exponents — `Velocity` is `Length^1 * Time^-1`. User-defined base
+  dimensions cannot cross the binary boundary.
+- **Value ABI.** Each function's wasm export type follows its signature:
+  scalar/`Bool`/`Int` parameters are one `f64` each (raw SI base units;
+  `Int` as exactly-representable integers, `Bool` as `1.0`/`0.0`), and an
+  array parameter is an `(i32 ptr, i32 len)` pair pointing at `len` dense
+  little-endian `f64` elements in index order. A scalar result is the
+  single `f64` return value; an array or struct result replaces the
+  return with one trailing `i32` out-pointer the plugin fills — `len`
+  elements for an array (the length of the input bound to the result's
+  index variable) or one slot per field for a struct. A non-finite scalar
+  flows into graphcal's ordinary non-finite containment.
+- **Allocator exports.** A module that takes or returns arrays or structs
+  must export its memory as `"memory"` plus
+  `graphcal_alloc(size: i32) -> i32` (8-byte-aligned) and
+  `graphcal_free(ptr: i32, size: i32)`. The host allocates every buffer
+  before a call, writes the inputs, and frees everything after reading
+  the result — a plugin never retains a buffer across calls.
 - **No imports.** The module may import nothing — with one exception:
   `graphcal::fail(ptr: i32, len: i32)`, the host-provided failure
   reporter. The import ban is what makes plugins pure and I/O-free by
@@ -238,7 +321,9 @@ evaluation starts (P003, P005–P010 depending on the cause).
 
 Embedders provide native implementations by injecting a
 `HostFunctionRegistry` — a map from `(plugin path, function name)` to a
-function of shape `fn(&[f64]) -> Result<f64, HostFnError>`. WASM plugins
+function of shape `fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError>`,
+where a `HostFnValue` is a scalar `f64` or a dense `f64` buffer (arrays in
+index order; struct results as one slot per field). WASM plugins
 register through the same interface (the `graphcal-plugin-host` crate
 loads a project's vendored modules into the registry), so the evaluator
 itself stays WASM-free:
@@ -256,5 +341,6 @@ let result = compile_and_eval_from_project_with_host_fns(&project, &overrides, &
 Native registry entries carry no manifest, so their declarations are
 trusted as-is — appropriate for embedder-controlled functions. The CLI
 and language server inject the built-in demo plugin (`"graphcal:demo"`:
-`lerp`, `inverse`, `geometric_mean`) so extern declarations can be
+`lerp`, `inverse`, `geometric_mean`, `normalize`, `dv_range`) so extern
+declarations — including array and struct-returning ones — can be
 exercised without any plugin file.
