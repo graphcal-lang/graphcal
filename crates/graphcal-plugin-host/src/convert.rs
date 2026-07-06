@@ -10,14 +10,17 @@
 
 use graphcal_compiler::dimension::{Dimension, Rational, RationalError};
 use graphcal_compiler::function_signature::{
-    DimMonomial, DimVarPower, FunctionParam, FunctionSignature, SignatureError, ValueKind,
+    DimMonomial, DimVarPower, FunctionParam, FunctionSignature, SignatureError, StructFieldKind,
+    StructShape, StructShapeField, ValueKind,
 };
 use graphcal_compiler::registry::prelude::{PRELUDE_BASE_DIMENSION_NAMES, prelude_base_dimension};
 use graphcal_compiler::syntax::dimension::DimVarName;
 use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
+use graphcal_compiler::syntax::index_name::IndexVarName;
 use graphcal_compiler::syntax::names::NameAtomError;
 use graphcal_plugin_abi::{
-    ManifestFunction, ManifestMonomial, ManifestRational, ManifestValueKind, PluginManifest,
+    ManifestField, ManifestFieldKind, ManifestFunction, ManifestMonomial, ManifestRational,
+    ManifestValueKind, PluginManifest,
 };
 use thiserror::Error;
 
@@ -59,6 +62,12 @@ pub fn convert_function(
         .map(|var| convert_dim_var(var))
         .collect::<Result<Vec<_>, _>>()
         .map_err(&in_function)?;
+    let index_vars = function
+        .index_vars
+        .iter()
+        .map(|var| convert_index_var(var))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(&in_function)?;
     let params = function
         .params
         .iter()
@@ -76,7 +85,7 @@ pub fn convert_function(
         .map_err(&in_function)?;
     let result = convert_kind(&function.result).map_err(&in_function)?;
 
-    let signature = FunctionSignature::try_new(dim_vars, params, result)
+    let signature = FunctionSignature::try_new(dim_vars, index_vars, params, result)
         .map_err(|source| in_function(ConvertErrorKind::Signature(source)))?;
     Ok((name, signature))
 }
@@ -88,12 +97,50 @@ fn convert_dim_var(var: &str) -> Result<DimVarName, ConvertErrorKind> {
     })
 }
 
+fn convert_index_var(var: &str) -> Result<IndexVarName, ConvertErrorKind> {
+    IndexVarName::try_new(var.to_string()).map_err(|source| ConvertErrorKind::InvalidIndexVarName {
+        name: var.to_string(),
+        source,
+    })
+}
+
 fn convert_kind(kind: &ManifestValueKind) -> Result<ValueKind, ConvertErrorKind> {
     match kind {
         ManifestValueKind::Bool => Ok(ValueKind::Bool),
         ManifestValueKind::Int => Ok(ValueKind::Int),
         ManifestValueKind::Scalar(monomial) => Ok(ValueKind::Scalar(convert_monomial(monomial)?)),
+        ManifestValueKind::Array { element, index } => Ok(ValueKind::Indexed {
+            element: convert_monomial(element)?,
+            index: convert_index_var(index)?,
+        }),
+        ManifestValueKind::Struct { fields } => {
+            let fields = fields
+                .iter()
+                .map(convert_struct_field)
+                .collect::<Result<Vec<_>, _>>()?;
+            let shape = StructShape::try_new(fields).map_err(ConvertErrorKind::Signature)?;
+            Ok(ValueKind::Struct(shape))
+        }
     }
+}
+
+fn convert_struct_field(field: &ManifestField) -> Result<StructShapeField, ConvertErrorKind> {
+    let name = graphcal_compiler::syntax::type_name::FieldName::try_new(field.name.clone())
+        .map_err(|source| ConvertErrorKind::InvalidFieldName {
+            name: field.name.clone(),
+            source,
+        })?;
+    let kind = match &field.kind {
+        ManifestFieldKind::Bool => StructFieldKind::Bool,
+        ManifestFieldKind::Int => StructFieldKind::Int,
+        ManifestFieldKind::Scalar(monomial) => {
+            // Wire validation already rejects dimension-variable factors in
+            // struct fields, so the converted monomial is concrete.
+            let monomial = convert_monomial(monomial)?;
+            StructFieldKind::Scalar(monomial.fixed)
+        }
+    };
+    Ok(StructShapeField { name, kind })
 }
 
 fn convert_monomial(monomial: &ManifestMonomial) -> Result<DimMonomial, ConvertErrorKind> {
@@ -150,6 +197,22 @@ pub enum ConvertErrorKind {
     /// A declared dimension variable is not a valid name.
     #[error("`{name}` is not a valid dimension variable name: {source}")]
     InvalidDimVarName {
+        /// The rejected name.
+        name: String,
+        /// Why the name was rejected.
+        source: NameAtomError,
+    },
+    /// A declared or referenced index variable is not a valid name.
+    #[error("`{name}` is not a valid index variable name: {source}")]
+    InvalidIndexVarName {
+        /// The rejected name.
+        name: String,
+        /// Why the name was rejected.
+        source: NameAtomError,
+    },
+    /// A struct field name is not a valid name.
+    #[error("`{name}` is not a valid field name: {source}")]
+    InvalidFieldName {
         /// The rejected name.
         name: String,
         /// Why the name was rejected.
@@ -221,6 +284,7 @@ mod tests {
         let function = ManifestFunction {
             name: "root".to_string(),
             dim_vars: vec!["D".to_string()],
+            index_vars: Vec::new(),
             params: vec![param("x", scalar_var("D", 1, 1))],
             result: scalar_var("D", 1, 2),
         };
@@ -237,6 +301,7 @@ mod tests {
         let function = ManifestFunction {
             name: "period".to_string(),
             dim_vars: Vec::new(),
+            index_vars: Vec::new(),
             params: vec![param("length", fixed_dim("Length", 1, 1))],
             result: fixed_dim("Time", 1, 1),
         };
@@ -256,6 +321,7 @@ mod tests {
         let function = ManifestFunction {
             name: "speed".to_string(),
             dim_vars: Vec::new(),
+            index_vars: Vec::new(),
             params: vec![param("x", fixed_dim("Velocity", 1, 1))],
             result: ManifestValueKind::Scalar(ManifestMonomial::default()),
         };
@@ -272,6 +338,7 @@ mod tests {
         let function = ManifestFunction {
             name: "has.dot".to_string(),
             dim_vars: Vec::new(),
+            index_vars: Vec::new(),
             params: Vec::new(),
             result: ManifestValueKind::Int,
         };
@@ -287,6 +354,7 @@ mod tests {
         let function = ManifestFunction {
             name: "sq".to_string(),
             dim_vars: vec!["D".to_string()],
+            index_vars: Vec::new(),
             params: vec![param("x", scalar_var("D", 2, 1))],
             result: scalar_var("D", 1, 1),
         };

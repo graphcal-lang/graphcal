@@ -294,7 +294,7 @@ pub struct ImportDecl {
 /// ```text
 /// import plugin "plugins/coolprop.wasm" as fluids {
 ///     fn density(p: Pressure, t: Temperature) -> Density;
-///     fn smooth<D>(x: D, window: Dimensionless) -> D;
+///     fn smooth<D: Dim>(x: D, window: Dimensionless) -> D;
 /// }
 /// ```
 ///
@@ -314,19 +314,53 @@ pub struct PluginImportDecl<P: Phase = Raw> {
 }
 
 /// One extern function signature inside an `import plugin` block:
-/// `fn smooth<D>(x: D, window: Dimensionless) -> D;`
+/// `fn smooth<D: Dim, I: Index>(xs: D[I], window: Dimensionless) -> D[I];`
 #[derive(Debug, Clone)]
 pub struct ExternFnDecl<P: Phase = Raw> {
     /// The function name.
     pub name: Spanned<crate::syntax::function_name::FnName>,
-    /// Explicit dimension-variable binders (`<D1, D2>`), possibly empty.
-    pub dim_vars: Vec<Spanned<crate::syntax::dimension::DimVarName>>,
+    /// Explicit generic binders (`<D: Dim, I: Index>`) in source order,
+    /// possibly empty.
+    pub generics: Vec<ExternGenericBinder>,
     /// The named parameters, in order.
     pub params: Vec<ExternFnParam<P>>,
     /// The result type annotation.
     pub result: TypeExpr<P>,
     /// Span of the whole `fn ...;` declaration.
     pub span: Span,
+}
+
+/// One generic binder in an extern signature, categorized by its constraint.
+///
+/// Extern binders reuse the `name: constraint` grammar of `type` generics but
+/// support only the `Dim` and `Index` constraints; the category is carried
+/// typewise from the parser on.
+#[derive(Debug, Clone)]
+pub enum ExternGenericBinder {
+    /// `D: Dim` — a dimension variable.
+    Dim(Spanned<crate::syntax::dimension::DimVarName>),
+    /// `I: Index` — an index variable.
+    Index(Spanned<crate::syntax::index_name::IndexVarName>),
+}
+
+impl ExternGenericBinder {
+    /// The binder's source span.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Dim(var) => var.span,
+            Self::Index(var) => var.span,
+        }
+    }
+
+    /// The binder's name as source text.
+    #[must_use]
+    pub fn name_str(&self) -> &str {
+        match self {
+            Self::Dim(var) => var.value.as_str(),
+            Self::Index(var) => var.value.as_str(),
+        }
+    }
 }
 
 /// One named parameter in an extern function signature: `p: Pressure`.

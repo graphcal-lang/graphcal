@@ -17,7 +17,7 @@ use graphcal_plugin_abi::PluginManifest;
 
 graphcal_plugin::plugin! {
     /// Linear interpolation between `a` and `b`.
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D {
         (b - a).mul_add(t, a)
     }
 
@@ -42,6 +42,25 @@ graphcal_plugin::plugin! {
     /// An Int result the ABI cannot represent exactly.
     fn unrepresentable() -> Int {
         (1_i64 << 53) + 1
+    }
+
+    /// Array parameters arrive as slices; array results return `Vec`s over
+    /// the same index (issue #25 Phase D).
+    fn rescale<D: Dim, I: Index>(xs: D[I], k: Dimensionless) -> D[I] {
+        xs.iter().map(|x| x * k).collect()
+    }
+
+    /// Arrays can collapse to scalars.
+    fn total<D: Dim, I: Index>(xs: D[I]) -> D {
+        xs.iter().sum()
+    }
+
+    /// Struct results are declared structurally (concrete field types) and
+    /// returned through a generated named output type (issue #25 Phase D).
+    fn span<I: Index>(xs: Pressure[I]) -> { lo: Pressure, hi: Pressure } {
+        let lo = xs.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        SpanOutput { lo, hi }
     }
 }
 
@@ -88,6 +107,18 @@ fn unrepresentable_int_results_are_rejected() {
 }
 
 #[test]
+fn array_kernels_run_natively_with_slices_and_vecs() {
+    assert_eq!(rescale(&[1.0, 2.5, -4.0], 2.0), vec![2.0, 5.0, -8.0]);
+    assert!((total(&[1.0, 2.0, 3.5]) - 6.5).abs() < 1e-12);
+}
+
+#[test]
+fn struct_kernels_return_the_generated_output_type() {
+    let span = span(&[3.0, -1.5, 2.0]);
+    assert_eq!(span, SpanOutput { lo: -1.5, hi: 3.0 });
+}
+
+#[test]
 fn manifest_matches_the_declarations() {
     let manifest = decoded_manifest();
     let names: Vec<&str> = manifest
@@ -102,9 +133,29 @@ fn manifest_matches_the_declarations() {
             "checked_sqrt",
             "step",
             "is_probability",
-            "unrepresentable"
+            "unrepresentable",
+            "rescale",
+            "total",
+            "span"
         ]
     );
+
+    let rescale = &manifest.functions[5];
+    assert_eq!(rescale.index_vars, ["I"]);
+    let span = &manifest.functions[7];
+    assert!(matches!(
+        &span.result,
+        graphcal_plugin_abi::ManifestValueKind::Struct { fields }
+            if fields.len() == 2 && fields[0].name == "lo" && fields[1].name == "hi"
+    ));
+    assert!(matches!(
+        &rescale.params[0].kind,
+        graphcal_plugin_abi::ManifestValueKind::Array { index, .. } if index == "I"
+    ));
+    assert!(matches!(
+        &rescale.result,
+        graphcal_plugin_abi::ManifestValueKind::Array { index, .. } if index == "I"
+    ));
 }
 
 #[test]
@@ -116,6 +167,7 @@ fn manifest_converts_to_the_compiler_signature_ir() {
     let var = || DimVarName::expect_valid("D");
     let expected_lerp = FunctionSignature::try_new(
         vec![var()],
+        Vec::new(),
         vec![
             FunctionParam {
                 name: FnParamName::expect_valid("a"),
@@ -147,6 +199,7 @@ fn manifest_converts_to_the_compiler_signature_ir() {
         .expect("step is in the manifest")
         .1;
     let expected_step = FunctionSignature::try_new(
+        Vec::new(),
         Vec::new(),
         vec![
             FunctionParam {

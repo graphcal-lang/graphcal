@@ -2,16 +2,16 @@
 //!
 //! Extern functions declared by `import plugin "…" as alias { … }` blocks
 //! are resolved against a [`HostFunctionRegistry`] injected by the embedder
-//! (CLI, LSP, or tests). In this phase the registry maps each canonical
-//! `(plugin path, function name)` identity to a host-native Rust closure;
-//! Phase B swaps the closure backend for a WASM runtime without changing
-//! this interface.
+//! (CLI, LSP, or tests). The registry maps each canonical
+//! `(plugin path, function name)` identity to a host closure; the WASM
+//! plugin host registers module-backed closures through the same interface.
 //!
-//! The Phase A host ABI is scalar-only, mirroring
-//! [`BuiltinFunction::eval`](graphcal_compiler::registry::builtins::BuiltinFunction):
-//! arguments arrive as `&[f64]` (Int and Bool arguments are converted —
-//! exactly-representable integers and `1.0`/`0.0` respectively) and the
-//! result is converted back per the declared result kind.
+//! The host ABI carries SI-flat numbers: each value crosses as a
+//! [`HostFnValue`] — a bare `f64` for scalars (Int and Bool arguments are
+//! converted — exactly-representable integers and `1.0`/`0.0` respectively)
+//! or a dense `f64` buffer in index order for arrays. The evaluator does all
+//! typed interpretation against the declared signature; closures never see
+//! dimensions, units, or index identities beyond buffer lengths.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,8 +60,56 @@ impl From<&str> for HostFnError {
     }
 }
 
+/// One value crossing the host-function boundary, SI-flat in both directions.
+///
+/// Bool and Int values cross inside [`Self::Scalar`] using the documented
+/// encodings (`1.0`/`0.0`, exactly-representable integers); arrays cross as
+/// dense element buffers in index declaration order. The evaluator converts
+/// to and from typed [`RuntimeValue`]s per the declared signature — a
+/// closure returning the wrong shape is reported as a plugin failure, never
+/// reinterpreted.
+///
+/// [`RuntimeValue`]: graphcal_compiler::registry::runtime_value::RuntimeValue
+#[derive(Debug, Clone, PartialEq)]
+pub enum HostFnValue {
+    /// A scalar in SI base units (also the Bool/Int wire encoding).
+    Scalar(f64),
+    /// A dense array of SI scalars in index order.
+    Buffer(Vec<f64>),
+}
+
+impl HostFnValue {
+    /// The scalar payload, or an error naming the parameter position.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HostFnError`] when this value is a buffer.
+    pub fn expect_scalar(&self, position: usize) -> Result<f64, HostFnError> {
+        match self {
+            Self::Scalar(value) => Ok(*value),
+            Self::Buffer(_) => Err(HostFnError::new(format!(
+                "argument {position} is an array, expected a scalar"
+            ))),
+        }
+    }
+
+    /// The buffer payload, or an error naming the parameter position.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HostFnError`] when this value is a scalar.
+    pub fn expect_buffer(&self, position: usize) -> Result<&[f64], HostFnError> {
+        match self {
+            Self::Buffer(values) => Ok(values),
+            Self::Scalar(_) => Err(HostFnError::new(format!(
+                "argument {position} is a scalar, expected an array"
+            ))),
+        }
+    }
+}
+
 /// A host-native extern function implementation.
-pub type HostFn = Arc<dyn Fn(&[f64]) -> Result<f64, HostFnError> + Send + Sync>;
+pub type HostFn = Arc<dyn Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync>;
 
 /// One registered extern function: the callable closure plus, for
 /// plugin-backed entries, the signature the plugin's manifest declared.
@@ -135,7 +183,7 @@ impl HostFunctionRegistry {
         &mut self,
         plugin: PluginPath,
         name: FnName,
-        function: impl Fn(&[f64]) -> Result<f64, HostFnError> + Send + Sync + 'static,
+        function: impl Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
     ) {
         self.fns.insert(
             ExternFnKey { plugin, name },
@@ -153,7 +201,7 @@ impl HostFunctionRegistry {
         plugin: PluginPath,
         name: FnName,
         signature: FunctionSignature,
-        function: impl Fn(&[f64]) -> Result<f64, HostFnError> + Send + Sync + 'static,
+        function: impl Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
     ) {
         self.fns.insert(
             ExternFnKey { plugin, name },
@@ -205,17 +253,19 @@ impl HostFunctionRegistry {
 /// [`demo_registry`].
 pub const DEMO_PLUGIN_PATH: &str = "graphcal:demo";
 
-/// Phase A stand-in registry used by the CLI and LSP embedders.
+/// Host-native stand-in registry used by the CLI and LSP embedders.
 ///
-/// Real plugins do not exist until Phase B ships a WASM runtime, so the
-/// default embedders provide one well-known demo plugin (path
-/// [`DEMO_PLUGIN_PATH`]) to prove the extern path end-to-end:
+/// The default embedders provide one well-known demo plugin (path
+/// [`DEMO_PLUGIN_PATH`]) to prove the extern path end-to-end without a
+/// `.wasm` module:
 ///
 /// ```gcl
 /// import plugin "graphcal:demo" as demo {
-///     fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
-///     fn inverse<D>(x: D) -> D^-1;
-///     fn geometric_mean<D1, D2>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
+///     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+///     fn inverse<D: Dim>(x: D) -> D^-1;
+///     fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
+///     fn normalize<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
+///     fn dv_range<I: Index>(xs: Velocity[I]) -> DvRange;
 /// }
 /// ```
 #[must_use]
@@ -223,23 +273,52 @@ pub fn demo_registry() -> HostFunctionRegistry {
     let plugin = PluginPath::new(DEMO_PLUGIN_PATH);
     let mut registry = HostFunctionRegistry::new();
     registry.register(plugin.clone(), FnName::expect_valid("lerp"), |args| {
-        let (a, b, t) = (args[0], args[1], args[2]);
-        Ok((b - a).mul_add(t, a))
+        let (a, b, t) = (
+            args[0].expect_scalar(0)?,
+            args[1].expect_scalar(1)?,
+            args[2].expect_scalar(2)?,
+        );
+        Ok(HostFnValue::Scalar((b - a).mul_add(t, a)))
     });
     registry.register(plugin.clone(), FnName::expect_valid("inverse"), |args| {
-        if args[0] == 0.0 {
+        let x = args[0].expect_scalar(0)?;
+        if x == 0.0 {
             return Err(HostFnError::new("division by zero"));
         }
-        Ok(args[0].recip())
+        Ok(HostFnValue::Scalar(x.recip()))
     });
-    registry.register(plugin, FnName::expect_valid("geometric_mean"), |args| {
-        let product = args[0] * args[1];
-        if product < 0.0 {
+    registry.register(
+        plugin.clone(),
+        FnName::expect_valid("geometric_mean"),
+        |args| {
+            let product = args[0].expect_scalar(0)? * args[1].expect_scalar(1)?;
+            if product < 0.0 {
+                return Err(HostFnError::new(
+                    "geometric mean of a negative product is undefined",
+                ));
+            }
+            Ok(HostFnValue::Scalar(product.sqrt()))
+        },
+    );
+    registry.register(plugin.clone(), FnName::expect_valid("normalize"), |args| {
+        let xs = args[0].expect_buffer(0)?;
+        let total: f64 = xs.iter().sum();
+        if total == 0.0 {
             return Err(HostFnError::new(
-                "geometric mean of a negative product is undefined",
+                "cannot normalize: the elements sum to zero",
             ));
         }
-        Ok(product.sqrt())
+        Ok(HostFnValue::Buffer(xs.iter().map(|x| x / total).collect()))
+    });
+    registry.register(plugin, FnName::expect_valid("dv_range"), |args| {
+        let xs = args[0].expect_buffer(0)?;
+        let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
+        for x in xs {
+            min = min.min(*x);
+            max = max.max(*x);
+        }
+        // Struct results cross as one f64 slot per field, in field order.
+        Ok(HostFnValue::Buffer(vec![min, max]))
     });
     registry
 }
@@ -255,10 +334,14 @@ mod tests {
         }
     }
 
+    fn scalars(values: &[f64]) -> Vec<HostFnValue> {
+        values.iter().map(|v| HostFnValue::Scalar(*v)).collect()
+    }
+
     #[test]
     fn demo_registry_provides_documented_functions() {
         let registry = demo_registry();
-        for name in ["lerp", "inverse", "geometric_mean"] {
+        for name in ["lerp", "inverse", "geometric_mean", "normalize", "dv_range"] {
             assert!(registry.contains(&key(name)), "missing demo fn `{name}`");
         }
     }
@@ -267,7 +350,8 @@ mod tests {
     fn demo_lerp_interpolates() {
         let registry = demo_registry();
         let lerp = registry.get(&key("lerp")).unwrap();
-        assert!((lerp(&[0.0, 10.0, 0.25]).unwrap() - 2.5).abs() < f64::EPSILON);
+        let result = lerp(&scalars(&[0.0, 10.0, 0.25])).unwrap();
+        assert_eq!(result, HostFnValue::Scalar(2.5));
     }
 
     #[test]
@@ -275,8 +359,29 @@ mod tests {
         let registry = demo_registry();
         let inverse = registry.get(&key("inverse")).unwrap();
         assert_eq!(
-            inverse(&[0.0]).unwrap_err().message,
+            inverse(&scalars(&[0.0])).unwrap_err().message,
             "division by zero".to_string()
         );
+    }
+
+    #[test]
+    fn demo_normalize_divides_by_the_sum() {
+        let registry = demo_registry();
+        let normalize = registry.get(&key("normalize")).unwrap();
+        let result = normalize(&[HostFnValue::Buffer(vec![1.0, 3.0])]).unwrap();
+        assert_eq!(result, HostFnValue::Buffer(vec![0.25, 0.75]));
+    }
+
+    #[test]
+    fn shape_mismatches_are_reported_not_reinterpreted() {
+        let registry = demo_registry();
+        let lerp = registry.get(&key("lerp")).unwrap();
+        let err = lerp(&[
+            HostFnValue::Buffer(vec![1.0]),
+            HostFnValue::Scalar(1.0),
+            HostFnValue::Scalar(0.5),
+        ])
+        .unwrap_err();
+        assert!(err.message.contains("expected a scalar"), "{err}");
     }
 }

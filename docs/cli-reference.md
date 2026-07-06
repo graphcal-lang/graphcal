@@ -174,11 +174,11 @@ graphcal plugin test <MODULE> [--call <FUNCTION> [ARGS]...]
 $ graphcal plugin test plugins/fluid_props.wasm --call lerp 1.0 3.0 0.5
 plugin: plugins/fluid_props.wasm
 sha256: 3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855c
-abi: version 1, 2 function(s)
+abi: version 2, 2 function(s)
 
 import plugin "plugins/fluid_props.wasm" as fluid_props {
     fn air_density(p: Length^-1 * Mass * Time^-2, t: Temperature) -> Length^-3 * Mass;
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
 
 lerp(1.0, 3.0, 0.5) = 2
@@ -187,7 +187,10 @@ lerp(1.0, 3.0, 0.5) = 2
 The rendered fixed dimensions are spelled structurally over the prelude
 base dimensions (the manifest's alphabet); in your `.gcl` declaration you
 may equivalently write derived names such as `Pressure` — verification is
-structural.
+structural. Array arguments to `--call` are bracketed literals
+(`--call share [1.0,3.0]`) and array results render the same way; for
+struct-returning functions the import block is preceded by a suggested
+record declaration to paste alongside it.
 
 ---
 

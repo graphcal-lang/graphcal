@@ -20,7 +20,9 @@ use std::collections::HashSet;
 use proc_macro2::{Span, TokenStream};
 
 use crate::dims;
-use crate::parse::{DimExprAst, DimTermAst, ExponentAst, MulOp, PluginFnDecl, PluginInput};
+use crate::parse::{
+    DimExprAst, DimTermAst, ExponentAst, MulOp, PluginFnDecl, PluginInput, ResultAst, TypeAst,
+};
 use crate::rational::Rational;
 
 /// The validated `plugin!` block.
@@ -28,14 +30,35 @@ pub struct PluginIr {
     pub functions: Vec<FunctionIr>,
 }
 
+impl PluginIr {
+    /// Whether any function moves arrays — the shape that needs the
+    /// allocator exports and the buffer wrappers.
+    pub fn uses_buffers(&self) -> bool {
+        self.functions.iter().any(FunctionIr::uses_buffers)
+    }
+}
+
 /// One validated function: signature plus its untouched Rust body.
 pub struct FunctionIr {
     pub docs: Vec<syn::Attribute>,
     pub name: syn::Ident,
     pub dim_vars: Vec<syn::Ident>,
+    pub index_vars: Vec<syn::Ident>,
     pub params: Vec<ParamIr>,
     pub result: KindIr,
     pub body: TokenStream,
+}
+
+impl FunctionIr {
+    /// Whether this function moves values through plugin-memory buffers
+    /// (array parameters/results or a struct result).
+    pub fn uses_buffers(&self) -> bool {
+        self.params
+            .iter()
+            .map(|param| &param.kind)
+            .chain(std::iter::once(&self.result))
+            .any(|kind| matches!(kind, KindIr::Array { .. } | KindIr::Struct(_)))
+    }
 }
 
 /// One validated parameter.
@@ -46,6 +69,25 @@ pub struct ParamIr {
 
 /// A validated value kind.
 pub enum KindIr {
+    Bool,
+    Int,
+    Scalar(MonomialIr),
+    Array {
+        element: MonomialIr,
+        index: syn::Ident,
+    },
+    /// A struct-shaped result (never a parameter).
+    Struct(Vec<FieldIr>),
+}
+
+/// One validated field of a struct-shaped result.
+pub struct FieldIr {
+    pub name: syn::Ident,
+    pub kind: FieldKindIr,
+}
+
+/// A struct field's kind: concrete scalars only (no dimension variables).
+pub enum FieldKindIr {
     Bool,
     Int,
     Scalar(MonomialIr),
@@ -103,7 +145,9 @@ pub fn lower(input: &PluginInput) -> syn::Result<PluginIr> {
     Ok(PluginIr { functions })
 }
 
-fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
+/// Validate the binder lists: no prelude shadowing, no duplicate idents
+/// across the (shared) dim/index namespaces.
+fn validate_binders(decl: &PluginFnDecl) -> syn::Result<(HashSet<String>, HashSet<String>)> {
     let mut binders: HashSet<String> = HashSet::new();
     for var in &decl.dim_vars {
         let name = var.to_string();
@@ -123,9 +167,47 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
             ));
         }
     }
+    // Binder idents share one lexical namespace regardless of constraint,
+    // so index binders are checked against the dim binders too.
+    let mut index_binders: HashSet<String> = HashSet::new();
+    for var in &decl.index_vars {
+        let name = var.to_string();
+        if is_vocabulary_name(&name) {
+            return Err(syn::Error::new(
+                var.span(),
+                format!(
+                    "index variable `{name}` shadows the prelude name `{name}`; \
+                     rename the variable"
+                ),
+            ));
+        }
+        if binders.contains(&name) || !index_binders.insert(name) {
+            return Err(syn::Error::new(
+                var.span(),
+                format!("generic binder `{var}` is declared more than once"),
+            ));
+        }
+    }
+    Ok((binders, index_binders))
+}
 
+/// Lowered parameters plus the binding facts later checks need.
+struct LoweredParams {
+    params: Vec<ParamIr>,
+    /// Dimension variables bound by a bare parameter or bare array element.
+    bound: HashSet<String>,
+    /// Index variables used by at least one array parameter.
+    used_indexes: HashSet<String>,
+}
+
+fn lower_params(
+    decl: &PluginFnDecl,
+    binders: &HashSet<String>,
+    index_binders: &HashSet<String>,
+) -> syn::Result<LoweredParams> {
     let mut seen_params: HashSet<String> = HashSet::new();
     let mut bound: HashSet<String> = HashSet::new();
+    let mut used_indexes: HashSet<String> = HashSet::new();
     let mut params = Vec::new();
     for param in &decl.params {
         if !seen_params.insert(param.name.to_string()) {
@@ -134,8 +216,17 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
                 format!("parameter `{}` is declared more than once", param.name),
             ));
         }
-        let kind = lower_type(&param.ty, &binders)?;
-        if let KindIr::Scalar(monomial) = &kind {
+        let kind = lower_type(&param.ty, binders, index_binders)?;
+        let monomial = match &kind {
+            KindIr::Scalar(monomial) => Some(monomial),
+            KindIr::Array { element, index } => {
+                used_indexes.insert(index.to_string());
+                Some(element)
+            }
+            // The parser only accepts struct shapes in result position.
+            KindIr::Bool | KindIr::Int | KindIr::Struct(_) => None,
+        };
+        if let Some(monomial) = monomial {
             match monomial.as_bare_var() {
                 Some(var) => {
                     bound.insert(var.to_string());
@@ -148,7 +239,7 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
                                 format!(
                                     "dimension variable `{}` is used in a compound type before \
                                      it is bound; bind it first with a parameter of type \
-                                     exactly `{}`",
+                                     exactly `{}` (or an array of it)",
                                     factor.name, factor.name
                                 ),
                             ));
@@ -162,16 +253,46 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
             kind,
         });
     }
+    Ok(LoweredParams {
+        params,
+        bound,
+        used_indexes,
+    })
+}
 
-    let result = lower_type(&decl.result, &binders)?;
-    if let KindIr::Scalar(monomial) = &result {
+fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
+    let (binders, index_binders) = validate_binders(decl)?;
+    let LoweredParams {
+        params,
+        bound,
+        used_indexes,
+    } = lower_params(decl, &binders, &index_binders)?;
+
+    let result = lower_result(&decl.result, &binders, &index_binders)?;
+    let result_monomial = match &result {
+        KindIr::Scalar(monomial) => Some(monomial),
+        KindIr::Array { element, index } => {
+            if !used_indexes.contains(&index.to_string()) {
+                return Err(syn::Error::new(
+                    index.span(),
+                    format!(
+                        "the result array is indexed by `{index}`, which no array parameter \
+                         uses; a plugin cannot invent its output length"
+                    ),
+                ));
+            }
+            Some(element)
+        }
+        KindIr::Bool | KindIr::Int | KindIr::Struct(_) => None,
+    };
+    if let Some(monomial) = result_monomial {
         for factor in &monomial.vars {
             if !bound.contains(&factor.name) {
                 return Err(syn::Error::new(
                     factor.span,
                     format!(
                         "the result uses dimension variable `{}`, which no parameter binds; \
-                         add a parameter of type exactly `{}`",
+                         add a parameter of type exactly `{}` (or an array of it)",
                         factor.name, factor.name
                     ),
                 ));
@@ -185,8 +306,16 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
                 var.span(),
                 format!(
                     "dimension variable `{var}` is never bound; every declared variable needs \
-                     a parameter of type exactly `{var}`"
+                     a parameter of type exactly `{var}` (or an array of it)"
                 ),
+            ));
+        }
+    }
+    for var in &decl.index_vars {
+        if !used_indexes.contains(&var.to_string()) {
+            return Err(syn::Error::new(
+                var.span(),
+                format!("index variable `{var}` is declared but indexes no array parameter"),
             ));
         }
     }
@@ -195,16 +324,121 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
         docs: decl.docs.clone(),
         name: decl.name.clone(),
         dim_vars: decl.dim_vars.clone(),
+        index_vars: decl.index_vars.clone(),
         params,
         result,
         body: decl.body.clone(),
     })
 }
 
-/// Lower one type position: a lone `Bool`/`Int`, or a dimension monomial.
-fn lower_type(expr: &DimExprAst, binders: &HashSet<String>) -> syn::Result<KindIr> {
+/// Lower the result position: a value type, or a braced struct shape.
+fn lower_result(
+    result: &ResultAst,
+    binders: &HashSet<String>,
+    index_binders: &HashSet<String>,
+) -> syn::Result<KindIr> {
+    match result {
+        ResultAst::Value(ty) => lower_type(ty, binders, index_binders),
+        ResultAst::Struct(fields) => {
+            if fields.is_empty() {
+                return Err(syn::Error::new(
+                    Span::call_site(),
+                    "a struct result must declare at least one field",
+                ));
+            }
+            let mut seen: HashSet<String> = HashSet::new();
+            let lowered = fields
+                .iter()
+                .map(|field| {
+                    if !seen.insert(field.name.to_string()) {
+                        return Err(syn::Error::new(
+                            field.name.span(),
+                            format!("struct field `{}` is declared more than once", field.name),
+                        ));
+                    }
+                    // Fields lower with no binders in scope: struct-result
+                    // fields must have concrete dimensions, so a dimension
+                    // variable here reads as an unknown dimension.
+                    let empty = HashSet::new();
+                    let kind = match lower_type(
+                        &TypeAst {
+                            element: clone_dim_expr(&field.ty),
+                            index: None,
+                        },
+                        &empty,
+                        &empty,
+                    )? {
+                        KindIr::Bool => FieldKindIr::Bool,
+                        KindIr::Int => FieldKindIr::Int,
+                        KindIr::Scalar(monomial) => FieldKindIr::Scalar(monomial),
+                        KindIr::Array { .. } | KindIr::Struct(_) => {
+                            return Err(syn::Error::new(
+                                field.name.span(),
+                                "struct fields must be Bool, Int, or scalar dimension types",
+                            ));
+                        }
+                    };
+                    Ok(FieldIr {
+                        name: field.name.clone(),
+                        kind,
+                    })
+                })
+                .collect::<syn::Result<Vec<_>>>()?;
+            Ok(KindIr::Struct(lowered))
+        }
+    }
+}
+
+/// Clone a parsed dimension expression (the parse AST is not `Clone`; the
+/// struct-field path re-lowers through the shared `TypeAst` shape).
+fn clone_dim_expr(expr: &DimExprAst) -> DimExprAst {
+    DimExprAst {
+        first: clone_dim_term(&expr.first),
+        rest: expr
+            .rest
+            .iter()
+            .map(|(op, term)| (*op, clone_dim_term(term)))
+            .collect(),
+    }
+}
+
+fn clone_dim_term(term: &DimTermAst) -> DimTermAst {
+    match term {
+        DimTermAst::Named { name, pow } => DimTermAst::Named {
+            name: name.clone(),
+            pow: pow.as_ref().map(clone_exponent),
+        },
+        DimTermAst::Group { inner, pow } => DimTermAst::Group {
+            inner: Box::new(clone_dim_expr(inner)),
+            pow: pow.as_ref().map(clone_exponent),
+        },
+    }
+}
+
+const fn clone_exponent(exponent: &ExponentAst) -> ExponentAst {
+    ExponentAst {
+        num: exponent.num,
+        den: exponent.den,
+        span: exponent.span,
+    }
+}
+
+/// Lower one type position: a lone `Bool`/`Int`, a dimension monomial, or
+/// an array of scalars over a declared index variable.
+fn lower_type(
+    ty: &TypeAst,
+    binders: &HashSet<String>,
+    index_binders: &HashSet<String>,
+) -> syn::Result<KindIr> {
+    let expr = &ty.element;
     if let (DimTermAst::Named { name, pow: None }, true) = (&expr.first, expr.rest.is_empty()) {
         match name.to_string().as_str() {
+            "Bool" | "Int" if ty.index.is_some() => {
+                return Err(syn::Error::new(
+                    name.span(),
+                    "array elements must be scalars in this phase",
+                ));
+            }
             "Bool" => return Ok(KindIr::Bool),
             "Int" => return Ok(KindIr::Int),
             _ => {}
@@ -213,7 +447,25 @@ fn lower_type(expr: &DimExprAst, binders: &HashSet<String>) -> syn::Result<KindI
 
     let mut acc = MonomialAcc::default();
     lower_expr(expr, binders, Rational::ONE, &mut acc)?;
-    Ok(KindIr::Scalar(acc.into_monomial()))
+    let element = acc.into_monomial();
+    match &ty.index {
+        Some(index) => {
+            if !index_binders.contains(&index.to_string()) {
+                return Err(syn::Error::new(
+                    index.span(),
+                    format!(
+                        "unknown index variable `{index}`; declare it in the binder list as \
+                         `{index}: Index`"
+                    ),
+                ));
+            }
+            Ok(KindIr::Array {
+                element,
+                index: index.clone(),
+            })
+        }
+        None => Ok(KindIr::Scalar(element)),
+    }
 }
 
 /// Accumulator for monomial folding; zero-power variables are removed at

@@ -4546,6 +4546,7 @@ fn lerp_plugin_wasm() -> Vec<u8> {
         functions: vec![ManifestFunction {
             name: "lerp".to_string(),
             dim_vars: vec!["D".to_string()],
+            index_vars: Vec::new(),
             params: vec![
                 ManifestParam {
                     name: "a".to_string(),
@@ -4578,7 +4579,7 @@ fn lerp_plugin_wasm() -> Vec<u8> {
 
 const PLUGIN_EVAL_SOURCE: &str = r#"
 import plugin "plugins/demo.wasm" as demo {
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
 node mid: Length = demo.lerp(1.0 m, 3.0 m, 0.5);
 "#;

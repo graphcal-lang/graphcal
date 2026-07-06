@@ -10,7 +10,7 @@
 //! ```
 //! graphcal_plugin::plugin! {
 //!     /// Linear interpolation between `a` and `b`.
-//!     fn lerp<D>(a: D, b: D, t: Dimensionless) -> D {
+//!     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D {
 //!         a + (b - a) * t
 //!     }
 //! }
@@ -23,7 +23,7 @@
 //!
 //! ```text
 //! import plugin "plugins/my_plugin.wasm" as my_plugin {
-//!     fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+//!     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 //! }
 //! ```
 //!
@@ -37,6 +37,11 @@
 //!   the raw ABI (`f64`s in SI base units) and the declared value kinds —
 //!   `Bool` parameters arrive in the body as `bool`, `Int` parameters as
 //!   `i64`, and scalar parameters as `f64` SI values;
+//! - for functions with array parameters or results (`xs: D[I]`), the
+//!   buffer-protocol plumbing: the body sees `&[f64]` slices and returns a
+//!   `Vec<f64>`, while the generated wasm wrapper and the
+//!   `graphcal_alloc`/`graphcal_free` exports move the dense SI buffers
+//!   across the boundary;
 //! - a panic hook that forwards panic messages through the host's
 //!   `graphcal::fail` import, so a `panic!` in plugin code surfaces as a
 //!   readable per-node diagnostic instead of an anonymous trap.
@@ -80,7 +85,7 @@
 ///     }
 ///
 ///     /// Cube root, dimensionally exact.
-///     fn cbrt<D>(x: D) -> D^(1/3) {
+///     fn cbrt<D: Dim>(x: D) -> D^(1/3) {
 ///         x.cbrt()
 ///     }
 /// }
@@ -91,9 +96,12 @@
 ///
 /// # Signature syntax
 ///
-/// Each function is `fn name<Vars>(params) -> Result { body }`, where
-/// parameter and result types are `Bool`, `Int`, or dimension expressions
-/// over:
+/// Each function is `fn name<Vars>(params) -> Result { body }`, with
+/// binders written `name: constraint` (`D: Dim` for dimension variables,
+/// `I: Index` for index variables). Parameter and result types are `Bool`,
+/// `Int`, dimension expressions, or arrays of scalars over one declared
+/// index variable (`xs: D[I]`, `-> Dimensionless[I]`). Dimension
+/// expressions range over:
 ///
 /// - dimension variables declared in the `<...>` binder (`D`, `D1`, …);
 /// - the prelude base dimensions `Length`, `Time`, `Mass`, `Temperature`,
@@ -106,16 +114,22 @@
 /// combined with `*`, `/`, parentheses, and `^` powers whose exponents are
 /// integers (`^2`, `^-3`) or parenthesized rationals (`^(1/2)`, `^(-1/2)`).
 /// Every dimension variable must first appear as a bare parameter type
-/// (`x: D`) before it is used in a compound form — the same rule the
-/// graphcal compiler enforces on the `.gcl` declaration.
+/// (`x: D`, or a bare array element `xs: D[I]`) before it is used in a
+/// compound form — the same rule the graphcal compiler enforces on the
+/// `.gcl` declaration. A result array must reuse an index variable that
+/// indexes some array parameter: a plugin can never invent its output
+/// length.
 ///
 /// # In the body
 ///
 /// Parameters are in scope with their declared names: `f64` (SI) for
-/// scalar types, `bool` for `Bool`, `i64` for `Int`. The body is an
-/// ordinary Rust block evaluating to `f64`, `bool`, or `i64` to match the
-/// declared result. Dimension variables are *parametric*: the body never
-/// learns what `D` was bound to, so keep the math dimension-uniform.
+/// scalar types, `bool` for `Bool`, `i64` for `Int`, and `&[f64]` (SI,
+/// dense, in index order) for arrays. The body is an ordinary Rust block
+/// evaluating to `f64`, `bool`, `i64`, or `Vec<f64>` to match the declared
+/// result; an array result must have exactly the length of the input array
+/// bound to its index variable. Dimension and index variables are
+/// *parametric*: the body never learns what `D` or `I` was bound to beyond
+/// each slice's length, so keep the math dimension-uniform.
 ///
 /// # Generated items
 ///
@@ -297,6 +311,102 @@ pub mod __rt {
             raw
         } else {
             crate::fail!("Int result {value} is not exactly representable as an f64")
+        }
+    }
+
+    // -- Buffer protocol (arrays over index variables, issue #25 Phase D) --
+
+    /// Alignment of every host-requested buffer allocation. Mirrors the ABI
+    /// crate's `BUFFER_ALIGN`; the drift test pins the two together through
+    /// the real loader.
+    const BUFFER_ALIGN: usize = 8;
+
+    fn buffer_layout(size: u32) -> std::alloc::Layout {
+        // `size.max(1)` sidesteps the zero-size allocation edge; the host
+        // never requests zero (graphcal indexes are non-empty).
+        #[expect(
+            clippy::expect_used,
+            reason = "the layout is invalid only for sizes near usize::MAX, which cannot \
+                      arrive through the 32-bit ABI"
+        )]
+        std::alloc::Layout::from_size_align(size.max(1) as usize, BUFFER_ALIGN)
+            .expect("buffer layout must be valid for 32-bit sizes")
+    }
+
+    /// The `graphcal_alloc` export body: allocate one host-requested buffer.
+    #[must_use]
+    #[expect(
+        unsafe_code,
+        reason = "the buffer protocol hands raw pointers to the host"
+    )]
+    pub fn buffer_alloc(size: u32) -> *mut u8 {
+        // SAFETY: the layout has non-zero size by construction.
+        unsafe { std::alloc::alloc(buffer_layout(size)) }
+    }
+
+    /// The `graphcal_free` export body: release one host-requested buffer.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be exactly a pointer `buffer_alloc(size)` returned during
+    /// the same call (the host guarantees this pairing).
+    #[expect(
+        unsafe_code,
+        reason = "the buffer protocol hands raw pointers to the host"
+    )]
+    pub unsafe fn buffer_free(ptr: *mut u8, size: u32) {
+        if ptr.is_null() {
+            return;
+        }
+        // SAFETY: per the ABI, `ptr` came from `buffer_alloc(size)`.
+        unsafe { std::alloc::dealloc(ptr, buffer_layout(size)) }
+    }
+
+    /// View one host-written array parameter as a slice.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point at `len` initialized `f64`s that stay alive and
+    /// unaliased for the duration of the call — the host guarantees this
+    /// for every array parameter it passes.
+    #[must_use]
+    #[expect(
+        unsafe_code,
+        reason = "viewing host-written plugin memory is inherently raw"
+    )]
+    pub const unsafe fn slice_from_abi<'call>(ptr: *const f64, len: u32) -> &'call [f64] {
+        // SAFETY: forwarded from the caller.
+        unsafe { std::slice::from_raw_parts(ptr, len as usize) }
+    }
+
+    /// Write an array result through the host-allocated out-pointer.
+    ///
+    /// The result length is fixed by the signature (the input array bound to
+    /// the result's index variable); a body returning any other length is a
+    /// plugin bug reported through `fail` rather than truncated or padded.
+    ///
+    /// # Safety
+    ///
+    /// `out` must point at `expected_len` writable `f64` slots (the host
+    /// allocates exactly that many for the result buffer).
+    #[expect(unsafe_code, reason = "writing through the host-allocated out-pointer")]
+    pub unsafe fn write_array_result(
+        values: &[f64],
+        out: *mut f64,
+        expected_len: u32,
+        function: &str,
+    ) {
+        if values.len() != expected_len as usize {
+            crate::fail!(
+                "{function}: the result array has {} element(s), expected {expected_len} (the \
+                 length of the input array bound to the result's index variable)",
+                values.len()
+            );
+        }
+        // SAFETY: the host allocated `expected_len` f64 slots at `out`, and
+        // the length was checked above.
+        unsafe {
+            std::ptr::copy_nonoverlapping(values.as_ptr(), out, values.len());
         }
     }
 }

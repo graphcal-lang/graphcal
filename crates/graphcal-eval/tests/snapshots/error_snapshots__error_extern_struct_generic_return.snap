@@ -2,13 +2,13 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-invalid extern function signature: function `lerp` of plugin "graphcal:demo" is declared elsewhere with a different signature
+invalid extern function signature: record type `Pair` is generic; generic struct returns are not supported in this phase
     Diagnostic severity: error
-Begin snippet for extern_conflicting_signature.gcl starting at line 5, column 1
+Begin snippet for extern_struct_generic_return.gcl starting at line 5, column 1
 
-snippet line 5: import plugin "graphcal:demo" as b {
-snippet line 6:     fn lerp(a: Dimensionless, b: Dimensionless, t: Dimensionless) -> Dimensionless;
-    label at line 6, columns 5 to 83: invalid signature
+snippet line 5: import plugin "graphcal:demo" as demo {
+snippet line 6:     fn bounds(x: Length) -> Pair;
+    label at line 6, columns 29 to 32: invalid signature
 snippet line 7: }
 diagnostic help: extern signatures support Bool, Int, scalar dimension types, arrays of scalars over a declared index variable, and record struct returns with concrete fields; each dimension variable must be declared in the `<...>` binder list and bound by a bare scalar parameter or bare array element before compound uses, and a result array must reuse an index variable that indexes some parameter
 diagnostic code: graphcal::P001

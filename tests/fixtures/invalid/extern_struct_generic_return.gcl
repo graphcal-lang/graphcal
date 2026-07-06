@@ -1,0 +1,9 @@
+// Generic records cannot cross the plugin boundary in this phase: the
+// manifest carries concrete field dimensions only.
+type Pair<D: Dim> { Pair(lo: D, hi: D) }
+
+import plugin "graphcal:demo" as demo {
+    fn bounds(x: Length) -> Pair;
+}
+
+node y: Dimensionless = 1.0;

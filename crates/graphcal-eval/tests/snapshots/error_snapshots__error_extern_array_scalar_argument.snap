@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected an indexed scalar collection, found Length
+    Diagnostic severity: error
+Begin snippet for extern_array_scalar_argument.gcl starting at line 5, column 1
+
+snippet line 5: 
+snippet line 6: node bad: Dimensionless = demo.normalize(3.0 m);
+    label at line 6, columns 42 to 46: has dimension Length
+diagnostic help: parameter `xs` of `demo.normalize` takes an array over index variable `I`
+diagnostic code: graphcal::D001

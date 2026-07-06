@@ -1,0 +1,6 @@
+// An array parameter requires an indexed argument, never a bare scalar.
+import plugin "graphcal:demo" as demo {
+    fn normalize<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
+}
+
+node bad: Dimensionless = demo.normalize(3.0 m);

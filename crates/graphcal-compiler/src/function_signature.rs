@@ -22,6 +22,7 @@ use thiserror::Error;
 use crate::dimension::{Dimension, Rational, RationalError};
 use crate::syntax::dimension::DimVarName;
 use crate::syntax::function_name::FnParamName;
+use crate::syntax::index_name::IndexVarName;
 
 /// One dimension-variable factor in a [`DimMonomial`]: `var^power`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,6 +151,87 @@ pub enum ValueKind {
     Bool,
     /// An integer value.
     Int,
+    /// An array of scalars over a declared index variable: `element[index]`.
+    ///
+    /// Elements are scalars whose dimension is given by the monomial; the
+    /// index variable is bound by an argument's concrete index at the call
+    /// site. A result array must reuse an index variable bound by some
+    /// parameter — a function can never invent its output length.
+    Indexed {
+        /// The element dimension monomial.
+        element: DimMonomial,
+        /// The index variable naming the array's index.
+        index: IndexVarName,
+    },
+    /// A record value described by its flattened field shape.
+    ///
+    /// Result-only: [`FunctionSignature::try_new`] rejects struct
+    /// parameters (callers pass fields as separate arguments). The shape is
+    /// structural — the manifest never learns the graphcal type's name; the
+    /// declaration site binds the shape to a record type in scope.
+    Struct(StructShape),
+}
+
+/// The flattened field layout of a record return: named fields of concrete
+/// scalar, boolean, or integer kinds, in declaration order.
+///
+/// Constructed through [`StructShape::try_new`], which rejects empty shapes
+/// and duplicate field names. Field names and order are part of the calling
+/// contract (they are labels users access, not binders), so structural
+/// equivalence compares them verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructShape {
+    fields: Vec<StructShapeField>,
+}
+
+/// One named field of a [`StructShape`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructShapeField {
+    /// The field name (part of the contract).
+    pub name: crate::syntax::type_name::FieldName,
+    /// The field's value kind.
+    pub kind: StructFieldKind,
+}
+
+/// The kind of one struct field: concrete scalars only — dimension
+/// variables cannot appear in struct returns in this phase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StructFieldKind {
+    /// A scalar with a concrete fixed dimension.
+    Scalar(Dimension),
+    /// A boolean value.
+    Bool,
+    /// An integer value.
+    Int,
+}
+
+impl StructShape {
+    /// Build a validated shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SignatureError`] when the shape has no fields or repeats
+    /// a field name.
+    pub fn try_new(fields: Vec<StructShapeField>) -> Result<Self, SignatureError> {
+        if fields.is_empty() {
+            return Err(SignatureError::EmptyStructShape);
+        }
+        let mut seen: HashSet<&crate::syntax::type_name::FieldName> = HashSet::new();
+        for field in &fields {
+            if !seen.insert(&field.name) {
+                return Err(SignatureError::DuplicateStructField {
+                    field: field.name.clone(),
+                });
+            }
+        }
+        Ok(Self { fields })
+    }
+
+    /// The fields, in declaration order.
+    #[must_use]
+    pub fn fields(&self) -> &[StructShapeField] {
+        &self.fields
+    }
 }
 
 impl ValueKind {
@@ -175,23 +257,30 @@ pub struct FunctionParam {
     pub kind: ValueKind,
 }
 
-/// A typed, serializable function signature: declared dimension variables,
-/// named parameters, and the result kind.
+/// A typed, serializable function signature: declared dimension and index
+/// variables, named parameters, and the result kind.
 ///
 /// Construction goes through [`FunctionSignature::try_new`], which enforces
 /// the invariants that make call-site checking decidable:
 ///
-/// - Declared dimension variables are distinct.
+/// - Declared dimension variables are distinct; declared index variables are
+///   distinct.
 /// - Monomial factors carry no zero exponents and no duplicate variables.
-/// - Every referenced variable is declared, and every declared variable has a
-///   *binding occurrence*: a parameter that is exactly that bare variable
-///   (`var^1`), appearing before (or as) the variable's first use in any
-///   compound monomial. Binding occurrences are what unify a variable with a
-///   concrete argument dimension at a call site; compound monomials are then
-///   checked by direct evaluation, never by solving equations.
+/// - Every referenced dimension variable is declared, and every declared
+///   dimension variable has a *binding occurrence*: a parameter whose scalar
+///   or array-element monomial is exactly that bare variable (`var^1`),
+///   appearing before (or as) the variable's first use in any compound
+///   monomial. Binding occurrences are what unify a variable with a concrete
+///   argument dimension at a call site; compound monomials are then checked
+///   by direct evaluation, never by solving equations.
+/// - Every referenced index variable is declared, and every declared index
+///   variable indexes at least one array parameter. A result array reuses an
+///   index variable some parameter binds — output lengths always come from
+///   inputs (the dynamic-index fence stays closed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSignature {
     dim_vars: Vec<DimVarName>,
+    index_vars: Vec<IndexVarName>,
     params: Vec<FunctionParam>,
     result: ValueKind,
 }
@@ -204,6 +293,7 @@ impl FunctionSignature {
     /// Returns a [`SignatureError`] describing the first violated invariant.
     pub fn try_new(
         dim_vars: Vec<DimVarName>,
+        index_vars: Vec<IndexVarName>,
         params: Vec<FunctionParam>,
         result: ValueKind,
     ) -> Result<Self, SignatureError> {
@@ -213,11 +303,31 @@ impl FunctionSignature {
                 return Err(SignatureError::DuplicateDimVar { var: var.clone() });
             }
         }
+        let mut declared_indexes: HashSet<&IndexVarName> = HashSet::new();
+        for var in &index_vars {
+            if !declared_indexes.insert(var) {
+                return Err(SignatureError::DuplicateIndexVar { var: var.clone() });
+            }
+        }
 
         let mut bound: HashSet<&DimVarName> = HashSet::new();
+        let mut used_indexes: HashSet<&IndexVarName> = HashSet::new();
         for param in &params {
-            let ValueKind::Scalar(monomial) = &param.kind else {
-                continue;
+            let monomial = match &param.kind {
+                ValueKind::Scalar(monomial) => monomial,
+                ValueKind::Indexed { element, index } => {
+                    if !declared_indexes.contains(index) {
+                        return Err(SignatureError::UndeclaredIndexVar { var: index.clone() });
+                    }
+                    used_indexes.insert(index);
+                    element
+                }
+                ValueKind::Struct(_) => {
+                    return Err(SignatureError::StructParam {
+                        param: param.name.clone(),
+                    });
+                }
+                ValueKind::Bool | ValueKind::Int => continue,
             };
             validate_monomial_factors(monomial)?;
             if let Some(var) = monomial.as_bare_var() {
@@ -240,7 +350,22 @@ impl FunctionSignature {
             }
         }
 
-        if let ValueKind::Scalar(monomial) = &result {
+        let result_monomial = match &result {
+            ValueKind::Scalar(monomial) => Some(monomial),
+            ValueKind::Indexed { element, index } => {
+                if !declared_indexes.contains(index) {
+                    return Err(SignatureError::UndeclaredIndexVar { var: index.clone() });
+                }
+                if !used_indexes.contains(index) {
+                    return Err(SignatureError::UnboundResultIndexVar { var: index.clone() });
+                }
+                Some(element)
+            }
+            // Struct fields are concrete (validated by StructShape::try_new);
+            // no variables to bind.
+            ValueKind::Bool | ValueKind::Int | ValueKind::Struct(_) => None,
+        };
+        if let Some(monomial) = result_monomial {
             validate_monomial_factors(monomial)?;
             for var in monomial.referenced_vars() {
                 if !declared.contains(var) {
@@ -255,9 +380,13 @@ impl FunctionSignature {
         if let Some(var) = dim_vars.iter().find(|var| !bound.contains(var)) {
             return Err(SignatureError::DimVarNeverBound { var: var.clone() });
         }
+        if let Some(var) = index_vars.iter().find(|var| !used_indexes.contains(var)) {
+            return Err(SignatureError::IndexVarNeverUsed { var: var.clone() });
+        }
 
         Ok(Self {
             dim_vars,
+            index_vars,
             params,
             result,
         })
@@ -267,6 +396,12 @@ impl FunctionSignature {
     #[must_use]
     pub fn dim_vars(&self) -> &[DimVarName] {
         &self.dim_vars
+    }
+
+    /// The declared index variables, in declaration order.
+    #[must_use]
+    pub fn index_vars(&self) -> &[IndexVarName] {
+        &self.index_vars
     }
 
     /// The named parameters, in declaration order.
@@ -287,8 +422,8 @@ impl FunctionSignature {
         self.params.len()
     }
 
-    /// Render this signature as `<D1, D2>(name: kind, ...) -> kind`, using
-    /// `format_dim` to render concrete dimensions.
+    /// Render this signature as `<D1: Dim, I: Index>(name: kind, ...) -> kind`,
+    /// using `format_dim` to render concrete dimensions.
     ///
     /// This is a display boundary (hover, signature help, diagnostics); the
     /// checker and evaluator pattern-match the typed parts instead.
@@ -297,8 +432,17 @@ impl FunctionSignature {
         use std::fmt::Write as _;
 
         let mut out = String::new();
-        if !self.dim_vars.is_empty() {
-            let vars: Vec<&str> = self.dim_vars.iter().map(DimVarName::as_str).collect();
+        if !self.dim_vars.is_empty() || !self.index_vars.is_empty() {
+            let vars: Vec<String> = self
+                .dim_vars
+                .iter()
+                .map(|var| format!("{}: Dim", var.as_str()))
+                .chain(
+                    self.index_vars
+                        .iter()
+                        .map(|var| format!("{}: Index", var.as_str())),
+                )
+                .collect();
             let _ = write!(out, "<{}>", vars.join(", "));
         }
         out.push('(');
@@ -342,15 +486,15 @@ impl FunctionSignature {
         self.canonical_form() == other.canonical_form()
     }
 
-    /// Rewrite this signature with dimension variables numbered by first
-    /// occurrence across the parameter list and monomial factors sorted by
-    /// that numbering.
+    /// Rewrite this signature with dimension and index variables numbered by
+    /// first occurrence across the parameter list and monomial factors sorted
+    /// by that numbering.
     ///
     /// The use-before-binding invariant makes first occurrence well-defined
-    /// and rename-invariant: a variable's first appearance in parameter order
-    /// is always its bare binding occurrence.
+    /// and rename-invariant: a dimension variable's first appearance in
+    /// parameter order is always its bare binding occurrence.
     fn canonical_form(&self) -> CanonicalSignature {
-        let mut order: Vec<&DimVarName> = Vec::new();
+        let mut order = CanonicalOrder::default();
         let params = self
             .params
             .iter()
@@ -359,17 +503,19 @@ impl FunctionSignature {
         let result = canonical_kind(&self.result, &mut order);
         CanonicalSignature {
             dim_var_count: self.dim_vars.len(),
+            index_var_count: self.index_vars.len(),
             params,
             result,
         }
     }
 }
 
-/// A [`FunctionSignature`] with dimension variables replaced by occurrence
-/// indices; equality on this form is structural equivalence.
+/// A [`FunctionSignature`] with dimension and index variables replaced by
+/// occurrence indices; equality on this form is structural equivalence.
 #[derive(PartialEq, Eq)]
 struct CanonicalSignature {
     dim_var_count: usize,
+    index_var_count: usize,
     params: Vec<CanonicalValueKind>,
     result: CanonicalValueKind,
 }
@@ -380,6 +526,13 @@ enum CanonicalValueKind {
     Scalar(CanonicalMonomial),
     Bool,
     Int,
+    Indexed {
+        element: CanonicalMonomial,
+        index: usize,
+    },
+    /// Struct shapes carry no variables; field names, order, and kinds are
+    /// the contract and compare verbatim.
+    Struct(StructShape),
 }
 
 /// [`DimMonomial`] in canonical form: variable factors as
@@ -390,32 +543,52 @@ struct CanonicalMonomial {
     fixed: Dimension,
 }
 
-fn canonical_kind<'a>(kind: &'a ValueKind, order: &mut Vec<&'a DimVarName>) -> CanonicalValueKind {
+/// First-occurrence numbering state shared across a signature's kinds.
+#[derive(Default)]
+struct CanonicalOrder<'a> {
+    dims: Vec<&'a DimVarName>,
+    indexes: Vec<&'a IndexVarName>,
+}
+
+fn canonical_kind<'a>(kind: &'a ValueKind, order: &mut CanonicalOrder<'a>) -> CanonicalValueKind {
     match kind {
         ValueKind::Bool => CanonicalValueKind::Bool,
         ValueKind::Int => CanonicalValueKind::Int,
         ValueKind::Scalar(monomial) => {
-            let mut vars: Vec<(usize, Rational)> = monomial
-                .vars
-                .iter()
-                .map(|factor| {
-                    let index = order
-                        .iter()
-                        .position(|seen| **seen == factor.var)
-                        .unwrap_or_else(|| {
-                            order.push(&factor.var);
-                            order.len() - 1
-                        });
-                    (index, factor.power)
-                })
-                .collect();
-            vars.sort_unstable_by_key(|(index, _)| *index);
-            CanonicalValueKind::Scalar(CanonicalMonomial {
-                vars,
-                fixed: monomial.fixed.clone(),
-            })
+            CanonicalValueKind::Scalar(canonical_monomial(monomial, order))
         }
+        ValueKind::Indexed { element, index } => CanonicalValueKind::Indexed {
+            element: canonical_monomial(element, order),
+            index: occurrence_index(&mut order.indexes, index),
+        },
+        ValueKind::Struct(shape) => CanonicalValueKind::Struct(shape.clone()),
     }
+}
+
+fn canonical_monomial<'a>(
+    monomial: &'a DimMonomial,
+    order: &mut CanonicalOrder<'a>,
+) -> CanonicalMonomial {
+    let mut vars: Vec<(usize, Rational)> = monomial
+        .vars
+        .iter()
+        .map(|factor| (occurrence_index(&mut order.dims, &factor.var), factor.power))
+        .collect();
+    vars.sort_unstable_by_key(|(index, _)| *index);
+    CanonicalMonomial {
+        vars,
+        fixed: monomial.fixed.clone(),
+    }
+}
+
+fn occurrence_index<'a, T: PartialEq>(order: &mut Vec<&'a T>, item: &'a T) -> usize {
+    order
+        .iter()
+        .position(|seen| *seen == item)
+        .unwrap_or_else(|| {
+            order.push(item);
+            order.len() - 1
+        })
 }
 
 fn format_value_kind(
@@ -426,6 +599,31 @@ fn format_value_kind(
         ValueKind::Bool => "Bool".to_string(),
         ValueKind::Int => "Int".to_string(),
         ValueKind::Scalar(monomial) => format_monomial(monomial, format_dim),
+        ValueKind::Indexed { element, index } => {
+            format!("{}[{index}]", format_monomial(element, format_dim))
+        }
+        ValueKind::Struct(shape) => {
+            let fields: Vec<String> = shape
+                .fields()
+                .iter()
+                .map(|field| {
+                    let kind = match &field.kind {
+                        StructFieldKind::Bool => "Bool".to_string(),
+                        StructFieldKind::Int => "Int".to_string(),
+                        StructFieldKind::Scalar(dim) => {
+                            let rendered = format_dim(dim);
+                            if rendered.is_empty() {
+                                "Dimensionless".to_string()
+                            } else {
+                                rendered
+                            }
+                        }
+                    };
+                    format!("{}: {kind}", field.name)
+                })
+                .collect();
+            format!("{{ {} }}", fields.join(", "))
+        }
     }
 }
 
@@ -529,6 +727,49 @@ pub enum SignatureError {
         /// The repeated variable.
         var: DimVarName,
     },
+    /// The same index variable was declared twice.
+    #[error("index variable `{var}` is declared more than once")]
+    DuplicateIndexVar {
+        /// The duplicated variable.
+        var: IndexVarName,
+    },
+    /// An array kind referenced an index variable that was not declared.
+    #[error("index variable `{var}` is not declared by this signature")]
+    UndeclaredIndexVar {
+        /// The undeclared variable.
+        var: IndexVarName,
+    },
+    /// The result array's index variable indexes no parameter.
+    #[error(
+        "result array is indexed by `{var}`, which no array parameter uses; a function cannot invent its output length"
+    )]
+    UnboundResultIndexVar {
+        /// The unbound index variable.
+        var: IndexVarName,
+    },
+    /// A declared index variable indexes no array parameter.
+    #[error("index variable `{var}` is declared but indexes no array parameter")]
+    IndexVarNeverUsed {
+        /// The never-used variable.
+        var: IndexVarName,
+    },
+    /// A struct appeared in parameter position.
+    #[error(
+        "parameter `{param}` has a struct type; struct values only cross the plugin boundary as results — pass the fields as separate parameters"
+    )]
+    StructParam {
+        /// The offending parameter.
+        param: FnParamName,
+    },
+    /// A struct shape declared no fields.
+    #[error("a struct return must have at least one field")]
+    EmptyStructShape,
+    /// A struct shape repeated a field name.
+    #[error("struct field `{field}` is declared more than once")]
+    DuplicateStructField {
+        /// The repeated field.
+        field: crate::syntax::type_name::FieldName,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -555,7 +796,7 @@ fn expect_signature(
     params: Vec<FunctionParam>,
     result: ValueKind,
 ) -> FunctionSignature {
-    FunctionSignature::try_new(dim_vars, params, result)
+    FunctionSignature::try_new(dim_vars, Vec::new(), params, result)
         .expect("built-in signature shape must be valid")
 }
 
@@ -667,6 +908,7 @@ mod tests {
         // (D1, D2) -> D1 * D2, the `torque(force, arm)` shape.
         let sig = FunctionSignature::try_new(
             vec![var("D1"), var("D2")],
+            Vec::new(),
             vec![
                 param("force", ValueKind::Scalar(DimMonomial::var(var("D1")))),
                 param("arm", ValueKind::Scalar(DimMonomial::var(var("D2")))),
@@ -704,6 +946,7 @@ mod tests {
         // (x: D^2, y: D) -> D would require solving D from D^2 — rejected.
         let err = FunctionSignature::try_new(
             vec![var("D")],
+            Vec::new(),
             vec![
                 param(
                     "x",
@@ -724,6 +967,7 @@ mod tests {
     fn undeclared_var_is_rejected() {
         let err = FunctionSignature::try_new(
             Vec::new(),
+            Vec::new(),
             vec![param("x", ValueKind::Scalar(DimMonomial::var(var("D"))))],
             ValueKind::dimensionless(),
         )
@@ -735,6 +979,7 @@ mod tests {
     fn declared_but_never_bound_var_is_rejected() {
         let err = FunctionSignature::try_new(
             vec![var("D")],
+            Vec::new(),
             vec![param("x", ValueKind::dimensionless())],
             ValueKind::dimensionless(),
         )
@@ -745,6 +990,7 @@ mod tests {
     #[test]
     fn bool_and_int_kinds_carry_no_dims() {
         let sig = FunctionSignature::try_new(
+            Vec::new(),
             Vec::new(),
             vec![param("flag", ValueKind::Bool), param("n", ValueKind::Int)],
             ValueKind::Int,
@@ -757,13 +1003,14 @@ mod tests {
     fn format_with_renders_binders_params_and_result() {
         let sig = FunctionSignature::free_to_pow("x", Rational::HALF);
         let rendered = sig.format_with(|dim| format!("{dim:?}"));
-        assert_eq!(rendered, "<D>(x: D) -> D^(1/2)");
+        assert_eq!(rendered, "<D: Dim>(x: D) -> D^(1/2)");
     }
 
     /// `<vars>(params) -> result` shorthand for equivalence tests.
     fn sig(dim_vars: &[&str], params: &[ValueKind], result: ValueKind) -> FunctionSignature {
         FunctionSignature::try_new(
             dim_vars.iter().map(|v| var(v)).collect(),
+            Vec::new(),
             params
                 .iter()
                 .enumerate()
@@ -782,6 +1029,7 @@ mod tests {
     fn equivalence_ignores_variable_names_and_param_names() {
         let declared = FunctionSignature::try_new(
             vec![var("D")],
+            Vec::new(),
             vec![
                 param("a", bare("D")),
                 param("b", bare("D")),
@@ -792,6 +1040,7 @@ mod tests {
         .unwrap();
         let manifest = FunctionSignature::try_new(
             vec![var("T")],
+            Vec::new(),
             vec![
                 param("lo", bare("T")),
                 param("hi", bare("T")),
@@ -882,5 +1131,270 @@ mod tests {
         let _ = FunctionSignature::free_to_pow("x", Rational::HALF);
         let _ = FunctionSignature::same_dim(&["a", "b"]);
         let _ = FunctionSignature::same_dim_to_fixed(&["y", "x"], length());
+    }
+
+    // -- Index-variable (array) invariants ---------------------------------
+
+    fn ivar(name: &str) -> IndexVarName {
+        IndexVarName::expect_valid(name)
+    }
+
+    fn array(dim_var: &str, index_var: &str) -> ValueKind {
+        ValueKind::Indexed {
+            element: DimMonomial::var(var(dim_var)),
+            index: ivar(index_var),
+        }
+    }
+
+    /// `smooth<D: Dim, I: Index>(xs: D[I], window: Dimensionless) -> D[I]`.
+    fn smooth_signature() -> FunctionSignature {
+        FunctionSignature::try_new(
+            vec![var("D")],
+            vec![ivar("I")],
+            vec![
+                param("xs", array("D", "I")),
+                param("window", ValueKind::dimensionless()),
+            ],
+            array("D", "I"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn array_element_binds_dimension_variable() {
+        // `xs: D[I]` is a binding occurrence for `D`: the checker reads the
+        // element dimension straight off the indexed argument.
+        let sig = smooth_signature();
+        assert_eq!(sig.dim_vars().len(), 1);
+        assert_eq!(sig.index_vars().len(), 1);
+    }
+
+    #[test]
+    fn duplicate_index_var_is_rejected() {
+        let err = FunctionSignature::try_new(
+            vec![var("D")],
+            vec![ivar("I"), ivar("I")],
+            vec![param("xs", array("D", "I"))],
+            ValueKind::dimensionless(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SignatureError::DuplicateIndexVar { .. }));
+    }
+
+    #[test]
+    fn undeclared_index_var_is_rejected() {
+        let err = FunctionSignature::try_new(
+            vec![var("D")],
+            Vec::new(),
+            vec![param("xs", array("D", "I"))],
+            ValueKind::dimensionless(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SignatureError::UndeclaredIndexVar { .. }));
+    }
+
+    #[test]
+    fn result_index_var_must_index_a_parameter() {
+        // A function inventing its output length is the dynamic-index
+        // problem — the result must reuse an input index variable.
+        let err = FunctionSignature::try_new(
+            vec![var("D")],
+            vec![ivar("I")],
+            vec![param("x", bare("D"))],
+            array("D", "I"),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SignatureError::UnboundResultIndexVar { .. }));
+    }
+
+    #[test]
+    fn declared_but_never_used_index_var_is_rejected() {
+        let err = FunctionSignature::try_new(
+            vec![var("D")],
+            vec![ivar("I")],
+            vec![param("x", bare("D"))],
+            bare("D"),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SignatureError::IndexVarNeverUsed { .. }));
+    }
+
+    #[test]
+    fn compound_array_element_requires_prior_binding() {
+        let err = FunctionSignature::try_new(
+            vec![var("D")],
+            vec![ivar("I")],
+            vec![param(
+                "xs",
+                ValueKind::Indexed {
+                    element: DimMonomial::var_pow(var("D"), Rational::try_new(2, 1).unwrap()),
+                    index: ivar("I"),
+                },
+            )],
+            ValueKind::dimensionless(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SignatureError::UseBeforeBinding { .. }));
+    }
+
+    #[test]
+    fn array_equivalence_is_alpha_on_index_vars() {
+        let a = smooth_signature();
+        let b = FunctionSignature::try_new(
+            vec![var("T")],
+            vec![ivar("J")],
+            vec![
+                param("data", array("T", "J")),
+                param("w", ValueKind::dimensionless()),
+            ],
+            array("T", "J"),
+        )
+        .unwrap();
+        assert!(a.structurally_equivalent(&b));
+    }
+
+    #[test]
+    fn array_equivalence_distinguishes_index_identification() {
+        // (xs: D[I], ys: D[I]) forces both indexes equal; (xs: D[I], ys: D[J])
+        // does not — the distinction must survive canonicalization.
+        let same = FunctionSignature::try_new(
+            vec![var("D")],
+            vec![ivar("I")],
+            vec![param("xs", array("D", "I")), param("ys", array("D", "I"))],
+            array("D", "I"),
+        )
+        .unwrap();
+        let free = FunctionSignature::try_new(
+            vec![var("D")],
+            vec![ivar("I"), ivar("J")],
+            vec![param("xs", array("D", "I")), param("ys", array("D", "J"))],
+            array("D", "I"),
+        )
+        .unwrap();
+        assert!(!same.structurally_equivalent(&free));
+        assert!(!free.structurally_equivalent(&same));
+    }
+
+    #[test]
+    fn array_is_not_equivalent_to_scalar() {
+        let arr = FunctionSignature::try_new(
+            vec![var("D")],
+            vec![ivar("I")],
+            vec![param("xs", array("D", "I"))],
+            bare("D"),
+        )
+        .unwrap();
+        let scalar = FunctionSignature::passthrough("xs");
+        assert!(!arr.structurally_equivalent(&scalar));
+    }
+
+    // -- Struct-return shapes ----------------------------------------------
+
+    fn shape(fields: &[(&str, StructFieldKind)]) -> StructShape {
+        StructShape::try_new(
+            fields
+                .iter()
+                .map(|(name, kind)| StructShapeField {
+                    name: crate::syntax::type_name::FieldName::expect_valid(*name),
+                    kind: kind.clone(),
+                })
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn struct_shapes_reject_empty_and_duplicate_fields() {
+        assert!(matches!(
+            StructShape::try_new(Vec::new()).unwrap_err(),
+            SignatureError::EmptyStructShape
+        ));
+        let field = StructShapeField {
+            name: crate::syntax::type_name::FieldName::expect_valid("x"),
+            kind: StructFieldKind::Int,
+        };
+        assert!(matches!(
+            StructShape::try_new(vec![field.clone(), field]).unwrap_err(),
+            SignatureError::DuplicateStructField { .. }
+        ));
+    }
+
+    #[test]
+    fn struct_params_are_rejected() {
+        let err = FunctionSignature::try_new(
+            Vec::new(),
+            Vec::new(),
+            vec![param(
+                "x",
+                ValueKind::Struct(shape(&[("lo", StructFieldKind::Int)])),
+            )],
+            ValueKind::Int,
+        )
+        .unwrap_err();
+        assert!(matches!(err, SignatureError::StructParam { .. }));
+    }
+
+    #[test]
+    fn struct_results_compare_field_names_and_order() {
+        let lo_hi = |names: (&str, &str)| {
+            FunctionSignature::try_new(
+                vec![var("D")],
+                vec![ivar("I")],
+                vec![param("xs", array("D", "I"))],
+                ValueKind::Struct(shape(&[
+                    (names.0, StructFieldKind::Scalar(length())),
+                    (names.1, StructFieldKind::Scalar(length())),
+                ])),
+            )
+            .unwrap()
+        };
+        let declared = lo_hi(("lo", "hi"));
+        assert!(declared.structurally_equivalent(&lo_hi(("lo", "hi"))));
+        // Field names are labels users access — part of the contract.
+        assert!(!declared.structurally_equivalent(&lo_hi(("minimum", "maximum"))));
+        // So is their order.
+        assert!(!declared.structurally_equivalent(&lo_hi(("hi", "lo"))));
+    }
+
+    #[test]
+    fn format_with_renders_struct_shapes() {
+        let sig = FunctionSignature::try_new(
+            vec![var("D")],
+            vec![ivar("I")],
+            vec![param("xs", array("D", "I"))],
+            ValueKind::Struct(shape(&[
+                ("lo", StructFieldKind::Scalar(Dimension::dimensionless())),
+                ("ok", StructFieldKind::Bool),
+            ])),
+        )
+        .unwrap();
+        let rendered = sig.format_with(|dim| {
+            if dim.is_dimensionless() {
+                String::new()
+            } else {
+                format!("{dim:?}")
+            }
+        });
+        assert_eq!(
+            rendered,
+            "<D: Dim, I: Index>(xs: D[I]) -> { lo: Dimensionless, ok: Bool }"
+        );
+    }
+
+    #[test]
+    fn format_with_renders_array_kinds() {
+        // Mirror real callers: a dimensionless fixed factor renders empty and
+        // falls back to the `Dimensionless` spelling.
+        let rendered = smooth_signature().format_with(|dim| {
+            if dim.is_dimensionless() {
+                String::new()
+            } else {
+                format!("{dim:?}")
+            }
+        });
+        assert_eq!(
+            rendered,
+            "<D: Dim, I: Index>(xs: D[I], window: Dimensionless) -> D[I]"
+        );
     }
 }

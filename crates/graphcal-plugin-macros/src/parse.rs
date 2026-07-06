@@ -27,19 +27,46 @@ pub struct PluginFnDecl {
     /// `///` doc comments, re-emitted onto the generated wrapper.
     pub docs: Vec<syn::Attribute>,
     pub name: syn::Ident,
-    /// Dimension-variable binders, in declaration order (empty when the
-    /// declaration has no `<...>` list).
+    /// Dimension-variable binders (`D: Dim`), in declaration order (empty
+    /// when the declaration has no `<...>` list or declares only indexes).
     pub dim_vars: Vec<syn::Ident>,
+    /// Index-variable binders (`I: Index`), in declaration order.
+    pub index_vars: Vec<syn::Ident>,
     pub params: Vec<ParamDecl>,
-    pub result: DimExprAst,
+    pub result: ResultAst,
     /// The tokens inside the body's braces.
     pub body: TokenStream,
+}
+
+/// A result position: a value type, or a braced struct shape
+/// (`-> { root: Dimensionless, iters: Int }`).
+///
+/// The struct shape is the one place the Rust and `.gcl` spellings differ:
+/// the `.gcl` declaration names a record type in scope, while the plugin —
+/// which cannot see graphcal type names — declares the shape structurally.
+pub enum ResultAst {
+    Value(TypeAst),
+    Struct(Vec<FieldDecl>),
+}
+
+/// One `name: type` field of a struct-shaped result.
+pub struct FieldDecl {
+    pub name: syn::Ident,
+    pub ty: DimExprAst,
 }
 
 /// One `name: type` parameter.
 pub struct ParamDecl {
     pub name: syn::Ident,
-    pub ty: DimExprAst,
+    pub ty: TypeAst,
+}
+
+/// A full type position: a dimension expression, optionally indexed by one
+/// declared index variable (`D[I]`, `Velocity[I]`).
+pub struct TypeAst {
+    pub element: DimExprAst,
+    /// The `[I]` suffix, when present.
+    pub index: Option<syn::Ident>,
 }
 
 /// A parsed type position: `dim_expr` from the graphcal grammar. A lone
@@ -113,29 +140,7 @@ impl Parse for PluginFnDecl {
         input.parse::<Token![fn]>()?;
         let name: syn::Ident = input.parse()?;
 
-        let mut dim_vars = Vec::new();
-        if input.peek(Token![<]) {
-            let open_span = input.span();
-            input.parse::<Token![<]>()?;
-            loop {
-                if input.peek(Token![>]) {
-                    break;
-                }
-                dim_vars.push(input.parse::<syn::Ident>()?);
-                if input.peek(Token![,]) {
-                    input.parse::<Token![,]>()?;
-                } else {
-                    break;
-                }
-            }
-            input.parse::<Token![>]>()?;
-            if dim_vars.is_empty() {
-                return Err(syn::Error::new(
-                    open_span,
-                    "empty dimension-variable binder list; drop the `<>` or declare a variable",
-                ));
-            }
-        }
+        let (dim_vars, index_vars) = parse_binders(input)?;
 
         let params_content;
         syn::parenthesized!(params_content in input);
@@ -143,7 +148,7 @@ impl Parse for PluginFnDecl {
         while !params_content.is_empty() {
             let name: syn::Ident = params_content.parse()?;
             params_content.parse::<Token![:]>()?;
-            let ty: DimExprAst = params_content.parse()?;
+            let ty: TypeAst = params_content.parse()?;
             params.push(ParamDecl { name, ty });
             if params_content.peek(Token![,]) {
                 params_content.parse::<Token![,]>()?;
@@ -155,7 +160,29 @@ impl Parse for PluginFnDecl {
         }
 
         input.parse::<Token![->]>()?;
-        let result: DimExprAst = input.parse()?;
+        // A brace directly after `->` is a struct shape: the (mandatory)
+        // result type would otherwise be missing entirely.
+        let result = if input.peek(syn::token::Brace) {
+            let shape_content;
+            syn::braced!(shape_content in input);
+            let mut fields = Vec::new();
+            while !shape_content.is_empty() {
+                let name: syn::Ident = shape_content.parse()?;
+                shape_content.parse::<Token![:]>()?;
+                let ty: DimExprAst = shape_content.parse()?;
+                fields.push(FieldDecl { name, ty });
+                if shape_content.peek(Token![,]) {
+                    shape_content.parse::<Token![,]>()?;
+                } else if shape_content.is_empty() {
+                    break;
+                } else {
+                    return Err(shape_content.error("expected `,` between struct fields"));
+                }
+            }
+            ResultAst::Struct(fields)
+        } else {
+            ResultAst::Value(input.parse()?)
+        };
 
         if input.peek(Token![;]) {
             return Err(input.error(
@@ -171,10 +198,75 @@ impl Parse for PluginFnDecl {
             docs,
             name,
             dim_vars,
+            index_vars,
             params,
             result,
             body,
         })
+    }
+}
+
+/// Parse the optional `<D: Dim, I: Index>` binder list.
+fn parse_binders(input: ParseStream) -> syn::Result<(Vec<syn::Ident>, Vec<syn::Ident>)> {
+    let mut dim_vars = Vec::new();
+    let mut index_vars = Vec::new();
+    if input.peek(Token![<]) {
+        let open_span = input.span();
+        input.parse::<Token![<]>()?;
+        loop {
+            if input.peek(Token![>]) {
+                break;
+            }
+            let var = input.parse::<syn::Ident>()?;
+            input.parse::<Token![:]>()?;
+            let constraint = input.parse::<syn::Ident>()?;
+            if constraint == "Dim" {
+                dim_vars.push(var);
+            } else if constraint == "Index" {
+                index_vars.push(var);
+            } else {
+                return Err(syn::Error::new(
+                    constraint.span(),
+                    format!(
+                        "unsupported binder constraint `{constraint}`; extern signatures \
+                         support `Dim` and `Index` (write `{var}: Dim` or `{var}: Index`)"
+                    ),
+                ));
+            }
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            } else {
+                break;
+            }
+        }
+        input.parse::<Token![>]>()?;
+        if dim_vars.is_empty() && index_vars.is_empty() {
+            return Err(syn::Error::new(
+                open_span,
+                "empty dimension-variable binder list; drop the `<>` or declare a variable",
+            ));
+        }
+    }
+    Ok((dim_vars, index_vars))
+}
+
+impl Parse for TypeAst {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let element: DimExprAst = input.parse()?;
+        let index = if input.peek(syn::token::Bracket) {
+            let content;
+            syn::bracketed!(content in input);
+            let index: syn::Ident = content.parse()?;
+            if !content.is_empty() {
+                return Err(
+                    content.error("extern arrays take exactly one index variable in this phase")
+                );
+            }
+            Some(index)
+        } else {
+            None
+        };
+        Ok(Self { element, index })
     }
 }
 

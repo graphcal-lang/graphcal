@@ -396,7 +396,7 @@ fn cross_file_inline_dag_call_using_extern_functions_evaluates() {
         package_dir.join("lib.gcl"),
         r#"
 import plugin "graphcal:demo" as demo {
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
 
 pub dag mid {

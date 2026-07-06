@@ -15,12 +15,12 @@ the language-side view (declaring and calling extern functions, the module
 contract, trust rules), see
 [Extern Functions](language/extern-functions.md).
 
-A graphcal plugin is a **pure, sandboxed scalar kernel library**: functions
-from `f64`s to an `f64`, with dimensional signatures checked by the
-graphcal compiler at every call site. Plugins fit computations that cannot
-be a `dag` block — iterative solvers, special functions, property
-libraries, coordinate transforms. They cannot touch the filesystem or
-network by construction.
+A graphcal plugin is a **pure, sandboxed kernel library**: functions over
+SI scalars, dense arrays, and record-shaped results, with dimensional
+signatures checked by the graphcal compiler at every call site. Plugins
+fit computations that cannot be a `dag` block — iterative solvers, special
+functions, property libraries, coordinate transforms. They cannot touch
+the filesystem or network by construction.
 
 ## 1. Scaffold
 
@@ -57,8 +57,23 @@ graphcal_plugin::plugin! {
     }
 
     /// Linear interpolation, polymorphic over the dimension of `a`/`b`.
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D {
         (b - a).mul_add(t, a)
+    }
+
+    /// Arrays cross as slices in, `Vec` out — always over an index the
+    /// inputs bind, so the output length can never be invented.
+    fn share<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I] {
+        let total: f64 = xs.iter().sum();
+        xs.iter().map(|x| x / total).collect()
+    }
+
+    /// Struct results are declared structurally; the macro generates a
+    /// named `SpanOutput` type so same-kind fields cannot swap silently.
+    fn span<I: Index>(xs: Pressure[I]) -> { lo: Pressure, hi: Pressure } {
+        let lo = xs.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        SpanOutput { lo, hi }
     }
 }
 ```
@@ -70,12 +85,15 @@ pasted verbatim into the `.gcl` import site.
 
 ### Signature syntax
 
-Parameter and result types are `Bool`, `Int`, or dimension expressions
-built from:
+Parameter and result types are `Bool`, `Int`, dimension expressions, or
+arrays of scalars over one declared index variable (`xs: D[I]`); a result
+may also be a braced struct shape (`-> { lo: Pressure, hi: Pressure }`).
+Dimension expressions are built from:
 
 | Vocabulary | Names |
 |------------|-------|
-| Dimension variables | declared per function in `<...>`, e.g. `<D>`, `<D1, D2>` |
+| Dimension variables | declared per function as `D: Dim` binders in `<...>` |
+| Index variables | declared per function as `I: Index` binders in `<...>` |
 | Prelude base dimensions | `Length`, `Time`, `Mass`, `Temperature`, `ElectricCurrent`, `Amount`, `LuminousIntensity`, `Angle` |
 | Prelude derived dimensions | `Velocity`, `Acceleration`, `Force`, `Energy`, `Power`, `Frequency`, `Pressure`, `Area`, `Volume` |
 | The empty product | `Dimensionless` |
@@ -90,14 +108,28 @@ the plugin crate, with the same meaning as P005/P016 on the graphcal
 side):
 
 - every dimension variable must first appear as a **bare** parameter type
-  (`x: D`) before any compound use (`D^2`, `D1 * D2`, or the result);
+  (`x: D`, or a bare array element `xs: D[I]`) before any compound use
+  (`D^2`, `D1 * D2`, or the result);
+- a result array must reuse an index variable that indexes some array
+  parameter, and every declared index variable must index one;
+- struct-shape fields are concrete (`Bool`, `Int`, fixed dimensions — no
+  dimension variables) with unique names;
 - exponents are non-zero.
+
+The struct shape is the one spot where the Rust and `.gcl` spellings
+differ: the plugin declares the shape (it cannot see graphcal type
+names), while the `.gcl` import site names a record type in scope whose
+fields must match the shape — names, order, and kinds.
 
 ### In the body
 
 Parameters arrive with their declared names and natural Rust types —
-`f64` for scalars, `bool` for `Bool`, `i64` for `Int` — and the body
-evaluates to `f64`, `bool`, or `i64` to match the declared result.
+`f64` for scalars, `bool` for `Bool`, `i64` for `Int`, `&[f64]` for
+arrays (dense, in index order) — and the body evaluates to `f64`, `bool`,
+`i64`, `Vec<f64>` (arrays; exactly the binding input's length), or the
+generated `...Output` struct (struct shapes) to match the declared
+result. Array-moving functions compile natively as ordinary slice/`Vec`
+functions, so `cargo test` needs no wasm toolchain.
 
 **Scalar values are SI base units, always.** A `Pressure` parameter is
 pascals; a `Velocity` result is metres per second. Graphcal checks
@@ -144,7 +176,10 @@ graphcal plugin test target/wasm32-unknown-unknown/release/fluid_props.wasm \
 ban, export types), prints the module's SHA-256 and a **paste-ready
 `import plugin` block**, and `--call` executes one function under the same
 fuel and memory limits evaluation uses — arguments in SI base units,
-`true`/`false` for `Bool`, integers for `Int`.
+`true`/`false` for `Bool`, integers for `Int`, bracketed literals like
+`[1.0,2.5,3]` for arrays. For struct-returning functions the import block
+is preceded by a suggested record declaration (rename it freely — the
+loader compares shapes, not names).
 
 ## 5. Vendor, declare, pin
 
@@ -154,7 +189,7 @@ declarations, and pin:
 ```text
 import plugin "plugins/fluid_props.wasm" as fluids {
     fn air_density(p: Pressure, t: Temperature) -> Mass / Volume;
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
 
 node rho: Mass / Volume = fluids.air_density(@chamber_p, @chamber_t);
@@ -168,10 +203,13 @@ The lockfile is the trust boundary: plugin bytes can only change together
 with a reviewable `graphcal.lock` diff. See
 [Trust: Lockfile Pins](language/extern-functions.md#trust-lockfile-pins).
 
-## Scope and limits (ABI v1)
+## Scope and limits (ABI v2)
 
-- Values are scalars (`f64` in SI), `Bool`, or `Int`; arrays, structs, and
-  `Datetime` do not cross the boundary yet.
+- Values are SI scalars, `Bool`, `Int`, arrays of scalars over one index
+  variable, and record-shaped results with concrete fields. Not crossing
+  the boundary yet: `Datetime` (use explicit `to_jd`/`from_jd`-style
+  conversions), `Bool`/`Int` array elements, multi-axis arrays, struct
+  parameters, generic records, and dimension-variable struct fields.
 - One `plugin!` block per plugin (a second block fails the wasm link with
   a duplicate-symbol error); helper functions can live anywhere in the
   crate.
@@ -185,9 +223,12 @@ with a reviewable `graphcal.lock` diff. See
 
 The SDK is a convenience, not part of the trust model — a plugin is any
 core wasm module satisfying the [module
-contract](language/extern-functions.md#wasm-plugin-modules): exports of
-type `(f64 × arity) -> f64`, a `graphcal-manifest` custom section, no
-imports beyond the optional `graphcal::fail`. For non-Rust toolchains,
+contract](language/extern-functions.md#wasm-plugin-modules): exports
+whose wasm types follow their signatures (`f64` per scalar, `(i32, i32)`
+per array, a trailing out-pointer for array/struct results), the
+`graphcal_alloc`/`graphcal_free` pair when buffers are involved, a
+`graphcal-manifest` custom section, and no imports beyond the optional
+`graphcal::fail`. For non-Rust toolchains,
 emit the manifest JSON (the `graphcal-plugin-abi` crate documents the
 model and provides `embed_manifest` for build tooling) and verify the
 result with `graphcal plugin test`.

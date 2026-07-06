@@ -12,6 +12,7 @@ use graphcal_compiler::dimension::{BaseDimId, Dimension};
 use graphcal_compiler::function_signature::{FunctionSignature, ValueKind};
 use graphcal_compiler::registry::format::format_exponent;
 use graphcal_eval::eval::format_number;
+use graphcal_eval::host_fns::HostFnValue;
 use graphcal_plugin_host::PluginModule;
 use thiserror::Error;
 
@@ -146,14 +147,14 @@ test:
 fn lib_rs_file() -> ScaffoldFile {
     ScaffoldFile {
         relative_path: "src/lib.rs",
-        contents: r#"//! A graphcal plugin: pure scalar kernels with dimensional signatures.
+        contents: r#"//! A graphcal plugin: pure kernels with dimensional signatures.
 //!
 //! Build with `cargo build --release --target wasm32-unknown-unknown`
 //! (or `just build`), then vendor the artifact into your graphcal project.
 
 graphcal_plugin::plugin! {
     /// Linear interpolation between `a` and `b`.
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D {
         (b - a).mul_add(t, a)
     }
 
@@ -164,6 +165,17 @@ graphcal_plugin::plugin! {
             graphcal_plugin::fail!("checked_sqrt: negative input {x}");
         }
         x.sqrt()
+    }
+
+    /// Each element's share of the total. Array parameters arrive as
+    /// `&[f64]` slices; array results return `Vec<f64>`s over the same
+    /// index (`I`), so the output length always matches the input's.
+    fn share<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I] {
+        let total: f64 = xs.iter().sum();
+        if total == 0.0 {
+            graphcal_plugin::fail!("share: the elements sum to zero");
+        }
+        xs.iter().map(|x| x / total).collect()
     }
 }
 
@@ -178,6 +190,11 @@ mod tests {
     #[should_panic(expected = "negative input")]
     fn checked_sqrt_rejects_negatives() {
         let _ = super::checked_sqrt(-1.0);
+    }
+
+    #[test]
+    fn share_normalizes() {
+        assert_eq!(super::share(&[1.0, 3.0]), vec![0.25, 0.75]);
     }
 }
 "#
@@ -219,8 +236,9 @@ Vendor the module (for example under `plugins/`), declare it, and pin it:
 
 ```text
 import plugin "plugins/{artifact}.wasm" as {artifact} {{
-    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
     fn checked_sqrt(x: Dimensionless) -> Dimensionless;
+    fn share<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
 }}
 
 node mid: Length = {artifact}.lerp(1.0 m, 3.0 m, 0.5);
@@ -258,17 +276,84 @@ fn validate_name(name: &str) -> Result<(), ScaffoldNameError> {
 // ---------------------------------------------------------------------------
 
 /// Render one function as a `.gcl` extern declaration line (no leading
-/// indentation): `fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;`.
+/// indentation): `fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;`.
+///
+/// A struct-returning function names its result type: the manifest is
+/// structural, so a suggested record name is derived from the function
+/// (`solve` → `SolveResult`) and the caller pairs the declaration with
+/// [`render_result_type_decl`].
 pub fn render_declaration(name: &str, signature: &FunctionSignature) -> String {
-    format!("fn {name}{};", signature.format_with(render_dimension))
+    let rendered = signature.format_with(render_dimension);
+    if matches!(signature.result(), ValueKind::Struct(_))
+        && let Some((head, _)) = rendered.rsplit_once(" -> ")
+    {
+        return format!("fn {name}{head} -> {};", suggest_result_type_name(name));
+    }
+    format!("fn {name}{rendered};")
 }
 
-/// Render the paste-ready `import plugin` block for a loaded module.
-///
-/// `path` is the verbatim path string for the import (callers pass the
-/// CLI argument; users adjust it to the vendored location).
+/// The suggested record type name for a struct-returning function:
+/// `solve_orbit` → `SolveOrbitResult`.
+#[must_use]
+pub fn suggest_result_type_name(function: &str) -> String {
+    let mut out = String::new();
+    for part in function.split('_').filter(|part| !part.is_empty()) {
+        let mut chars = part.chars();
+        if let Some(first) = chars.next() {
+            out.extend(first.to_uppercase());
+            out.push_str(chars.as_str());
+        }
+    }
+    out.push_str("Result");
+    out
+}
+
+/// Render the suggested `.gcl` record declaration for a struct-returning
+/// function, e.g. `type SolveResult { SolveResult(root: Dimensionless, iters: Int) }`.
+#[must_use]
+pub fn render_result_type_decl(
+    function: &str,
+    shape: &graphcal_compiler::function_signature::StructShape,
+) -> String {
+    use graphcal_compiler::function_signature::StructFieldKind;
+
+    let type_name = suggest_result_type_name(function);
+    let fields: Vec<String> = shape
+        .fields()
+        .iter()
+        .map(|field| {
+            let kind = match &field.kind {
+                StructFieldKind::Bool => "Bool".to_string(),
+                StructFieldKind::Int => "Int".to_string(),
+                StructFieldKind::Scalar(dim) => {
+                    if dim.is_dimensionless() {
+                        "Dimensionless".to_string()
+                    } else {
+                        render_dimension(dim)
+                    }
+                }
+            };
+            format!("{}: {kind}", field.name)
+        })
+        .collect();
+    format!("type {type_name} {{ {type_name}({}) }}", fields.join(", "))
+}
+
+/// Render the paste-ready `import plugin` block for a loaded module,
+/// preceded by suggested record declarations for struct-returning
+/// functions (their names are suggestions — rename freely, the loader
+/// compares shapes, not names).
 pub fn render_import_block(path: &str, alias: &str, module: &PluginModule) -> String {
-    let mut out = format!("import plugin \"{path}\" as {alias} {{\n");
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    for (name, signature) in module.functions() {
+        if let ValueKind::Struct(shape) = signature.result() {
+            out.push_str(&render_result_type_decl(name.as_str(), shape));
+            out.push_str("\n\n");
+        }
+    }
+    let _ = writeln!(out, "import plugin \"{path}\" as {alias} {{");
     for (name, signature) in module.functions() {
         out.push_str("    ");
         out.push_str(&render_declaration(name.as_str(), signature));
@@ -341,12 +426,13 @@ pub enum CallArgError {
 }
 
 /// Parse `--call` arguments against the signature's parameter kinds:
-/// scalars as (SI) floats, `Bool` as `true`/`false`, `Int` as an integer.
+/// scalars as (SI) floats, `Bool` as `true`/`false`, `Int` as an integer,
+/// arrays as bracketed comma-separated (SI) floats (`[1.0,2.5,3]`).
 pub fn parse_call_args(
     function: &str,
     signature: &FunctionSignature,
     raw: &[String],
-) -> Result<Vec<f64>, CallArgError> {
+) -> Result<Vec<HostFnValue>, CallArgError> {
     if raw.len() != signature.arity() {
         return Err(CallArgError::ArityMismatch {
             function: function.to_string(),
@@ -366,30 +452,58 @@ pub fn parse_call_args(
             };
             match &param.kind {
                 ValueKind::Bool => match text.as_str() {
-                    "true" => Ok(1.0),
-                    "false" => Ok(0.0),
+                    "true" => Ok(HostFnValue::Scalar(1.0)),
+                    "false" => Ok(HostFnValue::Scalar(0.0)),
                     _ => Err(invalid("expected `true` or `false`")),
                 },
                 ValueKind::Int => {
                     let value: i64 = text.parse().map_err(|_| invalid("expected an integer"))?;
                     int_to_abi(value)
+                        .map(HostFnValue::Scalar)
                         .ok_or_else(|| invalid("integer is not exactly representable as an f64"))
                 }
                 ValueKind::Scalar(_) => text
                     .parse::<f64>()
+                    .map(HostFnValue::Scalar)
                     .map_err(|_| invalid("expected a number (in SI base units)")),
+                // Struct parameters never pass signature validation.
+                ValueKind::Struct(_) => Err(invalid("struct parameters are not supported")),
+                ValueKind::Indexed { .. } => {
+                    let inner = text
+                        .strip_prefix('[')
+                        .and_then(|rest| rest.strip_suffix(']'))
+                        .ok_or_else(|| {
+                            invalid("expected a bracketed array like `[1.0,2.5,3]` (SI base units)")
+                        })?;
+                    let elements = inner
+                        .split(',')
+                        .map(|element| element.trim().parse::<f64>())
+                        .collect::<Result<Vec<f64>, _>>()
+                        .map_err(|_| {
+                            invalid("expected a bracketed array like `[1.0,2.5,3]` (SI base units)")
+                        })?;
+                    if elements.is_empty() {
+                        return Err(invalid("arrays cannot be empty (indexes are non-empty)"));
+                    }
+                    Ok(HostFnValue::Buffer(elements))
+                }
             }
         })
         .collect()
 }
 
-/// Render a call's raw `f64` result per the declared result kind.
+/// Render a call's result value per the declared result kind.
 ///
 /// Returns `Err` with a description when the value violates the declared
 /// kind's encoding (a plugin bug worth surfacing, not reinterpreting).
-pub fn render_result(signature: &FunctionSignature, raw: f64) -> Result<String, String> {
+pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Result<String, String> {
+    let scalar = |value: &HostFnValue| match value {
+        HostFnValue::Scalar(raw) => Ok(*raw),
+        HostFnValue::Buffer(_) => Err("declared a scalar result but returned an array".to_string()),
+    };
     match signature.result() {
         ValueKind::Bool => {
+            let raw = scalar(value)?;
             if raw.to_bits() == 1.0_f64.to_bits() {
                 Ok("true".to_string())
             } else if raw.to_bits() == 0.0_f64.to_bits() {
@@ -400,18 +514,84 @@ pub fn render_result(signature: &FunctionSignature, raw: f64) -> Result<String, 
                 ))
             }
         }
-        ValueKind::Int => int_from_abi(raw)
-            .map(|value| value.to_string())
-            .ok_or_else(|| {
-                format!("declared Int result is not an exactly-representable integer: got {raw}")
-            }),
+        ValueKind::Int => {
+            let raw = scalar(value)?;
+            int_from_abi(raw)
+                .map(|value| value.to_string())
+                .ok_or_else(|| {
+                    format!(
+                        "declared Int result is not an exactly-representable integer: got {raw}"
+                    )
+                })
+        }
         ValueKind::Scalar(monomial) => {
-            let rendered = format_number(raw);
+            let rendered = format_number(scalar(value)?);
             let dim = render_scalar_result_dimension(monomial);
             Ok(match dim {
                 Some(dim) => format!("{rendered} [{dim}, SI base units]"),
                 None => rendered,
             })
+        }
+        ValueKind::Indexed { element, .. } => {
+            let HostFnValue::Buffer(values) = value else {
+                return Err("declared an array result but returned a scalar".to_string());
+            };
+            let rendered = values
+                .iter()
+                .map(|value| format_number(*value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let dim = render_scalar_result_dimension(element);
+            Ok(dim.map_or_else(
+                || format!("[{rendered}]"),
+                |dim| format!("[{rendered}] [{dim}, SI base units]"),
+            ))
+        }
+        ValueKind::Struct(shape) => {
+            use graphcal_compiler::function_signature::StructFieldKind;
+
+            let HostFnValue::Buffer(slots) = value else {
+                return Err("declared a struct result but returned a scalar".to_string());
+            };
+            if slots.len() != shape.fields().len() {
+                return Err(format!(
+                    "declared a struct result with {} field(s) but returned {} slot(s)",
+                    shape.fields().len(),
+                    slots.len()
+                ));
+            }
+            let fields = shape
+                .fields()
+                .iter()
+                .zip(slots)
+                .map(|(field, slot)| {
+                    let rendered = match &field.kind {
+                        StructFieldKind::Bool => {
+                            if slot.to_bits() == 1.0_f64.to_bits() {
+                                "true".to_string()
+                            } else if slot.to_bits() == 0.0_f64.to_bits() {
+                                "false".to_string()
+                            } else {
+                                return Err(format!(
+                                    "field `{}`: declared Bool is not encoded as 1.0/0.0: got {slot}",
+                                    field.name
+                                ));
+                            }
+                        }
+                        StructFieldKind::Int => int_from_abi(*slot)
+                            .map(|value| value.to_string())
+                            .ok_or_else(|| {
+                                format!(
+                                    "field `{}`: declared Int is not an exactly-representable integer: got {slot}",
+                                    field.name
+                                )
+                            })?,
+                        StructFieldKind::Scalar(_) => format_number(*slot),
+                    };
+                    Ok(format!("{}: {rendered}", field.name))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(format!("{{ {} }} [SI base units]", fields.join(", ")))
         }
     }
 }
@@ -465,6 +645,7 @@ mod tests {
         let var = || DimVarName::expect_valid("D");
         FunctionSignature::try_new(
             vec![var()],
+            Vec::new(),
             vec![
                 FunctionParam {
                     name: FnParamName::expect_valid("a"),
@@ -486,6 +667,7 @@ mod tests {
 
     fn step_signature() -> FunctionSignature {
         FunctionSignature::try_new(
+            Vec::new(),
             Vec::new(),
             vec![
                 FunctionParam {
@@ -567,7 +749,7 @@ mod tests {
     fn declarations_render_in_gcl_syntax() {
         assert_eq!(
             render_declaration("lerp", &lerp_signature()),
-            "fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;"
+            "fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;"
         );
         assert_eq!(
             render_declaration("step", &step_signature()),
@@ -585,6 +767,7 @@ mod tests {
             .pow(Rational::HALF)
             .unwrap();
         let signature = FunctionSignature::try_new(
+            Vec::new(),
             Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("p"),
@@ -616,11 +799,18 @@ mod tests {
             &["1.0".into(), "3.0".into(), "0.5".into()],
         )
         .unwrap();
-        assert_eq!(args, [1.0, 3.0, 0.5]);
+        assert_eq!(
+            args,
+            [
+                HostFnValue::Scalar(1.0),
+                HostFnValue::Scalar(3.0),
+                HostFnValue::Scalar(0.5)
+            ]
+        );
 
         let args =
             parse_call_args("step", &step_signature(), &["5".into(), "true".into()]).unwrap();
-        assert_eq!(args, [5.0, 1.0]);
+        assert_eq!(args, [HostFnValue::Scalar(5.0), HostFnValue::Scalar(1.0)]);
 
         assert!(matches!(
             parse_call_args("step", &step_signature(), &["5".into()]).unwrap_err(),
@@ -642,10 +832,14 @@ mod tests {
 
     #[test]
     fn results_render_per_kind() {
-        assert_eq!(render_result(&step_signature(), 42.0).unwrap(), "42");
-        assert!(render_result(&step_signature(), 42.5).is_err());
+        assert_eq!(
+            render_result(&step_signature(), &HostFnValue::Scalar(42.0)).unwrap(),
+            "42"
+        );
+        assert!(render_result(&step_signature(), &HostFnValue::Scalar(42.5)).is_err());
 
         let bool_result = FunctionSignature::try_new(
+            Vec::new(),
             Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("x"),
@@ -654,15 +848,22 @@ mod tests {
             ValueKind::Bool,
         )
         .expect("valid signature");
-        assert_eq!(render_result(&bool_result, 1.0).unwrap(), "true");
-        assert_eq!(render_result(&bool_result, 0.0).unwrap(), "false");
-        assert!(render_result(&bool_result, 0.5).is_err());
+        assert_eq!(
+            render_result(&bool_result, &HostFnValue::Scalar(1.0)).unwrap(),
+            "true"
+        );
+        assert_eq!(
+            render_result(&bool_result, &HostFnValue::Scalar(0.0)).unwrap(),
+            "false"
+        );
+        assert!(render_result(&bool_result, &HostFnValue::Scalar(0.5)).is_err());
 
         let velocity = prelude_base_dimension("Length")
             .unwrap()
             .checked_mul(&prelude_base_dimension("Time").unwrap().pow(-1).unwrap())
             .unwrap();
         let scalar_result = FunctionSignature::try_new(
+            Vec::new(),
             Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("x"),
@@ -672,7 +873,7 @@ mod tests {
         )
         .expect("valid signature");
         assert_eq!(
-            render_result(&scalar_result, 2.5).unwrap(),
+            render_result(&scalar_result, &HostFnValue::Scalar(2.5)).unwrap(),
             "2.5 [Length * Time^-1, SI base units]"
         );
     }

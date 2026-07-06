@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn dim_generic_signature_roundtrips() {
         let manifest = manifest_of(quote! {
-            fn lerp<D>(a: D, b: D, t: Dimensionless) -> D { a + (b - a) * t }
+            fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D { a + (b - a) * t }
         });
         assert_eq!(manifest.abi_version, graphcal_plugin_abi::ABI_VERSION);
         let function = &manifest.functions[0];
@@ -110,8 +110,8 @@ mod tests {
     #[test]
     fn rational_powers_and_division_fold() {
         let manifest = manifest_of(quote! {
-            fn geometric_mean<D1, D2>(x: D1, y: D2) -> (D1 * D2)^(1/2) { (x * y).sqrt() }
-            fn cancel<D>(x: D, y: D^2) -> D^2 / D * Dimensionless { y / x * 1.0 }
+            fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> (D1 * D2)^(1/2) { (x * y).sqrt() }
+            fn cancel<D: Dim>(x: D, y: D^2) -> D^2 / D * Dimensionless { y / x * 1.0 }
         });
         let mean = scalar(&manifest.functions[0].result);
         let powers: Vec<(&str, i32, i32)> = mean
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn use_before_binding_is_rejected() {
         let message = error_of(quote! {
-            fn sq<D>(x: D^2) -> D { x.sqrt() }
+            fn sq<D: Dim>(x: D^2) -> D { x.sqrt() }
         });
         assert!(message.contains("before it is bound"), "got: {message}");
     }
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn unbound_result_variable_is_rejected() {
         let message = error_of(quote! {
-            fn f<D>(x: Dimensionless) -> D { x }
+            fn f<D: Dim>(x: Dimensionless) -> D { x }
         });
         assert!(message.contains("no parameter binds"), "got: {message}");
     }
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn never_bound_variable_is_rejected() {
         let message = error_of(quote! {
-            fn f<D>(x: Dimensionless) -> Dimensionless { x }
+            fn f<D: Dim>(x: Dimensionless) -> Dimensionless { x }
         });
         assert!(message.contains("never bound"), "got: {message}");
     }
@@ -201,7 +201,7 @@ mod tests {
         assert!(message.contains("plugin ABI v1"), "got: {message}");
 
         let message = error_of(quote! {
-            fn f<Length>(x: Length) -> Length { x }
+            fn f<Length: Dim>(x: Length) -> Length { x }
         });
         assert!(
             message.contains("shadows the prelude name"),
@@ -242,7 +242,7 @@ mod tests {
         assert!(message.contains("parameter `x`"), "got: {message}");
 
         let message = error_of(quote! {
-            fn f<D, D>(x: D) -> D { x }
+            fn f<D: Dim, D: Dim>(x: D) -> D { x }
         });
         assert!(
             message.contains("dimension variable `D` is declared more than once"),
@@ -278,13 +278,134 @@ mod tests {
             message.contains("empty dimension-variable binder"),
             "got: {message}"
         );
+
+        let message = error_of(quote! {
+            fn f<N: Nat>(x: Dimensionless) -> Dimensionless { x }
+        });
+        assert!(
+            message.contains("unsupported binder constraint `Nat`"),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn array_signatures_roundtrip_to_the_manifest() {
+        let manifest = manifest_of(quote! {
+            fn smooth<D: Dim, I: Index>(xs: D[I], window: Dimensionless) -> D[I] {
+                let _ = window;
+                xs.to_vec()
+            }
+        });
+        let function = &manifest.functions[0];
+        assert_eq!(function.dim_vars, ["D"]);
+        assert_eq!(function.index_vars, ["I"]);
+        assert!(matches!(
+            &function.params[0].kind,
+            ManifestValueKind::Array { index, .. } if index == "I"
+        ));
+        assert!(matches!(
+            &function.result,
+            ManifestValueKind::Array { index, .. } if index == "I"
+        ));
+    }
+
+    #[test]
+    fn struct_results_roundtrip_to_the_manifest() {
+        let manifest = manifest_of(quote! {
+            fn span<D: Dim, I: Index>(xs: D[I]) -> { lo: Pressure, ok: Bool, n: Int } {
+                SpanOutput { lo: xs[0], ok: true, n: xs.len() as i64 }
+            }
+        });
+        let function = &manifest.functions[0];
+        let ManifestValueKind::Struct { fields } = &function.result else {
+            panic!("expected a struct result, got {:?}", function.result);
+        };
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].name, "lo");
+        assert!(matches!(
+            &fields[0].kind,
+            graphcal_plugin_abi::ManifestFieldKind::Scalar(monomial) if monomial.vars.is_empty()
+        ));
+        assert!(matches!(
+            &fields[1].kind,
+            graphcal_plugin_abi::ManifestFieldKind::Bool
+        ));
+        assert!(matches!(
+            &fields[2].kind,
+            graphcal_plugin_abi::ManifestFieldKind::Int
+        ));
+    }
+
+    #[test]
+    fn struct_discipline_is_enforced() {
+        let message = error_of(quote! {
+            fn f(x: Dimensionless) -> { } { unreachable!() }
+        });
+        assert!(message.contains("at least one field"), "got: {message}");
+
+        let message = error_of(quote! {
+            fn f(x: Dimensionless) -> { a: Dimensionless, a: Int } { unreachable!() }
+        });
+        assert!(
+            message.contains("field `a` is declared more than once"),
+            "got: {message}"
+        );
+
+        // Struct fields have no dimension variables in scope.
+        let message = error_of(quote! {
+            fn f<D: Dim>(x: D) -> { lo: D } { unreachable!() }
+        });
+        assert!(message.contains("unknown dimension `D`"), "got: {message}");
+    }
+
+    #[test]
+    fn array_discipline_is_enforced() {
+        let message = error_of(quote! {
+            fn f<D: Dim>(xs: D[I]) -> D { xs.iter().sum() }
+        });
+        assert!(
+            message.contains("unknown index variable `I`"),
+            "got: {message}"
+        );
+
+        let message = error_of(quote! {
+            fn f<D: Dim, I: Index>(x: D) -> D[I] { vec![x] }
+        });
+        assert!(
+            message.contains("cannot invent its output length"),
+            "got: {message}"
+        );
+
+        let message = error_of(quote! {
+            fn f<D: Dim, I: Index>(x: D) -> D { x }
+        });
+        assert!(
+            message.contains("indexes no array parameter"),
+            "got: {message}"
+        );
+
+        let message = error_of(quote! {
+            fn f<I: Index>(xs: Bool[I]) -> Dimensionless { 0.0 }
+        });
+        assert!(
+            message.contains("array elements must be scalars"),
+            "got: {message}"
+        );
+
+        let message = error_of(quote! {
+            fn f<D: Dim, D: Index>(xs: D) -> D { xs }
+        });
+        assert!(
+            message.contains("generic binder `D` is declared more than once"),
+            "got: {message}"
+        );
     }
 
     #[test]
     fn generated_items_are_present() {
         let expansion = expand(quote! {
             /// Docs survive.
-            fn identity<D>(x: D) -> D { x }
+            fn identity<D: Dim>(x: D) -> D { x }
         })
         .expect("expansion")
         .to_string();

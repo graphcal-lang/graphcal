@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected an array over index `Maneuver` (index variable `I` was bound by an earlier argument), found Velocity[Phase]
+    Diagnostic severity: error
+Begin snippet for extern_array_index_mismatch.gcl starting at line 10, column 1
+
+snippet line 10: node b: Velocity[Phase] = { Phase.Boost: 2.0 km/s, Phase.Coast: 0.1 km/s };
+snippet line 11: node bad: Velocity = demo.dot(@a, @b);
+    label at line 11, columns 35 to 36: has dimension Velocity[Phase]
+diagnostic help: arguments sharing the index variable `I` of `demo.dot` must range over the same index
+diagnostic code: graphcal::D001
