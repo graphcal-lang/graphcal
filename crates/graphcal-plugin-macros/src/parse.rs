@@ -27,11 +27,13 @@ pub struct PluginFnDecl {
     /// `///` doc comments, re-emitted onto the generated wrapper.
     pub docs: Vec<syn::Attribute>,
     pub name: syn::Ident,
-    /// Dimension-variable binders, in declaration order (empty when the
-    /// declaration has no `<...>` list).
+    /// Dimension-variable binders (`D: Dim`), in declaration order (empty
+    /// when the declaration has no `<...>` list or declares only indexes).
     pub dim_vars: Vec<syn::Ident>,
+    /// Index-variable binders (`I: Index`), in declaration order.
+    pub index_vars: Vec<syn::Ident>,
     pub params: Vec<ParamDecl>,
-    pub result: DimExprAst,
+    pub result: TypeAst,
     /// The tokens inside the body's braces.
     pub body: TokenStream,
 }
@@ -39,7 +41,15 @@ pub struct PluginFnDecl {
 /// One `name: type` parameter.
 pub struct ParamDecl {
     pub name: syn::Ident,
-    pub ty: DimExprAst,
+    pub ty: TypeAst,
+}
+
+/// A full type position: a dimension expression, optionally indexed by one
+/// declared index variable (`D[I]`, `Velocity[I]`).
+pub struct TypeAst {
+    pub element: DimExprAst,
+    /// The `[I]` suffix, when present.
+    pub index: Option<syn::Ident>,
 }
 
 /// A parsed type position: `dim_expr` from the graphcal grammar. A lone
@@ -114,6 +124,7 @@ impl Parse for PluginFnDecl {
         let name: syn::Ident = input.parse()?;
 
         let mut dim_vars = Vec::new();
+        let mut index_vars = Vec::new();
         if input.peek(Token![<]) {
             let open_span = input.span();
             input.parse::<Token![<]>()?;
@@ -124,16 +135,19 @@ impl Parse for PluginFnDecl {
                 let var = input.parse::<syn::Ident>()?;
                 input.parse::<Token![:]>()?;
                 let constraint = input.parse::<syn::Ident>()?;
-                if constraint != "Dim" {
+                if constraint == "Dim" {
+                    dim_vars.push(var);
+                } else if constraint == "Index" {
+                    index_vars.push(var);
+                } else {
                     return Err(syn::Error::new(
                         constraint.span(),
                         format!(
                             "unsupported binder constraint `{constraint}`; extern signatures \
-                             support `Dim` (write `{var}: Dim`)"
+                             support `Dim` and `Index` (write `{var}: Dim` or `{var}: Index`)"
                         ),
                     ));
                 }
-                dim_vars.push(var);
                 if input.peek(Token![,]) {
                     input.parse::<Token![,]>()?;
                 } else {
@@ -141,7 +155,7 @@ impl Parse for PluginFnDecl {
                 }
             }
             input.parse::<Token![>]>()?;
-            if dim_vars.is_empty() {
+            if dim_vars.is_empty() && index_vars.is_empty() {
                 return Err(syn::Error::new(
                     open_span,
                     "empty dimension-variable binder list; drop the `<>` or declare a variable",
@@ -155,7 +169,7 @@ impl Parse for PluginFnDecl {
         while !params_content.is_empty() {
             let name: syn::Ident = params_content.parse()?;
             params_content.parse::<Token![:]>()?;
-            let ty: DimExprAst = params_content.parse()?;
+            let ty: TypeAst = params_content.parse()?;
             params.push(ParamDecl { name, ty });
             if params_content.peek(Token![,]) {
                 params_content.parse::<Token![,]>()?;
@@ -167,7 +181,7 @@ impl Parse for PluginFnDecl {
         }
 
         input.parse::<Token![->]>()?;
-        let result: DimExprAst = input.parse()?;
+        let result: TypeAst = input.parse()?;
 
         if input.peek(Token![;]) {
             return Err(input.error(
@@ -183,10 +197,31 @@ impl Parse for PluginFnDecl {
             docs,
             name,
             dim_vars,
+            index_vars,
             params,
             result,
             body,
         })
+    }
+}
+
+impl Parse for TypeAst {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let element: DimExprAst = input.parse()?;
+        let index = if input.peek(syn::token::Bracket) {
+            let content;
+            syn::bracketed!(content in input);
+            let index: syn::Ident = content.parse()?;
+            if !content.is_empty() {
+                return Err(
+                    content.error("extern arrays take exactly one index variable in this phase")
+                );
+            }
+            Some(index)
+        } else {
+            None
+        };
+        Ok(Self { element, index })
     }
 }
 

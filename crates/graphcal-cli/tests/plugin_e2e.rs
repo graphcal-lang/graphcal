@@ -149,7 +149,26 @@ fn scaffolded_plugin_builds_locks_and_evaluates() {
         stdout.contains("fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("fn share<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];"),
+        "{stdout}"
+    );
     assert!(stdout.contains("= 2"), "{stdout}");
+
+    // --- a sandboxed array call through the buffer protocol.
+    let output = graphcal_bin()
+        .args(["plugin", "test"])
+        .arg(&artifact)
+        .args(["--call", "share", "[1.0,3.0]"])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "plugin test --call share failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("[0.25, 0.75]"), "{stdout}");
 
     // --- vendor into a package-mode project and pin via deps lock.
     let project = dir.path().join("proj");
@@ -162,12 +181,23 @@ fn scaffolded_plugin_builds_locks_and_evaluates() {
         r#"import plugin "plugins/e2e_kernels.wasm" as kernels {
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
     fn checked_sqrt(x: Dimensionless) -> Dimensionless;
+    fn share<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
 }
+
+index Leg = { Ascent, Coast, Descent };
 
 param a: Length = 1.0 m;
 node mid: Length = kernels.lerp(@a, 3.0 m, 0.5);
 node bad: Dimensionless = kernels.checked_sqrt(-1.0);
 node fine: Dimensionless = kernels.checked_sqrt(9.0);
+
+node dv: Velocity[Leg] = {
+    Leg.Ascent: 3.0 km/s,
+    Leg.Coast: 0.5 km/s,
+    Leg.Descent: 0.5 km/s,
+};
+node dv_share: Dimensionless[Leg] = kernels.share(@dv);
+node ascent_share: Dimensionless = @dv_share[Leg.Ascent];
 "#,
     )
     .unwrap();
@@ -229,6 +259,19 @@ node fine: Dimensionless = kernels.checked_sqrt(9.0);
         .unwrap_or_else(|| panic!("no `fine` node in {stdout}"));
     let si = fine["si_value"].as_f64().expect("fine must evaluate");
     assert!((si - 3.0).abs() < 1e-12, "fine = {si}");
+    let ascent_share = nodes
+        .as_object()
+        .and_then(|nodes| {
+            nodes
+                .iter()
+                .find(|(name, _)| name.ends_with("ascent_share"))
+                .map(|(_, value)| value)
+        })
+        .unwrap_or_else(|| panic!("no `ascent_share` node in {stdout}"));
+    let si = ascent_share["si_value"]
+        .as_f64()
+        .expect("ascent_share must evaluate");
+    assert!((si - 0.75).abs() < 1e-12, "ascent_share = {si}");
 }
 
 #[test]

@@ -289,6 +289,70 @@ mod tests {
     }
 
     #[test]
+    fn array_signatures_roundtrip_to_the_manifest() {
+        let manifest = manifest_of(quote! {
+            fn smooth<D: Dim, I: Index>(xs: D[I], window: Dimensionless) -> D[I] {
+                let _ = window;
+                xs.to_vec()
+            }
+        });
+        let function = &manifest.functions[0];
+        assert_eq!(function.dim_vars, ["D"]);
+        assert_eq!(function.index_vars, ["I"]);
+        assert!(matches!(
+            &function.params[0].kind,
+            ManifestValueKind::Array { index, .. } if index == "I"
+        ));
+        assert!(matches!(
+            &function.result,
+            ManifestValueKind::Array { index, .. } if index == "I"
+        ));
+    }
+
+    #[test]
+    fn array_discipline_is_enforced() {
+        let message = error_of(quote! {
+            fn f<D: Dim>(xs: D[I]) -> D { xs.iter().sum() }
+        });
+        assert!(
+            message.contains("unknown index variable `I`"),
+            "got: {message}"
+        );
+
+        let message = error_of(quote! {
+            fn f<D: Dim, I: Index>(x: D) -> D[I] { vec![x] }
+        });
+        assert!(
+            message.contains("cannot invent its output length"),
+            "got: {message}"
+        );
+
+        let message = error_of(quote! {
+            fn f<D: Dim, I: Index>(x: D) -> D { x }
+        });
+        assert!(
+            message.contains("indexes no array parameter"),
+            "got: {message}"
+        );
+
+        let message = error_of(quote! {
+            fn f<I: Index>(xs: Bool[I]) -> Dimensionless { 0.0 }
+        });
+        assert!(
+            message.contains("array elements must be scalars"),
+            "got: {message}"
+        );
+
+        let message = error_of(quote! {
+            fn f<D: Dim, D: Index>(xs: D) -> D { xs }
+        });
+        assert!(
+            message.contains("generic binder `D` is declared more than once"),
+            "got: {message}"
+        );
+    }
+
+    #[test]
     fn generated_items_are_present() {
         let expansion = expand(quote! {
             /// Docs survive.

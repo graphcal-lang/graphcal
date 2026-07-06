@@ -43,6 +43,17 @@ graphcal_plugin::plugin! {
     fn unrepresentable() -> Int {
         (1_i64 << 53) + 1
     }
+
+    /// Array parameters arrive as slices; array results return `Vec`s over
+    /// the same index (issue #25 Phase D).
+    fn rescale<D: Dim, I: Index>(xs: D[I], k: Dimensionless) -> D[I] {
+        xs.iter().map(|x| x * k).collect()
+    }
+
+    /// Arrays can collapse to scalars.
+    fn total<D: Dim, I: Index>(xs: D[I]) -> D {
+        xs.iter().sum()
+    }
 }
 
 fn decoded_manifest() -> PluginManifest {
@@ -88,6 +99,12 @@ fn unrepresentable_int_results_are_rejected() {
 }
 
 #[test]
+fn array_kernels_run_natively_with_slices_and_vecs() {
+    assert_eq!(rescale(&[1.0, 2.5, -4.0], 2.0), vec![2.0, 5.0, -8.0]);
+    assert!((total(&[1.0, 2.0, 3.5]) - 6.5).abs() < 1e-12);
+}
+
+#[test]
 fn manifest_matches_the_declarations() {
     let manifest = decoded_manifest();
     let names: Vec<&str> = manifest
@@ -102,9 +119,22 @@ fn manifest_matches_the_declarations() {
             "checked_sqrt",
             "step",
             "is_probability",
-            "unrepresentable"
+            "unrepresentable",
+            "rescale",
+            "total"
         ]
     );
+
+    let rescale = &manifest.functions[5];
+    assert_eq!(rescale.index_vars, ["I"]);
+    assert!(matches!(
+        &rescale.params[0].kind,
+        graphcal_plugin_abi::ManifestValueKind::Array { index, .. } if index == "I"
+    ));
+    assert!(matches!(
+        &rescale.result,
+        graphcal_plugin_abi::ManifestValueKind::Array { index, .. } if index == "I"
+    ));
 }
 
 #[test]

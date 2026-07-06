@@ -147,7 +147,7 @@ test:
 fn lib_rs_file() -> ScaffoldFile {
     ScaffoldFile {
         relative_path: "src/lib.rs",
-        contents: r#"//! A graphcal plugin: pure scalar kernels with dimensional signatures.
+        contents: r#"//! A graphcal plugin: pure kernels with dimensional signatures.
 //!
 //! Build with `cargo build --release --target wasm32-unknown-unknown`
 //! (or `just build`), then vendor the artifact into your graphcal project.
@@ -166,6 +166,17 @@ graphcal_plugin::plugin! {
         }
         x.sqrt()
     }
+
+    /// Each element's share of the total. Array parameters arrive as
+    /// `&[f64]` slices; array results return `Vec<f64>`s over the same
+    /// index (`I`), so the output length always matches the input's.
+    fn share<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I] {
+        let total: f64 = xs.iter().sum();
+        if total == 0.0 {
+            graphcal_plugin::fail!("share: the elements sum to zero");
+        }
+        xs.iter().map(|x| x / total).collect()
+    }
 }
 
 #[cfg(test)]
@@ -179,6 +190,11 @@ mod tests {
     #[should_panic(expected = "negative input")]
     fn checked_sqrt_rejects_negatives() {
         let _ = super::checked_sqrt(-1.0);
+    }
+
+    #[test]
+    fn share_normalizes() {
+        assert_eq!(super::share(&[1.0, 3.0]), vec![0.25, 0.75]);
     }
 }
 "#
@@ -222,6 +238,7 @@ Vendor the module (for example under `plugins/`), declare it, and pin it:
 import plugin "plugins/{artifact}.wasm" as {artifact} {{
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
     fn checked_sqrt(x: Dimensionless) -> Dimensionless;
+    fn share<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
 }}
 
 node mid: Length = {artifact}.lerp(1.0 m, 3.0 m, 0.5);

@@ -31,10 +31,49 @@ fn dimensionless() -> ManifestValueKind {
     ManifestValueKind::Scalar(ManifestMonomial::default())
 }
 
-/// A lerp plugin plus an Int/Bool `step` function, compiled from WAT.
+/// The manifest entry for the array `twice` function.
+fn twice_manifest_function() -> ManifestFunction {
+    let element = ManifestMonomial {
+        vars: vec![ManifestVarPower {
+            var: "D".to_string(),
+            pow: ManifestRational { num: 1, den: 1 },
+        }],
+        fixed: Vec::new(),
+    };
+    ManifestFunction {
+        name: "twice".to_string(),
+        dim_vars: vec!["D".to_string()],
+        index_vars: vec!["I".to_string()],
+        params: vec![ManifestParam {
+            name: "xs".to_string(),
+            kind: ManifestValueKind::Array {
+                element: element.clone(),
+                index: "I".to_string(),
+            },
+        }],
+        result: ManifestValueKind::Array {
+            element,
+            index: "I".to_string(),
+        },
+    }
+}
+
+/// A lerp plugin plus an Int/Bool `step` function and an array `twice`
+/// function (buffer protocol), compiled from WAT.
 fn test_module_bytes() -> Vec<u8> {
     let wat = r#"
     (module
+      (memory (export "memory") 1)
+      (global $bump (mut i32) (i32.const 1024))
+      (func (export "graphcal_alloc") (param $size i32) (result i32)
+        (local $ptr i32)
+        (local.set $ptr (global.get $bump))
+        (global.set $bump
+          (i32.add
+            (global.get $bump)
+            (i32.and (i32.add (local.get $size) (i32.const 7)) (i32.const -8))))
+        (local.get $ptr))
+      (func (export "graphcal_free") (param i32 i32))
       (func (export "lerp") (param f64 f64 f64) (result f64)
         (f64.add
           (local.get 0)
@@ -42,7 +81,19 @@ fn test_module_bytes() -> Vec<u8> {
       (func (export "step") (param f64 f64) (result f64)
         (if (result f64) (f64.eq (local.get 1) (f64.const 1))
           (then (f64.add (local.get 0) (f64.const 1)))
-          (else (f64.sub (local.get 0) (f64.const 1))))))
+          (else (f64.sub (local.get 0) (f64.const 1)))))
+      (func (export "twice") (param $ptr i32) (param $len i32) (param $out i32)
+        (local $i i32)
+        (block $done
+          (loop $loop
+            (br_if $done (i32.ge_s (local.get $i) (local.get $len)))
+            (f64.store
+              (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 8)))
+              (f64.mul
+                (f64.load (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 8))))
+                (f64.const 2)))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $loop)))))
     "#;
     let manifest = PluginManifest {
         abi_version: graphcal_plugin_abi::ABI_VERSION,
@@ -83,6 +134,7 @@ fn test_module_bytes() -> Vec<u8> {
                 ],
                 result: ManifestValueKind::Int,
             },
+            twice_manifest_function(),
         ],
     };
     let wasm = wat::parse_str(wat).expect("test WAT compiles");
@@ -112,7 +164,7 @@ fn plugin_test_reports_identity_and_import_block() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("sha256: "), "{stdout}");
-    assert!(stdout.contains("abi: version 2, 2 function(s)"), "{stdout}");
+    assert!(stdout.contains("abi: version 2, 3 function(s)"), "{stdout}");
     assert!(stdout.contains("as kernels {"), "{stdout}");
     assert!(
         stdout.contains("fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;"),
@@ -120,6 +172,10 @@ fn plugin_test_reports_identity_and_import_block() {
     );
     assert!(
         stdout.contains("fn step(n: Int, up: Bool) -> Int;"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("fn twice<D: Dim, I: Index>(xs: D[I]) -> D[I];"),
         "{stdout}"
     );
 }
@@ -156,6 +212,23 @@ fn plugin_test_calls_functions_with_typed_arguments() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("step(41, true) = 42"), "{stdout}");
+
+    let output = graphcal_bin()
+        .args(["plugin", "test"])
+        .arg(&module)
+        .args(["--call", "twice", "[1.5,2.0,-3.0]"])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("twice([1.5,2.0,-3.0]) = [3, 4, -6]"),
+        "{stdout}"
+    );
 }
 
 #[test]
