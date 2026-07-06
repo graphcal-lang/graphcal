@@ -108,8 +108,8 @@ fn every_vocabulary_name_matches_the_prelude() {
 
 #[test]
 fn drift_would_be_detected() {
-    // Negative control: mis-declare one function and require P005, proving
-    // the positive test actually verifies signatures.
+    // Negative control: declare one function with the wrong signature and
+    // require P005, proving the positive test actually verifies signatures.
     let dir = tempfile::tempdir().expect("tempdir");
     let registry = registry_from_embedded_manifest();
     let source = r#"
