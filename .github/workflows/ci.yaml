@@ -57,6 +57,9 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install stable --profile minimal
 
+      - name: Install wasm32 target (plugin end-to-end tests)
+        run: rustup target add wasm32-unknown-unknown
+
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Test

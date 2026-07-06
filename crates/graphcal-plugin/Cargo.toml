@@ -1,0 +1,25 @@
+[package]
+name = "graphcal-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description.workspace = true
+readme.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+graphcal-plugin-macros = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+graphcal-compiler = { workspace = true }
+graphcal-eval = { workspace = true }
+graphcal-io = { workspace = true }
+graphcal-plugin-abi = { workspace = true }
+graphcal-plugin-host = { workspace = true }
+tempfile.workspace = true

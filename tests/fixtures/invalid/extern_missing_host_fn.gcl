@@ -1,0 +1,6 @@
+// error: declared extern function has no host registry entry (the
+// load-time host-verification diagnostic, reported by check and eval alike)
+import plugin "graphcal:demo" as demo {
+    fn not_provided(x: Dimensionless) -> Dimensionless;
+}
+node x: Dimensionless = demo.not_provided(1.0);

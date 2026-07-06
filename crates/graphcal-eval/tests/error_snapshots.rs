@@ -791,7 +791,7 @@ fn error_extern_conflicting_signature() {
 
 #[test]
 fn error_extern_missing_host_fn() {
-    let source = include_str!("../../../tests/fixtures/runtime_error/extern_missing_host_fn.gcl");
+    let source = include_str!("../../../tests/fixtures/invalid/extern_missing_host_fn.gcl");
     let rendered = render_error(source, "extern_missing_host_fn.gcl");
     insta::assert_snapshot!(rendered);
 }

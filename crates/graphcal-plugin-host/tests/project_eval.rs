@@ -196,6 +196,41 @@ node mid: Length = demo.lerp(1.0 m, 3.0 m, 0.5);
 }
 
 #[test]
+fn check_path_reports_signature_mismatch_without_evaluating() {
+    // The compile-only pipeline (`graphcal check`, LSP analysis) must
+    // report the same load-time extern diagnostics as evaluation; it
+    // regressed silently in Phase B (verification ran only on the eval
+    // path) and is covered here since Phase C.
+    let dir = tempfile::tempdir().unwrap();
+    let source = r#"
+import plugin "plugins/demo.wasm" as demo {
+    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D^2;
+}
+node x: Dimensionless = 1.0;
+"#;
+    let path = dir.path().join("plugins/demo.wasm");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, lerp_plugin()).unwrap();
+    let root = dir.path().join("main.gcl");
+    std::fs::write(&root, source).unwrap();
+
+    let fs = RealFileSystem::default();
+    let project = load_project(&root, None, &fs).unwrap();
+    let mut registry = HostFunctionRegistry::new();
+    register_project_plugins(&PluginHost::new(), &project, &mut registry);
+    let err = graphcal_eval::eval::compile_to_tir_from_project_with_host_fns(&project, &registry)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CompileError::Eval(GraphcalError::ExternSignatureMismatch { ref name, .. })
+                if name.as_str() == "lerp"
+        ),
+        "expected ExternSignatureMismatch, got {err:?}"
+    );
+}
+
+#[test]
 fn forbidden_imports_surface_as_a_dedicated_diagnostic() {
     let dir = tempfile::tempdir().unwrap();
     let bytes = plugin_bytes(

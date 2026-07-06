@@ -26,6 +26,8 @@ graphcal [OPTIONS] <COMMAND>
 | [`check`](#graphcal-check) | Check `.gcl` files for errors without evaluation |
 | [`graph`](#graphcal-graph) | Export the dependency graph of a `.gcl` file (experimental) |
 | [`deps lock`](#graphcal-deps-lock) | Resolve exact-rev Git dependencies and write `graphcal.lock` |
+| [`plugin new`](#graphcal-plugin-new) | Scaffold a WASM plugin crate using the Rust SDK (experimental) |
+| [`plugin test`](#graphcal-plugin-test) | Validate a built `.wasm` plugin module and call its functions (experimental) |
 | [`lsp`](#graphcal-lsp) | Start the LSP server |
 
 ---
@@ -87,6 +89,105 @@ up to date: /path/to/mission/graphcal.lock
 
 See [Package Dependencies](language/multi-file.md#package-dependencies) for
 manifest syntax and source-resolution rules.
+
+---
+
+## `graphcal plugin new`
+
+!!! warning "Experimental"
+    The plugin commands are experimental, like the plugin system itself;
+    their surface may change in any release.
+
+Scaffold a new WASM plugin crate that uses the
+[`graphcal-plugin` Rust SDK](authoring-plugins.md): a `Cargo.toml`
+(cdylib + rlib), a `rust-toolchain.toml` with the
+`wasm32-unknown-unknown` target, a `src/lib.rs` with a sample `plugin!`
+block, native unit tests, a `justfile`, and a README describing the
+build-vendor-pin workflow.
+
+```bash
+graphcal plugin new <NAME> [OPTIONS]
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `<NAME>` | Crate name: a lowercase letter followed by lowercase letters, digits, `-`, or `_` |
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--dir <DIR>` | Target directory (default: `./<NAME>`); must not exist yet |
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Scaffold created |
+| `2` | Invalid name, existing target directory, or I/O error |
+
+```bash
+$ graphcal plugin new fluid-props
+created plugin crate `fluid-props` at fluid-props
+```
+
+---
+
+## `graphcal plugin test`
+
+Validate a built `.wasm` module against the plugin ABI and print its
+identity and signatures. Every load-time check runs before any plugin
+code: the embedded manifest must decode, the module may import nothing
+beyond `graphcal::fail`, and each manifest function must be exported with
+the scalar wasm type. On success the output includes the SHA-256 (the
+value `graphcal deps lock` pins) and a paste-ready `import plugin` block
+in `.gcl` syntax.
+
+```bash
+graphcal plugin test <MODULE> [--call <FUNCTION> [ARGS]...]
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `<MODULE>` | Path to the `.wasm` plugin module |
+| `[ARGS]...` | Arguments for `--call`: numbers in SI base units for scalar parameters, `true`/`false` for `Bool`, integers for `Int` |
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--call <FUNCTION>` | Call one provided function after validation, under the same fuel and memory limits evaluation uses |
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Module is a valid plugin (and the call, if any, succeeded) |
+| `1` | ABI validation failed, or the called function failed or returned a value violating its declared kind |
+| `2` | Unreadable file, unknown function, or unusable call arguments |
+
+```bash
+$ graphcal plugin test plugins/fluid_props.wasm --call lerp 1.0 3.0 0.5
+plugin: plugins/fluid_props.wasm
+sha256: 3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855c
+abi: version 1, 2 function(s)
+
+import plugin "plugins/fluid_props.wasm" as fluid_props {
+    fn air_density(p: Length^-1 * Mass * Time^-2, t: Temperature) -> Length^-3 * Mass;
+    fn lerp<D>(a: D, b: D, t: Dimensionless) -> D;
+}
+
+lerp(1.0, 3.0, 0.5) = 2
+```
+
+The rendered fixed dimensions are spelled structurally over the prelude
+base dimensions (the manifest's alphabet); in your `.gcl` declaration you
+may equivalently write derived names such as `Pressure` — verification is
+structural.
 
 ---
 
