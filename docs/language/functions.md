@@ -15,7 +15,6 @@ A `dag` block defines a named, reusable sub-DAG with its own parameters and
 nodes:
 
 ```
-dim Velocity = Length / Time;
 dim GravParam = Length^3 / Time^2;
 
 dag orbital_velocity {

@@ -29,17 +29,17 @@ Plus the special dimension `Dimensionless` (the identity element).
 
 ### Derived Dimensions
 
-Define derived dimensions using algebraic expressions:
+The prelude already provides common derived dimensions such as `Velocity`,
+`Acceleration`, `Force`, `Energy`, `Power`, `Frequency`, `Pressure`, `Area`,
+and `Volume`. Define a derived dimension only when your model needs a
+project-specific quantity kind:
 
 ```
-dim Velocity = Length / Time;
-dim Acceleration = Length / Time^2;
-dim Force = Mass * Length / Time^2;
-dim Energy = Mass * Length^2 / Time^2;
 dim GravParam = Length^3 / Time^2;
+dim Jerk = Length / Time^3;
 ```
 
-The allowed operations are:
+Derived dimensions use algebraic expressions. The allowed operations are:
 
 | Operation | Syntax | Example |
 |-----------|--------|---------|
@@ -188,9 +188,9 @@ A conversion is only allowed where its display effect can land — the top level
 
 A conversion must also be *resolvable* at runtime: if the target's scale cannot be computed (for example, a [dynamic unit](#dynamic-units) whose scale expression evaluates to zero or a negative value), the declaration fails with a per-node error rather than silently falling back to the base unit.
 
-## Dimension Inference
+## Result Dimension Computation
 
-When you write an expression like `@a + @b`, the compiler infers the dimension of the result from the operands:
+When you write an expression like `@a + @b`, the compiler computes the dimension of the result from the operands:
 
 | Expression | Result Dimension |
 |-----------|-----------------|

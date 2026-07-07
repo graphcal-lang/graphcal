@@ -14,7 +14,7 @@ is the externally-visible package name.
 Two declarations bring outside material into a DAG:
 
 - **`import`** brings *names* (compile-time references: `type`, `dim`,
-  `unit`, `const node`, `dag`, `index`) into the local
+  `unit`, `const node`, `dag`, `index`, `assert`) into the local
   scope. Imports never instantiate anything.
 - **`include`** *instantiates* a DAG with parameter bindings and embeds
   it as a sub-graph, exposing its outputs as nodes.
@@ -143,6 +143,7 @@ Only compile-time names cross the `import` boundary:
 | `type`               | `TypeName`                             |
 | `index`              | `IndexName`                            |
 | `dag`                | Used with `include` or `@name(args).out` |
+| `assert`             | Used in `#[assumes(name)]`              |
 
 Runtime values — non-`const` `node` and any `param` — are **not**
 importable. To consume runtime values from another file, instantiate
@@ -697,13 +698,13 @@ prevents leaking names that importers cannot see. Violating this rule
 is error `V003`:
 
 ```graphcal
-dim Velocity = Length / Time;
-// ERROR: `pub node` `speed` references private dim `Velocity`
-pub node speed: Velocity = 10.0 m/s;
+dim TransferSpeed = Length / Time;
+// ERROR: `pub node` `speed` references private dim `TransferSpeed`
+pub node speed: TransferSpeed = 10.0 m/s;
 
 // Fix: make the dim visible too.
-pub dim Velocity = Length / Time;
-pub node speed: Velocity = 10.0 m/s;
+pub dim TransferSpeed = Length / Time;
+pub node speed: TransferSpeed = 10.0 m/s;
 ```
 
 ### `pub(bind)` indexes and variant literals (`V004`)

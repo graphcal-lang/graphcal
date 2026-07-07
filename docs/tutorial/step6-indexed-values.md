@@ -19,8 +19,6 @@ index Maneuver = { Departure, Correction, Insertion };
 Use `[IndexName]` to declare an indexed value:
 
 ```
-dim Velocity = Length / Time;
-
 node delta_v: Velocity[Maneuver] = {
     Maneuver.Departure: 2.46 km/s,
     Maneuver.Correction: 0.12 km/s,
@@ -81,8 +79,6 @@ This produces:
 ## Complete Example
 
 ```
-dim Velocity = Length / Time;
-
 index Maneuver = { Departure, Correction, Insertion };
 
 node delta_v: Velocity[Maneuver] = {

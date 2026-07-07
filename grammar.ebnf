@@ -142,7 +142,11 @@ source_file
    "bind" is a contextual keyword parsed only inside the parens after
    "pub"; it remains a valid identifier elsewhere. *)
 declaration
-   = { attribute }, [ "pub", [ "(", "bind", ")" ] ], declaration_kind;
+   = regular_declaration
+   | multi_decl;
+
+regular_declaration
+   = { attribute }, [ "pub", [ "(", "bind", ")" ] ], regular_declaration_kind;
 
 (* Recognized attribute names: "assumes" (node/param), "expected_fail"
    (assert), "hidden" (plot; suppresses standalone display), "lazy". *)
@@ -168,11 +172,10 @@ attribute_range_step
 attribute_group
    = "(", attribute_arg, { ",", attribute_arg }, [ "," ], ")";
 
-declaration_kind
+regular_declaration_kind
    = param_decl
    | node_decl
    | const_decl
-   | multi_decl
    | dimension_decl
    | unit_decl
    | type_decl
@@ -629,9 +632,15 @@ type_expr_base
    = "Dimensionless"
    | "Bool"
    | "Int"
-   | "Datetime"
+   | datetime_type
    | type_application
    | dim_expr;
+
+datetime_type
+   = "Datetime", [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ];
+(* Bare `Datetime` defaults to `Datetime<UTC>`; parameterized forms such
+   as `Datetime<TT>` use the dedicated built-in datetime type, not a
+   user-defined generic type application. *)
 
 (* Domain constraints restrict the valid value range of a type:
    Mass(min: 100 kg, max: 2000 kg) *)
@@ -641,13 +650,14 @@ type_constraints
 type_constraint
    = ( "min" | "max" ), ":", expr;
 
-(* Generic type application: Vec3<Length, ECI>, Timestamp<UTC>, module.Vec3<Length> *)
+(* Generic type application: Vec3<Length, ECI>, Timestamp<UTC>, module.Vec3<Length>.
+   `Datetime<Scale>` is represented by datetime_type above. *)
 type_application
    = ident_path, "<", type_expr, { ",", type_expr }, [ "," ], ">";
 
 (* Index expressions in indexed types: T[I], T[3], T[N + 1], T[M * N], T[module.I] *)
 index_expr_list
-   = index_expr, { ",", index_expr };
+   = index_expr, { ",", index_expr }, [ "," ];
 
 index_expr
    = nat_add_expr
@@ -722,7 +732,11 @@ expr
    = convert_expr;
 
 convert_expr
-   = conditional_expr, [ "->", unit_expr ];
+   = conditional_expr, [ "->", conversion_target ];
+
+conversion_target
+   = unit_expr
+   | string_literal;
 
 conditional_expr
    = "if", expr, "{", expr, "}", "else", "{", expr, "}"
@@ -914,7 +928,7 @@ table_expr
 (* Each index is a named identifier path or an integer literal which    *)
 (* desugars to `range(N)` with synthetic variants `#0`, `#1`, ...       *)
 index_list
-   = (ident_path | NUMBER), { ",", (ident_path | NUMBER) };
+   = (ident_path | NUMBER), { ",", (ident_path | NUMBER) }, [ "," ];
 
 table_body
    = table_slice_section, { table_slice_section }   (* 3D+: slice sections *)
@@ -952,7 +966,7 @@ paren_expr
 
 (* --- Match expression --- *)
 match_expr
-   = "match", expr, "{", [ match_arm, { ",", match_arm }, [ "," ] ], "}";
+   = "match", expr, "{", [ match_arm, { [ "," ], match_arm }, [ "," ] ], "}";
 
 match_arm
    = match_pattern, "=>", expr;

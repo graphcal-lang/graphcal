@@ -13,7 +13,6 @@ A `dag` block defines a reusable sub-DAG with its own parameters and
 nodes. It uses the same `param` / `node` / `@` syntax you already know:
 
 ```
-dim Velocity = Length / Time;
 dim GravParam = Length^3 / Time^2;
 
 dag orbital_velocity {

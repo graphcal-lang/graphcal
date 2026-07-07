@@ -36,7 +36,7 @@ left.
 | `a * b` | Multiplication | Multiplication | Dimensions multiply |
 | `a / b` | Division | Integer division | Dimensions divide |
 | `a % b` | Remainder | Remainder | Dimensions must match |
-| `a ^ n` | Exponentiation | Not supported | Dimension raised to power |
+| `a ^ n` | Exponentiation | Integer exponentiation (non-negative exponent) | Dimension raised to power |
 | `-a` | Negation | Negation | Dimension preserved |
 
 !!! note "Exponent restriction"
@@ -58,6 +58,11 @@ left.
 
 All comparison operators return `Bool` for scalar operands.
 
+Datetime arithmetic follows point-vs-duration rules: `Datetime + Time`,
+`Time + Datetime`, and `Datetime - Time` produce `Datetime`, while
+`Datetime - Datetime` produces a `Time` duration. `Time - Datetime` and
+`Datetime + Datetime` are errors.
+
 Comparisons broadcast element-wise over indexed operands: `T[I] op T[I]`
 zips the two collections per key, and `T[I] op scalar` applies the scalar to
 every key — both return `Bool[I]`. Indexed operands must share the same
@@ -76,7 +81,7 @@ Operands must be `Bool`.
 `&&` and `||` always evaluate **both** operands (no short-circuit).
 In a reactive calculation graph every sub-expression should be valid regardless of control flow,
 so Graphcal surfaces errors eagerly rather than hiding them behind a short-circuit.
-Use `if`-`then`-`else` when you need conditional evaluation.
+Use `if cond { a } else { b }` when you need conditional evaluation.
 
 ## Unit Conversion (`->`)
 

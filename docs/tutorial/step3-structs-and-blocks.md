@@ -14,7 +14,6 @@ struct is just a single-variant union whose sole constructor's name
 matches the type's name:
 
 ```
-dim Velocity = Length / Time;
 dim GravParam = Length^3 / Time^2;
 
 type TransferResult {
@@ -68,7 +67,6 @@ produces several related values. Express each intermediate as its own
 `node`, then group the outputs into a `TransferResult`:
 
 ```
-dim Velocity = Length / Time;
 dim GravParam = Length^3 / Time^2;
 
 type TransferResult {

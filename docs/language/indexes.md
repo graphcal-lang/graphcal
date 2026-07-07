@@ -28,8 +28,6 @@ in index access, map/table keys, expected-fail keys, include index bindings, and
 Annotate a type with `[IndexName]` to create an indexed value:
 
 ```
-dim Velocity = Length / Time;
-
 node delta_v: Velocity[Maneuver] = {
     Maneuver.Departure: 2.46 km/s,
     Maneuver.Correction: 0.12 km/s,
@@ -72,6 +70,16 @@ node doubled: Velocity[Maneuver] = for m: Maneuver {
 ```
 
 The result is a new indexed value with the same index.
+
+For multi-axis comprehensions, the body may start with an explicit tuple-key
+marker. The names are pure sugar and must exactly match the `for` bindings in
+order; they do not introduce additional variables:
+
+```
+node v: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
+    (m, t) => @accel[m] * t
+};
+```
 
 ## Aggregation Functions
 
@@ -326,7 +334,7 @@ param      power_mode_active:  Bool[Component, OperationMode]
   };
 ```
 
-In v2, at most one slot may carry an extra axis; multiple adjacent extra-axis slots are planned for a later extension.
+Currently, at most one slot may carry an extra axis; multiple adjacent extra-axis slots are planned for a later extension.
 
 ### N-D with slice sections
 
@@ -359,7 +367,7 @@ Slice labels must qualify each shared axis in the declared order (`Phase.Launch`
 Each slot in a multi-declaration is its own declaration for the purposes of navigation: `gotoDefinition`, `findReferences`, `rename`, and `hover` all land on the slot header, and each slot receives its own inlay hint at its name. The formatter preserves the multi-decl surface form on round-trip — it emits the original source slice verbatim rather than the N desugared single-decls. Cell-level inlay hints (projecting slot names into the header row of the source) and canonicalization of the multi-decl body remain future work.
 
 - Multi-declarations are **pure syntactic sugar**: each slot desugars to an ordinary declaration with its own `table[SharedAxis] { … }` initializer. Cross-slot references work exactly as for any other declarations (`@other_slot[Variant]`).
-- Attributes (`#[…]`) and visibility annotations (`pub` / `pub(bind)`) are not allowed on a multi-declaration or its slots in v1.
+- Attributes (`#[…]`) and visibility annotations (`pub` / `pub(bind)`) are not allowed on a multi-declaration or its slots.
 
 ## Range Indexes
 

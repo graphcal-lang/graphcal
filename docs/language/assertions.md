@@ -58,7 +58,7 @@ assert all_stages_ok = @thrust > @min_thrust;
 
 Comparisons broadcast element-wise over indexed operands: `T[I] op T[I]`
 zips the two collections per key, and `T[I] op scalar` applies the scalar
-to every key — both infer `Bool[I]`. A `for` comprehension yielding
+to every key — both produce `Bool[I]`. A `for` comprehension yielding
 `Bool[I]` works the same way. Indexed operands must share the same axes in
 the same order; mismatched axes are a compile error (`D011`).
 
@@ -387,3 +387,5 @@ node ratio: Dimensionless = @limit / 2.0;
 | A012 | Duplicate key in `#[expected_fail(...)]` |
 | A013 | `#[expected_fail(...)]` key has the wrong index shape |
 | A014 | `#[expected_fail(...)]` key uses the wrong assertion index |
+| A015 | Literal tolerance in `~=` assertion is negative |
+| A016 | `#[expected_fail(...)]` range key is outside the indexed assertion range |

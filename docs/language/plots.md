@@ -45,10 +45,10 @@ The plot-level properties:
 
 Property names and value types are validated by `graphcal check`: an unknown
 name (e.g. a misspelled `title:`) is an error, a wrongly-typed value (e.g.
-`title: 42.0`) is an error, and a dimensioned value (e.g.
-`stroke_width: 2.0 m`) is rejected — plot properties are raw rendering
-quantities, so units never get silently stripped. `width`/`height` must be
-strictly positive (checked at evaluation time).
+`title: 42.0`) is an error, and a dimensioned value on a raw rendering
+quantity (e.g. `width: 2.0 m`) is rejected — units never get silently
+stripped. `width`/`height` must be strictly positive (checked at evaluation
+time).
 
 ### Mark Types
 
@@ -155,15 +155,16 @@ plot custom_labels = {
 ### Line chart
 
 ```gcl
-index Time = { T0, T1, T2, T3, T4 };
+index Sample = { T0, T1, T2, T3, T4 };
 
-node altitude: Length[Time] = { ... };
+node elapsed: Time[Sample] = { ... };
+node altitude: Length[Sample] = { ... };
 
 plot altitude_over_time = {
     mark: line,
     encode: {
-        x: for t: Time { @altitude[t] -> km },
-        y: for t: Time { @altitude[t] -> km },
+        x: for sample: Sample { @elapsed[sample] -> s },
+        y: for sample: Sample { @altitude[sample] -> km },
     },
     title: "Altitude Over Time",
 };
@@ -174,13 +175,14 @@ plot altitude_over_time = {
 ```gcl
 index Mode = { Normal, Eco, Boost };
 
+node mode_code: Dimensionless[Mode] = { ... };
 node power: Power[Mode] = { ... };
 
 plot power_by_mode = {
     mark: bar,
     encode: {
-        x: for m: Mode { @power[m] -> W },
-        y: for m: Mode { @power[m] -> W },
+        x: for mode: Mode { @mode_code[mode] },
+        y: for mode: Mode { @power[mode] -> W },
     },
     title: "Power by Operating Mode",
 };

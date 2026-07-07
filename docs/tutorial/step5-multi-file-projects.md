@@ -47,7 +47,6 @@ rocket_project/
 ### `constants.gcl`
 
 ```graphcal
-pub dim Acceleration = Length / Time^2;
 pub const node g0: Acceleration = 9.80665 m/s^2;
 ```
 
@@ -64,8 +63,6 @@ param isp: Time = 320.0 s;
 ```graphcal
 import rocket_project.constants.{g0};
 include rocket_project.params().{dry_mass, fuel_mass, isp};
-
-dim Velocity = Length / Time;
 
 node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
@@ -104,9 +101,9 @@ There are three forms; pick the one that matches what you want to
 bring into scope:
 
 ```graphcal
-import constants;                  // brings module `constants`
-import constants as c;             // brings module under alias `c`
-import constants.{g0, g_mars};     // brings only `g0` and `g_mars`
+import rocket_project.constants;                  // brings module `constants`
+import rocket_project.constants as c;             // brings module under alias `c`
+import rocket_project.constants.{g0, g_mars};     // brings only `g0` and `g_mars`
 ```
 
 The brace form is the most common in practice — it makes every
@@ -117,15 +114,15 @@ imported name explicit.
 If two files export the same name, rename one or both with `as`:
 
 ```graphcal
-import file_a.{velocity as velocity_a};
-import file_b.{velocity as velocity_b};
+import rocket_project.file_a.{velocity as velocity_a};
+import rocket_project.file_b.{velocity as velocity_b};
 ```
 
 You can also alias a whole module:
 
 ```graphcal
 import very.long.package.path as p;
-node y: Length = p.helper(...);
+node y: Length = @p.helper(...).result;
 ```
 
 ## What Gets Imported
@@ -137,12 +134,13 @@ the producing DAG instead of importing the value (see
 
 | Declaration kind | How to import                       | How to reference |
 |------------------|-------------------------------------|------------------|
-| `const node`     | `import file.{name}`                | `@name`          |
-| `dim`            | `import file.{DimName}`             | `DimName`        |
-| `unit`           | `import file.{unit_name}`           | `unit_name`      |
-| `type`           | `import file.{type TypeName}`       | `TypeName`       |
-| `index`          | `import file.{IndexName}`           | `IndexName`      |
-| `dag`            | `import file.{dag_name}`            | `include`-d, or called as `@dag_name(...).out` |
+| `const node`     | `import package.file.{name}`                | `@name`          |
+| `dim`            | `import package.file.{DimName}`             | `DimName`        |
+| `unit`           | `import package.file.{unit_name}`           | `unit_name`      |
+| `type`           | `import package.file.{type TypeName}`       | `TypeName`       |
+| `index`          | `import package.file.{IndexName}`           | `IndexName`      |
+| `dag`            | `import package.file.{dag_name}`            | `include`-d, or called as `@dag_name(...).out` |
+| `assert`         | `import package.file.{assert_name}`         | `#[assumes(assert_name)]` |
 
 ## When a Single File Suffices
 
