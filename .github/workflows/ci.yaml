@@ -65,6 +65,31 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  wasm:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: allow
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Check browser Wasm crates
+        run: >-
+          cargo check
+          --workspace
+          --exclude graphcal
+          --exclude graphcal-lsp
+          --target wasm32-unknown-unknown
+
   coverage:
     runs-on: ubuntu-latest
     steps:
@@ -117,13 +142,13 @@ jobs:
       - uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
 
   collect:
-    needs: [checks, test, coverage, msrv, typos]
+    needs: [checks, test, wasm, coverage, msrv, typos]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
-          results=("${{ needs.checks.result }}" "${{ needs.test.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}")
+          results=("${{ needs.checks.result }}" "${{ needs.test.result }}" "${{ needs.wasm.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}")
           for result in "${results[@]}"; do
             if [[ "$result" != "success" ]]; then
               echo "One or more jobs failed"
