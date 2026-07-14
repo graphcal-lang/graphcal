@@ -9,7 +9,7 @@ use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
-use toml_spanner::{Item, Table};
+use toml::{Table, Value};
 
 /// Graphcal's first lockfile schema version.
 pub const LOCK_VERSION: u64 = 1;
@@ -334,19 +334,27 @@ pub enum ManifestError {
 /// Returns [`ManifestError`] for TOML, required-field, type, source-dir, or
 /// dependency validation failures.
 pub fn parse_manifest_str(content: &str) -> Result<PackageManifest, ManifestError> {
-    let arena = toml_spanner::Arena::new();
-    let root = toml_spanner::parse(content, &arena).map_err(|e| ManifestError::TomlParseError {
-        message: e.to_string(),
-    })?;
+    let root = content
+        .parse::<Table>()
+        .map_err(|e| ManifestError::TomlParseError {
+            message: e.to_string(),
+        })?;
+    let package = root.get("package").and_then(Value::as_table);
 
-    let name = PackageName::new(root["package"]["name"].as_str().ok_or(
-        ManifestError::MissingField {
-            field: "[package].name",
-        },
-    )?)?;
-    let source_dir_str = root["package"]["source_dir"].as_str().unwrap_or("src");
+    let name = PackageName::new(
+        package
+            .and_then(|table| table.get("name"))
+            .and_then(Value::as_str)
+            .ok_or(ManifestError::MissingField {
+                field: "[package].name",
+            })?,
+    )?;
+    let source_dir_str = package
+        .and_then(|table| table.get("source_dir"))
+        .and_then(Value::as_str)
+        .unwrap_or("src");
     let source_dir = parse_source_dir(source_dir_str)?;
-    let dependencies = parse_manifest_dependencies(&root["dependencies"], &name)?;
+    let dependencies = parse_manifest_dependencies(root.get("dependencies"), &name)?;
 
     Ok(PackageManifest {
         name,
@@ -371,10 +379,10 @@ fn parse_source_dir(value: &str) -> Result<PathBuf, ManifestError> {
 }
 
 fn parse_manifest_dependencies(
-    item: &toml_spanner::MaybeItem<'_>,
+    item: Option<&Value>,
     package_name: &PackageName,
 ) -> Result<BTreeMap<DependencyName, DependencySpec>, ManifestError> {
-    let Some(item) = item.item() else {
+    let Some(item) = item else {
         return Ok(BTreeMap::new());
     };
     let Some(table) = item.as_table() else {
@@ -385,10 +393,9 @@ fn parse_manifest_dependencies(
     };
 
     table
-        .entries()
         .iter()
         .map(|(key, value)| {
-            let dep_name = DependencyName::new(key.name)?;
+            let dep_name = DependencyName::new(key)?;
             if dep_name.as_str() == package_name.as_str() {
                 return Err(ManifestError::SelfDependencyAlias {
                     package: package_name.clone(),
@@ -401,10 +408,7 @@ fn parse_manifest_dependencies(
         .collect()
 }
 
-fn parse_dependency_spec(
-    dependency: &str,
-    item: &Item<'_>,
-) -> Result<DependencySpec, ManifestError> {
+fn parse_dependency_spec(dependency: &str, item: &Value) -> Result<DependencySpec, ManifestError> {
     let Some(table) = item.as_table() else {
         return Err(ManifestError::InvalidType {
             field: format!("[dependencies].{dependency}"),
@@ -412,8 +416,8 @@ fn parse_dependency_spec(
         });
     };
 
-    for (key, _) in table.entries() {
-        match key.name {
+    for key in table.keys() {
+        match key.as_str() {
             "git" | "rev" | "package" => {}
             other => {
                 return Err(ManifestError::UnsupportedDependencyField {
@@ -426,14 +430,14 @@ fn parse_dependency_spec(
 
     let git = table
         .get("git")
-        .and_then(Item::as_str)
+        .and_then(Value::as_str)
         .ok_or(ManifestError::MissingField {
             field: "[dependencies].<name>.git",
         })
         .and_then(|url| GitUrl::new(url).map_err(ManifestError::GitUrl))?;
     let rev = table
         .get("rev")
-        .and_then(Item::as_str)
+        .and_then(Value::as_str)
         .ok_or(ManifestError::MissingField {
             field: "[dependencies].<name>.rev",
         })
@@ -1193,29 +1197,29 @@ pub enum LockfileParseError {
 ///
 /// Returns [`LockfileParseError`] for TOML, type, and field validation errors.
 pub fn parse_lockfile_str(content: &str) -> Result<Lockfile, LockfileParseError> {
-    let arena = toml_spanner::Arena::new();
-    let root =
-        toml_spanner::parse(content, &arena).map_err(|e| LockfileParseError::TomlParseError {
+    let root = content
+        .parse::<Table>()
+        .map_err(|e| LockfileParseError::TomlParseError {
             message: e.to_string(),
         })?;
 
-    let lock_version = required_u64(root["lock_version"].item(), "lock_version")?;
-    let created_by = required_string(root["created_by"].item(), "created_by")?.to_string();
+    let lock_version = required_u64(root.get("lock_version"), "lock_version")?;
+    let created_by = required_string(root.get("created_by"), "created_by")?.to_string();
     let graphcal_version =
-        required_string(root["graphcal_version"].item(), "graphcal_version")?.to_string();
-    let stdlib_version =
-        required_string(root["stdlib_version"].item(), "stdlib_version")?.to_string();
-    let root_id = PackageInstanceId::new(required_string(root["root"].item(), "root")?)?;
-    let package_array = root["package"]
-        .as_array()
+        required_string(root.get("graphcal_version"), "graphcal_version")?.to_string();
+    let stdlib_version = required_string(root.get("stdlib_version"), "stdlib_version")?.to_string();
+    let root_id = PackageInstanceId::new(required_string(root.get("root"), "root")?)?;
+    let package_array = root
+        .get("package")
+        .and_then(Value::as_array)
         .ok_or(LockfileParseError::MissingField { field: "package" })?;
     let packages = package_array
         .iter()
         .enumerate()
         .map(|(index, package)| parse_locked_package(index, package))
         .collect::<Result<Vec<_>, _>>()?;
-    let plugins = root["plugin"]
-        .item()
+    let plugins = root
+        .get("plugin")
         .map(parse_locked_plugins)
         .transpose()?
         .unwrap_or_default();
@@ -1231,7 +1235,7 @@ pub fn parse_lockfile_str(content: &str) -> Result<Lockfile, LockfileParseError>
     })
 }
 
-fn parse_locked_plugins(item: &Item<'_>) -> Result<Vec<LockedPlugin>, LockfileParseError> {
+fn parse_locked_plugins(item: &Value) -> Result<Vec<LockedPlugin>, LockfileParseError> {
     let Some(array) = item.as_array() else {
         return Err(LockfileParseError::InvalidType {
             field: "plugin".to_string(),
@@ -1255,10 +1259,7 @@ fn parse_locked_plugins(item: &Item<'_>) -> Result<Vec<LockedPlugin>, LockfilePa
         .collect()
 }
 
-fn parse_locked_package(
-    index: usize,
-    item: &Item<'_>,
-) -> Result<LockedPackage, LockfileParseError> {
+fn parse_locked_package(index: usize, item: &Value) -> Result<LockedPackage, LockfileParseError> {
     let Some(table) = item.as_table() else {
         return Err(LockfileParseError::InvalidType {
             field: format!("package[{index}]"),
@@ -1274,7 +1275,7 @@ fn parse_locked_package(
     let source_table =
         table
             .get("source")
-            .and_then(Item::as_table)
+            .and_then(Value::as_table)
             .ok_or(LockfileParseError::MissingField {
                 field: "package.source",
             })?;
@@ -1300,7 +1301,7 @@ fn parse_lock_source_dir(value: &str) -> Result<PathBuf, LockfileParseError> {
     })
 }
 
-fn parse_package_source(table: &Table<'_>) -> Result<PackageSource, LockfileParseError> {
+fn parse_package_source(table: &Table) -> Result<PackageSource, LockfileParseError> {
     let source_type = required_string(table.get("type"), "package.source.type")?;
     match source_type {
         "path" => Ok(PackageSource::Path {
@@ -1316,7 +1317,7 @@ fn parse_package_source(table: &Table<'_>) -> Result<PackageSource, LockfilePars
                 table.get("commit"),
                 "package.source.commit",
             )?)?;
-            let hashes = table.get("tree_hashes").and_then(Item::as_table).ok_or(
+            let hashes = table.get("tree_hashes").and_then(Value::as_table).ok_or(
                 LockfileParseError::MissingField {
                     field: "package.source.tree_hashes",
                 },
@@ -1338,7 +1339,7 @@ fn parse_package_source(table: &Table<'_>) -> Result<PackageSource, LockfilePars
 }
 
 fn parse_package_dependencies(
-    item: &Item<'_>,
+    item: &Value,
 ) -> Result<BTreeMap<DependencyName, PackageInstanceId>, LockfileParseError> {
     let Some(table) = item.as_table() else {
         return Err(LockfileParseError::InvalidType {
@@ -1347,13 +1348,12 @@ fn parse_package_dependencies(
         });
     };
     table
-        .entries()
         .iter()
         .map(|(key, value)| {
-            let name = DependencyName::new(key.name)?;
+            let name = DependencyName::new(key)?;
             let target = PackageInstanceId::new(value.as_str().ok_or_else(|| {
                 LockfileParseError::InvalidType {
-                    field: format!("package.dependencies.{}", key.name),
+                    field: format!("package.dependencies.{key}"),
                     expected: "a string",
                 }
             })?)?;
@@ -1363,7 +1363,7 @@ fn parse_package_dependencies(
 }
 
 fn required_string<'a>(
-    item: Option<&'a Item<'a>>,
+    item: Option<&'a Value>,
     field: &'static str,
 ) -> Result<&'a str, LockfileParseError> {
     let item = item.ok_or(LockfileParseError::MissingField { field })?;
@@ -1374,9 +1374,10 @@ fn required_string<'a>(
         })
 }
 
-fn required_u64(item: Option<&Item<'_>>, field: &'static str) -> Result<u64, LockfileParseError> {
+fn required_u64(item: Option<&Value>, field: &'static str) -> Result<u64, LockfileParseError> {
     let item = item.ok_or(LockfileParseError::MissingField { field })?;
-    item.as_u64()
+    item.as_integer()
+        .and_then(|value| u64::try_from(value).ok())
         .ok_or_else(|| LockfileParseError::InvalidType {
             field: field.to_string(),
             expected: "an integer",

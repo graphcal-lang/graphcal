@@ -1679,7 +1679,7 @@ name = "graphcal-package"
 version = "0.0.1-alpha.15"
 dependencies = [
  "thiserror",
- "toml-spanner",
+ "toml",
 ]
 
 [[package]]
@@ -3574,15 +3574,6 @@ dependencies = [
  "toml_parser",
  "toml_writer",
  "winnow",
-]
-
-[[package]]
-name = "toml-spanner"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0454309849e01bb15a8591a5032d706694445b393f0b1ac84b5e3b0b07ca8d69"
-dependencies = [
- "foldhash 0.2.0",
 ]
 
 [[package]]
