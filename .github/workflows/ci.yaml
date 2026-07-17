@@ -7,7 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-Dwarnings"
+  CARGO_BUILD_WARNINGS: deny
 
 permissions:
   contents: read
@@ -28,10 +28,10 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Clippy (all features)
-        run: cargo clippy --workspace --all-targets --all-features
+        run: cargo clippy --workspace --all-targets --all-features --keep-going
 
       - name: Clippy (no default features)
-        run: cargo clippy --workspace --all-targets --no-default-features
+        run: cargo clippy --workspace --all-targets --no-default-features --keep-going
 
       - name: Rustfmt
         run: cargo fmt --check
@@ -118,8 +118,6 @@ jobs:
 
   msrv:
     runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: "" # Override global -Dwarnings for MSRV check
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
