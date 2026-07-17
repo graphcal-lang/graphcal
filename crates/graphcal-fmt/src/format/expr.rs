@@ -34,7 +34,7 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         }
         ExprKind::Bool(b) => RcDoc::text(if *b { "true" } else { "false" }),
         ExprKind::StringLiteral(s) => RcDoc::text(format!("\"{s}\"")),
-        ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", &name.value.to_string())),
+        ExprKind::GraphRef(name) => RcDoc::text(format!("@{}", name.value)),
         ExprKind::InlineDagRef { path, args, output } => {
             format_inline_dag_ref(fmt, path, args, output.value.as_str())
         }

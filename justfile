@@ -1,9 +1,9 @@
 lint:
-    RUSTFLAGS="-Dwarnings" cargo clippy --workspace --all-targets --all-features
-    RUSTFLAGS="-Dwarnings" cargo clippy --workspace --all-targets --no-default-features
+    CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features
+    CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --no-default-features
     cargo fmt --check
-    RUSTDOCFLAGS="-Dwarnings" cargo doc --workspace --no-deps
-    cargo check --workspace
+    CARGO_BUILD_WARNINGS=deny cargo doc --workspace --no-deps
+    CARGO_BUILD_WARNINGS=deny cargo check --workspace
 
 test:
     cargo test --workspace
