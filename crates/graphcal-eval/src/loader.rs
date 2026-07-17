@@ -2012,10 +2012,7 @@ pub fn discover_project_root<F: FileSystemReader>(start_dir: &Path, fs: &F) -> O
         if fs.is_file(&dir.join("graphcal.toml")) {
             return Some(dir.to_path_buf());
         }
-        match dir.parent() {
-            Some(parent) => dir = parent,
-            None => return None,
-        }
+        dir = dir.parent()?;
     }
 }
 
