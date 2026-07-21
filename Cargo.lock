@@ -1573,7 +1573,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal"
-version = "0.0.1-alpha.15"
+version = "0.0.1-alpha.16"
 dependencies = [
  "clap",
  "gix",
@@ -1603,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-compiler"
-version = "0.0.1-alpha.15"
+version = "0.0.1-alpha.16"
 dependencies = [
  "hifitime",
  "indexmap",
@@ -1621,7 +1621,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-eval"
-version = "0.0.1-alpha.15"
+version = "0.0.1-alpha.16"
 dependencies = [
  "graphcal-compiler",
  "graphcal-io",
@@ -1641,7 +1641,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-fmt"
-version = "0.0.1-alpha.15"
+version = "0.0.1-alpha.16"
 dependencies = [
  "graphcal-compiler",
  "insta",
@@ -1653,14 +1653,14 @@ dependencies = [
 
 [[package]]
 name = "graphcal-io"
-version = "0.0.1-alpha.15"
+version = "0.0.1-alpha.16"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "graphcal-lsp"
-version = "0.0.1-alpha.15"
+version = "0.0.1-alpha.16"
 dependencies = [
  "graphcal-compiler",
  "graphcal-eval",
@@ -1677,7 +1677,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-package"
-version = "0.0.1-alpha.15"
+version = "0.0.1-alpha.16"
 dependencies = [
  "thiserror",
  "toml",
@@ -1685,7 +1685,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-plugin"
-version = "0.0.1-alpha.15"
+version = "0.0.1-alpha.16"
 dependencies = [
  "graphcal-compiler",
  "graphcal-eval",
@@ -1698,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-plugin-abi"
-version = "0.0.1-alpha.15"
+version = "0.0.1-alpha.16"
 dependencies = [
  "serde",
  "serde_json",
@@ -1707,7 +1707,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-plugin-host"
-version = "0.0.1-alpha.15"
+version = "0.0.1-alpha.16"
 dependencies = [
  "graphcal-compiler",
  "graphcal-eval",
@@ -1723,7 +1723,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-plugin-macros"
-version = "0.0.1-alpha.15"
+version = "0.0.1-alpha.16"
 dependencies = [
  "graphcal-plugin-abi",
  "proc-macro2",
