@@ -12,7 +12,7 @@
 //! Lowering is diagnostic-accumulating: a reference that cannot be resolved
 //! becomes an explicit [`ExprKind::Error`] node and its diagnostic is
 //! recorded, so IDE consumers can keep working on incomplete code. The strict
-//! entry points ([`lower_expr`], [`lower_assert_body`]) reject any tree that
+//! entry points (`lower_expr`, `lower_assert_body`) reject any tree that
 //! contains an error node, so the batch pipeline never sees one.
 
 use crate::syntax::decl_name::{DeclNameNamespace, ResolvedDeclName};
@@ -893,7 +893,6 @@ pub struct FieldInit {
 pub struct ParamBinding {
     pub target: Spanned<ResolvedDeclName>,
     pub value: Expr,
-    pub span: Span,
 }
 
 /// A resolved map literal entry.
@@ -1483,7 +1482,6 @@ impl<'a> ExprLowerer<'a> {
         Ok(ParamBinding {
             target: Spanned::new(target_name, binding.name.span),
             value: self.lower_expr(&binding.value),
-            span: binding.span,
         })
     }
 

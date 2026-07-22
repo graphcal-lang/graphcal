@@ -239,7 +239,8 @@ impl NatPolyForm {
     /// # Errors
     ///
     /// Returns an error when the form is a concrete invalid Nat range size.
-    pub fn to_nat_range_identity(
+    #[cfg(test)]
+    pub(crate) fn to_nat_range_identity(
         &self,
     ) -> Result<NatRangeIndexIdentity, crate::registry::types::NatRangeIndexError> {
         NatRangeIndexIdentity::try_from_form(self.clone())
@@ -634,8 +635,6 @@ pub struct ResolvedTypeDefs {
 pub struct ResolvedDomainBound {
     /// Whether this is a `min:` or `max:` bound.
     pub kind: crate::syntax::ast::DomainBoundKind,
-    /// Span of the `min`/`max` keyword.
-    pub kind_span: Span,
     /// The bound expression, lowered.
     pub value: hir::Expr,
     /// Span of the whole bound.
@@ -704,7 +703,6 @@ pub struct ResolvedInlineDagCall {
 /// A resolved constructor and the tagged-union member it constructs.
 #[derive(Debug, Clone)]
 pub struct ResolvedConstructorTarget {
-    pub constructor: ResolvedConstructorName,
     pub owning_type: ResolvedStructTypeName,
     pub type_def: TypeDef,
     pub variant: UnionMemberDef,
@@ -884,16 +882,12 @@ pub struct DagTIR {
     pub semantic: DagSemanticBody,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
-    /// Set of all assert names. Membership-only, never iterated.
-    pub assert_names: std::collections::HashSet<ScopedName>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
     pub expected_fail: HashMap<ScopedName, ExpectedFail>,
     /// Resolved type for each const/param/node declaration.
     pub resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
-    /// Resolved domain constraints for declarations that have them.
-    pub domain_constraints: HashMap<ScopedName, ResolvedDomainConstraint>,
     /// Pre-evaluated values imported from dependency files (passed through from IR).
     pub imported_values: HashMap<
         ScopedName,

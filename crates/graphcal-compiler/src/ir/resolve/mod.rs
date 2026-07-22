@@ -452,14 +452,12 @@ fn collect_local_declarations(
                 figures.push(ResolvedFigureEntry {
                     name: f.name.value.clone(),
                     decl: f.clone(),
-                    span: decl.span,
                 });
             }
             DeclKind::Layer(l) => {
                 layers.push(ResolvedLayerEntry {
                     name: l.name.value.clone(),
                     decl: l.clone(),
-                    span: decl.span,
                 });
             }
             DeclKind::Param(p) => {
@@ -929,7 +927,8 @@ pub(crate) struct ImportedNames {
 ///
 /// Returns a [`GraphcalError`] if duplicate names or invalid declaration
 /// shells are found.
-pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFile, GraphcalError> {
+#[cfg(test)]
+fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFile, GraphcalError> {
     resolve_with_imports(file, src, &ImportedNames::default())
 }
 

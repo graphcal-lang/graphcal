@@ -95,8 +95,8 @@ impl TypeDef {
         }
     }
 
-    /// Returns `true` if this is a tagged union — single-variant or
-    /// multi-variant.
+    /// Returns `true` if this is a tagged union.
+    #[cfg(test)]
     #[must_use]
     pub const fn is_union(&self) -> bool {
         matches!(self.kind, TypeDefKind::Union { .. })

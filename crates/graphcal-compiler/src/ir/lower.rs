@@ -70,12 +70,12 @@ pub struct LoweredPlotField {
 ///
 /// A declaration written in the file being compiled spans into that file's
 /// own [`NamedSource`], which every lowering/type stage already threads as its
-/// ambient `src` — those entries carry [`BodySource::own`]. An instantiated
+/// ambient `src` — those entries carry `BodySource::own`. An instantiated
 /// `include` merges a dependency's declaration bodies into the importer's IR
 /// (`merge_dependency`); those bodies keep the *dependency's* byte offsets, so
-/// they carry [`BodySource::dependency`] naming the dependency file. Rendering
+/// they carry `BodySource::dependency` naming the dependency file. Rendering
 /// a diagnostic for such a body against the importer's source produces an
-/// out-of-bounds (or simply wrong) label; [`BodySource::resolve`] hands back
+/// out-of-bounds (or simply wrong) label; `BodySource::resolve` hands back
 /// the correct source to anchor against.
 #[derive(Debug, Clone, Default)]
 pub struct BodySource(Option<NamedSource<Arc<String>>>);
@@ -249,10 +249,6 @@ pub struct PlotEntry {
     /// are best-effort at evaluation time: an incomplete body is skipped by
     /// the runtime instead of failing the compile.
     pub body: Option<LoweredPlotBody>,
-    pub span: Span,
-    /// Whether this plot is `pub` (exported across the file boundary,
-    /// requestable by include brace lists). Says nothing about display.
-    pub is_pub: bool,
     /// Whether this plot renders standalone when its file is the entry
     /// point. `true` unless the declaration carries `#[hidden]` (#847).
     pub displayed: bool,
@@ -267,8 +263,6 @@ pub struct PlotEntry {
 pub struct IncludedPlotEntry {
     /// The local alias the plot is visible under.
     pub name: ScopedName,
-    /// The include item's span.
-    pub span: Span,
 }
 
 /// A plot requested by an include brace list item (#847).
@@ -289,7 +283,6 @@ pub struct FigureEntry {
     /// Lowered field expressions; fields that failed to lower are omitted
     /// (best-effort, matching plots).
     pub fields: Vec<LoweredPlotField>,
-    pub span: Span,
 }
 
 /// A layer declaration with lowered fields.
@@ -301,7 +294,6 @@ pub struct LayerEntry {
     /// Lowered field expressions; fields that failed to lower are omitted
     /// (best-effort, matching plots).
     pub fields: Vec<LoweredPlotField>,
-    pub span: Span,
 }
 
 /// A plot declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -312,8 +304,6 @@ pub struct UnfrozenPlotEntry {
     /// Module scope for plot field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
-    /// Whether this plot is `pub` (visible in standalone output).
-    pub is_pub: bool,
     /// Whether this plot renders standalone (no `#[hidden]`).
     pub displayed: bool,
 }
@@ -325,7 +315,6 @@ pub struct UnfrozenFigureEntry {
     pub decl: FigureDecl,
     /// Module scope for figure field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
-    pub span: Span,
 }
 
 /// A layer declaration awaiting field lowering at [`UnfrozenIR::freeze`].
@@ -335,7 +324,6 @@ pub struct UnfrozenLayerEntry {
     pub decl: LayerDecl,
     /// Module scope for layer field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
-    pub span: Span,
 }
 
 /// Intermediate Representation produced by [`lower`].
@@ -367,8 +355,6 @@ pub struct IR {
     pub included_plots: Vec<IncludedPlotEntry>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
-    /// Set of all assert names.
-    pub assert_names: HashSet<ScopedName>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
@@ -597,10 +583,6 @@ pub fn lower_to_builder_with_imported_values(
 ///
 /// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
 #[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-#[expect(
     clippy::too_many_arguments,
     reason = "lowering threads imported value metadata plus the registry seed hook"
 )]
@@ -639,10 +621,7 @@ pub fn lower_to_builder_with_imported_value_decls(
     unfrozen.included_plots = imported_names
         .plot_names
         .iter()
-        .map(|(name, span)| IncludedPlotEntry {
-            name: name.clone(),
-            span: *span,
-        })
+        .map(|(name, _span)| IncludedPlotEntry { name: name.clone() })
         .collect();
 
     Ok((builder, unfrozen))
@@ -717,14 +696,11 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls(
 }
 
 #[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-#[expect(
     clippy::too_many_arguments,
     reason = "dag-body lowering threads pre-processed import metadata + parent registry"
 )]
-pub fn lower_dag_body_to_ir(
+#[cfg(test)]
+pub(crate) fn lower_dag_body_to_ir(
     dag_name: &str,
     stripped_body: &[crate::desugar::desugared_ast::Declaration],
     parent_registry: &Registry,
@@ -948,14 +924,12 @@ fn build_ir_from_resolved(
             .plots
             .into_iter()
             .map(|entry| {
-                let is_pub = resolved.pub_names.contains(entry.name.as_str());
                 let displayed = !resolved.hidden_plots.contains(entry.name.as_str());
                 UnfrozenPlotEntry {
                     name: ScopedName::from(entry.name),
                     decl: entry.decl,
                     body_resolution_owner: dag_id.clone(),
                     span: entry.span,
-                    is_pub,
                     displayed,
                 }
             })
@@ -967,7 +941,6 @@ fn build_ir_from_resolved(
                 name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
-                span: entry.span,
             })
             .collect(),
         layers: resolved
@@ -977,7 +950,6 @@ fn build_ir_from_resolved(
                 name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
-                span: entry.span,
             })
             .collect(),
         included_plots: Vec::new(),
@@ -1278,8 +1250,6 @@ impl UnfrozenIR {
                     name: entry.name.clone(),
                     mark_type: entry.decl.mark.mark_type,
                     body: complete.then_some(body),
-                    span: entry.span,
-                    is_pub: entry.is_pub,
                     displayed: entry.displayed,
                 }
             })
@@ -1304,7 +1274,6 @@ impl UnfrozenIR {
                 name: entry.name.clone(),
                 plot_names: entry.decl.plot_names.clone(),
                 fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
-                span: entry.span,
             })
             .collect();
         let layers = self
@@ -1314,7 +1283,6 @@ impl UnfrozenIR {
                 name: entry.name.clone(),
                 plot_names: entry.decl.plot_names.clone(),
                 fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
-                span: entry.span,
             })
             .collect();
 
@@ -1333,7 +1301,6 @@ impl UnfrozenIR {
             layers,
             included_plots: self.included_plots,
             source_order: self.source_order,
-            assert_names: self.assert_names,
             assumes_map: self.assumes_map,
             expected_fail: self.expected_fail,
             imported_values: self.imported_values,
@@ -1499,7 +1466,7 @@ impl UnfrozenIR {
     ///
     /// `dep_src` is the dependency body's [`NamedSource`]: merged declarations
     /// keep the dependency file's byte offsets, so each is tagged with it (via
-    /// [`BodySource::or_dependency`]) for diagnostics raised at the importer's
+    /// `BodySource::or_dependency`) for diagnostics raised at the importer's
     /// freeze/TIR boundary (#868). For inline-DAG includes the body shares the
     /// importer's source, so `dep_src` equals `importer_src` there.
     #[expect(
@@ -1719,9 +1686,6 @@ impl UnfrozenIR {
                 decl: entry.decl,
                 body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
-                // The alias is root-local; re-export requires its own `pub`
-                // include item, resolved at the import surface.
-                is_pub: false,
                 displayed: !requested.hidden,
             });
             self.source_order.push((local, DeclCategory::Plot));

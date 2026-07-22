@@ -289,7 +289,8 @@ impl Value {
     /// # Errors
     ///
     /// Returns [`ValueError`] if this is not a `Scalar`.
-    pub fn display_value(&self) -> Result<f64, ValueError> {
+    #[cfg(test)]
+    pub(crate) fn display_value(&self) -> Result<f64, ValueError> {
         match self {
             Self::Scalar {
                 si_value,

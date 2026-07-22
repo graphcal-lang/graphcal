@@ -4,7 +4,7 @@
 //! collection, dimension inference), the evaluators, the formatter, and the
 //! LSP symbol walker all recurse once per expression-tree level. Structural
 //! *nesting* is bounded by the parser
-//! ([`crate::syntax::parser::MAX_NESTING_DEPTH`]), but left-nested operator
+//! (`crate::syntax::parser::MAX_NESTING_DEPTH`), but left-nested operator
 //! *chains* (`1.0 + 1.0 + …`) are parsed iteratively and produce trees whose
 //! depth equals the chain length — a few hundred terms is realistic in
 //! engineering files and used to overflow the stack in debug builds.

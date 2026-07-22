@@ -25,7 +25,8 @@ impl DagRegistry {
     }
 
     /// Iterate over all registered dags.
-    pub fn all_dags(&self) -> impl Iterator<Item = (&DeclName, &DagDecl)> {
+    #[cfg(test)]
+    pub(crate) fn all_dags(&self) -> impl Iterator<Item = (&DeclName, &DagDecl)> {
         self.dags.iter()
     }
 }

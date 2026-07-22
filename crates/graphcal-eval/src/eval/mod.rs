@@ -46,10 +46,6 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
 ///
 /// Returns a [`CompileError`] if parsing, validation, or evaluation fails, or
 /// if `name` is not a valid `.gcl` source path.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "public API accepts HashMap without requiring specific hasher"
-)]
 pub fn compile_and_eval_with_overrides(
     source: &str,
     name: &str,

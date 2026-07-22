@@ -40,7 +40,7 @@ pub enum RawExprSugar {
 ///
 /// Carried by `ExprKind::UnresolvedRef`. The parser emits these
 /// when the meaning of an identifier path cannot be determined from syntax
-/// alone; HIR expression lowering ([`crate::hir::lower_expr`]) classifies and
+/// alone; HIR expression lowering (`crate::hir::lower_expr`) classifies and
 /// resolves them in a single pass against the lexical scope and the
 /// module-aware resolver.
 ///
@@ -717,6 +717,7 @@ impl MultiDeclSharedAxes {
     }
 
     /// Number of shared axes. Always at least 1.
+    #[cfg(test)]
     #[must_use]
     pub const fn len(&self) -> usize {
         self.slice_axes.len() + 1

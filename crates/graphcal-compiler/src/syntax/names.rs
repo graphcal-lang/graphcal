@@ -508,6 +508,7 @@ impl NamePath {
     }
 
     /// Returns the qualifier segments before the leaf. Empty for bare paths.
+    #[cfg(test)]
     #[must_use]
     pub fn qualifier_segments(&self) -> &[NameAtom] {
         self.split_last().0

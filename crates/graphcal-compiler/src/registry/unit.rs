@@ -226,11 +226,7 @@ impl UnitRegistry {
     }
 
     /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UnitResolveError`] naming the unknown or dynamic-scale
-    /// unit, or the exponent overflow.
+    #[cfg(test)]
     pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Result<(Dimension, f64), UnitResolveError> {
         resolve_unit_expr_impl(&self.units, expr)
     }

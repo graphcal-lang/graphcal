@@ -120,7 +120,6 @@ pub struct ResolvedPlotEntry {
 pub struct ResolvedFigureEntry {
     pub name: DeclName,
     pub decl: FigureDecl,
-    pub span: Span,
 }
 
 /// A resolved layer declaration.
@@ -128,7 +127,6 @@ pub struct ResolvedFigureEntry {
 pub struct ResolvedLayerEntry {
     pub name: DeclName,
     pub decl: LayerDecl,
-    pub span: Span,
 }
 
 /// One axis segment in a per-variant `#[expected_fail(...)]` key.

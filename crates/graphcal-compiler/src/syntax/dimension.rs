@@ -85,6 +85,7 @@ impl UnitRef {
     }
 
     /// The module alias qualifying this reference, if any.
+    #[cfg(test)]
     #[must_use]
     pub const fn qualifier(&self) -> Option<&ModuleAliasName> {
         self.qualifier.as_ref()
@@ -114,7 +115,7 @@ impl From<UnitName> for UnitRef {
 
 impl From<NameAtom> for UnitRef {
     /// Wrap a bare atom as a local unit reference. This is what
-    /// [`crate::syntax::ast::Ident::into_spanned`] uses to lift parser
+    /// `crate::syntax::ast::Ident::into_spanned` uses to lift parser
     /// identifiers into the typed reference.
     fn from(atom: NameAtom) -> Self {
         Self::local(UnitName::from_atom(atom))

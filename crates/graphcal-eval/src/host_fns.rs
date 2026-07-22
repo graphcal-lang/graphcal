@@ -256,7 +256,7 @@ pub const DEMO_PLUGIN_PATH: &str = "graphcal:demo";
 /// Host-native stand-in registry used by the CLI and LSP embedders.
 ///
 /// The default embedders provide one well-known demo plugin (path
-/// [`DEMO_PLUGIN_PATH`]) to prove the extern path end-to-end without a
+/// `DEMO_PLUGIN_PATH`) to prove the extern path end-to-end without a
 /// `.wasm` module:
 ///
 /// ```gcl

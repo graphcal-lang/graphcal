@@ -286,7 +286,6 @@ impl Parser<'_> {
                     SlotKind::Node => ast::MultiSlotKind::Node,
                     SlotKind::ConstNode => ast::MultiSlotKind::ConstNode,
                 },
-                kind_span: s.kind_span,
                 name: s.name.clone(),
                 type_ann: s.type_ann.clone(),
                 header_span: s.header_span,
@@ -323,7 +322,6 @@ impl Parser<'_> {
                         },
                     })
                     .collect(),
-                header_span: slice.header_span,
                 column_layout: slice
                     .column_layout
                     .iter()
@@ -343,10 +341,9 @@ impl Parser<'_> {
                 rows: slice
                     .row_values
                     .iter()
-                    .map(|(label, values, row_span)| ast::MultiDataRow {
+                    .map(|(label, values, _row_span)| ast::MultiDataRow {
                         label: label.clone(),
                         values: values.clone(),
-                        span: *row_span,
                     })
                     .collect(),
             })
@@ -489,7 +486,6 @@ impl Parser<'_> {
         Ok(MultiSlice {
             prefix_keys: prefix_keys.to_vec(),
             header_cells,
-            header_span,
             column_layout,
             row_values,
         })
@@ -1106,7 +1102,6 @@ pub(super) enum HeaderCell {
 pub(super) struct MultiSlice {
     pub prefix_keys: Vec<MapEntryKey>,
     pub header_cells: Vec<HeaderCell>,
-    pub header_span: Span,
     pub column_layout: Vec<SlotColumnSpan>,
     pub row_values: Vec<(Spanned<IndexVariantName>, Vec<Expr>, Span)>,
 }

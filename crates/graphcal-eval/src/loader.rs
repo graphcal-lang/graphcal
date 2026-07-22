@@ -22,8 +22,8 @@ use graphcal_package::{
 
 /// Span-free identity for an `import`/`include` path.
 ///
-/// Used as a `HashMap` key in [`LoadedFile::resolved_imports`] /
-/// [`LoadedDag::resolved_imports`] so that two equal logical paths always
+/// Used as a `HashMap` key in `LoadedFile::resolved_imports` /
+/// `LoadedDag::resolved_imports` so that two equal logical paths always
 /// produce equal keys without depending on a shared join format
 /// (e.g. `.` vs `/`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -255,7 +255,6 @@ fn read_plugin_file<F: FileSystemReader>(
         Ok(bytes) => Ok(LoadedPlugin {
             sha256_hex: hex_string(&Sha256::digest(&bytes)),
             bytes: bytes.into(),
-            resolved_path: resolved,
         }),
         Err(err) => Err(PluginFileError::Unreadable {
             resolved,
@@ -267,8 +266,6 @@ fn read_plugin_file<F: FileSystemReader>(
 /// A successfully read wasm plugin file, ready for the plugin host.
 #[derive(Debug, Clone)]
 pub struct LoadedPlugin {
-    /// The resolved on-disk path (inside the root package).
-    pub resolved_path: PathBuf,
     /// The raw module bytes.
     pub bytes: Arc<[u8]>,
     /// Lowercase-hex SHA-256 of the bytes — the form `graphcal.lock` pins.

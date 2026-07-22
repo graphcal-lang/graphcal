@@ -4,7 +4,7 @@
 //! `Raw` form to its `Desugared` form. Most are mechanical structural
 //! pass-throughs; the only interesting case is [`DeclKind`], which expands
 //! the `Sugar(RawDeclSugar::Multi(_))` variant via
-//! [`crate::syntax::desugar::expand_multi_decl`] instead of pass-through.
+//! `crate::syntax::desugar::expand_multi_decl` instead of pass-through.
 //!
 //! These impls let consumers say `vec_of_raw.into_iter().map(Into::into)` or
 //! `option_of_raw.map(Into::into)` to lift any AST tree from `Raw` to

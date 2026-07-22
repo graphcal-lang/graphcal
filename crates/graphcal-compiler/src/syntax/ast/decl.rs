@@ -87,7 +87,7 @@ pub enum DeclKind<P: Phase = Raw> {
     /// desugar pass. In [`Desugared`](Raw), the
     /// payload is [`core::convert::Infallible`] — the variant is statically
     /// unreachable, so post-desugar consumers handle it with
-    /// [`crate::syntax::phase::never`].
+    /// `crate::syntax::phase::never`.
     Sugar(P::DeclSugar),
 }
 
@@ -454,8 +454,6 @@ pub struct MultiDeclSlot<P: Phase = Raw> {
     /// before the kind keyword.
     pub visibility: Visibility,
     pub kind: MultiSlotKind,
-    /// Span covering the kind keyword(s) (`param`, `node`, or `const node`).
-    pub kind_span: Span,
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr<P>,
     /// Span from kind keyword through end of the type annotation.
@@ -500,8 +498,6 @@ pub struct MultiDeclSlice<P: Phase = Raw> {
     pub prefix_keys: Vec<MapEntryKey>,
     /// Header row cells, in left-to-right order.
     pub header_cells: Vec<MultiHeaderCell>,
-    /// Span of the entire header row (`:` through `;`).
-    pub header_span: Span,
     /// Per-slot column span into this slice's `header_cells` and `rows`
     /// values. Same length as `MultiDecl::slots`. May differ between
     /// slices if their header rows list variants in different orders.
@@ -539,7 +535,6 @@ impl MultiHeaderCell {
 pub struct MultiDataRow<P: Phase = Raw> {
     pub label: Spanned<IndexVariantName>,
     pub values: Vec<Expr<P>>,
-    pub span: Span,
 }
 
 /// Shared shape for value declarations with an expression body.

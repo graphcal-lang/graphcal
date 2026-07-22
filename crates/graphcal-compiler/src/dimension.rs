@@ -250,6 +250,7 @@ impl Dimension {
     }
 
     /// Get the exponent for a specific base dimension (zero if absent).
+    #[cfg(test)]
     #[must_use]
     pub fn get_exponent(&self, id: &BaseDimId) -> Rational {
         self.exponents.get(id).copied().unwrap_or(Rational::ZERO)

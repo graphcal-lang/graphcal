@@ -125,7 +125,7 @@ impl std::fmt::Display for ScopedName {
 
 impl From<NameAtom> for ScopedName {
     /// Wrap a bare atom as a local `ScopedName`. This is what
-    /// [`crate::syntax::ast::Ident::into_spanned`] uses to lift parser
+    /// `crate::syntax::ast::Ident::into_spanned` uses to lift parser
     /// identifiers into the typed name; qualified forms are constructed
     /// explicitly via [`ScopedName::qualified`] or [`ScopedName::qualified_path`].
     fn from(atom: NameAtom) -> Self {
