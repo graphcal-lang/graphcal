@@ -24,9 +24,9 @@ pub use super::type_def::{
     StructField, TypeDef, TypeDefKind, TypeGenericConstraint, TypeGenericParam, TypeRegistry,
     UnionMemberDef,
 };
+pub(crate) use super::unit::UnitResolveError;
 pub use super::unit::{
-    PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitRegistry, UnitResolveError,
-    UnitScale, pow_scale,
+    PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitRegistry, UnitScale, pow_scale,
 };
 
 // ---------------------------------------------------------------------------

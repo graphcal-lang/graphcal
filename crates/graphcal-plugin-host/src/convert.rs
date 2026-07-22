@@ -42,7 +42,7 @@ pub fn convert_manifest(
 /// # Errors
 ///
 /// See [`convert_manifest`].
-pub fn convert_function(
+fn convert_function(
     function: &ManifestFunction,
 ) -> Result<(FnName, FunctionSignature), ManifestConvertError> {
     let in_function = |kind: ConvertErrorKind| ManifestConvertError {

@@ -67,7 +67,7 @@ pub use manifest::{
     ManifestRational, ManifestValidationError, ManifestValueKind, ManifestVarPower, NameRole,
     PluginManifest,
 };
-pub use section::{SectionError, embed_manifest, extract_manifest};
+pub use section::{SectionError, embed_manifest};
 
 /// The plugin ABI version this crate speaks.
 ///

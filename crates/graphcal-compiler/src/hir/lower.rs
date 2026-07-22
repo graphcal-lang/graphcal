@@ -223,7 +223,7 @@ impl GenericScope {
 
 /// Context required to lower one type expression into HIR.
 #[derive(Debug, Clone, Copy)]
-pub struct TypeLoweringContext<'a> {
+pub(crate) struct TypeLoweringContext<'a> {
     pub owner: &'a DagId,
     pub resolver: &'a ModuleResolver,
     pub generic_scope: &'a GenericScope,
@@ -309,7 +309,7 @@ pub fn lower_generic_params(
 ///
 /// Returns [`HirLowerError`] when a source path cannot be resolved to the
 /// namespace required by its syntactic position.
-pub fn lower_type_expr(
+pub(crate) fn lower_type_expr(
     type_ann: &ast::TypeExpr,
     ctx: TypeLoweringContext<'_>,
 ) -> Result<TypeExpr, HirLowerError> {
@@ -603,7 +603,7 @@ fn lower_index_expr_name(
 ///
 /// Returns [`HirLowerError`] if the expression references an unknown generic
 /// parameter or a generic parameter whose constraint is not `Nat`.
-pub fn lower_nat_expr(
+pub(crate) fn lower_nat_expr(
     nat_expr: &ast::NatExpr,
     ctx: TypeLoweringContext<'_>,
 ) -> Result<NatExpr, HirLowerError> {

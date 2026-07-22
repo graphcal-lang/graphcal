@@ -16,7 +16,7 @@ use crate::syntax::span::Span;
 
 /// Returns `true` if `name` is a time scale identifier (`UTC`, `TT`, `TAI`, etc.).
 #[must_use]
-pub fn is_time_scale_name(name: &str) -> bool {
+pub(crate) fn is_time_scale_name(name: &str) -> bool {
     crate::registry::time_scale::TimeScale::ALL_NAMES.contains(&name)
 }
 
@@ -261,8 +261,8 @@ impl ExpectedFailKeyPart<IndexTypeRef> {
 /// - Length >1 for multi-index assertions: `[(Mode.Boost, Phase.Launch)]`
 pub type ExpectedFailKey<I = IndexTypeRef> = Vec<ExpectedFailKeyPart<I>>;
 
-pub type ParsedExpectedFailKeyPart = ExpectedFailKeyPart<NamePath>;
-pub type ParsedExpectedFailKey = ExpectedFailKey<NamePath>;
+pub(crate) type ParsedExpectedFailKeyPart = ExpectedFailKeyPart<NamePath>;
+pub(crate) type ParsedExpectedFailKey = ExpectedFailKey<NamePath>;
 pub type ParsedExpectedFail = ExpectedFail<NamePath>;
 pub type ResolvedExpectedFailKeyPart = ExpectedFailKeyPart<IndexTypeRef>;
 pub type ResolvedExpectedFailKey = ExpectedFailKey<IndexTypeRef>;
@@ -279,7 +279,7 @@ pub enum ExpectedFail<I = IndexTypeRef> {
 
 /// The result of declaration collection: declarations separated by category.
 #[derive(Debug)]
-pub struct ResolvedFile {
+pub(crate) struct ResolvedFile {
     /// Const declarations in source order.
     pub consts: Vec<ResolvedConstEntry>,
     /// Param declarations in source order.

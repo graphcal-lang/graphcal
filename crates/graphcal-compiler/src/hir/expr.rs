@@ -204,7 +204,10 @@ pub fn lower_expr_tolerant(
 ///
 /// Returns the first [`ExprLowerError`] if any expression-level reference
 /// cannot be resolved to a canonical module identity or lexical local binding.
-pub fn lower_expr(expr: &ast::Expr, ctx: ExprLoweringContext<'_>) -> Result<Expr, ExprLowerError> {
+pub(crate) fn lower_expr(
+    expr: &ast::Expr,
+    ctx: ExprLoweringContext<'_>,
+) -> Result<Expr, ExprLowerError> {
     let (lowered, mut diagnostics) = lower_expr_tolerant(expr, ctx);
     if diagnostics.is_empty() {
         Ok(lowered)
@@ -219,7 +222,7 @@ pub fn lower_expr(expr: &ast::Expr, ctx: ExprLoweringContext<'_>) -> Result<Expr
 /// expressions cannot share locals across the `actual`/`expected`/`tolerance`
 /// slots of a tolerance assertion, so each slot is lowered with a fresh lowerer.
 #[must_use]
-pub fn lower_assert_body_tolerant(
+fn lower_assert_body_tolerant(
     body: &ast::AssertBody,
     ctx: ExprLoweringContext<'_>,
 ) -> (AssertBody, Vec<ExprLowerError>) {
@@ -257,7 +260,7 @@ pub fn lower_assert_body_tolerant(
 /// # Errors
 ///
 /// Returns the first [`ExprLowerError`] if any reference cannot be resolved.
-pub fn lower_assert_body(
+pub(crate) fn lower_assert_body(
     body: &ast::AssertBody,
     ctx: ExprLoweringContext<'_>,
 ) -> Result<AssertBody, ExprLowerError> {
@@ -637,7 +640,7 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
 /// is a genuine cycle. Used to decide whether a declaration's self-edge can
 /// be dropped from the dependency graph.
 #[must_use]
-pub fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedDeclName) -> bool {
+pub(crate) fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedDeclName) -> bool {
     // Recursion choke point: recurses once per tree level (unbounded for
     // left-nested operator chains).
     crate::stack::with_stack_growth(|| match &expr.kind {
@@ -794,7 +797,7 @@ impl std::fmt::Display for ExternFnRef {
 /// host function registry (const expressions, domain bounds, dynamic unit
 /// scales) use this to reject them with a spanned diagnostic.
 #[must_use]
-pub fn find_extern_call(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
+pub(crate) fn find_extern_call(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
     // Recursion choke point: recurses once per tree level.
     crate::stack::with_stack_growth(|| find_extern_call_inner(expr))
 }

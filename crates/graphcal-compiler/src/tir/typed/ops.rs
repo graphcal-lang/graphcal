@@ -803,10 +803,6 @@ pub fn unify_resolved_type(
 /// Substitute generic parameters in a resolved type, producing an `InferredType`.
 ///
 /// This replaces `resolve_type_with_substitution()` from `dim_check.rs`.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "always called with standard HashMap"
-)]
 pub fn substitute_resolved_type(
     resolved: &ResolvedTypeExpr,
     dim_sub: &HashMap<GenericParamName, Dimension>,
@@ -823,10 +819,6 @@ pub fn substitute_resolved_type(
 /// Unconstrained generic type parameters are substituted from `type_sub`
 /// (used by HIR constructor-call inference, which binds them from
 /// call-site arguments).
-#[expect(
-    clippy::implicit_hasher,
-    reason = "always called with standard HashMap"
-)]
 #[expect(
     clippy::too_many_lines,
     reason = "single dispatch over ResolvedTypeExpr variants with per-variant generic-substitution + dimension-arithmetic overflow handling"
