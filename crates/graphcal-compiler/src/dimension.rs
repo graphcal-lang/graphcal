@@ -37,12 +37,12 @@ impl From<i32> for Rational {
 }
 
 impl Rational {
-    pub const ZERO: Self = Self { num: 0, den: 1 };
+    pub(crate) const ZERO: Self = Self { num: 0, den: 1 };
     pub const ONE: Self = Self { num: 1, den: 1 };
     /// `1/2` — used for square-root exponents.
     pub const HALF: Self = Self { num: 1, den: 2 };
     /// `1/3` — used for cube-root exponents.
-    pub const THIRD: Self = Self { num: 1, den: 3 };
+    pub(crate) const THIRD: Self = Self { num: 1, den: 3 };
 
     /// Try to create a new rational number, automatically reduced.
     ///
@@ -86,7 +86,7 @@ impl Rational {
     }
 
     #[must_use]
-    pub const fn is_zero(self) -> bool {
+    pub(crate) const fn is_zero(self) -> bool {
         self.num == 0
     }
 
@@ -243,15 +243,16 @@ impl Dimension {
     /// Returns true when this dimension cannot be represented by a single base
     /// dimension to the first power.
     #[must_use]
-    pub fn is_compound(&self) -> bool {
+    pub(crate) fn is_compound(&self) -> bool {
         !self.exponents.is_empty()
             && (self.exponents.len() != 1
                 || self.exponents.values().next().copied() != Some(Rational::ONE))
     }
 
     /// Get the exponent for a specific base dimension (zero if absent).
+    #[cfg(test)]
     #[must_use]
-    pub fn get_exponent(&self, id: &BaseDimId) -> Rational {
+    pub(crate) fn get_exponent(&self, id: &BaseDimId) -> Rational {
         self.exponents.get(id).copied().unwrap_or(Rational::ZERO)
     }
 
@@ -290,7 +291,7 @@ impl Dimension {
     ///
     /// Returns [`MissingBaseDimensionName`] when `names` does not contain an
     /// entry for a base dimension referenced by `self`.
-    pub fn try_format_with(
+    pub(crate) fn try_format_with(
         &self,
         names: &BTreeMap<BaseDimId, String>,
     ) -> Result<String, MissingBaseDimensionName> {
@@ -369,7 +370,7 @@ fn push_dim_factor(out: &mut String, name: &str, exp: Rational) {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("missing display name for base dimension {id:?}")]
 pub struct MissingBaseDimensionName {
-    pub id: BaseDimId,
+    id: BaseDimId,
 }
 
 /// Whether to add or subtract exponents when combining dimensions.
@@ -388,7 +389,7 @@ impl Dimension {
     }
 
     /// Divide two dimensions, returning an error if exponent arithmetic overflows.
-    pub fn checked_div(self, other: &Self) -> Result<Self, RationalError> {
+    pub(crate) fn checked_div(self, other: &Self) -> Result<Self, RationalError> {
         self.combine(other, CombineOp::Sub)
     }
 

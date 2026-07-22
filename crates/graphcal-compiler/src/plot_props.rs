@@ -24,7 +24,7 @@ pub enum PlotPropertyType {
 impl PlotPropertyType {
     /// Human-readable expectation for diagnostics.
     #[must_use]
-    pub const fn describe(self) -> &'static str {
+    pub(crate) const fn describe(self) -> &'static str {
         match self {
             Self::String => "a string literal",
             Self::Number => "a dimensionless number",
@@ -47,7 +47,7 @@ pub enum MarkProperty {
 
 impl MarkProperty {
     /// Every mark property, for diagnostics listing the valid set.
-    pub const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::StrokeWidth,
         Self::Opacity,
         Self::Size,
@@ -64,7 +64,7 @@ impl MarkProperty {
 
     /// The source-level property name.
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::StrokeWidth => "stroke_width",
             Self::Opacity => "opacity",
@@ -90,7 +90,7 @@ impl MarkProperty {
 
     /// The value type this property expects.
     #[must_use]
-    pub const fn value_type(self) -> PlotPropertyType {
+    pub(crate) const fn value_type(self) -> PlotPropertyType {
         match self {
             Self::StrokeWidth | Self::Opacity | Self::Size => PlotPropertyType::Number,
             Self::Color | Self::Interpolate => PlotPropertyType::String,
@@ -111,7 +111,7 @@ pub enum PlotProperty {
 
 impl PlotProperty {
     /// Every plot property, for diagnostics listing the valid set.
-    pub const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::Title,
         Self::Width,
         Self::Height,
@@ -157,7 +157,7 @@ pub enum CompositionProperty {
 
 impl CompositionProperty {
     /// Every composition property, for diagnostics listing the valid set.
-    pub const ALL: [Self; 3] = [Self::Title, Self::Width, Self::Height];
+    pub(crate) const ALL: [Self; 3] = [Self::Title, Self::Width, Self::Height];
 
     /// Parse a composition property from its source-level name.
     #[must_use]
@@ -190,7 +190,7 @@ impl CompositionProperty {
     /// width/height — only `title` applies; sizes belong on the
     /// constituent plots (or on layers).
     #[must_use]
-    pub const fn applies_to_figure(self) -> bool {
+    pub(crate) const fn applies_to_figure(self) -> bool {
         matches!(self, Self::Title)
     }
 }

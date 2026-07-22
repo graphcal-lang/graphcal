@@ -42,7 +42,7 @@ pub fn convert_manifest(
 /// # Errors
 ///
 /// See [`convert_manifest`].
-pub fn convert_function(
+fn convert_function(
     function: &ManifestFunction,
 ) -> Result<(FnName, FunctionSignature), ManifestConvertError> {
     let in_function = |kind: ConvertErrorKind| ManifestConvertError {
@@ -178,7 +178,7 @@ fn convert_rational(pow: ManifestRational) -> Result<Rational, ConvertErrorKind>
 #[error("plugin manifest function `{function}`: {kind}")]
 pub struct ManifestConvertError {
     /// The manifest function that failed to convert.
-    pub function: String,
+    function: String,
     /// What went wrong.
     pub kind: ConvertErrorKind,
 }

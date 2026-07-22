@@ -276,12 +276,11 @@ fn build_dep_decl_index(
 /// maps based on what the dependency declares the binding name as. The
 /// `indexes` / `types` / `dims` maps use [`DepToImporter`] keying — the key
 /// is the dep-side name and the value is the importer-side name it binds to.
-pub(in crate::eval::project) struct ClassifiedBindings {
-    pub(in crate::eval::project) params:
-        HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
-    pub(in crate::eval::project) indexes: DepToImporter<IndexName>,
-    pub(in crate::eval::project) types: DepToImporter<StructTypeName>,
-    pub(in crate::eval::project) dims: DepToImporter<DimName>,
+struct ClassifiedBindings {
+    params: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    indexes: DepToImporter<IndexName>,
+    types: DepToImporter<StructTypeName>,
+    dims: DepToImporter<DimName>,
 }
 
 /// Classify each param binding against the dep's declaration index, returning

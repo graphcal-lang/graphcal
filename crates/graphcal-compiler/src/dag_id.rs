@@ -37,8 +37,9 @@ impl DagPackageId {
     }
 
     /// Borrow the opaque package id payload.
+    #[cfg(test)]
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    fn as_str(&self) -> &str {
         &self.0
     }
 }

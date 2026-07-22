@@ -12,7 +12,7 @@
 //! Lowering is diagnostic-accumulating: a reference that cannot be resolved
 //! becomes an explicit [`ExprKind::Error`] node and its diagnostic is
 //! recorded, so IDE consumers can keep working on incomplete code. The strict
-//! entry points ([`lower_expr`], [`lower_assert_body`]) reject any tree that
+//! entry points (`lower_expr`, `lower_assert_body`) reject any tree that
 //! contains an error node, so the batch pipeline never sees one.
 
 use crate::syntax::decl_name::{DeclNameNamespace, ResolvedDeclName};
@@ -118,11 +118,11 @@ pub enum ExprLowerError {
 /// Context required to lower one expression tree into HIR.
 #[derive(Debug, Clone, Copy)]
 pub struct ExprLoweringContext<'a> {
-    pub owner: &'a DagId,
-    pub resolver: &'a ModuleResolver,
-    pub generic_scope: &'a GenericScope,
-    pub prelude: Option<&'a PreludeTypeScope>,
-    pub decl_bindings: Option<&'a HashMap<ScopedName, ResolvedDeclName>>,
+    owner: &'a DagId,
+    resolver: &'a ModuleResolver,
+    generic_scope: &'a GenericScope,
+    prelude: Option<&'a PreludeTypeScope>,
+    decl_bindings: Option<&'a HashMap<ScopedName, ResolvedDeclName>>,
 }
 
 impl<'a> ExprLoweringContext<'a> {
@@ -157,7 +157,7 @@ impl<'a> ExprLoweringContext<'a> {
     /// Add canonical declaration bindings for declarations already visible in
     /// the lowered IR, such as prefixed dependency entries and DAG self-imports.
     #[must_use]
-    pub const fn with_decl_bindings(
+    pub(crate) const fn with_decl_bindings(
         self,
         decl_bindings: &'a HashMap<ScopedName, ResolvedDeclName>,
     ) -> Self {
@@ -204,7 +204,10 @@ pub fn lower_expr_tolerant(
 ///
 /// Returns the first [`ExprLowerError`] if any expression-level reference
 /// cannot be resolved to a canonical module identity or lexical local binding.
-pub fn lower_expr(expr: &ast::Expr, ctx: ExprLoweringContext<'_>) -> Result<Expr, ExprLowerError> {
+pub(crate) fn lower_expr(
+    expr: &ast::Expr,
+    ctx: ExprLoweringContext<'_>,
+) -> Result<Expr, ExprLowerError> {
     let (lowered, mut diagnostics) = lower_expr_tolerant(expr, ctx);
     if diagnostics.is_empty() {
         Ok(lowered)
@@ -219,7 +222,7 @@ pub fn lower_expr(expr: &ast::Expr, ctx: ExprLoweringContext<'_>) -> Result<Expr
 /// expressions cannot share locals across the `actual`/`expected`/`tolerance`
 /// slots of a tolerance assertion, so each slot is lowered with a fresh lowerer.
 #[must_use]
-pub fn lower_assert_body_tolerant(
+fn lower_assert_body_tolerant(
     body: &ast::AssertBody,
     ctx: ExprLoweringContext<'_>,
 ) -> (AssertBody, Vec<ExprLowerError>) {
@@ -257,7 +260,7 @@ pub fn lower_assert_body_tolerant(
 /// # Errors
 ///
 /// Returns the first [`ExprLowerError`] if any reference cannot be resolved.
-pub fn lower_assert_body(
+pub(crate) fn lower_assert_body(
     body: &ast::AssertBody,
     ctx: ExprLoweringContext<'_>,
 ) -> Result<AssertBody, ExprLowerError> {
@@ -276,7 +279,7 @@ pub struct LocalId(u32);
 impl LocalId {
     /// Numeric index unique within one lowered expression tree.
     #[must_use]
-    pub const fn index(self) -> u32 {
+    pub(crate) const fn index(self) -> u32 {
         self.0
     }
 }
@@ -525,7 +528,7 @@ pub struct ExprDependencies {
     /// Runtime graph dependencies reached through `@name` references.
     pub graph_refs: BTreeSet<ResolvedDeclName>,
     /// Compile-time const dependencies reached through const-like value refs.
-    pub const_refs: BTreeSet<ResolvedDeclName>,
+    pub(crate) const_refs: BTreeSet<ResolvedDeclName>,
 }
 
 /// Collect canonical declaration dependencies from an already-lowered HIR expression.
@@ -637,7 +640,7 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
 /// is a genuine cycle. Used to decide whether a declaration's self-edge can
 /// be dropped from the dependency graph.
 #[must_use]
-pub fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedDeclName) -> bool {
+pub(crate) fn has_ref_outside_unfold(expr: &Expr, name: &ResolvedDeclName) -> bool {
     // Recursion choke point: recurses once per tree level (unbounded for
     // left-nested operator chains).
     crate::stack::with_stack_growth(|| match &expr.kind {
@@ -718,7 +721,7 @@ pub enum TypeSystemRef {
 
 impl TypeSystemRef {
     #[must_use]
-    pub fn surface_description(&self) -> String {
+    fn surface_description(&self) -> String {
         match self {
             Self::Type(name) => format!("type `{}`", name.as_str()),
             Self::Dimension(name) => format!("dimension `{}`", name.as_str()),
@@ -732,7 +735,7 @@ impl TypeSystemRef {
     }
 
     #[must_use]
-    pub fn value_position_error(&self) -> String {
+    pub(crate) fn value_position_error(&self) -> String {
         format!("{} cannot be used as a value", self.surface_description())
     }
 }
@@ -794,7 +797,7 @@ impl std::fmt::Display for ExternFnRef {
 /// host function registry (const expressions, domain bounds, dynamic unit
 /// scales) use this to reject them with a spanned diagnostic.
 #[must_use]
-pub fn find_extern_call(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
+pub(crate) fn find_extern_call(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
     // Recursion choke point: recurses once per tree level.
     crate::stack::with_stack_growth(|| find_extern_call_inner(expr))
 }
@@ -890,7 +893,6 @@ pub struct FieldInit {
 pub struct ParamBinding {
     pub target: Spanned<ResolvedDeclName>,
     pub value: Expr,
-    pub span: Span,
 }
 
 /// A resolved map literal entry.
@@ -1480,7 +1482,6 @@ impl<'a> ExprLowerer<'a> {
         Ok(ParamBinding {
             target: Spanned::new(target_name, binding.name.span),
             value: self.lower_expr(&binding.value),
-            span: binding.span,
         })
     }
 

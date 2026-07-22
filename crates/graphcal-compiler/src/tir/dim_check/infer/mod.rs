@@ -16,7 +16,7 @@ use crate::registry::types::Registry;
 ///
 /// Concrete Nat ranges come from the registry; declared indexes come from the
 /// DAG's semantic collection refs.
-pub(super) fn index_def_for_inferred<'a>(
+fn index_def_for_inferred<'a>(
     index: &InferredIndex,
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,

@@ -29,13 +29,13 @@ use crate::syntax::span::Span;
 // Re-export types and constants from graphcal-registry's resolve_types module.
 pub use crate::registry::resolve_types::{
     DeclCategory, ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart, ImportedValueNames,
-    ParsedExpectedFail, ParsedExpectedFailKey, ParsedExpectedFailKeyPart, ResolvedFile,
-    is_time_scale_name,
+    ParsedExpectedFail,
 };
+pub(crate) use crate::registry::resolve_types::{ResolvedFile, is_time_scale_name};
 pub use crate::syntax::module_name::ScopedName;
 
 // Re-export items from submodules (crate-internal only).
-pub use deps::contains_graph_ref;
+pub(crate) use deps::contains_graph_ref;
 
 // Import helpers from submodules for use within this file.
 use names::parse_expected_fail_args;
@@ -452,14 +452,12 @@ fn collect_local_declarations(
                 figures.push(ResolvedFigureEntry {
                     name: f.name.value.clone(),
                     decl: f.clone(),
-                    span: decl.span,
                 });
             }
             DeclKind::Layer(l) => {
                 layers.push(ResolvedLayerEntry {
                     name: l.name.value.clone(),
                     decl: l.clone(),
-                    span: decl.span,
                 });
             }
             DeclKind::Param(p) => {
@@ -929,7 +927,8 @@ pub(crate) struct ImportedNames {
 ///
 /// Returns a [`GraphcalError`] if duplicate names or invalid declaration
 /// shells are found.
-pub fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFile, GraphcalError> {
+#[cfg(test)]
+fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFile, GraphcalError> {
     resolve_with_imports(file, src, &ImportedNames::default())
 }
 

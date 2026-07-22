@@ -42,42 +42,42 @@ pub enum GraphNodeKind {
 /// A vertex in the dependency graph.
 #[derive(Debug, Clone)]
 pub struct GraphNode {
-    pub id: GraphNodeId,
-    pub kind: GraphNodeKind,
+    id: GraphNodeId,
+    kind: GraphNodeKind,
     /// Human-readable resolved type (e.g. `"Length / Time^2"`), pre-rendered
     /// because renderers have no access to the registry. `None` when the
     /// declaration's resolved type is unknown (external nodes).
-    pub type_label: Option<String>,
+    type_label: Option<String>,
 }
 
 /// A directed dataflow edge: `to` reads `from` via `@`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GraphEdge {
-    pub from: GraphNodeId,
-    pub to: GraphNodeId,
+    from: GraphNodeId,
+    to: GraphNodeId,
 }
 
 /// One DAG body projected as a group of nodes (the file's top-level body or
 /// an inline `dag` block). Nodes keep source order.
 #[derive(Debug, Clone)]
 pub struct GraphCluster {
-    pub dag_id: DagId,
-    pub nodes: Vec<GraphNode>,
+    dag_id: DagId,
+    nodes: Vec<GraphNode>,
 }
 
 /// The projected dependency graph of one compiled file.
 #[derive(Debug, Clone)]
 pub struct GraphIr {
     /// The file's own top-level body.
-    pub root: GraphCluster,
+    root: GraphCluster,
     /// Inline `dag` blocks nested (at any depth) inside the file, sorted by
     /// canonical id for deterministic output.
-    pub children: Vec<GraphCluster>,
+    children: Vec<GraphCluster>,
     /// Placeholder nodes for dependencies declared outside the projected
     /// DAGs, sorted by id.
-    pub external: Vec<GraphNode>,
+    external: Vec<GraphNode>,
     /// Dataflow edges, deduplicated and sorted.
-    pub edges: Vec<GraphEdge>,
+    edges: Vec<GraphEdge>,
 }
 
 /// Project a compiled [`TIR`] into its dependency [`GraphIr`].

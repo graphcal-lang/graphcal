@@ -108,7 +108,7 @@ impl ScopedName {
     /// `x.with_prefix("p")` → `p.x`.
     /// `m.x.with_prefix("p")` → `p.x`.
     #[must_use]
-    pub fn with_prefix(&self, prefix: &str) -> Self {
+    pub(crate) fn with_prefix(&self, prefix: &str) -> Self {
         Self::qualified(prefix, Arc::clone(&self.member))
     }
 }
@@ -125,7 +125,7 @@ impl std::fmt::Display for ScopedName {
 
 impl From<NameAtom> for ScopedName {
     /// Wrap a bare atom as a local `ScopedName`. This is what
-    /// [`crate::syntax::ast::Ident::into_spanned`] uses to lift parser
+    /// `crate::syntax::ast::Ident::into_spanned` uses to lift parser
     /// identifiers into the typed name; qualified forms are constructed
     /// explicitly via [`ScopedName::qualified`] or [`ScopedName::qualified_path`].
     fn from(atom: NameAtom) -> Self {

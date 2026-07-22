@@ -44,7 +44,7 @@ mod pipeline;
 /// and dim bindings on instantiated includes. The aliased name keeps the
 /// directional convention discoverable everywhere the map shape appears in a
 /// signature.
-pub(in crate::eval::project) type DepToImporter<T> = HashMap<T, T>;
+type DepToImporter<T> = HashMap<T, T>;
 
 /// A selective import/include alias.
 ///
@@ -53,17 +53,15 @@ pub(in crate::eval::project) type DepToImporter<T> = HashMap<T, T>;
 /// sites from swapping a raw `(String, String)` pair.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::eval::project) struct ImportAlias {
-    pub(in crate::eval::project) original: DeclName,
-    pub(in crate::eval::project) local: DeclName,
+    original: DeclName,
+    local: DeclName,
 }
 
 /// Derive a module name (the leaf segment) from a `ModulePath`.
 ///
 /// Used as the include-instance alias for the bare `include path(args);`
 /// form and as the module-qualifier name for `import path;`.
-pub(in crate::eval::project) fn derive_module_name_from_import_path(
-    import_path: &ModulePath,
-) -> ModuleAliasName {
+fn derive_module_name_from_import_path(import_path: &ModulePath) -> ModuleAliasName {
     ModuleAliasName::from_atom(import_path.leaf().name.clone())
 }
 
@@ -144,33 +142,32 @@ fn rewrite_alias_field_access(expr: &mut Expr, qualified_pairs: &HashSet<Qualifi
 /// downstream compile-time imports still need their registry, public names,
 /// declared types, const values, and DAG metadata. For those files,
 /// `runtime_available` is `false` and `values` / `assertions` are empty.
-pub(in crate::eval::project) struct EvaluatedFile {
+struct EvaluatedFile {
     /// Whether runtime values and assertion results were evaluated.
-    pub(in crate::eval::project) runtime_available: bool,
+    runtime_available: bool,
     /// Evaluated runtime values (params + nodes): name → `RuntimeValue`.
-    pub(in crate::eval::project) values: HashMap<DeclName, RuntimeValue>,
+    values: HashMap<DeclName, RuntimeValue>,
     /// Evaluated const values: name → `RuntimeValue`.
-    pub(in crate::eval::project) const_values: HashMap<DeclName, RuntimeValue>,
+    const_values: HashMap<DeclName, RuntimeValue>,
     /// Declared types for all consts/params/nodes in this file.
-    pub(in crate::eval::project) declared_types: HashMap<ScopedName, DeclaredType>,
+    declared_types: HashMap<ScopedName, DeclaredType>,
     /// Assertion results from this file: name → (result, span).
     /// Names keep alias qualification for include-instantiated asserts (#813).
-    pub(in crate::eval::project) assertions: HashMap<ScopedName, (AssertResult, Span)>,
+    assertions: HashMap<ScopedName, (AssertResult, Span)>,
     /// Evaluated plot specs of this file, keyed by their local (leaf) name.
     /// Consumers request them through include brace lists (#847).
-    pub(in crate::eval::project) plots: HashMap<DeclName, super::types::PlotSpec>,
+    plots: HashMap<DeclName, super::types::PlotSpec>,
     /// The file's frozen registry (for type-system import by downstream files).
-    pub(in crate::eval::project) registry: Registry,
+    registry: Registry,
     /// Names of declarations marked `pub` in the source file.
     /// Used to enforce private-by-default visibility during imports.
-    pub(in crate::eval::project) pub_names: HashSet<DeclName>,
+    pub_names: HashSet<DeclName>,
     /// Concrete scale factors for this file's own dynamic units, resolved
     /// against the file's evaluated runtime values. Module importers convert
     /// the dynamic units to static scales at registry-merge time — the scale
     /// expression references this file's params and cannot be re-evaluated in
     /// the importer's context. Empty when `runtime_available` is `false`.
-    pub(in crate::eval::project) resolved_dynamic_unit_scales:
-        HashMap<UnitRef, PositiveFiniteScale>,
+    resolved_dynamic_unit_scales: HashMap<UnitRef, PositiveFiniteScale>,
     /// Compiled dag TIRs for each `dag { ... }` declared in this file.
     ///
     /// Keyed by bare dag name. Cloned into downstream importers' `TIR::dags`
@@ -178,12 +175,12 @@ pub(in crate::eval::project) struct EvaluatedFile {
     /// (`@alias.dag(args).out`) resolve through the same machinery as
     /// same-file inline calls. The internal `::` separator avoids collisions
     /// with user-visible `.`-separated names.
-    pub(in crate::eval::project) dag_tirs: graphcal_compiler::tir::typed::DagRegistry,
+    dag_tirs: graphcal_compiler::tir::typed::DagRegistry,
     /// Resolved extern function signatures declared by this file's
     /// `import plugin` blocks. Merged into importers' TIRs alongside
     /// `dag_tirs` so cross-file qualified inline calls into dag bodies that
     /// use extern functions can resolve their signatures at eval time.
-    pub(in crate::eval::project) extern_functions: HashMap<
+    extern_functions: HashMap<
         graphcal_compiler::syntax::plugin::ExternFnKey,
         graphcal_compiler::ir::lower::ExternFunctionEntry,
     >,
@@ -192,7 +189,7 @@ pub(in crate::eval::project) struct EvaluatedFile {
 impl EvaluatedFile {
     /// Check whether this file has an evaluated top-level assertion with the
     /// given (bare local) name.
-    pub(in crate::eval::project) fn has_assert(&self, name: &str) -> bool {
+    fn has_assert(&self, name: &str) -> bool {
         self.assertions.contains_key(&ScopedName::local(name))
     }
 }
@@ -201,23 +198,23 @@ impl EvaluatedFile {
 ///
 /// Produced by [`compile_single_file_in_project`] and consumed by the
 /// per-file evaluation and TIR compilation pipelines.
-pub(in crate::eval::project) struct CompiledFile {
-    pub(in crate::eval::project) tir: graphcal_compiler::tir::typed::TIR,
-    pub(in crate::eval::project) declared_types: HashMap<ScopedName, DeclaredType>,
+struct CompiledFile {
+    tir: graphcal_compiler::tir::typed::TIR,
+    declared_types: HashMap<ScopedName, DeclaredType>,
     /// Imported values for this file (cloned before being consumed by IR).
     /// Used by the root file to enrich output with imported value names.
-    pub(in crate::eval::project) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     /// Imported value categories in source order (for root output).
-    pub(in crate::eval::project) imported_source_order: Vec<(ScopedName, DeclCategory)>,
+    imported_source_order: Vec<(ScopedName, DeclCategory)>,
     /// Plot specs requested from standalone-evaluated dependencies via
     /// include brace lists, renamed to their local aliases (#847).
-    pub(in crate::eval::project) included_plots: Vec<super::types::PlotSpec>,
+    included_plots: Vec<super::types::PlotSpec>,
 }
 
 /// Return type for [`build_dep_imported_values`].
-pub(in crate::eval::project) struct DepImportedValues {
-    pub(in crate::eval::project) names: ImportedValueNames,
-    pub(in crate::eval::project) values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+struct DepImportedValues {
+    names: ImportedValueNames,
+    values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
 }
 
 /// A deferred include of a DAG (file-level or inline) — compile its body
@@ -228,44 +225,43 @@ pub(in crate::eval::project) struct DepImportedValues {
 /// the file root; an inline DAG include (`include dag(args)` /
 /// `include lib.dag(args)`) is a DAG inside some file. After the flat
 /// TIR registry, both are uniformly addressed by canonical [`DagId`].
-pub(in crate::eval::project) struct DeferredDagInclude {
+struct DeferredDagInclude {
     /// Identifies the source kind and any kind-specific data (file's AST
     /// vs inline dag's body + parent context).
-    pub(in crate::eval::project) source: DeferredDagSource,
+    source: DeferredDagSource,
     /// The prefix for all merged declarations (from alias or dag name or
     /// filename).
-    pub(in crate::eval::project) prefix: ModuleAliasName,
+    prefix: ModuleAliasName,
     /// Param bindings: `param_name` → binding expression.
-    pub(in crate::eval::project) bindings: HashMap<DeclName, Expr>,
+    bindings: HashMap<DeclName, Expr>,
     /// Index bindings: `dep_index_name` → `importer_index_name`.
-    pub(in crate::eval::project) index_bindings: DepToImporter<IndexName>,
+    index_bindings: DepToImporter<IndexName>,
     /// Type bindings: `dep_type_name` → `importer_type_name`.
-    pub(in crate::eval::project) type_bindings: DepToImporter<StructTypeName>,
+    type_bindings: DepToImporter<StructTypeName>,
     /// Dimension bindings: `dep_dim_name` → `importer_dim_name`.
-    pub(in crate::eval::project) dim_bindings: DepToImporter<DimName>,
+    dim_bindings: DepToImporter<DimName>,
     /// For selective includes: the selected names and their local aliases.
     /// `None` for module-form includes (all names accessible via `prefix::`).
-    pub(in crate::eval::project) selective_names: Option<Vec<ImportAlias>>,
+    selective_names: Option<Vec<ImportAlias>>,
     /// Plots requested by the include brace list, keyed by the dep-side
     /// plot name (#847).
-    pub(in crate::eval::project) requested_plots:
-        HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot>,
+    requested_plots: HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot>,
     /// Span of the include declaration (for diagnostics).
-    pub(in crate::eval::project) import_span: Span,
+    import_span: Span,
     /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on
     /// included assertions). Key = original name in dep.
-    pub(in crate::eval::project) import_item_attributes:
+    import_item_attributes:
         HashMap<DeclName, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
     /// Whether this include carries a leading `pub` (whole-module re-export).
-    pub(in crate::eval::project) pub_reexport_whole: bool,
+    pub_reexport_whole: bool,
     /// Original names of selective items marked `pub` in the importer's
     /// brace list. Empty for whole-module form.
-    pub(in crate::eval::project) pub_reexport_items: HashSet<DeclName>,
+    pub_reexport_items: HashSet<DeclName>,
 }
 
 /// What is being included — distinguishes file roots from inline DAGs and
 /// carries the kind-specific data the deferred processor needs.
-pub(in crate::eval::project) enum DeferredDagSource {
+enum DeferredDagSource {
     /// File include — body is the dep file's full AST, with its own
     /// transitive imports' values supplied via
     /// [`build_dep_imported_values`].
@@ -298,42 +294,41 @@ pub(in crate::eval::project) enum DeferredDagSource {
 /// Bundles the various collections that [`compile_single_file_in_project`] builds
 /// during its import-processing loop, avoiding excessive parameter counts in the
 /// extracted helper functions.
-pub(in crate::eval::project) struct ImportContext<'a> {
-    pub(in crate::eval::project) imported_names: ImportedValueNames,
-    pub(in crate::eval::project) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    pub(in crate::eval::project) imported_source_order: Vec<(ScopedName, DeclCategory)>,
-    pub(in crate::eval::project) imported_type_system_names: HashMap<
+struct ImportContext<'a> {
+    imported_names: ImportedValueNames,
+    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_source_order: Vec<(ScopedName, DeclCategory)>,
+    imported_type_system_names: HashMap<
         graphcal_compiler::dag_id::DagId,
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
-    pub(in crate::eval::project) module_map:
-        HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
+    module_map: HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
     /// Registry surfaces of module-imported dependencies, merged into the
     /// importer's registry builder before its own declarations register.
-    pub(in crate::eval::project) extra_registry_builders: Vec<ModuleRegistryImport<'a>>,
-    pub(in crate::eval::project) deferred_dag_includes: Vec<DeferredDagInclude>,
+    extra_registry_builders: Vec<ModuleRegistryImport<'a>>,
+    deferred_dag_includes: Vec<DeferredDagInclude>,
     /// Plot specs requested from standalone-evaluated dependencies via
     /// include brace lists, renamed to their local aliases (#847).
-    pub(in crate::eval::project) included_plot_specs: Vec<super::types::PlotSpec>,
+    included_plot_specs: Vec<super::types::PlotSpec>,
 }
 
 /// A module-imported dependency's registry surface, queued for merging into
 /// the importer's registry builder.
-pub(in crate::eval::project) struct ModuleRegistryImport<'a> {
+struct ModuleRegistryImport<'a> {
     /// The dependency's frozen registry.
-    pub(in crate::eval::project) registry: &'a Registry,
+    registry: &'a Registry,
     /// Names declared `pub` in the dependency — only these cross the boundary.
-    pub(in crate::eval::project) pub_names: &'a HashSet<DeclName>,
+    pub_names: &'a HashSet<DeclName>,
     /// The import alias that keys the dependency's `pub` units in the
     /// importer's unit scope (`alias.unit`).
-    pub(in crate::eval::project) unit_alias: ModuleAliasName,
+    unit_alias: ModuleAliasName,
     /// Concrete scales for the dependency's dynamic units, resolved against
     /// its evaluated runtime values. Dynamic units merge as static scales —
     /// their scale expressions reference the dependency's own params and
     /// cannot be re-evaluated in the importer's context.
-    pub(in crate::eval::project) resolved_dynamic_scales: &'a HashMap<UnitRef, PositiveFiniteScale>,
+    resolved_dynamic_scales: &'a HashMap<UnitRef, PositiveFiniteScale>,
     /// The import-statement span, localizing merge-conflict diagnostics.
-    pub(in crate::eval::project) import_span: Span,
+    import_span: Span,
 }
 
 /// Result of looking up a single selective import item in an `EvaluatedFile`.
@@ -358,7 +353,7 @@ pub(in crate::eval::project) enum SelectiveImportResult {
 ///
 /// If there are no module imports and no qualified members, returns a
 /// borrowed reference to the original AST.
-pub(in crate::eval::project) fn rewrite_qualified_refs_in_ast<'a>(
+fn rewrite_qualified_refs_in_ast<'a>(
     ast: &'a graphcal_compiler::desugar::desugared_ast::File,
     module_map: &HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
     imported_names: &ImportedValueNames,
@@ -475,7 +470,7 @@ pub(super) fn resolve_field_declared_type(
 }
 
 /// Validate and apply parameter overrides to an IR.
-pub(in crate::eval::project) fn apply_overrides(
+fn apply_overrides(
     ir: &mut graphcal_compiler::ir::lower::UnfrozenIR,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
 ) -> Result<(), CompileError> {

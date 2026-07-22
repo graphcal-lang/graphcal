@@ -20,12 +20,13 @@ pub struct DagRegistry {
 impl DagRegistry {
     /// Return the AST body of the named `dag`, if one is declared in this file.
     #[must_use]
-    pub fn get(&self, name: &str) -> Option<&DagDecl> {
+    pub(crate) fn get(&self, name: &str) -> Option<&DagDecl> {
         self.dags.get(name)
     }
 
     /// Iterate over all registered dags.
-    pub fn all_dags(&self) -> impl Iterator<Item = (&DeclName, &DagDecl)> {
+    #[cfg(test)]
+    pub(crate) fn all_dags(&self) -> impl Iterator<Item = (&DeclName, &DagDecl)> {
         self.dags.iter()
     }
 }

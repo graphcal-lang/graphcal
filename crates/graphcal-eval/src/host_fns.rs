@@ -27,7 +27,7 @@ use graphcal_compiler::syntax::plugin::{ExternFnKey, PluginPath};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostFnError {
     /// Human-readable failure description.
-    pub message: String,
+    pub(crate) message: String,
 }
 
 impl HostFnError {
@@ -84,7 +84,7 @@ impl HostFnValue {
     /// # Errors
     ///
     /// Returns a [`HostFnError`] when this value is a buffer.
-    pub fn expect_scalar(&self, position: usize) -> Result<f64, HostFnError> {
+    fn expect_scalar(&self, position: usize) -> Result<f64, HostFnError> {
         match self {
             Self::Scalar(value) => Ok(*value),
             Self::Buffer(_) => Err(HostFnError::new(format!(
@@ -98,7 +98,7 @@ impl HostFnValue {
     /// # Errors
     ///
     /// Returns a [`HostFnError`] when this value is a scalar.
-    pub fn expect_buffer(&self, position: usize) -> Result<&[f64], HostFnError> {
+    fn expect_buffer(&self, position: usize) -> Result<&[f64], HostFnError> {
         match self {
             Self::Buffer(values) => Ok(values),
             Self::Scalar(_) => Err(HostFnError::new(format!(
@@ -179,7 +179,7 @@ impl HostFunctionRegistry {
     ///
     /// Re-registering the same `(plugin, name)` replaces the previous
     /// closure — the embedder owns the registry contents.
-    pub fn register(
+    fn register(
         &mut self,
         plugin: PluginPath,
         name: FnName,
@@ -223,20 +223,20 @@ impl HostFunctionRegistry {
 
     /// The recorded registration failure for `plugin`, if any.
     #[must_use]
-    pub fn plugin_failure(&self, plugin: &PluginPath) -> Option<&PluginRegistrationError> {
+    pub(crate) fn plugin_failure(&self, plugin: &PluginPath) -> Option<&PluginRegistrationError> {
         self.failed_plugins.get(plugin)
     }
 
     /// Look up the host closure for an extern function.
     #[must_use]
-    pub fn get(&self, key: &ExternFnKey) -> Option<&HostFn> {
+    pub(crate) fn get(&self, key: &ExternFnKey) -> Option<&HostFn> {
         self.fns.get(key).map(|entry| &entry.function)
     }
 
     /// The manifest-provided signature for an extern function, when its
     /// entry came from a WASM plugin.
     #[must_use]
-    pub fn provided_signature(&self, key: &ExternFnKey) -> Option<&FunctionSignature> {
+    pub(crate) fn provided_signature(&self, key: &ExternFnKey) -> Option<&FunctionSignature> {
         self.fns
             .get(key)
             .and_then(|entry| entry.provided_signature.as_ref())
@@ -244,19 +244,19 @@ impl HostFunctionRegistry {
 
     /// Returns whether the registry provides an implementation for `key`.
     #[must_use]
-    pub fn contains(&self, key: &ExternFnKey) -> bool {
+    pub(crate) fn contains(&self, key: &ExternFnKey) -> bool {
         self.fns.contains_key(key)
     }
 }
 
 /// The plugin path of the built-in demo plugin registered by
 /// [`demo_registry`].
-pub const DEMO_PLUGIN_PATH: &str = "graphcal:demo";
+const DEMO_PLUGIN_PATH: &str = "graphcal:demo";
 
 /// Host-native stand-in registry used by the CLI and LSP embedders.
 ///
 /// The default embedders provide one well-known demo plugin (path
-/// [`DEMO_PLUGIN_PATH`]) to prove the extern path end-to-end without a
+/// `DEMO_PLUGIN_PATH`) to prove the extern path end-to-end without a
 /// `.wasm` module:
 ///
 /// ```gcl

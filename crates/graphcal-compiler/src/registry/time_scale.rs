@@ -36,19 +36,19 @@ pub enum TimeScale {
 
 impl TimeScale {
     /// All supported time scale names, for error messages and validation.
-    pub const ALL_NAMES: &[&str] = &[
+    pub(crate) const ALL_NAMES: &[&str] = &[
         "UTC", "TAI", "TT", "TDB", "ET", "GPST", "GST", "BDT", "QZSST",
     ];
 
     /// Returns `true` if this is the default civil time scale (UTC).
     #[must_use]
-    pub const fn is_utc(self) -> bool {
+    pub(crate) const fn is_utc(self) -> bool {
         matches!(self, Self::UTC)
     }
 
     /// Returns the string name of this time scale.
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    const fn name(self) -> &'static str {
         match self {
             Self::UTC => "UTC",
             Self::TAI => "TAI",
@@ -84,7 +84,7 @@ impl TimeScale {
     ///
     /// Returns an error when `ts` is a `hifitime` time scale that Graphcal does
     /// not support.
-    pub const fn from_hifitime(
+    const fn from_hifitime(
         ts: hifitime::TimeScale,
     ) -> Result<Self, UnsupportedHifitimeTimeScaleError> {
         match ts {
@@ -110,7 +110,7 @@ impl TimeScale {
 #[error("unknown time scale `{input}`; expected one of: {}", TimeScale::ALL_NAMES.join(", "))]
 pub struct ParseTimeScaleError {
     /// The unrecognized input string.
-    pub input: String,
+    input: String,
 }
 
 /// Error returned when converting an unsupported `hifitime` time scale.
@@ -119,7 +119,7 @@ pub struct ParseTimeScaleError {
 /// as a valid time scale, but Graphcal does not support that time scale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("unsupported hifitime time scale `{0:?}`")]
-pub struct UnsupportedHifitimeTimeScaleError(pub hifitime::TimeScale);
+pub struct UnsupportedHifitimeTimeScaleError(hifitime::TimeScale);
 
 impl TryFrom<hifitime::TimeScale> for TimeScale {
     type Error = UnsupportedHifitimeTimeScaleError;

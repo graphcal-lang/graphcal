@@ -1,0 +1,4 @@
+[[production]]
+package = "graphcal"
+bin = "graphcal"
+reason = "shipped application binary"

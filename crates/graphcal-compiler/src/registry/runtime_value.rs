@@ -54,11 +54,11 @@ impl std::fmt::Display for RuntimeValueKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeValueError {
     /// What kind of value was expected (e.g. "scalar", "Bool").
-    pub expected: &'static str,
+    expected: &'static str,
     /// A description of what the value was being used for.
-    pub context: String,
+    context: String,
     /// The actual variant encountered.
-    pub actual: RuntimeValueKind,
+    actual: RuntimeValueKind,
 }
 
 impl std::fmt::Display for RuntimeValueError {

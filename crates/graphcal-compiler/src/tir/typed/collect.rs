@@ -632,7 +632,6 @@ fn record_resolved_constructor_target(
         )
     })?;
     let target = ResolvedConstructorTarget {
-        constructor: constructor.clone(),
         owning_type: def.owning_type.clone(),
         type_def: def.type_def.clone(),
         variant: def.variant.clone(),

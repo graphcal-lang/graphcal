@@ -92,7 +92,7 @@ impl NameAtom {
 
     /// Consume and return the inner `String`.
     #[must_use]
-    pub fn into_inner(self) -> String {
+    pub(crate) fn into_inner(self) -> String {
         self.0
     }
 }
@@ -276,13 +276,13 @@ impl<Ns: NameNamespace> NameDef<Ns> {
 
     /// Consume and return the inner atom.
     #[must_use]
-    pub fn into_atom(self) -> NameAtom {
+    pub(crate) fn into_atom(self) -> NameAtom {
         self.atom
     }
 
     /// Consume and return the inner `String`.
     #[must_use]
-    pub fn into_inner(self) -> String {
+    pub(crate) fn into_inner(self) -> String {
         self.atom.into_inner()
     }
 }
@@ -364,7 +364,7 @@ impl<Ns: NameNamespace> std::fmt::Debug for ResolvedName<Ns> {
 impl<Ns: NameNamespace> ResolvedName<Ns> {
     /// Construct a resolved name from its canonical owner and leaf atom.
     #[must_use]
-    pub const fn new(owner: crate::dag_id::DagId, name: NameAtom) -> Self {
+    pub(crate) const fn new(owner: crate::dag_id::DagId, name: NameAtom) -> Self {
         Self {
             owner,
             name,
@@ -440,13 +440,16 @@ impl NamePath {
 
     /// Construct a one-segment path.
     #[must_use]
-    pub fn local(atom: NameAtom) -> Self {
+    pub(crate) fn local(atom: NameAtom) -> Self {
         Self::new(crate::syntax::non_empty::NonEmpty::singleton(atom))
     }
 
     /// Construct a path from qualifier atoms plus a leaf atom.
     #[must_use]
-    pub fn qualified_path(qualifier: impl IntoIterator<Item = NameAtom>, leaf: NameAtom) -> Self {
+    pub(crate) fn qualified_path(
+        qualifier: impl IntoIterator<Item = NameAtom>,
+        leaf: NameAtom,
+    ) -> Self {
         let mut segments: Vec<NameAtom> = qualifier.into_iter().collect();
         segments.push(leaf);
         let first = segments.remove(0);
@@ -479,7 +482,7 @@ impl NamePath {
 
     /// Returns whether this is a one-segment path.
     #[must_use]
-    pub const fn is_bare(&self) -> bool {
+    pub(crate) const fn is_bare(&self) -> bool {
         self.segments.len() == 1
     }
 
@@ -502,14 +505,15 @@ impl NamePath {
     ///
     /// The qualifier slice is empty for one-segment paths.
     #[must_use]
-    pub fn split_last(&self) -> (&[NameAtom], &NameAtom) {
+    pub(crate) fn split_last(&self) -> (&[NameAtom], &NameAtom) {
         let (leaf, qualifier) = self.segments.split_last();
         (qualifier, leaf)
     }
 
     /// Returns the qualifier segments before the leaf. Empty for bare paths.
+    #[cfg(test)]
     #[must_use]
-    pub fn qualifier_segments(&self) -> &[NameAtom] {
+    fn qualifier_segments(&self) -> &[NameAtom] {
         self.split_last().0
     }
 
@@ -527,7 +531,7 @@ impl NamePath {
     /// Returns [`NameAtomError`] when the string is empty or contains a path
     /// separator. Use [`Self::qualified_path`] when the input is genuinely a
     /// path with multiple segments.
-    pub fn try_local(s: impl Into<String>) -> Result<Self, NameAtomError> {
+    fn try_local(s: impl Into<String>) -> Result<Self, NameAtomError> {
         NameAtom::parse(s).map(Self::local)
     }
 
@@ -540,7 +544,7 @@ impl NamePath {
         clippy::panic,
         reason = "trusted constructor centralizes explicit panic policy"
     )]
-    pub fn expect_local(s: impl Into<String>) -> Self {
+    pub(crate) fn expect_local(s: impl Into<String>) -> Self {
         Self::try_local(s)
             .unwrap_or_else(|err| panic!("trusted NamePath leaf must be valid: {err}"))
     }

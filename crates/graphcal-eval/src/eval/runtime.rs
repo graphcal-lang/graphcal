@@ -971,7 +971,7 @@ fn check_indexed_assert_with_expected_fail(
 ///   `failed at Mode.Boost`
 /// Multi-index failure message example:
 ///   `failed at (Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`
-pub(super) fn check_indexed_assert(
+fn check_indexed_assert(
     index_name: &IndexTypeRef,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
 ) -> AssertResult {
@@ -1031,7 +1031,7 @@ fn collect_failing_paths(
 }
 
 /// Evaluate a single assert body and return an `AssertResult`.
-pub(super) fn evaluate_assert_body(
+fn evaluate_assert_body(
     body: &graphcal_compiler::hir::AssertBody,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,

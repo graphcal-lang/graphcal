@@ -28,7 +28,7 @@ const CUSTOM_SECTION_ID: u8 = 0;
 /// Returns [`SectionError`] when the bytes are not a wasm module, the
 /// section framing is malformed, or the module does not contain exactly one
 /// manifest section.
-pub fn extract_manifest(wasm: &[u8]) -> Result<&[u8], SectionError> {
+pub(crate) fn extract_manifest(wasm: &[u8]) -> Result<&[u8], SectionError> {
     let mut manifest: Option<&[u8]> = None;
     let mut walker = SectionWalker::new(wasm)?;
     while let Some(section) = walker.next_section()? {

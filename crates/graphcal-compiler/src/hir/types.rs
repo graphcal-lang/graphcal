@@ -22,14 +22,14 @@ use crate::syntax::type_name::ResolvedStructTypeName;
 /// generic scope plus the parameter leaf name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GenericParamId {
-    pub owner: GenericParamOwner,
+    owner: GenericParamOwner,
     pub name: GenericParamName,
 }
 
 impl GenericParamId {
     /// Create a generic parameter identity from its owner and leaf name.
     #[must_use]
-    pub const fn new(owner: GenericParamOwner, name: GenericParamName) -> Self {
+    pub(crate) const fn new(owner: GenericParamOwner, name: GenericParamName) -> Self {
         Self { owner, name }
     }
 }
@@ -44,9 +44,9 @@ pub enum GenericParamOwner {
 /// A resolved generic-parameter definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericParamDef {
-    pub id: Spanned<GenericParamId>,
-    pub constraint: GenericConstraint,
-    pub default: Option<TypeExpr>,
+    pub(crate) id: Spanned<GenericParamId>,
+    pub(crate) constraint: GenericConstraint,
+    pub(crate) default: Option<TypeExpr>,
 }
 
 /// Built-in type forms with closed semantic meaning.
@@ -65,7 +65,7 @@ pub enum BuiltinType {
 impl BuiltinType {
     /// The default `Datetime` type is UTC.
     #[must_use]
-    pub const fn datetime_utc() -> Self {
+    pub(crate) const fn datetime_utc() -> Self {
         Self::Datetime(TimeScale::UTC)
     }
 }
@@ -78,13 +78,13 @@ impl BuiltinType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeExpr {
     pub kind: TypeExprKind,
-    pub span: Span,
+    pub(crate) span: Span,
 }
 
 impl TypeExpr {
     /// Create a HIR type expression.
     #[must_use]
-    pub const fn new(kind: TypeExprKind, span: Span) -> Self {
+    pub(crate) const fn new(kind: TypeExprKind, span: Span) -> Self {
         Self { kind, span }
     }
 }
@@ -122,13 +122,13 @@ pub enum TypeExprKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DimExpr {
     pub terms: Vec<DimExprItem>,
-    pub span: Span,
+    pub(crate) span: Span,
 }
 
 /// One term of a dimension expression with its combining operator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DimExprItem {
-    pub op: MulDivOp,
+    pub(crate) op: MulDivOp,
     pub term: DimTermRef,
 }
 
@@ -137,8 +137,8 @@ pub struct DimExprItem {
 pub struct DimTermRef {
     pub target: DimTermTarget,
     /// `None` means exponent 1. Rational exponents (`^(1/2)`) are kept exact.
-    pub power: Option<Rational>,
-    pub span: Span,
+    pub(crate) power: Option<Rational>,
+    pub(crate) span: Span,
 }
 
 /// Target of a resolved dimension term.
@@ -177,7 +177,7 @@ pub enum NatExpr {
 impl NatExpr {
     /// Source span for the expression.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    pub(crate) const fn span(&self) -> Span {
         match self {
             Self::Literal(_, span) | Self::Add(_, _, span) | Self::Mul(_, _, span) => *span,
             Self::Param(param) => param.span,

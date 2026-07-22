@@ -15,7 +15,7 @@ fn struct_value_type_refs_equal(lhs: &StructTypeRef, rhs: &StructTypeRef) -> boo
     lhs.matches_ref(rhs)
 }
 
-pub(super) fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
+fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
     match (lhs, rhs) {
         #[expect(
             clippy::float_cmp,

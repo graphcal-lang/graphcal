@@ -1011,7 +1011,6 @@ impl FormatEquivalent for MultiDeclSlot {
         let Self {
             visibility,
             kind,
-            kind_span: _,
             name,
             type_ann,
             header_span: _,
@@ -1019,7 +1018,6 @@ impl FormatEquivalent for MultiDeclSlot {
         let Self {
             visibility: other_visibility,
             kind: other_kind,
-            kind_span: _,
             name: other_name,
             type_ann: other_type_ann,
             header_span: _,
@@ -1080,14 +1078,12 @@ impl FormatEquivalent for MultiDeclSlice {
         let Self {
             prefix_keys,
             header_cells,
-            header_span: _,
             column_layout,
             rows,
         } = self;
         let Self {
             prefix_keys: other_prefix_keys,
             header_cells: other_header_cells,
-            header_span: _,
             column_layout: other_column_layout,
             rows: other_rows,
         } = other;
@@ -1123,15 +1119,10 @@ impl FormatEquivalent for MultiHeaderCell {
 
 impl FormatEquivalent for MultiDataRow {
     fn format_equivalent(&self, other: &Self) -> bool {
-        let Self {
-            label,
-            values,
-            span: _,
-        } = self;
+        let Self { label, values } = self;
         let Self {
             label: other_label,
             values: other_values,
-            span: _,
         } = other;
         label.format_equivalent(other_label) && values.format_equivalent(other_values)
     }

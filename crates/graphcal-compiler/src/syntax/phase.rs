@@ -72,6 +72,6 @@ impl sealed::Sealed for Desugared {}
 /// is the canonical way to handle the impossible case without runtime panic.
 #[inline]
 #[must_use]
-pub const fn never<T>(x: Infallible) -> T {
+pub(crate) const fn never<T>(x: Infallible) -> T {
     match x {}
 }

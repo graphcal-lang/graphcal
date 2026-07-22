@@ -89,7 +89,7 @@ pub struct PreludeTypeScope {
 impl PreludeTypeScope {
     /// Create a prelude type scope from its canonical owner and dimension names.
     #[must_use]
-    pub fn new(owner: DagId, dimensions: impl IntoIterator<Item = DimName>) -> Self {
+    fn new(owner: DagId, dimensions: impl IntoIterator<Item = DimName>) -> Self {
         Self {
             owner,
             dimensions: dimensions.into_iter().collect(),
@@ -119,15 +119,15 @@ impl PreludeTypeScope {
 /// A generic parameter binding in a lexical generic scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericParamBinding {
-    pub id: GenericParamId,
-    pub constraint: GenericConstraint,
-    pub span: Span,
+    pub(crate) id: GenericParamId,
+    pub(crate) constraint: GenericConstraint,
+    span: Span,
 }
 
 impl GenericParamBinding {
     /// Create a lexical generic-parameter binding.
     #[must_use]
-    pub const fn new(id: GenericParamId, constraint: GenericConstraint, span: Span) -> Self {
+    pub(crate) const fn new(id: GenericParamId, constraint: GenericConstraint, span: Span) -> Self {
         Self {
             id,
             constraint,
@@ -159,7 +159,7 @@ impl GenericScope {
     ///
     /// Returns [`HirLowerError::DuplicateGenericParam`] if the list contains
     /// the same leaf name twice.
-    pub fn from_params(
+    fn from_params(
         owner: &GenericParamOwner,
         params: &[ast::GenericParam],
     ) -> Result<Self, HirLowerError> {
@@ -175,7 +175,7 @@ impl GenericScope {
     ///
     /// Returns [`HirLowerError::DuplicateGenericParam`] if a parameter with the
     /// same leaf name is already in scope.
-    pub fn insert(
+    fn insert(
         &mut self,
         owner: &GenericParamOwner,
         param: &ast::GenericParam,
@@ -194,7 +194,10 @@ impl GenericScope {
     ///
     /// Returns [`HirLowerError::DuplicateGenericParam`] if a parameter with the
     /// same leaf name is already in scope.
-    pub fn insert_binding(&mut self, binding: GenericParamBinding) -> Result<(), HirLowerError> {
+    pub(crate) fn insert_binding(
+        &mut self,
+        binding: GenericParamBinding,
+    ) -> Result<(), HirLowerError> {
         let name = binding.id.name.clone();
         match self.params.entry(name.clone()) {
             Entry::Vacant(entry) => {
@@ -211,7 +214,7 @@ impl GenericScope {
 
     /// Look up a generic parameter by its leaf name.
     #[must_use]
-    pub fn get(&self, name: &GenericParamName) -> Option<&GenericParamBinding> {
+    pub(crate) fn get(&self, name: &GenericParamName) -> Option<&GenericParamBinding> {
         self.params.get(name)
     }
 
@@ -223,17 +226,17 @@ impl GenericScope {
 
 /// Context required to lower one type expression into HIR.
 #[derive(Debug, Clone, Copy)]
-pub struct TypeLoweringContext<'a> {
-    pub owner: &'a DagId,
-    pub resolver: &'a ModuleResolver,
-    pub generic_scope: &'a GenericScope,
-    pub prelude: Option<&'a PreludeTypeScope>,
+pub(crate) struct TypeLoweringContext<'a> {
+    owner: &'a DagId,
+    resolver: &'a ModuleResolver,
+    generic_scope: &'a GenericScope,
+    prelude: Option<&'a PreludeTypeScope>,
 }
 
 impl<'a> TypeLoweringContext<'a> {
     /// Create a type-lowering context.
     #[must_use]
-    pub const fn new(
+    pub(crate) const fn new(
         owner: &'a DagId,
         resolver: &'a ModuleResolver,
         generic_scope: &'a GenericScope,
@@ -248,7 +251,7 @@ impl<'a> TypeLoweringContext<'a> {
 
     /// Add implicit prelude type symbols to this lowering context.
     #[must_use]
-    pub const fn with_prelude(self, prelude: &'a PreludeTypeScope) -> Self {
+    pub(crate) const fn with_prelude(self, prelude: &'a PreludeTypeScope) -> Self {
         Self {
             owner: self.owner,
             resolver: self.resolver,
@@ -309,7 +312,7 @@ pub fn lower_generic_params(
 ///
 /// Returns [`HirLowerError`] when a source path cannot be resolved to the
 /// namespace required by its syntactic position.
-pub fn lower_type_expr(
+pub(crate) fn lower_type_expr(
     type_ann: &ast::TypeExpr,
     ctx: TypeLoweringContext<'_>,
 ) -> Result<TypeExpr, HirLowerError> {
@@ -603,7 +606,7 @@ fn lower_index_expr_name(
 ///
 /// Returns [`HirLowerError`] if the expression references an unknown generic
 /// parameter or a generic parameter whose constraint is not `Nat`.
-pub fn lower_nat_expr(
+pub(crate) fn lower_nat_expr(
     nat_expr: &ast::NatExpr,
     ctx: TypeLoweringContext<'_>,
 ) -> Result<NatExpr, HirLowerError> {

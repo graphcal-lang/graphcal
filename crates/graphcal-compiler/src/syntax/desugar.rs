@@ -16,7 +16,7 @@
 //! to `File<Raw> -> File<Desugared>` (the [`From`] impl in
 //! [`crate::desugar::convert`] is the engine for that transition) and
 //! pin all consumers to `File<Desugared>`, replacing the runtime
-//! [`unreachable_post_desugar`] panics with [`crate::syntax::phase::never`]
+//! [`unreachable_post_desugar`] panics with `crate::syntax::phase::never`
 //! on the [`Infallible`](core::convert::Infallible) `Sugar` payload.
 //!
 //! ## Span fidelity
@@ -47,10 +47,11 @@ pub fn unreachable_post_desugar() -> ! {
 }
 
 use crate::syntax::ast::{
-    ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, File, MapEntry, MapEntryIndex,
-    MapEntryKey, MultiDecl, MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl,
-    ParamDecl, TableIndexSpec,
+    ConstNodeDecl, Expr, ExprKind, File, MapEntry, MapEntryIndex, MapEntryKey, MultiDecl,
+    MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl, ParamDecl, TableIndexSpec,
 };
+#[cfg(test)]
+use crate::syntax::ast::{DeclKind, Declaration};
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Raw};
@@ -80,7 +81,7 @@ fn multi_entry_keys(
 /// cannot share storage. The actual conversion logic lives in
 /// [`crate::desugar::convert`] (the `From<File<Raw>> for File<Desugared>`
 /// impl), which dispatches the multi-decl `Sugar` arm to
-/// [`expand_multi_decl`].
+/// `expand_multi_decl`.
 #[must_use]
 pub fn desugar_multi_decls_in_file(file: File<Raw>) -> File<Desugared> {
     file.into()
@@ -101,8 +102,9 @@ pub enum ExpandedSlotDecl {
 impl ExpandedSlotDecl {
     /// Re-wrap as a generic [`Declaration`] (used by tests that inspect the
     /// expansion through the ordinary AST surface).
+    #[cfg(test)]
     #[must_use]
-    pub fn into_declaration(self) -> Declaration {
+    pub(crate) fn into_declaration(self) -> Declaration {
         let (kind, span) = match self {
             Self::Param(p, span) => (DeclKind::Param(p), span),
             Self::Node(n, span) => (DeclKind::Node(n), span),
@@ -122,7 +124,7 @@ impl ExpandedSlotDecl {
     clippy::too_many_lines,
     reason = "single cohesive routine for multi-decl expansion"
 )]
-pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
+pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
     let row_index_spec = multi.shared_axes.row_axis().clone();
     let slice_axis_specs: &[TableIndexSpec] = multi.shared_axes.slice_axes();
 

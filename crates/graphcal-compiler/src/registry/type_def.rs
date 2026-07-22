@@ -70,9 +70,9 @@ impl From<GenericConstraint> for TypeGenericConstraint {
 #[derive(Debug, Clone)]
 pub struct TypeGenericParam {
     pub name: GenericParamName,
-    pub constraint: TypeGenericConstraint,
+    pub(crate) constraint: TypeGenericConstraint,
     /// Optional default type expression, e.g. `F: Type = Unframed`.
-    pub default: Option<crate::desugar::desugared_ast::TypeExpr>,
+    pub(crate) default: Option<crate::desugar::desugared_ast::TypeExpr>,
 }
 
 /// A registered type definition: either a required type stub or a tagged union.
@@ -80,7 +80,7 @@ pub struct TypeGenericParam {
 pub struct TypeDef {
     pub name: StructTypeName,
     pub generic_params: Vec<TypeGenericParam>,
-    pub kind: TypeDefKind,
+    pub(crate) kind: TypeDefKind,
 }
 
 impl TypeDef {
@@ -95,16 +95,16 @@ impl TypeDef {
         }
     }
 
-    /// Returns `true` if this is a tagged union — single-variant or
-    /// multi-variant.
+    /// Returns `true` if this is a tagged union.
+    #[cfg(test)]
     #[must_use]
-    pub const fn is_union(&self) -> bool {
+    pub(crate) const fn is_union(&self) -> bool {
         matches!(self.kind, TypeDefKind::Union { .. })
     }
 
     /// Returns `true` if this is a required type stub awaiting binding.
     #[must_use]
-    pub const fn is_required(&self) -> bool {
+    pub(crate) const fn is_required(&self) -> bool {
         matches!(self.kind, TypeDefKind::Required)
     }
 

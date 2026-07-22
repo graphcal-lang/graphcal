@@ -22,8 +22,8 @@ use graphcal_package::{
 
 /// Span-free identity for an `import`/`include` path.
 ///
-/// Used as a `HashMap` key in [`LoadedFile::resolved_imports`] /
-/// [`LoadedDag::resolved_imports`] so that two equal logical paths always
+/// Used as a `HashMap` key in `LoadedFile::resolved_imports` /
+/// `LoadedDag::resolved_imports` so that two equal logical paths always
 /// produce equal keys without depending on a shared join format
 /// (e.g. `.` vs `/`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -34,7 +34,7 @@ impl ModulePathKey {
     /// cloned and spans are dropped — span-aware lookup is never useful at
     /// this layer.
     #[must_use]
-    pub fn from_path(path: &ModulePath) -> Self {
+    pub(crate) fn from_path(path: &ModulePath) -> Self {
         Self(path.segments.iter().map(|s| s.name.to_string()).collect())
     }
 
@@ -78,20 +78,20 @@ impl std::fmt::Display for ModulePathKey {
 pub struct LoadedDag {
     /// Abstract DAG identity for this inline dag, formed by appending the
     /// dag's name to its parent file's `DagId`.
-    pub dag_id: DagId,
+    pub(crate) dag_id: DagId,
     /// The enclosing file's `DagId`. Imports whose path resolves to this id
     /// are dag-body self-imports (`import <self>.{...}`).
-    pub parent_dag_id: DagId,
+    pub(crate) parent_dag_id: DagId,
     /// The dag declaration's name in source.
-    pub name: String,
+    name: String,
     /// Raw declarations from the dag body, in source order.
-    pub body: Vec<Declaration>,
+    pub(crate) body: Vec<Declaration>,
     /// Loader-resolved DAG identities for each `import` declaration in the
     /// body, keyed by the import path's display string. Self-imports map to
     /// `parent_dag_id`; cross-file imports map to the dependency file's id.
     /// Imports whose path fails to resolve at load time are absent here; the
     /// downstream resolver surfaces a structured error for them.
-    pub resolved_imports: HashMap<ModulePathKey, InlineBodyImportResolution>,
+    pub(crate) resolved_imports: HashMap<ModulePathKey, InlineBodyImportResolution>,
 }
 
 /// A single loaded and parsed file.
@@ -100,18 +100,18 @@ pub struct LoadedFile {
     /// Canonical path of this file (retained for I/O: diagnostics, LSP URIs).
     pub path: PathBuf,
     /// Abstract DAG identity (filesystem-independent).
-    pub dag_id: DagId,
+    pub(crate) dag_id: DagId,
     /// Raw source text.
     pub source: Arc<String>,
     /// Parsed AST.
     pub ast: File,
     /// Named source for diagnostics.
-    pub named_source: NamedSource<Arc<String>>,
+    pub(crate) named_source: NamedSource<Arc<String>>,
     /// Loader-resolved DAG identities for each import declaration, keyed by the
     /// import path's display string (e.g. `"./lib.gcl"` or `"nasa/rocket"`).
     /// Produced by the loader so that downstream consumers (evaluator, LSP) can
     /// look up resolved imports without re-resolving.
-    pub resolved_imports: HashMap<ModulePathKey, DagId>,
+    resolved_imports: HashMap<ModulePathKey, DagId>,
     /// Inline `dag X { ... }` blocks lifted from this file, with
     /// per-dag pre-resolved imports. Order matches source order.
     ///
@@ -120,7 +120,7 @@ pub struct LoadedFile {
     /// (Slice C step 2) the AST view will stop being the authority for
     /// dag-body compilation and `inline_dags` will be the single source of
     /// truth.
-    pub inline_dags: Vec<LoadedDag>,
+    pub(crate) inline_dags: Vec<LoadedDag>,
 }
 
 impl LoadedFile {
@@ -178,7 +178,7 @@ pub struct LoadedProject {
     pub root: DagId,
     /// Topological load order: dependencies before dependents.
     /// The root file is last.
-    pub load_order: Vec<DagId>,
+    pub(crate) load_order: Vec<DagId>,
     /// WASM plugin files referenced by `import plugin "….wasm"` declarations
     /// in root-package files, keyed by the verbatim plugin path.
     ///
@@ -255,7 +255,6 @@ fn read_plugin_file<F: FileSystemReader>(
         Ok(bytes) => Ok(LoadedPlugin {
             sha256_hex: hex_string(&Sha256::digest(&bytes)),
             bytes: bytes.into(),
-            resolved_path: resolved,
         }),
         Err(err) => Err(PluginFileError::Unreadable {
             resolved,
@@ -267,12 +266,10 @@ fn read_plugin_file<F: FileSystemReader>(
 /// A successfully read wasm plugin file, ready for the plugin host.
 #[derive(Debug, Clone)]
 pub struct LoadedPlugin {
-    /// The resolved on-disk path (inside the root package).
-    pub resolved_path: PathBuf,
     /// The raw module bytes.
     pub bytes: Arc<[u8]>,
     /// Lowercase-hex SHA-256 of the bytes — the form `graphcal.lock` pins.
-    pub sha256_hex: String,
+    sha256_hex: String,
 }
 
 /// Why a wasm plugin file could not be provided to the plugin host.

@@ -178,7 +178,7 @@ fn value_entry_maps_equal(
 #[error("expected Scalar value, got {actual}")]
 pub struct ValueError {
     /// A short description of the actual variant (e.g. "Bool", "Int", "struct `Foo`").
-    pub actual: String,
+    actual: String,
 }
 
 impl Value {
@@ -289,7 +289,8 @@ impl Value {
     /// # Errors
     ///
     /// Returns [`ValueError`] if this is not a `Scalar`.
-    pub fn display_value(&self) -> Result<f64, ValueError> {
+    #[cfg(test)]
+    pub(crate) fn display_value(&self) -> Result<f64, ValueError> {
         match self {
             Self::Scalar {
                 si_value,
@@ -595,7 +596,7 @@ pub struct EvalResult {
     pub base_dim_symbols:
         std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     /// Domain constraints for params/nodes, for programmatic access (sweeping/sampling).
-    pub domain_constraints: std::collections::HashMap<
+    pub(crate) domain_constraints: std::collections::HashMap<
         ScopedName,
         graphcal_compiler::tir::typed::ResolvedDomainConstraint,
     >,

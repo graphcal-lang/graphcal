@@ -71,7 +71,7 @@ pub struct QualifiedIndexVariantName {
 impl QualifiedIndexVariantName {
     /// Create a qualified index variant name from its index and variant parts.
     #[must_use]
-    pub const fn new(index: IndexName, variant: IndexVariantName) -> Self {
+    const fn new(index: IndexName, variant: IndexVariantName) -> Self {
         Self { index, variant }
     }
 
@@ -109,7 +109,7 @@ impl ResolvedIndexVariant {
     /// Create a resolved index-variant reference from its resolved index and
     /// variant leaf.
     #[must_use]
-    pub const fn new(index: ResolvedIndexName, variant: IndexVariantName) -> Self {
+    pub(crate) const fn new(index: ResolvedIndexName, variant: IndexVariantName) -> Self {
         Self { index, variant }
     }
 
@@ -127,7 +127,7 @@ impl ResolvedIndexVariant {
 
     /// Consume this value and return its typed parts.
     #[must_use]
-    pub fn into_parts(self) -> (ResolvedIndexName, IndexVariantName) {
+    pub(crate) fn into_parts(self) -> (ResolvedIndexName, IndexVariantName) {
         (self.index, self.variant)
     }
 }

@@ -167,7 +167,6 @@ fn type_resolve_impl(
         ir.layers,
         ir.included_plots,
         ir.source_order,
-        ir.assert_names,
         ir.assumes_map,
         ir.expected_fail,
         ir.imported_values,
@@ -237,7 +236,6 @@ fn type_resolve_single_impl(
         ir.layers,
         ir.included_plots,
         ir.source_order,
-        ir.assert_names,
         ir.assumes_map,
         ir.expected_fail,
         ir.imported_values,
@@ -782,7 +780,6 @@ fn lower_domain_bounds(
                 .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
             Ok(ResolvedDomainBound {
                 kind: bound.kind,
-                kind_span: bound.kind_span,
                 value,
                 span: bound.span,
             })
@@ -1164,7 +1161,6 @@ impl DagTIRSeed {
         layers: Vec<crate::ir::lower::LayerEntry>,
         included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
         source_order: Vec<(ScopedName, DeclCategory)>,
-        assert_names: std::collections::HashSet<ScopedName>,
         assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
         expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
         imported_values: HashMap<
@@ -1207,11 +1203,9 @@ impl DagTIRSeed {
             included_plots,
             semantic,
             source_order,
-            assert_names,
             assumes_map,
             expected_fail,
             resolved_decl_types: self.resolved_decl_types,
-            domain_constraints: HashMap::new(), // Resolved later in compile()
             imported_values,
             imported_decl_types,
             imported_value_sources,
@@ -1224,10 +1218,8 @@ impl DagTIRSeed {
 mod ops;
 #[cfg(test)]
 use ops::unify_nat_poly_form;
-pub use ops::{
-    resolved_to_declared_type, substitute_resolved_type, substitute_resolved_type_with_types,
-    unify_resolved_type,
-};
+pub use ops::{resolved_to_declared_type, unify_resolved_type};
+pub(crate) use ops::{substitute_resolved_type, substitute_resolved_type_with_types};
 
 // ---------------------------------------------------------------------------
 mod type_expr;

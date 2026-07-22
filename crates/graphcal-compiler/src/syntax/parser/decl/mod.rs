@@ -448,7 +448,7 @@ impl Parser<'_> {
     /// Returns `(BindableVisibility::Private, None)` when the next token is not
     /// `pub`. `bind` is a contextual keyword: parsed as a literal identifier
     /// inside the parens, not reserved as a token elsewhere.
-    pub(super) fn parse_visibility_prefix(
+    fn parse_visibility_prefix(
         &mut self,
     ) -> Result<(BindableVisibility, Option<Span>), ParseError> {
         if self.lexer.peek() != Some(&Token::Pub) {

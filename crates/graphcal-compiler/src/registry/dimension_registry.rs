@@ -190,10 +190,11 @@ impl DimensionRegistry {
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
-    ///
-    /// Returns `Ok(None)` if any dimension name is unknown, and `Err` if
-    /// dimension exponent arithmetic overflows `i32`.
-    pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RationalError> {
+    #[cfg(test)]
+    pub(crate) fn resolve_dim_expr(
+        &self,
+        expr: &DimExpr,
+    ) -> Result<Option<Dimension>, RationalError> {
         resolve_dim_expr_impl(&self.dimensions, expr)
     }
 

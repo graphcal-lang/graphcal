@@ -59,7 +59,7 @@ impl BuiltinConst {
     /// Numeric value of the constant. Must agree with
     /// [`crate::registry::builtins::builtin_constants`] (enforced by test).
     #[must_use]
-    pub const fn value(self) -> f64 {
+    pub(crate) const fn value(self) -> f64 {
         match self {
             Self::Pi => std::f64::consts::PI,
             Self::E => std::f64::consts::E,

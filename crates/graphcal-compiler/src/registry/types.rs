@@ -24,9 +24,9 @@ pub use super::type_def::{
     StructField, TypeDef, TypeDefKind, TypeGenericConstraint, TypeGenericParam, TypeRegistry,
     UnionMemberDef,
 };
+pub(crate) use super::unit::UnitResolveError;
 pub use super::unit::{
-    PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitRegistry, UnitResolveError,
-    UnitScale, pow_scale,
+    PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitRegistry, UnitScale, pow_scale,
 };
 
 // ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ pub struct Registry {
     pub units: UnitRegistry,
     pub types: TypeRegistry,
     pub indexes: IndexRegistry,
-    pub dags: DagRegistry,
+    pub(crate) dags: DagRegistry,
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +124,7 @@ impl RegistryBuilder {
     ///
     /// Accessed later during dim-checking of inline `@dag(args).out`
     /// expressions.
-    pub fn register_dag(&mut self, name: DeclName, decl: DagDecl) {
+    pub(crate) fn register_dag(&mut self, name: DeclName, decl: DagDecl) {
         self.dags.insert(name, decl);
     }
 
@@ -135,7 +135,7 @@ impl RegistryBuilder {
     /// units, indexes, types, and sibling dags so that reference resolution and
     /// type checking behave as if the dag body were declared inline at the
     /// top level.
-    pub fn merge_from_registry(&mut self, parent: &Registry) {
+    pub(crate) fn merge_from_registry(&mut self, parent: &Registry) {
         for (id, name) in &parent.dimensions.base_dim_names {
             self.base_dim_names
                 .entry(id.clone())
@@ -191,7 +191,7 @@ impl RegistryBuilder {
     /// Celsius/Fahrenheit on Temperature) need offset conversions that unit
     /// definitions cannot express, so user unit definitions on the bare
     /// dimension are rejected (#648 U4).
-    pub fn mark_affine_prone(&mut self, id: BaseDimId) {
+    pub(crate) fn mark_affine_prone(&mut self, id: BaseDimId) {
         self.affine_prone_dims.insert(id);
     }
 
@@ -199,7 +199,7 @@ impl RegistryBuilder {
     /// (power 1). Compound dimensions involving the base (e.g.
     /// `Temperature / Time`) stay allowed: offsets cancel in differences.
     #[must_use]
-    pub fn is_affine_prone(&self, dim: &Dimension) -> bool {
+    pub(crate) fn is_affine_prone(&self, dim: &Dimension) -> bool {
         let mut iter = dim.iter();
         let Some((id, &exp)) = iter.next() else {
             return false;
@@ -218,7 +218,7 @@ impl RegistryBuilder {
     ///
     /// Same as `register_base_dimension` but also records the default unit symbol
     /// used for runtime display (e.g., `"m"` for Length).
-    pub fn register_base_dimension_with_symbol(
+    pub(crate) fn register_base_dimension_with_symbol(
         &mut self,
         name: DimName,
         id: BaseDimId,
@@ -243,7 +243,7 @@ impl RegistryBuilder {
     }
 
     /// Register a named unit with its dimension and SI scale factor.
-    pub fn register_unit(
+    pub(crate) fn register_unit(
         &mut self,
         name: impl Into<UnitRef>,
         dimension: Dimension,
@@ -317,7 +317,7 @@ impl RegistryBuilder {
     /// `size` is `NonZeroUsize` because empty indexes are not representable.
     /// AST-level `u64` literals must be checked at the boundary before
     /// reaching this entry point.
-    pub fn ensure_nat_range_index(&mut self, size: NonZeroUsize) -> NatRangeIndex {
+    pub(crate) fn ensure_nat_range_index(&mut self, size: NonZeroUsize) -> NatRangeIndex {
         let nat_range = NatRangeIndex::new(size);
         self.nat_ranges
             .entry(nat_range)
@@ -402,7 +402,7 @@ impl RegistryBuilder {
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`, preserving the
     /// unknown referenced dimension name in the error.
-    pub fn resolve_dim_expr_detailed(
+    pub(crate) fn resolve_dim_expr_detailed(
         &self,
         expr: &DimExpr,
     ) -> Result<Dimension, DimensionResolveError> {
@@ -426,7 +426,10 @@ impl RegistryBuilder {
     ///
     /// Returns a [`UnitResolveError`] naming the unknown or dynamic-scale
     /// unit, or the exponent overflow.
-    pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Result<(Dimension, f64), UnitResolveError> {
+    pub(crate) fn resolve_unit_expr(
+        &self,
+        expr: &UnitExpr,
+    ) -> Result<(Dimension, f64), UnitResolveError> {
         resolve_unit_expr_impl(&self.units, expr)
     }
 

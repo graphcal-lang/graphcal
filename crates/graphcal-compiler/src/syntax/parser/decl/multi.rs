@@ -62,7 +62,7 @@ impl Parser<'_> {
     /// Mirrors the per-decl checks at the top of `parse_declaration`:
     /// `param` rejects any visibility annotation; `node` / `const node`
     /// reject `pub(bind)`. Called once per multi-decl slot.
-    pub(super) fn check_value_decl_visibility(
+    fn check_value_decl_visibility(
         &self,
         visibility: BindableVisibility,
         visibility_span: Option<Span>,
@@ -286,7 +286,6 @@ impl Parser<'_> {
                     SlotKind::Node => ast::MultiSlotKind::Node,
                     SlotKind::ConstNode => ast::MultiSlotKind::ConstNode,
                 },
-                kind_span: s.kind_span,
                 name: s.name.clone(),
                 type_ann: s.type_ann.clone(),
                 header_span: s.header_span,
@@ -323,7 +322,6 @@ impl Parser<'_> {
                         },
                     })
                     .collect(),
-                header_span: slice.header_span,
                 column_layout: slice
                     .column_layout
                     .iter()
@@ -343,10 +341,9 @@ impl Parser<'_> {
                 rows: slice
                     .row_values
                     .iter()
-                    .map(|(label, values, row_span)| ast::MultiDataRow {
+                    .map(|(label, values, _row_span)| ast::MultiDataRow {
                         label: label.clone(),
                         values: values.clone(),
-                        span: *row_span,
                     })
                     .collect(),
             })
@@ -489,7 +486,6 @@ impl Parser<'_> {
         Ok(MultiSlice {
             prefix_keys: prefix_keys.to_vec(),
             header_cells,
-            header_span,
             column_layout,
             row_values,
         })
@@ -1106,7 +1102,6 @@ pub(super) enum HeaderCell {
 pub(super) struct MultiSlice {
     pub prefix_keys: Vec<MapEntryKey>,
     pub header_cells: Vec<HeaderCell>,
-    pub header_span: Span,
     pub column_layout: Vec<SlotColumnSpan>,
     pub row_values: Vec<(Spanned<IndexVariantName>, Vec<Expr>, Span)>,
 }
@@ -1125,7 +1120,7 @@ pub(super) enum SlotColumnSpan {
 }
 
 /// Internal error from layout validation; converted to `ParseError` by the caller.
-pub(super) enum LayoutError {
+enum LayoutError {
     HeaderCellKind {
         span: Span,
         slot_name: String,
@@ -1149,10 +1144,7 @@ pub(super) enum LayoutError {
 }
 
 impl LayoutError {
-    pub(super) fn into_parse_error(
-        self,
-        src: &miette::NamedSource<std::sync::Arc<String>>,
-    ) -> ParseError {
+    fn into_parse_error(self, src: &miette::NamedSource<std::sync::Arc<String>>) -> ParseError {
         match self {
             Self::HeaderCellKind {
                 span,
@@ -1211,7 +1203,7 @@ impl LayoutError {
 ///
 /// The last rule assumes **at most one extra-axis slot** in v2; v3 will
 /// disambiguate adjacent extra-axis slots by axis lookup.
-pub(super) fn build_column_layout(
+fn build_column_layout(
     slot_axes: &[SlotAxis],
     header_cells: &[HeaderCell],
     header_span: Span,
