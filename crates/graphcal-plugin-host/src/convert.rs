@@ -178,7 +178,7 @@ fn convert_rational(pow: ManifestRational) -> Result<Rational, ConvertErrorKind>
 #[error("plugin manifest function `{function}`: {kind}")]
 pub struct ManifestConvertError {
     /// The manifest function that failed to convert.
-    pub function: String,
+    function: String,
     /// What went wrong.
     pub kind: ConvertErrorKind,
 }

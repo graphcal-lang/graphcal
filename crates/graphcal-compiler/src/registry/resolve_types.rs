@@ -78,41 +78,41 @@ impl std::fmt::Display for DeclCategory {
 /// A resolved const declaration (before type annotation is added).
 #[derive(Debug)]
 pub struct ResolvedConstEntry {
-    pub name: DeclName,
-    pub expr: Expr,
-    pub span: Span,
+    pub(crate) name: DeclName,
+    pub(crate) expr: Expr,
+    pub(crate) span: Span,
 }
 
 /// A resolved param declaration (before type annotation is added).
 #[derive(Debug)]
 pub struct ResolvedParamEntry {
-    pub name: DeclName,
-    pub default_expr: Option<Expr>,
-    pub span: Span,
+    pub(crate) name: DeclName,
+    pub(crate) default_expr: Option<Expr>,
+    pub(crate) span: Span,
 }
 
 /// A resolved node declaration (before type annotation is added).
 #[derive(Debug)]
 pub struct ResolvedNodeEntry {
-    pub name: DeclName,
-    pub expr: Expr,
-    pub span: Span,
+    pub(crate) name: DeclName,
+    pub(crate) expr: Expr,
+    pub(crate) span: Span,
 }
 
 /// A resolved assert declaration.
 #[derive(Debug)]
 pub struct ResolvedAssertEntry {
-    pub name: DeclName,
-    pub body: AssertBody,
-    pub span: Span,
+    pub(crate) name: DeclName,
+    pub(crate) body: AssertBody,
+    pub(crate) span: Span,
 }
 
 /// A resolved plot declaration.
 #[derive(Debug)]
 pub struct ResolvedPlotEntry {
-    pub name: DeclName,
-    pub decl: PlotDecl,
-    pub span: Span,
+    pub(crate) name: DeclName,
+    pub(crate) decl: PlotDecl,
+    pub(crate) span: Span,
 }
 
 /// A resolved figure declaration.
@@ -153,7 +153,7 @@ pub enum ExpectedFailKeyPart<I = IndexTypeRef> {
 impl<I> ExpectedFailKeyPart<I> {
     /// The source span of this key segment.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    pub(crate) const fn span(&self) -> Span {
         match self {
             Self::Named { span, .. } | Self::RangeStep { span, .. } => *span,
         }
@@ -161,7 +161,7 @@ impl<I> ExpectedFailKeyPart<I> {
 
     /// The variant key this segment selects within its axis.
     #[must_use]
-    pub fn variant(&self) -> IndexVariantName {
+    pub(crate) fn variant(&self) -> IndexVariantName {
         match self {
             Self::Named { variant, .. } => variant.clone(),
             Self::RangeStep { step, .. } => IndexVariantName::range_step(*step),
@@ -171,7 +171,11 @@ impl<I> ExpectedFailKeyPart<I> {
 
 impl ExpectedFailKeyPart<NamePath> {
     #[must_use]
-    pub const fn parsed(index_path: NamePath, variant: IndexVariantName, span: Span) -> Self {
+    pub(crate) const fn parsed(
+        index_path: NamePath,
+        variant: IndexVariantName,
+        span: Span,
+    ) -> Self {
         Self::Named {
             index: index_path,
             variant,
@@ -181,7 +185,7 @@ impl ExpectedFailKeyPart<NamePath> {
 
     /// The parsed index path, when this segment targets a named axis.
     #[must_use]
-    pub const fn index_path(&self) -> Option<&NamePath> {
+    pub(crate) const fn index_path(&self) -> Option<&NamePath> {
         match self {
             Self::Named { index, .. } => Some(index),
             Self::RangeStep { .. } => None,
@@ -205,7 +209,7 @@ impl ExpectedFailKeyPart<IndexTypeRef> {
     }
 
     #[must_use]
-    pub fn resolved(resolved: ResolvedIndexVariant, span: Span) -> Self {
+    pub(crate) fn resolved(resolved: ResolvedIndexVariant, span: Span) -> Self {
         let (index, variant) = resolved.into_parts();
         Self::Named {
             index: IndexTypeRef::from_resolved(index),
@@ -216,7 +220,7 @@ impl ExpectedFailKeyPart<IndexTypeRef> {
 
     /// The named index reference, when this segment targets a named axis.
     #[must_use]
-    pub const fn named_index(&self) -> Option<&IndexTypeRef> {
+    pub(crate) const fn named_index(&self) -> Option<&IndexTypeRef> {
         match self {
             Self::Named { index, .. } => Some(index),
             Self::RangeStep { .. } => None,
@@ -245,7 +249,7 @@ impl ExpectedFailKeyPart<IndexTypeRef> {
 
     /// Render this segment for diagnostics: `Index.Variant` or `#N`.
     #[must_use]
-    pub fn display(&self) -> String {
+    pub(crate) fn display(&self) -> String {
         match self {
             Self::Named { index, variant, .. } => format!("{}.{variant}", index.display_name()),
             Self::RangeStep { step, .. } => format!("#{step}"),
@@ -279,32 +283,32 @@ pub enum ExpectedFail<I = IndexTypeRef> {
 #[derive(Debug)]
 pub(crate) struct ResolvedFile {
     /// Const declarations in source order.
-    pub consts: Vec<ResolvedConstEntry>,
+    pub(crate) consts: Vec<ResolvedConstEntry>,
     /// Param declarations in source order.
-    pub params: Vec<ResolvedParamEntry>,
+    pub(crate) params: Vec<ResolvedParamEntry>,
     /// Node declarations in source order.
-    pub nodes: Vec<ResolvedNodeEntry>,
+    pub(crate) nodes: Vec<ResolvedNodeEntry>,
     /// Assert declarations in source order.
-    pub asserts: Vec<ResolvedAssertEntry>,
+    pub(crate) asserts: Vec<ResolvedAssertEntry>,
     /// Plot declarations in source order.
-    pub plots: Vec<ResolvedPlotEntry>,
+    pub(crate) plots: Vec<ResolvedPlotEntry>,
     /// Figure declarations in source order.
-    pub figures: Vec<ResolvedFigureEntry>,
+    pub(crate) figures: Vec<ResolvedFigureEntry>,
     /// Layer declarations in source order.
-    pub layers: Vec<ResolvedLayerEntry>,
+    pub(crate) layers: Vec<ResolvedLayerEntry>,
     /// All declaration names in source order with their category.
-    pub source_order: Vec<(DeclName, DeclCategory)>,
+    pub(crate) source_order: Vec<(DeclName, DeclCategory)>,
     /// Set of all assert names (for checking `@assert_name` errors).
-    pub assert_names: HashSet<DeclName>,
+    pub(crate) assert_names: HashSet<DeclName>,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Built from `#[assumes(...)]` attributes.
-    pub assumes_map: HashMap<DeclName, Vec<DeclName>>,
+    pub(crate) assumes_map: HashMap<DeclName, Vec<DeclName>>,
     /// Mapping from assert name to its expected-fail configuration.
     /// Built from `#[expected_fail]` / `#[expected_fail(...)]` attributes.
-    pub expected_fail: HashMap<DeclName, ParsedExpectedFail>,
+    pub(crate) expected_fail: HashMap<DeclName, ParsedExpectedFail>,
     /// Plot names carrying `#[hidden]`: evaluated and referenceable from
     /// figures/layers, but excluded from standalone output (#847).
-    pub hidden_plots: HashSet<DeclName>,
+    pub(crate) hidden_plots: HashSet<DeclName>,
     /// Names of all declarations marked `pub` in this file (values + type-system).
-    pub pub_names: HashSet<DeclName>,
+    pub(crate) pub_names: HashSet<DeclName>,
 }

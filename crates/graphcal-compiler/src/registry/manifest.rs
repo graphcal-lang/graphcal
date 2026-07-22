@@ -49,7 +49,7 @@ impl Manifest {
     /// # Errors
     ///
     /// Returns [`ManifestError`] if the package name or source directory is invalid.
-    pub fn new(package_name: String, source_dir: PathBuf) -> Result<Self, ManifestError> {
+    fn new(package_name: String, source_dir: PathBuf) -> Result<Self, ManifestError> {
         if !is_valid_package_name(&package_name) {
             return Err(ManifestError::InvalidPackageName { name: package_name });
         }

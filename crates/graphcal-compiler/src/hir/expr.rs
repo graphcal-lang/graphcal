@@ -118,11 +118,11 @@ pub enum ExprLowerError {
 /// Context required to lower one expression tree into HIR.
 #[derive(Debug, Clone, Copy)]
 pub struct ExprLoweringContext<'a> {
-    pub owner: &'a DagId,
-    pub resolver: &'a ModuleResolver,
-    pub generic_scope: &'a GenericScope,
-    pub prelude: Option<&'a PreludeTypeScope>,
-    pub decl_bindings: Option<&'a HashMap<ScopedName, ResolvedDeclName>>,
+    owner: &'a DagId,
+    resolver: &'a ModuleResolver,
+    generic_scope: &'a GenericScope,
+    prelude: Option<&'a PreludeTypeScope>,
+    decl_bindings: Option<&'a HashMap<ScopedName, ResolvedDeclName>>,
 }
 
 impl<'a> ExprLoweringContext<'a> {
@@ -157,7 +157,7 @@ impl<'a> ExprLoweringContext<'a> {
     /// Add canonical declaration bindings for declarations already visible in
     /// the lowered IR, such as prefixed dependency entries and DAG self-imports.
     #[must_use]
-    pub const fn with_decl_bindings(
+    pub(crate) const fn with_decl_bindings(
         self,
         decl_bindings: &'a HashMap<ScopedName, ResolvedDeclName>,
     ) -> Self {
@@ -279,7 +279,7 @@ pub struct LocalId(u32);
 impl LocalId {
     /// Numeric index unique within one lowered expression tree.
     #[must_use]
-    pub const fn index(self) -> u32 {
+    pub(crate) const fn index(self) -> u32 {
         self.0
     }
 }
@@ -528,7 +528,7 @@ pub struct ExprDependencies {
     /// Runtime graph dependencies reached through `@name` references.
     pub graph_refs: BTreeSet<ResolvedDeclName>,
     /// Compile-time const dependencies reached through const-like value refs.
-    pub const_refs: BTreeSet<ResolvedDeclName>,
+    pub(crate) const_refs: BTreeSet<ResolvedDeclName>,
 }
 
 /// Collect canonical declaration dependencies from an already-lowered HIR expression.
@@ -721,7 +721,7 @@ pub enum TypeSystemRef {
 
 impl TypeSystemRef {
     #[must_use]
-    pub fn surface_description(&self) -> String {
+    fn surface_description(&self) -> String {
         match self {
             Self::Type(name) => format!("type `{}`", name.as_str()),
             Self::Dimension(name) => format!("dimension `{}`", name.as_str()),
@@ -735,7 +735,7 @@ impl TypeSystemRef {
     }
 
     #[must_use]
-    pub fn value_position_error(&self) -> String {
+    pub(crate) fn value_position_error(&self) -> String {
         format!("{} cannot be used as a value", self.surface_description())
     }
 }

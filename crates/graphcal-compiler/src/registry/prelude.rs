@@ -9,7 +9,7 @@ use crate::registry::types::{PositiveFiniteScale, RegistryBuilder};
 /// Prelude names are implicitly in scope, so they do not have a source module
 /// alias. HIR still needs a canonical owner for resolved names; this synthetic
 /// [`DagId`] is that owner at the compiler boundary.
-pub const PRELUDE_DAG_ID_SEGMENT: &str = "__graphcal_prelude__";
+const PRELUDE_DAG_ID_SEGMENT: &str = "__graphcal_prelude__";
 
 /// Names of the prelude *base* dimensions, in registration order.
 ///
@@ -47,7 +47,7 @@ pub fn prelude_base_dimension(name: &str) -> Option<Dimension> {
 }
 
 /// Dimension names provided by the Graphcal prelude.
-pub const PRELUDE_DIMENSION_NAMES: &[&str] = &[
+pub(crate) const PRELUDE_DIMENSION_NAMES: &[&str] = &[
     "Length",
     "Time",
     "Mass",
@@ -68,7 +68,8 @@ pub const PRELUDE_DIMENSION_NAMES: &[&str] = &[
 ];
 
 /// Non-dimension type names provided by the Graphcal prelude.
-pub const PRELUDE_BUILTIN_TYPE_NAMES: &[&str] = &["Dimensionless", "Bool", "Int", "Datetime"];
+pub(crate) const PRELUDE_BUILTIN_TYPE_NAMES: &[&str] =
+    &["Dimensionless", "Bool", "Int", "Datetime"];
 
 /// Unit names provided by the Graphcal prelude.
 pub const PRELUDE_UNIT_NAMES: &[&str] = &[
@@ -78,7 +79,7 @@ pub const PRELUDE_UNIT_NAMES: &[&str] = &[
 
 /// Canonical synthetic owner for Graphcal prelude symbols.
 #[must_use]
-pub fn prelude_dag_id() -> DagId {
+pub(crate) fn prelude_dag_id() -> DagId {
     DagId::root_in_package(PRELUDE_DAG_ID_SEGMENT, PRELUDE_DAG_ID_SEGMENT)
 }
 

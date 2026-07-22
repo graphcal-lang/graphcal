@@ -34,7 +34,7 @@ pub enum AttributeArg {
 impl AttributeArg {
     /// Returns the span of this argument.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    pub(crate) const fn span(&self) -> Span {
         match self {
             Self::Path { span, .. } | Self::RangeStep { span, .. } | Self::Group { span, .. } => {
                 *span
@@ -75,7 +75,7 @@ impl BindableVisibility {
 
     /// Returns `true` for `PublicBind`.
     #[must_use]
-    pub const fn is_bindable(self) -> bool {
+    pub(crate) const fn is_bindable(self) -> bool {
         matches!(self, Self::PublicBind)
     }
 }
@@ -254,13 +254,13 @@ pub struct Ident {
 impl Ident {
     /// Convert this identifier into a `Spanned<T>`, consuming the name and span.
     #[must_use]
-    pub fn into_spanned<T: From<NameAtom>>(self) -> Spanned<T> {
+    pub(crate) fn into_spanned<T: From<NameAtom>>(self) -> Spanned<T> {
         Spanned::new(T::from(self.name), self.span)
     }
 
     /// Interpret this identifier as a generic parameter name.
     #[must_use]
-    pub fn as_generic_param_name(&self) -> GenericParamName {
+    pub(crate) fn as_generic_param_name(&self) -> GenericParamName {
         GenericParamName::from_atom(self.name.clone())
     }
 }

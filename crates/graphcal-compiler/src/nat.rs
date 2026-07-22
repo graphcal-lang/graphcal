@@ -30,13 +30,13 @@ pub(crate) struct Monomial(pub(crate) BTreeMap<GenericParamName, u64>);
 impl Monomial {
     /// The constant monomial (empty product = 1).
     #[must_use]
-    pub(crate) const fn constant() -> Self {
+    const fn constant() -> Self {
         Self(BTreeMap::new())
     }
 
     /// A single-variable monomial with exponent 1.
     #[must_use]
-    pub(crate) fn var(name: GenericParamName) -> Self {
+    fn var(name: GenericParamName) -> Self {
         let mut m = BTreeMap::new();
         m.insert(name, 1);
         Self(m)
@@ -51,7 +51,7 @@ impl Monomial {
     /// Multiply two monomials: add exponents of each variable.
     ///
     /// Returns an error if an exponent overflows.
-    pub(crate) fn mul(&self, other: &Self) -> Result<Self, NatOverflowError> {
+    fn mul(&self, other: &Self) -> Result<Self, NatOverflowError> {
         let mut result = self.0.clone();
         for (var, exp) in &other.0 {
             let entry = result.entry(var.clone()).or_insert(0);
@@ -64,7 +64,7 @@ impl Monomial {
     ///
     /// Returns `None` if any variable is unbound or arithmetic overflows.
     #[must_use]
-    pub(crate) fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
+    fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
         let mut result: u64 = 1;
         for (var, exp) in &self.0 {
             let val = bindings.get(var)?;
@@ -96,7 +96,7 @@ impl Monomial {
 
     /// Format as a human-readable string, e.g. `""`, `"N"`, `"M * N"`, `"N^2"`.
     #[must_use]
-    pub(crate) fn format(&self) -> String {
+    fn format(&self) -> String {
         let mut parts = Vec::new();
         for (var, exp) in &self.0 {
             if *exp == 1 {
@@ -137,7 +137,7 @@ pub struct NatPolyForm {
 impl NatPolyForm {
     /// Create a polynomial from a constant.
     #[must_use]
-    pub fn from_constant(c: u64) -> Self {
+    pub(crate) fn from_constant(c: u64) -> Self {
         let mut terms = BTreeMap::new();
         if c != 0 {
             terms.insert(Monomial::constant(), c);
@@ -147,7 +147,7 @@ impl NatPolyForm {
 
     /// Create a polynomial from a single variable with coefficient 1.
     #[must_use]
-    pub fn from_var(name: GenericParamName) -> Self {
+    pub(crate) fn from_var(name: GenericParamName) -> Self {
         let mut terms = BTreeMap::new();
         terms.insert(Monomial::var(name), 1);
         Self { terms }
@@ -156,7 +156,7 @@ impl NatPolyForm {
     /// Add two polynomials.
     ///
     /// Returns an error if a coefficient overflows.
-    pub fn add(&self, other: &Self) -> Result<Self, NatOverflowError> {
+    pub(crate) fn add(&self, other: &Self) -> Result<Self, NatOverflowError> {
         let mut terms = self.terms.clone();
         for (mono, coeff) in &other.terms {
             let entry = terms.entry(mono.clone()).or_insert(0);
@@ -169,7 +169,7 @@ impl NatPolyForm {
     /// Multiply two polynomials (distributive law).
     ///
     /// Returns an error if a coefficient or exponent overflows.
-    pub fn mul(&self, other: &Self) -> Result<Self, NatOverflowError> {
+    pub(crate) fn mul(&self, other: &Self) -> Result<Self, NatOverflowError> {
         let mut terms: BTreeMap<Monomial, u64> = BTreeMap::new();
         for (m1, c1) in &self.terms {
             for (m2, c2) in &other.terms {
@@ -185,13 +185,13 @@ impl NatPolyForm {
 
     /// Returns the constant term (coefficient of the empty monomial).
     #[must_use]
-    pub fn constant(&self) -> u64 {
+    pub(crate) fn constant(&self) -> u64 {
         self.terms.get(&Monomial::constant()).copied().unwrap_or(0)
     }
 
     /// Returns `true` if this form has no variables (is a constant).
     #[must_use]
-    pub fn is_constant(&self) -> bool {
+    pub(crate) fn is_constant(&self) -> bool {
         self.terms.iter().all(|(m, _)| m.is_constant())
     }
 
@@ -199,7 +199,7 @@ impl NatPolyForm {
     ///
     /// Returns `None` if any variable is unbound or arithmetic overflows.
     #[must_use]
-    pub fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
+    pub(crate) fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
         let mut result: u64 = 0;
         for (mono, coeff) in &self.terms {
             result = result.checked_add(coeff.checked_mul(mono.evaluate(bindings)?)?)?;
@@ -246,7 +246,7 @@ impl NatPolyForm {
     /// the coefficient in `other`. This is sound because all `Nat` variables
     /// are non-negative, so each monomial evaluates to a non-negative value.
     #[must_use]
-    pub fn is_leq(&self, other: &Self) -> bool {
+    pub(crate) fn is_leq(&self, other: &Self) -> bool {
         self.terms.iter().all(|(mono, &coeff)| {
             let other_coeff = other.terms.get(mono).copied().unwrap_or(0);
             coeff <= other_coeff
@@ -255,7 +255,7 @@ impl NatPolyForm {
 
     /// Collect all variable names that appear in any monomial of this polynomial.
     #[must_use]
-    pub fn variables(&self) -> BTreeSet<GenericParamName> {
+    pub(crate) fn variables(&self) -> BTreeSet<GenericParamName> {
         self.terms
             .keys()
             .flat_map(|mono| mono.0.keys().cloned())

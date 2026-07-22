@@ -89,7 +89,7 @@ impl DependencyName {
     ///
     /// Returns [`DependencyNameError`] when `value` is not a valid dependency
     /// alias.
-    pub fn new(value: impl Into<String>) -> Result<Self, DependencyNameError> {
+    fn new(value: impl Into<String>) -> Result<Self, DependencyNameError> {
         let value = value.into();
         if is_valid_name(&value) {
             Ok(Self(value))
@@ -129,7 +129,7 @@ impl GitCommitHash {
     /// # Errors
     ///
     /// Returns [`GitRevError`] when `value` is not a 40-character hex hash.
-    pub fn new(value: impl Into<String>) -> Result<Self, GitRevError> {
+    fn new(value: impl Into<String>) -> Result<Self, GitRevError> {
         let value = value.into();
         if value.len() == 40 && value.chars().all(|c| c.is_ascii_hexdigit()) {
             Ok(Self(value.to_ascii_lowercase()))
@@ -145,7 +145,7 @@ impl GitUrl {
     /// # Errors
     ///
     /// Returns [`GitUrlError`] for empty URLs or URLs that include credentials.
-    pub fn new(value: impl Into<String>) -> Result<Self, GitUrlError> {
+    fn new(value: impl Into<String>) -> Result<Self, GitUrlError> {
         let value = value.into();
         if value.trim().is_empty() {
             return Err(GitUrlError {
@@ -259,7 +259,7 @@ pub struct PackageManifest {
 pub struct DependencySpec {
     /// Real package name expected at the fetched source. `None` means it must
     /// match the dependency alias.
-    pub package: Option<PackageName>,
+    package: Option<PackageName>,
     /// Exact-rev Git source.
     pub git: GitDependency,
 }
@@ -1110,7 +1110,7 @@ pub struct ResolvedPackageModule {
     /// self/dependency selector segment.
     pub module_segments: Vec<String>,
     /// How the first segment resolved.
-    pub relation: PackageResolutionRelation,
+    relation: PackageResolutionRelation,
 }
 
 /// First-segment package resolution relation.

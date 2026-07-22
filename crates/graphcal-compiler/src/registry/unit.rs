@@ -77,7 +77,7 @@ pub enum UnitScale {
 impl UnitScale {
     /// Returns the static scale factor, or `None` if the scale is dynamic.
     #[must_use]
-    pub const fn as_static(&self) -> Option<f64> {
+    pub(crate) const fn as_static(&self) -> Option<f64> {
         match self {
             Self::Static(s) => Some(s.get()),
             Self::Dynamic { .. } => None,
@@ -227,7 +227,10 @@ impl UnitRegistry {
 
     /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
     #[cfg(test)]
-    pub fn resolve_unit_expr(&self, expr: &UnitExpr) -> Result<(Dimension, f64), UnitResolveError> {
+    pub(crate) fn resolve_unit_expr(
+        &self,
+        expr: &UnitExpr,
+    ) -> Result<(Dimension, f64), UnitResolveError> {
         resolve_unit_expr_impl(&self.units, expr)
     }
 
@@ -239,7 +242,10 @@ impl UnitRegistry {
     ///
     /// Returns a [`UnitResolveError`] naming the unknown unit, or the
     /// exponent overflow.
-    pub fn resolve_unit_dimension(&self, expr: &UnitExpr) -> Result<Dimension, UnitResolveError> {
+    pub(crate) fn resolve_unit_dimension(
+        &self,
+        expr: &UnitExpr,
+    ) -> Result<Dimension, UnitResolveError> {
         resolve_unit_dimension_impl(&self.units, expr)
     }
 }

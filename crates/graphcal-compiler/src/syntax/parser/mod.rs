@@ -301,7 +301,7 @@ pub enum ParseError {
 /// LSP server). The limit is far above any realistic engineering program —
 /// note that left-nested operator *chains* (`1.0 + 1.0 + …`) are parsed
 /// iteratively and are not limited by this bound.
-pub const MAX_NESTING_DEPTH: usize = 256;
+const MAX_NESTING_DEPTH: usize = 256;
 
 impl ParseError {
     /// Return the `NamedSource` embedded in this error.
@@ -339,9 +339,9 @@ impl ParseError {
 }
 
 pub struct Parser<'src> {
-    pub(super) lexer: Lexer<'src>,
-    pub(super) source: Arc<String>,
-    pub(super) source_name: String,
+    lexer: Lexer<'src>,
+    source: Arc<String>,
+    source_name: String,
     /// Current nesting depth of recursive grammar productions; bounded by
     /// [`MAX_NESTING_DEPTH`] via [`Self::with_depth`].
     depth: usize,
@@ -375,7 +375,7 @@ impl<'src> Parser<'src> {
     /// recursive-descent frames for [`MAX_NESTING_DEPTH`] levels exceed the
     /// default stack of secondary threads (tests, LSP workers) in debug
     /// builds, so the bound alone would not prevent an abort.
-    pub(super) fn with_depth<T>(
+    fn with_depth<T>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
     ) -> Result<T, ParseError> {
@@ -399,11 +399,11 @@ impl<'src> Parser<'src> {
         self.lexer.into_source_metadata()
     }
 
-    pub(super) fn named_source(&self) -> NamedSource<Arc<String>> {
+    fn named_source(&self) -> NamedSource<Arc<String>> {
         NamedSource::new(self.source_name.clone(), Arc::clone(&self.source))
     }
 
-    pub(super) fn unexpected_token(&self, expected: &str, found: &str, span: Span) -> ParseError {
+    fn unexpected_token(&self, expected: &str, found: &str, span: Span) -> ParseError {
         ParseError::UnexpectedToken {
             expected: expected.to_string(),
             found: found.to_string(),
@@ -413,12 +413,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Build a duplicate-field error for plot/figure/layer block parsing.
-    pub(super) fn duplicate_plot_field(
-        &self,
-        field: &str,
-        context: &str,
-        span: Span,
-    ) -> ParseError {
+    fn duplicate_plot_field(&self, field: &str, context: &str, span: Span) -> ParseError {
         ParseError::DuplicatePlotField {
             field: field.to_string(),
             context: context.to_string(),
@@ -427,7 +422,7 @@ impl<'src> Parser<'src> {
         }
     }
 
-    pub(super) fn unexpected_eof(&self, expected: &str) -> ParseError {
+    fn unexpected_eof(&self, expected: &str) -> ParseError {
         ParseError::UnexpectedEof {
             expected: expected.to_string(),
             src: self.named_source(),
@@ -458,18 +453,14 @@ impl<'src> Parser<'src> {
     /// Consume the next token, returning an error if the lexer is exhausted.
     ///
     /// Use this after `peek()` has confirmed `Some`.
-    pub(super) fn advance(&mut self) -> Result<(Token, Span), ParseError> {
+    fn advance(&mut self) -> Result<(Token, Span), ParseError> {
         self.lexer
             .next_token()
             .ok_or_else(|| self.unexpected_eof("token"))
     }
 
     /// Parse a finite `f64` literal from already-normalized token text.
-    pub(super) fn parse_finite_f64_literal(
-        &self,
-        text: &str,
-        span: Span,
-    ) -> Result<f64, ParseError> {
+    fn parse_finite_f64_literal(&self, text: &str, span: Span) -> Result<f64, ParseError> {
         let value: f64 =
             text.parse()
                 .map_err(|e: std::num::ParseFloatError| ParseError::InvalidNumber {
@@ -581,7 +572,7 @@ impl<'src> Parser<'src> {
 
     // --- Helper methods ---
 
-    pub(super) fn expect(&mut self, expected: Token) -> Result<(Token, Span), ParseError> {
+    fn expect(&mut self, expected: Token) -> Result<(Token, Span), ParseError> {
         let expected_str = format!("`{expected}`");
         match self.lexer.next_token() {
             Some((tok, span)) if tok == expected => Ok((tok, span)),
@@ -593,7 +584,7 @@ impl<'src> Parser<'src> {
     /// Parse a comma-separated list of items until `end_token` is peeked.
     ///
     /// Supports trailing commas. Does **not** consume the `end_token`.
-    pub(super) fn parse_comma_separated<T>(
+    fn parse_comma_separated<T>(
         &mut self,
         end_token: Token,
         mut parse_item: impl FnMut(&mut Self) -> Result<T, ParseError>,
@@ -614,7 +605,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse any identifier regardless of casing.
-    pub(super) fn parse_any_ident(&mut self) -> Result<Ident, ParseError> {
+    fn parse_any_ident(&mut self) -> Result<Ident, ParseError> {
         match self.lexer.next_token() {
             Some((
                 Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step,
@@ -629,7 +620,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a non-empty dot-separated identifier path.
-    pub(super) fn parse_ident_path(&mut self) -> Result<IdentPath, ParseError> {
+    fn parse_ident_path(&mut self) -> Result<IdentPath, ParseError> {
         let first = self.parse_any_ident()?;
         let mut rest = Vec::new();
         while self.lexer.peek() == Some(&Token::Dot)

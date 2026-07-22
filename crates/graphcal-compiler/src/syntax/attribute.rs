@@ -21,7 +21,7 @@ pub struct UnknownAttributeName {
 impl UnknownAttributeName {
     /// Create an unknown-attribute-name error from the original source text.
     #[must_use]
-    pub fn new(raw: impl Into<String>) -> Self {
+    fn new(raw: impl Into<String>) -> Self {
         Self { raw: raw.into() }
     }
 

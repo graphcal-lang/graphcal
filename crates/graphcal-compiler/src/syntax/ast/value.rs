@@ -107,7 +107,7 @@ impl IdentPath {
 
     /// Construct a one-segment path from an identifier.
     #[must_use]
-    pub fn bare(ident: Ident) -> Self {
+    fn bare(ident: Ident) -> Self {
         Self::new(NonEmpty::singleton(ident))
     }
 
@@ -143,13 +143,13 @@ impl IdentPath {
 
     /// Returns whether this is a one-segment identifier path.
     #[must_use]
-    pub const fn is_bare(&self) -> bool {
+    const fn is_bare(&self) -> bool {
         self.segments.len() == 1
     }
 
     /// Returns the source span covering the whole path.
     #[must_use]
-    pub fn span(&self) -> Span {
+    pub(crate) fn span(&self) -> Span {
         self.segments.first().span.merge(self.segments.last().span)
     }
 
@@ -158,7 +158,7 @@ impl IdentPath {
     /// Use this for span-independent written identity (semantic metadata
     /// keys); keep the `IdentPath` itself when diagnostics need segment spans.
     #[must_use]
-    pub fn to_name_path(&self) -> crate::syntax::names::NamePath {
+    pub(crate) fn to_name_path(&self) -> crate::syntax::names::NamePath {
         crate::syntax::names::NamePath::new(self.segments.clone().map(|ident| ident.name))
     }
 
@@ -172,7 +172,7 @@ impl IdentPath {
     ///
     /// The qualifier slice is empty for one-segment paths.
     #[must_use]
-    pub fn split_last(&self) -> (&[Ident], &Ident) {
+    pub(crate) fn split_last(&self) -> (&[Ident], &Ident) {
         let (leaf, qualifier) = self.segments.split_last();
         (qualifier, leaf)
     }
@@ -200,7 +200,7 @@ impl IdentPath {
     }
 
     /// Mutably returns the only segment when this is a bare identifier path.
-    pub fn as_bare_mut(&mut self) -> Option<&mut Ident> {
+    pub(crate) fn as_bare_mut(&mut self) -> Option<&mut Ident> {
         match self.segments.as_mut_slice() {
             [ident] => Some(ident),
             _ => None,
@@ -210,7 +210,7 @@ impl IdentPath {
     /// Consume this path and return its segment when it is bare.
     ///
     /// Returns the original path unchanged when it is qualified.
-    pub fn into_bare(self) -> Result<Ident, Self> {
+    pub(crate) fn into_bare(self) -> Result<Ident, Self> {
         if self.is_bare() {
             let mut segments = self.segments.into_vec();
             Ok(segments.remove(0))
@@ -221,13 +221,13 @@ impl IdentPath {
 
     /// Convert this spanned syntax path into a span-less [`NamePath`].
     #[must_use]
-    pub fn into_name_path(self) -> NamePath {
+    fn into_name_path(self) -> NamePath {
         NamePath::new(self.segments.map(|ident| ident.name))
     }
 
     /// Convert this syntax path into a [`NamePath`] paired with the path's full span.
     #[must_use]
-    pub fn into_spanned_name_path(self) -> Spanned<NamePath> {
+    pub(crate) fn into_spanned_name_path(self) -> Spanned<NamePath> {
         let span = self.span();
         Spanned::new(self.into_name_path(), span)
     }
@@ -280,7 +280,7 @@ pub struct ParamBinding<P: Phase = Raw> {
     /// The value expression (evaluated in the importer's scope).
     pub value: Expr<P>,
     /// Span covering the entire `name: expr`.
-    pub span: Span,
+    pub(crate) span: Span,
 }
 /// The kind of a domain constraint bound: `min` or `max`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,10 +306,10 @@ pub struct DomainBound<P: Phase = Raw> {
     /// The bound kind (`min` or `max`).
     pub kind: DomainBoundKind,
     /// The span of the keyword (`min` or `max`).
-    pub kind_span: Span,
+    pub(crate) kind_span: Span,
     /// The bound value expression.
     pub value: Expr<P>,
-    pub span: Span,
+    pub(crate) span: Span,
 }
 
 /// A type expression (dimension annotation on declarations).
@@ -330,7 +330,7 @@ pub enum IndexExpr {
 impl IndexExpr {
     /// Get the source span of this index expression.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    pub(crate) const fn span(&self) -> Span {
         match self {
             Self::Name(name) => name.span,
             Self::NatExpr(nat_expr) => nat_expr.span(),
@@ -346,7 +346,7 @@ pub struct TypeExpr<P: Phase = Raw> {
     pub kind: TypeExprKind<P>,
     /// Optional domain constraints on the type.
     pub constraints: Vec<DomainBound<P>>,
-    pub span: Span,
+    pub(crate) span: Span,
 }
 
 impl<P: Phase> TypeExpr<P> {
@@ -356,7 +356,7 @@ impl<P: Phase> TypeExpr<P> {
     /// parsed onto the base type expression, so this looks through one
     /// `Indexed` wrapper when the outer expression carries none.
     #[must_use]
-    pub fn domain_bounds(&self) -> &[DomainBound<P>] {
+    pub(crate) fn domain_bounds(&self) -> &[DomainBound<P>] {
         if !self.constraints.is_empty() {
             return &self.constraints;
         }
@@ -404,7 +404,7 @@ pub enum TypeExprKind<P: Phase = Raw> {
 #[derive(Debug, Clone)]
 pub struct DimExpr {
     pub terms: Vec<DimExprItem>,
-    pub span: Span,
+    pub(crate) span: Span,
 }
 
 /// One term in a dimension expression with its combining operator.
@@ -685,7 +685,7 @@ pub struct MultiDeclSharedAxes {
 impl MultiDeclSharedAxes {
     /// Construct shared axes from zero or more slice axes and the always-present row axis.
     #[must_use]
-    pub const fn new(slice_axes: Vec<TableIndexSpec>, row_axis: TableIndexSpec) -> Self {
+    const fn new(slice_axes: Vec<TableIndexSpec>, row_axis: TableIndexSpec) -> Self {
         Self {
             slice_axes,
             row_axis,
@@ -697,7 +697,7 @@ impl MultiDeclSharedAxes {
     /// # Errors
     ///
     /// Returns [`crate::syntax::non_empty::EmptyVecError`] when `axes` is empty.
-    pub fn try_from_vec(
+    pub(crate) fn try_from_vec(
         mut axes: Vec<TableIndexSpec>,
     ) -> Result<Self, crate::syntax::non_empty::EmptyVecError> {
         let row_axis = axes.pop().ok_or(crate::syntax::non_empty::EmptyVecError)?;
@@ -706,20 +706,20 @@ impl MultiDeclSharedAxes {
 
     /// Slice axes preceding the row axis.
     #[must_use]
-    pub fn slice_axes(&self) -> &[TableIndexSpec] {
+    pub(crate) fn slice_axes(&self) -> &[TableIndexSpec] {
         &self.slice_axes
     }
 
     /// The row axis.
     #[must_use]
-    pub const fn row_axis(&self) -> &TableIndexSpec {
+    pub(crate) const fn row_axis(&self) -> &TableIndexSpec {
         &self.row_axis
     }
 
     /// Number of shared axes. Always at least 1.
     #[cfg(test)]
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub(crate) const fn len(&self) -> usize {
         self.slice_axes.len() + 1
     }
 
@@ -876,7 +876,7 @@ pub enum NatExpr {
 impl NatExpr {
     /// Get the source span.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    pub(crate) const fn span(&self) -> Span {
         match self {
             Self::Literal(_, span) | Self::Add(_, _, span) | Self::Mul(_, _, span) => *span,
             Self::Var(ident) => ident.span,
@@ -1036,7 +1036,7 @@ pub enum MatchPattern {
 
 impl MatchPattern {
     #[must_use]
-    pub const fn span(&self) -> Span {
+    pub(crate) const fn span(&self) -> Span {
         match self {
             Self::Path { span, .. }
             | Self::Constructor { span, .. }

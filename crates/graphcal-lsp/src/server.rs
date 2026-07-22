@@ -452,9 +452,9 @@ async fn is_generation_current(
 /// Snapshot of another open editor buffer, overlaid onto the filesystem
 /// during analysis so cross-file diagnostics, goto-definition targets, and
 /// hover reflect what the user actually sees instead of stale disk content.
-pub(crate) struct OpenBuffer {
-    pub(crate) path: std::path::PathBuf,
-    pub(crate) text: Arc<String>,
+struct OpenBuffer {
+    path: std::path::PathBuf,
+    text: Arc<String>,
 }
 
 /// Build a `LoadedProject` from a URI and in-memory text.
@@ -1643,7 +1643,7 @@ impl LanguageServer for Backend {
 }
 
 /// Start the LSP server, reading from stdin and writing to stdout.
-pub async fn run() {
+pub(crate) async fn run() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 

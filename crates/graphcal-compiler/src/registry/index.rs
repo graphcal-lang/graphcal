@@ -12,7 +12,7 @@ pub struct RangeIndexData {
     pub end: f64,
     pub step: f64,
     /// Validated number of inclusive range steps.
-    pub step_count: NonZeroUsize,
+    pub(crate) step_count: NonZeroUsize,
     pub dimension: Dimension,
     /// Display unit label (e.g., `"s"`) for formatting step values.
     pub display_label: Option<String>,
@@ -33,7 +33,7 @@ impl RangeIndexData {
 
     /// Returns the number of steps in this range.
     #[must_use]
-    pub const fn step_count(&self) -> usize {
+    const fn step_count(&self) -> usize {
         self.step_count.get()
     }
 }
@@ -131,13 +131,13 @@ impl IndexDef {
 
     /// Returns true if this is a nat range index.
     #[must_use]
-    pub const fn is_nat_range(&self) -> bool {
+    pub(crate) const fn is_nat_range(&self) -> bool {
         matches!(self.kind, IndexKind::NatRange { .. })
     }
 
     /// Returns the nat range size, if this is a nat range index.
     #[must_use]
-    pub const fn nat_range_size(&self) -> Option<u64> {
+    pub(crate) const fn nat_range_size(&self) -> Option<u64> {
         match &self.kind {
             IndexKind::NatRange { size } => Some(size.get() as u64),
             _ => None,
@@ -181,7 +181,7 @@ pub struct NatRangeIndex {
 impl NatRangeIndex {
     /// Create an identity for a non-empty Nat range index.
     #[must_use]
-    pub const fn new(size: NonZeroUsize) -> Self {
+    pub(crate) const fn new(size: NonZeroUsize) -> Self {
         Self { size }
     }
 
@@ -212,7 +212,7 @@ impl NatRangeIndex {
         clippy::expect_used,
         reason = "Graphcal currently supports targets where usize fits in u64"
     )]
-    pub fn size_u64(self) -> u64 {
+    pub(crate) fn size_u64(self) -> u64 {
         u64::try_from(self.size.get()).expect("usize fits in u64 on supported targets")
     }
 

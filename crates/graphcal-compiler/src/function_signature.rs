@@ -59,7 +59,7 @@ impl DimMonomial {
 
     /// The dimensionless monomial (no variables, dimensionless fixed factor).
     #[must_use]
-    pub const fn dimensionless() -> Self {
+    pub(crate) const fn dimensionless() -> Self {
         Self::fixed(Dimension::dimensionless())
     }
 
@@ -71,7 +71,7 @@ impl DimMonomial {
 
     /// A single dimension-variable power: `var^power`.
     #[must_use]
-    pub fn var_pow(var: DimVarName, power: Rational) -> Self {
+    fn var_pow(var: DimVarName, power: Rational) -> Self {
         Self {
             vars: vec![DimVarPower { var, power }],
             fixed: Dimension::dimensionless(),
@@ -82,7 +82,7 @@ impl DimMonomial {
     /// (`var^1` with a dimensionless fixed factor) — the only shape that can
     /// *bind* a dimension variable at a call site.
     #[must_use]
-    pub fn as_bare_var(&self) -> Option<&DimVarName> {
+    pub(crate) fn as_bare_var(&self) -> Option<&DimVarName> {
         match self.vars.as_slice() {
             [DimVarPower { var, power }]
                 if *power == Rational::ONE && self.fixed.is_dimensionless() =>
@@ -100,7 +100,7 @@ impl DimMonomial {
     }
 
     /// Iterate the dimension variables referenced by this monomial.
-    pub fn referenced_vars(&self) -> impl Iterator<Item = &DimVarName> {
+    fn referenced_vars(&self) -> impl Iterator<Item = &DimVarName> {
         self.vars.iter().map(|factor| &factor.var)
     }
 
@@ -112,7 +112,7 @@ impl DimMonomial {
     /// Returns [`DimMonomialEvalError::UnboundVar`] when `lookup` has no
     /// binding for a referenced variable, and
     /// [`DimMonomialEvalError::Overflow`] when exponent arithmetic overflows.
-    pub fn eval<'a>(
+    pub(crate) fn eval<'a>(
         &self,
         mut lookup: impl FnMut(&DimVarName) -> Option<&'a Dimension>,
     ) -> Result<Dimension, DimMonomialEvalError> {
@@ -243,7 +243,7 @@ impl ValueKind {
 
     /// A scalar with a concrete fixed dimension.
     #[must_use]
-    pub const fn scalar(dim: Dimension) -> Self {
+    const fn scalar(dim: Dimension) -> Self {
         Self::Scalar(DimMonomial::fixed(dim))
     }
 }
@@ -803,7 +803,7 @@ fn expect_signature(
 impl FunctionSignature {
     /// All params dimensionless scalars, dimensionless scalar result.
     #[must_use]
-    pub fn all_dimensionless(names: &[&str]) -> Self {
+    pub(crate) fn all_dimensionless(names: &[&str]) -> Self {
         expect_signature(
             Vec::new(),
             names
@@ -826,7 +826,7 @@ impl FunctionSignature {
 
     /// Single free param `D`, result is `D`.
     #[must_use]
-    pub fn passthrough(name: &str) -> Self {
+    pub(crate) fn passthrough(name: &str) -> Self {
         let d = dim_var_d();
         expect_signature(
             vec![d.clone()],
@@ -837,7 +837,7 @@ impl FunctionSignature {
 
     /// Single free param `D`, result is a fixed dimension.
     #[must_use]
-    pub fn free_to_fixed(name: &str, output: Dimension) -> Self {
+    pub(crate) fn free_to_fixed(name: &str, output: Dimension) -> Self {
         let d = dim_var_d();
         expect_signature(
             vec![d.clone()],
@@ -859,7 +859,7 @@ impl FunctionSignature {
 
     /// N params all of the same dimension `D`, result is `D`.
     #[must_use]
-    pub fn same_dim(names: &[&str]) -> Self {
+    pub(crate) fn same_dim(names: &[&str]) -> Self {
         let d = dim_var_d();
         expect_signature(
             vec![d.clone()],
@@ -873,7 +873,7 @@ impl FunctionSignature {
 
     /// N params all of the same dimension `D`, result is a fixed dimension.
     #[must_use]
-    pub fn same_dim_to_fixed(names: &[&str], output: Dimension) -> Self {
+    pub(crate) fn same_dim_to_fixed(names: &[&str], output: Dimension) -> Self {
         let d = dim_var_d();
         expect_signature(
             vec![d.clone()],

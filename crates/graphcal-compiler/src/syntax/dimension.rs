@@ -39,7 +39,7 @@ pub type ResolvedDimName = ResolvedName<DimNameNamespace>;
 pub type UnitName = NameDef<UnitNameNamespace>;
 
 /// Module-resolved unit name.
-pub type ResolvedUnitName = ResolvedName<UnitNameNamespace>;
+pub(crate) type ResolvedUnitName = ResolvedName<UnitNameNamespace>;
 
 /// Name of a dimension variable in a built-in function signature (e.g., `"D"`).
 ///
@@ -87,7 +87,7 @@ impl UnitRef {
     /// The module alias qualifying this reference, if any.
     #[cfg(test)]
     #[must_use]
-    pub const fn qualifier(&self) -> Option<&ModuleAliasName> {
+    pub(crate) const fn qualifier(&self) -> Option<&ModuleAliasName> {
         self.qualifier.as_ref()
     }
 

@@ -567,7 +567,7 @@ impl Parser<'_> {
 
     /// Parse an integer literal, possibly preceded by `-`.
     /// Returns `(is_negative, absolute_value, span)`.
-    pub(super) fn parse_integer_literal(
+    fn parse_integer_literal(
         &mut self,
     ) -> Result<(bool, i32, crate::syntax::span::Span), ParseError> {
         let neg = if self.lexer.peek() == Some(&Token::Minus) {
@@ -631,7 +631,7 @@ impl Parser<'_> {
     }
 
     /// Parse a type argument list: `<TypeExpr, TypeExpr, ...>`
-    pub(super) fn parse_type_arg_list(&mut self) -> Result<Vec<TypeExpr>, ParseError> {
+    fn parse_type_arg_list(&mut self) -> Result<Vec<TypeExpr>, ParseError> {
         self.expect(Token::Lt)?;
         let args = self.parse_comma_separated(Token::Gt, Self::parse_type_expr)?;
         self.expect(Token::Gt)?;

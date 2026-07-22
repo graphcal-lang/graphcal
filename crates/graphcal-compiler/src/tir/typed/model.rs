@@ -120,7 +120,7 @@ impl ResolvedTypeExpr {
     }
 }
 
-pub(in crate::tir::typed) fn format_resolved_index(index: &ResolvedIndex) -> String {
+fn format_resolved_index(index: &ResolvedIndex) -> String {
     match index {
         ResolvedIndex::Concrete(name, _) => name.as_str().to_string(),
         ResolvedIndex::GenericParam(name, _) => name.to_string(),
@@ -149,7 +149,7 @@ pub enum ResolvedDimTerm {
 impl ResolvedDimTerm {
     /// Get the combining operator for this term.
     #[must_use]
-    pub const fn op(&self) -> MulDivOp {
+    pub(crate) const fn op(&self) -> MulDivOp {
         match self {
             Self::Concrete { op, .. } | Self::GenericParam { op, .. } => *op,
         }
@@ -157,7 +157,7 @@ impl ResolvedDimTerm {
 
     /// Format this term as a human-readable string, e.g. `"Length"`, `"/ Time^2"`, `"D^2"`.
     #[must_use]
-    pub fn format(&self, registry: &Registry) -> String {
+    fn format(&self, registry: &Registry) -> String {
         let (name, power, op) = match self {
             Self::Concrete { dim, power, op } => {
                 (registry.dimensions.format_dimension(dim), *power, *op)
@@ -198,7 +198,7 @@ impl NatRangeIndexIdentity {
     ///
     /// Returns an error when the form is a concrete `0` or cannot be
     /// represented as a non-empty in-memory Nat range on this target.
-    pub fn try_from_form(
+    pub(crate) fn try_from_form(
         form: NatPolyForm,
     ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
         if form.is_constant() {
@@ -226,7 +226,7 @@ impl NatRangeIndexIdentity {
     ///
     /// Returns an error if the identity invariant was violated before this
     /// conversion (for example, a concrete zero-sized range).
-    pub fn to_index_type_ref(
+    pub(crate) fn to_index_type_ref(
         &self,
     ) -> Result<IndexTypeRef, crate::registry::types::NatRangeIndexError> {
         IndexTypeRef::from_nat_range_form(self.form.clone())
@@ -331,9 +331,9 @@ impl ResolvedIndex {
 /// instead of by source alias text or a dotted string.
 #[derive(Debug, Clone)]
 pub struct ModuleConstructorDef {
-    pub owning_type: ResolvedStructTypeName,
-    pub type_def: TypeDef,
-    pub variant: UnionMemberDef,
+    pub(crate) owning_type: ResolvedStructTypeName,
+    pub(crate) type_def: TypeDef,
+    pub(crate) variant: UnionMemberDef,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -417,23 +417,23 @@ impl ModuleTypeRegistry {
     }
 
     #[must_use]
-    pub fn get_dimension(&self, name: &ResolvedDimName) -> Option<&Dimension> {
+    pub(crate) fn get_dimension(&self, name: &ResolvedDimName) -> Option<&Dimension> {
         self.dimensions.get(name)
     }
 
     #[must_use]
-    pub fn get_index(&self, name: &ResolvedIndexName) -> Option<&IndexDef> {
+    pub(crate) fn get_index(&self, name: &ResolvedIndexName) -> Option<&IndexDef> {
         self.indexes.get(name)
     }
 
     #[must_use]
-    pub fn get_struct_type(&self, name: &ResolvedStructTypeName) -> Option<&TypeDef> {
+    pub(crate) fn get_struct_type(&self, name: &ResolvedStructTypeName) -> Option<&TypeDef> {
         self.struct_types.get(name)
     }
 
     /// Look up the owner type and union member for a canonical constructor identity.
     #[must_use]
-    pub fn lookup_constructor(
+    pub(crate) fn lookup_constructor(
         &self,
         constructor: &ResolvedConstructorName,
     ) -> Option<&ModuleConstructorDef> {
@@ -451,7 +451,7 @@ pub struct ModuleTypeContext<'a> {
 
 impl<'a> ModuleTypeContext<'a> {
     #[must_use]
-    pub const fn new(
+    pub(crate) const fn new(
         owner: &'a crate::dag_id::DagId,
         resolver: &'a ModuleResolver,
         types: &'a ModuleTypeRegistry,
@@ -561,7 +561,7 @@ pub struct ResolvedExpressions {
     /// Const declaration expression keyed by its canonical declaration identity.
     pub consts: HashMap<ResolvedDeclName, hir::Expr>,
     /// Param default expression keyed by its canonical declaration identity.
-    pub param_defaults: HashMap<ResolvedDeclName, hir::Expr>,
+    pub(crate) param_defaults: HashMap<ResolvedDeclName, hir::Expr>,
     /// Node expression keyed by its canonical declaration identity.
     pub nodes: HashMap<ResolvedDeclName, hir::Expr>,
     /// Assert body keyed by its canonical declaration identity.
@@ -598,7 +598,7 @@ pub struct ResolvedConstructorRefs {
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedInlineDagRefs {
     /// Full inline-DAG call expression span -> resolved call routing metadata.
-    pub calls: HashMap<Span, ResolvedInlineDagCall>,
+    pub(crate) calls: HashMap<Span, ResolvedInlineDagCall>,
 }
 
 /// Canonical field type identity inside a resolved struct/tagged-union type.
@@ -618,11 +618,12 @@ pub struct ResolvedTypeDefs {
     /// Struct/tagged-union definitions keyed by canonical owner/name.
     pub struct_types: HashMap<ResolvedStructTypeName, TypeDef>,
     /// Field type annotations resolved in the owning type's generic scope.
-    pub field_types: HashMap<ResolvedStructFieldTypeKey, ResolvedTypeExpr>,
+    pub(crate) field_types: HashMap<ResolvedStructFieldTypeKey, ResolvedTypeExpr>,
     /// Field domain bounds lowered to HIR in the owning type's generic scope.
     pub field_bounds: HashMap<ResolvedStructFieldTypeKey, Vec<ResolvedDomainBound>>,
     /// Generic parameter defaults resolved in the owning type's generic scope.
-    pub generic_defaults: HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedTypeExpr>,
+    pub(crate) generic_defaults:
+        HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedTypeExpr>,
 }
 
 /// A `min:`/`max:` domain bound with its expression lowered to HIR.
@@ -668,7 +669,7 @@ pub struct DagSemanticBody {
     /// Canonical HIR-derived constructor calls and match patterns.
     pub constructor_refs: ResolvedConstructorRefs,
     /// Canonical HIR-derived inline-DAG routing identities for calls from this DAG.
-    pub inline_dag_refs: ResolvedInlineDagRefs,
+    pub(crate) inline_dag_refs: ResolvedInlineDagRefs,
     /// Canonical type definitions referenced by this DAG.
     pub type_defs: ResolvedTypeDefs,
     /// Canonical declaration identity for every value name visible in this DAG.
@@ -693,18 +694,18 @@ pub struct ResolvedPlotExprs {
 /// A resolved inline-DAG invocation target, bindings, and projected output.
 #[derive(Debug, Clone)]
 pub struct ResolvedInlineDagCall {
-    pub target: crate::dag_id::DagId,
+    pub(crate) target: crate::dag_id::DagId,
     /// Param binding name span -> canonical declaration in the target DAG.
-    pub arg_targets: HashMap<Span, ResolvedDeclName>,
+    pub(crate) arg_targets: HashMap<Span, ResolvedDeclName>,
     /// Canonical projected declaration in the target DAG.
-    pub output: Spanned<ResolvedDeclName>,
+    pub(crate) output: Spanned<ResolvedDeclName>,
 }
 
 /// A resolved constructor and the tagged-union member it constructs.
 #[derive(Debug, Clone)]
 pub struct ResolvedConstructorTarget {
     pub owning_type: ResolvedStructTypeName,
-    pub type_def: TypeDef,
+    pub(crate) type_def: TypeDef,
     pub variant: UnionMemberDef,
 }
 
@@ -877,7 +878,7 @@ pub struct DagTIR {
     /// Layer declarations in source order.
     pub layers: Vec<crate::ir::lower::LayerEntry>,
     /// Plot aliases from include brace lists (#847).
-    pub included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
+    pub(crate) included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
     /// Authoritative semantic facts for this checked DAG body.
     pub semantic: DagSemanticBody,
     /// All declaration names in source order with their category.
@@ -898,7 +899,8 @@ pub struct DagTIR {
     >,
     /// Declared types for imported names whose values are supplied by a caller
     /// or dependency at evaluation time.
-    pub imported_decl_types: HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
+    pub(crate) imported_decl_types:
+        HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
     /// Runtime source bindings for imported DAG-body values.
     pub imported_value_sources: HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
     /// Names of `pub` nodes declared in this dag body.
@@ -907,5 +909,5 @@ pub struct DagTIR {
     /// nodes (`@mod.dag(args).private_node` → `ImportPrivateItem`). The
     /// same-file case reads visibility from the AST; cross-file merges
     /// drop the AST, so this set is the compiled proxy.
-    pub pub_nodes: std::collections::HashSet<DeclName>,
+    pub(crate) pub_nodes: std::collections::HashSet<DeclName>,
 }

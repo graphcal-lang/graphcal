@@ -16,7 +16,7 @@ use super::*;
     clippy::too_many_lines,
     reason = "import processing, inline DAG handling, and cross-file DAG handling form a cohesive pipeline"
 )]
-pub(in crate::eval::project) fn compile_single_file_in_project(
+fn compile_single_file_in_project(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
@@ -300,7 +300,7 @@ fn top_level_const_values(
 /// Library files with required params or indexes cannot produce runtime values
 /// standalone, but their registry, declared types, consts, and DAG metadata are
 /// still needed by importers.
-pub(in crate::eval::project) fn store_compiled_file_artifact(
+fn store_compiled_file_artifact(
     compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
@@ -332,7 +332,7 @@ pub(in crate::eval::project) fn store_compiled_file_artifact(
 }
 
 /// Evaluate and store a non-root file, producing an [`EvaluatedFile`] for downstream imports.
-pub(in crate::eval::project) fn evaluate_and_store_file(
+fn evaluate_and_store_file(
     compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
@@ -750,7 +750,7 @@ fn verify_wasm_plugin(
 /// Transitive imports inherit the root-level import span of the direct import
 /// that started the chain. When a transitive dependency is reachable from multiple
 /// root imports, the first root import in source order wins.
-pub(in crate::eval::project) fn build_dep_import_spans(
+fn build_dep_import_spans(
     project: &crate::loader::LoadedProject,
 ) -> HashMap<graphcal_compiler::dag_id::DagId, Span> {
     let root_file = &project.files[&project.root];
@@ -879,7 +879,7 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
 ///
 /// Returns a map: `override_name` → (`owning_dag_id`, `original_param_name`).
 /// The `original_param_name` may differ from `override_name` when an alias is used.
-pub(in crate::eval::project) fn route_overrides_to_files(
+fn route_overrides_to_files(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
 ) -> Result<HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>, CompileError> {
@@ -990,7 +990,7 @@ pub(in crate::eval::project) fn route_overrides_to_files(
 /// Pure filter over an already-evaluated map: the eval loop runs once in
 /// [`evaluate_plan_with_values`](super::super::runtime::evaluate_plan_with_values),
 /// not again here.
-pub(super) fn filter_local_runtime_values(
+fn filter_local_runtime_values(
     tir: &graphcal_compiler::tir::typed::TIR,
     values: &crate::eval_expr::RuntimeValueMap,
 ) -> HashMap<DeclName, RuntimeValue> {

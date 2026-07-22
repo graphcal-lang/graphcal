@@ -36,7 +36,7 @@ fn scan_ascii_ident(bytes: &[u8], pos: usize) -> Option<usize> {
 }
 
 /// Map comparison tokens to their corresponding `BinOp`.
-pub(super) const fn token_to_comparison_op(token: Token) -> Option<BinOp> {
+const fn token_to_comparison_op(token: Token) -> Option<BinOp> {
     match token {
         Token::EqEq => Some(BinOp::Eq),
         Token::BangEq => Some(BinOp::Ne),
@@ -75,7 +75,7 @@ impl Parser<'_> {
 
     /// Parse a single named field initializer for a constructor call:
     /// `field: expr`. Used inside the paren-form `Ctor(field: expr, ...)`.
-    pub(super) fn parse_named_field_init(&mut self) -> Result<FieldInit, ParseError> {
+    fn parse_named_field_init(&mut self) -> Result<FieldInit, ParseError> {
         let ident = self.parse_any_ident()?;
         let name = ident.into_spanned::<FieldName>();
         self.expect(Token::Colon)?;
@@ -300,7 +300,7 @@ impl Parser<'_> {
     }
 
     /// Apply postfix operators (field access `.field`, index access `[i]`) to an already-parsed expression.
-    pub(super) fn apply_postfix(&mut self, mut expr: Expr) -> Result<Expr, ParseError> {
+    fn apply_postfix(&mut self, mut expr: Expr) -> Result<Expr, ParseError> {
         loop {
             match self.lexer.peek() {
                 Some(Token::Dot) => {
@@ -751,7 +751,7 @@ impl Parser<'_> {
     /// 2. Parse a full expression:
     ///    - If it's a single-segment unresolved path → convert to `IndexArg::Var`.
     ///    - Otherwise → `IndexArg::Expr`.
-    pub(super) fn parse_index_arg(&mut self) -> Result<IndexArg, ParseError> {
+    fn parse_index_arg(&mut self) -> Result<IndexArg, ParseError> {
         if self.lexer.peek() == Some(&Token::Ident)
             && self.lexer.peek_second() == Some(&Token::Dot)
             && self.lexer.peek_third() == Some(&Token::Ident)
@@ -865,7 +865,7 @@ impl Parser<'_> {
     /// Look ahead to check if `<...>` is followed by `(`.
     /// Used to disambiguate `eye<3>()` (turbofish fn call)
     /// from `f < x` (comparison).
-    pub(super) fn is_type_args_followed_by_paren(&mut self) -> bool {
+    fn is_type_args_followed_by_paren(&mut self) -> bool {
         self.is_type_args_followed_by(b'(')
     }
 
@@ -879,7 +879,7 @@ impl Parser<'_> {
     /// unit constructor is written `Ctor`, not `Ctor()`. A `Ctor()` call
     /// site with empty parens parses as a zero-arg function call and
     /// later fails at name-resolution time if no such function exists.
-    pub(super) fn is_named_arg_call(&mut self) -> bool {
+    fn is_named_arg_call(&mut self) -> bool {
         let Some((&Token::LParen, lp_span)) = self.lexer.peek_with_span() else {
             return false;
         };
@@ -907,7 +907,7 @@ impl Parser<'_> {
     /// Parse a generic argument list: `<GenericArg, GenericArg, ...>`
     ///
     /// Each argument is either a nat expression (integer literal) or a type expression.
-    pub(super) fn parse_generic_arg_list(
+    fn parse_generic_arg_list(
         &mut self,
     ) -> Result<Vec<crate::syntax::ast::GenericArg>, ParseError> {
         self.expect(Token::Lt)?;

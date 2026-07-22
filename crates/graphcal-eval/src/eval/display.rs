@@ -267,7 +267,7 @@ fn find_static_map_entry<'a>(
 ///
 /// Returns a [`GraphcalError`] when the scale cannot be resolved; see
 /// [`attach_display_units`].
-pub(super) fn resolve_unit_to_display(
+fn resolve_unit_to_display(
     unit: &graphcal_compiler::desugar::desugared_ast::UnitExpr,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
@@ -328,7 +328,7 @@ pub(super) fn format_range_step(
 }
 
 /// Set display unit on a scalar value. No-op for non-scalar values.
-pub(super) fn set_scalar_display_unit(value: &mut Value, du: &DisplayUnit) {
+fn set_scalar_display_unit(value: &mut Value, du: &DisplayUnit) {
     if let Value::Scalar { display_unit, .. } = value {
         *display_unit = Some(du.clone());
     }
@@ -336,7 +336,7 @@ pub(super) fn set_scalar_display_unit(value: &mut Value, du: &DisplayUnit) {
 
 /// Set display unit on every scalar leaf, descending through nested
 /// `Indexed` layers (multi-axis values).
-pub(super) fn set_scalar_display_unit_deep(value: &mut Value, du: &DisplayUnit) {
+fn set_scalar_display_unit_deep(value: &mut Value, du: &DisplayUnit) {
     match value {
         Value::Scalar { display_unit, .. } => *display_unit = Some(du.clone()),
         Value::Indexed { entries, .. } => {

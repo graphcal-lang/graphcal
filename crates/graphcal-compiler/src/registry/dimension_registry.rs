@@ -191,7 +191,10 @@ impl DimensionRegistry {
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
     #[cfg(test)]
-    pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RationalError> {
+    pub(crate) fn resolve_dim_expr(
+        &self,
+        expr: &DimExpr,
+    ) -> Result<Option<Dimension>, RationalError> {
         resolve_dim_expr_impl(&self.dimensions, expr)
     }
 

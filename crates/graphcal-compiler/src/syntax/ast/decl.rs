@@ -96,7 +96,7 @@ impl<P: Phase> DeclKind<P> {
     /// variant carries a name. `Import` and `Include` have no name and return
     /// `None`.
     #[must_use]
-    pub fn name_and_span(&self) -> Option<(&str, Span)> {
+    pub(crate) fn name_and_span(&self) -> Option<(&str, Span)> {
         match self {
             Self::Param(p) => Some((p.name.value.as_str(), p.name.span)),
             Self::Node(n) => Some((n.name.value.as_str(), n.name.span)),
@@ -203,9 +203,9 @@ impl std::fmt::Display for EncodingChannel {
 #[derive(Debug, Clone)]
 pub struct MarkSpec<P: Phase = Raw> {
     pub mark_type: MarkType,
-    pub mark_type_span: Span,
+    pub(crate) mark_type_span: Span,
     pub properties: Vec<PlotField<P>>,
-    pub span: Span,
+    pub(crate) span: Span,
 }
 
 /// An encoding channel mapping in a plot declaration.
@@ -214,9 +214,9 @@ pub struct MarkSpec<P: Phase = Raw> {
 #[derive(Debug, Clone)]
 pub struct Encoding<P: Phase = Raw> {
     pub channel: EncodingChannel,
-    pub channel_span: Span,
+    pub(crate) channel_span: Span,
     pub value: Expr<P>,
-    pub span: Span,
+    pub(crate) span: Span,
 }
 
 /// A named field in a plot or figure declaration body.
@@ -228,7 +228,7 @@ pub struct PlotField<P: Phase = Raw> {
     pub name: Spanned<PlotPropertyName>,
     /// The field value expression.
     pub value: Expr<P>,
-    pub span: Span,
+    pub(crate) span: Span,
 }
 
 /// Plot declaration: `plot name = { mark: point, encode: { x: ..., y: ... }, title: "..." };`
@@ -346,7 +346,7 @@ pub enum ExternGenericBinder {
 impl ExternGenericBinder {
     /// The binder's source span.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    pub(crate) const fn span(&self) -> Span {
         match self {
             Self::Dim(var) => var.span,
             Self::Index(var) => var.span,
@@ -440,9 +440,9 @@ pub struct MultiDecl<P: Phase = Raw> {
     pub slices: Vec<MultiDeclSlice<P>>,
     /// Full surface span: from the first slot's kind keyword through the
     /// closing `;`.
-    pub span: Span,
+    pub(crate) span: Span,
     /// Span of the `table[…] {…}` sub-expression.
-    pub table_expr_span: Span,
+    pub(crate) table_expr_span: Span,
 }
 
 /// One slot in a multi-decl: kind keyword, name, type annotation, visibility.
@@ -457,7 +457,7 @@ pub struct MultiDeclSlot<P: Phase = Raw> {
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr<P>,
     /// Span from kind keyword through end of the type annotation.
-    pub header_span: Span,
+    pub(crate) header_span: Span,
 }
 
 /// Value-decl kinds that a multi-decl slot can have.
@@ -501,7 +501,7 @@ pub struct MultiDeclSlice<P: Phase = Raw> {
     /// Per-slot column span into this slice's `header_cells` and `rows`
     /// values. Same length as `MultiDecl::slots`. May differ between
     /// slices if their header rows list variants in different orders.
-    pub column_layout: Vec<MultiSlotColumnSpan>,
+    pub(crate) column_layout: Vec<MultiSlotColumnSpan>,
     /// Data rows for this slice.
     pub rows: Vec<MultiDataRow<P>>,
 }
@@ -610,7 +610,7 @@ pub struct UnitDecl<P: Phase = Raw> {
 pub struct UnitDef<P: Phase = Raw> {
     pub scale_expr: Expr<P>,
     pub unit_expr: UnitExpr,
-    pub span: Span,
+    pub(crate) span: Span,
 }
 
 /// Type declaration: required type stubs and tagged-union bodies.

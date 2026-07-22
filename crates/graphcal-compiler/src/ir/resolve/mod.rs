@@ -35,7 +35,7 @@ pub(crate) use crate::registry::resolve_types::{ResolvedFile, is_time_scale_name
 pub use crate::syntax::module_name::ScopedName;
 
 // Re-export items from submodules (crate-internal only).
-pub use deps::contains_graph_ref;
+pub(crate) use deps::contains_graph_ref;
 
 // Import helpers from submodules for use within this file.
 use names::parse_expected_fail_args;

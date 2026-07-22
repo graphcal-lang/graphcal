@@ -11,7 +11,7 @@ pub(crate) enum CommentDelimiter {
 
 impl CommentDelimiter {
     #[must_use]
-    pub(crate) const fn lexeme(self) -> &'static str {
+    const fn lexeme(self) -> &'static str {
         match self {
             Self::Line => "//",
             Self::Doc => "///",

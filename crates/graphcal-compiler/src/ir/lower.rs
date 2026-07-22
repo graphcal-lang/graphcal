@@ -62,7 +62,7 @@ pub struct LoweredPlotBody {
 pub struct LoweredPlotField {
     pub name: crate::syntax::ast::PlotPropertyName,
     /// Span of the property name in the source, for validation diagnostics.
-    pub name_span: crate::syntax::span::Span,
+    pub(crate) name_span: crate::syntax::span::Span,
     pub value: crate::hir::Expr,
 }
 
@@ -84,21 +84,21 @@ impl BodySource {
     /// The declaration belongs to the file being compiled; its span indexes
     /// into the ambient `src` threaded through the pipeline.
     #[must_use]
-    pub const fn own() -> Self {
+    const fn own() -> Self {
         Self(None)
     }
 
     /// The declaration was merged from a dependency body whose spans index
     /// into `src`.
     #[must_use]
-    pub const fn dependency(src: NamedSource<Arc<String>>) -> Self {
+    const fn dependency(src: NamedSource<Arc<String>>) -> Self {
         Self(Some(src))
     }
 
     /// Resolve the source the span should render against, falling back to the
     /// ambient `default` source for declarations native to the compiled file.
     #[must_use]
-    pub fn resolve<'a>(
+    pub(crate) fn resolve<'a>(
         &'a self,
         default: &'a NamedSource<Arc<String>>,
     ) -> &'a NamedSource<Arc<String>> {
@@ -113,7 +113,7 @@ impl BodySource {
     /// must name `dep_src`. A body already tagged with a deeper dependency
     /// source (a transitively-merged include) keeps that attribution.
     #[must_use]
-    pub fn or_dependency(self, dep_src: &NamedSource<Arc<String>>) -> Self {
+    fn or_dependency(self, dep_src: &NamedSource<Arc<String>>) -> Self {
         match self.0 {
             Some(_) => self,
             None => Self::dependency(dep_src.clone()),
@@ -129,14 +129,14 @@ pub struct ConstEntry {
     /// Module scope used to resolve this declaration's type annotation and
     /// domain-bound expressions. Merged include outputs keep the producer's
     /// scope so consumers do not need imports for names they never wrote.
-    pub type_resolution_owner: crate::dag_id::DagId,
-    pub expr: crate::hir::Expr,
+    pub(crate) type_resolution_owner: crate::dag_id::DagId,
+    pub(crate) expr: crate::hir::Expr,
     pub span: Span,
     /// Provenance of this declaration's `span` (#868). `None` means the span
     /// indexes into the IR's own file source; `Some` carries the source of a
     /// dependency body merged in by an instantiated include, so diagnostics
     /// anchored on the span render against the right file.
-    pub src: BodySource,
+    pub(crate) src: BodySource,
 }
 
 /// A param declaration with type annotation and lowered default.
@@ -146,11 +146,11 @@ pub struct ParamEntry {
     pub type_ann: TypeExpr,
     /// Module scope used to resolve this parameter's type annotation and
     /// domain-bound expressions.
-    pub type_resolution_owner: crate::dag_id::DagId,
+    pub(crate) type_resolution_owner: crate::dag_id::DagId,
     pub default_expr: Option<crate::hir::Expr>,
     pub span: Span,
     /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
-    pub src: BodySource,
+    pub(crate) src: BodySource,
 }
 
 /// A node declaration with type annotation and lowered body.
@@ -160,11 +160,11 @@ pub struct NodeEntry {
     pub type_ann: TypeExpr,
     /// Module scope used to resolve this node's type annotation and
     /// domain-bound expressions.
-    pub type_resolution_owner: crate::dag_id::DagId,
+    pub(crate) type_resolution_owner: crate::dag_id::DagId,
     pub expr: crate::hir::Expr,
     pub span: Span,
     /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
-    pub src: BodySource,
+    pub(crate) src: BodySource,
 }
 
 /// An assert declaration with lowered body.
@@ -174,7 +174,7 @@ pub struct AssertEntry {
     pub body: crate::hir::AssertBody,
     pub span: Span,
     /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
-    pub src: BodySource,
+    pub(crate) src: BodySource,
 }
 
 /// A const declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -183,60 +183,60 @@ pub struct AssertEntry {
 /// reference paths (prefixing, index/type rebinding) before resolution.
 #[derive(Debug, Clone)]
 pub struct UnfrozenConstEntry {
-    pub name: ScopedName,
-    pub type_ann: TypeExpr,
+    name: ScopedName,
+    type_ann: TypeExpr,
     /// Module scope for the declaration signature (type annotation and domain bounds).
-    pub type_resolution_owner: crate::dag_id::DagId,
-    pub expr: Expr,
+    type_resolution_owner: crate::dag_id::DagId,
+    expr: Expr,
     /// Module scope for the declaration body expression.
-    pub body_resolution_owner: crate::dag_id::DagId,
-    pub span: Span,
+    body_resolution_owner: crate::dag_id::DagId,
+    span: Span,
     /// Source provenance of `span`; see [`BodySource`] (#868).
-    pub src: BodySource,
+    src: BodySource,
 }
 
 /// A param declaration awaiting default lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
 pub struct UnfrozenParamEntry {
-    pub name: ScopedName,
-    pub type_ann: TypeExpr,
+    name: ScopedName,
+    type_ann: TypeExpr,
     /// Module scope for the parameter signature (type annotation and domain bounds).
-    pub type_resolution_owner: crate::dag_id::DagId,
-    pub default_expr: Option<Expr>,
+    type_resolution_owner: crate::dag_id::DagId,
+    default_expr: Option<Expr>,
     /// Module scope for the default expression when present. Include-time
     /// param bindings are importer-written expressions, so this can differ
     /// from `type_resolution_owner`.
-    pub default_resolution_owner: crate::dag_id::DagId,
-    pub span: Span,
+    default_resolution_owner: crate::dag_id::DagId,
+    span: Span,
     /// Source provenance of `span`; see [`BodySource`] (#868).
-    pub src: BodySource,
+    src: BodySource,
 }
 
 /// A node declaration awaiting body lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
 pub struct UnfrozenNodeEntry {
-    pub name: ScopedName,
-    pub type_ann: TypeExpr,
+    name: ScopedName,
+    type_ann: TypeExpr,
     /// Module scope for the declaration signature (type annotation and domain bounds).
-    pub type_resolution_owner: crate::dag_id::DagId,
-    pub expr: Expr,
+    type_resolution_owner: crate::dag_id::DagId,
+    expr: Expr,
     /// Module scope for the declaration body expression.
-    pub body_resolution_owner: crate::dag_id::DagId,
-    pub span: Span,
+    body_resolution_owner: crate::dag_id::DagId,
+    span: Span,
     /// Source provenance of `span`; see [`BodySource`] (#868).
-    pub src: BodySource,
+    src: BodySource,
 }
 
 /// An assert declaration awaiting body lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
 pub struct UnfrozenAssertEntry {
-    pub name: ScopedName,
-    pub body: AssertBody,
+    name: ScopedName,
+    body: AssertBody,
     /// Module scope for the assertion body expression(s).
-    pub body_resolution_owner: crate::dag_id::DagId,
-    pub span: Span,
+    body_resolution_owner: crate::dag_id::DagId,
+    span: Span,
     /// Source provenance of `span`; see [`BodySource`] (#868).
-    pub src: BodySource,
+    src: BodySource,
 }
 
 /// A plot declaration with lowered body.
@@ -299,20 +299,20 @@ pub struct LayerEntry {
 /// A plot declaration awaiting body lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
 pub struct UnfrozenPlotEntry {
-    pub name: ScopedName,
-    pub decl: PlotDecl,
+    name: ScopedName,
+    decl: PlotDecl,
     /// Module scope for plot field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
     /// Whether this plot renders standalone (no `#[hidden]`).
-    pub displayed: bool,
+    displayed: bool,
 }
 
 /// A figure declaration awaiting field lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
 pub struct UnfrozenFigureEntry {
-    pub name: ScopedName,
-    pub decl: FigureDecl,
+    name: ScopedName,
+    decl: FigureDecl,
     /// Module scope for figure field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
 }
@@ -320,8 +320,8 @@ pub struct UnfrozenFigureEntry {
 /// A layer declaration awaiting field lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
 pub struct UnfrozenLayerEntry {
-    pub name: ScopedName,
-    pub decl: LayerDecl,
+    name: ScopedName,
+    decl: LayerDecl,
     /// Module scope for layer field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
 }
@@ -338,44 +338,44 @@ pub struct IR {
     /// The type/unit/dimension/index/struct/function registry.
     pub registry: Registry,
     /// Const declarations in source order.
-    pub consts: Vec<ConstEntry>,
+    pub(crate) consts: Vec<ConstEntry>,
     /// Param declarations in source order.
-    pub params: Vec<ParamEntry>,
+    pub(crate) params: Vec<ParamEntry>,
     /// Node declarations in source order.
-    pub nodes: Vec<NodeEntry>,
+    pub(crate) nodes: Vec<NodeEntry>,
     /// Assert declarations in source order.
-    pub asserts: Vec<AssertEntry>,
+    pub(crate) asserts: Vec<AssertEntry>,
     /// Plot declarations in source order.
-    pub plots: Vec<PlotEntry>,
+    pub(crate) plots: Vec<PlotEntry>,
     /// Figure declarations in source order.
-    pub figures: Vec<FigureEntry>,
+    pub(crate) figures: Vec<FigureEntry>,
     /// Layer declarations in source order.
-    pub layers: Vec<LayerEntry>,
+    pub(crate) layers: Vec<LayerEntry>,
     /// Plot aliases from include brace lists (#847).
-    pub included_plots: Vec<IncludedPlotEntry>,
+    pub(crate) included_plots: Vec<IncludedPlotEntry>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// Mapping from assert name to the list of declarations that assume it.
-    pub assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
+    pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
-    pub expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
+    pub(crate) expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
     /// Pre-evaluated values imported from dependency files.
     /// These are injected directly into the execution plan rather than compiled.
     /// Each entry carries the runtime value and its declared type (for `dim_check`).
-    pub imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    pub(crate) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     /// Declared types for imported names that are not backed by a pre-evaluated
     /// value at this compilation boundary.
     ///
     /// Inline DAG bodies use this for `import parent.{const}`: the body needs
     /// the imported name's type during dim-checking, while the concrete value is
     /// supplied later by the caller or by the dependency that owns the DAG.
-    pub imported_decl_types: HashMap<ScopedName, DeclaredType>,
+    pub(crate) imported_decl_types: HashMap<ScopedName, DeclaredType>,
     /// Source bindings for imported values whose runtime value is supplied
     /// outside this IR.
-    pub imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    pub(crate) imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     /// Resolved extern function signatures declared by `import plugin`
     /// blocks, keyed by canonical plugin identity plus function name.
-    pub extern_functions: HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>,
+    pub(crate) extern_functions: HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>,
     /// Names of declarations marked `pub` (or `pub(bind)`) in the file.
     ///
     /// Carried through from the resolver so downstream stages — most
@@ -489,7 +489,7 @@ fn single_module_resolver(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
-pub(crate) fn lower_to_builder(
+fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
@@ -586,7 +586,7 @@ pub fn lower_to_builder_with_imported_values(
     clippy::too_many_arguments,
     reason = "lowering threads imported value metadata plus the registry seed hook"
 )]
-pub fn lower_to_builder_with_imported_value_decls(
+fn lower_to_builder_with_imported_value_decls(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
@@ -1005,7 +1005,7 @@ pub struct UnfrozenIR {
     figures: Vec<UnfrozenFigureEntry>,
     layers: Vec<UnfrozenLayerEntry>,
     /// Plot aliases from include brace lists (#847).
-    pub included_plots: Vec<IncludedPlotEntry>,
+    included_plots: Vec<IncludedPlotEntry>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
     assert_names: HashSet<ScopedName>,
@@ -2093,7 +2093,7 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for RefPrefixer<'_> {
 /// `"dry_mass"` is in `dep_names` and `prefix` is `"r"`.
 ///
 /// Built-in names and names from the importer's scope are left unchanged.
-pub(crate) fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<DeclName>) {
+fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<DeclName>) {
     let Ok(prefix_atom) = NameAtom::parse(prefix) else {
         // The prefix comes from a validated include alias; a non-identifier
         // prefix cannot name any reference, so there is nothing to rewrite.
@@ -2225,7 +2225,7 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
 ///
 /// This must be called **before** `prefix_expr_refs` so that index names are
 /// correct before ref-prefixing adds the `prefix.` qualifier.
-pub(crate) fn substitute_index_names(expr: &mut Expr, bindings: &HashMap<IndexName, IndexName>) {
+fn substitute_index_names(expr: &mut Expr, bindings: &HashMap<IndexName, IndexName>) {
     if bindings.is_empty() {
         return;
     }
@@ -2346,7 +2346,7 @@ where
     clippy::too_many_lines,
     reason = "single recursion covering every ExprKind variant"
 )]
-pub(crate) fn substitute_type_names_in_expr(
+fn substitute_type_names_in_expr(
     expr: &mut Expr,
     bindings: &HashMap<StructTypeName, StructTypeName>,
 ) {
@@ -2484,7 +2484,7 @@ pub(crate) fn substitute_type_names_in_expr(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if a referenced dimension or unit is unknown.
-pub(crate) fn register_file_declarations(
+fn register_file_declarations(
     file: &File,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
@@ -2503,7 +2503,7 @@ pub struct SelectedDeclarations {
     /// Names imported from the default compile-time namespace.
     pub default: HashSet<crate::syntax::names::NameAtom>,
     /// Names imported from the explicit `type` namespace.
-    pub types: HashSet<crate::syntax::names::NameAtom>,
+    types: HashSet<crate::syntax::names::NameAtom>,
 }
 
 impl SelectedDeclarations {

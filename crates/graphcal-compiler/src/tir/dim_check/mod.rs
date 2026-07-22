@@ -55,14 +55,14 @@ impl InferredIndex {
     }
 
     #[must_use]
-    pub fn from_resolved(resolved: ResolvedIndexName) -> Self {
+    pub(crate) fn from_resolved(resolved: ResolvedIndexName) -> Self {
         Self {
             reference: IndexTypeRef::from_resolved(resolved),
         }
     }
 
     #[must_use]
-    pub const fn from_ref(reference: IndexTypeRef) -> Self {
+    pub(crate) const fn from_ref(reference: IndexTypeRef) -> Self {
         Self { reference }
     }
 
@@ -71,7 +71,7 @@ impl InferredIndex {
     /// # Errors
     ///
     /// Returns an error if the identity cannot be converted to an index type reference.
-    pub fn from_nat_range_identity(
+    fn from_nat_range_identity(
         identity: &NatRangeIndexIdentity,
     ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
         Ok(Self {
@@ -84,44 +84,44 @@ impl InferredIndex {
     /// # Errors
     ///
     /// Returns an error when the form is a concrete invalid Nat range size.
-    pub fn from_nat_range_form(
+    pub(crate) fn from_nat_range_form(
         form: NatPolyForm,
     ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
         Self::from_nat_range_identity(&NatRangeIndexIdentity::try_from_form(form)?)
     }
 
     #[must_use]
-    pub const fn type_ref(&self) -> &IndexTypeRef {
+    pub(crate) const fn type_ref(&self) -> &IndexTypeRef {
         &self.reference
     }
 
     #[must_use]
-    pub fn name(&self) -> IndexName {
+    pub(crate) fn name(&self) -> IndexName {
         self.reference.display_name()
     }
 
     #[must_use]
-    pub const fn declared_resolved(&self) -> Option<&ResolvedIndexName> {
+    pub(crate) const fn declared_resolved(&self) -> Option<&ResolvedIndexName> {
         self.reference.declared_resolved()
     }
 
     #[must_use]
-    pub const fn concrete_nat_range(&self) -> Option<crate::registry::types::NatRangeIndex> {
+    const fn concrete_nat_range(&self) -> Option<crate::registry::types::NatRangeIndex> {
         self.reference.nat_range()
     }
 
     #[must_use]
-    pub fn nat_range_form(&self) -> Option<NatPolyForm> {
+    pub(crate) fn nat_range_form(&self) -> Option<NatPolyForm> {
         self.reference.nat_range_form()
     }
 
     #[must_use]
-    pub fn matches_resolved(&self, expected: &ResolvedIndexName) -> bool {
+    pub(crate) fn matches_resolved(&self, expected: &ResolvedIndexName) -> bool {
         self.declared_resolved() == Some(expected)
     }
 
     #[must_use]
-    pub fn matches_ref(&self, expected: &IndexTypeRef) -> bool {
+    fn matches_ref(&self, expected: &IndexTypeRef) -> bool {
         self.reference.matches_ref(expected)
     }
 }
@@ -156,39 +156,39 @@ impl InferredStructType {
     }
 
     #[must_use]
-    pub fn from_resolved(resolved: ResolvedStructTypeName) -> Self {
+    pub(crate) fn from_resolved(resolved: ResolvedStructTypeName) -> Self {
         Self {
             reference: StructTypeRef::from_resolved(resolved),
         }
     }
 
     #[must_use]
-    pub const fn from_ref(reference: StructTypeRef) -> Self {
+    const fn from_ref(reference: StructTypeRef) -> Self {
         Self { reference }
     }
 
     #[must_use]
-    pub const fn type_ref(&self) -> &StructTypeRef {
+    const fn type_ref(&self) -> &StructTypeRef {
         &self.reference
     }
 
     #[must_use]
-    pub const fn name(&self) -> &StructTypeName {
+    const fn name(&self) -> &StructTypeName {
         self.reference.name()
     }
 
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedStructTypeName {
+    pub(crate) const fn resolved(&self) -> &ResolvedStructTypeName {
         self.reference.resolved()
     }
 
     #[must_use]
-    pub fn matches_resolved(&self, expected: &ResolvedStructTypeName) -> bool {
+    fn matches_resolved(&self, expected: &ResolvedStructTypeName) -> bool {
         self.resolved() == expected
     }
 
     #[must_use]
-    pub fn matches_ref(&self, expected: &StructTypeRef) -> bool {
+    fn matches_ref(&self, expected: &StructTypeRef) -> bool {
         self.reference.matches_ref(expected)
     }
 }
@@ -254,12 +254,12 @@ pub enum InferredType {
 impl InferredType {
     /// Returns `true` if this type is `Int` or `Fin(N)` (integer-like).
     #[must_use]
-    pub const fn is_int_like(&self) -> bool {
+    pub(crate) const fn is_int_like(&self) -> bool {
         matches!(self, Self::Int | Self::Fin(_))
     }
 
     #[must_use]
-    pub const fn scalar_dimension(&self) -> Option<&Dimension> {
+    const fn scalar_dimension(&self) -> Option<&Dimension> {
         match self {
             Self::Scalar(dimension) | Self::RangeIndexLabel { dimension, .. } => Some(dimension),
             _ => None,

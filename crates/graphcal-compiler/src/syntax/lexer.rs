@@ -55,17 +55,17 @@ impl<'src> Lexer<'src> {
     }
 
     /// Peek at the next token without consuming it.
-    pub fn peek(&mut self) -> Option<&Token> {
+    pub(crate) fn peek(&mut self) -> Option<&Token> {
         self.peek_with_span().map(|(tok, _)| tok)
     }
 
     /// Peek at the token after the next token without consuming either one.
-    pub fn peek_second(&mut self) -> Option<&Token> {
+    pub(crate) fn peek_second(&mut self) -> Option<&Token> {
         self.peek_token_at(1)
     }
 
     /// Peek at the third token from the current position without consuming any token.
-    pub fn peek_third(&mut self) -> Option<&Token> {
+    pub(crate) fn peek_third(&mut self) -> Option<&Token> {
         self.peek_token_at(2)
     }
 
@@ -73,7 +73,7 @@ impl<'src> Lexer<'src> {
     ///
     /// This delegates to the cache, which fills its first slot before returning
     /// a reference to it.
-    pub fn peek_with_span(&mut self) -> Option<(&Token, Span)> {
+    pub(crate) fn peek_with_span(&mut self) -> Option<(&Token, Span)> {
         let inner = &mut self.inner;
         let source = self.source;
         let source_metadata = &mut self.source_metadata;
@@ -106,7 +106,7 @@ impl<'src> Lexer<'src> {
     /// answer at a specific point should ensure lexing has progressed past the
     /// region of interest (e.g., by draining the remaining tokens).
     #[must_use]
-    pub const fn first_error_span(&self) -> Option<Span> {
+    pub(crate) const fn first_error_span(&self) -> Option<Span> {
         self.first_error_span
     }
 
@@ -125,18 +125,18 @@ impl<'src> Lexer<'src> {
 
     /// Get the source text corresponding to a span.
     #[must_use]
-    pub fn slice_at(&self, span: Span) -> &'src str {
+    pub(crate) fn slice_at(&self, span: Span) -> &'src str {
         &self.source[span.offset()..span.offset() + span.len()]
     }
 
     /// Return the total length (in bytes) of the source string.
     #[must_use]
-    pub const fn source_len(&self) -> usize {
+    pub(crate) const fn source_len(&self) -> usize {
         self.source.len()
     }
 
     #[must_use]
-    pub fn into_source_metadata(self) -> SourceMetadata {
+    pub(crate) fn into_source_metadata(self) -> SourceMetadata {
         self.source_metadata
     }
 }

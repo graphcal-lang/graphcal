@@ -510,7 +510,7 @@ fn find_inline_dag_decl_in_declarations<'a>(
 /// Each cloned DAG TIR also receives the dep-file values named by the
 /// DAG body's explicit imports, so `import dep.{const as local}`
 /// resolves under the local alias at inline-call eval time.
-pub(in crate::eval::project) fn merge_dep_dag_tirs(
+fn merge_dep_dag_tirs(
     tir: &mut graphcal_compiler::tir::typed::TIR,
     module_map: &HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
@@ -591,7 +591,7 @@ pub(in crate::eval::project) fn merge_dep_dag_tirs(
     clippy::too_many_lines,
     reason = "single cohesive include pipeline: source resolution, registry merge, validation, IR merge"
 )]
-pub(in crate::eval::project) fn process_deferred_dag_includes(
+fn process_deferred_dag_includes(
     project: &crate::loader::LoadedProject,
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
     importer_file_dag_id: &graphcal_compiler::dag_id::DagId,
@@ -906,7 +906,7 @@ pub(in crate::eval::project) fn process_deferred_dag_includes(
 /// Bindings that an alias's type annotation must be rewritten through before
 /// it is registered in the importer's IR. Shared by both inline-DAG and
 /// file-include alias paths so their type-substitution stays in lock-step.
-pub(in crate::eval::project) struct AliasSubstitutions<'a> {
+struct AliasSubstitutions<'a> {
     pub index: &'a HashMap<IndexName, IndexName>,
     pub r#type: &'a HashMap<StructTypeName, StructTypeName>,
     pub dim: &'a HashMap<DimName, DimName>,
@@ -1027,7 +1027,7 @@ fn add_selective_aliases_inner(
 ///
 /// This imports dimensions, units, indexes, and struct types so that the
 /// importing file can reference them.
-pub(in crate::eval::project) fn merge_registry_into_builder(
+fn merge_registry_into_builder(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
     index_bindings: &HashMap<IndexName, IndexName>,
@@ -1133,7 +1133,7 @@ fn replace_dynamic_units_with_resolved_scales(
 /// Merge type-system declarations from a dependency's frozen Registry into a
 /// builder, restricted to names listed in `pub_names`. Used for module imports
 /// where only public items should cross the boundary.
-pub(in crate::eval::project) fn merge_registry_into_builder_pub_filtered(
+fn merge_registry_into_builder_pub_filtered(
     builder: &mut RegistryBuilder,
     import: &ModuleRegistryImport<'_>,
 ) -> Result<(), UnitMergeConflict> {
@@ -1159,7 +1159,7 @@ pub(in crate::eval::project) struct UnitMergeConflict {
     pub name: graphcal_compiler::syntax::dimension::UnitRef,
 }
 
-pub(in crate::eval::project) fn merge_registry_into_builder_filtered(
+fn merge_registry_into_builder_filtered(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
     index_bindings: &HashMap<IndexName, IndexName>,
@@ -1418,7 +1418,7 @@ pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
 /// This mirrors the import-processing logic in `compile_single_file_in_project` but
 /// only for non-instantiated imports (the dependency's own transitive deps already
 /// have compiled artifacts in `evaluated_files`).
-pub(in crate::eval::project) fn build_dep_imported_values(
+fn build_dep_imported_values(
     project: &crate::loader::LoadedProject,
     dep_dag_id: &graphcal_compiler::dag_id::DagId,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,

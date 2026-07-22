@@ -233,9 +233,7 @@ impl Parser<'_> {
     ///
     /// Stops before any `.` that is *not* immediately followed by an identifier;
     /// such a `.` belongs to the brace-list tail (`.{ ... }`).
-    pub(in crate::syntax::parser) fn parse_module_path(
-        &mut self,
-    ) -> Result<ModulePath, ParseError> {
+    fn parse_module_path(&mut self) -> Result<ModulePath, ParseError> {
         let first = self.parse_any_ident()?;
         let path_start = first.span;
         let mut rest = Vec::new();

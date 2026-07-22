@@ -49,13 +49,13 @@ pub enum SymbolVisibility {
 impl SymbolVisibility {
     /// Returns whether the symbol is visible outside its owning module.
     #[must_use]
-    pub const fn is_public(self) -> bool {
+    const fn is_public(self) -> bool {
         matches!(self, Self::Public | Self::PublicBind)
     }
 
     /// Returns whether the symbol can be rebound by include-time bindings.
     #[must_use]
-    pub const fn is_bindable(self) -> bool {
+    pub(crate) const fn is_bindable(self) -> bool {
         matches!(self, Self::PublicBind)
     }
 }
@@ -110,7 +110,7 @@ impl DeclSymbolKind {
     /// Returns whether this declaration can be referenced from const-like
     /// expression positions.
     #[must_use]
-    pub const fn is_const(self) -> bool {
+    pub(crate) const fn is_const(self) -> bool {
         matches!(self, Self::Const)
     }
 }
@@ -163,19 +163,19 @@ impl<Ns: NameNamespace> ModuleSymbol<Ns> {
 
     /// Canonical resolved identity for this symbol.
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedName<Ns> {
+    pub(crate) const fn resolved(&self) -> &ResolvedName<Ns> {
         &self.resolved
     }
 
     /// Visibility of this symbol across module boundaries.
     #[must_use]
-    pub const fn visibility(&self) -> SymbolVisibility {
+    const fn visibility(&self) -> SymbolVisibility {
         self.visibility
     }
 
     /// Source span of the definition-site name.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    const fn span(&self) -> Span {
         self.span
     }
 }
@@ -223,25 +223,25 @@ impl ModuleDeclSymbol {
 
     /// Canonical resolved identity for this declaration.
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedDeclName {
+    const fn resolved(&self) -> &ResolvedDeclName {
         self.symbol.resolved()
     }
 
     /// Visibility of this declaration across module boundaries.
     #[must_use]
-    pub const fn visibility(&self) -> SymbolVisibility {
+    const fn visibility(&self) -> SymbolVisibility {
         self.symbol.visibility()
     }
 
     /// Source span of the definition-site name.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    const fn span(&self) -> Span {
         self.symbol.span()
     }
 
     /// Semantic declaration kind.
     #[must_use]
-    pub const fn kind(&self) -> DeclSymbolKind {
+    const fn kind(&self) -> DeclSymbolKind {
         self.kind
     }
 }
@@ -270,25 +270,25 @@ pub struct ModuleIndexSymbol {
 impl ModuleIndexSymbol {
     /// Canonical resolved identity for the index type.
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedIndexName {
+    const fn resolved(&self) -> &ResolvedIndexName {
         self.symbol.resolved()
     }
 
     /// Visibility of the index declaration.
     #[must_use]
-    pub const fn visibility(&self) -> SymbolVisibility {
+    pub(crate) const fn visibility(&self) -> SymbolVisibility {
         self.symbol.visibility()
     }
 
     /// Source span of the index definition-site name.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    const fn span(&self) -> Span {
         self.symbol.span()
     }
 
     /// Variant names declared by this index, keyed by leaf name.
     #[must_use]
-    pub const fn variants(&self) -> &HashMap<IndexVariantName, Span> {
+    pub(crate) const fn variants(&self) -> &HashMap<IndexVariantName, Span> {
         &self.variants
     }
 }
@@ -329,7 +329,7 @@ impl ModuleSymbols {
     ///
     /// Returns [`ModuleResolveError::DuplicateSymbol`] when two definitions in
     /// the same namespace share a leaf name.
-    pub fn from_declarations(
+    fn from_declarations(
         owner: DagId,
         declarations: &[ast::Declaration],
     ) -> Result<Self, ModuleResolveError> {
@@ -355,25 +355,25 @@ impl ModuleSymbols {
 
     /// Value/declaration namespace symbols.
     #[must_use]
-    pub const fn decls(&self) -> &HashMap<DeclName, ModuleDeclSymbol> {
+    pub(crate) const fn decls(&self) -> &HashMap<DeclName, ModuleDeclSymbol> {
         &self.decls
     }
 
     /// Dimension namespace symbols.
     #[must_use]
-    pub const fn dimensions(&self) -> &HashMap<DimName, ModuleSymbol<DimNameNamespace>> {
+    const fn dimensions(&self) -> &HashMap<DimName, ModuleSymbol<DimNameNamespace>> {
         &self.dimensions
     }
 
     /// Unit namespace symbols.
     #[must_use]
-    pub const fn units(&self) -> &HashMap<UnitName, ModuleSymbol<UnitNameNamespace>> {
+    const fn units(&self) -> &HashMap<UnitName, ModuleSymbol<UnitNameNamespace>> {
         &self.units
     }
 
     /// Struct/tagged-union type namespace symbols.
     #[must_use]
-    pub const fn struct_types(
+    pub(crate) const fn struct_types(
         &self,
     ) -> &HashMap<StructTypeName, ModuleSymbol<StructTypeNameNamespace>> {
         &self.struct_types
@@ -381,13 +381,13 @@ impl ModuleSymbols {
 
     /// Index namespace symbols.
     #[must_use]
-    pub const fn indexes(&self) -> &HashMap<IndexName, ModuleIndexSymbol> {
+    pub(crate) const fn indexes(&self) -> &HashMap<IndexName, ModuleIndexSymbol> {
         &self.indexes
     }
 
     /// Tagged-union constructor namespace symbols.
     #[must_use]
-    pub const fn constructors(
+    const fn constructors(
         &self,
     ) -> &HashMap<ConstructorName, ModuleSymbol<ConstructorNameNamespace>> {
         &self.constructors
@@ -761,7 +761,7 @@ impl ModuleAliasTarget {
 
     /// Source span of the local alias name.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    const fn span(&self) -> Span {
         self.span
     }
 
@@ -784,19 +784,19 @@ pub struct PluginAliasTarget {
 impl PluginAliasTarget {
     /// The plugin identity the alias refers to.
     #[must_use]
-    pub const fn path(&self) -> &crate::syntax::plugin::PluginPath {
+    pub(crate) const fn path(&self) -> &crate::syntax::plugin::PluginPath {
         &self.path
     }
 
     /// Source span of the local alias name.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    const fn span(&self) -> Span {
         self.span
     }
 
     /// The extern functions declared under this alias, with their name spans.
     #[must_use]
-    pub const fn functions(&self) -> &HashMap<crate::syntax::function_name::FnName, Span> {
+    pub(crate) const fn functions(&self) -> &HashMap<crate::syntax::function_name::FnName, Span> {
         &self.functions
     }
 }
@@ -820,19 +820,19 @@ impl<Ns: NameNamespace> ImportedSymbol<Ns> {
 
     /// Canonical target identity of the imported symbol.
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedName<Ns> {
+    const fn resolved(&self) -> &ResolvedName<Ns> {
         &self.resolved
     }
 
     /// Source span of the local import name.
     #[must_use]
-    pub const fn span(&self) -> Span {
+    const fn span(&self) -> Span {
         self.span
     }
 
     /// Visibility of this selective import when the importing module is itself imported.
     #[must_use]
-    pub const fn visibility(&self) -> SymbolVisibility {
+    const fn visibility(&self) -> SymbolVisibility {
         self.visibility
     }
 }
@@ -1034,7 +1034,7 @@ impl ModuleResolver {
     /// Plugin imports are file-level declarations; inline `dag` children see
     /// the enclosing file's aliases, so the lookup walks up the owner chain.
     #[must_use]
-    pub fn plugin_alias(&self, owner: &DagId, alias: &str) -> Option<&PluginAliasTarget> {
+    pub(crate) fn plugin_alias(&self, owner: &DagId, alias: &str) -> Option<&PluginAliasTarget> {
         let mut current = Some(owner.clone());
         while let Some(id) = current {
             if let Some(target) = self
@@ -1197,7 +1197,7 @@ impl ModuleResolver {
     /// Bare paths first search local declarations, then selective imports.
     /// Qualified paths resolve their qualifier through module aliases and then
     /// apply that alias boundary's visibility rule.
-    pub fn resolve_decl_path(
+    pub(crate) fn resolve_decl_path(
         &self,
         owner: &DagId,
         path: &NamePath,
@@ -1208,7 +1208,7 @@ impl ModuleResolver {
     }
 
     /// Resolve a declaration path and require that it names a const declaration.
-    pub fn resolve_const_decl_path(
+    pub(crate) fn resolve_const_decl_path(
         &self,
         owner: &DagId,
         path: &NamePath,
@@ -1227,7 +1227,7 @@ impl ModuleResolver {
     }
 
     /// Return the semantic kind of a resolved declaration symbol.
-    pub fn decl_symbol_kind(
+    pub(crate) fn decl_symbol_kind(
         &self,
         name: &ResolvedDeclName,
     ) -> Result<DeclSymbolKind, ModuleResolveError> {
@@ -1245,7 +1245,7 @@ impl ModuleResolver {
     }
 
     /// Resolve a syntactic dimension path to a canonical owner + leaf.
-    pub fn resolve_dimension_path(
+    pub(crate) fn resolve_dimension_path(
         &self,
         owner: &DagId,
         path: &NamePath,
@@ -1267,7 +1267,7 @@ impl ModuleResolver {
     }
 
     /// Resolve a syntactic struct/tagged-union type path to a canonical owner + leaf.
-    pub fn resolve_struct_type_path(
+    pub(crate) fn resolve_struct_type_path(
         &self,
         owner: &DagId,
         path: &NamePath,
@@ -1278,7 +1278,7 @@ impl ModuleResolver {
     }
 
     /// Resolve a syntactic tagged-union constructor path to a canonical owner + leaf.
-    pub fn resolve_constructor_path(
+    pub(crate) fn resolve_constructor_path(
         &self,
         owner: &DagId,
         path: &NamePath,
@@ -1290,7 +1290,7 @@ impl ModuleResolver {
 
     /// Resolve a span-aware constructor path without losing source path shape at
     /// the caller boundary.
-    pub fn resolve_constructor_ident_path(
+    pub(crate) fn resolve_constructor_ident_path(
         &self,
         owner: &DagId,
         path: &IdentPath,
@@ -1299,7 +1299,7 @@ impl ModuleResolver {
     }
 
     /// Resolve a syntactic index path to a canonical owner + leaf.
-    pub fn resolve_index_path(
+    pub(crate) fn resolve_index_path(
         &self,
         owner: &DagId,
         path: &NamePath,
@@ -1337,7 +1337,7 @@ impl ModuleResolver {
     /// index path and variant leaf separately (map keys, index arguments, and
     /// match labels). It avoids reconstructing a dotted string or re-parsing
     /// source text just to validate the variant against the canonical index.
-    pub fn resolve_index_variant_parts(
+    pub(crate) fn resolve_index_variant_parts(
         &self,
         owner: &DagId,
         index_path: &NamePath,
@@ -1366,7 +1366,7 @@ impl ModuleResolver {
 
     /// Resolve a bare variant leaf by searching local and selectively imported
     /// indexes in the current module scope.
-    pub fn resolve_bare_index_variant(
+    pub(crate) fn resolve_bare_index_variant(
         &self,
         owner: &DagId,
         variant: &IndexVariantName,
@@ -1419,7 +1419,7 @@ impl ModuleResolver {
     /// segment as a module alias and append the remaining segments to the alias
     /// target. The returned identity is canonical; source qualifier text is not
     /// carried beyond this resolver boundary.
-    pub fn resolve_module_path(
+    pub(crate) fn resolve_module_path(
         &self,
         owner: &DagId,
         path: &ModulePath,

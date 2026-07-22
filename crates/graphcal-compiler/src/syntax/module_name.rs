@@ -108,7 +108,7 @@ impl ScopedName {
     /// `x.with_prefix("p")` → `p.x`.
     /// `m.x.with_prefix("p")` → `p.x`.
     #[must_use]
-    pub fn with_prefix(&self, prefix: &str) -> Self {
+    pub(crate) fn with_prefix(&self, prefix: &str) -> Self {
         Self::qualified(prefix, Arc::clone(&self.member))
     }
 }

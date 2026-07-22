@@ -62,7 +62,7 @@ impl Parser<'_> {
     /// Mirrors the per-decl checks at the top of `parse_declaration`:
     /// `param` rejects any visibility annotation; `node` / `const node`
     /// reject `pub(bind)`. Called once per multi-decl slot.
-    pub(super) fn check_value_decl_visibility(
+    fn check_value_decl_visibility(
         &self,
         visibility: BindableVisibility,
         visibility_span: Option<Span>,
@@ -1120,7 +1120,7 @@ pub(super) enum SlotColumnSpan {
 }
 
 /// Internal error from layout validation; converted to `ParseError` by the caller.
-pub(super) enum LayoutError {
+enum LayoutError {
     HeaderCellKind {
         span: Span,
         slot_name: String,
@@ -1144,10 +1144,7 @@ pub(super) enum LayoutError {
 }
 
 impl LayoutError {
-    pub(super) fn into_parse_error(
-        self,
-        src: &miette::NamedSource<std::sync::Arc<String>>,
-    ) -> ParseError {
+    fn into_parse_error(self, src: &miette::NamedSource<std::sync::Arc<String>>) -> ParseError {
         match self {
             Self::HeaderCellKind {
                 span,
@@ -1206,7 +1203,7 @@ impl LayoutError {
 ///
 /// The last rule assumes **at most one extra-axis slot** in v2; v3 will
 /// disambiguate adjacent extra-axis slots by axis lookup.
-pub(super) fn build_column_layout(
+fn build_column_layout(
     slot_axes: &[SlotAxis],
     header_cells: &[HeaderCell],
     header_span: Span,

@@ -54,7 +54,7 @@ impl<T> NonEmpty<T> {
 
     /// Convert into a vector, preserving order.
     #[must_use]
-    pub fn into_vec(self) -> Vec<T> {
+    pub(crate) fn into_vec(self) -> Vec<T> {
         self.items
     }
 
@@ -66,7 +66,7 @@ impl<T> NonEmpty<T> {
 
     /// Mutably borrow as a slice.
     #[must_use]
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.items
     }
 
@@ -96,7 +96,7 @@ impl<T> NonEmpty<T> {
 
     /// Split into the last element and the elements before it.
     #[must_use]
-    pub fn split_last(&self) -> (&T, &[T]) {
+    pub(crate) fn split_last(&self) -> (&T, &[T]) {
         let last_index = self.items.len() - 1;
         (&self.items[last_index], &self.items[..last_index])
     }
@@ -112,7 +112,7 @@ impl<T> NonEmpty<T> {
     }
 
     /// Append an item to the end of the sequence.
-    pub fn push(&mut self, item: T) {
+    pub(crate) fn push(&mut self, item: T) {
         self.items.push(item);
     }
 

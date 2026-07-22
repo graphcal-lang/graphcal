@@ -20,7 +20,7 @@ pub struct DagRegistry {
 impl DagRegistry {
     /// Return the AST body of the named `dag`, if one is declared in this file.
     #[must_use]
-    pub fn get(&self, name: &str) -> Option<&DagDecl> {
+    pub(crate) fn get(&self, name: &str) -> Option<&DagDecl> {
         self.dags.get(name)
     }
 

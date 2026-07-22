@@ -74,7 +74,7 @@ impl<Ns: NameNamespace> TypeNameRef<Ns> {
 
     /// Clone the leaf definition name for diagnostic/display boundaries.
     #[must_use]
-    pub fn to_unowned_name(&self) -> NameDef<Ns> {
+    fn to_unowned_name(&self) -> NameDef<Ns> {
         self.name.clone()
     }
 }
@@ -122,7 +122,7 @@ impl NatRangeIndexRef {
     /// # Errors
     ///
     /// Returns an error when the form is a concrete invalid Nat range size.
-    pub fn from_form(form: NatPolyForm) -> Result<Self, NatRangeIndexError> {
+    fn from_form(form: NatPolyForm) -> Result<Self, NatRangeIndexError> {
         if form.is_constant() {
             NatRangeIndex::try_from_u64(form.constant()).map(Self::Concrete)
         } else {
@@ -132,7 +132,7 @@ impl NatRangeIndexRef {
 
     /// Return the concrete Nat range identity, if this reference is concrete.
     #[must_use]
-    pub const fn concrete_index(&self) -> Option<NatRangeIndex> {
+    pub(crate) const fn concrete_index(&self) -> Option<NatRangeIndex> {
         match self {
             Self::Concrete(index) => Some(*index),
             Self::Symbolic(_) => None,
@@ -141,7 +141,7 @@ impl NatRangeIndexRef {
 
     /// Return the normalized Nat form for this reference.
     #[must_use]
-    pub fn form(&self) -> NatPolyForm {
+    pub(crate) fn form(&self) -> NatPolyForm {
         match self {
             Self::Concrete(index) => NatPolyForm::from_constant(index.size_u64()),
             Self::Symbolic(form) => form.clone(),
@@ -150,7 +150,7 @@ impl NatRangeIndexRef {
 
     /// Render this Nat range as a source-like display name for diagnostics.
     #[must_use]
-    pub fn display_name(&self) -> IndexName {
+    fn display_name(&self) -> IndexName {
         match self {
             Self::Concrete(index) => index.display_name(),
             Self::Symbolic(form) => NameDef::expect_valid(format!("range({})", form.format())),
@@ -159,7 +159,7 @@ impl NatRangeIndexRef {
 
     /// Compare Nat range references by typed identity.
     #[must_use]
-    pub fn matches_ref(&self, other: &Self) -> bool {
+    fn matches_ref(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Concrete(lhs), Self::Concrete(rhs)) => lhs == rhs,
             (Self::Symbolic(lhs), Self::Symbolic(rhs)) => lhs == rhs,
@@ -209,7 +209,7 @@ impl IndexTypeRef {
     /// # Errors
     ///
     /// Returns an error when the form is a concrete invalid Nat range size.
-    pub fn from_nat_range_form(form: NatPolyForm) -> Result<Self, NatRangeIndexError> {
+    pub(crate) fn from_nat_range_form(form: NatPolyForm) -> Result<Self, NatRangeIndexError> {
         NatRangeIndexRef::from_form(form).map(Self::NatRange)
     }
 
@@ -239,7 +239,7 @@ impl IndexTypeRef {
 
     /// Return the Nat range reference, when this is a compiler-generated Nat range.
     #[must_use]
-    pub const fn nat_range_ref(&self) -> Option<&NatRangeIndexRef> {
+    pub(crate) const fn nat_range_ref(&self) -> Option<&NatRangeIndexRef> {
         match self {
             Self::Declared(_) => None,
             Self::NatRange(reference) => Some(reference),
@@ -257,7 +257,7 @@ impl IndexTypeRef {
 
     /// Return the normalized Nat form, when this is a Nat range reference.
     #[must_use]
-    pub fn nat_range_form(&self) -> Option<NatPolyForm> {
+    pub(crate) fn nat_range_form(&self) -> Option<NatPolyForm> {
         self.nat_range_ref().map(NatRangeIndexRef::form)
     }
 
@@ -346,7 +346,7 @@ pub enum DeclaredType {
 impl DeclaredType {
     /// Format as a human-readable string for diagnostics (e.g. `"Length / Time"`, `"Bool"`).
     #[must_use]
-    pub fn format(&self, dims: &DimensionRegistry) -> String {
+    pub(crate) fn format(&self, dims: &DimensionRegistry) -> String {
         match self {
             Self::Scalar(d) => dims.format_dimension(d),
             Self::Bool => "Bool".to_string(),

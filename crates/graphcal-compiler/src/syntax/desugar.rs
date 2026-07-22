@@ -104,7 +104,7 @@ impl ExpandedSlotDecl {
     /// expansion through the ordinary AST surface).
     #[cfg(test)]
     #[must_use]
-    pub fn into_declaration(self) -> Declaration {
+    pub(crate) fn into_declaration(self) -> Declaration {
         let (kind, span) = match self {
             Self::Param(p, span) => (DeclKind::Param(p), span),
             Self::Node(n, span) => (DeclKind::Node(n), span),
@@ -124,7 +124,7 @@ impl ExpandedSlotDecl {
     clippy::too_many_lines,
     reason = "single cohesive routine for multi-decl expansion"
 )]
-pub fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
+pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
     let row_index_spec = multi.shared_axes.row_axis().clone();
     let slice_axis_specs: &[TableIndexSpec] = multi.shared_axes.slice_axes();
 
