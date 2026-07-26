@@ -1,6 +1,0 @@
-# See https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md for all rules.
-default: true
-line-length: false
-no-inline-html: false
-fenced-code-language: false
-table-column-style: false
