@@ -11,6 +11,12 @@
       minimumReleaseAge: null,
     },
     {
+      description: "Disable Renovate cooldown for Cargo crates until Cargo min-publish-age is stable (#885)",
+      matchManagers: ["cargo"],
+      matchDatasources: ["crate"],
+      minimumReleaseAge: null,
+    },
+    {
       matchManagers: ["rust-toolchain"],
       matchDepTypes: ["toolchain"],
       addLabels: ["rust", "ci"],
