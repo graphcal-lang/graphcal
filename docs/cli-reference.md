@@ -269,7 +269,7 @@ delta_v    = 4284.300858 m/s
 
 ```bash
 # Provide a required param (param declared without a default value)
-$ graphcal eval engine.gcl --set 'dry_mass=800.0 kg'
+graphcal eval engine.gcl --set 'dry_mass=800.0 kg'
 ```
 
 The JSON parser preserves module-qualified constructor and index paths inside

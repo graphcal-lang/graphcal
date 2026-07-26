@@ -1,0 +1,11 @@
+[global]
+disable = [
+    "fenced-code-language",
+    "no-inline-html",
+    "line-length",
+    "list-item-spacing",
+]
+exclude = [".local"]
+
+[per-file-ignores]
+".github/pull_request_template.md" = ["first-line-h1"]
