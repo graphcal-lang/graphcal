@@ -8,6 +8,7 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
+use crate::syntax::names::NamePath;
 use crate::syntax::phase::{Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
@@ -415,7 +416,7 @@ pub struct ParamDecl<P: Phase = Raw> {
 //
 // A multi-decl is a single surface form — e.g.,
 //
-//     param a: T[I], const node b: U[I, J] = table[I, (_, J)] { : _, …; … };
+//     param a: T[I], const node b: U[I, J] = table[I, (_, J)] { : _, J.X, …; … };
 //
 // — represented in the AST as `DeclKind::Multi(MultiDecl)`. A dedicated
 // desugar pass (`syntax::desugar::desugar_multi_decls_in_file`) expands
@@ -473,8 +474,8 @@ pub enum MultiSlotKind {
 pub enum MultiSlotAxis {
     /// `_` — 1-D slot, typed `T[SharedAxis]`.
     Underscore,
-    /// Named axis — 2-D slot, typed `T[SharedAxis, ExtraAxis]`.
-    Axis(Spanned<IndexName>),
+    /// Named axis path — 2-D slot, typed `T[SharedAxis, ExtraAxis]`.
+    Axis(Spanned<NamePath>),
 }
 
 /// Where a slot's columns live within each slice's header row.
@@ -486,7 +487,7 @@ pub enum MultiSlotColumnSpan {
     Range {
         start: usize,
         end: usize,
-        extra_axis: Spanned<IndexName>,
+        extra_axis: Spanned<NamePath>,
     },
 }
 
@@ -513,8 +514,8 @@ pub enum MultiHeaderCell {
         span: Span,
     },
     Variant {
-        /// Axis qualifier, if the author wrote `Axis.Variant`.
-        axis: Option<Spanned<IndexName>>,
+        /// Required axis path from the canonical `Axis.Variant` spelling.
+        axis: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
         span: Span,
     },

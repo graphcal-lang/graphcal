@@ -615,21 +615,9 @@ type Maneuver {
 }
 
 #[test]
-fn parse_union_type_decl_brace_payload() {
+fn parse_union_type_decl_brace_payload_rejected() {
     let source = "type Status { Active { since: Time }, Idle }";
-    let file = Parser::new(source).parse_file().unwrap();
-    match &file.declarations[0].kind {
-        DeclKind::Type(u) => {
-            assert_eq!(type_members(u).len(), 2);
-            assert_eq!(type_members(u)[0].name.value.as_str(), "Active");
-            assert_eq!(
-                type_members(u)[0].payload.as_ref().expect("payload").len(),
-                1
-            );
-            assert!(type_members(u)[1].payload.is_none());
-        }
-        _ => panic!("expected union type declaration"),
-    }
+    assert!(Parser::new(source).parse_file().is_err());
 }
 
 #[test]

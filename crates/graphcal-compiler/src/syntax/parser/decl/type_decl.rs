@@ -52,10 +52,9 @@ impl Parser<'_> {
 
     /// Parse the body inside `type T { ... }` after the opening brace has
     /// been consumed. Distinguishes record-form (`ident : Type`) from
-    /// union-form (`ident ( ... )`, `ident { ... }`, `ident` followed by
-    /// `,` or `}`) by one-token structural lookahead — never by identifier
-    /// casing. All entries must agree on form; mixing produces a precise
-    /// syntax error.
+    /// union-form (`ident ( ... )` or `ident` followed by `,` / `}`) by
+    /// one-token structural lookahead — never by identifier casing. All entries
+    /// must agree on form; mixing produces a precise syntax error.
     fn parse_unified_type_body(
         &mut self,
         name: Spanned<StructTypeName>,
@@ -91,7 +90,7 @@ impl Parser<'_> {
                     first_ident.span,
                 ))
             }
-            Some(&Token::LParen | &Token::LBrace | &Token::Comma | &Token::RBrace) => {
+            Some(&Token::LParen | &Token::Comma | &Token::RBrace) => {
                 let first_ctor = self.parse_constructor_tail(&first_ident)?;
                 let members = self.continue_constructor_list(first_ctor)?;
                 let (_, end_span) = self.expect(Token::RBrace)?;
@@ -110,7 +109,7 @@ impl Parser<'_> {
             _ => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token(
-                    "'(' or '{' (constructor payload), or ',' / '}' (unit constructor)",
+                    "'(' (constructor payload), or ',' / '}' (unit constructor)",
                     &tok.to_string(),
                     span,
                 ))
@@ -137,18 +136,6 @@ impl Parser<'_> {
                 } else {
                     let fields = self.parse_field_list_until(Token::RParen)?;
                     let (_, end_span) = self.expect(Token::RParen)?;
-                    (fields, end_span)
-                };
-                (Some(fields), end_span)
-            }
-            Some(&Token::LBrace) => {
-                self.lexer.next_token();
-                let (fields, end_span) = if self.lexer.peek() == Some(&Token::RBrace) {
-                    let (_, end_span) = self.expect(Token::RBrace)?;
-                    (Vec::new(), end_span)
-                } else {
-                    let fields = self.parse_field_list_until(Token::RBrace)?;
-                    let (_, end_span) = self.expect(Token::RBrace)?;
                     (fields, end_span)
                 };
                 (Some(fields), end_span)

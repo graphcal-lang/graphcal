@@ -219,7 +219,7 @@ param delta_v: Velocity[Maneuver] = table[Maneuver] {
 };
 ```
 
-Labels in the table body are unqualified (`Departure` instead of `Maneuver.Departure`) since the index is declared in `table[...]`. Rows are terminated with `;`.
+Named axes in `table[...]` accept the same full paths as indexed types, including module-qualified paths such as `mission.Maneuver`. Labels in ordinary table bodies are bare (`Departure`, not `Maneuver.Departure`) because `table[...]` explicitly supplies exactly one owner for each row or column axis. Rows are terminated with `;`.
 
 ### 2D Table
 
@@ -232,7 +232,7 @@ param m: Mass[Phase, Maneuver] = table[Phase, Maneuver] {
 };
 ```
 
-The last index becomes columns, the second-to-last becomes rows. The header row starts with `:` and lists the column labels, followed by data rows with `RowLabel: value, value, ...;`.
+The last index becomes columns, the second-to-last becomes rows. The header row starts with `:` and lists the column labels, followed by data rows with `RowLabel: value, value, ...;`. Commas separate cells; the semicolon is the explicit row (second-dimension) delimiter, so do not add a redundant trailing comma before it.
 
 ### 3D+ Table
 
@@ -318,7 +318,8 @@ const node mass_per_unit:     Mass[Component]
 
 - Each slot on the left-hand side is a full declaration: kind (`param` / `node` / `const node`), name, and type annotation.
 - The `table[SharedAxis, (…)]` bracket declares the row axis followed by a parenthesized slot tuple. Each tuple entry is either `_` (1-D slot typed `T[SharedAxis]`) or a named axis, including module-qualified axes (2-D slot typed `T[SharedAxis, ExtraAxis]`).
-- The header row `: …;` has exactly one cell per column. For 1-D slots the cell must be `_`; for 2-D slots, list the extra-axis variants in order (bare, e.g., `Safe, Nominal`, or qualified `OpMode.Safe`). Qualification is never required but is accepted for readability.
+- The header row `: …;` has exactly one cell per column. For 1-D slots the cell must be `_`. Every 2-D slot cell must use the qualified `ExtraAxis.Variant` form (including the full module path when imported), because one heterogeneous header can concatenate columns owned by different axes.
+- Data-row labels remain bare because the shared row axis is explicit in the table prefix.
 
 Mixed 1-D / 2-D slots:
 
@@ -331,9 +332,9 @@ param      n_installed:        Int[Component],
 const node mass_per_unit:      Mass[Component],
 param      power_mode_active:  Bool[Component, OperationMode]
   = table[Component, (_, _, _, OperationMode)] {
-      :            _,       _, _,      Safe,  Nominal;
-      ComponentA:  10.0 W,  1, 2.5 kg, true,  true;
-      ComponentB:  12.0 W,  2, 3.1 kg, false, true;
+      :            _,       _, _,      OperationMode.Safe, OperationMode.Nominal;
+      ComponentA:  10.0 W,  1, 2.5 kg,               true,                  true;
+      ComponentB:  12.0 W,  2, 3.1 kg,              false,                  true;
   };
 ```
 
@@ -352,14 +353,14 @@ param      power_consumption: Power[Phase, Component],
 param      power_mode_active: Bool[Phase, Component, OperationMode]
   = table[Phase, Component, (_, OperationMode)] {
       [Phase.Launch]
-      :            _,       Safe,  Nominal;
-      ComponentA:  5.0 W,   true,  false;
-      ComponentB:  6.0 W,   false, false;
+      :            _,       OperationMode.Safe, OperationMode.Nominal;
+      ComponentA:  5.0 W,                 true,                 false;
+      ComponentB:  6.0 W,                false,                 false;
 
       [Phase.Cruise]
-      :            _,       Safe,  Nominal;
-      ComponentA:  10.0 W,  true,  true;
-      ComponentB:  12.0 W,  false, true;
+      :            _,       OperationMode.Safe, OperationMode.Nominal;
+      ComponentA:  10.0 W,                true,                  true;
+      ComponentB:  12.0 W,               false,                  true;
   };
 ```
 
@@ -367,7 +368,7 @@ Slice labels must qualify each shared axis in the declared order (`Phase.Launch`
 
 ### Editor integration
 
-Each slot in a multi-declaration is its own declaration for the purposes of navigation: `gotoDefinition`, `findReferences`, `rename`, and `hover` all land on the slot header, and each slot receives its own inlay hint at its name. The formatter preserves the multi-decl surface form on round-trip — it emits the original source slice verbatim rather than the N desugared single-decls. Cell-level inlay hints (projecting slot names into the header row of the source) and canonicalization of the multi-decl body remain future work.
+Each slot in a multi-declaration is its own declaration for the purposes of navigation: `gotoDefinition`, `findReferences`, `rename`, and `hover` all land on the slot header, and each slot receives its own inlay hint at its name. Axis and qualified header/slice references participate in navigation and rename as well. The formatter preserves the multi-decl surface form while canonicalizing alignment and retaining every required axis qualifier. Cell-level inlay hints (projecting slot names into the header row of the source) remain future work.
 
 - Multi-declarations are **pure syntactic sugar**: each slot desugars to an ordinary declaration with its own `table[SharedAxis] { … }` initializer. Cross-slot references work exactly as for any other declarations (`@other_slot[Variant]`).
 - Attributes (`#[…]`) and visibility annotations (`pub` / `pub(bind)`) are not allowed on a multi-declaration or its slots.

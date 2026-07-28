@@ -441,6 +441,7 @@ fn convert_indexed(
             Ok(MapEntry {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: Spanned::new(MapEntryIndex::Named(index_path.clone()), SYNTH_SPAN),
+                    additional_index_spans: Vec::new(),
                     variant: Spanned::new(
                         IndexVariantName::try_new(variant.clone()).map_err(|reason| {
                             JsonInputError::InvalidName {

@@ -2287,6 +2287,63 @@ node bad: Mass = mass + length;
         assert_eq!(red_imported.uri, lib_uri, "Red should jump to lib.gcl");
     }
 
+    #[test]
+    fn goto_definition_resolves_qualified_table_axes_and_slice_labels() {
+        use crate::resolve::{SymbolLocation, resolve_symbol_at};
+
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"lib\"\n"),
+            (
+                "src/lib/axes.gcl",
+                "pub index Scenario = { Nominal };\n\
+                 pub index Row = { A };\n\
+                 pub index Column = { X };\n",
+            ),
+            (
+                "src/lib/main.gcl",
+                "import lib.axes as axes;\n\
+                 param cube: Dimensionless[axes.Scenario, axes.Row, axes.Column] =\n    \
+                     table[axes.Scenario, axes.Row, axes.Column] {\n        \
+                         [axes.Scenario.Nominal]\n        \
+                         : X;\n        \
+                         A: 1.0;\n    \
+                     };\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/lib/main.gcl");
+        let axes_path = dir.path().join("src/lib/axes.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let axes_uri = Url::from_file_path(axes_path.canonicalize().unwrap()).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text, &[], test_plugin_host());
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        let table_axis = text.find("table[axes.Scenario").unwrap() + "table[axes.".len();
+        let slice_axis = text.find("[axes.Scenario.Nominal]").unwrap() + "[axes.".len();
+        let slice_variant = text.find("axes.Scenario.Nominal").unwrap() + "axes.Scenario.".len();
+        let column_variant = text.find(": X;").unwrap() + 2;
+        let row_variant = text.find("A: 1.0;").unwrap();
+
+        for (offset, spelling) in [
+            (table_axis, "Scenario"),
+            (slice_axis, "Scenario"),
+            (slice_variant, "Nominal"),
+            (column_variant, "X"),
+            (row_variant, "A"),
+        ] {
+            let resolved = resolve_symbol_at(&analysis, offset)
+                .unwrap_or_else(|| panic!("resolve table spelling `{spelling}`"));
+            let SymbolLocation::Imported(imported) = resolved.location else {
+                panic!("expected `{spelling}` to resolve to an imported definition");
+            };
+            assert_eq!(imported.uri, axes_uri, "wrong owner for `{spelling}`");
+        }
+    }
+
     /// A selective-imported alias should also bring across the variants of the
     /// underlying index, keyed under the local alias.
     #[test]

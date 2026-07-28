@@ -522,6 +522,43 @@ param m: Dimensionless[Phase, Maneuver] = table[Phase, Maneuver] {
 }
 
 #[test]
+fn format_table_qualified_axis_and_slice_paths() {
+    let source = r"
+param m: Dimensionless[mission.Time, mission.Phase, mission.Maneuver] = table[mission.Time, mission.Phase, mission.Maneuver] {
+    [mission.Time.T1]
+    : Departure;
+    Launch: 1.0;
+};
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("table[mission.Time, mission.Phase, mission.Maneuver]"),
+        "qualified table axes were not preserved: {formatted}"
+    );
+    assert!(
+        formatted.contains("[mission.Time.T1]"),
+        "qualified slice label was not preserved: {formatted}"
+    );
+}
+
+#[test]
+fn format_multi_decl_preserves_qualified_header_labels() {
+    let source = r"
+param p: Dimensionless[Component],
+param enabled: Bool[Component, mission.Mode]
+    = table[Component, (_, mission.Mode)] {
+        : _, mission.Mode.Safe, mission.Mode.Nominal;
+        A: 1.0, true, false;
+    };
+";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("mission.Mode.Safe") && formatted.contains("mission.Mode.Nominal"),
+        "qualified heterogeneous headers were not preserved: {formatted}"
+    );
+}
+
+#[test]
 fn format_map_literal_not_converted_to_table() {
     let source = r"
 index Maneuver = { Departure, Correction };
