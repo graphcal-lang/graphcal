@@ -73,7 +73,7 @@ pub(crate) const PRELUDE_BUILTIN_TYPE_NAMES: &[&str] =
 
 /// Unit names provided by the Graphcal prelude.
 pub const PRELUDE_UNIT_NAMES: &[&str] = &[
-    "m", "s", "kg", "K", "A", "mol", "cd", "rad", "km", "cm", "mm", "hour", "min", "deg", "g", "N",
+    "m", "s", "kg", "K", "A", "mol", "cd", "rad", "km", "cm", "mm", "h", "min", "deg", "g", "N",
     "kN", "J", "kJ", "W", "kW", "Pa", "kPa", "MPa", "Hz",
 ];
 
@@ -268,7 +268,7 @@ fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), R
 
     // Time
     r.register_unit(
-        UnitName::expect_valid("hour"),
+        UnitName::expect_valid("h"),
         ids.time.clone(),
         prelude_scale(3600.0),
     );
@@ -521,5 +521,35 @@ mod tests {
         assert_eq!(symbols.len(), 8);
         assert_eq!(symbols.get(&length_id()), Some(&"m".to_string()));
         assert_eq!(symbols.get(&time_id()), Some(&"s".to_string()));
+    }
+
+    #[test]
+    fn prelude_time_unit_spellings_are_canonical() {
+        use crate::syntax::dimension::UnitRef;
+
+        let mut builder = RegistryBuilder::new();
+        load_prelude(&mut builder).unwrap();
+        let registry = builder.try_build().unwrap();
+        let unit = |name| UnitRef::local(UnitName::expect_valid(name));
+
+        assert_eq!(
+            registry
+                .units
+                .get_unit(&unit("h"))
+                .unwrap()
+                .scale
+                .as_static(),
+            Some(3600.0)
+        );
+        assert_eq!(
+            registry
+                .units
+                .get_unit(&unit("min"))
+                .unwrap()
+                .scale
+                .as_static(),
+            Some(60.0)
+        );
+        assert!(registry.units.get_unit(&unit("hour")).is_none());
     }
 }

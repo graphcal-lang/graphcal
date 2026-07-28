@@ -1056,7 +1056,7 @@ mod tests {
 
     #[test]
     fn parse_conversion() {
-        let file = Parser::new("node speed_kmh: Velocity = @speed -> km/hour;")
+        let file = Parser::new("node speed_kmh: Velocity = @speed -> km/h;")
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
@@ -1068,7 +1068,7 @@ mod tests {
                     assert_eq!(target.terms.len(), 2);
                     assert_eq!(target.terms[0].name.value.to_string(), "km");
                     assert_eq!(target.terms[1].op, crate::syntax::ast::MulDivOp::Div);
-                    assert_eq!(target.terms[1].name.value.to_string(), "hour");
+                    assert_eq!(target.terms[1].name.value.to_string(), "h");
                 }
                 _ => panic!("expected Convert"),
             },

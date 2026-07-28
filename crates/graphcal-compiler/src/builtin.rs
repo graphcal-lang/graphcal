@@ -102,11 +102,13 @@ define_builtin_names! {
         Round => "round",
         Trunc => "trunc",
         Sign => "sign",
-        Min => "min",
-        Max => "max",
+        Least => "least",
+        Greatest => "greatest",
         Hypot => "hypot",
         Clamp => "clamp",
         Sum => "sum",
+        Minimum => "minimum",
+        Maximum => "maximum",
         Mean => "mean",
         Count => "count",
         ToFloat => "to_float",
@@ -136,5 +138,34 @@ define_builtin_names! {
         ToJd => "to_jd",
         ToMjd => "to_mjd",
         ToUnix => "to_unix",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BuiltinFnName;
+
+    #[test]
+    fn extremum_function_spellings_are_canonical() {
+        assert_eq!(BuiltinFnName::parse("least"), Some(BuiltinFnName::Least));
+        assert_eq!(
+            BuiltinFnName::parse("greatest"),
+            Some(BuiltinFnName::Greatest)
+        );
+        assert_eq!(
+            BuiltinFnName::parse("minimum"),
+            Some(BuiltinFnName::Minimum)
+        );
+        assert_eq!(
+            BuiltinFnName::parse("maximum"),
+            Some(BuiltinFnName::Maximum)
+        );
+        assert_eq!(BuiltinFnName::parse("min"), None);
+        assert_eq!(BuiltinFnName::parse("max"), None);
+    }
+
+    #[test]
+    fn datetime_hour_extractor_keeps_its_spelling() {
+        assert_eq!(BuiltinFnName::parse("hour"), Some(BuiltinFnName::Hour));
     }
 }

@@ -638,21 +638,21 @@ param x: Area = 5.0 km2;
 }
 
 #[test]
-fn compound_unit_conversion_km_per_hour_squared() {
-    // km/hour in SI is 1000/3600 m/s
-    // (km/hour)^2 in SI would be (1000/3600)^2 m^2/s^2
+fn compound_unit_conversion_km_per_h_squared() {
+    // km/h in SI is 1000/3600 m/s
+    // (km/h)^2 in SI would be (1000/3600)^2 m^2/s^2
     // But graphcal doesn't support squared compound unit expressions directly.
     // Test basic compound units instead.
     let source = r#"
-param v: Velocity = 36.0 km/hour;
+param v: Velocity = 36.0 km/h;
 node v_si: Velocity = @v;
 "#;
     let result = compile_and_eval(source).unwrap();
     let v = find_value(&result, "v_si");
-    // 36 km/hour = 36 * 1000/3600 m/s = 10 m/s
+    // 36 km/h = 36 * 1000/3600 m/s = 10 m/s
     assert!(
         (v - 10.0).abs() < 1e-10,
-        "36 km/hour should be 10 m/s, got {v}"
+        "36 km/h should be 10 m/s, got {v}"
     );
 }
 
@@ -800,13 +800,13 @@ fn to_int_rejects_out_of_range() {
 #[test]
 fn fn_call_trailing_comma() {
     let source = r#"
-node result: Dimensionless = max(1.0, 2.0,);
+node result: Dimensionless = greatest(1.0, 2.0,);
 "#;
     let result = compile_and_eval(source).unwrap();
     let val = find_value(&result, "result");
     assert!(
         (val - 2.0).abs() < f64::EPSILON,
-        "max(1.0, 2.0,) should be 2.0 but got {val}"
+        "greatest(1.0, 2.0,) should be 2.0 but got {val}"
     );
 }
 

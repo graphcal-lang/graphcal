@@ -33,8 +33,8 @@ pub(super) enum EvalBuiltinRule {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AggregationFn {
     Sum,
-    Min,
-    Max,
+    Minimum,
+    Maximum,
     Mean,
     Count,
 }
@@ -87,8 +87,8 @@ pub(super) enum DatetimeToFn {
 pub(super) const fn eval_rule_for_builtin(name: BuiltinFnName) -> EvalBuiltinRule {
     match name {
         BuiltinFnName::Sum => EvalBuiltinRule::CollectionAggregation(AggregationFn::Sum),
-        BuiltinFnName::Min => EvalBuiltinRule::CollectionAggregation(AggregationFn::Min),
-        BuiltinFnName::Max => EvalBuiltinRule::CollectionAggregation(AggregationFn::Max),
+        BuiltinFnName::Minimum => EvalBuiltinRule::CollectionAggregation(AggregationFn::Minimum),
+        BuiltinFnName::Maximum => EvalBuiltinRule::CollectionAggregation(AggregationFn::Maximum),
         BuiltinFnName::Mean => EvalBuiltinRule::CollectionAggregation(AggregationFn::Mean),
         BuiltinFnName::Count => EvalBuiltinRule::CollectionAggregation(AggregationFn::Count),
         BuiltinFnName::ToFloat => EvalBuiltinRule::TypeConversion(TypeConversionFn::ToFloat),

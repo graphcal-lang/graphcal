@@ -277,13 +277,18 @@ mod tests {
 
     #[test]
     fn prepare_rename_builtin_rejected() {
-        let source = "node y: Dimensionless = sqrt(1.0);";
+        let source = "node lower: Dimensionless = least(1.0, 2.0);\n\
+                      node reduced: Dimensionless = minimum(1.0);";
         let analysis = analysis_from_source(source);
 
-        // Cursor on "sqrt"
-        let offset = source.find("sqrt").unwrap();
-        let result = prepare_rename(&analysis, offset);
-        assert!(result.is_none(), "builtins should not be renameable");
+        for builtin in ["least", "minimum"] {
+            let offset = source.find(builtin).unwrap();
+            let result = prepare_rename(&analysis, offset);
+            assert!(
+                result.is_none(),
+                "builtin `{builtin}` should not be renameable"
+            );
+        }
     }
 
     #[test]

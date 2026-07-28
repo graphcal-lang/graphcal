@@ -679,7 +679,7 @@ fn eval_orbital_milestone() {
     let speed_kmh_val = speed_kmh.1.as_ref().unwrap();
     assert_eq!(
         speed_kmh_val.display_label(&result.base_dim_symbols),
-        Some("km/hour".to_string())
+        Some("km/h".to_string())
     );
     let display_kmh = speed_kmh_val.display_value().unwrap();
     let expected_kmh = expected_speed / (1000.0 / 3600.0);

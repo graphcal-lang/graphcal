@@ -223,8 +223,8 @@ mod tests {
 
     #[test]
     fn fn_call_nested() {
-        // sqrt(min(@a, @b))  — cursor after outer `(`
-        let source = "sqrt(min(@a, @b))";
+        // sqrt(least(@a, @b))  — cursor after outer `(`
+        let source = "sqrt(least(@a, @b))";
         let offset = 5; // after outer `(`
         let ctx = find_fn_call_context(source, offset).unwrap();
         assert_eq!(ctx.fn_name, "sqrt");
@@ -233,11 +233,11 @@ mod tests {
 
     #[test]
     fn fn_call_nested_inner() {
-        // sqrt(min(@a, |))  — cursor inside inner min()
-        let source = "sqrt(min(@a, ))";
-        let offset = 13; // after `, ` inside min()
+        // sqrt(least(@a, |))  — cursor inside inner least()
+        let source = "sqrt(least(@a, ))";
+        let offset = source.find(", ").unwrap() + 2;
         let ctx = find_fn_call_context(source, offset).unwrap();
-        assert_eq!(ctx.fn_name, "min");
+        assert_eq!(ctx.fn_name, "least");
         assert_eq!(ctx.active_param, 1);
     }
 

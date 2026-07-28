@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use graphcal_compiler::builtin::BuiltinFnName;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{
     AssertDecl, AttributeArg, BaseDimDecl, BindableVisibility, DagDecl, DeclKind, DimDecl, DimExpr,
@@ -1189,16 +1190,22 @@ fn register_builtins(table: &mut SymbolTable) {
         );
     }
 
-    for (name, f) in builtin_functions() {
+    let registry_functions = builtin_functions();
+    for name in BuiltinFnName::ALL {
+        let spelling = name.as_str();
+        let detail = registry_functions.get(spelling).map_or_else(
+            || "builtin".to_string(),
+            |function| format!("builtin, arity {}", function.arity()),
+        );
         table.insert_definition(
-            SymbolKey::TopLevel((*name).to_string()),
+            SymbolKey::TopLevel(spelling.to_string()),
             DefinitionInfo {
-                name: (*name).to_string(),
+                name: spelling.to_string(),
                 category: SymbolCategory::BuiltinFn,
                 name_span: Span::new(0, 0),
                 decl_span: Span::new(0, 0),
                 type_description: None,
-                detail: Some(format!("builtin, arity {}", f.arity())),
+                detail: Some(detail),
                 visibility: None,
             },
         );

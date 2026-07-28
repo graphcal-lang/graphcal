@@ -25,7 +25,7 @@ pub enum DeclType {
 /// Display unit metadata: the unit name(s) and scale factor for pretty-printing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayUnit {
-    /// Human-readable unit string (e.g., "km", "m/s^2", "km/hour")
+    /// Human-readable unit string (e.g., "km", "m/s^2", "km/h")
     pub label: String,
     /// Scale factor from SI to this display unit: `display_value = si_value / scale`
     pub scale: f64,
@@ -305,7 +305,7 @@ impl Value {
 
     /// Get the unit label for display, or `None` for dimensionless values.
     ///
-    /// Returns the explicit display unit label if set (e.g., "km", "km/hour"),
+    /// Returns the explicit display unit label if set (e.g., "km", "km/h"),
     /// otherwise uses registered base-unit symbols (e.g., "m/s", "kg"). If any
     /// referenced base dimension has no registered symbol, no default label is shown.
     #[must_use]
@@ -331,7 +331,7 @@ impl Value {
     /// Format this value as a flat display string (no name prefix, no recursion).
     ///
     /// If `symbols` is provided, quantity values include their unit label in brackets
-    /// (e.g., `"42.5 [km/hour]"`). Without `symbols`, only the numeric value is shown.
+    /// (e.g., `"42.5 [km/h]"`). Without `symbols`, only the numeric value is shown.
     ///
     /// Composite values (`Struct`, `Indexed`) are shown as their variant name or
     /// a placeholder string, not recursively expanded.
@@ -797,12 +797,12 @@ mod tests {
         let value = quantity(
             velocity,
             Some(DisplayUnit {
-                label: "km/hour".to_string(),
+                label: "km/h".to_string(),
                 scale: 1000.0 / 3600.0,
             }),
         );
 
-        assert_eq!(value.display_label(&symbols()), Some("km/hour".to_string()));
+        assert_eq!(value.display_label(&symbols()), Some("km/h".to_string()));
     }
 
     #[test]

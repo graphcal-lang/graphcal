@@ -59,7 +59,7 @@ Access fields of a record-shaped algebraic value with the `.` operator:
 
 ```
 node total: Velocity = @result.total_dv;
-node time_hours: Time = @result.tof -> hour;
+node time_hours: Time = @result.tof -> h;
 ```
 
 ## Putting It Together: Hohmann Transfer
@@ -98,7 +98,7 @@ node transfer: TransferResult = TransferResult(
 );
 
 node total_dv: Velocity = @transfer.total_dv;
-node tof_hours: Time = @transfer.tof -> hour;
+node tof_hours: Time = @transfer.tof -> h;
 ```
 
 Every intermediate is a first-class node in the DAG. That makes them

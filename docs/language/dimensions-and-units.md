@@ -82,7 +82,7 @@ Units are value-level scaling factors tied to a specific dimension. They define 
 | Dimension | Units |
 |-----------|-------|
 | Length | `m`, `km` (1000 m), `cm` (0.01 m), `mm` (0.001 m) |
-| Time | `s`, `min` (60 s), `hour` (3600 s) |
+| Time | `s`, `min` (60 s), `h` (3600 s) |
 | Mass | `kg`, `g` (0.001 kg) |
 | Temperature | `K` |
 | ElectricCurrent | `A` |
@@ -152,7 +152,7 @@ Attach a unit to a numeric literal:
 
 ```
 param altitude: Length = 200.0 km;
-param duration: Time = 1.5 hour;
+param duration: Time = 1.5 h;
 const node c: Velocity = 299792458.0 m/s;
 ```
 

@@ -206,16 +206,37 @@ fn resolve_builtin_const_recognized() {
 
 #[test]
 fn resolve_builtin_function_recognized() {
-    let resolved =
-        parse_and_resolve("param x: Dimensionless = 4.0;\nnode y: Dimensionless = sqrt(@x);")
-            .unwrap();
-    assert_eq!(resolved.nodes.len(), 1);
+    let resolved = parse_and_resolve(
+        "param x: Dimensionless = 4.0;\n\
+         node root: Dimensionless = sqrt(@x);\n\
+         node lower: Dimensionless = least(@x, 5.0);\n\
+         node upper: Dimensionless = greatest(@x, 3.0);",
+    )
+    .unwrap();
+    assert_eq!(resolved.nodes.len(), 3);
 }
 
 #[test]
 fn resolve_unknown_function() {
     let err = compile_to_tir("node x: Dimensionless = unknown_fn(1.0);").unwrap_err();
     assert!(matches!(err, GraphcalError::UnknownFunction { .. }));
+}
+
+#[test]
+fn obsolete_extremum_function_names_are_rejected() {
+    for obsolete in ["min", "max"] {
+        let source = format!("node x: Dimensionless = {obsolete}(1.0, 2.0);");
+        match compile_to_tir(&source).unwrap_err() {
+            GraphcalError::UnknownFunction { name, .. } => assert_eq!(name, obsolete),
+            other => panic!("obsolete function call should be unknown: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn binary_selection_functions_have_fixed_arity() {
+    let err = compile_to_tir("node x: Dimensionless = least(1.0);").unwrap_err();
+    assert!(matches!(err, GraphcalError::WrongArity { .. }));
 }
 
 #[test]

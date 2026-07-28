@@ -387,12 +387,16 @@ fn eval_hir_fn_call(
         }
     };
     match eval_rule_for_builtin(name) {
-        EvalBuiltinRule::CollectionAggregation(kind) if args.len() == 1 => {
+        EvalBuiltinRule::CollectionAggregation(kind) => {
+            expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
-            if let RuntimeValue::Indexed { entries, .. } = arg_val {
-                return eval_hir_aggregation_fn(kind, &entries, expr.span, ctx.src);
-            }
-            eval_hir_builtin_fn(expr, name, args, values, local_values, ctx)
+            let RuntimeValue::Indexed { entries, .. } = arg_val else {
+                return Err(ctx.internal_error(
+                    format!("{}() received a non-indexed argument", name.as_str()),
+                    args[0].span,
+                ));
+            };
+            eval_hir_aggregation_fn(kind, &entries, expr.span, ctx.src)
         }
         EvalBuiltinRule::TypeConversion(kind) => {
             eval_hir_conversion_fn(kind, expr.span, args, values, local_values, ctx)
@@ -493,7 +497,7 @@ fn eval_hir_fn_call(
             };
             Ok(RuntimeValue::Quantity(result))
         }
-        EvalBuiltinRule::RegistryFunction | EvalBuiltinRule::CollectionAggregation(_) => {
+        EvalBuiltinRule::RegistryFunction => {
             eval_hir_builtin_fn(expr, name, args, values, local_values, ctx)
         }
     }

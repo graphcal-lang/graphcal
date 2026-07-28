@@ -27,7 +27,7 @@ param departure_v: Velocity[TimeStep] = for t: TimeStep { @v_for[Maneuver.Depart
 node total_v: Velocity[TimeStep] = for t: TimeStep { sum(for m: Maneuver { @v_for[m, t] }) };
 
 // Aggregation: max over time axis for each maneuver
-node max_v: Velocity[Maneuver] = for m: Maneuver { max(for t: TimeStep { @v_for[m, t] }) };
+node max_v: Velocity[Maneuver] = for m: Maneuver { maximum(for t: TimeStep { @v_for[m, t] }) };
 
 // Scan over the outermost (label) axis
 node cumulative_max: Velocity[Maneuver] = scan(

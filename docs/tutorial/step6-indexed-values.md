@@ -54,13 +54,13 @@ Reduce an indexed quantity to a single quantity:
 
 ```
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
-node max_dv: Velocity = max(for m: Maneuver { @delta_v[m] });
-node min_dv: Velocity = min(for m: Maneuver { @delta_v[m] });
+node max_dv: Velocity = maximum(for m: Maneuver { @delta_v[m] });
+node min_dv: Velocity = minimum(for m: Maneuver { @delta_v[m] });
 node mean_dv: Velocity = mean(for m: Maneuver { @delta_v[m] });
 node n_maneuvers: Dimensionless = count(for m: Maneuver { @delta_v[m] });
 ```
 
-Available aggregation functions: `sum`, `max`, `min`, `mean`, `count`.
+Available aggregation functions: `sum`, `maximum`, `minimum`, `mean`, `count`.
 
 ## Scan (Cumulative Fold)
 
@@ -92,7 +92,7 @@ node double_dv: Velocity[Maneuver] = for m: Maneuver {
 };
 
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
-node max_dv: Velocity = max(for m: Maneuver { @delta_v[m] });
+node max_dv: Velocity = maximum(for m: Maneuver { @delta_v[m] });
 node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, val| acc + val);
 node departure_dv: Velocity = @delta_v[Maneuver.Departure];
 ```
@@ -102,7 +102,7 @@ node departure_dv: Velocity = @delta_v[Maneuver.Departure];
 - **`index`** declarations for finite label sets
 - **Indexed values** with `Type[Index]` syntax
 - **`for` comprehensions** to transform each element
-- **Aggregations**: `sum`, `max`, `min`, `mean`, `count`
+- **Aggregations**: `sum`, `maximum`, `minimum`, `mean`, `count`
 - **`scan`** for cumulative folds
 - **Aggregation functions** that work with any index
 
