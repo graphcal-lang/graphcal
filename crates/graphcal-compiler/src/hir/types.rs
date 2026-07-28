@@ -94,7 +94,7 @@ impl TypeExpr {
 pub enum TypeExprKind {
     /// A built-in type with closed meaning.
     Builtin(BuiltinType),
-    /// A scalar dimension expression.
+    /// A dimension expression denoting a quantity type.
     DimExpr(DimExpr),
     /// An index name in a type-expression syntactic slot.
     ///

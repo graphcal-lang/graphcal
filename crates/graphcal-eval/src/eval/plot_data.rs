@@ -10,8 +10,8 @@
 //!   row per cell).
 //! - Every other channel must range over a subset of those axes; its values
 //!   are broadcast across the axes it does not mention (`x: for p: P { ... }`
-//!   repeats per `t`). A channel with no axes (a scalar) broadcasts to every
-//!   row.
+//!   repeats per `t`). A channel with no axes (an unindexed value) broadcasts
+//!   to every row.
 //! - Channels over unrelated axes have no meaningful row pairing and are
 //!   rejected — never zipped up to the longest channel with rows silently
 //!   missing fields.
@@ -61,7 +61,7 @@ pub(super) struct ChannelData {
 
 impl ChannelData {
     /// A single string value with no axes (from a string-literal channel).
-    pub(super) fn scalar_label(label: String) -> Self {
+    pub(super) fn unindexed_label(label: String) -> Self {
         Self {
             axes: Vec::new(),
             values: vec![PlotDatum::Label(label)],
@@ -69,7 +69,7 @@ impl ChannelData {
     }
 
     /// Format this channel's axes for error messages: `P × T`, or
-    /// `no index` for a scalar channel.
+    /// `no index` for an unindexed channel.
     fn describe_axes(&self) -> String {
         if self.axes.is_empty() {
             return "no index".to_string();
@@ -84,7 +84,7 @@ impl ChannelData {
 
 /// Convert one leaf runtime value to a plot datum.
 ///
-/// Booleans become the labels `"true"`/`"false"`, matching how a scalar
+/// Booleans become the labels `"true"`/`"false"`, matching how a quantity
 /// `Bool` channel encodes (#840). Structs cannot be plotted.
 fn plot_datum_from_leaf(rv: &RuntimeValue) -> Result<PlotDatum, String> {
     #[expect(
@@ -92,7 +92,7 @@ fn plot_datum_from_leaf(rv: &RuntimeValue) -> Result<PlotDatum, String> {
         reason = "plot data loss of precision from i64 to f64 is acceptable"
     )]
     match rv {
-        RuntimeValue::Scalar(v) => Ok(PlotDatum::Number(*v)),
+        RuntimeValue::Quantity(v) => Ok(PlotDatum::Number(*v)),
         RuntimeValue::Int(i) => Ok(PlotDatum::Number(*i as f64)),
         // A range-index loop variable surfacing as a value
         // (e.g. `x: for t: T { t }`) is numeric data (#839).
@@ -289,17 +289,17 @@ mod tests {
         let x = channel_data_from_runtime(&indexed(
             "P",
             vec![
-                ("P1", RuntimeValue::Scalar(1.0)),
-                ("P2", RuntimeValue::Scalar(2.0)),
-                ("P3", RuntimeValue::Scalar(3.0)),
+                ("P1", RuntimeValue::Quantity(1.0)),
+                ("P2", RuntimeValue::Quantity(2.0)),
+                ("P3", RuntimeValue::Quantity(3.0)),
             ],
         ))
         .unwrap();
         let y = channel_data_from_runtime(&indexed(
             "T",
             vec![
-                ("T1", RuntimeValue::Scalar(10.0)),
-                ("T2", RuntimeValue::Scalar(20.0)),
+                ("T1", RuntimeValue::Quantity(10.0)),
+                ("T2", RuntimeValue::Quantity(20.0)),
             ],
         ))
         .unwrap();
@@ -311,8 +311,8 @@ mod tests {
                     indexed(
                         "T",
                         vec![
-                            ("T1", RuntimeValue::Scalar(0.1)),
-                            ("T2", RuntimeValue::Scalar(0.2)),
+                            ("T1", RuntimeValue::Quantity(0.1)),
+                            ("T2", RuntimeValue::Quantity(0.2)),
                         ],
                     ),
                 ),
@@ -321,8 +321,8 @@ mod tests {
                     indexed(
                         "T",
                         vec![
-                            ("T1", RuntimeValue::Scalar(0.3)),
-                            ("T2", RuntimeValue::Scalar(0.4)),
+                            ("T1", RuntimeValue::Quantity(0.3)),
+                            ("T2", RuntimeValue::Quantity(0.4)),
                         ],
                     ),
                 ),
@@ -331,8 +331,8 @@ mod tests {
                     indexed(
                         "T",
                         vec![
-                            ("T1", RuntimeValue::Scalar(0.5)),
-                            ("T2", RuntimeValue::Scalar(0.6)),
+                            ("T1", RuntimeValue::Quantity(0.5)),
+                            ("T2", RuntimeValue::Quantity(0.6)),
                         ],
                     ),
                 ),
@@ -369,16 +369,16 @@ mod tests {
         let x = channel_data_from_runtime(&indexed(
             "Step",
             vec![
-                ("A", RuntimeValue::Scalar(1.0)),
-                ("B", RuntimeValue::Scalar(2.0)),
+                ("A", RuntimeValue::Quantity(1.0)),
+                ("B", RuntimeValue::Quantity(2.0)),
             ],
         ))
         .unwrap();
         let y = channel_data_from_runtime(&indexed(
             "Pair",
             vec![
-                ("L", RuntimeValue::Scalar(10.0)),
-                ("R", RuntimeValue::Scalar(20.0)),
+                ("L", RuntimeValue::Quantity(10.0)),
+                ("R", RuntimeValue::Quantity(20.0)),
             ],
         ))
         .unwrap();
@@ -393,16 +393,16 @@ mod tests {
     }
 
     #[test]
-    fn scalar_channel_broadcasts_to_all_rows() {
+    fn unindexed_channel_broadcasts_to_all_rows() {
         let x = channel_data_from_runtime(&indexed(
             "Step",
             vec![
-                ("A", RuntimeValue::Scalar(1.0)),
-                ("B", RuntimeValue::Scalar(2.0)),
+                ("A", RuntimeValue::Quantity(1.0)),
+                ("B", RuntimeValue::Quantity(2.0)),
             ],
         ))
         .unwrap();
-        let y = channel_data_from_runtime(&RuntimeValue::Scalar(7.0)).unwrap();
+        let y = channel_data_from_runtime(&RuntimeValue::Quantity(7.0)).unwrap();
 
         let aligned =
             align_encoding_channels(&[(EncodingChannel::X, x), (EncodingChannel::Y, y)]).unwrap();
@@ -410,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn indexed_bools_become_labels_like_scalar_bools() {
+    fn indexed_bools_become_labels_like_unindexed_bools() {
         let flags = channel_data_from_runtime(&indexed(
             "Step",
             vec![
@@ -442,7 +442,7 @@ mod tests {
         let mixed = channel_data_from_runtime(&indexed(
             "Step",
             vec![
-                ("A", RuntimeValue::Scalar(1.0)),
+                ("A", RuntimeValue::Quantity(1.0)),
                 ("B", RuntimeValue::Bool(true)),
             ],
         ))
@@ -463,8 +463,8 @@ mod tests {
                     indexed(
                         "P",
                         vec![
-                            ("P1", RuntimeValue::Scalar(11.0)),
-                            ("P2", RuntimeValue::Scalar(12.0)),
+                            ("P1", RuntimeValue::Quantity(11.0)),
+                            ("P2", RuntimeValue::Quantity(12.0)),
                         ],
                     ),
                 ),
@@ -473,8 +473,8 @@ mod tests {
                     indexed(
                         "P",
                         vec![
-                            ("P1", RuntimeValue::Scalar(21.0)),
-                            ("P2", RuntimeValue::Scalar(22.0)),
+                            ("P1", RuntimeValue::Quantity(21.0)),
+                            ("P2", RuntimeValue::Quantity(22.0)),
                         ],
                     ),
                 ),
@@ -484,8 +484,8 @@ mod tests {
         let line = channel_data_from_runtime(&indexed(
             "P",
             vec![
-                ("P1", RuntimeValue::Scalar(1.0)),
-                ("P2", RuntimeValue::Scalar(2.0)),
+                ("P1", RuntimeValue::Quantity(1.0)),
+                ("P2", RuntimeValue::Quantity(2.0)),
             ],
         ))
         .unwrap();

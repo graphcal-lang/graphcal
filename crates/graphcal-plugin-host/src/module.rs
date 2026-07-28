@@ -228,8 +228,8 @@ impl PluginModule {
             })
     }
 
-    /// Call one plugin function with SI-normalized values: scalars cross as
-    /// raw `f64`s, arrays as dense buffers the host places in (and reads
+    /// Call one plugin function with SI-normalized values: single-value ABI
+    /// slots cross as raw `f64`s, arrays as dense buffers the host places in (and reads
     /// back from) the plugin's memory through the allocator exports.
     ///
     /// The call — including the allocator round-trips it needs — runs under
@@ -354,7 +354,7 @@ impl PluginModule {
                 });
             }
             (None, _) => match results.first() {
-                Some(wasmi::Val::F64(value)) => HostFnValue::Scalar(f64::from(*value)),
+                Some(wasmi::Val::F64(value)) => HostFnValue::F64(f64::from(*value)),
                 other => {
                     return Err(PluginCallError::Internal {
                         message: format!(
@@ -374,8 +374,8 @@ impl PluginModule {
         Ok(value)
     }
 
-    /// Build the wasm parameter list for one call: scalars as `f64`s, arrays
-    /// written into plugin memory as `(ptr, len)` pairs, plus the trailing
+    /// Build the wasm parameter list for one call: single-value ABI slots as
+    /// `f64`s, arrays written into plugin memory as `(ptr, len)` pairs, plus the trailing
     /// out-pointer (returned with its element count) when the result is an
     /// array — its length is the input array bound to the result's index
     /// variable.
@@ -397,8 +397,8 @@ impl PluginModule {
         for (param, arg) in signature.params().iter().zip(args) {
             match (&param.kind, arg) {
                 (
-                    ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int,
-                    HostFnValue::Scalar(value),
+                    ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int,
+                    HostFnValue::F64(value),
                 ) => params.push(wasmi::Val::F64((*value).into())),
                 (ValueKind::Indexed { .. }, HostFnValue::Buffer(values)) => {
                     let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
@@ -412,10 +412,13 @@ impl PluginModule {
                     params.push(wasmi::Val::I32(values.len() as i32));
                 }
                 (
-                    ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int | ValueKind::Struct(_),
+                    ValueKind::Quantity(_)
+                    | ValueKind::Bool
+                    | ValueKind::Int
+                    | ValueKind::Struct(_),
                     _,
                 )
-                | (ValueKind::Indexed { .. }, HostFnValue::Scalar(_)) => {
+                | (ValueKind::Indexed { .. }, HostFnValue::F64(_)) => {
                     return Err(PluginCallError::Internal {
                         message: format!(
                             "function `{function}` parameter `{}` received a value of the wrong shape",
@@ -460,7 +463,7 @@ impl PluginModule {
                 params.push(wasmi::Val::I32(ptr));
                 Some(OutBuffer { ptr, len })
             }
-            ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int => None,
+            ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int => None,
         };
         Ok((params, out_buffer))
     }
@@ -646,7 +649,7 @@ fn expected_wasm_type(signature: &FunctionSignature) -> ExpectedWasmType {
     let mut params = Vec::new();
     for param in signature.params() {
         match &param.kind {
-            ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int => {
+            ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int => {
                 params.push(wasmi::ValType::F64);
             }
             // Struct parameters never pass signature validation; folding
@@ -658,7 +661,7 @@ fn expected_wasm_type(signature: &FunctionSignature) -> ExpectedWasmType {
         }
     }
     let results = match signature.result() {
-        ValueKind::Scalar(_) | ValueKind::Bool | ValueKind::Int => vec![wasmi::ValType::F64],
+        ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int => vec![wasmi::ValType::F64],
         ValueKind::Indexed { .. } | ValueKind::Struct(_) => {
             params.push(wasmi::ValType::I32);
             Vec::new()

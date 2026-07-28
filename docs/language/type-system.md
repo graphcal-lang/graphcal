@@ -8,22 +8,84 @@ This page is the formal reference for Graphcal's type system. It describes the t
 
 For introductory material, see the [tutorial](../tutorial/index.md). For specific features, see [Dimensions & Units](dimensions-and-units.md), [Algebraic Data Types](algebraic-data-types.md), [Indexes](indexes.md), and [DAG Blocks](functions.md).
 
+## Type-Level Domains and Notation
+
+The capital letters in the definitions below are **metavariables**, not names
+that exist implicitly in graphcal source:
+
+- `D` ranges over **dimensions**: canonical products of base dimensions with
+  rational exponents. `Dimensionless` is the identity dimension. In a generic
+  declaration, `<D: Dim>` introduces a source-level variable over this domain.
+- `S` ranges over the closed set of supported **time scales**: `UTC`, `TAI`,
+  `TT`, `TDB`, `ET`, `GPST`, `GST`, `BDT`, and `QZSST`. `S` is semantic
+  notation only; graphcal does not currently have a `TimeScale` generic kind.
+- `A` ranges over names introduced by `type` declarations.
+- `Gᵢ` ranges over generic arguments accepted by `A`'s corresponding generic
+  parameter. Each argument is checked against that parameter's kind (`Dim`,
+  `Type`, `Index`, or `Nat`).
+- `Iᵢ` ranges over finite, ordered **index axes**. An axis can come from an
+  `index` declaration or from a positive type-level natural-number range such
+  as the `3` in `T[3]`.
+
+`Quantity(D)` and `Datetime(S)` use parentheses only as semantic notation; they
+are not constructor calls or literal source syntax. `A<G₁, ..., Gₙ>` and
+`T[I₁, ..., Iₘ]` mirror graphcal's source syntax. Angle brackets apply a
+generic algebraic type, while square brackets index a value type over one or
+more axes.
+
+`Dim`, `Type`, `Index`, and `Nat` are **generic parameter kinds**, not value
+types. They are defined precisely in [Generic Parameter Kinds](#generic-parameter-kinds).
+In kinding notation:
+
+```text
+D : Dim        D is a dimension
+S : TimeScale  S is a supported time scale (semantic notation only)
+T : Type       T is a single-value type, called a ValueType below
+I : Index      I is a finite, ordered index axis
+N : Nat        N is a type-level natural number
+```
+
+The built-in and user-declared type constructors have these kind-level
+signatures. The arrows are not graphcal function types:
+
+```text
+Quantity : Dim -> Type
+Int      : Type
+Bool     : Type
+Datetime : TimeScale -> Type
+A        : K₁ × ... × Kₙ -> Type     for generic kinds Kᵢ declared by A
+range    : positive Nat -> Index
+_[_]     : Type × one-or-more Index axes -> DeclType
+```
+
+Thus `Type` is the kind whose inhabitants are single-value types; this page
+uses **ValueType** for those inhabitants. `Index` is the kind whose inhabitants
+are axes, not labels or indexed collections.
+
 ## Type Stratification
 
 Graphcal's type system is organized into three levels:
 
-```
-Level 1: Primitive  = Scalar(Dim) | Int | Bool | Datetime(TimeScale)
-Level 2: ValueType  = Primitive
-                    | Struct(name, fields: [ValueType])
-                    | Union(name, members: [Type])
-Level 3: DeclType   = ValueType
-                    | Indexed(ValueType, [Index])   -- written T[I] or T[I, J, ...]
+```text
+Level 1: Primitive = Quantity(D) | Int | Bool | Datetime(S)
+Level 2: ValueType (T : Type) = Primitive | A | A<G₁, ..., Gₙ>
+Level 3: DeclType             = ValueType | ValueType[I₁, ..., Iₘ]  (m >= 1)
 ```
 
+A bare `A` is a non-generic algebraic type (or a generic type whose arguments
+all have defaults). Every `type` declaration defines this same nominal
+algebraic-type concept, regardless of whether it has one constructor or many.
+Constructors and their payload fields describe how values of `A` are formed;
+they are not separate types and therefore do not appear as separate cases in
+the `ValueType` definition.
+
 - **Primitive** — An indivisible atomic datum.
-- **ValueType** — A single logical value. Primitives plus algebraic compositions (structs and union types). This is the type of one value: you can store it in a node, pass it through a DAG parameter, or use it inside expressions.
-- **DeclType** — What can appear in type annotations of `param`, `node`, `const node`, and DAG parameter/output declarations. Either a ValueType or an indexed collection of ValueTypes.
+- **ValueType** — A single logical value: either a primitive or an instance of
+  a user-declared algebraic type. This is the type of one value that can be
+  stored in a node, passed through a DAG parameter, or used inside expressions.
+- **DeclType** — What can appear in type annotations of `param`, `node`,
+  `const node`, and DAG parameter/output declarations: either a `ValueType` or
+  a collection of one `ValueType` indexed by one or more axes.
 
 ### DAG Correspondence
 
@@ -61,33 +123,51 @@ Units are referenced only in unit syntax, such as unit literals and conversion
 targets. A unit name can match a type, index, or value leaf without changing
 which declaration a type, index, or value position resolves.
 
-## Type Kinds
+## Type Categories
 
 ### Primitives (Level 1)
 
 The indivisible types. Each represents a single atomic datum.
 
-| Type | Representation | Dimension? |
-|------|---------------|------------|
-| `Scalar(Dim)` | 64-bit float in SI base units | Yes |
-| `Int` | 64-bit signed integer | No (dimensionless) |
-| `Bool` | Boolean | No (dimensionless) |
-| `Datetime(TimeScale)` | High-precision epoch | No (point in time) |
+| Semantic type | Representation | Carries a dimension? |
+|---------------|----------------|----------------------|
+| `Quantity(D)` | IEEE 754 binary64 magnitude in SI base units | Yes |
+| `Int` | 64-bit signed integer | No |
+| `Bool` | Boolean | No |
+| `Datetime(S)` | High-precision epoch in time scale `S` | No |
 
-#### Scalar Types
+`Quantity(D)` and `Datetime(S)` are semantic notation, not literal source
+syntax. Their source spellings are:
 
-A scalar is a float value paired with a **dimension** at compile time. The dimension determines what physical quantity the value represents.
+```text
+Quantity(D)    -> D
+Datetime(UTC)  -> Datetime
+Datetime(S)    -> Datetime<S>
+```
+
+!!! important "No `Quantity` source constructor"
+    Write a quantity type as its dimension, such as `Length`,
+    `Dimensionless`, or `Length / Time`. `Quantity<Length>` and bare
+    `Quantity` are not Graphcal types.
+
+#### Quantity Types
+
+A quantity is a binary64 floating-point magnitude with a **dimension** known at
+compile time. Its unit is value/display metadata, not part of its type.
 
 ```
-param mass: Mass = 1200.0 kg;           // Float with dimension Mass
-param ratio: Dimensionless = 0.85;      // Float with dimension Dimensionless
+param mass: Mass = 1200.0 kg;           // quantity of dimension Mass
+param ratio: Dimensionless = 0.85;      // identity-dimension quantity
 ```
 
-`Dimensionless` is the identity dimension (no physical quantity). When two values of the same dimension are divided, the result is `Dimensionless`.
+`Dimensionless` is the identity-dimension quantity type. When two quantities
+of the same dimension are divided, the result has type `Dimensionless`.
 
-Float arithmetic follows IEEE 754 double-precision rules. The runtime detects and reports NaN and infinity.
+Floating-point arithmetic follows IEEE 754 binary64 rules. The runtime detects
+and reports NaN and infinity.
 
-Only `Scalar` carries a physical dimension. `Int` and `Bool` are non-scalable -- you cannot multiply an integer by an arbitrary unit scale factor and get a meaningful integer back.
+Only quantities carry physical dimensions. `Int`, `Bool`, and `Datetime(S)`
+are separate primitive families, not quantities.
 
 #### Int
 
@@ -124,7 +204,7 @@ Datetime values follow **point-vs-vector** semantics:
 
 | Operation | Result | Notes |
 |-----------|--------|-------|
-| `Datetime - Datetime` | `Time` (scalar) | Both must be the same time scale |
+| `Datetime - Datetime` | `Time` | Both must be the same time scale |
 | `Datetime + Time` | `Datetime` | Add a duration |
 | `Time + Datetime` | `Datetime` | Add a duration (commuted form) |
 | `Datetime - Time` | `Datetime` | Subtract a duration |
@@ -139,19 +219,20 @@ See [Built-in Reference](built-ins.md#datetime-functions) for the full list of d
 
 ### Value Types (Level 2)
 
-A ValueType is a single logical value: a primitive or an instance of a
-tagged union. Every `type` declaration in graphcal is an n-variant
-tagged union — record-shaped types are simply single-variant unions
-whose sole constructor's name matches the type's name. The functional
-core distinguishes only "required type stub" from "n-variant union";
-there is no separate record kind.
+A `ValueType` is a single logical value: a primitive or an instance of one
+nominal algebraic type declared with `type`. Every body-bearing `type`
+declaration lists one or more constructors. Constructor count does not create
+separate "struct" and "union" type categories.
 
-Constructor payload fields must themselves be ValueTypes — you cannot
-put an indexed type like `Velocity[Maneuver]` inside a constructor's
-payload. To index structured data, index the type itself:
+Constructor payload fields must themselves be ValueTypes — you cannot put an
+indexed type like `Velocity[Maneuver]` inside a constructor's payload. To index
+structured data, index the algebraic type itself:
 `Vec3<Velocity, ECI>[Maneuver]`.
 
-#### Single-Variant Unions (Records)
+#### Algebraic Type with One Constructor
+
+A one-constructor type can be record-shaped. By convention, its constructor
+has the same name as its type:
 
 ```
 type Orbit {
@@ -163,10 +244,13 @@ type Vec3<D: Dim, Frame: Type> {
 }
 ```
 
-#### Multi-Variant Unions
+Because every value has the same constructor and payload shape, its fields can
+be accessed directly with `@value.field`.
 
-A multi-variant union has more than one constructor. Each constructor
-carries its own payload (or is a bare unit constructor):
+#### Algebraic Type with Multiple Constructors
+
+The same `type` declaration syntax can list multiple constructors. Each
+constructor has its own payload or is a bare unit constructor:
 
 ```
 type ManeuverKind {
@@ -176,8 +260,9 @@ type ManeuverKind {
 }
 ```
 
-Field access (`@v.field`) is rejected on multi-variant unions —
-destructure through `match` instead.
+Field access is rejected when a type has multiple constructors because no
+single payload shape is guaranteed. Destructure the value through `match`
+instead.
 
 ### Declaration Types (Level 3)
 
@@ -207,23 +292,27 @@ param count: Int(min: 1, max: 100) = 10;             // Int constraints
 The constraint clause goes between the base type and the optional `[Index]` suffix:
 
 ```
-Type(min: expr, max: expr)           // both bounds
-Type(min: expr)                      // lower bound only
-Type(max: expr)                      // upper bound only
-Type(min: expr, max: expr)[Index]    // constrained indexed type (element-wise)
+T(min: expr, max: expr)           // both bounds
+T(min: expr)                      // lower bound only
+T(max: expr)                      // upper bound only
+T(min: expr, max: expr)[I]        // constrained indexed type (element-wise)
 ```
 
-Both `min` and `max` are optional — you can specify one or both. The bound expressions must evaluate to a value compatible with the type's dimension.
+Here `T` must be a quantity type or `Int`, and `I` is an index axis. Both
+`min` and `max` are optional — you can specify one or both. Each bound
+expression must evaluate to a value compatible with `T`.
 
 ### Supported Types
 
 Domain constraints are valid on:
 
-- **Scalar types** (any dimension): `Mass(min: ...)`, `Velocity(max: ...)`, etc.
-- **`Dimensionless`**: `Dimensionless(min: 0.0, max: 1.0)`
+- **Quantity types** (including `Dimensionless`): `Mass(min: ...)`,
+  `Velocity(max: ...)`, `Dimensionless(min: 0.0, max: 1.0)`, etc.
 - **`Int`**: `Int(min: 1, max: 100)`
 
-Domain constraints are **not** valid on `Bool`, `Datetime`, struct types, or union types. Attempting to use constraints on these types is a compile error.
+Domain constraints are **not** valid on `Bool`, `Datetime`, or any algebraic
+type, regardless of its constructor count. Attempting to use constraints on
+these types is a compile error.
 
 ### Indexed Types
 
@@ -279,11 +368,16 @@ pub type SignedLength { SignedLength(value: Length(min: 0.0 m)) }
 
 ### Runtime Checking
 
-Domain constraints on `param` and `node` declarations are checked at **runtime** after evaluation: a violation produces a per-node error and downstream nodes receive a `DependencyFailed`. Constraints on `const node` declarations and on struct/union member fields constructed inside a `const` are checked at compile time, since the values are known statically.
+Domain constraints on `param` and `node` declarations are checked at
+**runtime** after evaluation: a violation produces a per-node error and
+downstream nodes receive a `DependencyFailed`. Constraints on `const node`
+declarations and on constructor payload fields constructed inside a `const`
+are checked at compile time, since the values are known statically.
 
 ### Compile-Time Validation
 
-The following are always caught at compile time, regardless of where the constraint sits (top-level decl or struct field):
+The following are always caught at compile time, regardless of where the
+constraint sits (top-level declaration or constructor payload field):
 
 - **Invalid target type**: Constraint on an unsupported type (e.g., `Bool(min: 0)`)
 - **Invalid key**: Unknown constraint key (e.g., `Mass(step: 10)` — only `min` and `max` are valid)
@@ -314,7 +408,10 @@ A named index declares a finite set of labels usable as a collection axis. The `
 index Maneuver = { Departure, Correction, Insertion };
 ```
 
-Named index labels use qualified syntax (`Maneuver.Departure`), distinguishing them from union type members which use bare syntax (`Nominal`). This reflects a genuine semantic difference: labels identify positions within a collection axis, while union type members are constructors of a sum type.
+Named index labels use qualified syntax (`Maneuver.Departure`), distinguishing
+them from algebraic-type constructors, which use bare syntax (`Nominal`). This
+reflects a genuine semantic difference: labels identify positions within a
+collection axis, while constructors form values of an algebraic type.
 
 Named index labels are not ValueType values. They cannot be stored in nodes or params, compared with `==`, passed through DAG parameters, or used in constructor payloads. Labels appear only in index positions and index-pattern positions:
 
@@ -324,31 +421,36 @@ Named index labels are not ValueType values. They cannot be stored in nodes or p
 - `for` bindings and index access through their loop variables: `for m: Maneuver { @delta_v[m] }`
 - `match` patterns over named-index loop variables: `match m { Maneuver.Departure => ..., ... }`
 
-A fieldless tagged union (e.g., `type Foo { A, B }`) is NOT automatically an index. The `index` keyword explicitly marks an enumeration as usable in `T[I]`, preventing accidental use of marker types as collection axes.
+An algebraic type with only unit constructors (e.g., `type Foo { A, B }`) is
+NOT automatically an index. The `index` keyword explicitly marks an
+enumeration as usable in `T[I]`, preventing accidental use of marker types as
+collection axes.
 
 ### Range Index
 
-A range index is a finite sequence of scalar values in a specific dimension:
+A range index is a finite sequence of quantity values in a specific dimension:
 
 ```
 index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);
 ```
 
-Range index labels are scalar values, not union type members. The loop variable in `for t: TimeStep { ... }` acts as a `Scalar(Time)` -- it can be used in arithmetic and for indexing.
+Range index labels are quantity values, not algebraic-type constructors. The loop
+variable in `for t: TimeStep { ... }` has semantic type `Quantity(Time)`,
+written `Time` in source; it can be used in arithmetic and for indexing.
 
 ### Named vs Range Index Capabilities
 
 | Capability | Named index (`Maneuver`) | Range index (`TimeStep`) |
 |-----------|--------------------------|--------------------------|
-| Loop variable type | index case variable (not a ValueType) | `Scalar(Dim)` (Primitive) |
+| Loop variable type | index case variable (not a ValueType) | `Quantity(D)` (Primitive) |
 | Indexing: `@x[m]` | Yes | Yes |
 | Map literal key | Yes | No (range labels are implicit) |
-| Equality comparison | No; use `match` | Yes (as Scalar) |
+| Equality comparison | No; use `match` | Yes (as Quantity) |
 | Pattern matching | Yes (qualified: `Maneuver.X => ...`) | No |
-| Arithmetic | No (not a scalar) | Yes |
-| Pass to DAG param | No | Yes (as scalar) |
+| Arithmetic | No (not a quantity) | Yes |
+| Pass to DAG param | No | Yes (as quantity) |
 
-Range-index loop variables are scalar values. Named-index loop variables are index case variables: they can select an indexed entry and drive exhaustive `match`, but they are not values.
+Range-index loop variables are quantity values. Named-index loop variables are index case variables: they can select an indexed entry and drive exhaustive `match`, but they are not values.
 
 ### Construction of Indexed Values
 
@@ -450,13 +552,15 @@ Graphcal has **no implicit type conversions**. You must use explicit conversion 
 
 | Function | From | To | Example |
 |----------|------|----|---------|
-| `to_float(x)` | `Int` | `Dimensionless` (Float) | `to_float(42)` yields `42.0` |
-| `to_int(x)` | `Dimensionless` (Float) | `Int` | `to_int(3.7)` yields `3` |
-| `to_utc(x)` | `Datetime(any)` | `Datetime<UTC>` | Time scale conversion |
-| `to_tai(x)` | `Datetime(any)` | `Datetime<TAI>` | Time scale conversion |
-| `to_tt(x)` | `Datetime(any)` | `Datetime<TT>` | Time scale conversion |
+| `to_float(x)` | `Int` | `Dimensionless` | `to_float(42)` yields `42.0` |
+| `to_int(x)` | `Dimensionless` | `Int` | `to_int(3.7)` yields `3` |
+| `to_utc(x)` | `Datetime(S)` | `Datetime(UTC)` | Time scale conversion |
+| `to_tai(x)` | `Datetime(S)` | `Datetime(TAI)` | Time scale conversion |
+| `to_tt(x)` | `Datetime(S)` | `Datetime(TT)` | Time scale conversion |
 
-`to_int` truncates toward zero. Time scale conversion functions (`to_utc`, `to_tai`, `to_tt`, `to_tdb`, `to_et`, `to_gpst`, `to_gst`, `to_bdt`, `to_qzsst`) convert between time scales without changing the physical instant.
+The existing `to_float` name describes conversion to the floating-point
+representation; it does not name a source-level `Float` type. `to_int`
+truncates toward zero. Time scale conversion functions (`to_utc`, `to_tai`, `to_tt`, `to_tdb`, `to_et`, `to_gpst`, `to_gst`, `to_bdt`, `to_qzsst`) convert between time scales without changing the physical instant.
 
 ## Dimension Algebra
 
@@ -540,8 +644,8 @@ This section lists the type of each expression form and the constraints the comp
 | Expression | Type | Notes |
 |-----------|------|-------|
 | `42` | `Int` | No decimal point or exponent |
-| `3.14` | `Dimensionless` | Float without unit |
-| `400.0 km` | Dimension of the unit (`Length`) | Float with unit; integer literals cannot have units |
+| `3.14` | `Dimensionless` | Floating-point literal without a unit |
+| `400.0 km` | Dimension of the unit (`Length`) | Floating-point literal with a unit; integer literals cannot have units |
 | `true`, `false` | `Bool` | |
 
 ### References
@@ -569,7 +673,7 @@ This section lists the type of each expression form and the constraints the comp
 | Expression | Result Type | Constraint |
 |-----------|-------------|------------|
 | `a == b`, `a != b` | `Bool` | `a` and `b` must have the same type |
-| `a < b`, `a > b`, `a <= b`, `a >= b` | `Bool` | `a` and `b` must have the same scalar dimension |
+| `a < b`, `a > b`, `a <= b`, `a >= b` | `Bool` | `a` and `b` must be quantities with the same dimension |
 | `a && b`, `a \|\| b` | `Bool` | `a` and `b` must be `Bool` |
 | `!a` | `Bool` | `a` must be `Bool` |
 
@@ -601,9 +705,11 @@ function_name(arg1, arg2, ...)
 expr.field_name
 ```
 
-- `expr` must be a struct type.
-- `field_name` must be a field of that struct.
-- The result type is the declared type of the field (with generic parameters substituted).
+- `expr` must have a record-shaped algebraic type: exactly one constructor with
+  payload fields, using the same name as the type.
+- `field_name` must be a payload field of that constructor.
+- The result type is the declared field type, with generic parameters
+  substituted.
 
 ### Index Access
 
@@ -617,18 +723,21 @@ expr[Index1.V1, Index2.V2] // multi-dimensional access
 - All axes must be specified (no partial indexing).
 - The result type is the element type `T`.
 
-### Struct Construction
+### Algebraic Value Construction
 
 ```
-TypeName(field1: expr1, field2: expr2)
-TypeName<Arg1, Arg2>(field1: expr1, field2: expr2)
-MemberName                                        // unit type (no fields)
+ConstructorName(field1: expr1, field2: expr2)
+ConstructorName<Arg1, Arg2>(field1: expr1, field2: expr2)
+ConstructorName                                   // unit constructor
 ```
 
-- Each field expression must match the declared type of that field.
-- Every constructor field must be written as `field: expr`; shorthand `field` is not supported.
+- The constructor determines one enclosing algebraic result type; a
+  constructor does not introduce a separate type.
+- Each field expression must match the declared type of that payload field.
+- Every payload field must be written as `field: expr`; shorthand `field` is
+  not supported.
 - Use explicit `field: @node_name` when passing graph nodes.
-- The result type is the struct/union type.
+- Generic arguments instantiate the enclosing algebraic type's parameters.
 
 ### Index Label
 
@@ -649,10 +758,12 @@ match scrutinee {
 }
 ```
 
-- `scrutinee` must be a union-typed value expression or a named-index loop variable.
+- `scrutinee` must be an algebraic-type value or a named-index loop variable.
 - `match` is for exhaustive case analysis over closed finite alternatives. Use `if` for ordinary boolean predicates and comparisons.
 - All members/labels must be covered (exhaustiveness check).
-- For union type scrutinees, arms use constructor patterns (bare or module-qualified) and can bind fields explicitly with `field: variable` or `field: _`.
+- For algebraic-type scrutinees, arms use constructor patterns (bare or
+  module-qualified) and can bind payload fields explicitly with
+  `field: variable` or `field: _`.
 - For named-index loop variables, arms use qualified index-label patterns (`Index.Label` or `module.Index.Label`) and cannot bind fields.
 - All arm expressions must have the same type.
 - The result type is the common type of the arms.
@@ -685,7 +796,7 @@ for v1: Index1, v2: Index2 { body_expr }
 
 - `var` is bound to each label of the index in turn.
 - For named indexes, the loop variable is an index case variable. It is valid in index access (`@x[var]`) and named-index `match`, but not as a ValueType value.
-- For range indexes, the loop variable has `Scalar(Dim)` type.
+- For range indexes, the loop variable has `Quantity(D)` type.
 - `body_expr` is evaluated for each binding; its type is `T`.
 - The result type is `T[IndexName]` (or `T[Index1, Index2]` for multiple bindings).
 
@@ -744,16 +855,28 @@ include hohmann_transfer(
 
 ## Generics
 
-Types can be generic over dimensions, indexes, natural numbers, and phantom types.
+Algebraic types can be parameterized by values from four type-level domains.
+A generic parameter's annotation is its **kind**: it determines which arguments
+are legal and how the parameter may be used in the declaration.
 
-### Generic Constraints
+### Generic Parameter Kinds
 
-| Constraint | Syntax | Meaning |
-|-----------|--------|---------|
-| `Dim` | `<D: Dim>` | `D` stands for any dimension |
-| `Index` | `<I: Index>` | `I` stands for any index |
-| `Nat` | `<N: Nat>` | `N` stands for a natural number (type-level size) |
-| `Type` | `<F: Type>` | `F` stands for any type (phantom/tag) |
+| Kind | Syntax | Parameter ranges over | Valid uses |
+|------|--------|-----------------------|------------|
+| `Dim` | `<D: Dim>` | Any dimension, such as `Length` or `Length / Time` | Quantity field types and dimension expressions such as `D^2` |
+| `Type` | `<T: Type>` | Any `ValueType`, such as `Bool`, `Length`, or `Vec3<Length, Eci>` | A payload field type, or a phantom/tag parameter if unused in any payload |
+| `Index` | `<I: Index>` | Any finite ordered index axis, including named, range, and Nat-range axes | An axis in an indexed type such as `D[I]` |
+| `Nat` | `<N: Nat>` | A non-negative natural number used in type-level size arithmetic | A Nat-range axis such as `D[N]`, subject to the non-empty-axis rule |
+
+These kinds are not themselves `ValueType`s. For example, `Index` denotes the
+domain of collection axes; it does not mean an index label is a first-class
+value. Likewise, `Type` denotes the `ValueType` domain and excludes both a bare
+index axis and an indexed `DeclType` such as `Velocity[Maneuver]`.
+
+A `Type` parameter is not inherently phantom. It is phantom only when the
+declaration carries it for nominal distinction without using it in a
+constructor payload. In `Vec3<D, Frame>`, for example, `D` determines the field
+types while `Frame` is a phantom parameter.
 
 ### Default Type Parameters
 
@@ -807,12 +930,13 @@ Loop variables from `for i: range(N)` have type `Int` and can be used to index i
 
 Two types are equivalent if:
 
-- **Scalars**: They have the same dimension in canonical form. Named dimensions are transparent (e.g., `Velocity` equals `Length / Time`).
+- **Quantities**: They have the same dimension in canonical form. Named dimensions are transparent (e.g., `Velocity` equals `Length / Time`).
 - **Int**: Both are `Int`.
 - **Bool**: Both are `Bool`.
 - **Datetime**: Same time scale. `Datetime<UTC>` and `Datetime<TT>` are different types.
-- **Structs**: Same struct name and all type arguments are equivalent.
-- **Union types**: Same type name and same members.
+- **Algebraic types**: Same owner-qualified declared type name and equivalent
+  generic arguments. Constructor count and payload shape belong to that
+  nominal declaration; they do not create separate structural type identities.
 - **Indexed**: Same element type, same indexes in the same order. `T[I, J]` and `T[J, I]` are different types.
 
 There is no subtyping. `Length` is not assignable to `Dimensionless`, and `Vec3<Length, ECI>` is not assignable to `Vec3<Length, Unframed>` even if both have the same fields.
@@ -823,18 +947,24 @@ Named index labels do not participate in value type equivalence. They are index 
 
 | Entity | Is a type? | First-class value? | DAG param? | DAG node? | Appears in expressions |
 |--------|-----------|---------------------|------------|-----------|----------------------|
-| Scalar value | ValueType | Yes | Yes | Yes | Yes |
+| Quantity value | ValueType | Yes | Yes | Yes | Yes |
 | Int value | ValueType | Yes | Yes | Yes | Yes |
 | Bool value | ValueType | Yes | Yes | Yes | Yes |
 | Datetime value | ValueType | Yes | Yes | Yes | Yes |
-| Struct instance | ValueType | Yes | Yes | Yes | Yes |
-| Union type member | ValueType | Yes | Yes | Yes | Yes |
+| Algebraic value | ValueType | Yes | Yes | Yes | Yes |
+| Algebraic constructor | No | No | No | No | Construction and match patterns |
 | Named index label | No | No | No | No | Index positions and match patterns |
 | Indexed value | DeclType | Yes | Yes | Yes | Via `for` |
-| Range index label | Scalar(Dim) | Yes | Yes (as scalar) | Yes (as scalar) | Indexing, arithmetic |
+| Range index label | Quantity(D) | Yes | Yes (as quantity) | Yes (as quantity) | Indexing, arithmetic |
+| Nat-range label | Int | Yes | Yes (as Int) | Yes (as Int) | Indexing, arithmetic |
 | Function | No | No | No | No | Calling only |
-| Dimension | No (compile-time) | No | As generic `<D: Dim>` | As generic | No |
-| Unit | No (compile-time) | No | No | No | In literals only |
-| Index | No (compile-time) | No | As generic `<I: Index>` | As generic | No |
+| Dimension | No; inhabits `Dim` | No | As generic `<D: Dim>` | As generic | In quantity type syntax |
+| Time scale | No; inhabits semantic `TimeScale` | No | No | No | In `Datetime<TT>`-style type syntax |
+| Unit | No (compile-time) | No | No | No | In literals and conversion targets |
+| Index axis | No; inhabits `Index` | No | As generic `<I: Index>` | As generic | In indexed type syntax |
+| Natural number | No; inhabits `Nat` | No | As generic `<N: Nat>` | As generic | In Nat expressions and axes |
 
-Named index labels use qualified syntax (`Maneuver.Departure`) while union type members use bare syntax (`Nominal`). Labels belong to the index universe; union members belong to the value/type universe.
+Named index labels use qualified syntax (`Maneuver.Departure`) while algebraic
+constructors use bare or module-qualified syntax (`Nominal` or
+`module.Nominal`). Labels belong to the index universe; constructors belong to
+the constructor namespace and form values of their enclosing algebraic type.

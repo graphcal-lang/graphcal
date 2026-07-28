@@ -139,7 +139,7 @@ fn manifest_fixed_dimensions_stay_in_the_base_alphabet() {
             .map(|param| &param.kind)
             .chain([&function.result]);
         for kind in kinds {
-            let graphcal_plugin_abi::ManifestValueKind::Scalar(monomial) = kind else {
+            let graphcal_plugin_abi::ManifestValueKind::Quantity(monomial) = kind else {
                 continue;
             };
             for factor in &monomial.fixed {
@@ -168,8 +168,8 @@ fn manifest_fixed_dimensions_stay_in_the_base_alphabet() {
             .iter()
             .find(|function| function.name == function_name)
             .expect("declared above");
-        let graphcal_plugin_abi::ManifestValueKind::Scalar(monomial) = &function.result else {
-            panic!("base-dimension functions return scalars");
+        let graphcal_plugin_abi::ManifestValueKind::Quantity(monomial) = &function.result else {
+            panic!("base-dimension functions return quantities");
         };
         assert_eq!(monomial.fixed.len(), 1, "{function_name}");
         assert_eq!(monomial.fixed[0].dim, base_name);

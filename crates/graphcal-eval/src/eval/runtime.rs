@@ -48,12 +48,12 @@ pub(super) fn runtime_to_value(
     registry: &Registry,
 ) -> Value {
     match rv {
-        RuntimeValue::Scalar(si_value) => {
+        RuntimeValue::Quantity(si_value) => {
             let dimension = match declared_type {
-                Some(DeclaredType::Scalar(d)) => d.clone(),
+                Some(DeclaredType::Quantity(d)) => d.clone(),
                 _ => Dimension::dimensionless(),
             };
-            Value::Scalar {
+            Value::Quantity {
                 si_value: *si_value,
                 dimension,
                 display_unit: None,
@@ -148,13 +148,13 @@ pub(super) fn runtime_to_value(
             // RangeLabel is an intermediate value used during range-index
             // iteration, but it can surface in final output when a body
             // returns its loop variable (e.g. `for i: Step { i }`). Expose it
-            // as a plain scalar, consistent with `expect_scalar` which
+            // as a plain quantity, consistent with `expect_quantity` which
             // already treats it as one.
             let dimension = match declared_type {
-                Some(DeclaredType::Scalar(d)) => d.clone(),
+                Some(DeclaredType::Quantity(d)) => d.clone(),
                 _ => Dimension::dimensionless(),
             };
-            Value::Scalar {
+            Value::Quantity {
                 si_value: *value,
                 dimension,
                 display_unit: None,
@@ -1076,7 +1076,7 @@ fn evaluate_assert_body(
 /// Evaluate a tolerance assertion body (`actual ~= expected +/- tolerance`).
 ///
 /// Indexed operands broadcast element-wise (#809): the assertion's shape
-/// comes from `actual`; `expected` and `tolerance` are each scalar (applied
+/// comes from `actual`; `expected` and `tolerance` are each unindexed (applied
 /// to every key) or indexed by the same axes. Failures report each failing
 /// key with its actual/expected/delta detail.
 fn evaluate_tolerance_assert(
@@ -1124,7 +1124,7 @@ fn eval_tolerance_operands(
 
 /// A failing key of a tolerance assertion, with its numeric detail.
 struct ToleranceFailure {
-    /// Index path from outermost to innermost axis; empty for a scalar
+    /// Index path from outermost to innermost axis; empty for an unindexed
     /// assertion.
     path: Vec<(IndexTypeRef, IndexVariantName)>,
     /// `actual X, expected Y +/- T, off by D`.
@@ -1191,15 +1191,15 @@ fn tolerance_tree_inner(
         });
     }
 
-    let actual_val = tolerance_scalar_operand(actual, "actual")?;
-    let expected_val = tolerance_scalar_operand(expected, "expected")?;
+    let actual_val = tolerance_quantity_operand(actual, "actual")?;
+    let expected_val = tolerance_quantity_operand(expected, "expected")?;
     let tolerance_val = match tolerance {
         #[expect(
             clippy::cast_precision_loss,
             reason = "tolerance values are small integers"
         )]
         RuntimeValue::Int(i) => *i as f64,
-        other => tolerance_scalar_operand(other, "tolerance")?,
+        other => tolerance_quantity_operand(other, "tolerance")?,
     };
 
     let tol_display = if is_relative {
@@ -1266,14 +1266,14 @@ fn tolerance_entry_or_broadcast<'a>(
     }
 }
 
-fn tolerance_scalar_operand(value: &RuntimeValue, role: &str) -> Result<f64, String> {
+fn tolerance_quantity_operand(value: &RuntimeValue, role: &str) -> Result<f64, String> {
     match value {
-        RuntimeValue::Scalar(v) => Ok(*v),
-        other => Err(format!("expected scalar {role}, got {other:?}")),
+        RuntimeValue::Quantity(v) => Ok(*v),
+        other => Err(format!("expected quantity {role}, got {other:?}")),
     }
 }
 
-/// Render tolerance failures: a scalar assertion reports its detail bare
+/// Render tolerance failures: an unindexed assertion reports its detail bare
 /// (`actual X, expected Y +/- T, off by D`); indexed assertions report each
 /// failing key with its detail.
 fn format_tolerance_failures(failures: &[ToleranceFailure]) -> String {
@@ -1350,7 +1350,7 @@ fn evaluate_plot(
     let mut channel_data = Vec::new();
     for (channel, expr) in &lowered.encodings {
         let data = if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &expr.kind {
-            super::plot_data::ChannelData::scalar_label(s.clone())
+            super::plot_data::ChannelData::unindexed_label(s.clone())
         } else {
             let rv = eval_hir_expr(expr, values, &empty_locals, ctx).map_err(|e| {
                 format!(
@@ -1465,7 +1465,7 @@ fn dimension_label_from_declared_type(
     registry: &Registry,
 ) -> Option<String> {
     match dt {
-        graphcal_compiler::registry::declared_type::DeclaredType::Scalar(dim) => {
+        graphcal_compiler::registry::declared_type::DeclaredType::Quantity(dim) => {
             if dim.is_dimensionless() {
                 None
             } else {
@@ -1550,7 +1550,7 @@ fn check_positive_property(
 )]
 fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, String> {
     match rv {
-        RuntimeValue::Scalar(v) => Ok(PlotFieldValue::Number(*v)),
+        RuntimeValue::Quantity(v) => Ok(PlotFieldValue::Number(*v)),
         RuntimeValue::Int(i) => Ok(PlotFieldValue::Number(*i as f64)),
         RuntimeValue::Bool(b) => Ok(PlotFieldValue::String(b.to_string())),
         RuntimeValue::Label { variant, .. } => Ok(PlotFieldValue::String(variant.to_string())),

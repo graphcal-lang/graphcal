@@ -31,6 +31,8 @@
 
 When opening or updating a GitHub Pull Request, comply with `.github/pull_request_template.md`.
 
+For pull request classification, a **breaking change** means a change that requires existing Graphcal source programs to be modified. Changes only to Rust APIs or internal implementation interfaces do not count as breaking changes.
+
 When an agent files a GitHub Issue or opens a GitHub Pull Request, put this alert note at the very top of the description. Add the same note at the beginning of any issue or pull request comment written by an agent:
 
 > [!WARNING]

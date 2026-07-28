@@ -2,16 +2,18 @@
 icon: material/numeric-3-circle
 ---
 
-# Step 3: Structs
+# Step 3: Algebraic Types
 
-In this step, you'll learn to group related values into struct types.
+In this step, you'll learn to group related values into a record-shaped
+algebraic type.
 
-## Struct Types
+## Record-Shaped Algebraic Types
 
-When a calculation produces multiple related values, group them into a
-struct. In graphcal every `type` is an n-variant tagged union — a
-struct is just a single-variant union whose sole constructor's name
-matches the type's name:
+When a calculation produces multiple related values, group them into a type
+with one constructor. Graphcal has one algebraic-type concept: the same `type`
+declaration can have one constructor for record-shaped data or multiple
+constructors for alternatives. For record-shaped data, conventionally give the
+constructor the same name as the type:
 
 ```
 dim GravParam = Length^3 / Time^2;
@@ -21,9 +23,9 @@ type TransferResult {
 }
 ```
 
-## Constructing a Struct
+## Constructing an Algebraic Value
 
-Build a struct value by calling its constructor:
+Build a value by calling its constructor:
 
 ```
 node result: TransferResult = TransferResult(
@@ -53,7 +55,7 @@ Constructor fields must always be explicit: `field: expr`.
 
 ## Field Access
 
-Access struct fields with the `.` operator:
+Access fields of a record-shaped algebraic value with the `.` operator:
 
 ```
 node total: Velocity = @result.total_dv;
@@ -109,8 +111,6 @@ this graph into a reusable, parameterized `dag` block.
 
 ## What You Learned
 
-- **`type`** declarations as n-variant tagged unions (single-variant
-  for record-shaped data)
-- **Constructor calls** for unified `type` declarations with
-  `ConstructorName(field: value, ...)`
-- **Field access** with `.` on values of single-variant unions
+- **`type`** declarations with one or more constructors
+- **Constructor calls** with `ConstructorName(field: value, ...)`
+- **Field access** with `.` on record-shaped, one-constructor values

@@ -6,7 +6,7 @@ fn fs() -> RealFileSystem {
     RealFileSystem::default()
 }
 
-/// Find the SI value of a named scalar declaration.
+/// Find the SI value of a named quantity declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
     // Check consts first
     if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.to_string() == name) {
@@ -120,7 +120,7 @@ fn eval_uses_hir_builtin_dispatch_after_syntax_mutation() {
         tir.root(),
         &graphcal_compiler::syntax::module_name::ScopedName::local("y"),
     );
-    let value = values[&key].expect_scalar("y").unwrap();
+    let value = values[&key].expect_quantity("y").unwrap();
     assert!((value - 2.0).abs() < f64::EPSILON);
 }
 
@@ -141,7 +141,7 @@ fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
         panic!("expected indexed value, got {:?}", values[&key]);
     };
     let burn = graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn");
-    let value = entries[&burn].expect_scalar("Burn entry").unwrap();
+    let value = entries[&burn].expect_quantity("Burn entry").unwrap();
     assert!((value - 1.0).abs() < f64::EPSILON);
 }
 
@@ -247,7 +247,7 @@ fn indexed_tolerance_respects_per_variant_expected_fail() {
 
 #[test]
 fn indexed_comparison_broadcasts_element_wise() {
-    // #809: `T[I] == T[I]` and `T[I] op scalar` evaluate per key.
+    // #809: `T[I] == T[I]` and `T[I] op unindexed T` evaluate per key.
     let result = compile_and_eval(
         "index Case = { A, B };\n\
          node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
@@ -1340,7 +1340,7 @@ fn eval_int_negative_exponent() {
 
 #[test]
 fn eval_int_mixed_type_error() {
-    // Int + Scalar should be a type error
+    // Int + Quantity should be a type error
     let err = compile_and_eval("param x: Int = 10;\nnode y: Dimensionless = @x + 1.0;");
     assert!(err.is_err());
 }
@@ -1828,7 +1828,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let mut fields = indexmap::IndexMap::new();
     fields.insert(
         graphcal_compiler::syntax::type_name::FieldName::expect_valid("distance"),
-        crate::eval_expr::RuntimeValue::Scalar(9.0),
+        crate::eval_expr::RuntimeValue::Quantity(9.0),
     );
     let values = HashMap::from([(
         crate::decl_key::RuntimeDeclKey::for_local_decl(
@@ -1894,7 +1894,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let mut fields = indexmap::IndexMap::new();
     fields.insert(
         graphcal_compiler::syntax::type_name::FieldName::expect_valid("distance"),
-        crate::eval_expr::RuntimeValue::Scalar(99.0),
+        crate::eval_expr::RuntimeValue::Quantity(99.0),
     );
     let values = HashMap::from([(
         crate::decl_key::RuntimeDeclKey::for_local_decl(
@@ -2460,11 +2460,11 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let mut entries = indexmap::IndexMap::new();
     entries.insert(
         graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
-        crate::eval_expr::RuntimeValue::Scalar(99.0),
+        crate::eval_expr::RuntimeValue::Quantity(99.0),
     );
     entries.insert(
         graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Coast"),
-        crate::eval_expr::RuntimeValue::Scalar(100.0),
+        crate::eval_expr::RuntimeValue::Quantity(100.0),
     );
     let values = HashMap::from([(
         crate::decl_key::RuntimeDeclKey::for_local_decl(

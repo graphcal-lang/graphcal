@@ -36,7 +36,7 @@ pub fn resolved_to_declared_type(
     use crate::registry::declared_type::{DeclaredType, StructTypeRef};
 
     match resolved {
-        ResolvedTypeExpr::Dimensionless => Ok(DeclaredType::Scalar(Dimension::dimensionless())),
+        ResolvedTypeExpr::Dimensionless => Ok(DeclaredType::Quantity(Dimension::dimensionless())),
         ResolvedTypeExpr::Bool => Ok(DeclaredType::Bool),
         ResolvedTypeExpr::Int => Ok(DeclaredType::Int),
         ResolvedTypeExpr::Datetime(scale) => Ok(DeclaredType::Datetime(*scale)),
@@ -48,7 +48,7 @@ pub fn resolved_to_declared_type(
             src: src.clone(),
             span: resolved_type_expr_span(resolved).into(),
         }),
-        ResolvedTypeExpr::Scalar(dim) => Ok(DeclaredType::Scalar(dim.clone())),
+        ResolvedTypeExpr::Quantity(dim) => Ok(DeclaredType::Quantity(dim.clone())),
         ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(
             StructTypeRef::from_resolved(name.clone()),
             vec![],
@@ -145,7 +145,7 @@ fn resolved_type_expr_span(resolved: &ResolvedTypeExpr) -> Span {
         | ResolvedTypeExpr::Bool
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)
-        | ResolvedTypeExpr::Scalar(_) => Span::new(0, 0),
+        | ResolvedTypeExpr::Quantity(_) => Span::new(0, 0),
         ResolvedTypeExpr::IndexArg(index) => resolved_index_span(index),
         ResolvedTypeExpr::Struct(_, span)
         | ResolvedTypeExpr::GenericDimParam(_, span)
@@ -399,7 +399,7 @@ where
 /// binding generic dimension and index parameters.
 ///
 /// For example, if `resolved` is `GenericDimParam("D")` and `actual` is
-/// `Scalar(Length)`, binds `D = Length` in `dim_sub`.
+/// `Quantity(Length)`, binds `D = Length` in `dim_sub`.
 ///
 /// # Errors
 ///
@@ -571,7 +571,7 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Dimensionless => {
-            let actual_dim = crate::tir::dim_check::expect_scalar(actual, registry, src, span)?;
+            let actual_dim = crate::tir::dim_check::expect_quantity(actual, registry, src, span)?;
             if !actual_dim.is_dimensionless() {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Dimensionless".to_string(),
@@ -584,8 +584,8 @@ pub fn unify_resolved_type(
             Ok(())
         }
 
-        ResolvedTypeExpr::Scalar(expected_dim) => {
-            let actual_dim = crate::tir::dim_check::expect_scalar(actual, registry, src, span)?;
+        ResolvedTypeExpr::Quantity(expected_dim) => {
+            let actual_dim = crate::tir::dim_check::expect_quantity(actual, registry, src, span)?;
             if *expected_dim != actual_dim {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(expected_dim),
@@ -677,7 +677,7 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::GenericDimParam(gp, _) => {
-            let actual_dim = crate::tir::dim_check::expect_scalar(actual, registry, src, span)?;
+            let actual_dim = crate::tir::dim_check::expect_quantity(actual, registry, src, span)?;
             bind_or_check(dim_sub, gp.clone(), actual_dim, |prev, new| {
                 GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(prev),
@@ -702,7 +702,7 @@ pub fn unify_resolved_type(
         }),
 
         ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
-            let actual_dim = crate::tir::dim_check::expect_scalar(actual, registry, src, span)?;
+            let actual_dim = crate::tir::dim_check::expect_quantity(actual, registry, src, span)?;
 
             // Single generic term with power: D^n means D = actual^(1/n)
             if terms.len() == 1
@@ -834,14 +834,14 @@ pub fn substitute_resolved_type_with_types(
     use crate::tir::dim_check::InferredType;
 
     match resolved {
-        ResolvedTypeExpr::Dimensionless => Ok(InferredType::Scalar(Dimension::dimensionless())),
+        ResolvedTypeExpr::Dimensionless => Ok(InferredType::Quantity(Dimension::dimensionless())),
         ResolvedTypeExpr::Bool => Ok(InferredType::Bool),
         ResolvedTypeExpr::Int => Ok(InferredType::Int),
         ResolvedTypeExpr::Datetime(scale) => Ok(InferredType::Datetime(*scale)),
         ResolvedTypeExpr::IndexArg(index) => {
             resolved_index_to_inferred(index, src).map(InferredType::NamedIndex)
         }
-        ResolvedTypeExpr::Scalar(dim) => Ok(InferredType::Scalar(dim.clone())),
+        ResolvedTypeExpr::Quantity(dim) => Ok(InferredType::Quantity(dim.clone())),
         ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(
             crate::tir::dim_check::InferredStructType::from_resolved(name.clone()),
             vec![],
@@ -869,7 +869,7 @@ pub fn substitute_resolved_type_with_types(
                     span: (*span).into(),
                 })
             },
-            |dim| Ok(InferredType::Scalar(dim.clone())),
+            |dim| Ok(InferredType::Quantity(dim.clone())),
         ),
 
         ResolvedTypeExpr::GenericTypeParam(gp, span) => type_sub.get(gp).map_or_else(
@@ -913,7 +913,7 @@ pub fn substitute_resolved_type_with_types(
                     MulDivOp::Div => (result / term_dim).map_err(|_| overflow_err())?,
                 };
             }
-            Ok(InferredType::Scalar(result))
+            Ok(InferredType::Quantity(result))
         }
 
         ResolvedTypeExpr::Indexed { base, indexes } => {

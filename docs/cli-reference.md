@@ -140,8 +140,8 @@ created plugin crate `fluid-props` at fluid-props
 Validate a built `.wasm` module against the plugin ABI and print its
 identity and signatures. Every load-time check runs before any plugin
 code: the embedded manifest must decode, the module may import nothing
-beyond `graphcal::fail`, and each manifest function must be exported with
-the scalar wasm type. On success the output includes the SHA-256 (the
+beyond `graphcal::fail`, and each manifest function's wasm parameter/result types must match its
+declared signature. On success the output includes the SHA-256 (the
 value `graphcal deps lock` pins) and a paste-ready `import plugin` block
 in `.gcl` syntax.
 
@@ -154,7 +154,7 @@ graphcal plugin test <MODULE> [--call <FUNCTION> [ARGS]...]
 | Argument | Description |
 |----------|-------------|
 | `<MODULE>` | Path to the `.wasm` plugin module |
-| `[ARGS]...` | Arguments for `--call`: numbers in SI base units for scalar parameters, `true`/`false` for `Bool`, integers for `Int` |
+| `[ARGS]...` | Arguments for `--call`: numbers in SI base units for quantity parameters, `true`/`false` for `Bool`, integers for `Int` |
 
 **Options:**
 
@@ -174,7 +174,7 @@ graphcal plugin test <MODULE> [--call <FUNCTION> [ARGS]...]
 $ graphcal plugin test plugins/fluid_props.wasm --call lerp 1.0 3.0 0.5
 plugin: plugins/fluid_props.wasm
 sha256: 3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855c
-abi: version 2, 2 function(s)
+abi: version 3, 2 function(s)
 
 import plugin "plugins/fluid_props.wasm" as fluid_props {
     fn air_density(p: Length^-1 * Mass * Time^-2, t: Temperature) -> Length^-3 * Mass;

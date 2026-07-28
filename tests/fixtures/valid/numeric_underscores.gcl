@@ -1,6 +1,6 @@
 // numeric_underscores.gcl -- Pin support for `_` digit separators in numeric literals
 //
-// Grammar allows `_` between digits in both Int and Float mantissa parts.
+// Grammar allows `_` between digits in integer and floating-point mantissa parts.
 // (Underscores in the exponent part of `1.0e10` are currently NOT supported
 // by the lexer even though the EBNF allows them; that gap is captured as a
 // separate report.)

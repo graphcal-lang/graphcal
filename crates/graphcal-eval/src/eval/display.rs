@@ -45,18 +45,18 @@ fn attach_display_units_depth<'a>(
     depth: usize,
 ) -> Result<(), GraphcalError> {
     match (&mut *value, &expr.kind) {
-        (Value::Scalar { display_unit, .. }, ExprKind::UnitLiteral { unit, .. }) => {
+        (Value::Quantity { display_unit, .. }, ExprKind::UnitLiteral { unit, .. }) => {
             *display_unit = Some(resolve_unit_to_display(unit, ctx, values)?);
         }
-        (Value::Scalar { display_unit, .. }, ExprKind::Convert { target, .. }) => {
+        (Value::Quantity { display_unit, .. }, ExprKind::Convert { target, .. }) => {
             *display_unit = Some(resolve_unit_to_display(target, ctx, values)?);
         }
         // Element-wise conversion on indexed values (#648 U1): apply the
-        // target uniformly to every scalar entry, through nested axes.
+        // target uniformly to every quantity entry, through nested axes.
         (Value::Indexed { entries, .. }, ExprKind::Convert { target, .. }) => {
             let du = resolve_unit_to_display(target, ctx, values)?;
             for entry_val in entries.values_mut() {
-                set_scalar_display_unit_deep(entry_val, &du);
+                set_quantity_display_unit_deep(entry_val, &du);
             }
         }
         // Constructor call: recurse into each field initializer.
@@ -85,7 +85,7 @@ fn attach_display_units_depth<'a>(
         (Value::Indexed { entries, .. }, ExprKind::ForComp { body, .. }) => {
             if let Some(du) = extract_flat_display_unit(body, ctx, values)? {
                 for entry_val in entries.values_mut() {
-                    set_scalar_display_unit(entry_val, &du);
+                    set_quantity_display_unit(entry_val, &du);
                 }
             }
         }
@@ -94,7 +94,7 @@ fn attach_display_units_depth<'a>(
         | (Value::Indexed { entries, .. }, ExprKind::Unfold { init, .. }) => {
             if let Some(du) = extract_flat_display_unit(init, ctx, values)? {
                 for entry_val in entries.values_mut() {
-                    set_scalar_display_unit(entry_val, &du);
+                    set_quantity_display_unit(entry_val, &du);
                 }
             }
         }
@@ -279,7 +279,7 @@ fn resolve_unit_to_display(
     })
 }
 
-/// Extract a single display unit from a scalar-producing expression.
+/// Extract a single display unit from a quantity-producing expression.
 ///
 /// Used for indexed collections (for comprehensions, scan) where all entries
 /// share the same display unit. `Ok(None)` means the expression carries no
@@ -327,21 +327,21 @@ pub(super) fn format_range_step(
     )
 }
 
-/// Set display unit on a scalar value. No-op for non-scalar values.
-fn set_scalar_display_unit(value: &mut Value, du: &DisplayUnit) {
-    if let Value::Scalar { display_unit, .. } = value {
+/// Set display unit on a quantity value. No-op for non-quantity values.
+fn set_quantity_display_unit(value: &mut Value, du: &DisplayUnit) {
+    if let Value::Quantity { display_unit, .. } = value {
         *display_unit = Some(du.clone());
     }
 }
 
-/// Set display unit on every scalar leaf, descending through nested
+/// Set display unit on every quantity leaf, descending through nested
 /// `Indexed` layers (multi-axis values).
-fn set_scalar_display_unit_deep(value: &mut Value, du: &DisplayUnit) {
+fn set_quantity_display_unit_deep(value: &mut Value, du: &DisplayUnit) {
     match value {
-        Value::Scalar { display_unit, .. } => *display_unit = Some(du.clone()),
+        Value::Quantity { display_unit, .. } => *display_unit = Some(du.clone()),
         Value::Indexed { entries, .. } => {
             for entry in entries.values_mut() {
-                set_scalar_display_unit_deep(entry, du);
+                set_quantity_display_unit_deep(entry, du);
             }
         }
         _ => {}

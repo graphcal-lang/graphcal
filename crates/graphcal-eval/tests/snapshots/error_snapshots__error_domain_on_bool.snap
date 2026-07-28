@@ -9,5 +9,5 @@ Begin snippet for domain_on_bool.gcl starting at line 1, column 1
 snippet line 1: // domain_on_bool.gcl -- constraint on unsupported type
 snippet line 2: param flag: Bool(min: 0.0) = true;
     label at line 2, columns 1 to 34: constraints not valid here
-diagnostic help: domain constraints (min/max) are only valid on scalar, Dimensionless, and Int types
+diagnostic help: domain constraints (min/max) are only valid on quantity and Int types
 diagnostic code: graphcal::C004

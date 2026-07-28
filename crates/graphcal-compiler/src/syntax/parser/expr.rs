@@ -560,7 +560,7 @@ impl Parser<'_> {
                     })?;
             Ok(Expr::new(ExprKind::Integer(value), span))
         } else {
-            // Float literal: has decimal point or scientific notation
+            // Floating-point literal: has a decimal point or scientific notation
             let value = self.parse_finite_f64_literal(&text, span)?;
 
             // Check if followed by an identifier on the same line (unit

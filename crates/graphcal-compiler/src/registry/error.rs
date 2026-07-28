@@ -231,7 +231,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::P001),
         help(
-            "extern signatures support Bool, Int, scalar dimension types, arrays of scalars over a declared index variable, and record struct returns with concrete fields; each dimension variable must be declared in the `<...>` binder list and bound by a bare scalar parameter or bare array element before compound uses, and a result array must reuse an index variable that indexes some parameter"
+            "extern signatures support Bool, Int, quantity types, arrays of quantities over a declared index variable, and record struct returns with concrete fields; each dimension variable must be declared in the `<...>` binder list and bound by a bare quantity parameter or bare array element before compound uses, and a result array must reuse an index variable that indexes some parameter"
         )
     )]
     InvalidExternSignature {
@@ -555,7 +555,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::D011),
         help(
-            "element-wise operands must be indexed by the same axes in the same order; a scalar operand broadcasts to every key"
+            "element-wise operands must be indexed by the same axes in the same order; an unindexed operand broadcasts to every key"
         )
     )]
     IndexedShapeMismatch {
@@ -1523,9 +1523,7 @@ pub enum GraphcalError {
     #[error("domain constraints are not valid on `{type_kind}` types")]
     #[diagnostic(
         code(graphcal::C004),
-        help(
-            "domain constraints (min/max) are only valid on scalar, Dimensionless, and Int types"
-        )
+        help("domain constraints (min/max) are only valid on quantity and Int types")
     )]
     InvalidDomainTarget {
         type_kind: String,

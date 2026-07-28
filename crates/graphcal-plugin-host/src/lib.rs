@@ -10,8 +10,8 @@
 //!   decodable, signatures convertible to the compiler's typed
 //!   [`FunctionSignature`](graphcal_compiler::function_signature::FunctionSignature)
 //!   IR ([`convert`]), no imports beyond `graphcal::fail`, memory exported
-//!   when failure messages need reading, and every manifest function
-//!   exported with the scalar wasm type `(f64 × arity) -> f64`;
+//!   when failure messages need reading, and every manifest function exported
+//!   with the wasm parameter/result types required by its signature;
 //! - execute plugin functions under mandatory resource bounds
 //!   ([`PluginLimits`]: per-call fuel plus a linear-memory cap), mapping
 //!   failure messages, traps, and fuel exhaustion to [`PluginCallError`];

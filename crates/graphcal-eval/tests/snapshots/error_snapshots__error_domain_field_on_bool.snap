@@ -10,5 +10,5 @@ snippet line 2: type Foo {
 snippet line 3:     Foo(x: Bool(min: 0.0)),
     label at line 3, columns 12 to 24: constraints not valid here
 snippet line 4: }
-diagnostic help: domain constraints (min/max) are only valid on scalar, Dimensionless, and Int types
+diagnostic help: domain constraints (min/max) are only valid on quantity and Int types
 diagnostic code: graphcal::C004

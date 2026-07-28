@@ -32,14 +32,14 @@ impl DomainViolation {
 ///
 /// # Errors
 ///
-/// Returns [`DomainViolation`] when any scalar sub-value falls outside the
+/// Returns [`DomainViolation`] when any quantity sub-value falls outside the
 /// declared bounds.
 pub fn check_domain_constraint(
     rv: &RuntimeValue,
     constraint: &ResolvedDomainConstraint,
 ) -> Result<(), DomainViolation> {
     match rv {
-        RuntimeValue::Scalar(si_value) => check_scalar_constraint(*si_value, constraint),
+        RuntimeValue::Quantity(si_value) => check_quantity_constraint(*si_value, constraint),
         RuntimeValue::Int(i) => check_int_constraint(*i, constraint),
         RuntimeValue::Indexed { entries, .. } => {
             for (variant, entry_rv) in entries {
@@ -74,12 +74,12 @@ fn check_int_constraint(
         clippy::cast_precision_loss,
         reason = "integer magnitude is checked to be exactly representable before casting"
     )]
-    let scalar = value as f64;
-    check_scalar_constraint(scalar, constraint)
+    let quantity = value as f64;
+    check_quantity_constraint(quantity, constraint)
 }
 
-/// Check a scalar SI value against min/max bounds.
-fn check_scalar_constraint(
+/// Check a quantity SI value against min/max bounds.
+fn check_quantity_constraint(
     si_value: f64,
     constraint: &ResolvedDomainConstraint,
 ) -> Result<(), DomainViolation> {

@@ -22,7 +22,7 @@ use proptest::prelude::*;
 // Helpers
 // ============================================================================
 
-/// Find the SI value of a named scalar declaration.
+/// Find the SI value of a named quantity declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
     if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.to_string() == name) {
         return val.as_ref().unwrap().si_value().unwrap();
@@ -249,11 +249,11 @@ node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
 }
 
 #[test]
-fn for_comp_returning_range_loop_variable_yields_scalars() {
+fn for_comp_returning_range_loop_variable_yields_quantities() {
     // Regression: the loop variable of a `for` over a range index is bound to
     // an internal RangeLabel value. Returning it directly used to hit
     // `unreachable!("RangeLabel should not appear in final values")` when
-    // converting the result to a public value. It must surface as a scalar.
+    // converting the result to a public value. It must surface as a quantity.
     let source = r#"
 index Step = linspace(0.0 s, 2.0 s, step: 1.0 s);
 node t: Time[Step] = for i: Step { i };
@@ -265,8 +265,8 @@ node t: Time[Step] = for i: Step { i };
             let values: Vec<f64> = entries
                 .iter()
                 .map(|(_, v)| match v {
-                    Value::Scalar { si_value, .. } => *si_value,
-                    other => panic!("expected scalar entry, got {other:?}"),
+                    Value::Quantity { si_value, .. } => *si_value,
+                    other => panic!("expected quantity entry, got {other:?}"),
                 })
                 .collect();
             assert_eq!(values, vec![0.0, 1.0, 2.0]);
@@ -276,7 +276,7 @@ node t: Time[Step] = for i: Step { i };
 }
 
 // ============================================================================
-// BUG 3: Float power edge cases
+// BUG 3: Quantity power edge cases
 //
 // The evaluator uses `l.powf(r)` for float power, with a post-check for
 // finite results. But some edge cases slip through:
@@ -378,7 +378,7 @@ node y: Length = @x -> m;
     let result = compile_and_eval(source).unwrap();
     let y = find_entry(&result, "y");
     match &y {
-        Value::Scalar {
+        Value::Quantity {
             si_value,
             display_unit,
             ..
@@ -393,7 +393,7 @@ node y: Length = @x -> m;
                 );
             }
         }
-        _ => panic!("expected scalar"),
+        _ => panic!("expected quantity"),
     }
 }
 
@@ -687,7 +687,7 @@ proptest! {
         prop_assert_eq!(lhs, rhs);
     }
 
-    /// Float addition should be commutative
+    /// Quantity addition should be commutative
     #[test]
     fn float_add_commutative(
         a in proptest::num::f64::NORMAL,
@@ -706,7 +706,7 @@ proptest! {
         }
     }
 
-    /// Float multiplication should be commutative
+    /// Quantity multiplication should be commutative
     #[test]
     fn float_mul_commutative(
         a in proptest::num::f64::NORMAL,
@@ -891,11 +891,11 @@ assert all_positive = for l: Layer, b: Band, c: Channel {
 // const reads, and runtime-selected if/match branches.
 // ============================================================================
 
-/// Extract the display unit label of a scalar declaration, if any.
+/// Extract the display unit label of a quantity declaration, if any.
 fn display_label(result: &EvalResult, name: &str) -> Option<String> {
     match find_entry(result, name) {
-        Value::Scalar { display_unit, .. } => display_unit.map(|du| du.label),
-        other => panic!("expected scalar for `{name}`, got {other:?}"),
+        Value::Quantity { display_unit, .. } => display_unit.map(|du| du.label),
+        other => panic!("expected quantity for `{name}`, got {other:?}"),
     }
 }
 
@@ -932,12 +932,12 @@ fn display_unit_propagates_through_reads() {
         Value::Indexed { entries, .. } => {
             for (variant, entry) in &entries {
                 match entry {
-                    Value::Scalar { display_unit, .. } => assert_eq!(
+                    Value::Quantity { display_unit, .. } => assert_eq!(
                         display_unit.as_ref().map(|du| du.label.as_str()),
                         Some("km"),
                         "entry `{variant}` must keep its display unit"
                     ),
-                    other => panic!("expected scalar entry, got {other:?}"),
+                    other => panic!("expected quantity entry, got {other:?}"),
                 }
             }
         }

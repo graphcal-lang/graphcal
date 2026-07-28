@@ -16,7 +16,7 @@ contract, trust rules), see
 [Extern Functions](language/extern-functions.md).
 
 A graphcal plugin is a **pure, sandboxed kernel library**: functions over
-SI scalars, dense arrays, and record-shaped results, with dimensional
+SI quantities, dense arrays, and record-shaped results, with dimensional
 signatures checked by the graphcal compiler at every call site. Plugins
 fit computations that cannot be a `dag` block — iterative solvers, special
 functions, property libraries, coordinate transforms. They cannot touch
@@ -86,7 +86,7 @@ pasted verbatim into the `.gcl` import site.
 ### Signature syntax
 
 Parameter and result types are `Bool`, `Int`, dimension expressions, or
-arrays of scalars over one declared index variable (`xs: D[I]`); a result
+arrays of quantities over one declared index variable (`xs: D[I]`); a result
 may also be a braced struct shape (`-> { lo: Pressure, hi: Pressure }`).
 Dimension expressions are built from:
 
@@ -124,14 +124,14 @@ fields must match the shape — names, order, and kinds.
 ### In the body
 
 Parameters arrive with their declared names and natural Rust types —
-`f64` for scalars, `bool` for `Bool`, `i64` for `Int`, `&[f64]` for
+`f64` for quantities, `bool` for `Bool`, `i64` for `Int`, `&[f64]` for
 arrays (dense, in index order) — and the body evaluates to `f64`, `bool`,
 `i64`, `Vec<f64>` (arrays; exactly the binding input's length), or the
 generated `...Output` struct (struct shapes) to match the declared
 result. Array-moving functions compile natively as ordinary slice/`Vec`
 functions, so `cargo test` needs no wasm toolchain.
 
-**Scalar values are SI base units, always.** A `Pressure` parameter is
+**Quantity values are SI base units, always.** A `Pressure` parameter is
 pascals; a `Velocity` result is metres per second. Graphcal checks
 dimensions at every call site, but it cannot see whether your math treats
 a pascal as a bar — that residual risk lives inside the plugin, so keep
@@ -203,9 +203,9 @@ The lockfile is the trust boundary: plugin bytes can only change together
 with a reviewable `graphcal.lock` diff. See
 [Trust: Lockfile Pins](language/extern-functions.md#trust-lockfile-pins).
 
-## Scope and limits (ABI v2)
+## Scope and limits (ABI v3)
 
-- Values are SI scalars, `Bool`, `Int`, arrays of scalars over one index
+- Values are SI quantities, `Bool`, `Int`, arrays of quantities over one index
   variable, and record-shaped results with concrete fields. Not crossing
   the boundary yet: `Datetime` (use explicit `to_jd`/`from_jd`-style
   conversions), `Bool`/`Int` array elements, multi-axis arrays, struct
@@ -224,8 +224,8 @@ with a reviewable `graphcal.lock` diff. See
 The SDK is a convenience, not part of the trust model — a plugin is any
 core wasm module satisfying the [module
 contract](language/extern-functions.md#wasm-plugin-modules): exports
-whose wasm types follow their signatures (`f64` per scalar, `(i32, i32)`
-per array, a trailing out-pointer for array/struct results), the
+whose wasm types follow their signatures (one `f64` per quantity/`Bool`/`Int`
+slot, `(i32, i32)` per array, a trailing out-pointer for array/struct results), the
 `graphcal_alloc`/`graphcal_free` pair when buffers are involved, a
 `graphcal-manifest` custom section, and no imports beyond the optional
 `graphcal::fail`. For non-Rust toolchains,

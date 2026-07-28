@@ -71,7 +71,7 @@ pub struct ParamIr {
 pub enum KindIr {
     Bool,
     Int,
-    Scalar(MonomialIr),
+    Quantity(MonomialIr),
     Array {
         element: MonomialIr,
         index: syn::Ident,
@@ -86,11 +86,11 @@ pub struct FieldIr {
     pub kind: FieldKindIr,
 }
 
-/// A struct field's kind: concrete scalars only (no dimension variables).
+/// A struct field's kind: concrete quantities only (no dimension variables).
 pub enum FieldKindIr {
     Bool,
     Int,
-    Scalar(MonomialIr),
+    Quantity(MonomialIr),
 }
 
 /// A folded dimension monomial: dimension-variable powers in
@@ -218,7 +218,7 @@ fn lower_params(
         }
         let kind = lower_type(&param.ty, binders, index_binders)?;
         let monomial = match &kind {
-            KindIr::Scalar(monomial) => Some(monomial),
+            KindIr::Quantity(monomial) => Some(monomial),
             KindIr::Array { element, index } => {
                 used_indexes.insert(index.to_string());
                 Some(element)
@@ -270,7 +270,7 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
 
     let result = lower_result(&decl.result, &binders, &index_binders)?;
     let result_monomial = match &result {
-        KindIr::Scalar(monomial) => Some(monomial),
+        KindIr::Quantity(monomial) => Some(monomial),
         KindIr::Array { element, index } => {
             if !used_indexes.contains(&index.to_string()) {
                 return Err(syn::Error::new(
@@ -370,11 +370,11 @@ fn lower_result(
                     )? {
                         KindIr::Bool => FieldKindIr::Bool,
                         KindIr::Int => FieldKindIr::Int,
-                        KindIr::Scalar(monomial) => FieldKindIr::Scalar(monomial),
+                        KindIr::Quantity(monomial) => FieldKindIr::Quantity(monomial),
                         KindIr::Array { .. } | KindIr::Struct(_) => {
                             return Err(syn::Error::new(
                                 field.name.span(),
-                                "struct fields must be Bool, Int, or scalar dimension types",
+                                "struct fields must be Bool, Int, or quantity types",
                             ));
                         }
                     };
@@ -424,7 +424,7 @@ const fn clone_exponent(exponent: &ExponentAst) -> ExponentAst {
 }
 
 /// Lower one type position: a lone `Bool`/`Int`, a dimension monomial, or
-/// an array of scalars over a declared index variable.
+/// an array of quantities over a declared index variable.
 fn lower_type(
     ty: &TypeAst,
     binders: &HashSet<String>,
@@ -436,7 +436,7 @@ fn lower_type(
             "Bool" | "Int" if ty.index.is_some() => {
                 return Err(syn::Error::new(
                     name.span(),
-                    "array elements must be scalars in this phase",
+                    "array elements must be quantities in this phase",
                 ));
             }
             "Bool" => return Ok(KindIr::Bool),
@@ -464,7 +464,7 @@ fn lower_type(
                 index: index.clone(),
             })
         }
-        None => Ok(KindIr::Scalar(element)),
+        None => Ok(KindIr::Quantity(element)),
     }
 }
 

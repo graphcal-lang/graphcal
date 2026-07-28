@@ -482,7 +482,7 @@ fn runtime_eval_order_resolved(
 /// Resolve domain constraints from type annotations on consts, params, and nodes.
 ///
 /// Evaluates each constraint bound expression using const values and builtins
-/// to obtain SI min/max scalars, validates that the target type accepts
+/// to obtain SI min/max quantities, validates that the target type accepts
 /// constraints, and checks min <= max. Bound dimensions are validated earlier
 /// in `dim_check::check_dimensions_tir`.
 ///
@@ -548,7 +548,7 @@ pub fn resolve_domain_constraints(
             &visible_const_values,
             &ctx,
             src,
-            |kind| format!("domain constraint `{kind}` must evaluate to a scalar value"),
+            |kind| format!("domain constraint `{kind}` must evaluate to a quantity value"),
         )?;
 
         // For const declarations, validate the (already-known) value at compile time.
@@ -581,7 +581,7 @@ fn resolve_constraint_from_bounds(
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
     src: &NamedSource<Arc<String>>,
-    scalar_err_msg: impl Fn(graphcal_compiler::syntax::ast::DomainBoundKind) -> String,
+    quantity_err_msg: impl Fn(graphcal_compiler::syntax::ast::DomainBoundKind) -> String,
 ) -> Result<ResolvedDomainConstraint, GraphcalError> {
     let empty_locals = HirLocalValueMap::root();
     let mut min_val: Option<f64> = None;
@@ -593,11 +593,11 @@ fn resolve_constraint_from_bounds(
     for bound in bounds {
         let rv = eval_hir_expr(&bound.value, values, &empty_locals, ctx)?;
         let si_value = match &rv {
-            RuntimeValue::Scalar(v) => *v,
+            RuntimeValue::Quantity(v) => *v,
             RuntimeValue::Int(i) => exact_domain_int_bound(*i, src, bound.value.span)?,
             _ => {
                 return Err(GraphcalError::EvalError {
-                    message: scalar_err_msg(bound.kind),
+                    message: quantity_err_msg(bound.kind),
                     src: src.clone(),
                     span: bound.value.span.into(),
                 });
@@ -644,7 +644,7 @@ fn resolve_constraint_from_bounds(
 ///
 /// Field bounds are stored as HIR in each DAG's semantic type defs
 /// (`ResolvedTypeDefs.field_bounds`); this evaluates each constrained field's
-/// `min`/`max` bounds to SI scalars, validates `min ≤ max`, and stores the
+/// `min`/`max` bounds to SI quantities, validates `min ≤ max`, and stores the
 /// result keyed by the owning struct type, constructor, and field name —
 /// under both the owner-qualified identity and the root-owned display leaf so
 /// runtime lookups for boundary-created synthetic owners still hit.
@@ -700,7 +700,7 @@ pub fn resolve_struct_field_constraints(
                 src,
                 |kind| {
                     format!(
-                        "domain constraint `{kind}` on field `{display_name}` must evaluate to a scalar value"
+                        "domain constraint `{kind}` on field `{display_name}` must evaluate to a quantity value"
                     )
                 },
             )?;
@@ -866,7 +866,7 @@ fn check_const_struct_field_constraints(
 /// Format a runtime value for inclusion in a `DomainViolation` error message.
 fn format_runtime_value(rv: &RuntimeValue) -> String {
     match rv {
-        RuntimeValue::Scalar(v) => graphcal_compiler::registry::format::format_number(*v),
+        RuntimeValue::Quantity(v) => graphcal_compiler::registry::format::format_number(*v),
         RuntimeValue::Int(i) => format!("{i}"),
         RuntimeValue::Indexed { entries, .. } => {
             // Show the first violating entry's value if recoverable; otherwise summary.
@@ -903,7 +903,7 @@ fn validate_constraint_target(
         return Ok(()); // No resolved type — skip validation (will be caught elsewhere)
     };
     match resolved {
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Scalar(_)
+        graphcal_compiler::tir::typed::ResolvedTypeExpr::Quantity(_)
         | graphcal_compiler::tir::typed::ResolvedTypeExpr::Dimensionless
         | graphcal_compiler::tir::typed::ResolvedTypeExpr::Int => Ok(()),
         graphcal_compiler::tir::typed::ResolvedTypeExpr::Bool => {
@@ -962,7 +962,7 @@ fn exact_domain_int_bound(
     if value.unsigned_abs() > MAX_EXACT_F64_INT {
         return Err(GraphcalError::EvalError {
             message: format!(
-                "domain bound integer {value} is too large for exact scalar comparison"
+                "domain bound integer {value} is too large for exact quantity comparison"
             ),
             src: src.clone(),
             span: span.into(),
@@ -1042,10 +1042,10 @@ mod tests {
         (tir, src)
     }
 
-    fn scalar(rv: &RuntimeValue) -> f64 {
+    fn quantity(rv: &RuntimeValue) -> f64 {
         match rv {
-            RuntimeValue::Scalar(v) => *v,
-            other => panic!("expected scalar, got {other:?}"),
+            RuntimeValue::Quantity(v) => *v,
+            other => panic!("expected quantity, got {other:?}"),
         }
     }
 
@@ -1066,7 +1066,7 @@ mod tests {
     #[test]
     fn compile_simple_const() {
         let plan = compile_source("const node g0: Dimensionless = 9.80665;").unwrap();
-        assert!((scalar(&plan.const_values[&resolved_key("g0")]) - 9.80665).abs() < f64::EPSILON);
+        assert!((quantity(&plan.const_values[&resolved_key("g0")]) - 9.80665).abs() < f64::EPSILON);
         assert!(plan.topo_order.is_empty());
     }
 
@@ -1076,7 +1076,7 @@ mod tests {
             "const node g0: Dimensionless = 9.80665;\nconst node two_g0: Dimensionless = 2.0 * @g0;",
         )
         .unwrap();
-        assert!((scalar(&plan.const_values[&resolved_key("two_g0")]) - 19.6133).abs() < 1e-10);
+        assert!((quantity(&plan.const_values[&resolved_key("two_g0")]) - 19.6133).abs() < 1e-10);
     }
 
     #[test]
@@ -1139,7 +1139,7 @@ mod tests {
 
         let plan = compile(&tir, &src).unwrap();
         assert!(
-            (scalar(
+            (quantity(
                 &plan.const_values[&RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
                     tir.root_dag_id.clone(),
                     DeclName::expect_valid("b")

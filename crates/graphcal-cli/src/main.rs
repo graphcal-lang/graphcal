@@ -168,7 +168,7 @@ enum PluginCommands {
         /// Call one provided function after validation
         #[arg(long, value_name = "FUNCTION")]
         call: Option<String>,
-        /// Arguments for --call: numbers in SI base units for scalar
+        /// Arguments for --call: numbers in SI base units for quantity
         /// parameters, `true`/`false` for Bool, integers for Int
         #[arg(requires = "call", allow_negative_numbers = true, value_name = "ARG")]
         args: Vec<String>,
@@ -752,14 +752,14 @@ fn print_text(result: &EvalResult) {
                             eprintln!("{name:width$} = ERROR: {err}");
                         }
                         display::FlatEntry::Value(name, value) => {
-                            if let Value::Scalar {
+                            if let Value::Quantity {
                                 si_value,
                                 display_unit,
                                 ..
                             } = value
                             {
                                 let formatted =
-                                    format_number(graphcal_eval::eval::scalar_display_value(
+                                    format_number(graphcal_eval::eval::quantity_display_value(
                                         *si_value,
                                         display_unit.as_ref(),
                                     ));
@@ -863,7 +863,7 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
         symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     ) -> serde_json::Value {
         match v {
-            Value::Scalar {
+            Value::Quantity {
                 si_value,
                 display_unit,
                 ..
@@ -871,7 +871,7 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
                 let mut map = serde_json::Map::new();
                 map.insert("si_value".to_string(), serde_json::json!(si_value));
                 if let Some(du) = display_unit {
-                    let dv = graphcal_eval::eval::scalar_display_value(*si_value, Some(du));
+                    let dv = graphcal_eval::eval::quantity_display_value(*si_value, Some(du));
                     map.insert("display_value".to_string(), serde_json::json!(dv));
                     map.insert("unit".to_string(), serde_json::json!(du.label));
                 } else if let Some(si_unit) = v.display_label(symbols) {

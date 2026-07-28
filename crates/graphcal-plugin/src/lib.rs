@@ -1,6 +1,6 @@
 //! The graphcal plugin authoring SDK (Phase C of the plugin plan, issue #25).
 //!
-//! A graphcal plugin is a WebAssembly module that exports pure scalar
+//! A graphcal plugin is a WebAssembly module that exports pure quantity
 //! kernels and embeds a manifest describing their dimensional signatures
 //! (see the `graphcal-plugin-abi` crate for the protocol). Writing that
 //! module by hand means keeping three things in sync: the manifest JSON,
@@ -36,7 +36,7 @@
 //! - one `extern "C-unwind"` wrapper per function that converts between
 //!   the raw ABI (`f64`s in SI base units) and the declared value kinds —
 //!   `Bool` parameters arrive in the body as `bool`, `Int` parameters as
-//!   `i64`, and scalar parameters as `f64` SI values;
+//!   `i64`, and quantity parameters as `f64` SI values;
 //! - for functions with array parameters or results (`xs: D[I]`), the
 //!   buffer-protocol plumbing: the body sees `&[f64]` slices and returns a
 //!   `Vec<f64>`, while the generated wasm wrapper and the
@@ -48,7 +48,7 @@
 //!
 //! # Values are SI
 //!
-//! Scalar values cross the plugin boundary as bare `f64`s **in SI base
+//! Quantity values cross the plugin boundary as bare `f64`s **in SI base
 //! units** — a `Pressure` parameter is pascals, a `Velocity` result is
 //! metres per second. The declared dimensions are checked by the graphcal
 //! compiler at every call site; reading a pascal as a bar inside the body
@@ -99,7 +99,7 @@
 /// Each function is `fn name<Vars>(params) -> Result { body }`, with
 /// binders written `name: constraint` (`D: Dim` for dimension variables,
 /// `I: Index` for index variables). Parameter and result types are `Bool`,
-/// `Int`, dimension expressions, or arrays of scalars over one declared
+/// `Int`, dimension expressions, or arrays of quantities over one declared
 /// index variable (`xs: D[I]`, `-> Dimensionless[I]`). Dimension
 /// expressions range over:
 ///
@@ -123,7 +123,7 @@
 /// # In the body
 ///
 /// Parameters are in scope with their declared names: `f64` (SI) for
-/// scalar types, `bool` for `Bool`, `i64` for `Int`, and `&[f64]` (SI,
+/// quantity types, `bool` for `Bool`, `i64` for `Int`, and `&[f64]` (SI,
 /// dense, in index order) for arrays. The body is an ordinary Rust block
 /// evaluating to `f64`, `bool`, `i64`, or `Vec<f64>` to match the declared
 /// result; an array result must have exactly the length of the input array

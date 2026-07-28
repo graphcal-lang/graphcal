@@ -718,7 +718,7 @@ fn build_extern_fn_signatures(
         let format_kind = |kind: &ExternValueKind| match kind {
             ExternValueKind::Bool => "Bool".to_string(),
             ExternValueKind::Int => "Int".to_string(),
-            ExternValueKind::Scalar(monomial) => format_monomial(monomial),
+            ExternValueKind::Quantity(monomial) => format_monomial(monomial),
             ExternValueKind::Indexed { element, index } => {
                 format!("{}[{index}]", format_monomial(element))
             }
@@ -843,7 +843,7 @@ fn value_kind_display(kind: &ValueKind) -> std::result::Result<String, String> {
     match kind {
         ValueKind::Bool => Ok("Bool".to_string()),
         ValueKind::Int => Ok("Int".to_string()),
-        ValueKind::Scalar(monomial) => monomial_display(monomial),
+        ValueKind::Quantity(monomial) => monomial_display(monomial),
         ValueKind::Indexed { element, index } => {
             Ok(format!("{}[{index}]", monomial_display(element)?))
         }
@@ -894,7 +894,7 @@ const INLAY_HINT_MAX_LEN: usize = 80;
 
 /// Format a single `Value` as a compact inline string for inlay hints.
 ///
-/// - Scalar: `"9.81 [m/s^2]"` or `"3.14159"` (dimensionless)
+/// - Quantity: `"9.81 [m/s^2]"` or `"3.14159"` (dimensionless)
 /// - Bool: `"true"` / `"false"`
 /// - Int: `"42"`
 /// - Constructor value: `"LowThrust(thrust: 0.5 [N], duration: 3600 [s])"`
@@ -916,7 +916,7 @@ fn format_value_inline_with_budget(
 ) -> String {
     match value {
         // Leaf types: delegate to the shared `format_display` on `Value`.
-        Value::Scalar { .. }
+        Value::Quantity { .. }
         | Value::Bool(_)
         | Value::Int(_)
         | Value::Label { .. }
@@ -1681,8 +1681,8 @@ mod tests {
         BTreeMap::new()
     }
 
-    fn scalar(si_value: f64) -> Value {
-        Value::Scalar {
+    fn quantity(si_value: f64) -> Value {
+        Value::Quantity {
             si_value,
             dimension: Dimension::dimensionless(),
             display_unit: None,
@@ -1702,10 +1702,10 @@ mod tests {
     }
 
     #[test]
-    fn format_scalar_dimensionless() {
+    fn format_quantity_dimensionless() {
         let symbols = empty_symbols();
-        assert_eq!(format_value_inline(&scalar(2.72), &symbols), "2.72");
-        assert_eq!(format_value_inline(&scalar(42.0), &symbols), "42");
+        assert_eq!(format_value_inline(&quantity(2.72), &symbols), "2.72");
+        assert_eq!(format_value_inline(&quantity(42.0), &symbols), "42");
     }
 
     #[test]
@@ -1725,8 +1725,8 @@ mod tests {
     fn format_struct_with_fields() {
         let symbols = empty_symbols();
         let mut fields = IndexMap::new();
-        fields.insert(FieldName::expect_valid("dv1"), scalar(100.0));
-        fields.insert(FieldName::expect_valid("dv2"), scalar(200.0));
+        fields.insert(FieldName::expect_valid("dv1"), quantity(100.0));
+        fields.insert(FieldName::expect_valid("dv2"), quantity(200.0));
         let val = test_struct(StructTypeName::expect_valid("TransferResult"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
@@ -1745,8 +1745,8 @@ mod tests {
     fn format_struct_multi_variant() {
         let symbols = empty_symbols();
         let mut fields = IndexMap::new();
-        fields.insert(FieldName::expect_valid("thrust"), scalar(0.5));
-        fields.insert(FieldName::expect_valid("duration"), scalar(3600.0));
+        fields.insert(FieldName::expect_valid("thrust"), quantity(0.5));
+        fields.insert(FieldName::expect_valid("duration"), quantity(3600.0));
         let val = test_struct(StructTypeName::expect_valid("LowThrust"), fields);
         assert_eq!(
             format_value_inline(&val, &symbols),
@@ -1804,9 +1804,9 @@ mod tests {
     fn format_indexed() {
         let symbols = empty_symbols();
         let mut entries = IndexMap::new();
-        entries.insert(IndexVariantName::expect_valid("A"), scalar(1.0));
-        entries.insert(IndexVariantName::expect_valid("B"), scalar(2.0));
-        entries.insert(IndexVariantName::expect_valid("C"), scalar(3.0));
+        entries.insert(IndexVariantName::expect_valid("A"), quantity(1.0));
+        entries.insert(IndexVariantName::expect_valid("B"), quantity(2.0));
+        entries.insert(IndexVariantName::expect_valid("C"), quantity(3.0));
         let val = test_indexed(IndexName::expect_valid("Phase"), entries);
         assert_eq!(format_value_inline(&val, &symbols), "{ A: 1, B: 2, C: 3 }");
     }
@@ -1825,19 +1825,19 @@ mod tests {
         // Create entries with long names to trigger truncation at 80 chars
         entries.insert(
             IndexVariantName::expect_valid("LongVariantAlpha"),
-            scalar(1.23456),
+            quantity(1.23456),
         );
         entries.insert(
             IndexVariantName::expect_valid("LongVariantBeta"),
-            scalar(2.34567),
+            quantity(2.34567),
         );
         entries.insert(
             IndexVariantName::expect_valid("LongVariantGamma"),
-            scalar(3.45678),
+            quantity(3.45678),
         );
         entries.insert(
             IndexVariantName::expect_valid("LongVariantDelta"),
-            scalar(4.56789),
+            quantity(4.56789),
         );
         let val = test_indexed(IndexName::expect_valid("Idx"), entries);
         let result = format_value_inline(&val, &symbols);
@@ -1852,7 +1852,7 @@ mod tests {
     fn format_struct_inside_indexed() {
         let symbols = empty_symbols();
         let mut fields = IndexMap::new();
-        fields.insert(FieldName::expect_valid("x"), scalar(1.0));
+        fields.insert(FieldName::expect_valid("x"), quantity(1.0));
         let struct_val = test_struct(StructTypeName::expect_valid("Point"), fields);
         let mut entries = IndexMap::new();
         entries.insert(IndexVariantName::expect_valid("A"), struct_val);
@@ -1864,11 +1864,11 @@ mod tests {
     fn format_nested_indexed_tuple_keyed() {
         let symbols = empty_symbols();
         let mut inner_a = IndexMap::new();
-        inner_a.insert(IndexVariantName::expect_valid("X"), scalar(1.0));
-        inner_a.insert(IndexVariantName::expect_valid("Y"), scalar(2.0));
+        inner_a.insert(IndexVariantName::expect_valid("X"), quantity(1.0));
+        inner_a.insert(IndexVariantName::expect_valid("Y"), quantity(2.0));
         let mut inner_b = IndexMap::new();
-        inner_b.insert(IndexVariantName::expect_valid("X"), scalar(3.0));
-        inner_b.insert(IndexVariantName::expect_valid("Y"), scalar(4.0));
+        inner_b.insert(IndexVariantName::expect_valid("X"), quantity(3.0));
+        inner_b.insert(IndexVariantName::expect_valid("Y"), quantity(4.0));
         let mut entries = IndexMap::new();
         entries.insert(
             IndexVariantName::expect_valid("A"),
@@ -1888,9 +1888,9 @@ mod tests {
     #[test]
     fn format_triple_nested_indexed() {
         let symbols = empty_symbols();
-        // 3-level nesting: Scenario[Phase[Maneuver[scalar]]]
+        // 3-level nesting: Scenario[Phase[Maneuver[quantity]]]
         let mut inner_most = IndexMap::new();
-        inner_most.insert(IndexVariantName::expect_valid("Dep"), scalar(100.0));
+        inner_most.insert(IndexVariantName::expect_valid("Dep"), quantity(100.0));
         let mut mid = IndexMap::new();
         mid.insert(
             IndexVariantName::expect_valid("Launch"),
@@ -1914,28 +1914,28 @@ mod tests {
         let mut inner_a = IndexMap::new();
         inner_a.insert(
             IndexVariantName::expect_valid("LongNameAlpha"),
-            scalar(1.23456),
+            quantity(1.23456),
         );
         inner_a.insert(
             IndexVariantName::expect_valid("LongNameBeta"),
-            scalar(2.34567),
+            quantity(2.34567),
         );
         inner_a.insert(
             IndexVariantName::expect_valid("LongNameGamma"),
-            scalar(3.45678),
+            quantity(3.45678),
         );
         let mut inner_b = IndexMap::new();
         inner_b.insert(
             IndexVariantName::expect_valid("LongNameAlpha"),
-            scalar(4.56789),
+            quantity(4.56789),
         );
         inner_b.insert(
             IndexVariantName::expect_valid("LongNameBeta"),
-            scalar(5.6789),
+            quantity(5.6789),
         );
         inner_b.insert(
             IndexVariantName::expect_valid("LongNameGamma"),
-            scalar(6.7891),
+            quantity(6.7891),
         );
         let mut entries = IndexMap::new();
         entries.insert(

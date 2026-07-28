@@ -12,7 +12,7 @@ fn angle() -> Dimension {
     Dimension::base(BaseDimId::Prelude("Angle".to_string()))
 }
 
-/// A built-in scalar function: an evaluation kernel paired with its
+/// A built-in quantity function: an evaluation kernel paired with its
 /// [`FunctionSignature`].
 pub struct BuiltinFunction {
     pub eval: fn(&[f64]) -> f64,
@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn builtin_function_tables_agree() {
-        // Every ordinary scalar eval function must be a typed BuiltinFnName.
+        // Every ordinary quantity eval function must be a typed BuiltinFnName.
         // Non-registry built-in call shapes are accounted for by the HIR type
         // inference routing test in `tir::dim_check::infer::builtin_call`.
         use crate::builtin::BuiltinFnName;

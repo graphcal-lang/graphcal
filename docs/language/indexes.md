@@ -83,7 +83,7 @@ node v: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
 
 ## Aggregation Functions
 
-Reduce an indexed comprehension to a single scalar:
+Reduce an indexed quantity to a single quantity:
 
 | Function | Description | Result Type |
 |----------|-------------|-------------|

@@ -16,8 +16,8 @@ use graphcal_plugin_host::{
     ConvertErrorKind, PluginCallError, PluginHost, PluginLimits, PluginLoadError,
 };
 
-fn scalar_var(var: &str) -> ManifestValueKind {
-    ManifestValueKind::Scalar(ManifestMonomial {
+fn quantity_var(var: &str) -> ManifestValueKind {
+    ManifestValueKind::Quantity(ManifestMonomial {
         vars: vec![ManifestVarPower {
             var: var.to_string(),
             pow: ManifestRational { num: 1, den: 1 },
@@ -27,7 +27,7 @@ fn scalar_var(var: &str) -> ManifestValueKind {
 }
 
 fn dimensionless() -> ManifestValueKind {
-    ManifestValueKind::Scalar(ManifestMonomial::default())
+    ManifestValueKind::Quantity(ManifestMonomial::default())
 }
 
 const fn manifest(functions: Vec<ManifestFunction>) -> PluginManifest {
@@ -68,16 +68,16 @@ fn fn_name(name: &str) -> FnName {
     FnName::expect_valid(name)
 }
 
-/// Wrap raw floats as scalar host values for a call.
-fn scalars(values: &[f64]) -> Vec<HostFnValue> {
-    values.iter().map(|v| HostFnValue::Scalar(*v)).collect()
+/// Wrap raw floats as single-slot host values for a call.
+fn f64_values(values: &[f64]) -> Vec<HostFnValue> {
+    values.iter().map(|v| HostFnValue::F64(*v)).collect()
 }
 
-/// Unwrap a scalar result (panics on a buffer — a test bug).
-fn scalar(value: &HostFnValue) -> f64 {
+/// Unwrap an f64 result (panics on a buffer — a test bug).
+fn f64_value(value: &HostFnValue) -> f64 {
     match value {
-        HostFnValue::Scalar(raw) => *raw,
-        HostFnValue::Buffer(_) => panic!("expected a scalar result, got a buffer"),
+        HostFnValue::F64(raw) => *raw,
+        HostFnValue::Buffer(_) => panic!("expected an f64 result, got a buffer"),
     }
 }
 
@@ -95,27 +95,27 @@ fn lerp_manifest() -> PluginManifest {
         "lerp",
         &["D"],
         &[
-            ("a", scalar_var("D")),
-            ("b", scalar_var("D")),
+            ("a", quantity_var("D")),
+            ("b", quantity_var("D")),
             ("t", dimensionless()),
         ],
-        scalar_var("D"),
+        quantity_var("D"),
     )])
 }
 
 #[test]
-fn calls_a_scalar_kernel() {
+fn calls_a_quantity_kernel() {
     let host = PluginHost::new();
     let module = host.load(&plugin(LERP_WAT, &lerp_manifest())).unwrap();
     let result = module
-        .call(&fn_name("lerp"), &scalars(&[0.0, 10.0, 0.25]))
+        .call(&fn_name("lerp"), &f64_values(&[0.0, 10.0, 0.25]))
         .unwrap();
-    assert!((scalar(&result) - 2.5).abs() < f64::EPSILON);
+    assert!((f64_value(&result) - 2.5).abs() < f64::EPSILON);
     // Second call reuses the pooled instance.
     let result = module
-        .call(&fn_name("lerp"), &scalars(&[1.0, 3.0, 0.5]))
+        .call(&fn_name("lerp"), &f64_values(&[1.0, 3.0, 0.5]))
         .unwrap();
-    assert!((scalar(&result) - 2.0).abs() < f64::EPSILON);
+    assert!((f64_value(&result) - 2.0).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -155,8 +155,8 @@ fn fail_import_reports_the_plugin_message_and_recovers() {
     let manifest = manifest(vec![function(
         "inverse",
         &["D"],
-        &[("x", scalar_var("D"))],
-        ManifestValueKind::Scalar(ManifestMonomial {
+        &[("x", quantity_var("D"))],
+        ManifestValueKind::Quantity(ManifestMonomial {
             vars: vec![ManifestVarPower {
                 var: "D".to_string(),
                 pow: ManifestRational { num: -1, den: 1 },
@@ -168,7 +168,7 @@ fn fail_import_reports_the_plugin_message_and_recovers() {
     let module = host.load(&plugin(wat, &manifest)).unwrap();
 
     let err = module
-        .call(&fn_name("inverse"), &scalars(&[0.0]))
+        .call(&fn_name("inverse"), &f64_values(&[0.0]))
         .unwrap_err();
     assert_eq!(
         err,
@@ -178,8 +178,10 @@ fn fail_import_reports_the_plugin_message_and_recovers() {
     );
 
     // The damaged instance is discarded; the next call gets a fresh one.
-    let ok = module.call(&fn_name("inverse"), &scalars(&[4.0])).unwrap();
-    assert!((scalar(&ok) - 0.25).abs() < f64::EPSILON);
+    let ok = module
+        .call(&fn_name("inverse"), &f64_values(&[4.0]))
+        .unwrap();
+    assert!((f64_value(&ok) - 0.25).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -202,7 +204,9 @@ fn runaway_plugins_run_out_of_fuel() {
     });
     let module = host.load(&plugin(wat, &manifest)).unwrap();
     assert_eq!(
-        module.call(&fn_name("spin"), &scalars(&[0.0])).unwrap_err(),
+        module
+            .call(&fn_name("spin"), &f64_values(&[0.0]))
+            .unwrap_err(),
         PluginCallError::OutOfFuel { fuel: 10_000 }
     );
 }
@@ -227,7 +231,9 @@ fn runaway_start_functions_run_out_of_fuel_at_instantiation() {
     });
     let module = host.load(&plugin(wat, &manifest)).unwrap();
     assert_eq!(
-        module.call(&fn_name("id"), &scalars(&[1.0])).unwrap_err(),
+        module
+            .call(&fn_name("id"), &f64_values(&[1.0]))
+            .unwrap_err(),
         PluginCallError::OutOfFuel { fuel: 10_000 }
     );
 }
@@ -260,9 +266,9 @@ fn memory_growth_is_capped() {
         ..PluginLimits::default()
     });
     let module = host.load(&plugin(wat, &manifest)).unwrap();
-    let grown = module.call(&fn_name("grow"), &scalars(&[0.0])).unwrap();
+    let grown = module.call(&fn_name("grow"), &f64_values(&[0.0])).unwrap();
     // Started at 1 page; the limiter must stop growth at 64 pages total.
-    let grown = scalar(&grown);
+    let grown = f64_value(&grown);
     assert!((grown - 63.0).abs() < f64::EPSILON, "grew {grown} pages");
 }
 
@@ -281,7 +287,9 @@ fn traps_are_reported_per_call() {
     let host = PluginHost::new();
     let module = host.load(&plugin(wat, &manifest)).unwrap();
     assert!(matches!(
-        module.call(&fn_name("boom"), &scalars(&[0.0])).unwrap_err(),
+        module
+            .call(&fn_name("boom"), &f64_values(&[0.0]))
+            .unwrap_err(),
         PluginCallError::Trap { .. }
     ));
 }
@@ -303,7 +311,7 @@ fn non_finite_results_are_not_a_host_error() {
     )]);
     let host = PluginHost::new();
     let module = host.load(&plugin(wat, &manifest)).unwrap();
-    assert!(scalar(&module.call(&fn_name("inf"), &scalars(&[0.0])).unwrap()).is_infinite());
+    assert!(f64_value(&module.call(&fn_name("inf"), &f64_values(&[0.0])).unwrap()).is_infinite());
 }
 
 #[test]
@@ -383,12 +391,12 @@ fn missing_manifest_section_is_rejected_at_load() {
 #[test]
 fn future_abi_versions_are_rejected_with_a_version_error() {
     let wasm = wat::parse_str(LERP_WAT).unwrap();
-    let wasm = embed_manifest(&wasm, br#"{"abi_version":3,"shape":"unknown"}"#).unwrap();
+    let wasm = embed_manifest(&wasm, br#"{"abi_version":4,"shape":"unknown"}"#).unwrap();
     assert_eq!(
         PluginHost::new().load(&wasm).unwrap_err(),
         PluginLoadError::Manifest(ManifestFromWasmError::Decode(
             ManifestDecodeError::UnsupportedAbiVersion {
-                found: 3,
+                found: 4,
                 supported: graphcal_plugin_abi::ABI_VERSION,
             }
         ))
@@ -396,16 +404,16 @@ fn future_abi_versions_are_rejected_with_a_version_error() {
 }
 
 #[test]
-fn v1_manifests_are_rejected_with_a_version_error() {
-    // ABI v1 predates the first release; v2 (arrays) is a clean break, so
-    // v1-built modules report a version error asking for a rebuild.
+fn v2_manifests_are_rejected_with_a_version_error() {
+    // ABI v3 renamed the quantity manifest tag, so v2-built modules report a
+    // version error asking for a rebuild instead of a misleading shape error.
     let wasm = wat::parse_str(LERP_WAT).unwrap();
-    let wasm = embed_manifest(&wasm, br#"{"abi_version":1,"functions":[]}"#).unwrap();
+    let wasm = embed_manifest(&wasm, br#"{"abi_version":2,"functions":[]}"#).unwrap();
     assert_eq!(
         PluginHost::new().load(&wasm).unwrap_err(),
         PluginLoadError::Manifest(ManifestFromWasmError::Decode(
             ManifestDecodeError::UnsupportedAbiVersion {
-                found: 1,
+                found: 2,
                 supported: graphcal_plugin_abi::ABI_VERSION,
             }
         ))
@@ -474,7 +482,7 @@ fn manifest_signatures_using_non_base_dimensions_are_rejected() {
         &[],
         &[(
             "x",
-            ManifestValueKind::Scalar(ManifestMonomial {
+            ManifestValueKind::Quantity(ManifestMonomial {
                 vars: Vec::new(),
                 fixed: vec![graphcal_plugin_abi::ManifestDimPower {
                     dim: "Velocity".to_string(),
@@ -597,7 +605,7 @@ fn array_manifest() -> PluginManifest {
             &[("xs", array_kind("D", "I")), ("k", dimensionless())],
             array_kind("D", "I"),
         ),
-        array_function("total", &[("xs", array_kind("D", "I"))], scalar_var("D")),
+        array_function("total", &[("xs", array_kind("D", "I"))], quantity_var("D")),
     ])
 }
 
@@ -610,7 +618,7 @@ fn calls_an_array_kernel_with_an_array_result() {
             &fn_name("scale"),
             &[
                 HostFnValue::Buffer(vec![1.0, 2.5, -4.0]),
-                HostFnValue::Scalar(2.0),
+                HostFnValue::F64(2.0),
             ],
         )
         .unwrap();
@@ -621,14 +629,14 @@ fn calls_an_array_kernel_with_an_array_result() {
     let result = module
         .call(
             &fn_name("scale"),
-            &[HostFnValue::Buffer(vec![10.0]), HostFnValue::Scalar(0.5)],
+            &[HostFnValue::Buffer(vec![10.0]), HostFnValue::F64(0.5)],
         )
         .unwrap();
     assert_eq!(result, HostFnValue::Buffer(vec![5.0]));
 }
 
 #[test]
-fn calls_an_array_kernel_with_a_scalar_result() {
+fn calls_an_array_kernel_with_a_quantity_result() {
     let host = PluginHost::new();
     let module = host.load(&plugin(ARRAY_WAT, &array_manifest())).unwrap();
     let result = module
@@ -637,7 +645,7 @@ fn calls_an_array_kernel_with_a_scalar_result() {
             &[HostFnValue::Buffer(vec![1.0, 2.0, 3.5])],
         )
         .unwrap();
-    assert!((scalar(&result) - 6.5).abs() < f64::EPSILON);
+    assert!((f64_value(&result) - 6.5).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -651,7 +659,7 @@ fn array_manifests_require_the_allocator_exports() {
     let manifest = manifest(vec![array_function(
         "total",
         &[("xs", array_kind("D", "I"))],
-        scalar_var("D"),
+        quantity_var("D"),
     )]);
     assert!(matches!(
         PluginHost::new().load(&plugin(wat, &manifest)).unwrap_err(),
@@ -670,7 +678,7 @@ fn array_manifests_require_an_exported_memory() {
     let manifest = manifest(vec![array_function(
         "total",
         &[("xs", array_kind("D", "I"))],
-        scalar_var("D"),
+        quantity_var("D"),
     )]);
     assert!(matches!(
         PluginHost::new().load(&plugin(wat, &manifest)).unwrap_err(),
@@ -679,7 +687,7 @@ fn array_manifests_require_an_exported_memory() {
 }
 
 #[test]
-fn array_functions_with_scalar_wasm_types_are_rejected() {
+fn array_functions_with_single_value_wasm_types_are_rejected() {
     // The manifest declares an array parameter, but the export takes f64s.
     let wat = r#"
     (module
@@ -691,7 +699,7 @@ fn array_functions_with_scalar_wasm_types_are_rejected() {
     let manifest = manifest(vec![array_function(
         "total",
         &[("xs", array_kind("D", "I"))],
-        scalar_var("D"),
+        quantity_var("D"),
     )]);
     assert!(matches!(
         PluginHost::new().load(&plugin(wat, &manifest)).unwrap_err(),
@@ -702,7 +710,7 @@ fn array_functions_with_scalar_wasm_types_are_rejected() {
 
 #[test]
 fn manifests_with_duplicate_index_vars_are_rejected() {
-    let mut fun = array_function("total", &[("xs", array_kind("D", "I"))], scalar_var("D"));
+    let mut fun = array_function("total", &[("xs", array_kind("D", "I"))], quantity_var("D"));
     fun.index_vars = vec!["I".to_string(), "I".to_string()];
     let manifest = manifest(vec![fun]);
     let err = PluginHost::new()
@@ -761,16 +769,16 @@ const STRUCT_WAT: &str = r#"
 fn struct_manifest() -> PluginManifest {
     use graphcal_plugin_abi::{ManifestField, ManifestFieldKind};
 
-    let mut function = array_function("span", &[("xs", array_kind("D", "I"))], scalar_var("D"));
+    let mut function = array_function("span", &[("xs", array_kind("D", "I"))], quantity_var("D"));
     function.result = ManifestValueKind::Struct {
         fields: vec![
             ManifestField {
                 name: "min".to_string(),
-                kind: ManifestFieldKind::Scalar(ManifestMonomial::default()),
+                kind: ManifestFieldKind::Quantity(ManifestMonomial::default()),
             },
             ManifestField {
                 name: "max".to_string(),
-                kind: ManifestFieldKind::Scalar(ManifestMonomial::default()),
+                kind: ManifestFieldKind::Quantity(ManifestMonomial::default()),
             },
         ],
     };
@@ -794,11 +802,11 @@ fn calls_a_struct_returning_kernel() {
 fn struct_field_monomials_with_dim_vars_are_rejected() {
     use graphcal_plugin_abi::{ManifestField, ManifestFieldKind};
 
-    let mut function = array_function("span", &[("xs", array_kind("D", "I"))], scalar_var("D"));
+    let mut function = array_function("span", &[("xs", array_kind("D", "I"))], quantity_var("D"));
     function.result = ManifestValueKind::Struct {
         fields: vec![ManifestField {
             name: "min".to_string(),
-            kind: ManifestFieldKind::Scalar(ManifestMonomial {
+            kind: ManifestFieldKind::Quantity(ManifestMonomial {
                 vars: vec![ManifestVarPower {
                     var: "D".to_string(),
                     pow: ManifestRational { num: 1, den: 1 },

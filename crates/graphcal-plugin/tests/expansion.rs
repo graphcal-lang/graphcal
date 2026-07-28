@@ -50,7 +50,7 @@ graphcal_plugin::plugin! {
         xs.iter().map(|x| x * k).collect()
     }
 
-    /// Arrays can collapse to scalars.
+    /// Arrays can collapse to quantities.
     fn total<D: Dim, I: Index>(xs: D[I]) -> D {
         xs.iter().sum()
     }
@@ -171,18 +171,18 @@ fn manifest_converts_to_the_compiler_signature_ir() {
         vec![
             FunctionParam {
                 name: FnParamName::expect_valid("a"),
-                kind: ValueKind::Scalar(DimMonomial::var(var())),
+                kind: ValueKind::Quantity(DimMonomial::var(var())),
             },
             FunctionParam {
                 name: FnParamName::expect_valid("b"),
-                kind: ValueKind::Scalar(DimMonomial::var(var())),
+                kind: ValueKind::Quantity(DimMonomial::var(var())),
             },
             FunctionParam {
                 name: FnParamName::expect_valid("t"),
                 kind: ValueKind::dimensionless(),
             },
         ],
-        ValueKind::Scalar(DimMonomial::var(var())),
+        ValueKind::Quantity(DimMonomial::var(var())),
     )
     .expect("expected signature is valid");
 

@@ -77,8 +77,8 @@ The set of bare-callable functions is closed: user code cannot add to it. Extern
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `to_float(x)` | `Int -> Dimensionless` | Convert integer to float |
-| `to_int(x)` | `Dimensionless -> Int` | Convert a finite float to integer (truncates toward zero; rejects values outside `i64` range) |
+| `to_float(x)` | `Int -> Dimensionless` | Convert an integer to a binary64 `Dimensionless` quantity |
+| `to_int(x)` | `Dimensionless -> Int` | Convert a finite `Dimensionless` quantity to an integer (truncates toward zero; rejects values outside `i64` range) |
 
 ### Datetime Functions
 

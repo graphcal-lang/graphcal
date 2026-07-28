@@ -1,4 +1,4 @@
-// domain_scalar.gcl -- scalar params with domain constraints
+// domain_quantity.gcl -- quantity params with domain constraints
 // Two-sided constraint
 param bus_mass: Mass(min: 100.0 kg, max: 2000.0 kg) = 500.0 kg;
 
