@@ -30,6 +30,62 @@ use crate::syntax::type_name::{
 // Resolved type types
 // ---------------------------------------------------------------------------
 
+/// A resolved argument of sort `Dim`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedDimArg {
+    Dimensionless,
+    Concrete(Dimension),
+    GenericParam(GenericParamName, Span),
+    Expr {
+        terms: Vec<ResolvedDimTerm>,
+        span: Span,
+    },
+}
+
+impl ResolvedDimArg {
+    #[must_use]
+    pub(crate) fn format(&self, registry: &Registry) -> String {
+        match self {
+            Self::Dimensionless => "Dimensionless".to_string(),
+            Self::Concrete(dim) => {
+                let formatted = registry.dimensions.format_dimension(dim);
+                if formatted.is_empty() {
+                    "Dimensionless".to_string()
+                } else {
+                    formatted
+                }
+            }
+            Self::GenericParam(name, _) => name.to_string(),
+            Self::Expr { terms, .. } => terms
+                .iter()
+                .map(|term| term.format(registry))
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
+}
+
+/// A generic argument resolved according to its declared sort.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedGenericArg {
+    Dim(ResolvedDimArg),
+    Index(ResolvedIndex),
+    Nat(NatPolyForm, Span),
+    Type(ResolvedTypeExpr),
+}
+
+impl ResolvedGenericArg {
+    #[must_use]
+    pub(crate) fn format(&self, registry: &Registry) -> String {
+        match self {
+            Self::Dim(dim) => dim.format(registry),
+            Self::Index(index) => format_resolved_index(index),
+            Self::Nat(form, _) => form.format(),
+            Self::Type(type_expr) => type_expr.format(registry),
+        }
+    }
+}
+
 /// A fully-resolved type expression.
 ///
 /// Unlike the raw AST `TypeExpr`, every name here has been classified as a
@@ -53,10 +109,11 @@ pub enum ResolvedTypeExpr {
     Quantity(Dimension),
     /// A non-generic struct type name, e.g. `TransferResult`.
     Struct(ResolvedStructTypeName, Span),
-    /// A generic struct with concrete type arguments, e.g. `Vec3<Length, ECI>`.
+    /// A generic struct with sort-aware arguments, e.g. `Vec3<Length, ECI>`
+    /// or `FixedVec<3>`.
     GenericStruct {
         name: ResolvedStructTypeName,
-        type_args: Vec<Self>,
+        generic_args: Vec<ResolvedGenericArg>,
         span: Span,
     },
     /// A single generic dimension parameter, e.g. `D`
@@ -101,9 +158,12 @@ impl ResolvedTypeExpr {
             }
             Self::Struct(name, _) => name.as_str().to_string(),
             Self::GenericStruct {
-                name, type_args, ..
+                name, generic_args, ..
             } => {
-                let args: Vec<String> = type_args.iter().map(|a| a.format(registry)).collect();
+                let args: Vec<String> = generic_args
+                    .iter()
+                    .map(|arg| arg.format(registry))
+                    .collect();
                 format!("{}<{}>", name.as_str(), args.join(", "))
             }
             Self::GenericDimParam(name, _) | Self::GenericTypeParam(name, _) => name.to_string(),
@@ -623,7 +683,7 @@ pub struct ResolvedTypeDefs {
     pub field_bounds: HashMap<ResolvedStructFieldTypeKey, Vec<ResolvedDomainBound>>,
     /// Generic parameter defaults resolved in the owning type's generic scope.
     pub(crate) generic_defaults:
-        HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedTypeExpr>,
+        HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedGenericArg>,
 }
 
 /// A `min:`/`max:` domain bound with its expression lowered to HIR.

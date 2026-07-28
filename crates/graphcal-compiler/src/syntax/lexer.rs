@@ -33,6 +33,7 @@ const LEXER_MAX_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 /// character is skipped. The parser surfaces this as a `ParseError::UnknownToken`
 /// when a top-level `parse_*` entry point finishes, regardless of whether the
 /// downstream parse happened to succeed.
+#[derive(Clone)]
 pub struct Lexer<'src> {
     inner: logos::Lexer<'src, LexicalToken>,
     peek_cache: PeekCache<(Token, Span)>,
@@ -237,6 +238,7 @@ mod peek_cache {
     use std::collections::VecDeque;
     use std::num::NonZeroUsize;
 
+    #[derive(Clone)]
     pub(super) struct PeekCache<T> {
         items: VecDeque<T>,
         eof_seen: bool,

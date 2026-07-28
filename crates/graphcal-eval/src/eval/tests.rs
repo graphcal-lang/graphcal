@@ -2065,6 +2065,193 @@ fn project_struct_field_constraints_preserve_same_leaf_struct_owner() {
 }
 
 #[test]
+fn nat_generic_arguments_work_in_types_constructors_and_nested_expressions() {
+    let source = r"
+pub type Fixed<N: Nat> {
+    Fixed(value: Dimensionless),
+}
+
+pub type Matrix<M: Nat, N: Nat> {
+    Matrix(value: Fixed<M * N + 1>),
+}
+
+param value: Matrix<2, 3> = Matrix<2, 3>(
+    value: Fixed<7>(value: 1.0),
+);
+";
+
+    let result = compile_and_eval(source).unwrap();
+    let value = result
+        .params
+        .iter()
+        .find(|(name, _)| name.to_string() == "value")
+        .expect("value param")
+        .1
+        .as_ref();
+    assert!(value.is_ok(), "Nat-generic value failed: {value:?}");
+}
+
+#[test]
+fn sorted_generic_defaults_are_substituted_in_type_and_constructor_positions() {
+    let source = r"
+pub index Component = { X, Y, Z };
+pub type Marker { Marker }
+pub type Fixed<
+    D: Dim,
+    I: Index = Component,
+    F: Type = Marker,
+    N: Nat = 3,
+> {
+    Fixed(value: D),
+}
+
+pub type AllDefaults<
+    D: Dim = Dimensionless,
+    I: Index = Component,
+    F: Type = Marker,
+    N: Nat = 3,
+> {
+    AllDefaults(value: D),
+}
+
+param value: Fixed<Dimensionless> = Fixed<Dimensionless>(value: 1.0);
+param all_defaults: AllDefaults = AllDefaults(value: 2.0);
+";
+
+    compile_and_eval(source).unwrap();
+}
+
+#[test]
+fn dependent_defaults_compose_across_all_generic_sorts() {
+    let source = r"
+pub index Phase = { A };
+pub type Marker { Marker }
+pub type Fixed<N: Nat> { Fixed(value: Dimensionless) }
+pub type Bundle<
+    D: Dim,
+    I: Index,
+    T: Type,
+    N: Nat,
+    E: Dim = D * D,
+    J: Index = I,
+    U: Type = T,
+    M: Nat = N + 1,
+> {
+    Bundle(scalar: E, payload: U, series: E[J], fixed: Fixed<M>),
+}
+
+param value: Bundle<Length, Phase, Marker, 2> = Bundle<Length, Phase, Marker, 2>(
+    scalar: 1.0 m^2,
+    payload: Marker,
+    series: { Phase.A: 2.0 m^2 },
+    fixed: Fixed<3>(value: 1.0),
+);
+";
+
+    compile_and_eval(source).unwrap();
+}
+
+#[test]
+fn dependent_nat_defaults_compose_through_nested_type_defaults() {
+    let source = r"
+pub type Fixed<N: Nat> {
+    Fixed(value: Dimensionless),
+}
+
+pub type Holder<N: Nat, M: Nat = N + 1, F: Type = Fixed<M>> {
+    Holder(value: F),
+}
+
+param value: Holder<2> = Holder<2>(value: Fixed<3>(value: 1.0));
+";
+
+    compile_and_eval(source).unwrap();
+}
+
+#[test]
+fn generic_defaults_may_reference_only_earlier_parameters() {
+    let error = compile_and_eval(
+        "pub type Invalid<N: Nat = M, M: Nat = 3> { Invalid(value: Dimensionless) }",
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("default for generic parameter `N` may reference only earlier generic parameters; `M` is not earlier"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn generic_defaults_must_form_a_trailing_parameter_suffix() {
+    let error =
+        compile_and_eval("pub type Invalid<N: Nat = 3, M: Nat> { Invalid(value: Dimensionless) }")
+            .unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "generic parameter `M` without a default cannot follow defaulted parameter `N`"
+        ),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn nested_type_generic_arguments_apply_inner_sorted_defaults() {
+    let source = r"
+pub type Fixed<D: Dim, N: Nat = 3> {
+    Fixed(value: D),
+}
+
+pub type Holder<F: Type> {
+    Holder(value: F),
+}
+
+param value: Holder<Fixed<Dimensionless>> = Holder<Fixed<Dimensionless>>(
+    value: Fixed<Dimensionless>(value: 1.0),
+);
+";
+
+    compile_and_eval(source).unwrap();
+}
+
+#[test]
+fn generic_arguments_reject_sort_crossing() {
+    let cases = [
+        (
+            "pub type ByIndex<I: Index> { ByIndex(value: Dimensionless) }\nparam value: ByIndex<3>;",
+            "sort `Index`",
+        ),
+        (
+            "pub index Phase = { A };\npub type ByNat<N: Nat> { ByNat(value: Dimensionless) }\nparam value: ByNat<Phase>;",
+            "sort `Nat`",
+        ),
+        (
+            "pub index Phase = { A };\npub type ByType<T: Type> { ByType(value: T) }\nparam value: ByType<Dimensionless[Phase]>;",
+            "sort `Type`",
+        ),
+    ];
+
+    for (source, expected) in cases {
+        let error = compile_and_eval(source).unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn non_empty_function_generic_arguments_are_rejected() {
+    let error = compile_and_eval("node value: Dimensionless = sqrt<3>(4.0);").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("function `sqrt` does not accept generic arguments"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn project_generic_struct_defaults_preserve_same_leaf_owner() {
     let dir = tempfile::tempdir().unwrap();
     let root_dir = dir.path().join("src/collide");
@@ -2095,19 +2282,20 @@ fn project_generic_struct_defaults_preserve_same_leaf_owner() {
         let key = graphcal_compiler::syntax::module_name::ScopedName::local(decl);
         let graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct {
             name: wrap,
-            type_args,
+            generic_args,
             ..
         } = &tir.root().resolved_decl_types[&key]
         else {
             panic!("expected generic struct annotation for `{decl}`");
         };
         assert_eq!(wrap.as_str(), "Wrap");
-        let graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(marker_resolved, _) =
-            &type_args[1]
+        let graphcal_compiler::tir::typed::ResolvedGenericArg::Type(
+            graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(marker_resolved, _),
+        ) = &generic_args[1]
         else {
             panic!(
                 "expected default marker type arg for `{decl}`, got {:?}",
-                type_args[1]
+                generic_args[1]
             );
         };
         assert_eq!(marker_resolved.as_str(), "Marker");

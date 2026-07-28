@@ -136,6 +136,19 @@ node unfold: Dimensionless = plugin.scan(1.0);
 }
 
 #[test]
+fn sort_aware_nat_generic_arguments_round_trip() {
+    let source = "type Matrix<M:Nat=2,N:Nat=M+1>{Matrix(value:Dimensionless)}\n\
+param value:Matrix<2,3> =Matrix<2,3>(value:1.0);\n";
+    let formatted = format_source(source).expect("Nat generics should format");
+    assert!(formatted.contains("Matrix<M: Nat = 2, N: Nat = M + 1>"));
+    assert!(formatted.contains("Matrix<2, 3>(value: 1.0)"));
+    graphcal_compiler::syntax::parser::Parser::new(&formatted)
+        .parse_file()
+        .expect("formatted Nat generics should parse");
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
 fn formats_fn_call_argument_trailing_comment_before_comma() {
     let source = "node x: Dimensionless = least(\n    1.0, // first\n    2.0,\n);\n";
     let formatted = format_source(source).expect("format_source should succeed");

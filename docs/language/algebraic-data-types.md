@@ -151,9 +151,11 @@ node bad: Force = match @maneuver {
 };
 ```
 
-## Generic Types (Phantom Type Parameters)
+## Generic Types
 
-Types can have generic parameters for type-safe phantom typing:
+Types can have sort-aware generic parameters for dimensions, value types,
+indexes, and type-level natural numbers. Parameters may be used in payload
+field types or retained only for phantom distinctions:
 
 ```
 type Eci { Eci }
@@ -182,9 +184,13 @@ node pos_body: Vec3<Length, Body> = Vec3<Length, Body>(
 The verbosity is intentional: a re-labeling is a deliberate, field-by-field
 act, visible at the call site — not a silent reinterpretation of opaque data.
 
-### Default Type Parameters
+### Generic Defaults and Nat Arguments
 
-```
+Defaults are checked against the parameter's declared sort, must form a
+trailing suffix, and may refer only to earlier parameters. Type annotations and
+constructors share the same argument syntax:
+
+```gcl
 type Unframed { Unframed }
 
 type Vec3<D: Dim, F: Type = Unframed> {
@@ -193,4 +199,15 @@ type Vec3<D: Dim, F: Type = Unframed> {
 
 // Equivalent to Vec3<Length, Unframed>
 node pos: Vec3<Length> = Vec3<Length>(x: 1.0 m, y: 2.0 m, z: 3.0 m);
+
+type Buffer<N: Nat = 3> {
+    Buffer(value: Dimensionless),
+}
+
+param buffer: Buffer<3> = Buffer<3>(value: 1.0);
 ```
+
+A Nat argument may use literals, in-scope Nat parameters, `+`, and `*`.
+Subtraction is deliberately unsupported; express the larger side additively,
+such as `Input<N + 1>` and `Output<N>`. `Nat` and `Index` arguments are never
+implicitly converted into one another.

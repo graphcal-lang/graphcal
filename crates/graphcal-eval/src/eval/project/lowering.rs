@@ -1591,10 +1591,18 @@ fn collect_type_expr_names(
                 }
             }
         }
-        TypeExprKind::TypeApplication { name, type_args } => {
+        TypeExprKind::TypeApplication { name, generic_args } => {
             refs.push(name.value.display_path());
-            for arg in type_args {
-                collect_type_expr_names(arg, refs);
+            for arg in generic_args {
+                match arg {
+                    graphcal_compiler::syntax::ast::GenericArg::Type(type_expr) => {
+                        collect_type_expr_names(type_expr, refs);
+                    }
+                    graphcal_compiler::syntax::ast::GenericArg::Ambiguous(ambiguous) => {
+                        collect_ambiguous_generic_names(ambiguous, refs);
+                    }
+                    graphcal_compiler::syntax::ast::GenericArg::Nat(_) => {}
+                }
             }
         }
         TypeExprKind::DatetimeApplication { type_args } => {
@@ -1607,6 +1615,21 @@ fn collect_type_expr_names(
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => {}
+    }
+}
+
+fn collect_ambiguous_generic_names(
+    arg: &graphcal_compiler::desugar::desugared_ast::AmbiguousGenericArg,
+    refs: &mut Vec<String>,
+) {
+    match arg {
+        graphcal_compiler::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
+            refs.push(ident.name.to_string());
+        }
+        graphcal_compiler::desugar::desugared_ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
+            collect_ambiguous_generic_names(lhs, refs);
+            collect_ambiguous_generic_names(rhs, refs);
+        }
     }
 }
 

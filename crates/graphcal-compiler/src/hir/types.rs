@@ -46,7 +46,7 @@ pub enum GenericParamOwner {
 pub struct GenericParamDef {
     pub(crate) id: Spanned<GenericParamId>,
     pub(crate) constraint: GenericConstraint,
-    pub(crate) default: Option<TypeExpr>,
+    pub(crate) default: Option<GenericArg>,
 }
 
 /// Built-in type forms with closed semantic meaning.
@@ -109,13 +109,59 @@ pub enum TypeExprKind {
     /// A user-defined generic type application.
     TypeApplication {
         name: Spanned<ResolvedStructTypeName>,
-        type_args: Vec<TypeExpr>,
+        generic_args: Vec<GenericArg>,
     },
     /// An indexed type expression.
     Indexed {
         base: Box<TypeExpr>,
         indexes: Vec<IndexRef>,
     },
+}
+
+/// A dimension-sorted generic argument.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DimArg {
+    /// The closed built-in `Dimensionless` dimension.
+    Dimensionless(Span),
+    /// A concrete or generic dimension expression.
+    Expr(DimExpr),
+}
+
+impl DimArg {
+    /// Source span for diagnostics.
+    #[must_use]
+    pub(crate) const fn span(&self) -> Span {
+        match self {
+            Self::Dimensionless(span) => *span,
+            Self::Expr(expr) => expr.span,
+        }
+    }
+}
+
+/// A generic argument classified against its declaration signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GenericArg {
+    Dim(DimArg),
+    Index(IndexRef),
+    Nat(NatExpr),
+    Type(TypeExpr),
+}
+
+impl GenericArg {
+    /// Source span for diagnostics.
+    #[must_use]
+    pub(crate) const fn span(&self) -> Span {
+        match self {
+            Self::Dim(arg) => arg.span(),
+            Self::Index(index) => match index {
+                IndexRef::Concrete(name) => name.span,
+                IndexRef::GenericParam(param) => param.span,
+                IndexRef::NatExpr(nat) => nat.span(),
+            },
+            Self::Nat(nat) => nat.span(),
+            Self::Type(type_expr) => type_expr.span,
+        }
+    }
 }
 
 /// A resolved dimension expression.

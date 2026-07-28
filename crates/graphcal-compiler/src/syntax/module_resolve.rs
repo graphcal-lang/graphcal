@@ -260,6 +260,83 @@ impl ModuleSymbolLookup<DeclNameNamespace> for ModuleDeclSymbol {
     }
 }
 
+/// Source signature of one generic parameter, retained by name resolution so
+/// HIR can sort application arguments after resolving the callee.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GenericParamSignature {
+    pub(crate) name: crate::syntax::type_name::GenericParamName,
+    pub(crate) constraint: ast::GenericConstraint,
+    pub(crate) has_default: bool,
+}
+
+impl GenericParamSignature {
+    fn from_param(param: &ast::GenericParam) -> Self {
+        Self {
+            name: param.name.value.clone(),
+            constraint: param.constraint,
+            has_default: param.default.is_some(),
+        }
+    }
+}
+
+/// Type symbol plus its declared generic-parameter signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModuleTypeSymbol {
+    symbol: ModuleSymbol<StructTypeNameNamespace>,
+    generic_params: Vec<GenericParamSignature>,
+}
+
+impl ModuleTypeSymbol {
+    fn generic_params(&self) -> &[GenericParamSignature] {
+        &self.generic_params
+    }
+
+    pub(crate) const fn resolved(&self) -> &ResolvedStructTypeName {
+        self.symbol.resolved()
+    }
+}
+
+impl ModuleSymbolLookup<StructTypeNameNamespace> for ModuleTypeSymbol {
+    fn resolved(&self) -> &ResolvedStructTypeName {
+        self.symbol.resolved()
+    }
+
+    fn visibility(&self) -> SymbolVisibility {
+        self.symbol.visibility()
+    }
+
+    fn span(&self) -> Span {
+        self.symbol.span()
+    }
+}
+
+/// Constructor symbol plus the generic signature of its owning type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModuleConstructorSymbol {
+    symbol: ModuleSymbol<ConstructorNameNamespace>,
+    generic_params: Vec<GenericParamSignature>,
+}
+
+impl ModuleConstructorSymbol {
+    fn generic_params(&self) -> &[GenericParamSignature] {
+        &self.generic_params
+    }
+}
+
+impl ModuleSymbolLookup<ConstructorNameNamespace> for ModuleConstructorSymbol {
+    fn resolved(&self) -> &ResolvedConstructorName {
+        self.symbol.resolved()
+    }
+
+    fn visibility(&self) -> SymbolVisibility {
+        self.symbol.visibility()
+    }
+
+    fn span(&self) -> Span {
+        self.symbol.span()
+    }
+}
+
 /// Index symbol plus the variants declared by that index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleIndexSymbol {
@@ -314,9 +391,9 @@ pub struct ModuleSymbols {
     decls: HashMap<DeclName, ModuleDeclSymbol>,
     dimensions: HashMap<DimName, ModuleSymbol<DimNameNamespace>>,
     units: HashMap<UnitName, ModuleSymbol<UnitNameNamespace>>,
-    struct_types: HashMap<StructTypeName, ModuleSymbol<StructTypeNameNamespace>>,
+    struct_types: HashMap<StructTypeName, ModuleTypeSymbol>,
     indexes: HashMap<IndexName, ModuleIndexSymbol>,
-    constructors: HashMap<ConstructorName, ModuleSymbol<ConstructorNameNamespace>>,
+    constructors: HashMap<ConstructorName, ModuleConstructorSymbol>,
 }
 
 impl ModuleSymbols {
@@ -373,9 +450,7 @@ impl ModuleSymbols {
 
     /// Struct/tagged-union type namespace symbols.
     #[must_use]
-    pub(crate) const fn struct_types(
-        &self,
-    ) -> &HashMap<StructTypeName, ModuleSymbol<StructTypeNameNamespace>> {
+    pub(crate) const fn struct_types(&self) -> &HashMap<StructTypeName, ModuleTypeSymbol> {
         &self.struct_types
     }
 
@@ -387,9 +462,7 @@ impl ModuleSymbols {
 
     /// Tagged-union constructor namespace symbols.
     #[must_use]
-    const fn constructors(
-        &self,
-    ) -> &HashMap<ConstructorName, ModuleSymbol<ConstructorNameNamespace>> {
+    const fn constructors(&self) -> &HashMap<ConstructorName, ModuleConstructorSymbol> {
         &self.constructors
     }
 
@@ -523,10 +596,16 @@ impl ModuleSymbols {
             ExclusiveNameKind::StructType,
             type_decl.name.span,
         )?;
+        let generic_params = type_decl
+            .generic_params
+            .iter()
+            .map(GenericParamSignature::from_param)
+            .collect::<Vec<_>>();
         self.insert_struct_type(
             &type_decl.name,
             visibility,
             StructTypeNameNamespace::DISPLAY_NAME,
+            generic_params.clone(),
         )?;
         if let ast::TypeDeclBody::Constructors(members) = &type_decl.body {
             for member in members {
@@ -534,6 +613,7 @@ impl ModuleSymbols {
                     &member.name,
                     visibility,
                     ConstructorNameNamespace::DISPLAY_NAME,
+                    generic_params.clone(),
                 )?;
             }
         }
@@ -630,14 +710,25 @@ impl ModuleSymbols {
         name: &Spanned<StructTypeName>,
         visibility: SymbolVisibility,
         namespace_name: &'static str,
+        generic_params: Vec<GenericParamSignature>,
     ) -> Result<(), ModuleResolveError> {
-        insert_symbol(
-            &self.owner,
-            &mut self.struct_types,
-            name,
-            visibility,
-            namespace_name,
-        )
+        if let Some(first) = self.struct_types.get(name.value.as_str()) {
+            return Err(ModuleResolveError::DuplicateSymbol {
+                owner: self.owner.clone(),
+                namespace: namespace_name,
+                name: name.value.to_string(),
+                first: first.span(),
+                duplicate: name.span,
+            });
+        }
+        self.struct_types.insert(
+            name.value.clone(),
+            ModuleTypeSymbol {
+                symbol: ModuleSymbol::new(&self.owner, name.value.clone(), visibility, name.span),
+                generic_params,
+            },
+        );
+        Ok(())
     }
 
     fn insert_constructor(
@@ -645,14 +736,25 @@ impl ModuleSymbols {
         name: &Spanned<ConstructorName>,
         visibility: SymbolVisibility,
         namespace_name: &'static str,
+        generic_params: Vec<GenericParamSignature>,
     ) -> Result<(), ModuleResolveError> {
-        insert_symbol(
-            &self.owner,
-            &mut self.constructors,
-            name,
-            visibility,
-            namespace_name,
-        )
+        if let Some(first) = self.constructors.get(name.value.as_str()) {
+            return Err(ModuleResolveError::DuplicateSymbol {
+                owner: self.owner.clone(),
+                namespace: namespace_name,
+                name: name.value.to_string(),
+                first: first.span(),
+                duplicate: name.span,
+            });
+        }
+        self.constructors.insert(
+            name.value.clone(),
+            ModuleConstructorSymbol {
+                symbol: ModuleSymbol::new(&self.owner, name.value.clone(), visibility, name.span),
+                generic_params,
+            },
+        );
+        Ok(())
     }
 
     fn insert_index(&mut self, index: &ast::IndexDecl) -> Result<(), ModuleResolveError> {
@@ -1277,6 +1379,23 @@ impl ModuleResolver {
         })
     }
 
+    /// Return the source generic signature for a resolved user-defined type.
+    pub(crate) fn struct_type_generic_params(
+        &self,
+        name: &ResolvedStructTypeName,
+    ) -> Result<&[GenericParamSignature], ModuleResolveError> {
+        let symbols = self.module_symbols(name.owner())?;
+        symbols
+            .struct_types
+            .get(name.as_str())
+            .map(ModuleTypeSymbol::generic_params)
+            .ok_or_else(|| ModuleResolveError::UnknownName {
+                owner: name.owner().clone(),
+                namespace: StructTypeNameNamespace::DISPLAY_NAME,
+                name: name.as_str().to_string(),
+            })
+    }
+
     /// Resolve a syntactic tagged-union constructor path to a canonical owner + leaf.
     pub(crate) fn resolve_constructor_path(
         &self,
@@ -1286,6 +1405,23 @@ impl ModuleResolver {
         self.resolve_symbol_path(owner, path, ModuleSymbols::constructors, |scope| {
             &scope.selected_constructors
         })
+    }
+
+    /// Return the owning type's source generic signature for a resolved constructor.
+    pub(crate) fn constructor_generic_params(
+        &self,
+        name: &ResolvedConstructorName,
+    ) -> Result<&[GenericParamSignature], ModuleResolveError> {
+        let symbols = self.module_symbols(name.owner())?;
+        symbols
+            .constructors
+            .get(name.as_str())
+            .map(ModuleConstructorSymbol::generic_params)
+            .ok_or_else(|| ModuleResolveError::UnknownName {
+                owner: name.owner().clone(),
+                namespace: ConstructorNameNamespace::DISPLAY_NAME,
+                name: name.as_str().to_string(),
+            })
     }
 
     /// Resolve a span-aware constructor path without losing source path shape at

@@ -40,6 +40,6 @@ pub use lower::{
 };
 pub(crate) use lower::{TypeLoweringContext, lower_type_expr};
 pub use types::{
-    BuiltinType, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericParamDef, GenericParamId,
-    GenericParamOwner, IndexRef, NatExpr, TypeExpr, TypeExprKind,
+    BuiltinType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg,
+    GenericParamDef, GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeExpr, TypeExprKind,
 };

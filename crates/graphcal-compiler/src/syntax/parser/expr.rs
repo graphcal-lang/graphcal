@@ -619,7 +619,7 @@ impl Parser<'_> {
         let path = self.parse_ident_path()?;
 
         if self.lexer.peek() == Some(&Token::LParen)
-            || (self.lexer.peek() == Some(&Token::Lt) && self.is_type_args_followed_by_paren())
+            || (self.lexer.peek() == Some(&Token::Lt) && self.is_generic_args_followed_by_paren())
         {
             // `path(args)` or `path<T>(args)`. The path is syntactic: bare
             // and qualified callees have the same AST representation. We only
@@ -652,7 +652,7 @@ impl Parser<'_> {
             Ok(Expr::new(
                 ExprKind::FnCall {
                     callee: path,
-                    type_args: generic_args,
+                    generic_args,
                     args,
                 },
                 call_span,
@@ -796,7 +796,7 @@ impl Parser<'_> {
     /// so an ordinary boolean expression like `a < b && c > (d)` is not
     /// misparsed as turbofish. Line comments are skipped so their contents
     /// affect neither the bracket balance nor the operator bail-out.
-    fn is_type_args_followed_by(&mut self, expected: u8) -> bool {
+    fn are_generic_args_followed_by(&mut self, expected: u8) -> bool {
         let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
             return false;
         };
@@ -819,7 +819,7 @@ impl Parser<'_> {
                     }
                     continue;
                 }
-                // Generic arguments are type expressions or Nat literals;
+                // Sort-aware generic arguments are type or Nat expressions;
                 // none of these bytes can occur in them.
                 b'&' | b'|' | b';' | b'=' | b'{' | b'}' | b'"' | b'@' | b'!' => return false,
                 _ => {}
@@ -875,8 +875,8 @@ impl Parser<'_> {
     /// Look ahead to check if `<...>` is followed by `(`.
     /// Used to disambiguate `eye<3>()` (turbofish fn call)
     /// from `f < x` (comparison).
-    fn is_type_args_followed_by_paren(&mut self) -> bool {
-        self.is_type_args_followed_by(b'(')
+    fn is_generic_args_followed_by_paren(&mut self) -> bool {
+        self.are_generic_args_followed_by(b'(')
     }
 
     /// After peeking `(`, look ahead to decide whether the parenthesized
@@ -912,40 +912,6 @@ impl Parser<'_> {
         // module path uses `.`, so a second `:` here would be a stray token;
         // either way, we only commit to the named-arg path on a lone `:`.
         bytes[pos] == b':' && bytes.get(pos + 1).is_none_or(|c| *c != b':')
-    }
-
-    /// Parse a generic argument list: `<GenericArg, GenericArg, ...>`
-    ///
-    /// Each argument is either a nat expression (integer literal) or a type expression.
-    fn parse_generic_arg_list(
-        &mut self,
-    ) -> Result<Vec<crate::syntax::ast::GenericArg>, ParseError> {
-        self.expect(Token::Lt)?;
-        let args = self.parse_comma_separated(Token::Gt, Self::parse_generic_arg)?;
-        self.expect(Token::Gt)?;
-        Ok(args)
-    }
-
-    /// Parse a single generic argument.
-    ///
-    /// If the next token is a number literal (and parses as a valid integer), parse as
-    /// `GenericArg::Nat`. Otherwise, parse as `GenericArg::Type`.
-    fn parse_generic_arg(&mut self) -> Result<crate::syntax::ast::GenericArg, ParseError> {
-        use crate::syntax::ast::{GenericArg, NatExpr};
-        // Check if it's a number literal (Nat argument)
-        if let Some((&Token::Number, _)) = self.lexer.peek_with_span() {
-            let (_, lit_span) = self.advance()?;
-            let text = self.lexer.slice_at(lit_span);
-            let normalized = text.replace('_', "");
-            let value: u64 = normalized.parse().map_err(|_| {
-                self.unexpected_token("a valid non-negative integer", text, lit_span)
-            })?;
-            Ok(GenericArg::Nat(NatExpr::Literal(value, lit_span)))
-        } else {
-            // Parse as type expression
-            let te = self.parse_type_expr()?;
-            Ok(GenericArg::Type(te))
-        }
     }
 }
 
@@ -1309,14 +1275,14 @@ mod tests {
         let expr = parse_node_expr("eye<3>()");
         if let ExprKind::FnCall {
             callee,
-            type_args,
+            generic_args,
             args,
         } = &expr.kind
         {
             assert_eq!(callee.as_bare().unwrap().name, "eye");
-            assert_eq!(type_args.len(), 1);
+            assert_eq!(generic_args.len(), 1);
             assert!(matches!(
-                &type_args[0],
+                &generic_args[0],
                 crate::syntax::ast::GenericArg::Nat(crate::syntax::ast::NatExpr::Literal(3, _))
             ));
             assert_eq!(args.len(), 0);
@@ -1328,9 +1294,9 @@ mod tests {
     #[test]
     fn parse_turbofish_nat_arg_with_separators() {
         let expr = parse_node_expr("eye<1_000>()");
-        if let ExprKind::FnCall { type_args, .. } = &expr.kind {
+        if let ExprKind::FnCall { generic_args, .. } = &expr.kind {
             assert!(matches!(
-                &type_args[0],
+                &generic_args[0],
                 crate::syntax::ast::GenericArg::Nat(crate::syntax::ast::NatExpr::Literal(1000, _))
             ));
         } else {
@@ -1343,15 +1309,17 @@ mod tests {
         let expr = parse_node_expr("make<Length>(@x)");
         if let ExprKind::FnCall {
             callee,
-            type_args,
+            generic_args,
             args,
         } = &expr.kind
         {
             assert_eq!(callee.as_bare().unwrap().name, "make");
-            assert_eq!(type_args.len(), 1);
+            assert_eq!(generic_args.len(), 1);
             assert!(matches!(
-                &type_args[0],
-                crate::syntax::ast::GenericArg::Type(_)
+                &generic_args[0],
+                crate::syntax::ast::GenericArg::Ambiguous(
+                    crate::syntax::ast::AmbiguousGenericArg::Name(_)
+                )
             ));
             assert_eq!(args.len(), 1);
         } else {
@@ -1364,19 +1332,21 @@ mod tests {
         let expr = parse_node_expr("foo<3, Length>(@x)");
         if let ExprKind::FnCall {
             callee,
-            type_args,
+            generic_args,
             args,
         } = &expr.kind
         {
             assert_eq!(callee.as_bare().unwrap().name, "foo");
-            assert_eq!(type_args.len(), 2);
+            assert_eq!(generic_args.len(), 2);
             assert!(matches!(
-                &type_args[0],
+                &generic_args[0],
                 crate::syntax::ast::GenericArg::Nat(crate::syntax::ast::NatExpr::Literal(3, _))
             ));
             assert!(matches!(
-                &type_args[1],
-                crate::syntax::ast::GenericArg::Type(_)
+                &generic_args[1],
+                crate::syntax::ast::GenericArg::Ambiguous(
+                    crate::syntax::ast::AmbiguousGenericArg::Name(_)
+                )
             ));
             assert_eq!(args.len(), 1);
         } else {

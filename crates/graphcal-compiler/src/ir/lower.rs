@@ -39,7 +39,7 @@ use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::type_name::{ConstructorName, StructTypeName};
+use crate::syntax::type_name::{ConstructorName, GenericParamName, StructTypeName};
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
 // ---------------------------------------------------------------------------
@@ -1836,7 +1836,7 @@ impl OverrideReconciliationChecker<'_> {
                 }
                 Ok(())
             }
-            TypeExprKind::TypeApplication { name, type_args } => {
+            TypeExprKind::TypeApplication { name, generic_args } => {
                 if let Some(atom) = name.value.as_bare()
                     && self.type_bindings.contains_key(atom.as_str())
                 {
@@ -1846,8 +1846,24 @@ impl OverrideReconciliationChecker<'_> {
                         format!("type `{}`", name.value),
                     ));
                 }
-                for arg in type_args {
-                    self.check_type_expr(arg)?;
+                for arg in generic_args {
+                    match arg {
+                        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
+                            self.check_type_expr(type_expr)?;
+                        }
+                        crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
+                            for ident in ambiguous_generic_arg_idents(ambiguous) {
+                                if self.type_bindings.contains_key(ident.name.as_str()) {
+                                    return Err(self.orphan_error(
+                                        "type",
+                                        ident.name.as_str(),
+                                        format!("generic argument `{ambiguous}`"),
+                                    ));
+                                }
+                            }
+                        }
+                        crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
+                    }
                 }
                 Ok(())
             }
@@ -2004,8 +2020,8 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
     }
 
     fn visit_fn_call(&mut self, expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
-        if let ExprKind::FnCall { type_args, .. } = &expr.kind {
-            for ga in type_args {
+        if let ExprKind::FnCall { generic_args, .. } = &expr.kind {
+            for ga in generic_args {
                 if let crate::desugar::desugared_ast::GenericArg::Type(ty) = ga {
                     self.check_type_expr(ty)?;
                 }
@@ -2233,6 +2249,82 @@ fn substitute_index_names(expr: &mut Expr, bindings: &HashMap<IndexName, IndexNa
     let _ = sub.visit_expr_mut(expr);
 }
 
+fn ambiguous_generic_arg_idents(
+    arg: &crate::desugar::desugared_ast::AmbiguousGenericArg,
+) -> Vec<&crate::syntax::ast::Ident> {
+    fn collect<'a>(
+        arg: &'a crate::desugar::desugared_ast::AmbiguousGenericArg,
+        idents: &mut Vec<&'a crate::syntax::ast::Ident>,
+    ) {
+        match arg {
+            crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
+                idents.push(ident);
+            }
+            crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
+                collect(lhs, idents);
+                collect(rhs, idents);
+            }
+        }
+    }
+
+    let mut idents = Vec::new();
+    collect(arg, &mut idents);
+    idents
+}
+
+fn rewrite_ambiguous_generic_arg_names<K>(
+    arg: &mut crate::desugar::desugared_ast::AmbiguousGenericArg,
+    bindings: &HashMap<K, K>,
+) where
+    K: std::hash::Hash + Eq + std::borrow::Borrow<str> + AsRef<str>,
+{
+    match arg {
+        crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
+            if let Some(new_name) = bindings.get(ident.name.as_str())
+                && let Ok(atom) = NameAtom::parse(new_name.as_ref())
+            {
+                ident.name = atom;
+            }
+        }
+        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
+            rewrite_ambiguous_generic_arg_names(lhs, bindings);
+            rewrite_ambiguous_generic_arg_names(rhs, bindings);
+        }
+    }
+}
+
+fn substitute_generic_arg_index_names(
+    arg: &mut crate::desugar::desugared_ast::GenericArg,
+    bindings: &HashMap<IndexName, IndexName>,
+) {
+    match arg {
+        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
+            substitute_type_expr_index_names(type_expr, bindings);
+        }
+        crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
+            rewrite_ambiguous_generic_arg_names(ambiguous, bindings);
+        }
+        crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
+    }
+}
+
+fn substitute_generic_arg_nominal_names<K>(
+    arg: &mut crate::desugar::desugared_ast::GenericArg,
+    bindings: &HashMap<K, K>,
+) where
+    K: std::hash::Hash + Eq + std::borrow::Borrow<str> + AsRef<str>,
+{
+    match arg {
+        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
+            substitute_type_expr_nominal_names(type_expr, bindings);
+        }
+        crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
+            rewrite_ambiguous_generic_arg_names(ambiguous, bindings);
+        }
+        crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
+    }
+}
+
 /// Rewrite index names within a type expression according to a binding map.
 ///
 /// `TypeExpr` is not part of the `Expr` tree, so it needs a separate
@@ -2264,8 +2356,12 @@ pub fn substitute_type_expr_index_names(
             }
             substitute_type_expr_index_names(base, bindings);
         }
-        TypeExprKind::TypeApplication { type_args, .. }
-        | TypeExprKind::DatetimeApplication { type_args } => {
+        TypeExprKind::TypeApplication { generic_args, .. } => {
+            for arg in generic_args {
+                substitute_generic_arg_index_names(arg, bindings);
+            }
+        }
+        TypeExprKind::DatetimeApplication { type_args } => {
             for arg in type_args {
                 substitute_type_expr_index_names(arg, bindings);
             }
@@ -2313,14 +2409,14 @@ where
         TypeExprKind::Indexed { base, .. } => {
             substitute_type_expr_nominal_names(base, bindings);
         }
-        TypeExprKind::TypeApplication { name, type_args } => {
+        TypeExprKind::TypeApplication { name, generic_args } => {
             if let Some(atom) = name.value.as_bare()
                 && let Some(new_name) = bindings.get(atom.as_str())
             {
                 name.value = crate::syntax::names::NamePath::expect_local(new_name.as_ref());
             }
-            for arg in type_args {
-                substitute_type_expr_nominal_names(arg, bindings);
+            for arg in generic_args {
+                substitute_generic_arg_nominal_names(arg, bindings);
             }
         }
         TypeExprKind::DatetimeApplication { type_args } => {
@@ -2339,9 +2435,9 @@ where
 
 /// Rewrite struct-type names within an expression according to a binding map.
 ///
-/// Covers `ConstructorCall.constructor`, `ConstructorCall.generic_args`,
-/// and `FnCall.type_args`. Recurses through child expressions so nested
-/// constructor calls are also rewritten.
+/// Covers `ConstructorCall.constructor` and both call variants' `generic_args`.
+/// Recurses through child expressions so nested constructor calls are also
+/// rewritten.
 #[expect(
     clippy::too_many_lines,
     reason = "single recursion covering every ExprKind variant"
@@ -2402,9 +2498,9 @@ fn substitute_type_names_in_expr(
         }
 
         ExprKind::FnCall {
-            type_args, args, ..
+            generic_args, args, ..
         } => {
-            for ga in type_args.iter_mut() {
+            for ga in generic_args.iter_mut() {
                 if let GenericArg::Type(ty) = ga {
                     substitute_type_expr_nominal_names(ty, bindings);
                 }
@@ -2610,7 +2706,7 @@ fn register_declarations_impl(
                 }
             }
             DeclKind::Type(t) if should_register_type(t.name.value.as_str()) => {
-                register_type_decl(t, registry);
+                register_type_decl(t, registry, src)?;
             }
             DeclKind::Dag(d) if should_register_default(d.name.value.as_str()) => {
                 registry.register_dag(d.name.value.clone(), d.clone());
@@ -3127,13 +3223,20 @@ fn collect_nat_ranges_from_type_expr(
             }
         }
     }
-    if let crate::desugar::desugared_ast::TypeExprKind::TypeApplication { type_args, .. }
-    | crate::desugar::desugared_ast::TypeExprKind::DatetimeApplication { type_args } =
-        &type_expr.kind
-    {
-        for arg in type_args {
-            collect_nat_ranges_from_type_expr(arg, registry, src)?;
+    match &type_expr.kind {
+        crate::desugar::desugared_ast::TypeExprKind::TypeApplication { generic_args, .. } => {
+            for arg in generic_args {
+                if let crate::desugar::desugared_ast::GenericArg::Type(type_expr) = arg {
+                    collect_nat_ranges_from_type_expr(type_expr, registry, src)?;
+                }
+            }
         }
+        crate::desugar::desugared_ast::TypeExprKind::DatetimeApplication { type_args } => {
+            for arg in type_args {
+                collect_nat_ranges_from_type_expr(arg, registry, src)?;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -3257,7 +3360,12 @@ fn register_index_decl(
     Ok(())
 }
 
-fn register_type_decl(t: &crate::desugar::desugared_ast::TypeDecl, registry: &mut RegistryBuilder) {
+fn register_type_decl(
+    t: &crate::desugar::desugared_ast::TypeDecl,
+    registry: &mut RegistryBuilder,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    validate_type_generic_params(t, src)?;
     let generic_params: Vec<types::TypeGenericParam> = t
         .generic_params
         .iter()
@@ -3300,6 +3408,172 @@ fn register_type_decl(t: &crate::desugar::desugared_ast::TypeDecl, registry: &mu
         generic_params,
         kind,
     });
+    Ok(())
+}
+
+fn validate_type_generic_params(
+    t: &crate::desugar::desugared_ast::TypeDecl,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let positions = t.generic_params.iter().enumerate().try_fold(
+        HashMap::new(),
+        |mut positions, (index, param)| match positions.insert(
+            param.name.value.atom().clone(),
+            (param.name.value.clone(), index, param.name.span),
+        ) {
+            Some((name, _, _)) => Err(GraphcalError::EvalError {
+                message: format!("duplicate generic parameter `{name}`"),
+                src: src.clone(),
+                span: param.name.span.into(),
+            }),
+            None => Ok(positions),
+        },
+    )?;
+
+    let mut first_defaulted: Option<&GenericParamName> = None;
+    for (index, param) in t.generic_params.iter().enumerate() {
+        match &param.default {
+            Some(default) => {
+                first_defaulted.get_or_insert(&param.name.value);
+                if let Some((referenced, span)) =
+                    find_non_earlier_generic_reference(default, index, &positions)
+                {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "default for generic parameter `{}` may reference only earlier generic parameters; `{referenced}` is not earlier",
+                            param.name.value
+                        ),
+                        src: src.clone(),
+                        span: span.into(),
+                    });
+                }
+            }
+            None => {
+                if let Some(first_defaulted) = first_defaulted {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "generic parameter `{}` without a default cannot follow defaulted parameter `{first_defaulted}`",
+                            param.name.value
+                        ),
+                        src: src.clone(),
+                        span: param.name.span.into(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+type GenericParamPositions = HashMap<NameAtom, (GenericParamName, usize, Span)>;
+
+fn find_non_earlier_generic_reference(
+    arg: &crate::desugar::desugared_ast::GenericArg,
+    current_index: usize,
+    positions: &GenericParamPositions,
+) -> Option<(GenericParamName, Span)> {
+    match arg {
+        crate::syntax::ast::GenericArg::Type(type_expr) => {
+            find_non_earlier_type_reference(type_expr, current_index, positions)
+        }
+        crate::syntax::ast::GenericArg::Nat(nat_expr) => {
+            find_non_earlier_nat_reference(nat_expr, current_index, positions)
+        }
+        crate::syntax::ast::GenericArg::Ambiguous(ambiguous) => {
+            find_non_earlier_ambiguous_reference(ambiguous, current_index, positions)
+        }
+    }
+}
+
+fn non_earlier_generic_reference(
+    name: &NameAtom,
+    span: Span,
+    current_index: usize,
+    positions: &GenericParamPositions,
+) -> Option<(GenericParamName, Span)> {
+    positions
+        .get(name)
+        .filter(|(_, index, _)| *index >= current_index)
+        .map(|(name, _, _)| (name.clone(), span))
+}
+
+fn find_non_earlier_path_reference(
+    path: &Spanned<NamePath>,
+    current_index: usize,
+    positions: &GenericParamPositions,
+) -> Option<(GenericParamName, Span)> {
+    path.value.is_bare().then_some(())?;
+    non_earlier_generic_reference(path.value.leaf(), path.span, current_index, positions)
+}
+
+fn find_non_earlier_ambiguous_reference(
+    arg: &crate::syntax::ast::AmbiguousGenericArg,
+    current_index: usize,
+    positions: &GenericParamPositions,
+) -> Option<(GenericParamName, Span)> {
+    match arg {
+        crate::syntax::ast::AmbiguousGenericArg::Name(ident) => {
+            non_earlier_generic_reference(&ident.name, ident.span, current_index, positions)
+        }
+        crate::syntax::ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
+            find_non_earlier_ambiguous_reference(lhs, current_index, positions)
+                .or_else(|| find_non_earlier_ambiguous_reference(rhs, current_index, positions))
+        }
+    }
+}
+
+fn find_non_earlier_nat_reference(
+    expr: &crate::syntax::ast::NatExpr,
+    current_index: usize,
+    positions: &GenericParamPositions,
+) -> Option<(GenericParamName, Span)> {
+    match expr {
+        crate::syntax::ast::NatExpr::Literal(..) => None,
+        crate::syntax::ast::NatExpr::Var(ident) => {
+            non_earlier_generic_reference(&ident.name, ident.span, current_index, positions)
+        }
+        crate::syntax::ast::NatExpr::Add(lhs, rhs, _)
+        | crate::syntax::ast::NatExpr::Mul(lhs, rhs, _) => {
+            find_non_earlier_nat_reference(lhs, current_index, positions)
+                .or_else(|| find_non_earlier_nat_reference(rhs, current_index, positions))
+        }
+    }
+}
+
+fn find_non_earlier_type_reference(
+    type_expr: &TypeExpr,
+    current_index: usize,
+    positions: &GenericParamPositions,
+) -> Option<(GenericParamName, Span)> {
+    use crate::desugar::desugared_ast::{IndexExpr, TypeExprKind};
+
+    match &type_expr.kind {
+        TypeExprKind::Dimensionless
+        | TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime => None,
+        TypeExprKind::DimExpr(dim_expr) => dim_expr.terms.iter().find_map(|item| {
+            find_non_earlier_path_reference(&item.term.name, current_index, positions)
+        }),
+        TypeExprKind::Indexed { base, indexes } => {
+            find_non_earlier_type_reference(base, current_index, positions).or_else(|| {
+                indexes.iter().find_map(|index| match index {
+                    IndexExpr::Name(path) => {
+                        find_non_earlier_path_reference(path, current_index, positions)
+                    }
+                    IndexExpr::NatExpr(expr) => {
+                        find_non_earlier_nat_reference(expr, current_index, positions)
+                    }
+                })
+            })
+        }
+        TypeExprKind::TypeApplication { generic_args, .. } => generic_args
+            .iter()
+            .find_map(|arg| find_non_earlier_generic_reference(arg, current_index, positions)),
+        TypeExprKind::DatetimeApplication { type_args } => type_args.iter().find_map(|type_arg| {
+            find_non_earlier_type_reference(type_arg, current_index, positions)
+        }),
+    }
 }
 
 /// Evaluate a constant scale expression (e.g. `1000`, `PI / 180`) to `f64`.

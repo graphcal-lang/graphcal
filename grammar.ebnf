@@ -365,7 +365,11 @@ generic_params
    = "<", generic_param, { ",", generic_param }, [ "," ], ">";
 
 generic_param
-   = IDENT, ":", generic_constraint, [ "=", type_expr ];
+   = IDENT, ":", generic_constraint, [ "=", generic_arg ];
+(* Defaults use the same unresolved argument surface as applications and are
+   checked against the parameter's declared constraint. Thus `N: Nat = 3`
+   and `F: Type = Unframed` are both valid. Defaulted parameters form a
+   trailing suffix, and a default may refer only to earlier parameters. *)
 
 generic_constraint
    = "Dim"
@@ -656,30 +660,35 @@ type_constraints
 type_constraint
    = ( "min" | "max" ), ":", expr;
 
-(* Generic type application: Vec3<Length, ECI>, Timestamp<UTC>, module.Vec3<Length>.
-   `Datetime<Scale>` is represented by datetime_type above. *)
+(* Generic type application: Vec3<Length, ECI>, FixedVec<N + 1>,
+   module.Vec3<Length>. `Datetime<Scale>` is represented by datetime_type
+   above. Arguments are sorted as Dim, Index, Nat, or Type only after the
+   referenced declaration is known. *)
 type_application
-   = ident_path, "<", type_expr, { ",", type_expr }, [ "," ], ">";
+   = ident_path, "<", generic_arg, { ",", generic_arg }, [ "," ], ">";
 
 (* Index expressions in indexed types: T[I], T[3], T[N + 1], T[M * N], T[module.I] *)
 index_expr_list
    = index_expr, { ",", index_expr }, [ "," ];
 
 index_expr
-   = nat_add_expr
-   | nat_mul_expr
-   | ident_path
-   | NAT_LITERAL;
+   = nat_expr
+   | ident_path;
 
-nat_add_expr
-   = ( IDENT | NAT_LITERAL | nat_mul_expr ), "+",
-     ( IDENT | NAT_LITERAL | nat_mul_expr );
+nat_expr
+   = nat_mul_expr, { "+", nat_mul_expr };
 
 nat_mul_expr
-   = ( IDENT | NAT_LITERAL ), "*", ( IDENT | NAT_LITERAL );
+   = nat_atom, { "*", nat_atom };
+
+nat_atom
+   = IDENT
+   | NAT_LITERAL;
+(* Nat subtraction is deliberately unsupported. Express the larger side with
+   addition, e.g. input `D[N + 1]` and smaller output `D[N]`. *)
 
 NAT_LITERAL
-   = DIGIT, { DIGIT };
+   = DIGIT_SEQ;
 
 (* ================================================================== *)
 (* 5. Dimension and Unit Expressions                                  *)
@@ -893,7 +902,12 @@ generic_arg_list
 
 generic_arg
    = type_expr
-   | NUMBER;
+   | nat_expr;
+(* A bare IDENT or name-only product is syntactically ambiguous between a
+   dimension/type expression and a Nat expression. The compiler preserves
+   that ambiguity until the declaration's GenericConstraint is known. Non-empty
+   generic argument lists on function calls are rejected; only constructors
+   currently consume this application surface. *)
 
 expr_list
    = expr, { ",", expr }, [ "," ];
@@ -1010,14 +1024,8 @@ for_binding_index
    = ident_path                               (* named index *)
    | "range", "(", nat_expr, ")";                         (* nat range *)
 
-(* "range" is a contextual keyword in for bindings.
-   The argument to range() is a nat expression: a literal, an
-   identifier (generic Nat param), or a compound expression. *)
-nat_expr
-   = NAT_LITERAL
-   | IDENT
-   | nat_expr, "+", nat_expr
-   | nat_expr, "*", nat_expr;
+(* "range" is a contextual keyword in for bindings. Its argument uses the
+   same precedence-aware nat_expr defined with type expressions above. *)
 
 scan_expr
    = "scan", "(", expr, ",", expr, ",",

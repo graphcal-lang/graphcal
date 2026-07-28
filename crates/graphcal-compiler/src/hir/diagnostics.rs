@@ -154,6 +154,7 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::UnknownPattern { span, .. }
         | hir::ExprLowerError::UnknownFunction { span, .. }
         | hir::ExprLowerError::UnknownExternFunction { span, .. }
+        | hir::ExprLowerError::UnsupportedFunctionGenericArgs { span, .. }
         | hir::ExprLowerError::WrongArity { span, .. } => *span,
         hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. } => *duplicate,
     };
@@ -174,6 +175,8 @@ pub fn hir_lower_error_to_graphcal(
         | hir::HirLowerError::UnknownTypePath { span, .. }
         | hir::HirLowerError::GenericConstraintMismatch { span, .. }
         | hir::HirLowerError::UnknownGenericParam { span, .. }
+        | hir::HirLowerError::WrongGenericArgCount { span, .. }
+        | hir::HirLowerError::GenericArgumentSortMismatch { span, .. }
         | hir::HirLowerError::ExpectedTimeScale { span }
         | hir::HirLowerError::UnknownTimeScale { span, .. }
         | hir::HirLowerError::WrongDatetimeArgCount { span, .. } => *span,

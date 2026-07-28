@@ -42,6 +42,7 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
             | SymbolCategory::Layer => SymbolKind::EVENT,
             SymbolCategory::IndexVariant
             | SymbolCategory::Field
+            | SymbolCategory::GenericParam
             | SymbolCategory::LocalVar
             | SymbolCategory::BuiltinFn
             | SymbolCategory::BuiltinConst => continue,

@@ -643,10 +643,45 @@ fn parse_type_decl_generic_default_type_param() {
             assert_eq!(u.generic_params[1].name.value.as_str(), "F");
             assert_eq!(u.generic_params[1].constraint, GenericConstraint::Type);
             let default = u.generic_params[1].default.as_ref().unwrap();
-            assert_eq!(dim_expr_name(default), "Unframed");
+            assert!(matches!(
+                default,
+                crate::syntax::ast::GenericArg::Ambiguous(arg)
+                    if arg.to_string() == "Unframed"
+            ));
         }
         _ => panic!("expected single-variant tagged union"),
     }
+}
+
+#[test]
+fn parse_type_decl_nat_generic_defaults() {
+    let source = "type Buffer<N: Nat = 3, M: Nat = N + 1> { Buffer(value: Dimensionless) }";
+    let file = Parser::new(source).parse_file().unwrap();
+    let DeclKind::Type(type_decl) = &file.declarations[0].kind else {
+        panic!("expected type declaration");
+    };
+    assert!(matches!(
+        type_decl.generic_params[0].default,
+        Some(crate::syntax::ast::GenericArg::Nat(
+            crate::syntax::ast::NatExpr::Literal(3, _)
+        ))
+    ));
+    assert!(matches!(
+        type_decl.generic_params[1].default,
+        Some(crate::syntax::ast::GenericArg::Nat(
+            crate::syntax::ast::NatExpr::Add(_, _, _)
+        ))
+    ));
+}
+
+#[test]
+fn nat_subtraction_in_generic_default_has_targeted_error() {
+    let source = "type Buffer<N: Nat = N - 1> { Buffer(value: Dimensionless) }";
+    let error = Parser::new(source).parse_file().unwrap_err();
+    assert!(matches!(
+        error,
+        crate::syntax::parser::ParseError::NatSubtractionUnsupported { .. }
+    ));
 }
 
 #[test]

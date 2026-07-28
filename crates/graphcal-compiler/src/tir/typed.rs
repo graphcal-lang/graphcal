@@ -453,10 +453,14 @@ fn collect_struct_type_defs_from_declared_type(
     defs: &mut ResolvedTypeDefs,
 ) -> Result<(), GraphcalError> {
     match declared {
-        crate::registry::declared_type::DeclaredType::Struct(name, type_args) => {
+        crate::registry::declared_type::DeclaredType::Struct(name, generic_args) => {
             record_resolved_struct_type_def(name.resolved(), ctx, registry, src, defs)?;
-            for arg in type_args {
-                collect_struct_type_defs_from_declared_type(arg, ctx, registry, src, defs)?;
+            for arg in generic_args {
+                if let crate::registry::declared_type::DeclaredGenericArg::Type(type_expr) = arg {
+                    collect_struct_type_defs_from_declared_type(
+                        type_expr, ctx, registry, src, defs,
+                    )?;
+                }
             }
         }
         crate::registry::declared_type::DeclaredType::Indexed { element, .. } => {
@@ -483,11 +487,15 @@ fn collect_struct_type_defs_from_resolved_type(
             record_resolved_struct_type_def(name, ctx, registry, src, defs)?;
         }
         ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
+            name, generic_args, ..
         } => {
             record_resolved_struct_type_def(name, ctx, registry, src, defs)?;
-            for arg in type_args {
-                collect_struct_type_defs_from_resolved_type(arg, ctx, registry, src, defs)?;
+            for arg in generic_args {
+                if let crate::tir::typed::ResolvedGenericArg::Type(type_expr) = arg {
+                    collect_struct_type_defs_from_resolved_type(
+                        type_expr, ctx, registry, src, defs,
+                    )?;
+                }
             }
         }
         ResolvedTypeExpr::Indexed { base, indexes: _ } => {
@@ -522,8 +530,9 @@ fn record_resolved_struct_type_def(
 
     for param in &type_def.generic_params {
         if let Some(default) = &param.default {
-            let resolved =
-                resolve_type_expr_in_struct_scope(default, name, type_def, ctx, registry, src)?;
+            let resolved = resolve_generic_default_in_struct_scope(
+                default, param, name, type_def, ctx, registry, src,
+            )?;
             defs.generic_defaults
                 .insert((name.clone(), param.name.clone()), resolved);
         }
@@ -577,7 +586,7 @@ fn generic_scope_for_type_def(
             TypeGenericConstraint::Dim => crate::syntax::ast::GenericConstraint::Dim,
             TypeGenericConstraint::Index => crate::syntax::ast::GenericConstraint::Index,
             TypeGenericConstraint::Nat => crate::syntax::ast::GenericConstraint::Nat,
-            TypeGenericConstraint::Unconstrained => crate::syntax::ast::GenericConstraint::Type,
+            TypeGenericConstraint::Type => crate::syntax::ast::GenericConstraint::Type,
         };
         scope
             .insert_binding(hir::GenericParamBinding::new(
@@ -1219,15 +1228,17 @@ mod ops;
 #[cfg(test)]
 use ops::unify_nat_poly_form;
 pub use ops::{resolved_to_declared_type, unify_resolved_type};
-pub(crate) use ops::{substitute_resolved_type, substitute_resolved_type_with_types};
+pub(crate) use ops::{
+    substitute_resolved_generic_arg, substitute_resolved_type, substitute_resolved_type_with_types,
+};
 
 // ---------------------------------------------------------------------------
 mod type_expr;
 #[cfg(test)]
 use type_expr::resolve_type_expr;
 use type_expr::{
-    internal_error, module_resolve_error, resolve_type_expr_in_struct_scope,
-    resolve_type_expr_inner,
+    internal_error, module_resolve_error, resolve_generic_default_in_struct_scope,
+    resolve_type_expr_in_struct_scope, resolve_type_expr_inner,
 };
 pub use type_expr::{resolve_hir_type_expr, resolve_type_expr_with_modules};
 

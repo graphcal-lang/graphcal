@@ -14,8 +14,9 @@ use graphcal_compiler::hir;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
-use graphcal_compiler::syntax::names::NamePath;
+use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::type_name::GenericParamName;
 
 use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
 use graphcal_compiler::registry::format::format_unit_expr_with_config;
@@ -147,6 +148,8 @@ pub enum SymbolKey {
         owner: SymbolPath,
         field_name: String,
     },
+    /// A generic parameter scoped to one type declaration.
+    GenericParam { owner: SymbolPath, name: String },
     /// Expression-scoped local variable (block, for, scan, unfold, match).
     ExprScoped {
         kind: ExprScopeKind,
@@ -452,11 +455,7 @@ impl<'a> HirRefCollector<'a> {
                 // precisely-keyed field references.
                 self.walk(operand, table);
             }
-            hir::ExprKind::FnCall {
-                callee,
-                type_args,
-                args,
-            } => {
+            hir::ExprKind::FnCall { callee, args } => {
                 match &callee.value {
                     hir::FunctionRef::Builtin(builtin) => Self::reference(
                         table,
@@ -471,11 +470,6 @@ impl<'a> HirRefCollector<'a> {
                             name: ext.name.to_string(),
                         },
                     ),
-                }
-                for type_arg in type_args {
-                    if let hir::expr::GenericArg::Type(type_expr) = type_arg {
-                        self.walk_type(type_expr, table);
-                    }
                 }
                 for arg in args {
                     self.walk(arg, table);
@@ -510,9 +504,7 @@ impl<'a> HirRefCollector<'a> {
                     SymbolKey::Constructor(constructor_path.clone()),
                 );
                 for generic_arg in generic_args {
-                    if let hir::expr::GenericArg::Type(type_expr) = generic_arg {
-                        self.walk_type(type_expr, table);
-                    }
+                    self.walk_generic_arg(generic_arg, table);
                 }
                 for field in fields {
                     Self::reference(
@@ -725,13 +717,34 @@ impl<'a> HirRefCollector<'a> {
                     }
                 }
             }
-            hir::TypeExprKind::TypeApplication { name, type_args } => {
+            hir::TypeExprKind::TypeApplication { name, generic_args } => {
                 let key = self.name_key(name.value.owner(), name.value.as_str());
                 Self::reference(table, name.span, key);
-                for arg in type_args {
-                    self.walk_type(arg, table);
+                for arg in generic_args {
+                    self.walk_generic_arg(arg, table);
                 }
             }
+        }
+    }
+
+    fn walk_generic_arg(&self, arg: &hir::GenericArg, table: &mut SymbolTable) {
+        match arg {
+            hir::GenericArg::Dim(hir::DimArg::Dimensionless(_))
+            | hir::GenericArg::Index(hir::IndexRef::GenericParam(_) | hir::IndexRef::NatExpr(_))
+            | hir::GenericArg::Nat(_) => {}
+            hir::GenericArg::Dim(hir::DimArg::Expr(dim_expr)) => {
+                for item in &dim_expr.terms {
+                    if let hir::DimTermTarget::Dimension(name) = &item.term.target {
+                        let key = self.name_key(name.value.owner(), name.value.as_str());
+                        Self::reference(table, name.span, key);
+                    }
+                }
+            }
+            hir::GenericArg::Index(hir::IndexRef::Concrete(name)) => {
+                let key = self.name_key(name.value.owner(), name.value.as_str());
+                Self::reference(table, name.span, key);
+            }
+            hir::GenericArg::Type(type_expr) => self.walk_type(type_expr, table),
         }
     }
 }
@@ -775,6 +788,7 @@ impl SymbolKey {
             Self::Constructor(_)
             | Self::Variant { .. }
             | Self::Field { .. }
+            | Self::GenericParam { .. }
             | Self::ExprScoped { .. } => None,
         }
     }
@@ -801,6 +815,7 @@ pub enum SymbolCategory {
     Index,
     IndexVariant,
     Field,
+    GenericParam,
     LocalVar,
     BuiltinFn,
     /// Extern function declared by an `import plugin` block.
@@ -1373,6 +1388,42 @@ fn collect_type_decl(
         None,
         visibility,
     );
+
+    let type_path = SymbolPath::local(t.name.value.to_string());
+    let generic_scope = t
+        .generic_params
+        .iter()
+        .map(|param| {
+            let key = SymbolKey::GenericParam {
+                owner: type_path.clone(),
+                name: param.name.value.to_string(),
+            };
+            table.insert_definition(
+                key.clone(),
+                DefinitionInfo {
+                    name: param.name.value.to_string(),
+                    category: SymbolCategory::GenericParam,
+                    name_span: param.name.span,
+                    decl_span: param.name.span,
+                    type_description: Some(generic_constraint_name(param.constraint).to_string()),
+                    detail: Some(format!("generic parameter of {}", t.name.value)),
+                    visibility: None,
+                },
+            );
+            (param.name.value.clone(), key)
+        })
+        .collect::<GenericParamSymbolScope>();
+
+    let mut earlier_params = GenericParamSymbolScope::new();
+    for param in &t.generic_params {
+        if let Some(default) = &param.default {
+            collect_generic_arg_refs(default, Some(&earlier_params), table);
+        }
+        if let Some(key) = generic_scope.get(&param.name.value) {
+            earlier_params.insert(param.name.value.clone(), key.clone());
+        }
+    }
+
     // Register constructor and payload-field definitions, then walk payload
     // type annotations (required types have no fields). Constructors are a
     // separate namespace from type names, so they must not reuse the type's
@@ -1409,10 +1460,21 @@ fn collect_type_decl(
                             visibility: None,
                         },
                     );
-                    collect_type_expr_refs(&field.type_ann, table);
+                    collect_type_expr_refs_in_scope(&field.type_ann, Some(&generic_scope), table);
                 }
             }
         }
+    }
+}
+
+const fn generic_constraint_name(
+    constraint: graphcal_compiler::syntax::ast::GenericConstraint,
+) -> &'static str {
+    match constraint {
+        graphcal_compiler::syntax::ast::GenericConstraint::Dim => "Dim",
+        graphcal_compiler::syntax::ast::GenericConstraint::Index => "Index",
+        graphcal_compiler::syntax::ast::GenericConstraint::Nat => "Nat",
+        graphcal_compiler::syntax::ast::GenericConstraint::Type => "Type",
     }
 }
 
@@ -1695,9 +1757,19 @@ fn collect_import_or_include_names(
 /// insert a `LocalVar` definition into the table, and bind the name in the
 /// current scope. Used by `Scan` and `Unfold`, which both bind two locals
 /// the same way and only differ in `kind` and the cosmetic `detail` text.
-/// Collect references from a type expression.
+type GenericParamSymbolScope = HashMap<GenericParamName, SymbolKey>;
+
+/// Collect references from a type expression outside a generic declaration.
 fn collect_type_expr_refs(
     type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
+    table: &mut SymbolTable,
+) {
+    collect_type_expr_refs_in_scope(type_expr, None, table);
+}
+
+fn collect_type_expr_refs_in_scope(
+    type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
+    generic_scope: Option<&GenericParamSymbolScope>,
     table: &mut SymbolTable,
 ) {
     match &type_expr.kind {
@@ -1706,31 +1778,34 @@ fn collect_type_expr_refs(
         | TypeExprKind::Int
         | TypeExprKind::Datetime => {}
         TypeExprKind::DimExpr(dim_expr) => {
-            collect_dim_expr_refs(dim_expr, table);
+            collect_dim_expr_refs_in_scope(dim_expr, generic_scope, table);
         }
         TypeExprKind::Indexed { base, indexes } => {
-            collect_type_expr_refs(base, table);
+            collect_type_expr_refs_in_scope(base, generic_scope, table);
             for idx in indexes {
                 match idx {
                     graphcal_compiler::desugar::desugared_ast::IndexExpr::Name(path) => {
                         table.references.push(ReferenceInfo {
                             span: path.span,
-                            target: symbol_key_for_name_path(&path.value),
+                            target: symbol_key_for_path_in_generic_scope(
+                                &path.value,
+                                generic_scope,
+                            ),
                         });
                     }
-                    graphcal_compiler::desugar::desugared_ast::IndexExpr::NatExpr(_) => {
-                        // No reference to resolve for nat expressions
+                    graphcal_compiler::desugar::desugared_ast::IndexExpr::NatExpr(expr) => {
+                        collect_nat_generic_param_refs(expr, generic_scope, table);
                     }
                 }
             }
         }
-        TypeExprKind::TypeApplication { name, type_args } => {
+        TypeExprKind::TypeApplication { name, generic_args } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
                 target: symbol_key_for_name_path(&name.value),
             });
-            for arg in type_args {
-                collect_type_expr_refs(arg, table);
+            for arg in generic_args {
+                collect_generic_arg_refs(arg, generic_scope, table);
             }
         }
         TypeExprKind::DatetimeApplication { type_args } => {
@@ -1738,7 +1813,7 @@ fn collect_type_expr_refs(
             // Recurse into args so any user-defined names reachable from the
             // time-scale expression are still picked up by go-to-definition.
             for arg in type_args {
-                collect_type_expr_refs(arg, table);
+                collect_type_expr_refs_in_scope(arg, generic_scope, table);
             }
         }
     }
@@ -1746,6 +1821,88 @@ fn collect_type_expr_refs(
     for bound in &type_expr.constraints {
         collect_constraint_expr_refs(&bound.value, table);
     }
+}
+
+fn collect_generic_arg_refs(
+    arg: &graphcal_compiler::syntax::ast::GenericArg<graphcal_compiler::syntax::phase::Desugared>,
+    generic_scope: Option<&GenericParamSymbolScope>,
+    table: &mut SymbolTable,
+) {
+    match arg {
+        graphcal_compiler::syntax::ast::GenericArg::Type(type_expr) => {
+            collect_type_expr_refs_in_scope(type_expr, generic_scope, table);
+        }
+        graphcal_compiler::syntax::ast::GenericArg::Nat(expr) => {
+            collect_nat_generic_param_refs(expr, generic_scope, table);
+        }
+        graphcal_compiler::syntax::ast::GenericArg::Ambiguous(ambiguous) => {
+            collect_ambiguous_generic_arg_refs(ambiguous, generic_scope, table);
+        }
+    }
+}
+
+fn collect_ambiguous_generic_arg_refs(
+    arg: &graphcal_compiler::syntax::ast::AmbiguousGenericArg,
+    generic_scope: Option<&GenericParamSymbolScope>,
+    table: &mut SymbolTable,
+) {
+    match arg {
+        graphcal_compiler::syntax::ast::AmbiguousGenericArg::Name(ident) => {
+            table.references.push(ReferenceInfo {
+                span: ident.span,
+                target: generic_param_symbol(&ident.name, generic_scope)
+                    .unwrap_or_else(|| SymbolKey::TopLevel(ident.name.to_string())),
+            });
+        }
+        graphcal_compiler::syntax::ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
+            collect_ambiguous_generic_arg_refs(lhs, generic_scope, table);
+            collect_ambiguous_generic_arg_refs(rhs, generic_scope, table);
+        }
+    }
+}
+
+fn collect_nat_generic_param_refs(
+    expr: &graphcal_compiler::syntax::ast::NatExpr,
+    generic_scope: Option<&GenericParamSymbolScope>,
+    table: &mut SymbolTable,
+) {
+    match expr {
+        graphcal_compiler::syntax::ast::NatExpr::Literal(..) => {}
+        graphcal_compiler::syntax::ast::NatExpr::Var(ident) => {
+            if let Some(target) = generic_param_symbol(&ident.name, generic_scope) {
+                table.references.push(ReferenceInfo {
+                    span: ident.span,
+                    target,
+                });
+            }
+        }
+        graphcal_compiler::syntax::ast::NatExpr::Add(lhs, rhs, _)
+        | graphcal_compiler::syntax::ast::NatExpr::Mul(lhs, rhs, _) => {
+            collect_nat_generic_param_refs(lhs, generic_scope, table);
+            collect_nat_generic_param_refs(rhs, generic_scope, table);
+        }
+    }
+}
+
+fn generic_param_symbol(
+    name: &NameAtom,
+    generic_scope: Option<&GenericParamSymbolScope>,
+) -> Option<SymbolKey> {
+    generic_scope?
+        .get(&GenericParamName::from_atom(name.clone()))
+        .cloned()
+}
+
+fn symbol_key_for_path_in_generic_scope(
+    path: &NamePath,
+    generic_scope: Option<&GenericParamSymbolScope>,
+) -> SymbolKey {
+    if path.qualifier_and_leaf().is_none()
+        && let Some(target) = generic_param_symbol(path.leaf(), generic_scope)
+    {
+        return target;
+    }
+    symbol_key_for_name_path(path)
 }
 
 /// Collect references from a constraint bound expression (limited walk for unit names).
@@ -1766,10 +1923,18 @@ fn collect_constraint_expr_refs(
 
 /// Collect references from a dimension expression.
 fn collect_dim_expr_refs(dim_expr: &DimExpr, table: &mut SymbolTable) {
+    collect_dim_expr_refs_in_scope(dim_expr, None, table);
+}
+
+fn collect_dim_expr_refs_in_scope(
+    dim_expr: &DimExpr,
+    generic_scope: Option<&GenericParamSymbolScope>,
+    table: &mut SymbolTable,
+) {
     for item in &dim_expr.terms {
         table.references.push(ReferenceInfo {
             span: item.term.span,
-            target: symbol_key_for_name_path(&item.term.name.value),
+            target: symbol_key_for_path_in_generic_scope(&item.term.name.value, generic_scope),
         });
     }
 }
@@ -2082,6 +2247,43 @@ mod tests {
         assert!(
             table.references.iter().any(|r| r.target == x_key),
             "expected @x reference"
+        );
+    }
+
+    #[test]
+    fn generic_parameter_references_are_scoped_to_their_type() {
+        let source = r"
+index Component = { A };
+type Sized<N: Nat, I: Index = Component, M: Nat = N + 1> {
+    Sized(values: Dimensionless[I, N]),
+}
+";
+        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+            .parse_file()
+            .unwrap();
+        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let table = build_for_buffer(&file, source);
+        let owner = SymbolPath::local("Sized");
+        let n_key = SymbolKey::GenericParam {
+            owner: owner.clone(),
+            name: "N".to_string(),
+        };
+        let i_key = SymbolKey::GenericParam {
+            owner,
+            name: "I".to_string(),
+        };
+
+        assert_eq!(
+            table.definitions[&n_key].category,
+            SymbolCategory::GenericParam
+        );
+        assert_eq!(table.find_all_references(&n_key).len(), 2);
+        assert_eq!(table.find_all_references(&i_key).len(), 1);
+        assert_eq!(
+            table
+                .find_all_references(&SymbolKey::TopLevel("Component".to_string()))
+                .len(),
+            1
         );
     }
 

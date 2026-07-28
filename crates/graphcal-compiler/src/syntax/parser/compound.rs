@@ -230,13 +230,16 @@ impl Parser<'_> {
     /// nat_expr := nat_mul_term ('+' nat_mul_term)*
     /// nat_mul_term := nat_atom ('*' nat_atom)*
     /// ```
-    fn parse_nat_expr(&mut self) -> Result<NatExpr, ParseError> {
+    pub(super) fn parse_nat_expr(&mut self) -> Result<NatExpr, ParseError> {
         let mut lhs = self.parse_nat_mul_term()?;
         while self.lexer.peek() == Some(&Token::Plus) {
             self.lexer.next_token(); // consume '+'
             let rhs = self.parse_nat_mul_term()?;
             let span = lhs.span().merge(rhs.span());
             lhs = NatExpr::Add(Box::new(lhs), Box::new(rhs), span);
+        }
+        if let Some((&Token::Minus, span)) = self.lexer.peek_with_span() {
+            return Err(self.nat_subtraction_unsupported(span));
         }
         Ok(lhs)
     }
@@ -260,7 +263,7 @@ impl Parser<'_> {
                 let (_, span) = self.advance()?;
                 let text = self.lexer.slice_at(span).replace('_', "");
                 let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
-                    reason: "expected non-negative integer in range()".to_string(),
+                    reason: "expected a non-negative integer in a Nat expression".to_string(),
                     src: self.named_source(),
                     span: span.into(),
                 })?;
@@ -346,16 +349,6 @@ impl Parser<'_> {
 mod tests {
     use super::*;
     use crate::syntax::ast::{BinOp, DeclKind, ExprKind};
-
-    fn dim_expr_name(te: &crate::syntax::ast::TypeExpr) -> &str {
-        match &te.kind {
-            crate::syntax::ast::TypeExprKind::DimExpr(dim) => {
-                assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
-                dim.terms[0].term.name.value.leaf().as_str()
-            }
-            other => panic!("expected DimExpr, got {other:?}"),
-        }
-    }
 
     #[test]
     fn missing_comma_between_match_arms_is_reported_at_next_pattern() {
@@ -452,22 +445,16 @@ node x: Dimensionless = match @r {
                 } => {
                     assert_eq!(callee.as_bare().unwrap().name, "Vec3");
                     assert_eq!(generic_args.len(), 2);
-                    match &generic_args[0] {
-                        crate::syntax::ast::GenericArg::Type(type_arg) => {
-                            assert_eq!(dim_expr_name(type_arg), "Length");
-                        }
-                        other @ crate::syntax::ast::GenericArg::Nat(_) => {
-                            panic!("expected type generic arg, got {other:?}")
-                        }
-                    }
-                    match &generic_args[1] {
-                        crate::syntax::ast::GenericArg::Type(type_arg) => {
-                            assert_eq!(dim_expr_name(type_arg), "ECI");
-                        }
-                        other @ crate::syntax::ast::GenericArg::Nat(_) => {
-                            panic!("expected type generic arg, got {other:?}")
-                        }
-                    }
+                    assert!(matches!(
+                        &generic_args[0],
+                        crate::syntax::ast::GenericArg::Ambiguous(arg)
+                            if arg.to_string() == "Length"
+                    ));
+                    assert!(matches!(
+                        &generic_args[1],
+                        crate::syntax::ast::GenericArg::Ambiguous(arg)
+                            if arg.to_string() == "ECI"
+                    ));
                     assert_eq!(fields.len(), 3);
                 }
                 other => panic!("expected ConstructorCall, got {other:?}"),
@@ -503,6 +490,16 @@ node x: Dimensionless = match @r {
         // The old brace-form `Ctor { field: val }` no longer parses.
         let source = "node t: Dimensionless = TransferResult { dv1: 1.0, dv2: 2.0 };";
         assert!(Parser::new(source).parse_file().is_err());
+    }
+
+    #[test]
+    fn nat_subtraction_in_range_binding_has_targeted_error() {
+        let source = "node x: Dimensionless[N] = for i: range(N - 1) { 1.0 };";
+        let error = Parser::new(source).parse_file().unwrap_err();
+        assert!(matches!(
+            error,
+            ParseError::NatSubtractionUnsupported { .. }
+        ));
     }
 
     #[test]

@@ -342,9 +342,20 @@ fn collect_resolved_collection_indexes_from_declared_type(
             record_declared_collection_index(index, ctx, src, refs)?;
             collect_resolved_collection_indexes_from_declared_type(element, ctx, src, refs)
         }
-        crate::registry::declared_type::DeclaredType::Struct(_name, type_args) => {
-            for arg in type_args {
-                collect_resolved_collection_indexes_from_declared_type(arg, ctx, src, refs)?;
+        crate::registry::declared_type::DeclaredType::Struct(_name, generic_args) => {
+            for arg in generic_args {
+                match arg {
+                    crate::registry::declared_type::DeclaredGenericArg::Index(index) => {
+                        record_declared_collection_index(index, ctx, src, refs)?;
+                    }
+                    crate::registry::declared_type::DeclaredGenericArg::Type(type_expr) => {
+                        collect_resolved_collection_indexes_from_declared_type(
+                            type_expr, ctx, src, refs,
+                        )?;
+                    }
+                    crate::registry::declared_type::DeclaredGenericArg::Dim(_)
+                    | crate::registry::declared_type::DeclaredGenericArg::Nat(_) => {}
+                }
             }
             Ok(())
         }
@@ -385,9 +396,20 @@ fn collect_resolved_collection_indexes_from_type(
             }
             Ok(())
         }
-        ResolvedTypeExpr::GenericStruct { type_args, .. } => {
-            for arg in type_args {
-                collect_resolved_collection_indexes_from_type(arg, ctx, src, refs)?;
+        ResolvedTypeExpr::GenericStruct { generic_args, .. } => {
+            for arg in generic_args {
+                match arg {
+                    crate::tir::typed::ResolvedGenericArg::Index(ResolvedIndex::Concrete(
+                        index,
+                        span,
+                    )) => record_resolved_collection_index(index, ctx, src, *span, refs)?,
+                    crate::tir::typed::ResolvedGenericArg::Type(type_expr) => {
+                        collect_resolved_collection_indexes_from_type(type_expr, ctx, src, refs)?;
+                    }
+                    crate::tir::typed::ResolvedGenericArg::Dim(_)
+                    | crate::tir::typed::ResolvedGenericArg::Index(_)
+                    | crate::tir::typed::ResolvedGenericArg::Nat(_, _) => {}
+                }
             }
             Ok(())
         }

@@ -6,8 +6,9 @@ use crate::dimension::Dimension;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeDef};
 
-use super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
-use crate::tir::typed::{ResolvedIndex, ResolvedTypeExpr};
+use super::{DeclaredType, InferredGenericArg, InferredIndex, InferredStructType, InferredType};
+use crate::registry::declared_type::DeclaredGenericArg;
+use crate::tir::typed::{ResolvedDimArg, ResolvedGenericArg, ResolvedIndex, ResolvedTypeExpr};
 
 pub(super) fn is_bool_type(ty: &InferredType) -> bool {
     match ty {
@@ -36,7 +37,7 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
                 && d_args
                     .iter()
                     .zip(i_args)
-                    .all(|(da, ia)| types_match(da, ia))
+                    .all(|(declared, inferred)| declared_generic_arg_matches(declared, inferred))
         }
         (
             DeclaredType::Indexed {
@@ -48,6 +49,27 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
                 index: i_idx,
             },
         ) => i_idx.matches_ref(d_idx) && types_match(d_elem, i_elem),
+        _ => false,
+    }
+}
+
+fn declared_generic_arg_matches(
+    declared: &DeclaredGenericArg,
+    inferred: &InferredGenericArg,
+) -> bool {
+    match (declared, inferred) {
+        (DeclaredGenericArg::Dim(declared), InferredGenericArg::Dim(inferred)) => {
+            declared == inferred
+        }
+        (DeclaredGenericArg::Index(declared), InferredGenericArg::Index(inferred)) => {
+            inferred.matches_ref(declared)
+        }
+        (DeclaredGenericArg::Nat(declared), InferredGenericArg::Nat(inferred)) => {
+            declared == inferred
+        }
+        (DeclaredGenericArg::Type(declared), InferredGenericArg::Type(inferred)) => {
+            types_match(declared, inferred)
+        }
         _ => false,
     }
 }
@@ -78,19 +100,42 @@ pub(super) fn resolved_type_matches_inferred(
         }
         (
             ResolvedTypeExpr::GenericStruct {
-                name, type_args, ..
+                name, generic_args, ..
             },
             InferredType::Struct(actual, actual_args),
         ) => {
             actual.matches_resolved(name)
-                && type_args.len() == actual_args.len()
-                && type_args
+                && generic_args.len() == actual_args.len()
+                && generic_args
                     .iter()
                     .zip(actual_args)
-                    .all(|(expected, actual)| resolved_type_matches_inferred(expected, actual))
+                    .all(|(expected, actual)| resolved_generic_arg_matches(expected, actual))
         }
         (ResolvedTypeExpr::Indexed { base, indexes }, _) => {
             resolved_indexed_type_matches_inferred(base, indexes, inferred)
+        }
+        _ => false,
+    }
+}
+
+fn resolved_generic_arg_matches(
+    resolved: &ResolvedGenericArg,
+    inferred: &InferredGenericArg,
+) -> bool {
+    match (resolved, inferred) {
+        (ResolvedGenericArg::Dim(resolved), InferredGenericArg::Dim(inferred)) => match resolved {
+            ResolvedDimArg::Dimensionless => inferred.is_dimensionless(),
+            ResolvedDimArg::Concrete(dimension) => dimension == inferred,
+            ResolvedDimArg::GenericParam(_, _) | ResolvedDimArg::Expr { .. } => false,
+        },
+        (ResolvedGenericArg::Index(resolved), InferredGenericArg::Index(inferred)) => {
+            resolved_index_matches_inferred(resolved, inferred)
+        }
+        (ResolvedGenericArg::Nat(resolved, _), InferredGenericArg::Nat(inferred)) => {
+            resolved == inferred
+        }
+        (ResolvedGenericArg::Type(resolved), InferredGenericArg::Type(inferred)) => {
+            resolved_type_matches_inferred(resolved, inferred)
         }
         _ => false,
     }
@@ -173,13 +218,36 @@ impl From<&InferredType> for DeclaredType {
             InferredType::Int | InferredType::Fin(_) => Self::Int,
             InferredType::Datetime(scale) => Self::Datetime(*scale),
             InferredType::NamedIndex(index) => Self::IndexArg(index.type_ref().clone()),
-            InferredType::Struct(n, args) => {
-                Self::Struct(n.type_ref().clone(), args.iter().map(Self::from).collect())
-            }
+            InferredType::Struct(n, args) => Self::Struct(
+                n.type_ref().clone(),
+                args.iter().map(DeclaredGenericArg::from).collect(),
+            ),
             InferredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),
                 index: index.type_ref().clone(),
             },
+        }
+    }
+}
+
+impl From<&InferredGenericArg> for DeclaredGenericArg {
+    fn from(arg: &InferredGenericArg) -> Self {
+        match arg {
+            InferredGenericArg::Dim(dimension) => Self::Dim(dimension.clone()),
+            InferredGenericArg::Index(index) => Self::Index(index.type_ref().clone()),
+            InferredGenericArg::Nat(form) => Self::Nat(form.clone()),
+            InferredGenericArg::Type(type_expr) => Self::Type(DeclaredType::from(type_expr)),
+        }
+    }
+}
+
+impl From<&DeclaredGenericArg> for InferredGenericArg {
+    fn from(arg: &DeclaredGenericArg) -> Self {
+        match arg {
+            DeclaredGenericArg::Dim(dimension) => Self::Dim(dimension.clone()),
+            DeclaredGenericArg::Index(index) => Self::Index(InferredIndex::from_ref(index.clone())),
+            DeclaredGenericArg::Nat(form) => Self::Nat(form.clone()),
+            DeclaredGenericArg::Type(type_expr) => Self::Type(InferredType::from(type_expr)),
         }
     }
 }
@@ -196,7 +264,7 @@ impl From<&DeclaredType> for InferredType {
             }
             DeclaredType::Struct(n, args) => Self::Struct(
                 InferredStructType::from_ref(n.clone()),
-                args.iter().map(Self::from).collect(),
+                args.iter().map(InferredGenericArg::from).collect(),
             ),
             DeclaredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),

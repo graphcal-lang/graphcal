@@ -88,6 +88,11 @@ fn format_hover(def: &DefinitionInfo) -> String {
         SymbolCategory::Field => {
             format!("`{}`", def.name)
         }
+        SymbolCategory::GenericParam => {
+            let sort = def.type_description.as_deref().unwrap_or("generic");
+            let detail = def.detail.as_deref().unwrap_or("generic parameter");
+            format!("```graphcal\n{}: {sort}\n```\n{detail}", def.name)
+        }
         SymbolCategory::LocalVar => {
             let detail = def.detail.as_deref().unwrap_or("");
             if detail.is_empty() {

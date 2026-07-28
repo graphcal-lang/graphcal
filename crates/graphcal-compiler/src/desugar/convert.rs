@@ -441,9 +441,9 @@ impl From<TypeExprKind<Raw>> for TypeExprKind<Desugared> {
                 base: Box::new((*base).into()),
                 indexes,
             },
-            TypeExprKind::TypeApplication { name, type_args } => Self::TypeApplication {
+            TypeExprKind::TypeApplication { name, generic_args } => Self::TypeApplication {
                 name,
-                type_args: type_args.into_iter().map(Into::into).collect(),
+                generic_args: generic_args.into_iter().map(Into::into).collect(),
             },
             TypeExprKind::DatetimeApplication { type_args } => Self::DatetimeApplication {
                 type_args: type_args.into_iter().map(Into::into).collect(),
@@ -468,6 +468,7 @@ impl From<GenericArg<Raw>> for GenericArg<Desugared> {
         match g {
             GenericArg::Type(t) => Self::Type(t.into()),
             GenericArg::Nat(n) => Self::Nat(n),
+            GenericArg::Ambiguous(arg) => Self::Ambiguous(arg),
         }
     }
 }
@@ -511,11 +512,11 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
             },
             ExprKind::FnCall {
                 callee,
-                type_args,
+                generic_args,
                 args,
             } => Self::FnCall {
                 callee,
-                type_args: type_args.into_iter().map(Into::into).collect(),
+                generic_args: generic_args.into_iter().map(Into::into).collect(),
                 args: args.into_iter().map(Into::into).collect(),
             },
             ExprKind::If {

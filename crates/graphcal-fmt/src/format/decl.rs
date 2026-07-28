@@ -358,7 +358,7 @@ fn format_generic_params(fmt: &mut Formatter<'_>, params: &[GenericParam]) -> Rc
             if let Some(ref default) = p.default {
                 doc = doc
                     .append(RcDoc::text(" = "))
-                    .append(format_type_expr_inline(fmt, default));
+                    .append(super::type_expr::format_generic_arg_inline(fmt, default));
             }
             doc
         })

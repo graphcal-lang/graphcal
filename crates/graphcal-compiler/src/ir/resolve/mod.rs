@@ -858,10 +858,18 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(crate::syntax::names:
                 }
             }
         }
-        TypeExprKind::TypeApplication { name, type_args } => {
+        TypeExprKind::TypeApplication { name, generic_args } => {
             refs.push((name.value.clone(), name.span));
-            for arg in type_args {
-                collect_type_refs(arg, refs);
+            for arg in generic_args {
+                match arg {
+                    crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
+                        collect_type_refs(type_expr, refs);
+                    }
+                    crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
+                        collect_ambiguous_generic_refs(ambiguous, refs);
+                    }
+                    crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
+                }
             }
         }
         TypeExprKind::DatetimeApplication { type_args } => {
@@ -876,6 +884,22 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(crate::syntax::names:
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => {}
+    }
+}
+
+fn collect_ambiguous_generic_refs(
+    arg: &crate::desugar::desugared_ast::AmbiguousGenericArg,
+    refs: &mut Vec<(crate::syntax::names::NamePath, Span)>,
+) {
+    match arg {
+        crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => refs.push((
+            crate::syntax::names::NamePath::local(ident.name.clone()),
+            ident.span,
+        )),
+        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
+            collect_ambiguous_generic_refs(lhs, refs);
+            collect_ambiguous_generic_refs(rhs, refs);
+        }
     }
 }
 

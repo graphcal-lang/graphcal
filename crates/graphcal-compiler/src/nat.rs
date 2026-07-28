@@ -183,6 +183,47 @@ impl NatPolyForm {
         Ok(Self { terms })
     }
 
+    /// Substitute variables with other normalized Nat forms.
+    ///
+    /// This composes type-level Nat expressions without flattening them to
+    /// strings or requiring the replacement forms to be concrete.
+    pub(crate) fn substitute_forms(
+        &self,
+        bindings: &HashMap<GenericParamName, Self>,
+    ) -> Result<Self, NatOverflowError> {
+        self.terms
+            .iter()
+            .try_fold(Self::from_constant(0), |sum, (monomial, coefficient)| {
+                let term = monomial.0.iter().try_fold(
+                    Self::from_constant(*coefficient),
+                    |product, (variable, exponent)| {
+                        let factor = bindings
+                            .get(variable)
+                            .cloned()
+                            .unwrap_or_else(|| Self::from_var(variable.clone()));
+                        product.mul(&factor.pow(*exponent)?)
+                    },
+                )?;
+                sum.add(&term)
+            })
+    }
+
+    fn pow(&self, exponent: u64) -> Result<Self, NatOverflowError> {
+        match exponent {
+            0 => Ok(Self::from_constant(1)),
+            1 => Ok(self.clone()),
+            exponent => {
+                let half = self.pow(exponent / 2)?;
+                let square = half.mul(&half)?;
+                if exponent.is_multiple_of(2) {
+                    Ok(square)
+                } else {
+                    square.mul(self)
+                }
+            }
+        }
+    }
+
     /// Returns the constant term (coefficient of the empty monomial).
     #[must_use]
     pub(crate) fn constant(&self) -> u64 {
@@ -266,5 +307,26 @@ impl NatPolyForm {
 impl std::fmt::Display for NatPolyForm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.format())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn substitute_forms_composes_and_normalizes_polynomials() {
+        let m = GenericParamName::expect_valid("M");
+        let n = GenericParamName::expect_valid("N");
+        let source = NatPolyForm::from_var(m.clone())
+            .mul(&NatPolyForm::from_var(m.clone()))
+            .unwrap();
+        let replacement = NatPolyForm::from_var(n)
+            .add(&NatPolyForm::from_constant(1))
+            .unwrap();
+        let expected = replacement.mul(&replacement).unwrap();
+        let bindings = HashMap::from([(m, replacement)]);
+
+        assert_eq!(source.substitute_forms(&bindings).unwrap(), expected);
     }
 }

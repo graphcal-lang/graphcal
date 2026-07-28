@@ -21,7 +21,9 @@ use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail, ExpectedFailKey
 use graphcal_compiler::registry::builtins::{
     BuiltinFunction, builtin_constants, builtin_functions,
 };
-use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
+use graphcal_compiler::registry::declared_type::{
+    DeclaredGenericArg, DeclaredType, IndexTypeRef, StructTypeRef,
+};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::Registry;
 
@@ -75,14 +77,25 @@ pub(super) fn runtime_to_value(
 
             // Build a substitution map from generic param names to concrete DeclaredTypes
             // when we have concrete type args from the declared type.
-            let generic_sub: HashMap<&str, &DeclaredType> =
-                if let (Some(td), Some(DeclaredType::Struct(_, type_args))) =
+            let generic_sub: HashMap<&str, DeclaredType> =
+                if let (Some(td), Some(DeclaredType::Struct(_, generic_args))) =
                     (type_def, declared_type)
                 {
                     td.generic_params
                         .iter()
-                        .zip(type_args.iter())
-                        .map(|(param, arg)| (param.name.as_str(), arg))
+                        .zip(generic_args)
+                        .filter_map(|(param, arg)| {
+                            let type_expr = match arg {
+                                DeclaredGenericArg::Dim(dimension) => {
+                                    DeclaredType::Quantity(dimension.clone())
+                                }
+                                DeclaredGenericArg::Type(type_expr) => type_expr.clone(),
+                                DeclaredGenericArg::Index(_) | DeclaredGenericArg::Nat(_) => {
+                                    return None;
+                                }
+                            };
+                            Some((param.name.as_str(), type_expr))
+                        })
                         .collect()
                 } else {
                     HashMap::new()
