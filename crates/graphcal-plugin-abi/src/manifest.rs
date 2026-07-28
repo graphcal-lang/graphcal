@@ -64,16 +64,13 @@ pub struct ManifestParam {
 
 /// The kind of a parameter or result value.
 ///
-/// JSON encoding is externally tagged: `{"scalar": {…}}`, `"bool"`, `"int"`,
+/// JSON encoding is externally tagged: `{"quantity": {…}}`, `"bool"`, `"int"`,
 /// `{"array": {"element": {…}, "index": "I"}}`,
-/// `{"struct": {"fields": [{"name": "root", "kind": {"scalar": {}}}]}}`.
-/// The wire tag retains the ABI term `scalar`; the semantic kind is a Graphcal
-/// quantity.
+/// `{"struct": {"fields": [{"name": "root", "kind": {"quantity": {}}}]}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestValueKind {
     /// A quantity with the dimension described by the monomial.
-    #[serde(rename = "scalar")]
     Quantity(ManifestMonomial),
     /// A boolean value (crosses the ABI as `1.0`/`0.0`).
     Bool,
@@ -114,8 +111,7 @@ pub struct ManifestField {
 #[serde(rename_all = "snake_case")]
 pub enum ManifestFieldKind {
     /// A quantity whose dimension is fixed (the monomial must have no
-    /// dimension-variable factors). The wire tag is the ABI term `scalar`.
-    #[serde(rename = "scalar")]
+    /// dimension-variable factors).
     Quantity(ManifestMonomial),
     /// A boolean slot (`1.0`/`0.0`).
     Bool,
@@ -126,7 +122,7 @@ pub enum ManifestFieldKind {
 /// A dimension monomial: a product of dimension-variable powers and fixed
 /// prelude base-dimension powers, e.g. `D1 * D2^(1/2) * Length^-1`.
 ///
-/// The dimensionless quantity monomial is the empty product: `{"scalar": {}}`.
+/// The dimensionless quantity monomial is the empty product: `{"quantity": {}}`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestMonomial {
@@ -751,8 +747,8 @@ mod tests {
 
     #[test]
     fn dimensionless_quantity_is_the_empty_monomial() {
-        let json = r#"{"abi_version":2,"functions":[
-            {"name":"tanh","params":[{"name":"x","kind":{"scalar":{}}}],"result":{"scalar":{}}}
+        let json = r#"{"abi_version":3,"functions":[
+            {"name":"tanh","params":[{"name":"x","kind":{"quantity":{}}}],"result":{"quantity":{}}}
         ]}"#;
         let manifest = PluginManifest::from_json(json.as_bytes()).unwrap();
         assert_eq!(
@@ -762,13 +758,24 @@ mod tests {
         assert!(manifest.functions[0].dim_vars.is_empty());
 
         let encoded = manifest.to_json().unwrap();
-        assert!(encoded.contains(r#""scalar""#));
-        assert!(!encoded.contains(r#""quantity""#));
+        assert!(encoded.contains(r#""quantity""#));
+        assert!(!encoded.contains(r#""scalar""#));
+    }
+
+    #[test]
+    fn legacy_v2_quantity_kind_is_rejected() {
+        let json = r#"{"abi_version":3,"functions":[
+            {"name":"tanh","params":[{"name":"x","kind":{"scalar":{}}}],"result":{"quantity":{}}}
+        ]}"#;
+        assert!(matches!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Json { .. }
+        ));
     }
 
     #[test]
     fn unit_kinds_decode_from_bare_strings() {
-        let json = r#"{"abi_version":2,"functions":[
+        let json = r#"{"abi_version":3,"functions":[
             {"name":"f","params":[{"name":"n","kind":"int"},{"name":"b","kind":"bool"}],"result":"int"}
         ]}"#;
         let manifest = PluginManifest::from_json(json.as_bytes()).unwrap();
@@ -783,12 +790,12 @@ mod tests {
     #[test]
     fn future_abi_version_is_reported_before_shape_errors() {
         // The future shape is unknown; only `abi_version` must be readable.
-        let json = r#"{"abi_version":3,"modules":{"totally":"different"}}"#;
+        let json = r#"{"abi_version":4,"modules":{"totally":"different"}}"#;
         let err = PluginManifest::from_json(json.as_bytes()).unwrap_err();
         assert_eq!(
             err,
             ManifestDecodeError::UnsupportedAbiVersion {
-                found: 3,
+                found: 4,
                 supported: crate::ABI_VERSION,
             }
         );
@@ -796,7 +803,7 @@ mod tests {
 
     #[test]
     fn unknown_fields_are_rejected() {
-        let json = r#"{"abi_version":2,"functions":[],"extra":true}"#;
+        let json = r#"{"abi_version":3,"functions":[],"extra":true}"#;
         assert!(matches!(
             PluginManifest::from_json(json.as_bytes()).unwrap_err(),
             ManifestDecodeError::Json { .. }
@@ -805,7 +812,7 @@ mod tests {
 
     #[test]
     fn empty_function_list_is_rejected() {
-        let json = r#"{"abi_version":2,"functions":[]}"#;
+        let json = r#"{"abi_version":3,"functions":[]}"#;
         assert_eq!(
             PluginManifest::from_json(json.as_bytes()).unwrap_err(),
             ManifestDecodeError::Invalid(ManifestValidationError::NoFunctions)

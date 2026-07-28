@@ -199,21 +199,22 @@ deterministic interpreter. The module must satisfy the ABI, all checked
 at load time before any plugin code runs:
 
 - **Manifest.** The module embeds a JSON manifest in a custom section
-  named `graphcal-manifest`, declaring `abi_version: 2` and each provided
+  named `graphcal-manifest`, declaring `abi_version: 3` and each provided
   function's dimensional signature (dimension and index variables, named
   parameters, the result — including array kinds and struct field
   layouts). Fixed dimensions are spelled structurally over the eight
   prelude base dimensions (`Length`, `Time`, `Mass`, `Temperature`,
   `ElectricCurrent`, `Amount`, `LuminousIntensity`, `Angle`) with rational
-  exponents — `Velocity` is `Length^1 * Time^-1`. User-defined base
-  dimensions cannot cross the binary boundary.
+  exponents — `Velocity` is `Length^1 * Time^-1`. Quantity kinds use the
+  `"quantity"` JSON tag. ABI v2's former `"scalar"` tag is not accepted;
+  rebuild plugins with the current SDK. User-defined base dimensions cannot
+  cross the binary boundary.
 - **Value ABI.** Each function's wasm export type follows its signature:
-  quantity/`Bool`/`Int` parameters use one scalar `f64` ABI slot each
-  (raw SI base units for quantities; `Int` as exactly-representable integers,
-  `Bool` as `1.0`/`0.0`), and an
-  array parameter is an `(i32 ptr, i32 len)` pair pointing at `len` dense
-  little-endian `f64` elements in index order. A scalar ABI result is the
-  single `f64` return value; an array or struct result replaces the
+  quantity/`Bool`/`Int` parameters use one `f64` ABI slot each (raw SI base
+  units for quantities; `Int` as exactly-representable integers, `Bool` as
+  `1.0`/`0.0`), and an array parameter is an `(i32 ptr, i32 len)` pair pointing at `len` dense
+  little-endian `f64` elements in index order. A quantity/`Bool`/`Int` result
+  is the single `f64` return value; an array or struct result replaces the
   return with one trailing `i32` out-pointer the plugin fills — `len`
   elements for an array (the length of the input bound to the result's
   index variable) or one slot per field for a struct. A non-finite quantity
@@ -326,8 +327,8 @@ evaluation starts (P003, P005–P010 depending on the cause).
 Embedders provide native implementations by injecting a
 `HostFunctionRegistry` — a map from `(plugin path, function name)` to a
 function of shape `fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError>`,
-where a `HostFnValue` is a scalar `f64` or a dense `f64` buffer (arrays in
-index order; struct results as one slot per field). WASM plugins
+where a `HostFnValue` is `HostFnValue::F64` or a dense `f64` buffer (arrays
+in index order; struct results as one slot per field). WASM plugins
 register through the same interface (the `graphcal-plugin-host` crate
 loads a project's vendored modules into the registry), so the evaluator
 itself stays WASM-free:

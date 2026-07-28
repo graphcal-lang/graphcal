@@ -203,7 +203,7 @@ The lockfile is the trust boundary: plugin bytes can only change together
 with a reviewable `graphcal.lock` diff. See
 [Trust: Lockfile Pins](language/extern-functions.md#trust-lockfile-pins).
 
-## Scope and limits (ABI v2)
+## Scope and limits (ABI v3)
 
 - Values are SI quantities, `Bool`, `Int`, arrays of quantities over one index
   variable, and record-shaped results with concrete fields. Not crossing
@@ -224,8 +224,8 @@ with a reviewable `graphcal.lock` diff. See
 The SDK is a convenience, not part of the trust model — a plugin is any
 core wasm module satisfying the [module
 contract](language/extern-functions.md#wasm-plugin-modules): exports
-whose wasm types follow their signatures (`f64` per scalar ABI slot, `(i32, i32)`
-per array, a trailing out-pointer for array/struct results), the
+whose wasm types follow their signatures (one `f64` per quantity/`Bool`/`Int`
+slot, `(i32, i32)` per array, a trailing out-pointer for array/struct results), the
 `graphcal_alloc`/`graphcal_free` pair when buffers are involved, a
 `graphcal-manifest` custom section, and no imports beyond the optional
 `graphcal::fail`. For non-Rust toolchains,

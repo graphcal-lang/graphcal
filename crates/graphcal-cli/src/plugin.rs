@@ -452,19 +452,19 @@ pub fn parse_call_args(
             };
             match &param.kind {
                 ValueKind::Bool => match text.as_str() {
-                    "true" => Ok(HostFnValue::Scalar(1.0)),
-                    "false" => Ok(HostFnValue::Scalar(0.0)),
+                    "true" => Ok(HostFnValue::F64(1.0)),
+                    "false" => Ok(HostFnValue::F64(0.0)),
                     _ => Err(invalid("expected `true` or `false`")),
                 },
                 ValueKind::Int => {
                     let value: i64 = text.parse().map_err(|_| invalid("expected an integer"))?;
                     int_to_abi(value)
-                        .map(HostFnValue::Scalar)
+                        .map(HostFnValue::F64)
                         .ok_or_else(|| invalid("integer is not exactly representable as an f64"))
                 }
                 ValueKind::Quantity(_) => text
                     .parse::<f64>()
-                    .map(HostFnValue::Scalar)
+                    .map(HostFnValue::F64)
                     .map_err(|_| invalid("expected a number (in SI base units)")),
                 // Struct parameters never pass signature validation.
                 ValueKind::Struct(_) => Err(invalid("struct parameters are not supported")),
@@ -497,15 +497,15 @@ pub fn parse_call_args(
 /// Returns `Err` with a description when the value violates the declared
 /// kind's encoding (a plugin bug worth surfacing, not reinterpreting).
 pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Result<String, String> {
-    let abi_scalar = |value: &HostFnValue| match value {
-        HostFnValue::Scalar(raw) => Ok(*raw),
+    let abi_f64 = |value: &HostFnValue| match value {
+        HostFnValue::F64(raw) => Ok(*raw),
         HostFnValue::Buffer(_) => {
-            Err("declared a scalar ABI result but returned an array".to_string())
+            Err("declared a single-value result but returned an array".to_string())
         }
     };
     match signature.result() {
         ValueKind::Bool => {
-            let raw = abi_scalar(value)?;
+            let raw = abi_f64(value)?;
             if raw.to_bits() == 1.0_f64.to_bits() {
                 Ok("true".to_string())
             } else if raw.to_bits() == 0.0_f64.to_bits() {
@@ -517,7 +517,7 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
             }
         }
         ValueKind::Int => {
-            let raw = abi_scalar(value)?;
+            let raw = abi_f64(value)?;
             int_from_abi(raw)
                 .map(|value| value.to_string())
                 .ok_or_else(|| {
@@ -527,7 +527,7 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
                 })
         }
         ValueKind::Quantity(monomial) => {
-            let rendered = format_number(abi_scalar(value)?);
+            let rendered = format_number(abi_f64(value)?);
             let dim = render_quantity_result_dimension(monomial);
             Ok(match dim {
                 Some(dim) => format!("{rendered} [{dim}, SI base units]"),
@@ -536,7 +536,7 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
         }
         ValueKind::Indexed { element, .. } => {
             let HostFnValue::Buffer(values) = value else {
-                return Err("declared an array result but returned a scalar ABI value".to_string());
+                return Err("declared an array result but returned an f64 ABI slot".to_string());
             };
             let rendered = values
                 .iter()
@@ -553,7 +553,7 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
             use graphcal_compiler::function_signature::StructFieldKind;
 
             let HostFnValue::Buffer(slots) = value else {
-                return Err("declared a struct result but returned a scalar ABI value".to_string());
+                return Err("declared a struct result but returned an f64 ABI slot".to_string());
             };
             if slots.len() != shape.fields().len() {
                 return Err(format!(
@@ -804,15 +804,15 @@ mod tests {
         assert_eq!(
             args,
             [
-                HostFnValue::Scalar(1.0),
-                HostFnValue::Scalar(3.0),
-                HostFnValue::Scalar(0.5)
+                HostFnValue::F64(1.0),
+                HostFnValue::F64(3.0),
+                HostFnValue::F64(0.5)
             ]
         );
 
         let args =
             parse_call_args("step", &step_signature(), &["5".into(), "true".into()]).unwrap();
-        assert_eq!(args, [HostFnValue::Scalar(5.0), HostFnValue::Scalar(1.0)]);
+        assert_eq!(args, [HostFnValue::F64(5.0), HostFnValue::F64(1.0)]);
 
         assert!(matches!(
             parse_call_args("step", &step_signature(), &["5".into()]).unwrap_err(),
@@ -835,10 +835,10 @@ mod tests {
     #[test]
     fn results_render_per_kind() {
         assert_eq!(
-            render_result(&step_signature(), &HostFnValue::Scalar(42.0)).unwrap(),
+            render_result(&step_signature(), &HostFnValue::F64(42.0)).unwrap(),
             "42"
         );
-        assert!(render_result(&step_signature(), &HostFnValue::Scalar(42.5)).is_err());
+        assert!(render_result(&step_signature(), &HostFnValue::F64(42.5)).is_err());
 
         let bool_result = FunctionSignature::try_new(
             Vec::new(),
@@ -851,14 +851,14 @@ mod tests {
         )
         .expect("valid signature");
         assert_eq!(
-            render_result(&bool_result, &HostFnValue::Scalar(1.0)).unwrap(),
+            render_result(&bool_result, &HostFnValue::F64(1.0)).unwrap(),
             "true"
         );
         assert_eq!(
-            render_result(&bool_result, &HostFnValue::Scalar(0.0)).unwrap(),
+            render_result(&bool_result, &HostFnValue::F64(0.0)).unwrap(),
             "false"
         );
-        assert!(render_result(&bool_result, &HostFnValue::Scalar(0.5)).is_err());
+        assert!(render_result(&bool_result, &HostFnValue::F64(0.5)).is_err());
 
         let velocity = prelude_base_dimension("Length")
             .unwrap()
@@ -875,7 +875,7 @@ mod tests {
         )
         .expect("valid signature");
         assert_eq!(
-            render_result(&quantity_result, &HostFnValue::Scalar(2.5)).unwrap(),
+            render_result(&quantity_result, &HostFnValue::F64(2.5)).unwrap(),
             "2.5 [Length * Time^-1, SI base units]"
         );
     }

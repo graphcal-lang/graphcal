@@ -778,14 +778,12 @@ fn eval_hir_extern_fn(
         let converted = match (&param.kind, value) {
             (ValueKind::Quantity(_), value) => value
                 .expect_quantity("extern function argument")
-                .map(HostFnValue::Scalar)
+                .map(HostFnValue::F64)
                 .map_err(|e| ctx.eval_error(e.to_string(), arg.span))?,
             (ValueKind::Int, RuntimeValue::Int(i)) => {
-                HostFnValue::Scalar(exact_numeric_extern_arg(i, ext, arg.span, ctx)?)
+                HostFnValue::F64(exact_numeric_extern_arg(i, ext, arg.span, ctx)?)
             }
-            (ValueKind::Bool, RuntimeValue::Bool(b)) => {
-                HostFnValue::Scalar(if b { 1.0 } else { 0.0 })
-            }
+            (ValueKind::Bool, RuntimeValue::Bool(b)) => HostFnValue::F64(if b { 1.0 } else { 0.0 }),
             (
                 ValueKind::Indexed { index, .. },
                 RuntimeValue::Indexed {
@@ -842,11 +840,13 @@ fn eval_hir_extern_fn(
         )
     })?;
 
-    let abi_scalar_result = |result: &HostFnValue| -> Result<f64, GraphcalError> {
+    let abi_f64_result = |result: &HostFnValue| -> Result<f64, GraphcalError> {
         match result {
-            HostFnValue::Scalar(value) => Ok(*value),
+            HostFnValue::F64(value) => Ok(*value),
             HostFnValue::Buffer(_) => Err(ctx.eval_error(
-                format!("extern function `{ext}` declared a quantity result but returned an array"),
+                format!(
+                    "extern function `{ext}` declared a single-value result but returned an array"
+                ),
                 expr.span,
             )),
         }
@@ -856,13 +856,13 @@ fn eval_hir_extern_fn(
         ValueKind::Quantity(_) => {
             let display = ext.to_string();
             Ok(RuntimeValue::Quantity(super::arithmetic::check_finite(
-                abi_scalar_result(&result)?,
+                abi_f64_result(&result)?,
                 &display,
                 ctx,
                 expr.span,
             )?))
         }
-        ValueKind::Int => super::conversions::checked_f64_to_i64(abi_scalar_result(&result)?)
+        ValueKind::Int => super::conversions::checked_f64_to_i64(abi_f64_result(&result)?)
             .map(RuntimeValue::Int)
             .map_err(|err| {
                 ctx.eval_error(
@@ -871,7 +871,7 @@ fn eval_hir_extern_fn(
                 )
             }),
         ValueKind::Bool => {
-            let result = abi_scalar_result(&result)?;
+            let result = abi_f64_result(&result)?;
             #[expect(
                 clippy::float_cmp,
                 reason = "the Bool host ABI is exactly 0.0/1.0; anything else is a plugin bug"
@@ -893,7 +893,7 @@ fn eval_hir_extern_fn(
             let HostFnValue::Buffer(buffer) = result else {
                 return Err(ctx.eval_error(
                     format!(
-                        "extern function `{ext}` declared an array result but returned a scalar ABI value"
+                        "extern function `{ext}` declared an array result but returned an f64 ABI slot"
                     ),
                     expr.span,
                 ));
@@ -942,7 +942,7 @@ fn eval_hir_extern_fn(
             let HostFnValue::Buffer(buffer) = result else {
                 return Err(ctx.eval_error(
                     format!(
-                        "extern function `{ext}` declared a struct result but returned a scalar ABI value"
+                        "extern function `{ext}` declared a struct result but returned an f64 ABI slot"
                     ),
                     expr.span,
                 ));
@@ -1017,7 +1017,7 @@ fn eval_hir_extern_fn(
     }
 }
 
-/// Convert an Int argument to the scalar host ABI, rejecting magnitudes that
+/// Convert an Int argument to the single-value f64 host ABI, rejecting magnitudes that
 /// are not exactly representable in `f64`.
 fn exact_numeric_extern_arg(
     value: i64,

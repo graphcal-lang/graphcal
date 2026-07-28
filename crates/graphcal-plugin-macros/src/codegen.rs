@@ -8,10 +8,9 @@
 //! integration tests read `GRAPHCAL_PLUGIN_MANIFEST` without a wasm
 //! toolchain.
 //!
-//! Scalar-ABI functions (quantities, `Bool`, and `Int`) are emitted as a single
-//! `extern "C-unwind"` item whose raw `f64` parameters double as the natural
-//! test surface. Functions
-//! that move arrays split in two: a natural `pub fn` taking `&[f64]` slices
+//! Single-value ABI functions (quantities, `Bool`, and `Int`) are emitted as a
+//! single `extern "C-unwind"` item whose raw `f64` parameters double as the
+//! natural test surface. Functions that move arrays split in two: a natural `pub fn` taking `&[f64]` slices
 //! (what `cargo test` calls) and a `wasm32`-only export wrapper that decodes
 //! the `(ptr, len)` pairs, calls the natural function, and writes the
 //! result through the host-allocated out-pointer.
@@ -73,11 +72,11 @@ fn generate_function(function: &FunctionIr) -> TokenStream {
     if function.uses_buffers() {
         generate_buffer_function(function)
     } else {
-        generate_scalar_abi_function(function)
+        generate_f64_abi_function(function)
     }
 }
 
-fn generate_scalar_abi_function(function: &FunctionIr) -> TokenStream {
+fn generate_f64_abi_function(function: &FunctionIr) -> TokenStream {
     let docs = &function.docs;
     let name = &function.name;
     let raw_params = function.params.iter().map(|param| {

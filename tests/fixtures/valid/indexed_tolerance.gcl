@@ -17,7 +17,7 @@ node per_key_tol: Length[Case] = {
 };
 
 // Unindexed tolerance applied to every key.
-assert scalar_tol = @actual ~= @expected +/- 0.6 m;
+assert unindexed_tol = @actual ~= @expected +/- 0.6 m;
 
 // Per-key tolerance over the same axes.
 assert per_key = @actual ~= @expected +/- @per_key_tol;
@@ -26,7 +26,7 @@ assert per_key = @actual ~= @expected +/- @per_key_tol;
 assert relative = @actual ~= @expected +/- 25%;
 
 // Unindexed expected value broadcast against indexed actual.
-assert near_scalar = @actual ~= 1.5 m +/- 1.0 m;
+assert near_unindexed = @actual ~= 1.5 m +/- 1.0 m;
 
 // Per-variant expected_fail works on indexed tolerance assertions exactly
 // as on indexed boolean ones.

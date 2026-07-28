@@ -7,10 +7,10 @@
 //! plugin host registers module-backed closures through the same interface.
 //!
 //! The host ABI carries SI-flat numbers: each value crosses as a
-//! [`HostFnValue`] — a bare `f64` for quantities (Int and Bool arguments are
-//! converted — exactly-representable integers and `1.0`/`0.0` respectively)
-//! or a dense `f64` buffer in index order for arrays. The evaluator does all
-//! typed interpretation against the declared signature; closures never see
+//! [`HostFnValue`] — one `f64` slot for quantities, `Int`, and `Bool` (using
+//! exactly-representable integers and `1.0`/`0.0` respectively), or a dense
+//! `f64` buffer in index order for arrays. The evaluator does all typed
+//! interpretation against the declared signature; closures never see
 //! dimensions, units, or index identities beyond buffer lengths.
 
 use std::collections::HashMap;
@@ -62,19 +62,20 @@ impl From<&str> for HostFnError {
 
 /// One value crossing the host-function boundary, SI-flat in both directions.
 ///
-/// Bool and Int values cross inside [`Self::Scalar`] using the documented
-/// encodings (`1.0`/`0.0`, exactly-representable integers); arrays cross as
-/// dense element buffers in index declaration order. The evaluator converts
-/// to and from typed [`RuntimeValue`]s per the declared signature — a
+/// Quantities, `Bool`, and `Int` each cross inside one [`Self::F64`] slot; the
+/// declared signature determines its semantic kind and therefore its encoding
+/// (`1.0`/`0.0` for `Bool`, exactly-representable integers for `Int`). Arrays
+/// cross as dense element buffers in index declaration order. The evaluator
+/// converts to and from typed [`RuntimeValue`]s per the declared signature — a
 /// closure returning the wrong shape is reported as a plugin failure, never
 /// reinterpreted.
 ///
 /// [`RuntimeValue`]: graphcal_compiler::registry::runtime_value::RuntimeValue
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostFnValue {
-    /// A quantity in SI base units (also the Bool/Int wire encoding).
-    Scalar(f64),
-    /// A dense array of SI quantities in index order.
+    /// One raw `f64` ABI slot; the function signature supplies its semantic kind.
+    F64(f64),
+    /// Dense `f64` ABI slots for an array or flattened record result.
     Buffer(Vec<f64>),
 }
 
@@ -86,7 +87,7 @@ impl HostFnValue {
     /// Returns a [`HostFnError`] when this value is a buffer.
     fn expect_quantity(&self, position: usize) -> Result<f64, HostFnError> {
         match self {
-            Self::Scalar(value) => Ok(*value),
+            Self::F64(value) => Ok(*value),
             Self::Buffer(_) => Err(HostFnError::new(format!(
                 "argument {position} is an array, expected a quantity"
             ))),
@@ -101,8 +102,8 @@ impl HostFnValue {
     fn expect_buffer(&self, position: usize) -> Result<&[f64], HostFnError> {
         match self {
             Self::Buffer(values) => Ok(values),
-            Self::Scalar(_) => Err(HostFnError::new(format!(
-                "argument {position} is a quantity, expected an array"
+            Self::F64(_) => Err(HostFnError::new(format!(
+                "argument {position} is a single-value slot, expected an array"
             ))),
         }
     }
@@ -278,14 +279,14 @@ pub fn demo_registry() -> HostFunctionRegistry {
             args[1].expect_quantity(1)?,
             args[2].expect_quantity(2)?,
         );
-        Ok(HostFnValue::Scalar((b - a).mul_add(t, a)))
+        Ok(HostFnValue::F64((b - a).mul_add(t, a)))
     });
     registry.register(plugin.clone(), FnName::expect_valid("inverse"), |args| {
         let x = args[0].expect_quantity(0)?;
         if x == 0.0 {
             return Err(HostFnError::new("division by zero"));
         }
-        Ok(HostFnValue::Scalar(x.recip()))
+        Ok(HostFnValue::F64(x.recip()))
     });
     registry.register(
         plugin.clone(),
@@ -297,7 +298,7 @@ pub fn demo_registry() -> HostFunctionRegistry {
                     "geometric mean of a negative product is undefined",
                 ));
             }
-            Ok(HostFnValue::Scalar(product.sqrt()))
+            Ok(HostFnValue::F64(product.sqrt()))
         },
     );
     registry.register(plugin.clone(), FnName::expect_valid("normalize"), |args| {
@@ -335,7 +336,7 @@ mod tests {
     }
 
     fn quantities(values: &[f64]) -> Vec<HostFnValue> {
-        values.iter().map(|v| HostFnValue::Scalar(*v)).collect()
+        values.iter().map(|v| HostFnValue::F64(*v)).collect()
     }
 
     #[test]
@@ -351,7 +352,7 @@ mod tests {
         let registry = demo_registry();
         let lerp = registry.get(&key("lerp")).unwrap();
         let result = lerp(&quantities(&[0.0, 10.0, 0.25])).unwrap();
-        assert_eq!(result, HostFnValue::Scalar(2.5));
+        assert_eq!(result, HostFnValue::F64(2.5));
     }
 
     #[test]
@@ -378,8 +379,8 @@ mod tests {
         let lerp = registry.get(&key("lerp")).unwrap();
         let err = lerp(&[
             HostFnValue::Buffer(vec![1.0]),
-            HostFnValue::Scalar(1.0),
-            HostFnValue::Scalar(0.5),
+            HostFnValue::F64(1.0),
+            HostFnValue::F64(0.5),
         ])
         .unwrap_err();
         assert!(err.message.contains("expected a quantity"), "{err}");
