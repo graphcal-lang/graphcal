@@ -322,10 +322,11 @@ mod tests {
     }
 }
 
-/// The declared type of a const/param/node: either a scalar with a dimension, a bool, or a struct.
+/// A concrete declared type: primitive, struct, or indexed value type.
+/// `IndexArg` is metadata carried only by generic struct instantiations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeclaredType {
-    Scalar(Dimension),
+    Quantity(Dimension),
     Bool,
     Int,
     /// A datetime instant in a specific time scale. `Datetime(UTC)` is the default for civil use.
@@ -348,7 +349,7 @@ impl DeclaredType {
     #[must_use]
     pub(crate) fn format(&self, dims: &DimensionRegistry) -> String {
         match self {
-            Self::Scalar(d) => dims.format_dimension(d),
+            Self::Quantity(d) => dims.format_dimension(d),
             Self::Bool => "Bool".to_string(),
             Self::Int => "Int".to_string(),
             Self::Datetime(scale) => {

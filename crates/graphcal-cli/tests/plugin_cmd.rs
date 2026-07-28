@@ -17,8 +17,8 @@ fn graphcal_bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_graphcal"))
 }
 
-fn scalar_var(var: &str) -> ManifestValueKind {
-    ManifestValueKind::Scalar(ManifestMonomial {
+fn quantity_var(var: &str) -> ManifestValueKind {
+    ManifestValueKind::Quantity(ManifestMonomial {
         vars: vec![ManifestVarPower {
             var: var.to_string(),
             pow: ManifestRational { num: 1, den: 1 },
@@ -28,7 +28,7 @@ fn scalar_var(var: &str) -> ManifestValueKind {
 }
 
 fn dimensionless() -> ManifestValueKind {
-    ManifestValueKind::Scalar(ManifestMonomial::default())
+    ManifestValueKind::Quantity(ManifestMonomial::default())
 }
 
 /// The manifest entry for the array `twice` function.
@@ -105,18 +105,18 @@ fn test_module_bytes() -> Vec<u8> {
                 params: vec![
                     ManifestParam {
                         name: "a".to_string(),
-                        kind: scalar_var("D"),
+                        kind: quantity_var("D"),
                     },
                     ManifestParam {
                         name: "b".to_string(),
-                        kind: scalar_var("D"),
+                        kind: quantity_var("D"),
                     },
                     ManifestParam {
                         name: "t".to_string(),
                         kind: dimensionless(),
                     },
                 ],
-                result: scalar_var("D"),
+                result: quantity_var("D"),
             },
             ManifestFunction {
                 name: "step".to_string(),

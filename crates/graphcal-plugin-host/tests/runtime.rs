@@ -16,8 +16,8 @@ use graphcal_plugin_host::{
     ConvertErrorKind, PluginCallError, PluginHost, PluginLimits, PluginLoadError,
 };
 
-fn scalar_var(var: &str) -> ManifestValueKind {
-    ManifestValueKind::Scalar(ManifestMonomial {
+fn quantity_var(var: &str) -> ManifestValueKind {
+    ManifestValueKind::Quantity(ManifestMonomial {
         vars: vec![ManifestVarPower {
             var: var.to_string(),
             pow: ManifestRational { num: 1, den: 1 },
@@ -27,7 +27,7 @@ fn scalar_var(var: &str) -> ManifestValueKind {
 }
 
 fn dimensionless() -> ManifestValueKind {
-    ManifestValueKind::Scalar(ManifestMonomial::default())
+    ManifestValueKind::Quantity(ManifestMonomial::default())
 }
 
 const fn manifest(functions: Vec<ManifestFunction>) -> PluginManifest {
@@ -95,16 +95,16 @@ fn lerp_manifest() -> PluginManifest {
         "lerp",
         &["D"],
         &[
-            ("a", scalar_var("D")),
-            ("b", scalar_var("D")),
+            ("a", quantity_var("D")),
+            ("b", quantity_var("D")),
             ("t", dimensionless()),
         ],
-        scalar_var("D"),
+        quantity_var("D"),
     )])
 }
 
 #[test]
-fn calls_a_scalar_kernel() {
+fn calls_a_quantity_kernel() {
     let host = PluginHost::new();
     let module = host.load(&plugin(LERP_WAT, &lerp_manifest())).unwrap();
     let result = module
@@ -155,8 +155,8 @@ fn fail_import_reports_the_plugin_message_and_recovers() {
     let manifest = manifest(vec![function(
         "inverse",
         &["D"],
-        &[("x", scalar_var("D"))],
-        ManifestValueKind::Scalar(ManifestMonomial {
+        &[("x", quantity_var("D"))],
+        ManifestValueKind::Quantity(ManifestMonomial {
             vars: vec![ManifestVarPower {
                 var: "D".to_string(),
                 pow: ManifestRational { num: -1, den: 1 },
@@ -474,7 +474,7 @@ fn manifest_signatures_using_non_base_dimensions_are_rejected() {
         &[],
         &[(
             "x",
-            ManifestValueKind::Scalar(ManifestMonomial {
+            ManifestValueKind::Quantity(ManifestMonomial {
                 vars: Vec::new(),
                 fixed: vec![graphcal_plugin_abi::ManifestDimPower {
                     dim: "Velocity".to_string(),
@@ -597,7 +597,7 @@ fn array_manifest() -> PluginManifest {
             &[("xs", array_kind("D", "I")), ("k", dimensionless())],
             array_kind("D", "I"),
         ),
-        array_function("total", &[("xs", array_kind("D", "I"))], scalar_var("D")),
+        array_function("total", &[("xs", array_kind("D", "I"))], quantity_var("D")),
     ])
 }
 
@@ -628,7 +628,7 @@ fn calls_an_array_kernel_with_an_array_result() {
 }
 
 #[test]
-fn calls_an_array_kernel_with_a_scalar_result() {
+fn calls_an_array_kernel_with_a_quantity_result() {
     let host = PluginHost::new();
     let module = host.load(&plugin(ARRAY_WAT, &array_manifest())).unwrap();
     let result = module
@@ -651,7 +651,7 @@ fn array_manifests_require_the_allocator_exports() {
     let manifest = manifest(vec![array_function(
         "total",
         &[("xs", array_kind("D", "I"))],
-        scalar_var("D"),
+        quantity_var("D"),
     )]);
     assert!(matches!(
         PluginHost::new().load(&plugin(wat, &manifest)).unwrap_err(),
@@ -670,7 +670,7 @@ fn array_manifests_require_an_exported_memory() {
     let manifest = manifest(vec![array_function(
         "total",
         &[("xs", array_kind("D", "I"))],
-        scalar_var("D"),
+        quantity_var("D"),
     )]);
     assert!(matches!(
         PluginHost::new().load(&plugin(wat, &manifest)).unwrap_err(),
@@ -691,7 +691,7 @@ fn array_functions_with_scalar_wasm_types_are_rejected() {
     let manifest = manifest(vec![array_function(
         "total",
         &[("xs", array_kind("D", "I"))],
-        scalar_var("D"),
+        quantity_var("D"),
     )]);
     assert!(matches!(
         PluginHost::new().load(&plugin(wat, &manifest)).unwrap_err(),
@@ -702,7 +702,7 @@ fn array_functions_with_scalar_wasm_types_are_rejected() {
 
 #[test]
 fn manifests_with_duplicate_index_vars_are_rejected() {
-    let mut fun = array_function("total", &[("xs", array_kind("D", "I"))], scalar_var("D"));
+    let mut fun = array_function("total", &[("xs", array_kind("D", "I"))], quantity_var("D"));
     fun.index_vars = vec!["I".to_string(), "I".to_string()];
     let manifest = manifest(vec![fun]);
     let err = PluginHost::new()
@@ -761,16 +761,16 @@ const STRUCT_WAT: &str = r#"
 fn struct_manifest() -> PluginManifest {
     use graphcal_plugin_abi::{ManifestField, ManifestFieldKind};
 
-    let mut function = array_function("span", &[("xs", array_kind("D", "I"))], scalar_var("D"));
+    let mut function = array_function("span", &[("xs", array_kind("D", "I"))], quantity_var("D"));
     function.result = ManifestValueKind::Struct {
         fields: vec![
             ManifestField {
                 name: "min".to_string(),
-                kind: ManifestFieldKind::Scalar(ManifestMonomial::default()),
+                kind: ManifestFieldKind::Quantity(ManifestMonomial::default()),
             },
             ManifestField {
                 name: "max".to_string(),
-                kind: ManifestFieldKind::Scalar(ManifestMonomial::default()),
+                kind: ManifestFieldKind::Quantity(ManifestMonomial::default()),
             },
         ],
     };
@@ -794,11 +794,11 @@ fn calls_a_struct_returning_kernel() {
 fn struct_field_monomials_with_dim_vars_are_rejected() {
     use graphcal_plugin_abi::{ManifestField, ManifestFieldKind};
 
-    let mut function = array_function("span", &[("xs", array_kind("D", "I"))], scalar_var("D"));
+    let mut function = array_function("span", &[("xs", array_kind("D", "I"))], quantity_var("D"));
     function.result = ManifestValueKind::Struct {
         fields: vec![ManifestField {
             name: "min".to_string(),
-            kind: ManifestFieldKind::Scalar(ManifestMonomial {
+            kind: ManifestFieldKind::Quantity(ManifestMonomial {
                 vars: vec![ManifestVarPower {
                     var: "D".to_string(),
                     pow: ManifestRational { num: 1, den: 1 },

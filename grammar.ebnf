@@ -106,7 +106,7 @@ STRING
 
 (* An integer literal is a NUMBER with no decimal point and no
    exponent. Integer literals cannot be followed by a unit expression;
-   use a float literal instead (e.g., "42.0 km" not "42 km"). *)
+   use a floating-point literal instead (e.g., "42.0 km" not "42 km"). *)
 (* --- Operators and punctuation --- *)
 (* Listed here for reference; each is used as a terminal in the
    syntactic grammar below. *)
@@ -427,7 +427,7 @@ import_decl
    | plugin_import_decl;
 
 (* --- plugin import (extern functions, issue #943 / #25 Phase A) --- *)
-(* Declares externally-provided scalar functions with explicit graphcal
+(* Declares externally-provided quantity functions with explicit graphcal
    signatures. `plugin` and `fn` are contextual keywords: `import` followed
    by the identifier `plugin` and a string literal selects this form, so
    `import plugin.foo;` (a module path) is unaffected.
@@ -442,7 +442,7 @@ import_decl
    `Bool`, `Int`, dimension expressions over dimensions in scope and the
    declared dim variables — with rational powers and cross-variable
    products (e.g. `fn torque<D1: Dim, D2: Dim>(f: D1, arm: D2) -> D1 * D2;`)
-   — or arrays of scalars over one declared index variable
+   — or arrays of quantities over one declared index variable
    (e.g. `fn smooth<D: Dim, I: Index>(xs: D[I], w: Dimensionless) -> D[I];`).
    Each dim variable must first appear as a bare `var` parameter or bare
    array element (its binding occurrence) before any compound use. A
@@ -615,14 +615,17 @@ layer_named_field
 (* 4. Type Expressions                                                *)
 (* ================================================================== *)
 (* The type system has three levels:
-   Level 1 -- Primitive:  Scalar(Dim) | Int | Bool | Datetime
-   Level 2 -- ValueType:  Primitive | Struct | Union
-   Level 3 -- DeclType:   ValueType | Indexed(ValueType, [Index])
+   Level 1 -- Primitive: Quantity(D) | Int | Bool | Datetime(S),
+                         where D: Dim and S: TimeScale
+   Level 2 -- ValueType: Primitive | AlgebraicType
+   Level 3 -- DeclType:  ValueType | Indexed(ValueType, [Index])
 
+   AlgebraicType is one nominal concept for every `type` declaration;
+   one- and multi-constructor declarations are not separate type kinds.
    type_expr corresponds to DeclType: a value_type optionally indexed
    or constrained.
    type_expr_base corresponds to ValueType (without indexing/constraints).
-   Struct fields must be ValueTypes (type_expr_base), not DeclTypes.
+   Constructor payload fields must be ValueTypes, not DeclTypes.
    param, node, const node annotations use DeclType (type_expr). *)
 type_expr
    = type_expr_base, [ type_constraints ], [ "[", index_expr_list, "]" ]
@@ -800,7 +803,7 @@ atom
 float_literal
    = NUMBER, [ unit_expr ];
 
-(* NUMBER must contain a decimal point or exponent (i.e., be a float).
+(* NUMBER must contain a decimal point or exponent (i.e., be floating-point).
    An optional unit expression may follow immediately. *)
 integer_literal
    = NUMBER;

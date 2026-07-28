@@ -14,10 +14,10 @@ The language has a layered type system:
 
 | Layer | Feature | Purpose |
 |-------|---------|---------|
-| 1 | [Primitives](type-system.md) | `Float`, `Int`, `Bool` base types |
+| 1 | [Primitives](type-system.md) | Primitive value types (canonical inventory) |
 | 2 | [Dimensions](dimensions-and-units.md) | Physical dimension algebra (compile-time types) |
 | 3 | [Units](dimensions-and-units.md) | Value-level scaling factors attached to dimensions |
-| 4 | [Algebraic Data Types](algebraic-data-types.md) | Structs, union types, pattern matching |
+| 4 | [Algebraic Data Types](algebraic-data-types.md) | Constructors, payloads, and pattern matching |
 | 5 | [Indexes](indexes.md) | Finite label sets for collections |
 | 6 | [DAG Blocks](functions.md) | Reusable computation via `dag` blocks and `include` |
 
@@ -37,7 +37,7 @@ The language has a layered type system:
 
     ---
 
-    Primitive types: `Float`, `Int`, `Bool`, and conversions.
+    Canonical primitive inventory, type levels, and explicit conversions.
 
     [:octicons-arrow-right-24: Type system](type-system.md)
 
@@ -53,7 +53,7 @@ The language has a layered type system:
 
     ---
 
-    Structs, union types, `match` expressions, generics.
+    One- and multi-constructor types, `match` expressions, and generics.
 
     [:octicons-arrow-right-24: ADTs](algebraic-data-types.md)
 

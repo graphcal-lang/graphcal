@@ -19,9 +19,9 @@ fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
     match (lhs, rhs) {
         #[expect(
             clippy::float_cmp,
-            reason = "Graphcal equality uses exact IEEE scalar equality"
+            reason = "Graphcal equality uses exact IEEE quantity equality"
         )]
-        (RuntimeValue::Scalar(lhs), RuntimeValue::Scalar(rhs)) => lhs == rhs,
+        (RuntimeValue::Quantity(lhs), RuntimeValue::Quantity(rhs)) => lhs == rhs,
         (RuntimeValue::Bool(lhs), RuntimeValue::Bool(rhs)) => lhs == rhs,
         (RuntimeValue::Int(lhs), RuntimeValue::Int(rhs)) => lhs == rhs,
         (
@@ -80,15 +80,15 @@ pub(super) fn check_finite(
     ctx: &EvalContext<'_>,
     span: Span,
 ) -> Result<f64, GraphcalError> {
-    super::numeric::computed_finite_scalar(value, context)
+    super::numeric::computed_finite_quantity(value, context)
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
 /// Broadcast a comparison kernel element-wise over indexed operands (#809).
 ///
 /// Indexed-vs-indexed operands zip per key (the dim checker guarantees
-/// matching axes; mismatches here are evaluation errors); indexed-vs-scalar
-/// broadcasts the scalar side to every key. Unindexed operands fall through
+/// matching axes; mismatches here are evaluation errors); indexed-vs-unindexed
+/// broadcasts the unindexed side to every key. Unindexed operands fall through
 /// to the kernel.
 fn broadcast_comparison(
     l: &RuntimeValue,
@@ -146,14 +146,14 @@ fn broadcast_comparison(
                 index_name,
                 entries,
             },
-            scalar_side,
+            unindexed_side,
         ) => {
             let entries = entries
                 .iter()
                 .map(|(variant, lv)| {
                     Ok((
                         variant.clone(),
-                        broadcast_comparison(lv, scalar_side, ctx, span, kernel)?,
+                        broadcast_comparison(lv, unindexed_side, ctx, span, kernel)?,
                     ))
                 })
                 .collect::<Result<_, GraphcalError>>()?;
@@ -163,7 +163,7 @@ fn broadcast_comparison(
             })
         }
         (
-            scalar_side,
+            unindexed_side,
             RuntimeValue::Indexed {
                 index_name,
                 entries,
@@ -174,7 +174,7 @@ fn broadcast_comparison(
                 .map(|(variant, rv)| {
                     Ok((
                         variant.clone(),
-                        broadcast_comparison(scalar_side, rv, ctx, span, kernel)?,
+                        broadcast_comparison(unindexed_side, rv, ctx, span, kernel)?,
                     ))
                 })
                 .collect::<Result<_, GraphcalError>>()?;
@@ -229,10 +229,10 @@ fn eval_equality_elements(
         (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => le == re,
         _ => {
             let lv = l
-                .expect_scalar("comparison operand")
+                .expect_quantity("comparison operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             let rv = r
-                .expect_scalar("comparison operand")
+                .expect_quantity("comparison operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             return Ok(RuntimeValue::Bool(eval_comparison(op, lv, rv, ctx, span)?));
         }
@@ -240,7 +240,7 @@ fn eval_equality_elements(
     Ok(RuntimeValue::Bool(eq == is_eq))
 }
 
-/// Ordering kernel shared by both evaluators: Int, Datetime, or Scalar
+/// Ordering kernel shared by both evaluators: Int, Datetime, or Quantity
 /// operands, dispatched through the typed [`OrderingOp`] subset so there is
 /// no "impossible operator" fallback.
 /// Indexed operands broadcast element-wise (#809).
@@ -262,10 +262,10 @@ pub(super) fn eval_ordering_values(
         }
         _ => {
             let lv = l
-                .expect_scalar("comparison operand")
+                .expect_quantity("comparison operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             let rv = r
-                .expect_scalar("comparison operand")
+                .expect_quantity("comparison operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             Ok(RuntimeValue::Bool(eval_comparison(op, lv, rv, ctx, span)?))
         }
@@ -377,7 +377,7 @@ pub(super) fn eval_int_binop(
 /// this path only rejected non-finite results when the *inputs* were
 /// finite, which could mask an upstream non-finite value — the strict
 /// policy wins, matching every value-construction site.)
-pub(super) fn eval_scalar_binop(
+pub(super) fn eval_quantity_binop(
     op: BinOp,
     l: f64,
     r: f64,

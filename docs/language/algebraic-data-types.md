@@ -4,17 +4,16 @@ icon: material/shape
 
 # Algebraic Data Types
 
-Every `type` declaration in graphcal is an **n-variant tagged union**.
-A record-shaped struct is just a single-variant union whose sole
-constructor's name matches the type's name; a unit marker is a
-single unit constructor. The functional core never distinguishes
-record from union — there is only one shape.
+Every body-bearing `type` declaration in graphcal defines one nominal
+**algebraic data type** with one or more constructors. Constructor count does
+not create separate type categories: one-constructor record-shaped data and
+multiple-constructor alternatives use the same declaration and type semantics.
 
-## Tagged Unions
+## Constructors
 
-A tagged union lists its **constructors** inside the braced body of a
-`type` declaration. Each constructor has an optional payload
-(declared with parens or braces) or is a bare unit constructor:
+A type lists its **constructors** inside the braced body. Each constructor has
+an optional payload (declared with parens or braces) or is a bare unit
+constructor:
 
 ```
 type ManeuverKind {
@@ -28,10 +27,10 @@ Constructors live in a namespace that is distinct from the type
 namespace — a single lexeme can name both a type and a constructor
 without ambiguity.
 
-## Records (Single-Variant Unions)
+## Record-Shaped One-Constructor Types
 
-Record-shaped data is written as a single-variant union whose sole
-constructor's name equals the type's name:
+A type is record-shaped when it has exactly one constructor and that
+constructor has the same name as the type:
 
 ```
 type TransferResult {
@@ -63,21 +62,20 @@ node result: TransferResult =
 
 ### Field Access
 
-Field access works on a value of a single-variant union — there is
-exactly one constructor, so the field set is unambiguous:
+Field access works on a record-shaped value because there is exactly one
+constructor, so the payload field set is unambiguous:
 
 ```
 node total: Velocity = @result.total_dv;
 node time_hours: Time = @result.tof -> hour;
 ```
 
-For multi-variant unions, field access is rejected — destructure
+For types with multiple constructors, field access is rejected — destructure
 through `match` instead.
 
 ## Unit Markers
 
-A unit marker is a single-variant union whose constructor takes no
-payload:
+A unit marker is a one-constructor type whose constructor takes no payload:
 
 ```
 type Eci { Eci }
@@ -92,7 +90,7 @@ frames).
 > declares a *required* type that importers must bind. See
 > [Multi-File Projects → Visibility and Bindability](multi-file.md#visibility-and-bindability).
 
-### Constructing Union Values
+### Constructing Algebraic Values
 
 Construct a variant by its constructor name. If another module exports a
 same-named constructor, qualify the constructor with the module alias (for
@@ -107,7 +105,9 @@ node coast: ManeuverKind = Coast;
 
 ## Match Expressions
 
-Use `match` to destructure union types. `match` is reserved for exhaustive case analysis over closed alternatives; use `if` for ordinary boolean predicates and comparisons.
+Use `match` to destructure algebraic values. `match` is reserved for
+exhaustive case analysis over closed constructors; use `if` for ordinary
+boolean predicates and comparisons.
 
 ```
 node fuel_proxy: Force = match @maneuver {

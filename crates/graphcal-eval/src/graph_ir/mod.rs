@@ -300,7 +300,7 @@ assert positive_dv = @delta_v > 0.0 m/s;
             .iter()
             .map(|n| (n.id.as_str(), n.type_label.as_deref()))
             .collect();
-        // Scalar types format with named dimension aliases preferred over
+        // Quantity types format with named dimension aliases preferred over
         // canonical dimension expressions (`Velocity`, not `Length / Time`).
         assert_eq!(labels["dry_mass"], Some("Mass"));
         assert_eq!(labels["mass_ratio"], Some("Dimensionless"));

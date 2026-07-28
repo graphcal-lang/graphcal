@@ -17,7 +17,7 @@ use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::span::Span;
 
-use super::super::helpers::{expect_scalar, format_inferred_type};
+use super::super::helpers::{expect_quantity, format_inferred_type};
 use super::super::{InferredIndex, InferredType};
 
 /// A typed operand with the span diagnostics should point at.
@@ -136,7 +136,7 @@ pub(super) fn binop_rule(
         }
         // Equality: element types must have the same ValueType (Int and
         // Fin(N) are compatible). Indexed operands broadcast element-wise
-        // (#809): `T[I] == T[I]` and `T[I] == scalar` infer `Bool[I]`.
+        // (#809): `T[I] == T[I]` and `T[I] == unindexed T` infer `Bool[I]`.
         BinOp::Eq | BinOp::Ne => {
             let (axes, lhs_elem, rhs_elem) = comparison_axes(lhs, rhs, registry, src)?;
             if matches!(lhs_elem, InferredType::NamedIndex(_))
@@ -164,7 +164,7 @@ pub(super) fn binop_rule(
                 return Ok(bool_with_axes(&axes));
             }
             if let (Some(lhs_dim), Some(rhs_dim)) =
-                (lhs_elem.scalar_dimension(), rhs_elem.scalar_dimension())
+                (lhs_elem.quantity_dimension(), rhs_elem.quantity_dimension())
                 && lhs_dim == rhs_dim
             {
                 return Ok(bool_with_axes(&axes));
@@ -177,9 +177,9 @@ pub(super) fn binop_rule(
                 span: rhs.span.into(),
             })
         }
-        // Ordering comparisons: element types must be same-type scalar,
+        // Ordering comparisons: element types must be same-type quantity,
         // Int/Fin, or same-scale Datetime. Indexed operands broadcast
-        // element-wise (#809): `T[I] op T[I]` and `T[I] op scalar` infer
+        // element-wise (#809): `T[I] op T[I]` and `T[I] op unindexed T` infer
         // `Bool[I]`.
         BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
             let (axes, lhs_elem, rhs_elem) = comparison_axes(lhs, rhs, registry, src)?;
@@ -210,8 +210,8 @@ pub(super) fn binop_rule(
                 }
                 return Ok(bool_with_axes(&axes));
             }
-            let lhs_dim = expect_scalar(lhs_elem, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(rhs_elem, registry, src, rhs.span)?;
+            let lhs_dim = expect_quantity(lhs_elem, registry, src, lhs.span)?;
+            let rhs_dim = expect_quantity(rhs_elem, registry, src, rhs.span)?;
             if lhs_dim != rhs_dim {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(&lhs_dim),
@@ -223,7 +223,7 @@ pub(super) fn binop_rule(
             }
             Ok(bool_with_axes(&axes))
         }
-        // Arithmetic operators: require matching numeric operands (Int or Scalar)
+        // Arithmetic operators: require matching numeric operands (Int or Quantity)
         BinOp::Add | BinOp::Sub => {
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
@@ -233,7 +233,7 @@ pub(super) fn binop_rule(
                 let time_dim =
                     Dimension::base(crate::dimension::BaseDimId::Prelude("Time".to_string()));
                 if let InferredType::Datetime(rs) = rhs_type {
-                    // Datetime - Datetime -> Scalar(Time)
+                    // Datetime - Datetime -> Quantity(Time)
                     if op == BinOp::Sub {
                         if ls != rs {
                             return Err(GraphcalError::DimensionMismatch {
@@ -245,19 +245,19 @@ pub(super) fn binop_rule(
                                 span: rhs.span.into(),
                             });
                         }
-                        return Ok(InferredType::Scalar(time_dim));
+                        return Ok(InferredType::Quantity(time_dim));
                     }
                     // Datetime + Datetime -> error
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: "Scalar(Time)".to_string(),
+                        expected: "Quantity(Time)".to_string(),
                         found: format_inferred_type(rhs_type, registry),
                         help: "cannot add two datetimes; did you mean to subtract?".to_string(),
                         src: src.clone(),
                         span: rhs.span.into(),
                     });
                 }
-                // Datetime +/- Scalar(Time) -> Datetime
-                let rhs_dim = expect_scalar(rhs_type, registry, src, rhs.span)?;
+                // Datetime +/- Quantity(Time) -> Datetime
+                let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
                 if rhs_dim != time_dim {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Time".to_string(),
@@ -271,11 +271,11 @@ pub(super) fn binop_rule(
                 return Ok(InferredType::Datetime(*ls));
             }
             if let InferredType::Datetime(rs) = rhs_type {
-                // Scalar(Time) + Datetime -> Datetime (only for Add)
+                // Quantity(Time) + Datetime -> Datetime (only for Add)
                 if op == BinOp::Add {
                     let time_dim =
                         Dimension::base(crate::dimension::BaseDimId::Prelude("Time".to_string()));
-                    let lhs_dim = expect_scalar(lhs_type, registry, src, lhs.span)?;
+                    let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
                     if lhs_dim != time_dim {
                         return Err(GraphcalError::DimensionMismatch {
                             expected: "Time".to_string(),
@@ -287,17 +287,17 @@ pub(super) fn binop_rule(
                     }
                     return Ok(InferredType::Datetime(*rs));
                 }
-                // Scalar - Datetime -> error
+                // Quantity - Datetime -> error
                 return Err(GraphcalError::DimensionMismatch {
                     expected: format_inferred_type(lhs_type, registry),
                     found: format_inferred_type(rhs_type, registry),
-                    help: "cannot subtract a Datetime from a scalar".to_string(),
+                    help: "cannot subtract a Datetime from a quantity".to_string(),
                     src: src.clone(),
                     span: rhs.span.into(),
                 });
             }
-            let lhs_dim = expect_scalar(lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(rhs_type, registry, src, rhs.span)?;
+            let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
+            let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
             if lhs_dim != rhs_dim {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(&lhs_dim),
@@ -308,14 +308,14 @@ pub(super) fn binop_rule(
                     span: rhs.span.into(),
                 });
             }
-            Ok(InferredType::Scalar(lhs_dim))
+            Ok(InferredType::Quantity(lhs_dim))
         }
         BinOp::Mul => {
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
             }
-            let lhs_dim = expect_scalar(lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(rhs_type, registry, src, rhs.span)?;
+            let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
+            let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
             let dim =
                 lhs_dim
                     .checked_mul(&rhs_dim)
@@ -323,14 +323,14 @@ pub(super) fn binop_rule(
                         src: src.clone(),
                         span: expr_span.into(),
                     })?;
-            Ok(InferredType::Scalar(dim))
+            Ok(InferredType::Quantity(dim))
         }
         BinOp::Div => {
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
             }
-            let lhs_dim = expect_scalar(lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(rhs_type, registry, src, rhs.span)?;
+            let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
+            let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
             let dim =
                 lhs_dim
                     .checked_div(&rhs_dim)
@@ -338,7 +338,7 @@ pub(super) fn binop_rule(
                         src: src.clone(),
                         span: expr_span.into(),
                     })?;
-            Ok(InferredType::Scalar(dim))
+            Ok(InferredType::Quantity(dim))
         }
         BinOp::Mod => {
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
@@ -362,7 +362,7 @@ pub(super) fn binop_rule(
                 let int_exp = match rhs_lit {
                     Some(LiteralExponent::Int(n)) => Some(n),
                     // Constant-fold Int^Int chains so `2 ^ 3 ^ 2` symmetrizes
-                    // with the de facto Float behavior (issue #578).
+                    // with the de facto floating-point behavior (issue #578).
                     _ => rhs_const_int,
                 };
                 if let Some(n) = int_exp {
@@ -382,9 +382,9 @@ pub(super) fn binop_rule(
                     span: rhs.span.into(),
                 });
             }
-            // Scalar ^ literal exponent
-            let lhs_dim = expect_scalar(lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_scalar(rhs_type, registry, src, rhs.span)?;
+            // Quantity ^ literal exponent
+            let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
+            let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
             match rhs_lit {
                 Some(LiteralExponent::Float(n)) => {
                     if n.fract() == 0.0 {
@@ -409,7 +409,7 @@ pub(super) fn binop_rule(
                                     src: src.clone(),
                                     span: expr_span.into(),
                                 })?;
-                        Ok(InferredType::Scalar(dim))
+                        Ok(InferredType::Quantity(dim))
                     } else {
                         #[expect(
                             clippy::float_cmp,
@@ -422,7 +422,7 @@ pub(super) fn binop_rule(
                                     span: expr_span.into(),
                                 }
                             })?;
-                            Ok(InferredType::Scalar(dim))
+                            Ok(InferredType::Quantity(dim))
                         } else {
                             Err(GraphcalError::NonLiteralExponent {
                                 src: src.clone(),
@@ -444,11 +444,11 @@ pub(super) fn binop_rule(
                             src: src.clone(),
                             span: expr_span.into(),
                         })?;
-                    Ok(InferredType::Scalar(dim))
+                    Ok(InferredType::Quantity(dim))
                 }
                 None => {
                     if rhs_dim.is_dimensionless() && lhs_dim.is_dimensionless() {
-                        Ok(InferredType::Scalar(Dimension::dimensionless()))
+                        Ok(InferredType::Quantity(Dimension::dimensionless()))
                     } else {
                         Err(GraphcalError::NonLiteralExponent {
                             src: src.clone(),
@@ -482,12 +482,12 @@ pub(super) fn unary_rule(
             Ok(InferredType::Bool)
         }
         UnaryOp::Neg => match &operand.ty {
-            InferredType::Scalar(_) | InferredType::Int => Ok(operand.ty.clone()),
+            InferredType::Quantity(_) | InferredType::Int => Ok(operand.ty.clone()),
             InferredType::RangeIndexLabel { dimension, .. } => {
-                Ok(InferredType::Scalar(dimension.clone()))
+                Ok(InferredType::Quantity(dimension.clone()))
             }
             InferredType::Fin(_) => Err(GraphcalError::DimensionMismatch {
-                expected: "Int or Scalar".to_string(),
+                expected: "Int or Quantity".to_string(),
                 found: format_inferred_type(&operand.ty, registry),
                 help: "range(N) loop variables are bounded natural indexes; convert explicitly before negating"
                     .to_string(),
@@ -495,9 +495,9 @@ pub(super) fn unary_rule(
                 span: operand.span.into(),
             }),
             other => Err(GraphcalError::DimensionMismatch {
-                expected: "Int or Scalar".to_string(),
+                expected: "Int or Quantity".to_string(),
                 found: format_inferred_type(other, registry),
-                help: "negation requires a numeric scalar or Int operand".to_string(),
+                help: "negation requires a numeric quantity or Int operand".to_string(),
                 src: src.clone(),
                 span: operand.span.into(),
             }),

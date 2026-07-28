@@ -67,16 +67,19 @@ pub struct ManifestParam {
 /// JSON encoding is externally tagged: `{"scalar": {…}}`, `"bool"`, `"int"`,
 /// `{"array": {"element": {…}, "index": "I"}}`,
 /// `{"struct": {"fields": [{"name": "root", "kind": {"scalar": {}}}]}}`.
+/// The wire tag retains the ABI term `scalar`; the semantic kind is a Graphcal
+/// quantity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestValueKind {
-    /// A scalar with the dimension described by the monomial.
-    Scalar(ManifestMonomial),
+    /// A quantity with the dimension described by the monomial.
+    #[serde(rename = "scalar")]
+    Quantity(ManifestMonomial),
     /// A boolean value (crosses the ABI as `1.0`/`0.0`).
     Bool,
     /// An integer value (crosses the ABI as an exactly-representable `f64`).
     Int,
-    /// An array of scalars over an index variable (crosses the ABI as a
+    /// An array of quantities over an index variable (crosses the ABI as a
     /// dense `f64` buffer in index order).
     Array {
         /// The element dimension monomial.
@@ -105,14 +108,15 @@ pub struct ManifestField {
     pub kind: ManifestFieldKind,
 }
 
-/// The kind of one struct-result field: concrete scalars only (no
+/// The kind of one struct-result field: concrete quantities only (no
 /// dimension variables), or `Bool`/`Int` with the usual slot encodings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestFieldKind {
-    /// A scalar whose dimension is fixed (the monomial must have no
-    /// dimension-variable factors).
-    Scalar(ManifestMonomial),
+    /// A quantity whose dimension is fixed (the monomial must have no
+    /// dimension-variable factors). The wire tag is the ABI term `scalar`.
+    #[serde(rename = "scalar")]
+    Quantity(ManifestMonomial),
     /// A boolean slot (`1.0`/`0.0`).
     Bool,
     /// An integer slot (exactly-representable `f64`).
@@ -122,7 +126,7 @@ pub enum ManifestFieldKind {
 /// A dimension monomial: a product of dimension-variable powers and fixed
 /// prelude base-dimension powers, e.g. `D1 * D2^(1/2) * Length^-1`.
 ///
-/// The dimensionless monomial is the empty product: `{"scalar": {}}`.
+/// The dimensionless quantity monomial is the empty product: `{"scalar": {}}`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestMonomial {
@@ -329,7 +333,7 @@ fn validate_kind(
     kind: &ManifestValueKind,
 ) -> Result<(), ManifestValidationError> {
     let monomial = match kind {
-        ManifestValueKind::Scalar(monomial) => monomial,
+        ManifestValueKind::Quantity(monomial) => monomial,
         ManifestValueKind::Array { element, index } => {
             if index.is_empty() {
                 return Err(ManifestValidationError::EmptyName {
@@ -372,7 +376,7 @@ fn validate_struct(
         seen_fields.push(&field.name);
         match &field.kind {
             ManifestFieldKind::Bool | ManifestFieldKind::Int => {}
-            ManifestFieldKind::Scalar(monomial) => {
+            ManifestFieldKind::Quantity(monomial) => {
                 if !monomial.vars.is_empty() {
                     return Err(ManifestValidationError::StructFieldWithDimVars {
                         function: function.name.clone(),
@@ -651,8 +655,8 @@ mod tests {
         ManifestRational { num, den }
     }
 
-    fn scalar_var(var: &str) -> ManifestValueKind {
-        ManifestValueKind::Scalar(ManifestMonomial {
+    fn quantity_var(var: &str) -> ManifestValueKind {
+        ManifestValueKind::Quantity(ManifestMonomial {
             vars: vec![ManifestVarPower {
                 var: var.to_string(),
                 pow: rational(1, 1),
@@ -671,18 +675,18 @@ mod tests {
                 params: vec![
                     ManifestParam {
                         name: "a".to_string(),
-                        kind: scalar_var("D"),
+                        kind: quantity_var("D"),
                     },
                     ManifestParam {
                         name: "b".to_string(),
-                        kind: scalar_var("D"),
+                        kind: quantity_var("D"),
                     },
                     ManifestParam {
                         name: "t".to_string(),
-                        kind: ManifestValueKind::Scalar(ManifestMonomial::default()),
+                        kind: ManifestValueKind::Quantity(ManifestMonomial::default()),
                     },
                 ],
-                result: scalar_var("D"),
+                result: quantity_var("D"),
             }],
         }
     }
@@ -698,7 +702,7 @@ mod tests {
                 params: vec![
                     ManifestParam {
                         name: "pressure".to_string(),
-                        kind: ManifestValueKind::Scalar(ManifestMonomial {
+                        kind: ManifestValueKind::Quantity(ManifestMonomial {
                             vars: Vec::new(),
                             fixed: vec![
                                 ManifestDimPower {
@@ -725,7 +729,7 @@ mod tests {
                         kind: ManifestValueKind::Bool,
                     },
                 ],
-                result: ManifestValueKind::Scalar(ManifestMonomial {
+                result: ManifestValueKind::Quantity(ManifestMonomial {
                     vars: Vec::new(),
                     fixed: vec![
                         ManifestDimPower {
@@ -746,16 +750,20 @@ mod tests {
     }
 
     #[test]
-    fn dimensionless_scalar_is_the_empty_monomial() {
+    fn dimensionless_quantity_is_the_empty_monomial() {
         let json = r#"{"abi_version":2,"functions":[
             {"name":"tanh","params":[{"name":"x","kind":{"scalar":{}}}],"result":{"scalar":{}}}
         ]}"#;
         let manifest = PluginManifest::from_json(json.as_bytes()).unwrap();
         assert_eq!(
             manifest.functions[0].params[0].kind,
-            ManifestValueKind::Scalar(ManifestMonomial::default())
+            ManifestValueKind::Quantity(ManifestMonomial::default())
         );
         assert!(manifest.functions[0].dim_vars.is_empty());
+
+        let encoded = manifest.to_json().unwrap();
+        assert!(encoded.contains(r#""scalar""#));
+        assert!(!encoded.contains(r#""quantity""#));
     }
 
     #[test]
@@ -848,8 +856,9 @@ mod tests {
     #[test]
     fn duplicate_monomial_vars_are_rejected() {
         let mut manifest = lerp_manifest();
-        let ManifestValueKind::Scalar(monomial) = &mut manifest.functions[0].params[0].kind else {
-            panic!("expected scalar kind");
+        let ManifestValueKind::Quantity(monomial) = &mut manifest.functions[0].params[0].kind
+        else {
+            panic!("expected quantity kind");
         };
         monomial.vars.push(ManifestVarPower {
             var: "D".to_string(),
@@ -868,8 +877,9 @@ mod tests {
     #[test]
     fn duplicate_fixed_dims_are_rejected() {
         let mut manifest = lerp_manifest();
-        let ManifestValueKind::Scalar(monomial) = &mut manifest.functions[0].params[2].kind else {
-            panic!("expected scalar kind");
+        let ManifestValueKind::Quantity(monomial) = &mut manifest.functions[0].params[2].kind
+        else {
+            panic!("expected quantity kind");
         };
         for _ in 0..2 {
             monomial.fixed.push(ManifestDimPower {
@@ -891,9 +901,9 @@ mod tests {
     fn non_positive_denominators_are_rejected() {
         for den in [0, -2] {
             let mut manifest = lerp_manifest();
-            let ManifestValueKind::Scalar(monomial) = &mut manifest.functions[0].params[0].kind
+            let ManifestValueKind::Quantity(monomial) = &mut manifest.functions[0].params[0].kind
             else {
-                panic!("expected scalar kind");
+                panic!("expected quantity kind");
             };
             monomial.vars[0].pow = rational(1, den);
             let json = manifest.to_json().unwrap();
@@ -911,8 +921,9 @@ mod tests {
     #[test]
     fn zero_powers_are_rejected() {
         let mut manifest = lerp_manifest();
-        let ManifestValueKind::Scalar(monomial) = &mut manifest.functions[0].params[0].kind else {
-            panic!("expected scalar kind");
+        let ManifestValueKind::Quantity(monomial) = &mut manifest.functions[0].params[0].kind
+        else {
+            panic!("expected quantity kind");
         };
         monomial.vars[0].pow = rational(0, 1);
         let json = manifest.to_json().unwrap();
@@ -969,7 +980,7 @@ mod tests {
                     },
                     ManifestParam {
                         name: "window".to_string(),
-                        kind: ManifestValueKind::Scalar(ManifestMonomial::default()),
+                        kind: ManifestValueKind::Quantity(ManifestMonomial::default()),
                     },
                 ],
                 result: ManifestValueKind::Array {

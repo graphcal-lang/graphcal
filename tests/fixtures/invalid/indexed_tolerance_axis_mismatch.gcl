@@ -1,5 +1,5 @@
 // #809: in a tolerance assertion, `expected` (and `tolerance`) must be
-// scalar or indexed by exactly `actual`'s axes.
+// unindexed or indexed by exactly `actual`'s axes.
 index Case = { A, B };
 index Other = { X, Y };
 

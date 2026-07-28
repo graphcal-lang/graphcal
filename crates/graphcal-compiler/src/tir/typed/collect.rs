@@ -348,7 +348,7 @@ fn collect_resolved_collection_indexes_from_declared_type(
             }
             Ok(())
         }
-        crate::registry::declared_type::DeclaredType::Scalar(_)
+        crate::registry::declared_type::DeclaredType::Quantity(_)
         | crate::registry::declared_type::DeclaredType::Bool
         | crate::registry::declared_type::DeclaredType::Int
         | crate::registry::declared_type::DeclaredType::Datetime(_) => Ok(()),
@@ -396,7 +396,7 @@ fn collect_resolved_collection_indexes_from_type(
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)
         | ResolvedTypeExpr::IndexArg(_)
-        | ResolvedTypeExpr::Scalar(_)
+        | ResolvedTypeExpr::Quantity(_)
         | ResolvedTypeExpr::Struct(_, _)
         | ResolvedTypeExpr::GenericDimParam(_, _)
         | ResolvedTypeExpr::GenericTypeParam(_, _)

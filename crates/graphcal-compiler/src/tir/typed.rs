@@ -55,7 +55,7 @@ impl DagTIR {
         for name in crate::registry::builtins::builtin_constants().keys() {
             declared_types.insert(
                 ScopedName::local(*name),
-                crate::registry::declared_type::DeclaredType::Scalar(Dimension::dimensionless()),
+                crate::registry::declared_type::DeclaredType::Quantity(Dimension::dimensionless()),
             );
         }
         for (name, dt) in &self.imported_decl_types {
@@ -462,7 +462,7 @@ fn collect_struct_type_defs_from_declared_type(
         crate::registry::declared_type::DeclaredType::Indexed { element, .. } => {
             collect_struct_type_defs_from_declared_type(element, ctx, registry, src, defs)?;
         }
-        crate::registry::declared_type::DeclaredType::Scalar(_)
+        crate::registry::declared_type::DeclaredType::Quantity(_)
         | crate::registry::declared_type::DeclaredType::Bool
         | crate::registry::declared_type::DeclaredType::Int
         | crate::registry::declared_type::DeclaredType::Datetime(_)
@@ -498,7 +498,7 @@ fn collect_struct_type_defs_from_resolved_type(
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)
         | ResolvedTypeExpr::IndexArg(_)
-        | ResolvedTypeExpr::Scalar(_)
+        | ResolvedTypeExpr::Quantity(_)
         | ResolvedTypeExpr::GenericDimParam(_, _)
         | ResolvedTypeExpr::GenericTypeParam(_, _)
         | ResolvedTypeExpr::GenericDimExpr { .. } => {}

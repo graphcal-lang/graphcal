@@ -826,9 +826,10 @@ fn error_extern_struct_generic_return() {
 }
 
 #[test]
-fn error_extern_array_scalar_argument() {
-    let source = include_str!("../../../tests/fixtures/invalid/extern_array_scalar_argument.gcl");
-    let rendered = render_error(source, "extern_array_scalar_argument.gcl");
+fn error_extern_array_unindexed_argument() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/extern_array_unindexed_argument.gcl");
+    let rendered = render_error(source, "extern_array_unindexed_argument.gcl");
     insta::assert_snapshot!(rendered);
 }
 

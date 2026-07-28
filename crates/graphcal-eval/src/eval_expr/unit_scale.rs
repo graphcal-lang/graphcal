@@ -40,7 +40,7 @@ pub fn resolve_exportable_dynamic_unit_scales(
             };
             let scale_hir = ctx.tir.root().semantic.dynamic_unit_scales.get(name)?;
             let scale_val = eval_hir_expr(scale_hir, values, &empty_locals, ctx).ok()?;
-            let RuntimeValue::Scalar(scale_f64) = scale_val else {
+            let RuntimeValue::Quantity(scale_f64) = scale_val else {
                 return None;
             };
             let combined = PositiveFiniteScale::new(scale_f64 * base_unit_scale.get()).ok()?;
@@ -49,15 +49,15 @@ pub fn resolve_exportable_dynamic_unit_scales(
         .collect()
 }
 
-/// Build a scalar runtime value after validating that it is finite.
-pub(in crate::eval_expr) fn checked_finite_scalar(
+/// Build a quantity runtime value after validating that it is finite.
+pub(in crate::eval_expr) fn checked_finite_quantity(
     value: f64,
     context: &str,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    numeric::finite_scalar(value, context)
-        .map(RuntimeValue::Scalar)
+    numeric::finite_quantity(value, context)
+        .map(RuntimeValue::Quantity)
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
@@ -78,8 +78,8 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    numeric::finite_scalar(value * scale, "unit literal value")
-        .map(RuntimeValue::Scalar)
+    numeric::finite_quantity(value * scale, "unit literal value")
+        .map(RuntimeValue::Quantity)
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
@@ -95,7 +95,7 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if a unit is unknown or a dynamic scale expression
-/// fails to evaluate to a scalar.
+/// fails to evaluate to a quantity.
 pub fn resolve_unit_scale(
     unit: &UnitExpr,
     values: &RuntimeValueMap,
@@ -137,9 +137,9 @@ pub fn resolve_unit_scale(
                     })?;
                 let empty_locals = HirLocalValueMap::root();
                 let scale_val = eval_hir_expr(scale_hir, values, &empty_locals, ctx)?;
-                let RuntimeValue::Scalar(scale_f64) = scale_val else {
+                let RuntimeValue::Quantity(scale_f64) = scale_val else {
                     return Err(ctx.eval_error(
-                        "dynamic unit scale expression must evaluate to a scalar",
+                        "dynamic unit scale expression must evaluate to a quantity",
                         scale_hir.span,
                     ));
                 };

@@ -50,7 +50,7 @@ This produces a new indexed value with each element doubled.
 
 ## Aggregations
 
-Reduce an indexed value to a single scalar:
+Reduce an indexed quantity to a single quantity:
 
 ```
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });

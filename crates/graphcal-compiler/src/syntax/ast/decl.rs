@@ -298,7 +298,7 @@ pub struct ImportDecl {
 /// }
 /// ```
 ///
-/// Declares externally-provided scalar functions with explicit graphcal
+/// Declares externally-provided quantity functions with explicit graphcal
 /// signatures. The alias is mandatory: extern functions are only callable
 /// qualified (`fluids.density(...)`), mirroring module-import explicitness.
 /// The path string carries no filesystem semantics in Phase A; it identifies

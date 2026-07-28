@@ -9,7 +9,7 @@ use super::numeric;
 /// Error produced by pure aggregation evaluation.
 #[derive(Debug, Error)]
 pub(super) enum AggregationError {
-    /// An indexed entry was not scalar-like.
+    /// An indexed entry was not quantity-like.
     #[error(transparent)]
     ElementType(#[from] RuntimeValueError),
     /// `min()` / `max()` have no identity element.
@@ -18,28 +18,28 @@ pub(super) enum AggregationError {
     /// `mean()` has no identity element.
     #[error("mean() over an empty Indexed value is undefined")]
     EmptyMean,
-    /// An input scalar or computed aggregate was non-finite.
+    /// An input quantity or computed aggregate was non-finite.
     #[error(transparent)]
-    Scalar(#[from] numeric::ScalarValidationError),
+    Quantity(#[from] numeric::QuantityValidationError),
 }
 
 /// Evaluate an aggregation function over indexed entries.
-pub(super) fn aggregate_indexed_scalars(
+pub(super) fn aggregate_indexed_quantities(
     kind: AggregationFn,
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
 ) -> Result<RuntimeValue, AggregationError> {
     match kind {
-        AggregationFn::Sum => aggregate_sum(entries).map(RuntimeValue::Scalar),
-        AggregationFn::Min => aggregate_min(entries).map(RuntimeValue::Scalar),
-        AggregationFn::Max => aggregate_max(entries).map(RuntimeValue::Scalar),
-        AggregationFn::Mean => aggregate_mean(entries).map(RuntimeValue::Scalar),
-        AggregationFn::Count => aggregate_count(entries).map(RuntimeValue::Scalar),
+        AggregationFn::Sum => aggregate_sum(entries).map(RuntimeValue::Quantity),
+        AggregationFn::Min => aggregate_min(entries).map(RuntimeValue::Quantity),
+        AggregationFn::Max => aggregate_max(entries).map(RuntimeValue::Quantity),
+        AggregationFn::Mean => aggregate_mean(entries).map(RuntimeValue::Quantity),
+        AggregationFn::Count => aggregate_count(entries).map(RuntimeValue::Quantity),
     }
 }
 
-fn scalar_entry(value: &RuntimeValue, context: &'static str) -> Result<f64, AggregationError> {
-    let scalar = value.expect_scalar(context)?;
-    numeric::finite_scalar(scalar, context).map_err(AggregationError::from)
+fn quantity_entry(value: &RuntimeValue, context: &'static str) -> Result<f64, AggregationError> {
+    let quantity = value.expect_quantity(context)?;
+    numeric::finite_quantity(quantity, context).map_err(AggregationError::from)
 }
 
 fn aggregate_sum(
@@ -49,9 +49,9 @@ fn aggregate_sum(
         entries
             .values()
             .try_fold(0.0_f64, |acc, value| -> Result<f64, AggregationError> {
-                Ok(acc + scalar_entry(value, "sum element")?)
+                Ok(acc + quantity_entry(value, "sum element")?)
             })?;
-    numeric::computed_finite_scalar(total, "sum()").map_err(AggregationError::from)
+    numeric::computed_finite_quantity(total, "sum()").map_err(AggregationError::from)
 }
 
 fn aggregate_min(
@@ -63,10 +63,10 @@ fn aggregate_min(
     let min = entries.values().try_fold(
         f64::INFINITY,
         |acc, value| -> Result<f64, AggregationError> {
-            Ok(acc.min(scalar_entry(value, "min element")?))
+            Ok(acc.min(quantity_entry(value, "min element")?))
         },
     )?;
-    numeric::computed_finite_scalar(min, "min()").map_err(AggregationError::from)
+    numeric::computed_finite_quantity(min, "min()").map_err(AggregationError::from)
 }
 
 fn aggregate_max(
@@ -78,10 +78,10 @@ fn aggregate_max(
     let max = entries.values().try_fold(
         f64::NEG_INFINITY,
         |acc, value| -> Result<f64, AggregationError> {
-            Ok(acc.max(scalar_entry(value, "max element")?))
+            Ok(acc.max(quantity_entry(value, "max element")?))
         },
     )?;
-    numeric::computed_finite_scalar(max, "max()").map_err(AggregationError::from)
+    numeric::computed_finite_quantity(max, "max()").map_err(AggregationError::from)
 }
 
 fn aggregate_mean(
@@ -99,9 +99,9 @@ fn aggregate_mean(
         entries
             .values()
             .try_fold(0.0_f64, |acc, value| -> Result<f64, AggregationError> {
-                Ok(acc + scalar_entry(value, "mean element")?)
+                Ok(acc + quantity_entry(value, "mean element")?)
             })?;
-    numeric::computed_finite_scalar(total / n, "mean()").map_err(AggregationError::from)
+    numeric::computed_finite_quantity(total / n, "mean()").map_err(AggregationError::from)
 }
 
 fn aggregate_count(
@@ -112,7 +112,7 @@ fn aggregate_count(
         reason = "indexed collection length fits in f64"
     )]
     let count = entries.len() as f64;
-    numeric::computed_finite_scalar(count, "count()").map_err(AggregationError::from)
+    numeric::computed_finite_quantity(count, "count()").map_err(AggregationError::from)
 }
 
 #[cfg(test)]

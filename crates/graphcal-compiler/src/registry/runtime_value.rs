@@ -10,7 +10,7 @@ use crate::syntax::type_name::{FieldName, StructTypeName};
 /// The kind of a [`RuntimeValue`], used in type-mismatch error reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeValueKind {
-    Scalar,
+    Quantity,
     Bool,
     Int,
     Label {
@@ -32,7 +32,7 @@ pub enum RuntimeValueKind {
 impl std::fmt::Display for RuntimeValueKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Scalar => write!(f, "Scalar"),
+            Self::Quantity => write!(f, "Quantity"),
             Self::Bool => write!(f, "Bool"),
             Self::Int => write!(f, "Int"),
             Self::Label {
@@ -53,7 +53,7 @@ impl std::fmt::Display for RuntimeValueKind {
 /// Error returned when a [`RuntimeValue`] accessor is called on an incompatible variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeValueError {
-    /// What kind of value was expected (e.g. "scalar", "Bool").
+    /// What kind of value was expected (e.g. "quantity", "Bool").
     expected: &'static str,
     /// A description of what the value was being used for.
     context: String,
@@ -73,10 +73,10 @@ impl std::fmt::Display for RuntimeValueError {
 
 impl std::error::Error for RuntimeValueError {}
 
-/// A runtime value: either a scalar (f64 in SI units), a bool, a struct, or an indexed collection.
+/// The compiler/evaluator boundary representation of a runtime value.
 #[derive(Debug, Clone)]
 pub enum RuntimeValue {
-    Scalar(f64),
+    Quantity(f64),
     Bool(bool),
     Int(i64),
     /// Internal carrier for a named-index loop case.
@@ -165,7 +165,7 @@ impl RuntimeValue {
     #[must_use]
     pub fn kind(&self) -> RuntimeValueKind {
         match self {
-            Self::Scalar(_) => RuntimeValueKind::Scalar,
+            Self::Quantity(_) => RuntimeValueKind::Quantity,
             Self::Bool(_) => RuntimeValueKind::Bool,
             Self::Int(_) => RuntimeValueKind::Int,
             Self::Label {
@@ -188,13 +188,13 @@ impl RuntimeValue {
         }
     }
 
-    /// Extract scalar value, returning a structured error if this is not a scalar.
+    /// Extract quantity value, returning a structured error if this is not a quantity.
     /// (Type mismatches should be caught by `dim_check`; this is defense-in-depth.)
-    pub fn expect_scalar(&self, context: &str) -> Result<f64, RuntimeValueError> {
+    pub fn expect_quantity(&self, context: &str) -> Result<f64, RuntimeValueError> {
         match self {
-            Self::Scalar(v) | Self::RangeLabel { value: v, .. } => Ok(*v),
+            Self::Quantity(v) | Self::RangeLabel { value: v, .. } => Ok(*v),
             other => Err(RuntimeValueError {
-                expected: "scalar",
+                expected: "quantity",
                 context: context.to_string(),
                 actual: other.kind(),
             }),

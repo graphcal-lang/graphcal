@@ -49,8 +49,8 @@ pub enum ResolvedTypeExpr {
     /// This is not a standalone value type and must not appear as a resolved
     /// declaration annotation.
     IndexArg(ResolvedIndex),
-    /// A concrete scalar dimension, e.g. `Length * Time^-2`
-    Scalar(Dimension),
+    /// A concrete quantity type, e.g. `Length * Time^-2`.
+    Quantity(Dimension),
     /// A non-generic struct type name, e.g. `TransferResult`.
     Struct(ResolvedStructTypeName, Span),
     /// A generic struct with concrete type arguments, e.g. `Vec3<Length, ECI>`.
@@ -91,7 +91,7 @@ impl ResolvedTypeExpr {
                 }
             }
             Self::IndexArg(index) => format!("index {}", format_resolved_index(index)),
-            Self::Scalar(dim) => {
+            Self::Quantity(dim) => {
                 let formatted = registry.dimensions.format_dimension(dim);
                 if formatted.is_empty() {
                     "Dimensionless".to_string()

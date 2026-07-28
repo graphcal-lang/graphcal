@@ -108,7 +108,9 @@ fn convert_kind(kind: &ManifestValueKind) -> Result<ValueKind, ConvertErrorKind>
     match kind {
         ManifestValueKind::Bool => Ok(ValueKind::Bool),
         ManifestValueKind::Int => Ok(ValueKind::Int),
-        ManifestValueKind::Scalar(monomial) => Ok(ValueKind::Scalar(convert_monomial(monomial)?)),
+        ManifestValueKind::Quantity(monomial) => {
+            Ok(ValueKind::Quantity(convert_monomial(monomial)?))
+        }
         ManifestValueKind::Array { element, index } => Ok(ValueKind::Indexed {
             element: convert_monomial(element)?,
             index: convert_index_var(index)?,
@@ -133,11 +135,11 @@ fn convert_struct_field(field: &ManifestField) -> Result<StructShapeField, Conve
     let kind = match &field.kind {
         ManifestFieldKind::Bool => StructFieldKind::Bool,
         ManifestFieldKind::Int => StructFieldKind::Int,
-        ManifestFieldKind::Scalar(monomial) => {
+        ManifestFieldKind::Quantity(monomial) => {
             // Wire validation already rejects dimension-variable factors in
             // struct fields, so the converted monomial is concrete.
             let monomial = convert_monomial(monomial)?;
-            StructFieldKind::Scalar(monomial.fixed)
+            StructFieldKind::Quantity(monomial.fixed)
         }
     };
     Ok(StructShapeField { name, kind })
@@ -252,8 +254,8 @@ mod tests {
         ManifestRational { num, den }
     }
 
-    fn scalar_var(var: &str, num: i32, den: i32) -> ManifestValueKind {
-        ManifestValueKind::Scalar(ManifestMonomial {
+    fn quantity_var(var: &str, num: i32, den: i32) -> ManifestValueKind {
+        ManifestValueKind::Quantity(ManifestMonomial {
             vars: vec![ManifestVarPower {
                 var: var.to_string(),
                 pow: rational(num, den),
@@ -263,7 +265,7 @@ mod tests {
     }
 
     fn fixed_dim(dim: &str, num: i32, den: i32) -> ManifestValueKind {
-        ManifestValueKind::Scalar(ManifestMonomial {
+        ManifestValueKind::Quantity(ManifestMonomial {
             vars: Vec::new(),
             fixed: vec![ManifestDimPower {
                 dim: dim.to_string(),
@@ -285,8 +287,8 @@ mod tests {
             name: "root".to_string(),
             dim_vars: vec!["D".to_string()],
             index_vars: Vec::new(),
-            params: vec![param("x", scalar_var("D", 1, 1))],
-            result: scalar_var("D", 1, 2),
+            params: vec![param("x", quantity_var("D", 1, 1))],
+            result: quantity_var("D", 1, 2),
         };
         let (name, signature) = convert_function(&function).unwrap();
         assert_eq!(name.as_str(), "root");
@@ -323,7 +325,7 @@ mod tests {
             dim_vars: Vec::new(),
             index_vars: Vec::new(),
             params: vec![param("x", fixed_dim("Velocity", 1, 1))],
-            result: ManifestValueKind::Scalar(ManifestMonomial::default()),
+            result: ManifestValueKind::Quantity(ManifestMonomial::default()),
         };
         let err = convert_function(&function).unwrap_err();
         assert_eq!(err.function, "speed");
@@ -355,8 +357,8 @@ mod tests {
             name: "sq".to_string(),
             dim_vars: vec!["D".to_string()],
             index_vars: Vec::new(),
-            params: vec![param("x", scalar_var("D", 2, 1))],
-            result: scalar_var("D", 1, 1),
+            params: vec![param("x", quantity_var("D", 2, 1))],
+            result: quantity_var("D", 1, 1),
         };
         assert!(matches!(
             convert_function(&function).unwrap_err().kind,

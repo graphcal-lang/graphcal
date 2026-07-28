@@ -57,8 +57,8 @@ assert all_stages_ok = @thrust > @min_thrust;
 ```
 
 Comparisons broadcast element-wise over indexed operands: `T[I] op T[I]`
-zips the two collections per key, and `T[I] op scalar` applies the scalar
-to every key — both produce `Bool[I]`. A `for` comprehension yielding
+zips the two collections per key, and `T[I] op unindexed T` applies the
+unindexed operand to every key — both produce `Bool[I]`. A `for` comprehension yielding
 `Bool[I]` works the same way. Indexed operands must share the same axes in
 the same order; mismatched axes are a compile error (`D011`).
 
@@ -148,7 +148,7 @@ assert velocity_approx = @velocity ~= 49.5 m/s +/- 5 %;
 
 Tolerance assertions broadcast element-wise over indexed operands. The
 assertion's index shape comes from `actual`; `expected` and `tolerance` are
-each either a scalar (applied to every key) or indexed by exactly the same
+each either unindexed (applied to every key) or indexed by exactly the same
 axes in the same order (`D011` otherwise):
 
 ```
@@ -158,14 +158,14 @@ node actual: Length[Case] = { Case.A: 1.0 m, Case.B: 2.0 m };
 node expected: Length[Case] = { Case.A: 1.0 m, Case.B: 2.5 m };
 node tol: Length[Case] = { Case.A: 0.01 m, Case.B: 0.6 m };
 
-// Scalar tolerance applied to every key:
+// Unindexed tolerance applied to every key:
 assert close = @actual ~= @expected +/- 0.1 m;
 //   FAIL  (failed at Case.B (actual 2, expected 2.5 +/- 0.1, off by 0.5))
 
 // Per-key tolerance over the same axes:
 assert per_key = @actual ~= @expected +/- @tol;
 
-// Relative tolerance works the same way (scalar or indexed, dimensionless):
+// Relative tolerance works the same way (unindexed or indexed, dimensionless):
 assert relative = @actual ~= @expected +/- 25 %;
 ```
 
@@ -257,7 +257,7 @@ assert x_greater = @x > @y;
   `node`, `const node`, etc. is a compile error (A008).
 - Evaluation errors (e.g., division by zero) are never inverted -- they remain
   errors regardless of `#[expected_fail]`.
-- `#[expected_fail]` without arguments is valid only on scalar assertions.
+- `#[expected_fail]` without arguments is valid only on unindexed assertions.
   Indexed assertions must list the exact expected-fail keys (A011).
 - Per-variant keys are valid only on indexed assertions (A010).
 - Each expected-fail key must be unique (A012).

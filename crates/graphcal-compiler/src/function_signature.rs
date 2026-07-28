@@ -1,7 +1,7 @@
 //! Function-signature IR: the typed dimensional calling convention shared by
 //! built-in and externally-provided (plugin) functions.
 //!
-//! A [`FunctionSignature`] describes how a scalar-kernel function interacts
+//! A [`FunctionSignature`] describes how a quantity-kernel function interacts
 //! with the type system: which dimension variables it declares, what value
 //! kind each named parameter requires, and how the result kind is computed
 //! from the bound dimension variables. Param and result dimensions are
@@ -145,15 +145,15 @@ pub enum DimMonomialEvalError {
 /// The kind of a parameter or result value in a function signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueKind {
-    /// A scalar with the dimension given by the monomial.
-    Scalar(DimMonomial),
+    /// A quantity with the dimension given by the monomial.
+    Quantity(DimMonomial),
     /// A boolean value.
     Bool,
     /// An integer value.
     Int,
-    /// An array of scalars over a declared index variable: `element[index]`.
+    /// An array of quantities over a declared index variable: `element[index]`.
     ///
-    /// Elements are scalars whose dimension is given by the monomial; the
+    /// Elements are quantities whose dimension is given by the monomial; the
     /// index variable is bound by an argument's concrete index at the call
     /// site. A result array must reuse an index variable bound by some
     /// parameter — a function can never invent its output length.
@@ -173,7 +173,7 @@ pub enum ValueKind {
 }
 
 /// The flattened field layout of a record return: named fields of concrete
-/// scalar, boolean, or integer kinds, in declaration order.
+/// quantity, boolean, or integer kinds, in declaration order.
 ///
 /// Constructed through [`StructShape::try_new`], which rejects empty shapes
 /// and duplicate field names. Field names and order are part of the calling
@@ -193,12 +193,12 @@ pub struct StructShapeField {
     pub kind: StructFieldKind,
 }
 
-/// The kind of one struct field: concrete scalars only — dimension
+/// The kind of one struct field: concrete quantities only — dimension
 /// variables cannot appear in struct returns in this phase.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StructFieldKind {
-    /// A scalar with a concrete fixed dimension.
-    Scalar(Dimension),
+    /// A quantity with a concrete fixed dimension.
+    Quantity(Dimension),
     /// A boolean value.
     Bool,
     /// An integer value.
@@ -235,16 +235,16 @@ impl StructShape {
 }
 
 impl ValueKind {
-    /// A dimensionless scalar.
+    /// A dimensionless quantity.
     #[must_use]
     pub const fn dimensionless() -> Self {
-        Self::Scalar(DimMonomial::dimensionless())
+        Self::Quantity(DimMonomial::dimensionless())
     }
 
-    /// A scalar with a concrete fixed dimension.
+    /// A quantity with a concrete fixed dimension.
     #[must_use]
-    const fn scalar(dim: Dimension) -> Self {
-        Self::Scalar(DimMonomial::fixed(dim))
+    const fn quantity(dim: Dimension) -> Self {
+        Self::Quantity(DimMonomial::fixed(dim))
     }
 }
 
@@ -267,7 +267,7 @@ pub struct FunctionParam {
 ///   distinct.
 /// - Monomial factors carry no zero exponents and no duplicate variables.
 /// - Every referenced dimension variable is declared, and every declared
-///   dimension variable has a *binding occurrence*: a parameter whose scalar
+///   dimension variable has a *binding occurrence*: a parameter whose quantity
 ///   or array-element monomial is exactly that bare variable (`var^1`),
 ///   appearing before (or as) the variable's first use in any compound
 ///   monomial. Binding occurrences are what unify a variable with a concrete
@@ -314,7 +314,7 @@ impl FunctionSignature {
         let mut used_indexes: HashSet<&IndexVarName> = HashSet::new();
         for param in &params {
             let monomial = match &param.kind {
-                ValueKind::Scalar(monomial) => monomial,
+                ValueKind::Quantity(monomial) => monomial,
                 ValueKind::Indexed { element, index } => {
                     if !declared_indexes.contains(index) {
                         return Err(SignatureError::UndeclaredIndexVar { var: index.clone() });
@@ -351,7 +351,7 @@ impl FunctionSignature {
         }
 
         let result_monomial = match &result {
-            ValueKind::Scalar(monomial) => Some(monomial),
+            ValueKind::Quantity(monomial) => Some(monomial),
             ValueKind::Indexed { element, index } => {
                 if !declared_indexes.contains(index) {
                     return Err(SignatureError::UndeclaredIndexVar { var: index.clone() });
@@ -523,7 +523,7 @@ struct CanonicalSignature {
 /// [`ValueKind`] in canonical form.
 #[derive(PartialEq, Eq)]
 enum CanonicalValueKind {
-    Scalar(CanonicalMonomial),
+    Quantity(CanonicalMonomial),
     Bool,
     Int,
     Indexed {
@@ -554,8 +554,8 @@ fn canonical_kind<'a>(kind: &'a ValueKind, order: &mut CanonicalOrder<'a>) -> Ca
     match kind {
         ValueKind::Bool => CanonicalValueKind::Bool,
         ValueKind::Int => CanonicalValueKind::Int,
-        ValueKind::Scalar(monomial) => {
-            CanonicalValueKind::Scalar(canonical_monomial(monomial, order))
+        ValueKind::Quantity(monomial) => {
+            CanonicalValueKind::Quantity(canonical_monomial(monomial, order))
         }
         ValueKind::Indexed { element, index } => CanonicalValueKind::Indexed {
             element: canonical_monomial(element, order),
@@ -598,7 +598,7 @@ fn format_value_kind(
     match kind {
         ValueKind::Bool => "Bool".to_string(),
         ValueKind::Int => "Int".to_string(),
-        ValueKind::Scalar(monomial) => format_monomial(monomial, format_dim),
+        ValueKind::Quantity(monomial) => format_monomial(monomial, format_dim),
         ValueKind::Indexed { element, index } => {
             format!("{}[{index}]", format_monomial(element, format_dim))
         }
@@ -610,7 +610,7 @@ fn format_value_kind(
                     let kind = match &field.kind {
                         StructFieldKind::Bool => "Bool".to_string(),
                         StructFieldKind::Int => "Int".to_string(),
-                        StructFieldKind::Scalar(dim) => {
+                        StructFieldKind::Quantity(dim) => {
                             let rendered = format_dim(dim);
                             if rendered.is_empty() {
                                 "Dimensionless".to_string()
@@ -801,7 +801,7 @@ fn expect_signature(
 }
 
 impl FunctionSignature {
-    /// All params dimensionless scalars, dimensionless scalar result.
+    /// All params dimensionless quantities, dimensionless quantity result.
     #[must_use]
     pub(crate) fn all_dimensionless(names: &[&str]) -> Self {
         expect_signature(
@@ -819,8 +819,8 @@ impl FunctionSignature {
     pub fn fixed_to_fixed(name: &str, input: Dimension, output: Dimension) -> Self {
         expect_signature(
             Vec::new(),
-            vec![param(name, ValueKind::scalar(input))],
-            ValueKind::scalar(output),
+            vec![param(name, ValueKind::quantity(input))],
+            ValueKind::quantity(output),
         )
     }
 
@@ -830,8 +830,11 @@ impl FunctionSignature {
         let d = dim_var_d();
         expect_signature(
             vec![d.clone()],
-            vec![param(name, ValueKind::Scalar(DimMonomial::var(d.clone())))],
-            ValueKind::Scalar(DimMonomial::var(d)),
+            vec![param(
+                name,
+                ValueKind::Quantity(DimMonomial::var(d.clone())),
+            )],
+            ValueKind::Quantity(DimMonomial::var(d)),
         )
     }
 
@@ -841,8 +844,8 @@ impl FunctionSignature {
         let d = dim_var_d();
         expect_signature(
             vec![d.clone()],
-            vec![param(name, ValueKind::Scalar(DimMonomial::var(d)))],
-            ValueKind::scalar(output),
+            vec![param(name, ValueKind::Quantity(DimMonomial::var(d)))],
+            ValueKind::quantity(output),
         )
     }
 
@@ -852,8 +855,11 @@ impl FunctionSignature {
         let d = dim_var_d();
         expect_signature(
             vec![d.clone()],
-            vec![param(name, ValueKind::Scalar(DimMonomial::var(d.clone())))],
-            ValueKind::Scalar(DimMonomial::var_pow(d, power)),
+            vec![param(
+                name,
+                ValueKind::Quantity(DimMonomial::var(d.clone())),
+            )],
+            ValueKind::Quantity(DimMonomial::var_pow(d, power)),
         )
     }
 
@@ -865,9 +871,9 @@ impl FunctionSignature {
             vec![d.clone()],
             names
                 .iter()
-                .map(|&n| param(n, ValueKind::Scalar(DimMonomial::var(d.clone()))))
+                .map(|&n| param(n, ValueKind::Quantity(DimMonomial::var(d.clone()))))
                 .collect(),
-            ValueKind::Scalar(DimMonomial::var(d)),
+            ValueKind::Quantity(DimMonomial::var(d)),
         )
     }
 
@@ -879,9 +885,9 @@ impl FunctionSignature {
             vec![d.clone()],
             names
                 .iter()
-                .map(|&n| param(n, ValueKind::Scalar(DimMonomial::var(d.clone()))))
+                .map(|&n| param(n, ValueKind::Quantity(DimMonomial::var(d.clone()))))
                 .collect(),
-            ValueKind::scalar(output),
+            ValueKind::quantity(output),
         )
     }
 }
@@ -910,10 +916,10 @@ mod tests {
             vec![var("D1"), var("D2")],
             Vec::new(),
             vec![
-                param("force", ValueKind::Scalar(DimMonomial::var(var("D1")))),
-                param("arm", ValueKind::Scalar(DimMonomial::var(var("D2")))),
+                param("force", ValueKind::Quantity(DimMonomial::var(var("D1")))),
+                param("arm", ValueKind::Quantity(DimMonomial::var(var("D2")))),
             ],
-            ValueKind::Scalar(DimMonomial {
+            ValueKind::Quantity(DimMonomial {
                 vars: vec![
                     DimVarPower {
                         var: var("D1"),
@@ -932,8 +938,8 @@ mod tests {
         let l = length();
         let t = time();
         let bindings = [(var("D1"), l.clone()), (var("D2"), t.clone())];
-        let ValueKind::Scalar(result) = sig.result() else {
-            panic!("expected scalar result");
+        let ValueKind::Quantity(result) = sig.result() else {
+            panic!("expected quantity result");
         };
         let dim = result
             .eval(|v| bindings.iter().find(|(bv, _)| bv == v).map(|(_, d)| d))
@@ -950,14 +956,14 @@ mod tests {
             vec![
                 param(
                     "x",
-                    ValueKind::Scalar(DimMonomial::var_pow(
+                    ValueKind::Quantity(DimMonomial::var_pow(
                         var("D"),
                         Rational::try_new(2, 1).unwrap(),
                     )),
                 ),
-                param("y", ValueKind::Scalar(DimMonomial::var(var("D")))),
+                param("y", ValueKind::Quantity(DimMonomial::var(var("D")))),
             ],
-            ValueKind::Scalar(DimMonomial::var(var("D"))),
+            ValueKind::Quantity(DimMonomial::var(var("D"))),
         )
         .unwrap_err();
         assert!(matches!(err, SignatureError::UseBeforeBinding { .. }));
@@ -968,7 +974,7 @@ mod tests {
         let err = FunctionSignature::try_new(
             Vec::new(),
             Vec::new(),
-            vec![param("x", ValueKind::Scalar(DimMonomial::var(var("D"))))],
+            vec![param("x", ValueKind::Quantity(DimMonomial::var(var("D"))))],
             ValueKind::dimensionless(),
         )
         .unwrap_err();
@@ -1022,7 +1028,7 @@ mod tests {
     }
 
     fn bare(name: &str) -> ValueKind {
-        ValueKind::Scalar(DimMonomial::var(var(name)))
+        ValueKind::Quantity(DimMonomial::var(var(name)))
     }
 
     #[test]
@@ -1055,7 +1061,7 @@ mod tests {
     #[test]
     fn equivalence_ignores_monomial_factor_order_and_binder_order() {
         let product = |first: &str, second: &str| {
-            ValueKind::Scalar(DimMonomial {
+            ValueKind::Quantity(DimMonomial {
                 vars: vec![
                     DimVarPower {
                         var: var(first),
@@ -1276,7 +1282,7 @@ mod tests {
     }
 
     #[test]
-    fn array_is_not_equivalent_to_scalar() {
+    fn array_is_not_equivalent_to_quantity() {
         let arr = FunctionSignature::try_new(
             vec![var("D")],
             vec![ivar("I")],
@@ -1284,8 +1290,8 @@ mod tests {
             bare("D"),
         )
         .unwrap();
-        let scalar = FunctionSignature::passthrough("xs");
-        assert!(!arr.structurally_equivalent(&scalar));
+        let quantity = FunctionSignature::passthrough("xs");
+        assert!(!arr.structurally_equivalent(&quantity));
     }
 
     // -- Struct-return shapes ----------------------------------------------
@@ -1342,8 +1348,8 @@ mod tests {
                 vec![ivar("I")],
                 vec![param("xs", array("D", "I"))],
                 ValueKind::Struct(shape(&[
-                    (names.0, StructFieldKind::Scalar(length())),
-                    (names.1, StructFieldKind::Scalar(length())),
+                    (names.0, StructFieldKind::Quantity(length())),
+                    (names.1, StructFieldKind::Quantity(length())),
                 ])),
             )
             .unwrap()
@@ -1363,7 +1369,7 @@ mod tests {
             vec![ivar("I")],
             vec![param("xs", array("D", "I"))],
             ValueKind::Struct(shape(&[
-                ("lo", StructFieldKind::Scalar(Dimension::dimensionless())),
+                ("lo", StructFieldKind::Quantity(Dimension::dimensionless())),
                 ("ok", StructFieldKind::Bool),
             ])),
         )

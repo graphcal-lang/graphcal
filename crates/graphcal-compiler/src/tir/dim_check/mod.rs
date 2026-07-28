@@ -19,7 +19,7 @@ use crate::registry::time_scale::TimeScale;
 use crate::registry::types::Registry;
 use crate::tir::typed::{NatPolyForm, NatRangeIndexIdentity};
 
-pub(crate) use helpers::{expect_scalar, format_inferred_type};
+pub(crate) use helpers::{expect_quantity, format_inferred_type};
 
 use helpers::{format_declared_type, is_bool_type, resolved_type_matches_inferred, types_match};
 
@@ -216,10 +216,10 @@ impl std::ops::Deref for InferredStructType {
 /// The inferred type of an expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InferredType {
-    Scalar(Dimension),
-    /// A scalar value produced by iterating a declared range index.
+    Quantity(Dimension),
+    /// A quantity value produced by iterating a declared range index.
     ///
-    /// Range labels can participate in scalar arithmetic, but retain the
+    /// Range labels can participate in quantity arithmetic, but retain the
     /// originating index identity so `@series[t]` can prove that `t` belongs
     /// to the same range axis as `series` instead of reading positionally.
     RangeIndexLabel {
@@ -259,9 +259,9 @@ impl InferredType {
     }
 
     #[must_use]
-    const fn scalar_dimension(&self) -> Option<&Dimension> {
+    const fn quantity_dimension(&self) -> Option<&Dimension> {
         match self {
-            Self::Scalar(dimension) | Self::RangeIndexLabel { dimension, .. } => Some(dimension),
+            Self::Quantity(dimension) | Self::RangeIndexLabel { dimension, .. } => Some(dimension),
             _ => None,
         }
     }
@@ -593,7 +593,7 @@ fn check_hir_assert_body(
             let tolerance_type = ctx.infer_hir(tolerance)?;
 
             // Element-wise broadcasting (#809): the assertion's index shape
-            // comes from `actual`; `expected` and `tolerance` are each scalar
+            // comes from `actual`; `expected` and `tolerance` are each unindexed
             // (broadcast to every key) or indexed by exactly the same axes.
             let (actual_axes, actual_elem) = peel_index_axes(&actual_type);
             let expected_elem = broadcast_operand_element(
@@ -613,8 +613,8 @@ fn check_hir_assert_body(
                 src,
             )?;
 
-            let actual_dim = expect_scalar(actual_elem, registry, src, actual.span)?;
-            let expected_dim = expect_scalar(expected_elem, registry, src, expected.span)?;
+            let actual_dim = expect_quantity(actual_elem, registry, src, actual.span)?;
+            let expected_dim = expect_quantity(expected_elem, registry, src, expected.span)?;
             if actual_dim != expected_dim {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(&actual_dim),
@@ -629,10 +629,10 @@ fn check_hir_assert_body(
             let tolerance_ok = if *is_relative {
                 tolerance_elem.is_int_like()
                     || tolerance_elem
-                        .scalar_dimension()
+                        .quantity_dimension()
                         .is_some_and(Dimension::is_dimensionless)
             } else {
-                let tolerance_dim = expect_scalar(tolerance_elem, registry, src, tolerance.span)?;
+                let tolerance_dim = expect_quantity(tolerance_elem, registry, src, tolerance.span)?;
                 tolerance_dim == actual_dim
             };
             if !tolerance_ok {
@@ -964,20 +964,20 @@ fn check_dimensions_dag(
 
 /// What a domain bound expression must infer to for a given target type.
 enum ExpectedBound {
-    /// Bound must be `Scalar(d)`. `Int` is also accepted when `d` is dimensionless.
-    Scalar(Dimension),
-    /// Bound must be unitless: `Int`, or `Scalar` with the dimensionless dimension.
+    /// Bound must be `Quantity(d)`. `Int` is also accepted when `d` is dimensionless.
+    Quantity(Dimension),
+    /// Bound must be unitless: `Int`, or `Quantity` with the dimensionless dimension.
     Int,
 }
 
 /// Check that domain constraint bound expressions have the correct type.
 ///
 /// For each param/node with `(min: ..., max: ...)` constraints whose target type
-/// is `Scalar(d)`, `Dimensionless`, or `Int`, infers the type of each bound
+/// is `Quantity(d)`, `Dimensionless`, or `Int`, infers the type of each bound
 /// expression using the regular type checker and verifies it matches:
-/// - `Scalar(d)` target: bound must be `Scalar(d)` (or `Int` if `d` is dimensionless).
-/// - `Dimensionless` target: bound must be `Scalar(dimensionless)` or `Int`.
-/// - `Int` target: bound must be `Int` or `Scalar(dimensionless)` — units forbidden.
+/// - `Quantity(d)` target: bound must be `Quantity(d)` (or `Int` if `d` is dimensionless).
+/// - `Dimensionless` target: bound must be `Quantity(dimensionless)` or `Int`.
+/// - `Int` target: bound must be `Int` or `Quantity(dimensionless)` — units forbidden.
 ///
 /// Other targets (e.g., `Bool`) are skipped here and handled by
 /// `validate_constraint_target` in `exec_plan` (which raises `InvalidDomainTarget`).
@@ -1010,11 +1010,11 @@ fn check_domain_constraint_dimensions_dag(
         let resolved = dag.resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);
         let expected = match base_resolved {
-            Some(crate::tir::typed::ResolvedTypeExpr::Scalar(dim)) => {
-                ExpectedBound::Scalar(dim.clone())
+            Some(crate::tir::typed::ResolvedTypeExpr::Quantity(dim)) => {
+                ExpectedBound::Quantity(dim.clone())
             }
             Some(crate::tir::typed::ResolvedTypeExpr::Dimensionless) => {
-                ExpectedBound::Scalar(Dimension::dimensionless())
+                ExpectedBound::Quantity(Dimension::dimensionless())
             }
             Some(crate::tir::typed::ResolvedTypeExpr::Int) => ExpectedBound::Int,
             _ => continue,
@@ -1047,15 +1047,15 @@ fn check_one_bound(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match expected {
-        ExpectedBound::Scalar(target_dim) => {
+        ExpectedBound::Quantity(target_dim) => {
             let ok = match inferred {
                 InferredType::Int => target_dim.is_dimensionless(),
-                other => other.scalar_dimension() == Some(target_dim),
+                other => other.quantity_dimension() == Some(target_dim),
             };
             if ok {
                 return Ok(());
             }
-            let bound_dim_str = inferred.scalar_dimension().map_or_else(
+            let bound_dim_str = inferred.quantity_dimension().map_or_else(
                 || format_inferred_type(inferred, registry),
                 |d| registry.dimensions.format_dimension(d),
             );
@@ -1072,7 +1072,7 @@ fn check_one_bound(
             let ok = match inferred {
                 InferredType::Int => true,
                 other => other
-                    .scalar_dimension()
+                    .quantity_dimension()
                     .is_some_and(Dimension::is_dimensionless),
             };
             if ok {
@@ -1123,7 +1123,7 @@ fn check_domain_constraint_targets_dag(
             | crate::tir::typed::ResolvedTypeExpr::GenericStruct {
                 name: struct_name, ..
             } => format!("struct `{}`", struct_name.as_str()),
-            crate::tir::typed::ResolvedTypeExpr::Scalar(_)
+            crate::tir::typed::ResolvedTypeExpr::Quantity(_)
             | crate::tir::typed::ResolvedTypeExpr::Dimensionless
             | crate::tir::typed::ResolvedTypeExpr::Int
             | crate::tir::typed::ResolvedTypeExpr::GenericDimParam(_, _)
@@ -1193,7 +1193,7 @@ fn check_field_domain_constraint_targets(
 /// `None`) or constraint-incompatible (returns `Some(kind_str)` describing
 /// why it's incompatible). Strips an outer `Indexed` wrapper before
 /// classifying — a `Velocity(min: 0)[Maneuver]` field is constraint-
-/// compatible because the base `Velocity` is scalar.
+/// compatible because the base `Velocity` is quantity.
 fn field_constraint_target_kind(
     type_ann: &crate::desugar::desugared_ast::TypeExpr,
     registry: &Registry,
@@ -1218,7 +1218,7 @@ fn field_constraint_target_kind(
         TypeExprKind::DimExpr(dim_expr) => {
             // A bare single-name DimExpr could be a struct, an index name, or a
             // dimension. The registry distinguishes them: dim → constraint-
-            // compatible scalar; struct → reject; index → reject as an index.
+            // compatible quantity; struct → reject; index → reject as an index.
             if dim_expr.terms.len() == 1
                 && dim_expr.terms[0].term.power.is_none()
                 && let Some(item) = dim_expr.terms.first()
@@ -1247,7 +1247,7 @@ fn field_constraint_target_kind(
                 }
             } else {
                 // Compound dim expression like `Length / Time` → constraint-
-                // compatible scalar.
+                // compatible quantity.
                 None
             }
         }
@@ -1327,7 +1327,7 @@ fn check_field_domain_constraint_dimensions(
 }
 
 /// Compute the [`ExpectedBound`] for a struct field's `TypeExpr`. Returns
-/// `Ok(None)` when the field's base type isn't `Scalar`/`Dimensionless`/`Int`
+/// `Ok(None)` when the field's base type isn't `Quantity`/`Dimensionless`/`Int`
 /// (in which case the target check has already rejected it, or it's a
 /// generic param to be checked at instantiation), and `Err` if dimension
 /// arithmetic overflows.
@@ -1342,7 +1342,9 @@ fn field_expected_bound(
         _ => type_ann,
     };
     match &base.kind {
-        TypeExprKind::Dimensionless => Ok(Some(ExpectedBound::Scalar(Dimension::dimensionless()))),
+        TypeExprKind::Dimensionless => {
+            Ok(Some(ExpectedBound::Quantity(Dimension::dimensionless())))
+        }
         TypeExprKind::Int => Ok(Some(ExpectedBound::Int)),
         TypeExprKind::DimExpr(_) => Ok(registry
             .dimensions
@@ -1351,7 +1353,7 @@ fn field_expected_bound(
                 src: src.clone(),
                 span: base.span.into(),
             })?
-            .map(ExpectedBound::Scalar)),
+            .map(ExpectedBound::Quantity)),
         _ => Ok(None),
     }
 }
@@ -1368,15 +1370,15 @@ fn check_one_bound_with_display_name(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match expected {
-        ExpectedBound::Scalar(target_dim) => {
+        ExpectedBound::Quantity(target_dim) => {
             let ok = match inferred {
                 InferredType::Int => target_dim.is_dimensionless(),
-                other => other.scalar_dimension() == Some(target_dim),
+                other => other.quantity_dimension() == Some(target_dim),
             };
             if ok {
                 return Ok(());
             }
-            let bound_dim_str = inferred.scalar_dimension().map_or_else(
+            let bound_dim_str = inferred.quantity_dimension().map_or_else(
                 || format_inferred_type(inferred, registry),
                 |d| registry.dimensions.format_dimension(d),
             );
@@ -1393,7 +1395,7 @@ fn check_one_bound_with_display_name(
             let ok = match inferred {
                 InferredType::Int => true,
                 other => other
-                    .scalar_dimension()
+                    .quantity_dimension()
                     .is_some_and(Dimension::is_dimensionless),
             };
             if ok {

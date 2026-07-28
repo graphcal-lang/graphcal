@@ -12,7 +12,7 @@ icon: material/power-plug
     same skepticism you would apply to any unreviewed external code, and
     please [report issues](https://github.com/graphcal-lang/graphcal/issues).
 
-Extern functions let a graphcal project call scalar functions implemented
+Extern functions let a graphcal project call quantity functions implemented
 outside the language — WebAssembly plugin modules vendored in the project,
 or native functions provided by the *embedder* (the CLI, the language
 server, or a program embedding the evaluation engine). They are the escape
@@ -43,10 +43,11 @@ import plugin "plugins/fluids.wasm" as fluids {
   mirrors the explicitness of module imports and keeps the built-in
   function namespace closed.
 - Each `fn` declares **named parameters** and a **result type**. Parameter
-  and result types may be `Bool`, `Int`, scalar dimension expressions, or
-  arrays of scalars over a declared index variable (`xs: D[I]`); the result
+  and result types may be `Bool`, `Int`, quantity types written as dimension
+  expressions, or arrays of quantities over a declared index variable
+  (`xs: D[I]`); the result
   may additionally be a record type in scope (see
-  [Struct Returns](#struct-returns)).
+  [Record-Shaped Results](#record-shaped-results)).
 
 Signatures are declared explicitly rather than inferred from the plugin:
 the declaration in your source is the contract your project type-checks
@@ -92,7 +93,7 @@ boundary.
 ## Arrays over Index Variables
 
 A signature may also declare *index variables* (`I: Index`) and take or
-return arrays of scalars over them:
+return arrays of quantities over them:
 
 ```
 import plugin "plugins/dsp.wasm" as dsp {
@@ -121,11 +122,11 @@ variables:
   binding argument's index, ready for `sum`, indexing, and `for`
   comprehensions like any other indexed value.
 - A bare array element (`xs: D[I]`) is a binding occurrence for `D`, just
-  like a bare scalar parameter.
-- Array elements are scalars in this phase (`Bool[I]`/`Int[I]` and
+  like a bare quantity parameter.
+- Array elements are quantities in this phase (`Bool[I]`/`Int[I]` and
   multi-axis arrays are not supported).
 
-## Struct Returns
+## Record-Shaped Results
 
 A function may return several named values at once by declaring a
 **record type in scope** as its result:
@@ -146,17 +147,19 @@ flattened field shape (names, order, and kinds), and the declaration
 binds that shape to the nominal record type. Field names and order are
 part of the contract: a plugin declaring `{min, max}` does not match a
 declaration whose record has `{lo, hi}` (P005). The result evaluates to
-an ordinary struct value with working field access and matching.
+an ordinary record-shaped algebraic value with working field access and
+matching. The plugin ABI calls its flattened representation a `struct` shape;
+this is not a separate Graphcal type category.
 
 Restrictions in this phase, each with a dedicated compile error:
 
-- The named type must be a **record** — a single constructor named after
-  the type. Multi-variant unions have no flattened layout to cross the
-  boundary.
-- Fields must be `Bool`, `Int`, or **concrete** scalar dimensions —
+- The named type must be **record-shaped** — a single constructor named after
+  the type. Types with multiple constructors have no single flattened layout
+  to cross the boundary.
+- Fields must be `Bool`, `Int`, or **concrete quantity types** —
   generic records and dimension-variable fields cannot cross yet.
-- Structs are result-only. A struct *parameter* should be passed as
-  separate scalar parameters instead.
+- Record-shaped algebraic values are result-only. Such a *parameter* should be
+  passed as separate quantity parameters instead.
 
 ## Calling Extern Functions
 
@@ -176,7 +179,7 @@ Restrictions, all enforced at compile time:
   `const` expressions, domain bounds, or unit scale expressions (P004).
 - Calls must be alias-qualified; a bare `lerp(...)` is an unknown
   function.
-- There is **no auto-lifting** over indexed values: an extern scalar
+- There is **no auto-lifting** over indexed values: an extern quantity
   function applies element-wise only through an explicit `for`
   comprehension, keeping the iteration visible in the source.
 
@@ -205,14 +208,15 @@ at load time before any plugin code runs:
   exponents — `Velocity` is `Length^1 * Time^-1`. User-defined base
   dimensions cannot cross the binary boundary.
 - **Value ABI.** Each function's wasm export type follows its signature:
-  scalar/`Bool`/`Int` parameters are one `f64` each (raw SI base units;
-  `Int` as exactly-representable integers, `Bool` as `1.0`/`0.0`), and an
+  quantity/`Bool`/`Int` parameters use one scalar `f64` ABI slot each
+  (raw SI base units for quantities; `Int` as exactly-representable integers,
+  `Bool` as `1.0`/`0.0`), and an
   array parameter is an `(i32 ptr, i32 len)` pair pointing at `len` dense
-  little-endian `f64` elements in index order. A scalar result is the
+  little-endian `f64` elements in index order. A scalar ABI result is the
   single `f64` return value; an array or struct result replaces the
   return with one trailing `i32` out-pointer the plugin fills — `len`
   elements for an array (the length of the input bound to the result's
-  index variable) or one slot per field for a struct. A non-finite scalar
+  index variable) or one slot per field for a struct. A non-finite quantity
   flows into graphcal's ordinary non-finite containment.
 - **Allocator exports.** A module that takes or returns arrays or structs
   must export its memory as `"memory"` plus

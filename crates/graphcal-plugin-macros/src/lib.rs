@@ -56,10 +56,10 @@ mod tests {
         expand(input).expect_err("expected an error").to_string()
     }
 
-    fn scalar(kind: &ManifestValueKind) -> &graphcal_plugin_abi::ManifestMonomial {
+    fn quantity(kind: &ManifestValueKind) -> &graphcal_plugin_abi::ManifestMonomial {
         match kind {
-            ManifestValueKind::Scalar(monomial) => monomial,
-            other => panic!("expected a scalar kind, got {other:?}"),
+            ManifestValueKind::Quantity(monomial) => monomial,
+            other => panic!("expected a quantity kind, got {other:?}"),
         }
     }
 
@@ -73,12 +73,12 @@ mod tests {
         assert_eq!(function.name, "lerp");
         assert_eq!(function.dim_vars, ["D"]);
         assert_eq!(function.params.len(), 3);
-        let a = scalar(&function.params[0].kind);
+        let a = quantity(&function.params[0].kind);
         assert_eq!(a.vars.len(), 1);
         assert_eq!(a.vars[0].var, "D");
         assert_eq!((a.vars[0].pow.num, a.vars[0].pow.den), (1, 1));
         assert!(a.fixed.is_empty());
-        let t = scalar(&function.params[2].kind);
+        let t = quantity(&function.params[2].kind);
         assert!(t.vars.is_empty() && t.fixed.is_empty());
     }
 
@@ -88,7 +88,7 @@ mod tests {
             fn density(p: Pressure, t: Temperature) -> Mass / Volume { p / t }
         });
         let function = &manifest.functions[0];
-        let pressure = scalar(&function.params[0].kind);
+        let pressure = quantity(&function.params[0].kind);
         let factors: Vec<(&str, i32, i32)> = pressure
             .fixed
             .iter()
@@ -98,7 +98,7 @@ mod tests {
             factors,
             [("Length", -1, 1), ("Time", -2, 1), ("Mass", 1, 1)]
         );
-        let result = scalar(&function.result);
+        let result = quantity(&function.result);
         let factors: Vec<(&str, i32, i32)> = result
             .fixed
             .iter()
@@ -113,7 +113,7 @@ mod tests {
             fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> (D1 * D2)^(1/2) { (x * y).sqrt() }
             fn cancel<D: Dim>(x: D, y: D^2) -> D^2 / D * Dimensionless { y / x * 1.0 }
         });
-        let mean = scalar(&manifest.functions[0].result);
+        let mean = quantity(&manifest.functions[0].result);
         let powers: Vec<(&str, i32, i32)> = mean
             .vars
             .iter()
@@ -121,7 +121,7 @@ mod tests {
             .collect();
         assert_eq!(powers, [("D1", 1, 2), ("D2", 1, 2)]);
 
-        let cancelled = scalar(&manifest.functions[1].result);
+        let cancelled = quantity(&manifest.functions[1].result);
         assert_eq!(cancelled.vars.len(), 1);
         assert_eq!(
             (cancelled.vars[0].pow.num, cancelled.vars[0].pow.den),
@@ -146,9 +146,9 @@ mod tests {
             fn f(x: Length^-3, y: Time^(-1/2)) -> Length^(2) { x + y }
         });
         let function = &manifest.functions[0];
-        let x = scalar(&function.params[0].kind);
+        let x = quantity(&function.params[0].kind);
         assert_eq!((x.fixed[0].pow.num, x.fixed[0].pow.den), (-3, 1));
-        let y = scalar(&function.params[1].kind);
+        let y = quantity(&function.params[1].kind);
         assert_eq!((y.fixed[0].pow.num, y.fixed[0].pow.den), (-1, 2));
     }
 
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(fields[0].name, "lo");
         assert!(matches!(
             &fields[0].kind,
-            graphcal_plugin_abi::ManifestFieldKind::Scalar(monomial) if monomial.vars.is_empty()
+            graphcal_plugin_abi::ManifestFieldKind::Quantity(monomial) if monomial.vars.is_empty()
         ));
         assert!(matches!(
             &fields[1].kind,
@@ -388,7 +388,7 @@ mod tests {
             fn f<I: Index>(xs: Bool[I]) -> Dimensionless { 0.0 }
         });
         assert!(
-            message.contains("array elements must be scalars"),
+            message.contains("array elements must be quantities"),
             "got: {message}"
         );
 

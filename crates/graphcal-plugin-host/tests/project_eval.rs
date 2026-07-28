@@ -21,8 +21,8 @@ use graphcal_plugin_abi::{
 };
 use graphcal_plugin_host::{PluginHost, register_project_plugins};
 
-fn scalar_var(var: &str, num: i32, den: i32) -> ManifestValueKind {
-    ManifestValueKind::Scalar(ManifestMonomial {
+fn quantity_var(var: &str, num: i32, den: i32) -> ManifestValueKind {
+    ManifestValueKind::Quantity(ManifestMonomial {
         vars: vec![ManifestVarPower {
             var: var.to_string(),
             pow: ManifestRational { num, den },
@@ -32,7 +32,7 @@ fn scalar_var(var: &str, num: i32, den: i32) -> ManifestValueKind {
 }
 
 fn dimensionless() -> ManifestValueKind {
-    ManifestValueKind::Scalar(ManifestMonomial::default())
+    ManifestValueKind::Quantity(ManifestMonomial::default())
 }
 
 fn manifest_fn(
@@ -78,11 +78,11 @@ fn lerp_plugin() -> Vec<u8> {
             "lerp",
             &["D"],
             &[
-                ("a", scalar_var("D", 1, 1)),
-                ("b", scalar_var("D", 1, 1)),
+                ("a", quantity_var("D", 1, 1)),
+                ("b", quantity_var("D", 1, 1)),
                 ("t", dimensionless()),
             ],
-            scalar_var("D", 1, 1),
+            quantity_var("D", 1, 1),
         )],
     )
 }
@@ -245,11 +245,11 @@ fn forbidden_imports_surface_as_a_dedicated_diagnostic() {
             "lerp",
             &["D"],
             &[
-                ("a", scalar_var("D", 1, 1)),
-                ("b", scalar_var("D", 1, 1)),
+                ("a", quantity_var("D", 1, 1)),
+                ("b", quantity_var("D", 1, 1)),
                 ("t", dimensionless()),
             ],
-            scalar_var("D", 1, 1),
+            quantity_var("D", 1, 1),
         )],
     );
     let source = format!("{LERP_IMPORT}\nnode x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);\n");
@@ -330,8 +330,8 @@ fn plugin_failures_are_contained_per_node() {
         vec![manifest_fn(
             "inverse",
             &["D"],
-            &[("x", scalar_var("D", 1, 1))],
-            scalar_var("D", -1, 1),
+            &[("x", quantity_var("D", 1, 1))],
+            quantity_var("D", -1, 1),
         )],
     );
     let source = r#"
@@ -701,11 +701,11 @@ fn span_plugin() -> Vec<u8> {
             fields: vec![
                 ManifestField {
                     name: "lo".to_string(),
-                    kind: ManifestFieldKind::Scalar(velocity.clone()),
+                    kind: ManifestFieldKind::Quantity(velocity.clone()),
                 },
                 ManifestField {
                     name: "hi".to_string(),
-                    kind: ManifestFieldKind::Scalar(velocity),
+                    kind: ManifestFieldKind::Quantity(velocity),
                 },
             ],
         },

@@ -615,7 +615,7 @@ snapshot_test!(
     snapshot_required_indexes,
     "valid_library/required_indexes.gcl"
 );
-snapshot_test!(snapshot_domain_scalar, "valid/domain_scalar.gcl");
+snapshot_test!(snapshot_domain_quantity, "valid/domain_quantity.gcl");
 snapshot_test!(snapshot_domain_indexed, "valid/domain_indexed.gcl");
 
 // ---------------------------------------------------------------------------

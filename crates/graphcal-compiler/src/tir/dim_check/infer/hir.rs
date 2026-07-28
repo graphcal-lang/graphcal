@@ -28,7 +28,7 @@ use crate::tir::typed::NatPolyForm;
 
 use super::super::builtins::infer_fn_dim_from_spans;
 use super::super::helpers::{
-    cartesian_product, expect_scalar, format_inferred_type, resolved_type_matches_inferred,
+    cartesian_product, expect_quantity, format_inferred_type, resolved_type_matches_inferred,
     struct_type_def_for_inferred,
 };
 use super::super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
@@ -122,7 +122,7 @@ fn infer_hir_type_inner(
                 span: expr.span.into(),
             });
         }
-        hir::ExprKind::Number(_) => InferredType::Scalar(Dimension::dimensionless()),
+        hir::ExprKind::Number(_) => InferredType::Quantity(Dimension::dimensionless()),
         hir::ExprKind::Integer(_) => InferredType::Int,
         hir::ExprKind::Bool(_) => InferredType::Bool,
         hir::ExprKind::StringLiteral(_) => {
@@ -400,7 +400,7 @@ fn infer_hir_unit_literal(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let dim = rules::resolve_unit_dimension_or_diagnose(unit, registry, src)?;
-    Ok(InferredType::Scalar(dim))
+    Ok(InferredType::Quantity(dim))
 }
 
 fn infer_resolved_decl_ref_type(
@@ -490,7 +490,7 @@ fn infer_hir_const_ref(
         ConstRef::Decl(resolved) => {
             infer_resolved_decl_ref_type(resolved, target.span, declared_types, dag, src)
         }
-        ConstRef::Builtin(_) => Ok(InferredType::Scalar(Dimension::dimensionless())),
+        ConstRef::Builtin(_) => Ok(InferredType::Quantity(Dimension::dimensionless())),
         ConstRef::TimeScale(_) => Err(GraphcalError::DimensionMismatch {
             expected: "value expression".to_string(),
             found: "time scale".to_string(),
@@ -616,24 +616,24 @@ fn infer_hir_fn_call(
             )?;
             if let InferredType::Indexed { element, .. } = arg_type {
                 return match kind {
-                    AggregationFn::Count => Ok(InferredType::Scalar(Dimension::dimensionless())),
+                    AggregationFn::Count => Ok(InferredType::Quantity(Dimension::dimensionless())),
                     AggregationFn::Sum
                     | AggregationFn::Min
                     | AggregationFn::Max
-                    | AggregationFn::Mean => element.scalar_dimension().cloned().map_or_else(
+                    | AggregationFn::Mean => element.quantity_dimension().cloned().map_or_else(
                         || {
                             Err(GraphcalError::DimensionMismatch {
-                                expected: "indexed scalar collection".to_string(),
+                                expected: "indexed quantity collection".to_string(),
                                 found: format_inferred_type(&element, registry),
                                 help: format!(
-                                    "{}() requires every indexed element to be scalar",
+                                    "{}() requires every indexed element to be quantity",
                                     name.as_str()
                                 ),
                                 src: src.clone(),
                                 span: args[0].span.into(),
                             })
                         },
-                        |dimension| Ok(InferredType::Scalar(dimension)),
+                        |dimension| Ok(InferredType::Quantity(dimension)),
                     ),
                 };
             }
@@ -722,7 +722,7 @@ fn infer_hir_fn_call(
             )?;
             match &arg_type {
                 t if t
-                    .scalar_dimension()
+                    .quantity_dimension()
                     .is_some_and(Dimension::is_dimensionless) => {}
                 t if t.is_int_like() => {}
                 _ => {
@@ -753,7 +753,7 @@ fn infer_hir_fn_call(
             registry,
             builtin_fns,
             src,
-            InferredType::Scalar(Dimension::dimensionless()),
+            InferredType::Quantity(Dimension::dimensionless()),
         ),
         BuiltinTypeRule::RegistrySignature | BuiltinTypeRule::CollectionAggregation(_) => {
             infer_hir_builtin_fn(
@@ -790,7 +790,7 @@ fn infer_extern_fn_call(
 ) -> Result<InferredType, GraphcalError> {
     use crate::function_signature::ValueKind;
 
-    use super::super::builtins::{check_scalar_param, eval_result_monomial};
+    use super::super::builtins::{check_quantity_param, eval_result_monomial};
 
     let Some(function) = tir.extern_functions.get(&ext.key()) else {
         return Err(GraphcalError::UnknownExternFunction {
@@ -850,9 +850,9 @@ fn infer_extern_fn_call(
                     });
                 }
             }
-            ValueKind::Scalar(monomial) => {
-                let arg_dim = expect_scalar(&arg_type, registry, src, arg.span)?;
-                check_scalar_param(
+            ValueKind::Quantity(monomial) => {
+                let arg_dim = expect_quantity(&arg_type, registry, src, arg.span)?;
+                check_quantity_param(
                     &display_name,
                     sig,
                     &param.name,
@@ -881,7 +881,7 @@ fn infer_extern_fn_call(
                 } = &arg_type
                 else {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: "an indexed scalar collection".to_string(),
+                        expected: "an indexed quantity collection".to_string(),
                         found: format_inferred_type(&arg_type, registry),
                         help: format!(
                             "parameter `{}` of `{display_name}` takes an array over index variable `{index}`",
@@ -891,19 +891,19 @@ fn infer_extern_fn_call(
                         span: arg.span.into(),
                     });
                 };
-                let Some(arg_dim) = arg_element.scalar_dimension().cloned() else {
+                let Some(arg_dim) = arg_element.quantity_dimension().cloned() else {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: "an indexed scalar collection".to_string(),
+                        expected: "an indexed quantity collection".to_string(),
                         found: format_inferred_type(&arg_type, registry),
                         help: format!(
-                            "parameter `{}` of `{display_name}` requires every indexed element to be scalar",
+                            "parameter `{}` of `{display_name}` requires every indexed element to be quantity",
                             param.name
                         ),
                         src: src.clone(),
                         span: arg.span.into(),
                     });
                 };
-                check_scalar_param(
+                check_quantity_param(
                     &display_name,
                     sig,
                     &param.name,
@@ -942,9 +942,9 @@ fn infer_extern_fn_call(
     match sig.result() {
         ValueKind::Bool => Ok(InferredType::Bool),
         ValueKind::Int => Ok(InferredType::Int),
-        ValueKind::Scalar(monomial) => {
+        ValueKind::Quantity(monomial) => {
             eval_result_monomial(&display_name, monomial, &bindings, src, callee_span)
-                .map(InferredType::Scalar)
+                .map(InferredType::Quantity)
         }
         ValueKind::Indexed { element, index } => {
             let dim = eval_result_monomial(&display_name, element, &bindings, src, callee_span)?;
@@ -960,7 +960,7 @@ fn infer_extern_fn_call(
                 });
             };
             Ok(InferredType::Indexed {
-                element: Box::new(InferredType::Scalar(dim)),
+                element: Box::new(InferredType::Quantity(dim)),
                 index: bound.clone(),
             })
         }
@@ -1027,7 +1027,7 @@ fn infer_hir_builtin_fn(
                 builtin_fns,
                 src,
             )?;
-            expect_scalar(&t, registry, src, arg.span)
+            expect_quantity(&t, registry, src, arg.span)
         })
         .collect::<Result<_, _>>()?;
     let arg_spans: Vec<Span> = args.iter().map(|arg| arg.span).collect();
@@ -1039,7 +1039,7 @@ fn infer_hir_builtin_fn(
         registry,
         src,
     )
-    .map(InferredType::Scalar)
+    .map(InferredType::Quantity)
 }
 
 #[expect(clippy::too_many_arguments, reason = "function-call context")]
@@ -1086,10 +1086,10 @@ fn infer_hir_type_conversion(
                     span: args[0].span.into(),
                 });
             }
-            Ok(InferredType::Scalar(Dimension::dimensionless()))
+            Ok(InferredType::Quantity(Dimension::dimensionless()))
         }
         TypeConversionFn::ToInt => {
-            let dim = expect_scalar(&arg_type, registry, src, args[0].span)?;
+            let dim = expect_quantity(&arg_type, registry, src, args[0].span)?;
             if !dim.is_dimensionless() {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Dimensionless".to_string(),
@@ -1721,10 +1721,10 @@ fn infer_hir_index_access(
                             });
                         }
                     }
-                    InferredType::Scalar(_) => {
+                    InferredType::Quantity(_) => {
                         return Err(GraphcalError::EvalError {
                             message: format!(
-                                "scalar local cannot index into range index `{}`; use that range index's loop variable",
+                                "quantity local cannot index into range index `{}`; use that range index's loop variable",
                                 index.name()
                             ),
                             src: src.clone(),
@@ -1940,7 +1940,7 @@ fn infer_hir_convert(
         builtin_fns,
         src,
     )?;
-    // `->` distributes element-wise over indexed values (#648 U1): the scalar
+    // `->` distributes element-wise over indexed values (#648 U1): the quantity
     // element dimension must match the target. Multi-axis values unwrap
     // through each nested Indexed layer.
     let mut element = &inner_type;
@@ -1950,7 +1950,7 @@ fn infer_hir_convert(
     {
         element = nested;
     }
-    let expr_dim = expect_scalar(element, registry, src, inner.span)?;
+    let expr_dim = expect_quantity(element, registry, src, inner.span)?;
     let target_dim = rules::resolve_unit_dimension_or_diagnose(target, registry, src)?;
 
     if expr_dim != target_dim {
@@ -2036,13 +2036,13 @@ fn generic_substitutions(
     for (param, arg) in type_def.generic_params.iter().zip(type_args.iter()) {
         match param.constraint {
             TypeGenericConstraint::Dim => match arg {
-                InferredType::Scalar(dim) => {
+                InferredType::Quantity(dim) => {
                     subs.dims.insert(param.name.clone(), dim.clone());
                 }
                 other => {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "generic parameter `{}` expects a scalar dimension, but got {}",
+                            "generic parameter `{}` expects a quantity type, but got {}",
                             param.name,
                             format_inferred_type(other, registry)
                         ),
@@ -2223,7 +2223,7 @@ fn infer_hir_generic_type_arg(
 ) -> Result<InferredType, GraphcalError> {
     match &type_expr.kind {
         hir::TypeExprKind::Builtin(hir::BuiltinType::Dimensionless) => {
-            Ok(InferredType::Scalar(Dimension::dimensionless()))
+            Ok(InferredType::Quantity(Dimension::dimensionless()))
         }
         hir::TypeExprKind::Builtin(hir::BuiltinType::Bool) => Ok(InferredType::Bool),
         hir::TypeExprKind::Builtin(hir::BuiltinType::Int) => Ok(InferredType::Int),
@@ -2231,7 +2231,7 @@ fn infer_hir_generic_type_arg(
             Ok(InferredType::Datetime(*scale))
         }
         hir::TypeExprKind::DimExpr(dim_expr) => {
-            infer_hir_dim_expr_arg(dim_expr, registry, src).map(InferredType::Scalar)
+            infer_hir_dim_expr_arg(dim_expr, registry, src).map(InferredType::Quantity)
         }
         hir::TypeExprKind::Index(index) => Ok(InferredType::NamedIndex(
             inferred_index_from_type_arg(index, src)?,

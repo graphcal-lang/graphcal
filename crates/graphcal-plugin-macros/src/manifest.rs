@@ -62,8 +62,8 @@ fn kind_to_manifest(kind: &KindIr, fallback_span: Span) -> syn::Result<ManifestV
     Ok(match kind {
         KindIr::Bool => ManifestValueKind::Bool,
         KindIr::Int => ManifestValueKind::Int,
-        KindIr::Scalar(monomial) => {
-            ManifestValueKind::Scalar(monomial_to_manifest(monomial, fallback_span)?)
+        KindIr::Quantity(monomial) => {
+            ManifestValueKind::Quantity(monomial_to_manifest(monomial, fallback_span)?)
         }
         KindIr::Array { element, index } => ManifestValueKind::Array {
             element: monomial_to_manifest(element, fallback_span)?,
@@ -78,8 +78,8 @@ fn kind_to_manifest(kind: &KindIr, fallback_span: Span) -> syn::Result<ManifestV
                         kind: match &field.kind {
                             FieldKindIr::Bool => graphcal_plugin_abi::ManifestFieldKind::Bool,
                             FieldKindIr::Int => graphcal_plugin_abi::ManifestFieldKind::Int,
-                            FieldKindIr::Scalar(monomial) => {
-                                graphcal_plugin_abi::ManifestFieldKind::Scalar(
+                            FieldKindIr::Quantity(monomial) => {
+                                graphcal_plugin_abi::ManifestFieldKind::Quantity(
                                     monomial_to_manifest(monomial, field.name.span())?,
                                 )
                             }

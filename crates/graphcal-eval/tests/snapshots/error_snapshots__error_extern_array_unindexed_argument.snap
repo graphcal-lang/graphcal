@@ -2,9 +2,9 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-dimension mismatch: expected an indexed scalar collection, found Length
+dimension mismatch: expected an indexed quantity collection, found Length
     Diagnostic severity: error
-Begin snippet for extern_array_scalar_argument.gcl starting at line 5, column 1
+Begin snippet for extern_array_unindexed_argument.gcl starting at line 5, column 1
 
 snippet line 5: 
 snippet line 6: node bad: Dimensionless = demo.normalize(3.0 m);

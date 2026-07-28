@@ -1436,8 +1436,10 @@ mod tests {
     #[test]
     fn import_selective_item_errors_when_declared_type_is_missing() {
         let mut dep = empty_evaluated_file();
-        dep.const_values
-            .insert(DeclName::expect_valid("g0"), RuntimeValue::Scalar(9.80665));
+        dep.const_values.insert(
+            DeclName::expect_valid("g0"),
+            RuntimeValue::Quantity(9.80665),
+        );
         dep.pub_names.insert(DeclName::expect_valid("g0"));
 
         let src = NamedSource::new("test.gcl", Arc::new(String::new()));
@@ -1468,8 +1470,10 @@ mod tests {
     #[test]
     fn transitive_const_only_import_skips_runtime_without_registering_it() {
         let mut dep = empty_evaluated_file();
-        dep.values
-            .insert(DeclName::expect_valid("runtime"), RuntimeValue::Scalar(1.0));
+        dep.values.insert(
+            DeclName::expect_valid("runtime"),
+            RuntimeValue::Quantity(1.0),
+        );
         dep.pub_names.insert(DeclName::expect_valid("runtime"));
 
         let import_item = graphcal_compiler::desugar::desugared_ast::ImportItem {

@@ -2,7 +2,7 @@
 //!
 //! `graphcal_compiler::builtin` owns the source vocabulary. This module owns the
 //! narrower question asked by runtime HIR evaluation: can a built-in call be
-//! evaluated through the ordinary scalar built-in function registry, or does it
+//! evaluated through the ordinary quantity built-in function registry, or does it
 //! need a custom runtime path here?
 
 use graphcal_compiler::builtin::BuiltinFnName;
@@ -15,7 +15,7 @@ pub(super) enum EvalBuiltinRule {
     RegistryFunction,
     /// One-argument reductions over indexed values.
     CollectionAggregation(AggregationFn),
-    /// Type-category conversions between `Int` and dimensionless scalar values.
+    /// Type-category conversions between `Int` and dimensionless quantity values.
     TypeConversion(TypeConversionFn),
     /// Datetime time-scale conversion to the carried target scale.
     TimeScaleConversion(TimeScale),

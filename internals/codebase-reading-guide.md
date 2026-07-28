@@ -454,7 +454,7 @@ compilation, and expression evaluation.
 | `eval/types.rs`         | Public `EvalResult`, `Value`, plot/assert result types        |
 | `eval_expr/`            | HIR expression evaluation kernels by expression family        |
 | `eval_expr/numeric.rs`  | Shared checked numeric helpers for expression evaluation      |
-| `eval_expr/unit_scale.rs` | Dynamic unit-scale resolution and finite-scalar validation  |
+| `eval_expr/unit_scale.rs` | Dynamic unit-scale resolution and finite-quantity validation |
 | `eval_expr/aggregations.rs` | Aggregation built-ins such as sum/mean/min/max/count     |
 | `eval_expr/conversions.rs` | Unit/type conversion helpers                              |
 | `eval_expr/hir_eval.rs` | HIR expression evaluator with canonical references            |
@@ -791,7 +791,7 @@ There are two value layers:
   metadata, but label/struct/indexed values carry type identity through
   `IndexTypeRef` / `StructTypeRef` so owner-qualified type/index identity is
   preserved during evaluation.
-- `Value` is user-facing and appears in `EvalResult`. Scalar values carry a
+- `Value` is user-facing and appears in `EvalResult`. Quantity values carry a
   dimension and optional display-unit information; labels, structs, and indexed
   values keep public identity carriers for diagnostics/output.
 

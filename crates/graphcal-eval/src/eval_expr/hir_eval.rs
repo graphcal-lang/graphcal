@@ -23,7 +23,7 @@ use super::builtin_call::{
     EvalBuiltinRule, TypeConversionFn, eval_rule_for_builtin,
 };
 use super::{
-    EvalContext, RuntimeValueMap, checked_finite_scalar, checked_unit_scaled_value,
+    EvalContext, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
     constructor_fields_for_runtime_struct, find_struct_field_constraint,
     imported_value_source_value, index_ref_matches_resolved, resolve_unit_scale,
     runtime_struct_type_def, topo_order_for_dag_body,
@@ -65,7 +65,7 @@ fn eval_hir_expr_inner(
         hir::ExprKind::Error => {
             Err(ctx.eval_error("unresolved reference reached evaluation", expr.span))
         }
-        hir::ExprKind::Number(n) => checked_finite_scalar(*n, "numeric literal", expr.span, ctx),
+        hir::ExprKind::Number(n) => checked_finite_quantity(*n, "numeric literal", expr.span, ctx),
         hir::ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
         hir::ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
         hir::ExprKind::StringLiteral(_) => {
@@ -187,7 +187,7 @@ fn eval_hir_const_ref(
                     target.span,
                 )
             })?;
-            checked_finite_scalar(*value, "built-in constant", target.span, ctx)
+            checked_finite_quantity(*value, "built-in constant", target.span, ctx)
         }
         ConstRef::TimeScale(scale) => Err(ctx.eval_error(
             format!("unexpected time scale `{scale}` outside epoch()"),
@@ -269,13 +269,13 @@ fn eval_hir_binop(
                         reason = "hifitime exposes Epoch subtraction for datetime differences"
                     )]
                     {
-                        return Ok(RuntimeValue::Scalar((*le - *re).to_seconds()));
+                        return Ok(RuntimeValue::Quantity((*le - *re).to_seconds()));
                     }
                 }
                 (RuntimeValue::Datetime(_), RuntimeValue::Datetime(_)) => {
                     return Err(ctx.eval_error("cannot add two datetimes", span));
                 }
-                (RuntimeValue::Datetime(e), RuntimeValue::Scalar(secs)) => {
+                (RuntimeValue::Datetime(e), RuntimeValue::Quantity(secs)) => {
                     let duration = hifitime::Duration::from_seconds(*secs);
                     #[expect(
                         clippy::arithmetic_side_effects,
@@ -285,12 +285,12 @@ fn eval_hir_binop(
                         BinOp::Add => Ok(RuntimeValue::Datetime(*e + duration)),
                         BinOp::Sub => Ok(RuntimeValue::Datetime(*e - duration)),
                         _ => Err(ctx.eval_error(
-                            format!("unsupported operator {op:?} for Datetime and scalar"),
+                            format!("unsupported operator {op:?} for Datetime and quantity"),
                             span,
                         )),
                     };
                 }
-                (RuntimeValue::Scalar(secs), RuntimeValue::Datetime(e)) if op == BinOp::Add => {
+                (RuntimeValue::Quantity(secs), RuntimeValue::Datetime(e)) if op == BinOp::Add => {
                     let duration = hifitime::Duration::from_seconds(*secs);
                     #[expect(
                         clippy::arithmetic_side_effects,
@@ -300,18 +300,19 @@ fn eval_hir_binop(
                         return Ok(RuntimeValue::Datetime(*e + duration));
                     }
                 }
-                (RuntimeValue::Scalar(_), RuntimeValue::Datetime(_)) => {
-                    return Err(ctx.eval_error("cannot subtract a Datetime from a scalar", span));
+                (RuntimeValue::Quantity(_), RuntimeValue::Datetime(_)) => {
+                    return Err(ctx.eval_error("cannot subtract a Datetime from a quantity", span));
                 }
                 _ => {}
             }
             let lv = l
-                .expect_scalar("binary operand")
+                .expect_quantity("binary operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             let rv = r
-                .expect_scalar("binary operand")
+                .expect_quantity("binary operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            super::arithmetic::eval_scalar_binop(op, lv, rv, ctx, span).map(RuntimeValue::Scalar)
+            super::arithmetic::eval_quantity_binop(op, lv, rv, ctx, span)
+                .map(RuntimeValue::Quantity)
         }
     }
 }
@@ -332,8 +333,8 @@ fn eval_hir_unary(
                     .checked_neg()
                     .map(RuntimeValue::Int)
                     .ok_or_else(|| ctx.eval_error("integer negation overflow", span)),
-                _ => Ok(RuntimeValue::Scalar(
-                    -v.expect_scalar("unary negation")
+                _ => Ok(RuntimeValue::Quantity(
+                    -v.expect_quantity("unary negation")
                         .map_err(|e| ctx.eval_error(e.to_string(), span))?,
                 )),
             }
@@ -458,7 +459,7 @@ fn eval_hir_fn_call(
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let num = match arg_val {
-                RuntimeValue::Scalar(v) => v,
+                RuntimeValue::Quantity(v) => v,
                 RuntimeValue::Int(v) => {
                     exact_numeric_datetime_arg(v, name.as_str(), args[0].span, ctx)?
                 }
@@ -490,7 +491,7 @@ fn eval_hir_fn_call(
                 DatetimeToFn::Mjd => epoch.to_mjd_utc_days(),
                 DatetimeToFn::Unix => epoch.to_unix_seconds(),
             };
-            Ok(RuntimeValue::Scalar(result))
+            Ok(RuntimeValue::Quantity(result))
         }
         EvalBuiltinRule::RegistryFunction | EvalBuiltinRule::CollectionAggregation(_) => {
             eval_hir_builtin_fn(expr, name, args, values, local_values, ctx)
@@ -504,7 +505,7 @@ fn eval_hir_aggregation_fn(
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    super::aggregations::aggregate_indexed_scalars(kind, entries).map_err(|err| {
+    super::aggregations::aggregate_indexed_quantities(kind, entries).map_err(|err| {
         GraphcalError::EvalError {
             message: err.to_string(),
             src: src.clone(),
@@ -538,12 +539,12 @@ fn eval_hir_conversion_fn(
                 clippy::cast_precision_loss,
                 reason = "explicit Int to float conversion"
             )]
-            Ok(RuntimeValue::Scalar(i as f64))
+            Ok(RuntimeValue::Quantity(i as f64))
         }
         TypeConversionFn::ToInt => {
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let f = arg
-                .expect_scalar("to_int argument")
+                .expect_quantity("to_int argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             super::conversions::checked_f64_to_i64(f)
                 .map(RuntimeValue::Int)
@@ -710,11 +711,11 @@ struct BoundExternIndex {
 /// host function registry.
 ///
 /// The host ABI is `fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError>`:
-/// scalars cross as SI `f64`s (Int arguments convert exactly, Bool arguments
+/// quantities cross as SI `f64`s (Int arguments convert exactly, Bool arguments
 /// become `1.0`/`0.0`), arrays cross as dense element buffers in index
 /// order, and the result converts back per the declared result kind — a
 /// result array is rebuilt over the same index the binding argument
-/// supplied. A closure error or a non-finite scalar becomes a per-node
+/// supplied. A closure error or a non-finite quantity becomes a per-node
 /// evaluation failure naming the plugin alias and function; dependents
 /// report `DependencyFailed` through the ordinary per-node fault isolation.
 #[expect(
@@ -775,8 +776,8 @@ fn eval_hir_extern_fn(
     for (param, arg) in signature.params().iter().zip(args) {
         let value = eval_hir_expr(arg, values, local_values, ctx)?;
         let converted = match (&param.kind, value) {
-            (ValueKind::Scalar(_), value) => value
-                .expect_scalar("extern function argument")
+            (ValueKind::Quantity(_), value) => value
+                .expect_quantity("extern function argument")
                 .map(HostFnValue::Scalar)
                 .map_err(|e| ctx.eval_error(e.to_string(), arg.span))?,
             (ValueKind::Int, RuntimeValue::Int(i)) => {
@@ -798,7 +799,7 @@ fn eval_hir_extern_fn(
                     keys.push(variant.clone());
                     buffer.push(
                         element
-                            .expect_scalar("extern function array element")
+                            .expect_quantity("extern function array element")
                             .map_err(|e| ctx.eval_error(e.to_string(), arg.span))?,
                     );
                 }
@@ -841,27 +842,27 @@ fn eval_hir_extern_fn(
         )
     })?;
 
-    let scalar_result = |result: &HostFnValue| -> Result<f64, GraphcalError> {
+    let abi_scalar_result = |result: &HostFnValue| -> Result<f64, GraphcalError> {
         match result {
             HostFnValue::Scalar(value) => Ok(*value),
             HostFnValue::Buffer(_) => Err(ctx.eval_error(
-                format!("extern function `{ext}` declared a scalar result but returned an array"),
+                format!("extern function `{ext}` declared a quantity result but returned an array"),
                 expr.span,
             )),
         }
     };
 
     match signature.result() {
-        ValueKind::Scalar(_) => {
+        ValueKind::Quantity(_) => {
             let display = ext.to_string();
-            Ok(RuntimeValue::Scalar(super::arithmetic::check_finite(
-                scalar_result(&result)?,
+            Ok(RuntimeValue::Quantity(super::arithmetic::check_finite(
+                abi_scalar_result(&result)?,
                 &display,
                 ctx,
                 expr.span,
             )?))
         }
-        ValueKind::Int => super::conversions::checked_f64_to_i64(scalar_result(&result)?)
+        ValueKind::Int => super::conversions::checked_f64_to_i64(abi_scalar_result(&result)?)
             .map(RuntimeValue::Int)
             .map_err(|err| {
                 ctx.eval_error(
@@ -870,7 +871,7 @@ fn eval_hir_extern_fn(
                 )
             }),
         ValueKind::Bool => {
-            let result = scalar_result(&result)?;
+            let result = abi_scalar_result(&result)?;
             #[expect(
                 clippy::float_cmp,
                 reason = "the Bool host ABI is exactly 0.0/1.0; anything else is a plugin bug"
@@ -892,7 +893,7 @@ fn eval_hir_extern_fn(
             let HostFnValue::Buffer(buffer) = result else {
                 return Err(ctx.eval_error(
                     format!(
-                        "extern function `{ext}` declared an array result but returned a scalar"
+                        "extern function `{ext}` declared an array result but returned a scalar ABI value"
                     ),
                     expr.span,
                 ));
@@ -923,7 +924,7 @@ fn eval_hir_extern_fn(
                 .map(|(variant, element)| {
                     Ok((
                         variant,
-                        RuntimeValue::Scalar(super::arithmetic::check_finite(
+                        RuntimeValue::Quantity(super::arithmetic::check_finite(
                             element, &display, ctx, expr.span,
                         )?),
                     ))
@@ -941,7 +942,7 @@ fn eval_hir_extern_fn(
             let HostFnValue::Buffer(buffer) = result else {
                 return Err(ctx.eval_error(
                     format!(
-                        "extern function `{ext}` declared a struct result but returned a scalar"
+                        "extern function `{ext}` declared a struct result but returned a scalar ABI value"
                     ),
                     expr.span,
                 ));
@@ -971,7 +972,7 @@ fn eval_hir_extern_fn(
                 .zip(buffer)
                 .map(|(field, slot)| {
                     let value = match &field.kind {
-                        StructFieldKind::Scalar(_) => RuntimeValue::Scalar(
+                        StructFieldKind::Quantity(_) => RuntimeValue::Quantity(
                             super::arithmetic::check_finite(slot, &display, ctx, expr.span)?,
                         ),
                         StructFieldKind::Int => super::conversions::checked_f64_to_i64(slot)
@@ -1057,7 +1058,7 @@ fn eval_hir_builtin_fn(
         .iter()
         .map(|arg| {
             let rv = eval_hir_expr(arg, values, local_values, ctx)?;
-            rv.expect_scalar("function argument")
+            rv.expect_quantity("function argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), arg.span))
         })
         .collect::<Result<_, _>>()?;
@@ -1073,7 +1074,7 @@ fn eval_hir_builtin_fn(
         ));
     }
     let result = (builtin.eval)(&arg_values);
-    Ok(RuntimeValue::Scalar(super::arithmetic::check_finite(
+    Ok(RuntimeValue::Quantity(super::arithmetic::check_finite(
         result,
         name.as_str(),
         ctx,

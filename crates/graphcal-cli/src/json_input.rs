@@ -1,6 +1,6 @@
 //! Convert a JSON input file into parameter overrides (`HashMap<DeclName, Expr>`).
 //!
-//! The JSON schema uses expression strings for scalar leaves and
+//! The JSON schema uses expression strings for leaf values and
 //! JSON objects for structs, tagged unions, and named-label indexed params.
 //! All type information is provided explicitly in the JSON — no AST lookup is needed.
 //! Type and dimension validation is deferred to the evaluator.
@@ -504,7 +504,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scalar_with_units() {
+    fn quantity_with_units() {
         let overrides = json_to_overrides(r#"{"dry_mass": "1500.0 kg"}"#).unwrap();
         assert!(overrides.contains_key(&DeclName::expect_valid("dry_mass")));
         let expr = &overrides[&DeclName::expect_valid("dry_mass")];

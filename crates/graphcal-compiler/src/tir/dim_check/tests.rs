@@ -246,7 +246,7 @@ fn check_dimensionless_const() {
     let types = check("const node g0: Dimensionless = 9.80665;").unwrap();
     assert_eq!(
         types[&ScopedName::local("g0")],
-        DeclaredType::Scalar(Dimension::dimensionless())
+        DeclaredType::Quantity(Dimension::dimensionless())
     );
 }
 
@@ -255,7 +255,7 @@ fn check_dimensionless_arithmetic() {
     let types = check("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 2.0;").unwrap();
     assert_eq!(
         types[&ScopedName::local("y")],
-        DeclaredType::Scalar(Dimension::dimensionless())
+        DeclaredType::Quantity(Dimension::dimensionless())
     );
 }
 
@@ -265,7 +265,7 @@ fn check_length_unit_literal() {
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
     assert_eq!(
         types[&ScopedName::local("alt")],
-        DeclaredType::Scalar(length)
+        DeclaredType::Quantity(length)
     );
 }
 
@@ -278,7 +278,7 @@ fn check_velocity_from_division() {
     .unwrap();
     assert_eq!(
         types[&ScopedName::local("speed")],
-        DeclaredType::Scalar(velocity)
+        DeclaredType::Quantity(velocity)
     );
 }
 
@@ -350,7 +350,7 @@ assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
 }
 
 #[test]
-fn check_expected_fail_rejects_variant_key_on_scalar_assertion() {
+fn check_expected_fail_rejects_variant_key_on_unindexed_assertion() {
     let source = "\
 pub index Mode = { A, B };
 param lhs: Dimensionless = 1.0;
@@ -390,7 +390,7 @@ fn check_conversion_same_dimension() {
     .unwrap();
     assert_eq!(
         types[&ScopedName::local("speed_kmh")],
-        DeclaredType::Scalar(velocity)
+        DeclaredType::Quantity(velocity)
     );
 }
 
@@ -476,7 +476,7 @@ Maneuver.Insertion: 1.8 km / s,
     assert_eq!(
         types[&ScopedName::local("dv")],
         DeclaredType::Indexed {
-            element: Box::new(DeclaredType::Scalar(velocity)),
+            element: Box::new(DeclaredType::Quantity(velocity)),
             index: test_index_ref("Maneuver"),
         }
     );
@@ -787,7 +787,7 @@ fn check_power_signed_float_literal_exponent() {
 
 #[test]
 fn check_power_int_chain_constant_folds() {
-    // `2 ^ 3 ^ 2` parses right-assoc as `2 ^ (3 ^ 2)`. Float chains were
+    // `2 ^ 3 ^ 2` parses right-assoc as `2 ^ (3 ^ 2)`. Quantity chains were
     // already accepted via the dimensionless ^ dimensionless rule; the Int
     // branch now constant-folds the rhs to `9` so the Int chain symmetrizes.
     // (Issue #578.)
@@ -844,7 +844,7 @@ fn check_unknown_dimension_in_type() {
     );
 }
 
-// --- expect_scalar error: struct used where scalar expected ---
+// --- expect_quantity error: struct used where quantity expected ---
 
 #[test]
 fn check_struct_in_arithmetic() {
@@ -862,7 +862,7 @@ node bad: Length = @o + 1.0 m;";
 // --- FieldAccess on non-struct ---
 
 #[test]
-fn check_field_access_on_scalar() {
+fn check_field_access_on_quantity() {
     let source = "\
 param x: Length = 1.0 m;
 node bad: Length = @x.foo;";
@@ -930,8 +930,8 @@ node y: Length = match @x { Pair(a: left, a: right) => left + right };";
 // --- types_match wildcard: mismatched kinds ---
 
 #[test]
-fn check_types_match_struct_vs_scalar() {
-    // Declared as a struct type but expression evaluates to scalar → mismatch
+fn check_types_match_struct_vs_quantity() {
+    // Declared as a struct type but expression evaluates to quantity → mismatch
     let source = "\
 type Orbit { Orbit(altitude: Length, speed: Velocity) }
 param x: Dimensionless = 1.0;
@@ -979,7 +979,7 @@ node bad: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc * val);";
 // --- Scan on non-indexed value ---
 
 #[test]
-fn check_scan_on_scalar() {
+fn check_scan_on_unindexed() {
     let source = "\
 param x: Dimensionless = 1.0;
 node bad: Dimensionless = scan(@x, 0.0, |acc, val| acc + val);";
@@ -1033,7 +1033,7 @@ param bad: Dimensionless = @x[Phase.NoSuch];";
 // --- Indexing a non-indexed value ---
 
 #[test]
-fn check_index_access_on_scalar() {
+fn check_index_access_on_quantity() {
     let source = "\
 pub index Phase = { Coast, Burn };
 param x: Dimensionless = 1.0;
@@ -1431,7 +1431,7 @@ node w: Dimensionless[5] = for i: range(5) { @v[i] };";
 }
 
 #[test]
-fn scalar_range_loop_var_cannot_index_named_indexed_value() {
+fn quantity_local_cannot_index_named_indexed_value() {
     let source = "\
 pub index Phase = { A };
 pub index TimeStep = linspace(0.0 s, 1.0 s, step: 1.0 s);
@@ -1493,14 +1493,14 @@ fn negation_rejects_datetime() {
 }
 
 #[test]
-fn aggregation_rejects_non_scalar_elements() {
+fn aggregation_rejects_non_quantity_elements() {
     let source = "\
 pub index Phase = { A, B };
 param flags: Bool[Phase] = for p: Phase { true };
 node total: Dimensionless = sum(@flags);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::DimensionMismatch { expected, .. } if expected == "indexed scalar collection"),
+        matches!(&err, GraphcalError::DimensionMismatch { expected, .. } if expected == "indexed quantity collection"),
         "got: {err:?}"
     );
 }
@@ -1512,7 +1512,7 @@ param counts: Int[3] = for i: range(3) { i };
 node total: Int = sum(@counts);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::DimensionMismatch { expected, .. } if expected == "indexed scalar collection"),
+        matches!(&err, GraphcalError::DimensionMismatch { expected, .. } if expected == "indexed quantity collection"),
         "got: {err:?}"
     );
 }
@@ -1529,7 +1529,7 @@ node m: Dimensionless[3, 3] = for i: range(3), j: range(3) {
 
 #[test]
 fn fin_arithmetic_with_int() {
-    // Fin(N) * Dimensionless -> error (Fin is not Scalar)
+    // Fin(N) * Dimensionless -> error (Fin is not Quantity)
     // Fin(N) + Fin(M) -> Int (arithmetic), then Int * Dimensionless -> error
     // to_float(i) -> Dimensionless (via Int coercion)
     let source = "\
@@ -1568,7 +1568,7 @@ fn domain_bound_bare_number_on_dimensioned_rejected() {
 
 #[test]
 fn domain_bound_bare_int_on_dimensioned_rejected() {
-    // Integer literal on a dimensioned scalar should also be rejected.
+    // Integer literal on a dimensioned quantity should also be rejected.
     let source = "param m: Mass(min: 1, max: 100.0 kg) = 50.0 kg;";
     let err = check(source).unwrap_err();
     assert!(
@@ -1651,7 +1651,7 @@ fn int_domain_bound_int_literal_accepted() {
 }
 
 #[test]
-fn int_domain_bound_dimensionless_scalar_accepted() {
+fn int_domain_bound_dimensionless_quantity_accepted() {
     let source = "param n: Int(min: 0.0, max: 100.0) = 5;";
     check(source).unwrap();
 }
@@ -1729,7 +1729,7 @@ fn inline_dag_call_basic_returns_output_type() {
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
     assert_eq!(
         types[&ScopedName::local("doubled")],
-        DeclaredType::Scalar(length)
+        DeclaredType::Quantity(length)
     );
 }
 
@@ -1839,7 +1839,7 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
     assert_eq!(
         types[&ScopedName::local("distances")],
         DeclaredType::Indexed {
-            element: Box::new(DeclaredType::Scalar(length)),
+            element: Box::new(DeclaredType::Quantity(length)),
             index: test_index_ref("Region"),
         }
     );
@@ -1885,7 +1885,7 @@ node out: Length = @doubler(v: @dist).result[Region.A];
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
     assert_eq!(
         types[&ScopedName::local("out")],
-        DeclaredType::Scalar(length)
+        DeclaredType::Quantity(length)
     );
 }
 
@@ -1985,8 +1985,8 @@ node y: Length = @forward(v: @src).b;
 
 #[test]
 fn int_exponent_beyond_i32_is_rejected() {
-    // Scalar `^` requires a float-literal exponent, so an Int-typed
-    // exponent is rejected by the rhs scalar check before the exponent arm.
+    // Quantity `^` requires a float-literal exponent, so an Int-typed
+    // exponent is rejected by the rhs quantity check before the exponent arm.
     // The arm's former `as i32` wrap is additionally hardened to a
     // DimensionOverflow error, so a huge exponent can never silently wrap
     // even if that earlier check changes.

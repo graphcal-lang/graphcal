@@ -154,7 +154,7 @@ graphcal plugin test <MODULE> [--call <FUNCTION> [ARGS]...]
 | Argument | Description |
 |----------|-------------|
 | `<MODULE>` | Path to the `.wasm` plugin module |
-| `[ARGS]...` | Arguments for `--call`: numbers in SI base units for scalar parameters, `true`/`false` for `Bool`, integers for `Int` |
+| `[ARGS]...` | Arguments for `--call`: numbers in SI base units for quantity parameters, `true`/`false` for `Bool`, integers for `Int` |
 
 **Options:**
 

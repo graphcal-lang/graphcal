@@ -332,7 +332,7 @@ panic = "abort"
         .call(&name, &[HostFnValue::Scalar(9.0)])
         .expect("probe(9) succeeds");
     let graphcal_eval::host_fns::HostFnValue::Scalar(ok) = ok else {
-        panic!("expected a scalar result, got {ok:?}");
+        panic!("expected a scalar ABI result, got {ok:?}");
     };
     assert!((ok - 3.0).abs() < 1e-12);
 

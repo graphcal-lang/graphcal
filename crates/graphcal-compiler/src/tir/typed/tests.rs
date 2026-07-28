@@ -130,7 +130,7 @@ fn resolve_concrete_dimension() {
     let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
     assert_eq!(
         resolved,
-        ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude("Length".to_string())))
+        ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude("Length".to_string())))
     );
 }
 
@@ -144,7 +144,7 @@ fn resolve_compound_dimension() {
             .pow(2)
             .unwrap())
     .unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Scalar(expected));
+    assert_eq!(resolved, ResolvedTypeExpr::Quantity(expected));
 }
 
 #[test]
@@ -215,7 +215,9 @@ fn resolve_concrete_indexed() {
         ResolvedTypeExpr::Indexed { base, indexes } => {
             assert_eq!(
                 *base,
-                ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude("Length".to_string())))
+                ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
+                    "Length".to_string()
+                )))
             );
             assert_eq!(indexes.len(), 1);
             assert!(
@@ -257,6 +259,14 @@ fn resolve_unknown_dimension_error() {
 }
 
 #[test]
+fn quantity_is_semantic_not_a_source_type_constructor() {
+    let registry = make_registry();
+    let type_expr = parse_type("Quantity");
+    let error = resolve_type_expr(&type_expr, &registry, &[], &[], &[], &make_src()).unwrap_err();
+    assert!(matches!(error, GraphcalError::UnknownDimension { .. }));
+}
+
+#[test]
 fn resolve_unknown_index_error() {
     let r = make_registry();
     let te = parse_type("Length[UnknownIdx]");
@@ -287,7 +297,7 @@ fn resolve_velocity_derived_dimension() {
     let expected = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
         / Dimension::base(BaseDimId::Prelude("Time".to_string())))
     .unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Scalar(expected));
+    assert_eq!(resolved, ResolvedTypeExpr::Quantity(expected));
 }
 
 // --- module-aware type resolution integration tests ---
@@ -541,16 +551,18 @@ fn type_resolve_generics() {
             assert_eq!(type_args.len(), 2);
             assert_eq!(
                 type_args[0],
-                ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude("Length".to_string())))
+                ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
+                    "Length".to_string()
+                )))
             );
             assert!(matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci"));
         }
         other => panic!("expected GenericStruct, got {other:?}"),
     }
-    // x_pos should be scalar Length
+    // x_pos should be quantity Length
     assert_eq!(
         tir.root().resolved_decl_types[&ScopedName::local("x_pos")],
-        ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude("Length".to_string())))
+        ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude("Length".to_string())))
     );
 }
 
@@ -569,7 +581,9 @@ fn type_resolve_default_type_params() {
             assert_eq!(type_args.len(), 2);
             assert_eq!(
                 type_args[0],
-                ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude("Length".to_string())))
+                ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
+                    "Length".to_string()
+                )))
             );
             assert!(matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci"));
         }
@@ -586,7 +600,9 @@ fn type_resolve_default_type_params() {
             assert_eq!(type_args.len(), 2);
             assert_eq!(
                 type_args[0],
-                ResolvedTypeExpr::Scalar(Dimension::base(BaseDimId::Prelude("Length".to_string())))
+                ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
+                    "Length".to_string()
+                )))
             );
             assert!(
                 matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Unframed"),
@@ -619,7 +635,7 @@ fn generic_index_substitution_preserves_resolved_owner() {
         )],
     };
     let actual = InferredType::Indexed {
-        element: Box::new(InferredType::Scalar(Dimension::dimensionless())),
+        element: Box::new(InferredType::Quantity(Dimension::dimensionless())),
         index: InferredIndex::from_resolved(resolved_index.clone()),
     };
     let mut dim_sub = HashMap::new();
@@ -653,7 +669,7 @@ fn generic_index_substitution_preserves_resolved_owner() {
 #[test]
 fn convert_dimensionless() {
     let dt = resolved_to_declared_type(&ResolvedTypeExpr::Dimensionless, &make_src()).unwrap();
-    assert_eq!(dt, DeclaredType::Scalar(Dimension::dimensionless()));
+    assert_eq!(dt, DeclaredType::Quantity(Dimension::dimensionless()));
 }
 
 #[test]
@@ -669,11 +685,11 @@ fn convert_int() {
 }
 
 #[test]
-fn convert_scalar() {
+fn convert_quantity() {
     let dim = Dimension::base(BaseDimId::Prelude("Length".to_string()));
     let dt =
-        resolved_to_declared_type(&ResolvedTypeExpr::Scalar(dim.clone()), &make_src()).unwrap();
-    assert_eq!(dt, DeclaredType::Scalar(dim));
+        resolved_to_declared_type(&ResolvedTypeExpr::Quantity(dim.clone()), &make_src()).unwrap();
+    assert_eq!(dt, DeclaredType::Quantity(dim));
 }
 
 #[test]
@@ -697,7 +713,7 @@ fn convert_indexed() {
     let resolved_index = ResolvedIndexName::from_def(owner, IndexName::expect_valid("M"));
     let dt = resolved_to_declared_type(
         &ResolvedTypeExpr::Indexed {
-            base: Box::new(ResolvedTypeExpr::Scalar(Dimension::base(
+            base: Box::new(ResolvedTypeExpr::Quantity(Dimension::base(
                 BaseDimId::Prelude("Length".to_string()),
             ))),
             indexes: vec![ResolvedIndex::Concrete(
@@ -711,7 +727,7 @@ fn convert_indexed() {
     assert_eq!(
         dt,
         DeclaredType::Indexed {
-            element: Box::new(DeclaredType::Scalar(Dimension::base(BaseDimId::Prelude(
+            element: Box::new(DeclaredType::Quantity(Dimension::base(BaseDimId::Prelude(
                 "Length".to_string()
             )))),
             index: IndexTypeRef::from_resolved(resolved_index),

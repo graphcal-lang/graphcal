@@ -391,7 +391,7 @@ fn resolve_hir_dim_expr(
             }
         },
     )?;
-    Ok(ResolvedTypeExpr::Scalar(result))
+    Ok(ResolvedTypeExpr::Quantity(result))
 }
 
 fn resolve_hir_dim_expr_item(
@@ -944,13 +944,13 @@ pub(super) fn resolve_type_expr_inner(
     }
 }
 
-/// Resolve a dimension expression to either a [`ResolvedTypeExpr::Scalar`],
+/// Resolve a dimension expression to either a [`ResolvedTypeExpr::Quantity`],
 /// [`ResolvedTypeExpr::GenericDimExpr`], [`ResolvedTypeExpr::IndexArg`],
 /// [`ResolvedTypeExpr::Struct`], or [`ResolvedTypeExpr::GenericDimParam`].
 ///
 /// A single-term, no-power expression is first checked against named indexes,
 /// struct types, and generic dimension parameters. Multi-term expressions with
-/// generic params become `GenericDimExpr`; fully concrete expressions become `Scalar`.
+/// generic params become `GenericDimExpr`; fully concrete expressions become `Quantity`.
 fn resolve_dim_expr(
     dim_expr: &crate::desugar::desugared_ast::DimExpr,
     registry: &Registry,
@@ -961,7 +961,7 @@ fn resolve_dim_expr(
     module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
     // Single-term, no power: may be a nominal type-level reference rather than
-    // a scalar dimension expression.
+    // a dimension expression denoting a quantity type.
     if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() {
         let term = &dim_expr.terms[0].term;
         if let Some(index) = resolve_concrete_index_path(
@@ -1038,7 +1038,7 @@ fn resolve_dim_expr(
                 }
             },
         )?;
-        Ok(ResolvedTypeExpr::Scalar(result))
+        Ok(ResolvedTypeExpr::Quantity(result))
     }
 }
 

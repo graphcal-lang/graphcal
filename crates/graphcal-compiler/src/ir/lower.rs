@@ -3735,7 +3735,7 @@ fn resolve_extern_value_kind(
         TypeExprKind::Dimensionless => Ok(ValueKind::dimensionless()),
         TypeExprKind::DimExpr(dim_expr) => {
             resolve_extern_dim_monomial(dim_expr, dim_vars, registry, src)
-                .map(ValueKind::Scalar)
+                .map(ValueKind::Quantity)
         }
         TypeExprKind::Indexed { base, indexes } => {
             resolve_extern_array_kind(base, indexes, dim_vars, index_vars, registry, src)
@@ -3744,7 +3744,7 @@ fn resolve_extern_value_kind(
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::TypeApplication { .. } => Err(GraphcalError::InvalidExternSignature {
             message:
-                "extern function signatures support Bool, Int, scalar dimension types, and arrays of scalars over a declared index variable in this phase"
+                "extern function signatures support Bool, Int, quantity types, and arrays of quantities over a declared index variable in this phase"
                     .to_string(),
             src: src.clone(),
             span: type_ann.span.into(),
@@ -3972,7 +3972,7 @@ fn resolve_extern_struct_field(
     let unsupported = || GraphcalError::InvalidExternSignature {
         message: format!(
             "field `{}` has a type that cannot cross the plugin boundary; struct-return \
-             fields support Bool, Int, and scalar dimension types in this phase",
+             fields support Bool, Int, and quantity types in this phase",
             field.name
         ),
         src: src.clone(),
@@ -3984,14 +3984,14 @@ fn resolve_extern_struct_field(
     match &field.type_ann.kind {
         TypeExprKind::Bool => Ok(StructFieldKind::Bool),
         TypeExprKind::Int => Ok(StructFieldKind::Int),
-        TypeExprKind::Dimensionless => Ok(StructFieldKind::Scalar(
+        TypeExprKind::Dimensionless => Ok(StructFieldKind::Quantity(
             crate::dimension::Dimension::dimensionless(),
         )),
         TypeExprKind::DimExpr(dim_expr) => {
             // No dimension variables are in scope inside a record's fields;
             // the monomial is therefore concrete by construction.
             let monomial = resolve_extern_dim_monomial(dim_expr, &[], registry, src)?;
-            Ok(StructFieldKind::Scalar(monomial.fixed))
+            Ok(StructFieldKind::Quantity(monomial.fixed))
         }
         TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }
@@ -4059,7 +4059,7 @@ fn resolve_extern_array_kind(
         }
         _ => {
             return Err(GraphcalError::InvalidExternSignature {
-                message: "extern array elements must be scalars in this phase".to_string(),
+                message: "extern array elements must be quantities in this phase".to_string(),
                 src: src.clone(),
                 span: base.span.into(),
             });
@@ -4268,8 +4268,8 @@ mod tests {
         dep_unfrozen.imported_values.insert(
             qualified.clone(),
             (
-                RuntimeValue::Scalar(7.0),
-                DeclaredType::Scalar(crate::dimension::Dimension::dimensionless()),
+                RuntimeValue::Quantity(7.0),
+                DeclaredType::Quantity(crate::dimension::Dimension::dimensionless()),
             ),
         );
 

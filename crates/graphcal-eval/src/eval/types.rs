@@ -31,10 +31,10 @@ pub struct DisplayUnit {
     pub scale: f64,
 }
 
-/// A runtime value: either a scalar with dimension and display info, a bool, an integer, or a struct.
+/// A user-facing evaluated runtime value.
 #[derive(Debug, Clone)]
 pub enum Value {
-    Scalar {
+    Quantity {
         /// The value in base SI units.
         si_value: f64,
         /// The dimension of this value.
@@ -84,12 +84,12 @@ impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (
-                Self::Scalar {
+                Self::Quantity {
                     si_value: l_si,
                     dimension: l_dim,
                     display_unit: l_unit,
                 },
-                Self::Scalar {
+                Self::Quantity {
                     si_value: r_si,
                     dimension: r_dim,
                     display_unit: r_unit,
@@ -175,7 +175,7 @@ fn value_entry_maps_equal(
 
 /// Error returned when a [`Value`] accessor is called on an incompatible variant.
 #[derive(Debug, Clone, Error)]
-#[error("expected Scalar value, got {actual}")]
+#[error("expected Quantity value, got {actual}")]
 pub struct ValueError {
     /// A short description of the actual variant (e.g. "Bool", "Int", "struct `Foo`").
     actual: String,
@@ -243,7 +243,7 @@ impl Value {
     /// A short description of this value's variant for error messages.
     fn variant_description(&self) -> String {
         match self {
-            Self::Scalar { .. } => "Scalar".to_string(),
+            Self::Quantity { .. } => "Quantity".to_string(),
             Self::Bool(_) => "Bool".to_string(),
             Self::Int(_) => "Int".to_string(),
             Self::Label {
@@ -260,10 +260,10 @@ impl Value {
     ///
     /// # Errors
     ///
-    /// Returns [`ValueError`] if this is not a `Scalar`.
+    /// Returns [`ValueError`] if this is not a `Quantity`.
     pub fn si_value(&self) -> Result<f64, ValueError> {
         match self {
-            Self::Scalar { si_value, .. } => Ok(*si_value),
+            Self::Quantity { si_value, .. } => Ok(*si_value),
             other => Err(ValueError {
                 actual: other.variant_description(),
             }),
@@ -274,10 +274,10 @@ impl Value {
     ///
     /// # Errors
     ///
-    /// Returns [`ValueError`] if this is not a `Scalar`.
+    /// Returns [`ValueError`] if this is not a `Quantity`.
     pub fn dimension(&self) -> Result<Dimension, ValueError> {
         match self {
-            Self::Scalar { dimension, .. } => Ok(dimension.clone()),
+            Self::Quantity { dimension, .. } => Ok(dimension.clone()),
             other => Err(ValueError {
                 actual: other.variant_description(),
             }),
@@ -288,15 +288,15 @@ impl Value {
     ///
     /// # Errors
     ///
-    /// Returns [`ValueError`] if this is not a `Scalar`.
+    /// Returns [`ValueError`] if this is not a `Quantity`.
     #[cfg(test)]
     pub(crate) fn display_value(&self) -> Result<f64, ValueError> {
         match self {
-            Self::Scalar {
+            Self::Quantity {
                 si_value,
                 display_unit,
                 ..
-            } => Ok(scalar_display_value(*si_value, display_unit.as_ref())),
+            } => Ok(quantity_display_value(*si_value, display_unit.as_ref())),
             other => Err(ValueError {
                 actual: other.variant_description(),
             }),
@@ -311,7 +311,7 @@ impl Value {
     #[must_use]
     pub fn display_label(&self, symbols: &BTreeMap<BaseDimId, String>) -> Option<String> {
         match self {
-            Self::Scalar {
+            Self::Quantity {
                 display_unit,
                 dimension,
                 ..
@@ -330,7 +330,7 @@ impl Value {
 
     /// Format this value as a flat display string (no name prefix, no recursion).
     ///
-    /// If `symbols` is provided, scalar values include their unit label in brackets
+    /// If `symbols` is provided, quantity values include their unit label in brackets
     /// (e.g., `"42.5 [km/hour]"`). Without `symbols`, only the numeric value is shown.
     ///
     /// Composite values (`Struct`, `Indexed`) are shown as their variant name or
@@ -348,13 +348,13 @@ impl Value {
             Self::Datetime {
                 epoch, display_tz, ..
             } => format_epoch_with_tz(epoch, display_tz.as_deref()),
-            Self::Scalar {
+            Self::Quantity {
                 si_value,
                 display_unit,
                 ..
             } => {
                 let formatted = graphcal_compiler::registry::format::format_number(
-                    scalar_display_value(*si_value, display_unit.as_ref()),
+                    quantity_display_value(*si_value, display_unit.as_ref()),
                 );
                 match symbols.and_then(|s| self.display_label(s)) {
                     Some(label) => format!("{formatted} [{label}]"),
@@ -384,16 +384,16 @@ impl Value {
     }
 }
 
-/// Compute the displayed scalar value from its SI value and optional display unit.
+/// Compute the displayed quantity value from its SI value and optional display unit.
 ///
 /// Returns `si_value` directly when no display unit is set; otherwise scales it
 /// by the unit's conversion factor (`display_value = si_value / scale`).
 #[must_use]
-pub fn scalar_display_value(si_value: f64, display_unit: Option<&DisplayUnit>) -> f64 {
+pub fn quantity_display_value(si_value: f64, display_unit: Option<&DisplayUnit>) -> f64 {
     display_unit.map_or(si_value, |du| si_value / du.scale)
 }
 
-/// Format a scalar's default unit label from its dimension and registered base-unit symbols.
+/// Format a quantity's default unit label from its dimension and registered base-unit symbols.
 ///
 /// This is intentionally kept in the runtime display layer rather than on
 /// `Dimension`: dimensions describe physical semantics; unit labels are a
@@ -738,8 +738,8 @@ mod tests {
         BaseDimId::Prelude(name.to_string())
     }
 
-    fn scalar(dimension: Dimension, display_unit: Option<DisplayUnit>) -> Value {
-        Value::Scalar {
+    fn quantity(dimension: Dimension, display_unit: Option<DisplayUnit>) -> Value {
+        Value::Quantity {
             si_value: 1.0,
             dimension,
             display_unit,
@@ -785,7 +785,7 @@ mod tests {
     fn display_label_falls_back_to_default_unit_symbols() {
         let velocity =
             (Dimension::base(dim_id("Length")) / Dimension::base(dim_id("Time"))).unwrap();
-        let value = scalar(velocity, None);
+        let value = quantity(velocity, None);
 
         assert_eq!(value.display_label(&symbols()), Some("m/s".to_string()));
     }
@@ -794,7 +794,7 @@ mod tests {
     fn display_label_prefers_explicit_display_unit() {
         let velocity =
             (Dimension::base(dim_id("Length")) / Dimension::base(dim_id("Time"))).unwrap();
-        let value = scalar(
+        let value = quantity(
             velocity,
             Some(DisplayUnit {
                 label: "km/hour".to_string(),
@@ -807,14 +807,14 @@ mod tests {
 
     #[test]
     fn display_label_omits_dimensionless_default_unit() {
-        let value = scalar(Dimension::dimensionless(), None);
+        let value = quantity(Dimension::dimensionless(), None);
 
         assert_eq!(value.display_label(&symbols()), None);
     }
 
     #[test]
     fn display_label_omits_default_unit_when_symbol_is_missing() {
-        let value = scalar(Dimension::base(dim_id("Mass")), None);
+        let value = quantity(Dimension::base(dim_id("Mass")), None);
 
         assert_eq!(value.display_label(&symbols()), None);
     }

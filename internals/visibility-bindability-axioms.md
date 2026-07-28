@@ -376,7 +376,7 @@ Under index rebinding, `Phase` → `MyPhase` substitution rewrites the
 A8 is vacuous.
 
 A reduction (e.g. summing across phases) would compose with a primitive
-like `scan` if a scalar result is wanted; the reduction primitive is
+like `scan` if an unindexed result is wanted; the reduction primitive is
 orthogonal to the injectability story — what matters is whether any
 `Phase::v` literal appears in the kept expressions.
 

@@ -29,8 +29,8 @@ left.
 
 ## Arithmetic Operators
 
-| Operator | Float Behavior | Int Behavior | Dimension Rule |
-|----------|---------------|-------------|----------------|
+| Operator | Quantity behavior | `Int` behavior | Dimension rule |
+|----------|-------------------|----------------|----------------|
 | `a + b` | Addition | Addition | Dimensions must match |
 | `a - b` | Subtraction | Subtraction | Dimensions must match |
 | `a * b` | Multiplication | Multiplication | Dimensions multiply |
@@ -40,10 +40,12 @@ left.
 | `-a` | Negation | Negation | Dimension preserved |
 
 !!! note "Exponent restriction"
-    The exponent in `^` must be **compile-time-known** so the resulting dimension can be resolved before evaluation. In practice that means a numeric literal (integer or float, optionally with a leading unary `-`); for `Int ^ Int`, any expression that constant-folds to a non-negative integer is also accepted (e.g., `2 ^ 3 ^ 2` parses as `2 ^ (3 ^ 2)` and folds to `2 ^ 9 = 512`). Variable exponents whose value would only be known at runtime are not allowed.
+    The exponent in `^` must be **compile-time-known** so the resulting dimension can be resolved before evaluation. In practice that means a numeric literal (integer or floating-point, optionally with a leading unary `-`); for `Int ^ Int`, any expression that constant-folds to a non-negative integer is also accepted (e.g., `2 ^ 3 ^ 2` parses as `2 ^ (3 ^ 2)` and folds to `2 ^ 9 = 512`). Variable exponents whose value would only be known at runtime are not allowed.
 
-!!! note "Finite scalars"
-    Floating-point literals must be finite. Scalar operations that would create `NaN` or `inf` are surfaced as errors instead of producing a runtime value.
+!!! note "Finite quantities"
+    Floating-point literals must be finite. Quantity operations that would
+    create `NaN` or `inf` are surfaced as errors instead of producing a
+    runtime value.
 
 ## Comparison Operators
 
@@ -56,7 +58,7 @@ left.
 | `<=` | Less or equal | Same type and dimension |
 | `>=` | Greater or equal | Same type and dimension |
 
-All comparison operators return `Bool` for scalar operands.
+All comparison operators return `Bool` for unindexed operands.
 
 Datetime arithmetic follows point-vs-duration rules: `Datetime + Time`,
 `Time + Datetime`, and `Datetime - Time` produce `Datetime`, while
@@ -64,8 +66,8 @@ Datetime arithmetic follows point-vs-duration rules: `Datetime + Time`,
 `Datetime + Datetime` are errors.
 
 Comparisons broadcast element-wise over indexed operands: `T[I] op T[I]`
-zips the two collections per key, and `T[I] op scalar` applies the scalar to
-every key — both return `Bool[I]`. Indexed operands must share the same
+zips the two collections per key, and `T[I] op unindexed T` applies the
+unindexed operand to every key — both return `Bool[I]`. Indexed operands must share the same
 axes in the same order; mismatched axes are a compile error (`D011`).
 
 ## Logical Operators
@@ -126,7 +128,7 @@ deliberate, field-by-field act, not a silent reinterpretation.
 
 ## Field Access (`.`)
 
-Access a field of a struct-typed value:
+Access a field of a record-shaped, one-constructor algebraic value:
 
 ```
 node dv: Velocity = @transfer.total_dv;
@@ -174,6 +176,6 @@ for the full semantics.
 | Form | Example | Type |
 |------|---------|------|
 | Integer | `42`, `1_000` | `Int` |
-| Float | `3.14`, `1.0e-3` | `Float` (Dimensionless) |
-| Float with unit | `200.0 km`, `9.8 m/s^2` | `Float` (with dimension) |
+| Floating-point | `3.14`, `1.0e-3` | `Dimensionless` |
+| Floating-point with unit | `200.0 km`, `9.8 m/s^2` | Dimension of the unit |
 | Boolean | `true`, `false` | `Bool` |

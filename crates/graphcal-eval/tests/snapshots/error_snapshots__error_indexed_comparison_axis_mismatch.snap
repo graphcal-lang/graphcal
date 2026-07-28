@@ -10,5 +10,5 @@ Begin snippet for indexed_comparison_axis_mismatch.gcl starting at line 14, colu
 snippet line 14: 
 snippet line 15: node same: Bool[Case] = @lhs == @rhs;
     label at line 15, columns 33 to 36: has type Length[Other]
-diagnostic help: element-wise operands must be indexed by the same axes in the same order; a scalar operand broadcasts to every key
+diagnostic help: element-wise operands must be indexed by the same axes in the same order; an unindexed operand broadcasts to every key
 diagnostic code: graphcal::D011

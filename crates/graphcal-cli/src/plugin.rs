@@ -208,7 +208,7 @@ fn readme_file(name: &str, artifact: &str) -> ScaffoldFile {
         contents: format!(
             r#"# {name}
 
-A [graphcal](https://github.com/graphcal-lang/graphcal) plugin: pure scalar
+A [graphcal](https://github.com/graphcal-lang/graphcal) plugin: pure quantity
 kernels with dimensional signatures, compiled to WebAssembly.
 
 ## Build
@@ -248,7 +248,7 @@ node mid: Length = {artifact}.lerp(1.0 m, 3.0 m, 0.5);
 graphcal deps lock   # records the module's SHA-256 in graphcal.lock
 ```
 
-Scalar values cross the plugin boundary as `f64`s in SI base units; keep
+Quantity values cross the plugin boundary as `f64`s in SI base units; keep
 kernel math in SI throughout.
 "#
         ),
@@ -325,7 +325,7 @@ pub fn render_result_type_decl(
             let kind = match &field.kind {
                 StructFieldKind::Bool => "Bool".to_string(),
                 StructFieldKind::Int => "Int".to_string(),
-                StructFieldKind::Scalar(dim) => {
+                StructFieldKind::Quantity(dim) => {
                     if dim.is_dimensionless() {
                         "Dimensionless".to_string()
                     } else {
@@ -426,7 +426,7 @@ pub enum CallArgError {
 }
 
 /// Parse `--call` arguments against the signature's parameter kinds:
-/// scalars as (SI) floats, `Bool` as `true`/`false`, `Int` as an integer,
+/// quantities as (SI) floats, `Bool` as `true`/`false`, `Int` as an integer,
 /// arrays as bracketed comma-separated (SI) floats (`[1.0,2.5,3]`).
 pub fn parse_call_args(
     function: &str,
@@ -462,7 +462,7 @@ pub fn parse_call_args(
                         .map(HostFnValue::Scalar)
                         .ok_or_else(|| invalid("integer is not exactly representable as an f64"))
                 }
-                ValueKind::Scalar(_) => text
+                ValueKind::Quantity(_) => text
                     .parse::<f64>()
                     .map(HostFnValue::Scalar)
                     .map_err(|_| invalid("expected a number (in SI base units)")),
@@ -497,13 +497,15 @@ pub fn parse_call_args(
 /// Returns `Err` with a description when the value violates the declared
 /// kind's encoding (a plugin bug worth surfacing, not reinterpreting).
 pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Result<String, String> {
-    let scalar = |value: &HostFnValue| match value {
+    let abi_scalar = |value: &HostFnValue| match value {
         HostFnValue::Scalar(raw) => Ok(*raw),
-        HostFnValue::Buffer(_) => Err("declared a scalar result but returned an array".to_string()),
+        HostFnValue::Buffer(_) => {
+            Err("declared a scalar ABI result but returned an array".to_string())
+        }
     };
     match signature.result() {
         ValueKind::Bool => {
-            let raw = scalar(value)?;
+            let raw = abi_scalar(value)?;
             if raw.to_bits() == 1.0_f64.to_bits() {
                 Ok("true".to_string())
             } else if raw.to_bits() == 0.0_f64.to_bits() {
@@ -515,7 +517,7 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
             }
         }
         ValueKind::Int => {
-            let raw = scalar(value)?;
+            let raw = abi_scalar(value)?;
             int_from_abi(raw)
                 .map(|value| value.to_string())
                 .ok_or_else(|| {
@@ -524,9 +526,9 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
                     )
                 })
         }
-        ValueKind::Scalar(monomial) => {
-            let rendered = format_number(scalar(value)?);
-            let dim = render_scalar_result_dimension(monomial);
+        ValueKind::Quantity(monomial) => {
+            let rendered = format_number(abi_scalar(value)?);
+            let dim = render_quantity_result_dimension(monomial);
             Ok(match dim {
                 Some(dim) => format!("{rendered} [{dim}, SI base units]"),
                 None => rendered,
@@ -534,14 +536,14 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
         }
         ValueKind::Indexed { element, .. } => {
             let HostFnValue::Buffer(values) = value else {
-                return Err("declared an array result but returned a scalar".to_string());
+                return Err("declared an array result but returned a scalar ABI value".to_string());
             };
             let rendered = values
                 .iter()
                 .map(|value| format_number(*value))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let dim = render_scalar_result_dimension(element);
+            let dim = render_quantity_result_dimension(element);
             Ok(dim.map_or_else(
                 || format!("[{rendered}]"),
                 |dim| format!("[{rendered}] [{dim}, SI base units]"),
@@ -551,7 +553,7 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
             use graphcal_compiler::function_signature::StructFieldKind;
 
             let HostFnValue::Buffer(slots) = value else {
-                return Err("declared a struct result but returned a scalar".to_string());
+                return Err("declared a struct result but returned a scalar ABI value".to_string());
             };
             if slots.len() != shape.fields().len() {
                 return Err(format!(
@@ -586,7 +588,7 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
                                     field.name
                                 )
                             })?,
-                        StructFieldKind::Scalar(_) => format_number(*slot),
+                        StructFieldKind::Quantity(_) => format_number(*slot),
                     };
                     Ok(format!("{}: {rendered}", field.name))
                 })
@@ -596,9 +598,9 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
     }
 }
 
-/// Describe a scalar result's dimension when it is concrete; dim-variable
+/// Describe a quantity result's dimension when it is concrete; dim-variable
 /// results depend on the call site, so no fixed description exists.
-fn render_scalar_result_dimension(
+fn render_quantity_result_dimension(
     monomial: &graphcal_compiler::function_signature::DimMonomial,
 ) -> Option<String> {
     if !monomial.vars.is_empty() {
@@ -649,18 +651,18 @@ mod tests {
             vec![
                 FunctionParam {
                     name: FnParamName::expect_valid("a"),
-                    kind: ValueKind::Scalar(DimMonomial::var(var())),
+                    kind: ValueKind::Quantity(DimMonomial::var(var())),
                 },
                 FunctionParam {
                     name: FnParamName::expect_valid("b"),
-                    kind: ValueKind::Scalar(DimMonomial::var(var())),
+                    kind: ValueKind::Quantity(DimMonomial::var(var())),
                 },
                 FunctionParam {
                     name: FnParamName::expect_valid("t"),
                     kind: ValueKind::dimensionless(),
                 },
             ],
-            ValueKind::Scalar(DimMonomial::var(var())),
+            ValueKind::Quantity(DimMonomial::var(var())),
         )
         .expect("valid signature")
     }
@@ -771,9 +773,9 @@ mod tests {
             Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("p"),
-                kind: ValueKind::Scalar(DimMonomial::fixed(pressure)),
+                kind: ValueKind::Quantity(DimMonomial::fixed(pressure)),
             }],
-            ValueKind::Scalar(DimMonomial::fixed(sqrt_len)),
+            ValueKind::Quantity(DimMonomial::fixed(sqrt_len)),
         )
         .expect("valid signature");
         assert_eq!(
@@ -862,18 +864,18 @@ mod tests {
             .unwrap()
             .checked_mul(&prelude_base_dimension("Time").unwrap().pow(-1).unwrap())
             .unwrap();
-        let scalar_result = FunctionSignature::try_new(
+        let quantity_result = FunctionSignature::try_new(
             Vec::new(),
             Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("x"),
                 kind: ValueKind::dimensionless(),
             }],
-            ValueKind::Scalar(DimMonomial::fixed(velocity)),
+            ValueKind::Quantity(DimMonomial::fixed(velocity)),
         )
         .expect("valid signature");
         assert_eq!(
-            render_result(&scalar_result, &HostFnValue::Scalar(2.5)).unwrap(),
+            render_result(&quantity_result, &HostFnValue::Scalar(2.5)).unwrap(),
             "2.5 [Length * Time^-1, SI base units]"
         );
     }

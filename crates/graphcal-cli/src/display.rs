@@ -3,7 +3,7 @@
 //! The CLI text format is the human-readable flavour of evaluation results. It
 //! prints:
 //!
-//! * Scalar / bool / int / struct / datetime values one per line, aligned on
+//! * Quantity / bool / int / struct / datetime values one per line, aligned on
 //!   the widest name.
 //! * 1D indexed values flattened to `name[Variant]` lines.
 //! * Higher-dimensional indexed values rendered as table grids (2D) or as a
@@ -30,8 +30,8 @@ use graphcal_eval::eval::{NodeError, Value};
 /// `foo[Departure]`). The renderer uses the max of these widths to align `=`
 /// across a whole `Flat` block.
 pub enum FlatEntry<'a> {
-    /// A displayable value (scalar, bool, int, struct, datetime, or 1D
-    /// indexed flattened to a single entry).
+    /// A displayable leaf/composite value, or a 1D indexed value flattened to
+    /// a single entry.
     Value(String, &'a Value),
     /// A node that failed to evaluate — rendered as `name = ERROR: <msg>`.
     Error(String, &'a NodeError),
@@ -51,7 +51,7 @@ pub enum OutputBlock<'a> {
 
 /// Count how many levels of `Indexed` nesting a value has.
 ///
-/// Scalars / bools / structs return `0`. A 1D indexed value returns `1`. A 2D
+/// Quantities / bools / structs return `0`. A 1D indexed value returns `1`. A 2D
 /// indexed-of-indexed returns `2`, and so on. The table renderer switches
 /// modes at depth >= 2.
 #[must_use]
@@ -62,14 +62,14 @@ pub fn index_depth(value: &Value) -> usize {
     }
 }
 
-/// Walk into nested `Indexed` to find the first leaf scalar's display label (unit).
+/// Walk into nested `Indexed` to find the first leaf quantity's display label (unit).
 ///
 /// Used to annotate the table header (e.g. `delta_v (m/s):`). Returns `None`
-/// if the value has no scalar leaves (e.g. an indexed of structs or labels).
+/// if the value has no quantity leaves (e.g. an indexed of structs or labels).
 #[must_use]
 pub fn extract_unit_label(value: &Value, symbols: &BTreeMap<BaseDimId, String>) -> Option<String> {
     match value {
-        Value::Scalar { .. } => value.display_label(symbols),
+        Value::Quantity { .. } => value.display_label(symbols),
         Value::Indexed { entries, .. } => entries
             .values()
             .next()
@@ -81,14 +81,14 @@ pub fn extract_unit_label(value: &Value, symbols: &BTreeMap<BaseDimId, String>) 
 /// Flatten a value into one or more [`FlatEntry::Value`] entries keyed by a
 /// dotted-or-indexed display name.
 ///
-/// - Leaves (scalars, bools, ints, labels, datetimes) become a single entry.
+/// - Leaves (quantities, bools, ints, labels, datetimes) become a single entry.
 /// - Structs expand to `name.field` lines (empty structs stay as a single
 ///   entry so that unit-struct variants still show up).
 /// - 1D indexed values expand to `name[Variant]` lines; higher-dimensional
 ///   values are NOT flattened here — the caller routes them to a table block.
 pub fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatEntry<'a>>) {
     match value {
-        Value::Scalar { .. }
+        Value::Quantity { .. }
         | Value::Bool(_)
         | Value::Int(_)
         | Value::Label { .. }
@@ -297,7 +297,7 @@ pub fn format_table_slices(
 /// - Depth 2: `name (unit):\n<grid>`.
 /// - Depth >= 3: header + a list of `\n  [Outer::Variant]`-tagged 2D grids.
 ///
-/// For dimensionless or non-scalar leaves, the `(unit)` part of the header is
+/// For dimensionless or non-quantity leaves, the `(unit)` part of the header is
 /// omitted.
 #[must_use]
 pub fn format_indexed_table(
@@ -331,8 +331,8 @@ mod tests {
     use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use indexmap::IndexMap;
 
-    fn scalar(si: f64) -> Value {
-        Value::Scalar {
+    fn quantity(si: f64) -> Value {
+        Value::Quantity {
             si_value: si,
             dimension: Dimension::dimensionless(),
             display_unit: None,
@@ -372,26 +372,26 @@ mod tests {
     }
 
     #[test]
-    fn index_depth_scalar_is_zero() {
-        assert_eq!(index_depth(&scalar(1.0)), 0);
+    fn index_depth_quantity_is_zero() {
+        assert_eq!(index_depth(&quantity(1.0)), 0);
     }
 
     #[test]
     fn index_depth_1d_is_one() {
-        let v = indexed_1d("I", &[("A", scalar(1.0)), ("B", scalar(2.0))]);
+        let v = indexed_1d("I", &[("A", quantity(1.0)), ("B", quantity(2.0))]);
         assert_eq!(index_depth(&v), 1);
     }
 
     #[test]
     fn index_depth_2d_is_two() {
-        let inner = indexed_1d("Col", &[("X", scalar(1.0)), ("Y", scalar(2.0))]);
+        let inner = indexed_1d("Col", &[("X", quantity(1.0)), ("Y", quantity(2.0))]);
         let outer = indexed_1d("Row", &[("R1", inner.clone()), ("R2", inner)]);
         assert_eq!(index_depth(&outer), 2);
     }
 
     #[test]
-    fn flatten_scalar_produces_single_entry() {
-        let v = scalar(42.0);
+    fn flatten_quantity_produces_single_entry() {
+        let v = quantity(42.0);
         let mut out = Vec::new();
         flatten_value("x", &v, &mut out);
         assert_eq!(out.len(), 1);
@@ -403,7 +403,7 @@ mod tests {
 
     #[test]
     fn flatten_1d_indexed_produces_bracketed_entries() {
-        let v = indexed_1d("I", &[("A", scalar(1.0)), ("B", scalar(2.0))]);
+        let v = indexed_1d("I", &[("A", quantity(1.0)), ("B", quantity(2.0))]);
         let mut out = Vec::new();
         flatten_value("dv", &v, &mut out);
         let names: Vec<&str> = out
@@ -419,7 +419,7 @@ mod tests {
     fn flatten_2d_indexed_fully_expands() {
         // The block-builder skips this case for tables, but flatten_value on
         // its own keeps peeling — verify that contract.
-        let inner = indexed_1d("Col", &[("X", scalar(1.0)), ("Y", scalar(2.0))]);
+        let inner = indexed_1d("Col", &[("X", quantity(1.0)), ("Y", quantity(2.0))]);
         let outer = indexed_1d("Row", &[("R1", inner)]);
         let mut out = Vec::new();
         flatten_value("m", &outer, &mut out);
@@ -435,8 +435,8 @@ mod tests {
     #[test]
     fn flatten_struct_expands_to_field_entries() {
         let mut fields = IndexMap::new();
-        fields.insert(FieldName::expect_valid("x"), scalar(1.0));
-        fields.insert(FieldName::expect_valid("y"), scalar(2.0));
+        fields.insert(FieldName::expect_valid("x"), quantity(1.0));
+        fields.insert(FieldName::expect_valid("y"), quantity(2.0));
         let s =
             Value::struct_with_owner(test_owner(), StructTypeName::expect_valid("Pair"), fields);
         let mut out = Vec::new();
@@ -464,11 +464,11 @@ mod tests {
 
     #[test]
     fn build_output_blocks_separates_tables() {
-        // scalar -> flat; 2D -> table; scalar -> flat
-        let a = Ok(scalar(1.0));
-        let inner = indexed_1d("Col", &[("X", scalar(10.0))]);
+        // quantity -> flat; 2D -> table; quantity -> flat
+        let a = Ok(quantity(1.0));
+        let inner = indexed_1d("Col", &[("X", quantity(10.0))]);
         let b = Ok(indexed_1d("Row", &[("R1", inner)]));
-        let c = Ok(scalar(3.0));
+        let c = Ok(quantity(3.0));
         let items: Vec<(&str, &Result<Value, NodeError>)> = vec![("a", &a), ("b", &b), ("c", &c)];
         let blocks = build_output_blocks(items);
         assert_eq!(blocks.len(), 3);
@@ -479,10 +479,10 @@ mod tests {
 
     #[test]
     fn max_flat_name_len_ignores_tables() {
-        let a = Ok(scalar(1.0));
-        let inner = indexed_1d("Col", &[("X", scalar(10.0))]);
+        let a = Ok(quantity(1.0));
+        let inner = indexed_1d("Col", &[("X", quantity(10.0))]);
         let b = Ok(indexed_1d("Row", &[("R1", inner)]));
-        let long = Ok(scalar(3.0));
+        let long = Ok(quantity(3.0));
         let items: Vec<(&str, &Result<Value, NodeError>)> = vec![
             ("a", &a),
             ("b_is_a_table_and_should_be_ignored", &b),
@@ -495,8 +495,8 @@ mod tests {
 
     #[test]
     fn format_table_grid_2d_has_header_and_rows() {
-        let inner_r1 = indexed_1d("Col", &[("X", scalar(1.0)), ("Y", scalar(2.0))]);
-        let inner_r2 = indexed_1d("Col", &[("X", scalar(3.0)), ("Y", scalar(4.0))]);
+        let inner_r1 = indexed_1d("Col", &[("X", quantity(1.0)), ("Y", quantity(2.0))]);
+        let inner_r2 = indexed_1d("Col", &[("X", quantity(3.0)), ("Y", quantity(4.0))]);
         let v = indexed_1d("Row", &[("R1", inner_r1), ("R2", inner_r2)]);
         let grid = format_table_grid(&v);
         assert!(grid.contains("R1"), "grid missing R1 row: {grid}");
@@ -507,8 +507,9 @@ mod tests {
 
     #[test]
     fn format_table_grid_column_headers_use_row_containing_column() {
-        let inner_r1 = indexed_1d_with_display("Col", &[("X", scalar(1.0))], &[("X", "first-X")]);
-        let inner_r2 = indexed_1d_with_display("Col", &[("Y", scalar(2.0))], &[("Y", "second-Y")]);
+        let inner_r1 = indexed_1d_with_display("Col", &[("X", quantity(1.0))], &[("X", "first-X")]);
+        let inner_r2 =
+            indexed_1d_with_display("Col", &[("Y", quantity(2.0))], &[("Y", "second-Y")]);
         let v = indexed_1d("Row", &[("R1", inner_r1), ("R2", inner_r2)]);
         let grid = format_table_grid(&v);
         assert!(grid.contains("first-X"), "grid missing X display: {grid}");
@@ -517,7 +518,7 @@ mod tests {
 
     #[test]
     fn format_indexed_table_depth_2_has_name_header() {
-        let inner = indexed_1d("Col", &[("X", scalar(1.0)), ("Y", scalar(2.0))]);
+        let inner = indexed_1d("Col", &[("X", quantity(1.0)), ("Y", quantity(2.0))]);
         let v = indexed_1d("Row", &[("R1", inner)]);
         let symbols = BTreeMap::new();
         let out = format_indexed_table("mymatrix", &v, &symbols);
@@ -529,7 +530,7 @@ mod tests {
 
     #[test]
     fn format_indexed_table_depth_3_emits_slice_headers() {
-        let leaf = indexed_1d("Col", &[("X", scalar(1.0)), ("Y", scalar(2.0))]);
+        let leaf = indexed_1d("Col", &[("X", quantity(1.0)), ("Y", quantity(2.0))]);
         let mid = indexed_1d("Row", &[("R1", leaf)]);
         let outer = indexed_1d("Slab", &[("S1", mid.clone()), ("S2", mid)]);
         let symbols = BTreeMap::new();

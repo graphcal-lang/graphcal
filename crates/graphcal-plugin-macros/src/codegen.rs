@@ -8,8 +8,9 @@
 //! integration tests read `GRAPHCAL_PLUGIN_MANIFEST` without a wasm
 //! toolchain.
 //!
-//! Scalar-only functions are emitted as a single `extern "C-unwind"` item
-//! whose raw `f64` parameters double as the natural test surface. Functions
+//! Scalar-ABI functions (quantities, `Bool`, and `Int`) are emitted as a single
+//! `extern "C-unwind"` item whose raw `f64` parameters double as the natural
+//! test surface. Functions
 //! that move arrays split in two: a natural `pub fn` taking `&[f64]` slices
 //! (what `cargo test` calls) and a `wasm32`-only export wrapper that decodes
 //! the `(ptr, len)` pairs, calls the natural function, and writes the
@@ -72,11 +73,11 @@ fn generate_function(function: &FunctionIr) -> TokenStream {
     if function.uses_buffers() {
         generate_buffer_function(function)
     } else {
-        generate_scalar_function(function)
+        generate_scalar_abi_function(function)
     }
 }
 
-fn generate_scalar_function(function: &FunctionIr) -> TokenStream {
+fn generate_scalar_abi_function(function: &FunctionIr) -> TokenStream {
     let docs = &function.docs;
     let name = &function.name;
     let raw_params = function.params.iter().map(|param| {
@@ -87,7 +88,7 @@ fn generate_scalar_function(function: &FunctionIr) -> TokenStream {
         let name = &param.name;
         let name_str = param.name.to_string();
         match param.kind {
-            KindIr::Scalar(_) | KindIr::Array { .. } | KindIr::Struct(_) => None,
+            KindIr::Quantity(_) | KindIr::Array { .. } | KindIr::Struct(_) => None,
             KindIr::Bool => Some(quote! {
                 let #name: bool = ::graphcal_plugin::__rt::bool_from_abi(#name, #name_str);
             }),
@@ -97,7 +98,7 @@ fn generate_scalar_function(function: &FunctionIr) -> TokenStream {
         }
     });
     let (result_ty, to_abi) = match function.result {
-        KindIr::Scalar(_) | KindIr::Array { .. } | KindIr::Struct(_) => {
+        KindIr::Quantity(_) | KindIr::Array { .. } | KindIr::Struct(_) => {
             (quote! { f64 }, quote! { __graphcal_result })
         }
         KindIr::Bool => (
@@ -145,7 +146,7 @@ fn wrapper_pieces(function: &FunctionIr) -> WrapperPieces {
             // Struct parameters cannot be written (the parser only accepts
             // the braced shape in result position); the arm keeps the match
             // total without a panic path.
-            KindIr::Scalar(_) | KindIr::Struct(_) => {
+            KindIr::Quantity(_) | KindIr::Struct(_) => {
                 raw_params.push(quote! { #pname: f64 });
                 natural_args.push(quote! { #pname });
             }
@@ -195,7 +196,7 @@ fn generate_buffer_function(function: &FunctionIr) -> TokenStream {
     let natural_params = function.params.iter().map(|param| {
         let pname = &param.name;
         match &param.kind {
-            KindIr::Scalar(_) | KindIr::Struct(_) => quote! { #pname: f64 },
+            KindIr::Quantity(_) | KindIr::Struct(_) => quote! { #pname: f64 },
             KindIr::Bool => quote! { #pname: bool },
             KindIr::Int => quote! { #pname: i64 },
             KindIr::Array { .. } => quote! { #pname: &[f64] },
@@ -203,7 +204,7 @@ fn generate_buffer_function(function: &FunctionIr) -> TokenStream {
     });
     let output_ident = output_struct_ident(name);
     let natural_result_ty = match &function.result {
-        KindIr::Scalar(_) => quote! { f64 },
+        KindIr::Quantity(_) => quote! { f64 },
         KindIr::Bool => quote! { bool },
         KindIr::Int => quote! { i64 },
         KindIr::Array { .. } => quote! { ::std::vec::Vec<f64> },
@@ -216,14 +217,14 @@ fn generate_buffer_function(function: &FunctionIr) -> TokenStream {
             let field_defs = fields.iter().map(|field| {
                 let fname = &field.name;
                 let ty = match &field.kind {
-                    FieldKindIr::Scalar(_) => quote! { f64 },
+                    FieldKindIr::Quantity(_) => quote! { f64 },
                     FieldKindIr::Bool => quote! { bool },
                     FieldKindIr::Int => quote! { i64 },
                 };
                 quote! { pub #fname: #ty }
             });
             let doc = format!(
-                "The result of [`{name}`], one field per declared struct field (scalars in SI                  base units)."
+                "The result of [`{name}`], one field per declared struct field (quantities in SI                  base units)."
             );
             Some(quote! {
                 #[doc = #doc]
@@ -304,7 +305,7 @@ fn generate_buffer_wrapper(
                 }
             }
         }
-        KindIr::Scalar(_) => quote! {
+        KindIr::Quantity(_) => quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(export_name = #name_str)]
             extern "C-unwind" fn #wrapper_ident(#(#raw_params),*) -> f64 {
@@ -336,7 +337,7 @@ fn generate_buffer_wrapper(
             let slots = fields.iter().map(|field| {
                 let fname = &field.name;
                 match &field.kind {
-                    FieldKindIr::Scalar(_) => quote! { __graphcal_result.#fname },
+                    FieldKindIr::Quantity(_) => quote! { __graphcal_result.#fname },
                     FieldKindIr::Bool => quote! {
                         ::graphcal_plugin::__rt::bool_to_abi(__graphcal_result.#fname)
                     },

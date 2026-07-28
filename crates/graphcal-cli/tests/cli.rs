@@ -747,7 +747,7 @@ fn eval_indexed_json_output() {
     assert_eq!(dv["index"].as_str(), Some("Maneuver"));
     assert!(dv["entries"]["Departure"]["si_value"].as_f64().is_some());
 
-    // total_dv is a scalar node
+    // total_dv is a quantity node
     assert!(json["node"]["total_dv"]["si_value"].as_f64().is_some());
 }
 
@@ -1063,8 +1063,8 @@ assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
 }
 
 #[test]
-fn check_rejects_variant_arg_on_scalar_expected_fail() {
-    // Scalar assertions cannot accept per-variant expected_fail metadata.
+fn check_rejects_variant_arg_on_unindexed_expected_fail() {
+    // Unindexed assertions cannot accept per-variant expected_fail metadata.
     let dir = tempfile::tempdir().unwrap();
     let root = write_temp_file(
         dir.path(),
@@ -1084,7 +1084,7 @@ assert order = @lhs > @rhs;
         .expect("failed to run graphcal");
     assert!(
         !output.status.success(),
-        "scalar expected_fail should not accept per-variant keys"
+        "unindexed expected_fail should not accept per-variant keys"
     );
 }
 
@@ -2245,10 +2245,10 @@ fn eval_power_budget_json() {
         "expected power_draw entries: {pd}"
     );
 
-    // peak_power is a scalar node
+    // peak_power is a quantity node
     assert!(
         json["node"]["peak_power"]["si_value"].as_f64().is_some(),
-        "expected peak_power scalar value"
+        "expected peak_power quantity value"
     );
 
     // assertions
@@ -3223,7 +3223,7 @@ fn eval_plot_mismatched_channel_axes_is_an_error() {
 }
 
 #[test]
-fn eval_plot_indexed_bools_encode_like_scalar_bools() {
+fn eval_plot_indexed_bools_encode_like_unindexed_bools() {
     // Indexed Bool entries must encode as "true"/"false" labels, never as
     // index variant names (#840).
     let dir = tempfile::tempdir().unwrap();
@@ -4533,7 +4533,7 @@ fn lerp_plugin_wasm() -> Vec<u8> {
     };
 
     let var = |name: &str| {
-        ManifestValueKind::Scalar(ManifestMonomial {
+        ManifestValueKind::Quantity(ManifestMonomial {
             vars: vec![ManifestVarPower {
                 var: name.to_string(),
                 pow: ManifestRational { num: 1, den: 1 },
@@ -4558,7 +4558,7 @@ fn lerp_plugin_wasm() -> Vec<u8> {
                 },
                 ManifestParam {
                     name: "t".to_string(),
-                    kind: ManifestValueKind::Scalar(ManifestMonomial::default()),
+                    kind: ManifestValueKind::Quantity(ManifestMonomial::default()),
                 },
             ],
             result: var("D"),

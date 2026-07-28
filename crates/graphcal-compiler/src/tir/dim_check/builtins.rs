@@ -18,12 +18,12 @@ use crate::syntax::dimension::DimVarName;
 use crate::syntax::function_name::FnName;
 use crate::syntax::span::Span;
 
-/// Check scalar argument dimensions against `sig` and compute the result
+/// Check quantity argument dimensions against `sig` and compute the result
 /// dimension.
 ///
-/// Arguments are scalar dimensions; callers verify non-scalar parameter kinds
+/// Arguments are quantity dimensions; callers verify non-quantity parameter kinds
 /// ([`ValueKind::Bool`]/[`ValueKind::Int`]) before reaching this walk. All
-/// built-in registry signatures are all-scalar, so built-in inference calls
+/// built-in registry signatures are all-quantity, so built-in inference calls
 /// this directly.
 pub(super) fn infer_fn_dim_from_spans(
     fn_name: &str,
@@ -68,17 +68,17 @@ pub(super) fn infer_fn_dim_from_spans(
                 .copied()
                 .unwrap_or_else(|| Span::new(0, 0))
         });
-        let ValueKind::Scalar(monomial) = &param.kind else {
+        let ValueKind::Quantity(monomial) = &param.kind else {
             return Err(GraphcalError::InternalError {
                 message: format!(
-                    "signature for `{fn_name}` has a non-scalar parameter `{}` in the scalar checking path",
+                    "signature for `{fn_name}` has a non-quantity parameter `{}` in the quantity checking path",
                     param.name
                 ),
                 src: src.clone(),
                 span: arg_span.into(),
             });
         };
-        check_scalar_param(
+        check_quantity_param(
             fn_name,
             sig,
             &param.name,
@@ -95,10 +95,10 @@ pub(super) fn infer_fn_dim_from_spans(
         .first()
         .copied()
         .unwrap_or_else(|| Span::new(0, 0));
-    let ValueKind::Scalar(result) = sig.result() else {
+    let ValueKind::Quantity(result) = sig.result() else {
         return Err(GraphcalError::InternalError {
             message: format!(
-                "signature for `{fn_name}` has a non-scalar result in the scalar checking path"
+                "signature for `{fn_name}` has a non-quantity result in the quantity checking path"
             ),
             src: src.clone(),
             span: result_span.into(),
@@ -107,11 +107,11 @@ pub(super) fn infer_fn_dim_from_spans(
     eval_result_monomial(fn_name, result, &bindings, src, result_span)
 }
 
-/// Check one scalar argument against its parameter monomial, binding or
+/// Check one quantity argument against its parameter monomial, binding or
 /// comparing dimension variables as required. Shared by built-in and extern
 /// call checking.
 #[expect(clippy::too_many_arguments, reason = "signature-walk context")]
-pub(super) fn check_scalar_param(
+pub(super) fn check_quantity_param(
     fn_name: &str,
     sig: &FunctionSignature,
     param_name: &crate::syntax::function_name::FnParamName,
@@ -202,7 +202,9 @@ fn eval_monomial(
 /// variable, for "must have the same dimension as `x`" diagnostics.
 fn first_binding_param<'a>(sig: &'a FunctionSignature, var: &DimVarName) -> Option<&'a str> {
     sig.params().iter().find_map(|p| match &p.kind {
-        ValueKind::Scalar(monomial) if monomial.as_bare_var() == Some(var) => Some(p.name.as_str()),
+        ValueKind::Quantity(monomial) if monomial.as_bare_var() == Some(var) => {
+            Some(p.name.as_str())
+        }
         _ => None,
     })
 }

@@ -7,7 +7,7 @@
 //! plugin host registers module-backed closures through the same interface.
 //!
 //! The host ABI carries SI-flat numbers: each value crosses as a
-//! [`HostFnValue`] — a bare `f64` for scalars (Int and Bool arguments are
+//! [`HostFnValue`] — a bare `f64` for quantities (Int and Bool arguments are
 //! converted — exactly-representable integers and `1.0`/`0.0` respectively)
 //! or a dense `f64` buffer in index order for arrays. The evaluator does all
 //! typed interpretation against the declared signature; closures never see
@@ -72,23 +72,23 @@ impl From<&str> for HostFnError {
 /// [`RuntimeValue`]: graphcal_compiler::registry::runtime_value::RuntimeValue
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostFnValue {
-    /// A scalar in SI base units (also the Bool/Int wire encoding).
+    /// A quantity in SI base units (also the Bool/Int wire encoding).
     Scalar(f64),
-    /// A dense array of SI scalars in index order.
+    /// A dense array of SI quantities in index order.
     Buffer(Vec<f64>),
 }
 
 impl HostFnValue {
-    /// The scalar payload, or an error naming the parameter position.
+    /// The quantity payload, or an error naming the parameter position.
     ///
     /// # Errors
     ///
     /// Returns a [`HostFnError`] when this value is a buffer.
-    fn expect_scalar(&self, position: usize) -> Result<f64, HostFnError> {
+    fn expect_quantity(&self, position: usize) -> Result<f64, HostFnError> {
         match self {
             Self::Scalar(value) => Ok(*value),
             Self::Buffer(_) => Err(HostFnError::new(format!(
-                "argument {position} is an array, expected a scalar"
+                "argument {position} is an array, expected a quantity"
             ))),
         }
     }
@@ -97,12 +97,12 @@ impl HostFnValue {
     ///
     /// # Errors
     ///
-    /// Returns a [`HostFnError`] when this value is a scalar.
+    /// Returns a [`HostFnError`] when this value is a quantity.
     fn expect_buffer(&self, position: usize) -> Result<&[f64], HostFnError> {
         match self {
             Self::Buffer(values) => Ok(values),
             Self::Scalar(_) => Err(HostFnError::new(format!(
-                "argument {position} is a scalar, expected an array"
+                "argument {position} is a quantity, expected an array"
             ))),
         }
     }
@@ -274,14 +274,14 @@ pub fn demo_registry() -> HostFunctionRegistry {
     let mut registry = HostFunctionRegistry::new();
     registry.register(plugin.clone(), FnName::expect_valid("lerp"), |args| {
         let (a, b, t) = (
-            args[0].expect_scalar(0)?,
-            args[1].expect_scalar(1)?,
-            args[2].expect_scalar(2)?,
+            args[0].expect_quantity(0)?,
+            args[1].expect_quantity(1)?,
+            args[2].expect_quantity(2)?,
         );
         Ok(HostFnValue::Scalar((b - a).mul_add(t, a)))
     });
     registry.register(plugin.clone(), FnName::expect_valid("inverse"), |args| {
-        let x = args[0].expect_scalar(0)?;
+        let x = args[0].expect_quantity(0)?;
         if x == 0.0 {
             return Err(HostFnError::new("division by zero"));
         }
@@ -291,7 +291,7 @@ pub fn demo_registry() -> HostFunctionRegistry {
         plugin.clone(),
         FnName::expect_valid("geometric_mean"),
         |args| {
-            let product = args[0].expect_scalar(0)? * args[1].expect_scalar(1)?;
+            let product = args[0].expect_quantity(0)? * args[1].expect_quantity(1)?;
             if product < 0.0 {
                 return Err(HostFnError::new(
                     "geometric mean of a negative product is undefined",
@@ -334,7 +334,7 @@ mod tests {
         }
     }
 
-    fn scalars(values: &[f64]) -> Vec<HostFnValue> {
+    fn quantities(values: &[f64]) -> Vec<HostFnValue> {
         values.iter().map(|v| HostFnValue::Scalar(*v)).collect()
     }
 
@@ -350,7 +350,7 @@ mod tests {
     fn demo_lerp_interpolates() {
         let registry = demo_registry();
         let lerp = registry.get(&key("lerp")).unwrap();
-        let result = lerp(&scalars(&[0.0, 10.0, 0.25])).unwrap();
+        let result = lerp(&quantities(&[0.0, 10.0, 0.25])).unwrap();
         assert_eq!(result, HostFnValue::Scalar(2.5));
     }
 
@@ -359,7 +359,7 @@ mod tests {
         let registry = demo_registry();
         let inverse = registry.get(&key("inverse")).unwrap();
         assert_eq!(
-            inverse(&scalars(&[0.0])).unwrap_err().message,
+            inverse(&quantities(&[0.0])).unwrap_err().message,
             "division by zero".to_string()
         );
     }
@@ -382,6 +382,6 @@ mod tests {
             HostFnValue::Scalar(0.5),
         ])
         .unwrap_err();
-        assert!(err.message.contains("expected a scalar"), "{err}");
+        assert!(err.message.contains("expected a quantity"), "{err}");
     }
 }

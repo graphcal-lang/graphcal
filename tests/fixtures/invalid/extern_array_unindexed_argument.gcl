@@ -1,4 +1,4 @@
-// An array parameter requires an indexed argument, never a bare scalar.
+// An array parameter requires an indexed argument, never an unindexed quantity.
 import plugin "graphcal:demo" as demo {
     fn normalize<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
 }

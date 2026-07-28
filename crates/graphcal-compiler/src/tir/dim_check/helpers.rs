@@ -25,7 +25,7 @@ pub(super) fn is_bool_type(ty: &InferredType) -> bool {
 /// equality is by name and type-argument list only.
 pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> bool {
     match (declared, inferred) {
-        (DeclaredType::Scalar(d), inferred) => inferred.scalar_dimension() == Some(d),
+        (DeclaredType::Quantity(d), inferred) => inferred.quantity_dimension() == Some(d),
         (DeclaredType::Bool, InferredType::Bool) => true,
         (DeclaredType::Int, inferred) if inferred.is_int_like() => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
@@ -60,15 +60,15 @@ pub(super) fn resolved_type_matches_inferred(
 ) -> bool {
     match (resolved, inferred) {
         (ResolvedTypeExpr::Dimensionless, inferred) => inferred
-            .scalar_dimension()
+            .quantity_dimension()
             .is_some_and(Dimension::is_dimensionless),
         (ResolvedTypeExpr::Bool, InferredType::Bool) => true,
         (ResolvedTypeExpr::Int, inferred) => inferred.is_int_like(),
         (ResolvedTypeExpr::Datetime(expected), InferredType::Datetime(actual)) => {
             expected == actual
         }
-        (ResolvedTypeExpr::Scalar(expected), inferred) => {
-            inferred.scalar_dimension() == Some(expected)
+        (ResolvedTypeExpr::Quantity(expected), inferred) => {
+            inferred.quantity_dimension() == Some(expected)
         }
         (ResolvedTypeExpr::IndexArg(expected), InferredType::NamedIndex(actual)) => {
             resolved_index_matches_inferred(expected, actual)
@@ -166,8 +166,8 @@ pub fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
 impl From<&InferredType> for DeclaredType {
     fn from(it: &InferredType) -> Self {
         match it {
-            InferredType::Scalar(d) | InferredType::RangeIndexLabel { dimension: d, .. } => {
-                Self::Scalar(d.clone())
+            InferredType::Quantity(d) | InferredType::RangeIndexLabel { dimension: d, .. } => {
+                Self::Quantity(d.clone())
             }
             InferredType::Bool => Self::Bool,
             InferredType::Int | InferredType::Fin(_) => Self::Int,
@@ -187,7 +187,7 @@ impl From<&InferredType> for DeclaredType {
 impl From<&DeclaredType> for InferredType {
     fn from(dt: &DeclaredType) -> Self {
         match dt {
-            DeclaredType::Scalar(d) => Self::Scalar(d.clone()),
+            DeclaredType::Quantity(d) => Self::Quantity(d.clone()),
             DeclaredType::Bool => Self::Bool,
             DeclaredType::Int => Self::Int,
             DeclaredType::Datetime(scale) => Self::Datetime(*scale),
@@ -206,14 +206,14 @@ impl From<&DeclaredType> for InferredType {
     }
 }
 
-pub fn expect_scalar(
+pub fn expect_quantity(
     inferred: &InferredType,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: crate::syntax::span::Span,
 ) -> Result<Dimension, GraphcalError> {
     let found_kind = match inferred {
-        InferredType::Scalar(d) | InferredType::RangeIndexLabel { dimension: d, .. } => {
+        InferredType::Quantity(d) | InferredType::RangeIndexLabel { dimension: d, .. } => {
             return Ok(d.clone());
         }
         InferredType::Bool => "a Bool value",
@@ -224,9 +224,9 @@ pub fn expect_scalar(
         InferredType::Indexed { .. } => "an indexed value",
     };
     Err(GraphcalError::DimensionMismatch {
-        expected: "scalar dimension".to_string(),
+        expected: "quantity type".to_string(),
         found: format_inferred_type(inferred, registry),
-        help: format!("expected a scalar value, not {found_kind}"),
+        help: format!("expected a quantity value, not {found_kind}"),
         src: src.clone(),
         span: span.into(),
     })
