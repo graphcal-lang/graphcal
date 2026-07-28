@@ -30,7 +30,7 @@ impl Parser<'_> {
         // Parse the base type first. Identifier-shaped type references are
         // parsed as paths before any semantic categorization; bare built-ins
         // are recognized only when the path has exactly one segment.
-        let mut base = if self.lexer.peek() == Some(&Token::Ident) {
+        let mut base = if self.lexer.peek().is_some_and(|token| token.is_identifier()) {
             let path = self.parse_ident_path()?;
             let path_span = path.span();
             let bare_name = path.as_bare().map(|ident| ident.name.as_str().to_string());
@@ -447,15 +447,13 @@ impl Parser<'_> {
             // operator for the expression parser to handle as arithmetic
             // (e.g., `459.3 W / (1.0 m^2)`).
             let can_continue_unit = match self.lexer.peek_second() {
-                Some(&Token::Ident) => true,
+                Some(token) if token.is_identifier() => true,
                 // `/(m * s)` continues the unit expression, but `/(1.0 m^2)`
                 // is arithmetic division by a parenthesized numeric value.
-                Some(&Token::LParen) => {
-                    matches!(
-                        self.lexer.peek_third(),
-                        Some(&Token::Ident | &Token::LParen)
-                    )
-                }
+                Some(&Token::LParen) => self
+                    .lexer
+                    .peek_third()
+                    .is_some_and(|token| token.is_identifier() || *token == Token::LParen),
                 _ => false,
             };
             if !can_continue_unit {
@@ -526,14 +524,20 @@ impl Parser<'_> {
             let start_span = ident.span;
             let mut end_span = ident.span;
             let name = if self.lexer.peek() == Some(&Token::Dot)
-                && matches!(self.lexer.peek_second(), Some(&Token::Ident))
+                && self
+                    .lexer
+                    .peek_second()
+                    .is_some_and(|token| token.is_identifier())
             {
                 self.expect(Token::Dot)?;
                 let leaf = self.parse_any_ident()?;
                 // Unit references are at most `alias.unit`: module aliases are
                 // single segments, so a deeper path can never resolve.
                 if self.lexer.peek() == Some(&Token::Dot)
-                    && matches!(self.lexer.peek_second(), Some(&Token::Ident))
+                    && self
+                        .lexer
+                        .peek_second()
+                        .is_some_and(|token| token.is_identifier())
                 {
                     return Err(ParseError::UnitReferenceTooDeep {
                         src: self.named_source(),
@@ -718,7 +722,7 @@ impl Parser<'_> {
                 })?;
                 Ok(IndexExprAtom::Nat(NatExpr::Literal(value, span)))
             }
-            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
+            Some(token) if token.is_identifier() => {
                 Ok(IndexExprAtom::Path(self.parse_ident_path()?))
             }
             _ => {

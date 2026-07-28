@@ -54,7 +54,10 @@ KEYWORD
 
 (* The following identifiers are contextual keywords -- they are parsed
    as keywords only in specific syntactic positions and are otherwise
-   valid identifiers: "scan", "unfold", "step", "linspace", "range",
+   valid identifiers. In particular, only bare "scan"/"unfold" immediately
+   followed by "(" select recurrence forms; qualified path segments do not.
+   "linspace" and "step" are special only in the range-index production.
+   The full contextual set is: "scan", "unfold", "step", "linspace", "range",
    "mark", "encode", "plots", "point", "line", "bar", "area", "rect",
    "tick", "min", "max", "Dim", "Index", "Nat", "Type",
    "Dimensionless", "Bool", "Int", "Datetime". *)

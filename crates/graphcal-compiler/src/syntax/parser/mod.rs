@@ -607,10 +607,7 @@ impl<'src> Parser<'src> {
     /// Parse any identifier regardless of casing.
     fn parse_any_ident(&mut self) -> Result<Ident, ParseError> {
         match self.lexer.next_token() {
-            Some((
-                Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step,
-                span,
-            )) => Ok(Ident {
+            Some((token, span)) if token.is_identifier() => Ok(Ident {
                 name: NameAtom::new_unchecked_for_parser(self.lexer.slice_at(span).to_string()),
                 span,
             }),
@@ -624,7 +621,10 @@ impl<'src> Parser<'src> {
         let first = self.parse_any_ident()?;
         let mut rest = Vec::new();
         while self.lexer.peek() == Some(&Token::Dot)
-            && self.lexer.peek_second() == Some(&Token::Ident)
+            && self
+                .lexer
+                .peek_second()
+                .is_some_and(|token| token.is_identifier())
         {
             self.lexer.next_token(); // consume `.`
             rest.push(self.parse_any_ident()?);

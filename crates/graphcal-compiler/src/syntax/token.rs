@@ -215,10 +215,14 @@ impl LexicalToken {
             Self::Plot => LexicalItem::Syntax(Token::Plot),
             Self::Figure => LexicalItem::Syntax(Token::Figure),
             Self::Layer => LexicalItem::Syntax(Token::Layer),
-            Self::Scan => LexicalItem::Syntax(Token::Scan),
-            Self::Unfold => LexicalItem::Syntax(Token::Unfold),
-            Self::Linspace => LexicalItem::Syntax(Token::Linspace),
-            Self::Step => LexicalItem::Syntax(Token::Step),
+            Self::Scan => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Scan)),
+            Self::Unfold => {
+                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Unfold))
+            }
+            Self::Linspace => {
+                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Linspace))
+            }
+            Self::Step => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Step)),
             Self::Pub => LexicalItem::Syntax(Token::Pub),
             Self::StringLiteral => LexicalItem::Syntax(Token::StringLiteral),
             Self::Plus => LexicalItem::Syntax(Token::Plus),
@@ -261,9 +265,34 @@ impl LexicalToken {
     }
 }
 
+/// An identifier spelling that has keyword meaning only in a precise parser context.
+///
+/// These spellings remain ordinary identifiers everywhere else. Keeping their
+/// lexical classification typed lets parser code select a special production
+/// without recovering semantics from source strings or repeating unions of
+/// otherwise unrelated token variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextualKeyword {
+    Scan,
+    Unfold,
+    Linspace,
+    Step,
+}
+
+impl std::fmt::Display for ContextualKeyword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Scan => write!(f, "scan"),
+            Self::Unfold => write!(f, "unfold"),
+            Self::Linspace => write!(f, "linspace"),
+            Self::Step => write!(f, "step"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token {
-    // Keywords
+    // Hard keywords
     Param,
     Node,
     Const,
@@ -287,11 +316,10 @@ pub enum Token {
     Plot,
     Figure,
     Layer,
-    Scan,
-    Unfold,
-    Linspace,
-    Step,
     Pub,
+
+    /// Identifier spellings with a special meaning in selected productions.
+    ContextualKeyword(ContextualKeyword),
 
     // Literals
     StringLiteral,
@@ -345,6 +373,14 @@ pub enum Token {
     Number,
 }
 
+impl Token {
+    /// Whether this token is accepted anywhere the grammar expects an identifier.
+    #[must_use]
+    pub const fn is_identifier(self) -> bool {
+        matches!(self, Self::Ident | Self::ContextualKeyword(_))
+    }
+}
+
 impl std::fmt::Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -371,11 +407,8 @@ impl std::fmt::Display for Token {
             Self::Plot => write!(f, "plot"),
             Self::Figure => write!(f, "figure"),
             Self::Layer => write!(f, "layer"),
-            Self::Scan => write!(f, "scan"),
-            Self::Unfold => write!(f, "unfold"),
-            Self::Linspace => write!(f, "linspace"),
-            Self::Step => write!(f, "step"),
             Self::Pub => write!(f, "pub"),
+            Self::ContextualKeyword(keyword) => keyword.fmt(f),
             Self::StringLiteral => write!(f, "string"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
@@ -631,10 +664,9 @@ mod tests {
     }
 
     #[test]
-    fn lex_keywords_not_identifiers() {
-        // "param" should be Token::Param, not Ident
+    fn hard_keywords_are_not_identifiers() {
         let tokens = lex_tokens(
-            "param node const if else base dim unit type index for import include dag match as assert table plot figure scan unfold linspace step pub",
+            "param node const if else base dim unit type index for import include dag match as assert table plot figure pub",
         );
         assert_eq!(
             tokens,
@@ -659,18 +691,28 @@ mod tests {
                 Token::Table,
                 Token::Plot,
                 Token::Figure,
-                Token::Scan,
-                Token::Unfold,
-                Token::Linspace,
-                Token::Step,
                 Token::Pub,
             ]
         );
     }
 
     #[test]
+    fn contextual_keywords_are_identifiers() {
+        for (spelling, keyword) in [
+            ("scan", ContextualKeyword::Scan),
+            ("unfold", ContextualKeyword::Unfold),
+            ("linspace", ContextualKeyword::Linspace),
+            ("step", ContextualKeyword::Step),
+        ] {
+            let token = Token::ContextualKeyword(keyword);
+            assert_single_token(spelling, token);
+            assert!(token.is_identifier());
+        }
+    }
+
+    #[test]
     fn lex_identifier_starting_with_new_keywords() {
-        // "scanner" should be Ident, not Scan + "ner"
+        // Contextual spellings remain whole-word matches.
         for word in [
             "baseline",
             "scanner",
