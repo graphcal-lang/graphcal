@@ -107,7 +107,8 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
                     // extern calls (`fluids.density(`) keep their qualified
                     // name.
                     if i > 0
-                        && let (Token::Ident, name_span) = &tokens[i - 1]
+                        && let (name_token, name_span) = &tokens[i - 1]
+                        && name_token.is_identifier()
                     {
                         let mut segments = vec![
                             source[name_span.offset()..name_span.offset() + name_span.len()]
@@ -116,7 +117,8 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
                         let mut j = i - 1;
                         while j >= 2
                             && tokens[j - 1].0 == Token::Dot
-                            && let (Token::Ident, seg_span) = &tokens[j - 2]
+                            && let (seg_token, seg_span) = &tokens[j - 2]
+                            && seg_token.is_identifier()
                         {
                             segments.push(
                                 source[seg_span.offset()..seg_span.offset() + seg_span.len()]
@@ -176,7 +178,7 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
     let (ref tok, _span) = tokens[idx];
 
     // If cursor is inside or immediately after an identifier, look at what's before it.
-    if *tok == Token::Ident && idx > 0 {
+    if tok.is_identifier() && idx > 0 {
         let (ref prev_tok, _) = tokens[idx - 1];
         match prev_tok {
             Token::At => return CompletionContext::GraphRef,
@@ -242,6 +244,15 @@ mod tests {
     }
 
     #[test]
+    fn qualified_contextual_name_is_an_ordinary_fn_call() {
+        let source = "plugin.scan()";
+        let offset = source.len() - 1;
+        let ctx = find_fn_call_context(source, offset).unwrap();
+        assert_eq!(ctx.fn_name, "plugin.scan");
+        assert_eq!(ctx.active_param, 0);
+    }
+
+    #[test]
     fn fn_call_with_partial_arg() {
         // lerp(@a, @b, |)
         let source = "lerp(@a, @b, )";
@@ -284,6 +295,17 @@ mod tests {
             determine_completion_context(source, offset),
             CompletionContext::TopLevel
         ));
+    }
+
+    #[test]
+    fn context_after_contextual_identifier_after_at() {
+        for name in ["scan", "unfold", "linspace", "step"] {
+            let source = format!("@{name}");
+            assert!(matches!(
+                determine_completion_context(&source, source.len()),
+                CompletionContext::GraphRef
+            ));
+        }
     }
 
     #[test]

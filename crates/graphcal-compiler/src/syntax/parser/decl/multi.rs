@@ -537,7 +537,7 @@ impl Parser<'_> {
                 })?;
                 Ok(TableIndexSpec::NatRange(value, span))
             }
-            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
+            Some(token) if token.is_identifier() => {
                 let ident = self.parse_any_ident()?;
                 Ok(TableIndexSpec::Named(ident.into_spanned::<NamePath>()))
             }
@@ -577,7 +577,7 @@ impl Parser<'_> {
                 self.advance()?;
                 Ok(SlotAxis::Underscore)
             }
-            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
+            Some(token) if token.is_identifier() => {
                 let ident = self.parse_any_ident()?;
                 Ok(SlotAxis::Axis(ident.into_spanned::<IndexName>()))
             }
@@ -615,7 +615,7 @@ impl Parser<'_> {
                 let (_, span) = self.advance()?;
                 Ok(HeaderCell::Underscore(span))
             }
-            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
+            Some(token) if token.is_identifier() => {
                 let ident = self.parse_any_ident()?;
                 if self.lexer.peek() == Some(&Token::Dot) {
                     self.lexer.next_token();

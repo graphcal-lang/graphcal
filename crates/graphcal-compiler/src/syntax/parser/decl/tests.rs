@@ -42,14 +42,25 @@ fn parse_param_with_type() {
 }
 
 #[test]
-fn parse_contextual_keyword_as_param_name() {
-    let file = Parser::new("param step: Int = 1;\nnode x: Int = step;")
-        .parse_file()
-        .unwrap();
-    assert_eq!(file.declarations.len(), 2);
-    match &file.declarations[0].kind {
-        DeclKind::Param(p) => assert_eq!(p.name.value.as_str(), "step"),
-        _ => panic!("expected param"),
+fn contextual_keywords_are_identifiers_outside_special_contexts() {
+    let sources = [
+        "param scan: Dimensionless = 1.0; node unfold: Dimensionless = scan;",
+        "dim linspace = Dimensionless; unit step: Dimensionless = 1.0 linspace;",
+        "index scan = { unfold, linspace, step };",
+        "import scan.unfold.{linspace as step};",
+        "type scan<unfold: Type> { scan(step: unfold) }",
+        "param value: scan<unfold>[linspace];",
+        "node value: Dimensionless = 1.0 scan.step;",
+        "node value: Dimensionless = Constructor(scan: unfold).step;",
+        "node values: Dimensionless[step] = for scan: step { unfold };",
+        "node values: Dimensionless = scan(unfold, linspace, |step, scan| step);",
+        "param values: Dimensionless[step] = table[step] { linspace: 1.0; };",
+    ];
+
+    for source in sources {
+        Parser::new(source).parse_file().unwrap_or_else(|error| {
+            panic!("contextual identifier source failed: {source}\n{error:?}")
+        });
     }
 }
 
@@ -715,6 +726,12 @@ fn parse_index_named_trailing_comma() {
         }
         _ => panic!("expected index declaration"),
     }
+}
+
+#[test]
+fn linspace_index_requires_step_label() {
+    let source = "index TimeStep = linspace(0.0 s, 1.0 s, scan: 0.1 s);";
+    assert!(Parser::new(source).parse_file().is_err());
 }
 
 #[test]

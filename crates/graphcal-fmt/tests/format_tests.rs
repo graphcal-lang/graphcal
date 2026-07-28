@@ -119,6 +119,23 @@ fn preserves_blank_line_between_declarations() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn contextual_keyword_identifiers_round_trip() {
+    let source = "\
+import scan.unfold.{linspace as step};
+type scan<unfold: Type> { scan(step: unfold) }
+param step: scan<unfold>[linspace];
+node unfold: Dimensionless = plugin.scan(1.0);
+";
+    let formatted = format_source(source).expect("contextual identifiers should format");
+    graphcal_compiler::syntax::parser::Parser::new(&formatted)
+        .parse_file()
+        .expect("formatted contextual identifiers should parse");
+    for spelling in ["scan", "unfold", "linspace", "step"] {
+        assert!(formatted.contains(spelling));
+    }
+}
+
+#[test]
 fn formats_fn_call_argument_trailing_comment_before_comma() {
     let source = "node x: Dimensionless = least(\n    1.0, // first\n    2.0,\n);\n";
     let formatted = format_source(source).expect("format_source should succeed");

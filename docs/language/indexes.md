@@ -23,6 +23,9 @@ in index access, map/table keys, expected-fail keys, include index bindings, and
 !!! note "No empty indexes"
     A finite index must declare **at least one variant** — `index Empty = {};` is rejected by the parser. The same goes for `linspace` ranges (`start > end`, `step <= 0`, non-finite bounds, and zero-step cardinalities are invalid) and nat ranges (`range(0)` is invalid). This is a deliberate design choice (issue #580): with no empty case ever reachable, aggregation builtins never face the "what is `mean` of nothing?" question, indexed values always have at least one element, and there are no NaN traps to remember. Model the absence at the boundary (e.g., guard with a separate `Bool` flag or split the dag) rather than collapsing the index to zero variants.
 
+!!! note "Contextual syntax names"
+    `scan` and `unfold` select recurrence syntax only as bare call heads followed by `(`. `linspace` and `step` are special only in a range-index declaration. Outside those positions, all four spellings are ordinary identifiers: they may name declarations, imports, path segments, fields, units, types, indexes, or local bindings. In particular, `plugin.scan(...)` is an ordinary qualified function call.
+
 ## Indexed Values
 
 Annotate a type with `[IndexName]` to create an indexed value:

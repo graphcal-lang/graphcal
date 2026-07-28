@@ -11,16 +11,15 @@ use crate::symbol_table::{SymbolCategory, SymbolKey, SymbolPath};
 
 /// Check whether a name is a valid Graphcal identifier.
 ///
-/// Asks the lexer instead of a hand-kept rule so reserved keywords
-/// (`node`, `param`, `true`, …) are rejected — renaming to a keyword would
-/// produce unparsable code.
+/// Asks the lexer instead of a hand-kept rule so hard keywords (`node`,
+/// `param`, `true`, …) are rejected while contextual keyword tokens remain
+/// valid identifiers.
 fn is_valid_identifier(name: &str) -> bool {
     use graphcal_compiler::syntax::lexer::Lexer;
-    use graphcal_compiler::syntax::token::Token;
     let mut lexer = Lexer::new(name);
     let is_single_ident = matches!(
         lexer.next_token(),
-        Some((Token::Ident, span)) if span.len() == name.len()
+        Some((token, span)) if token.is_identifier() && span.len() == name.len()
     );
     is_single_ident && lexer.next_token().is_none()
 }
@@ -71,7 +70,7 @@ pub fn prepare_rename(analysis: &AnalysisResult, offset: usize) -> Option<Prepar
 /// non-compiling buffer, which is the worst available outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RenameRefusal {
-    /// The new name is not a lexable identifier (or is a reserved keyword).
+    /// The new name is not a lexable identifier (or is a hard keyword).
     InvalidIdentifier { new_name: String },
     /// The new name collides with a visible declaration in the same
     /// namespace, which would compile to a duplicate-name error (N001).
@@ -368,11 +367,26 @@ mod tests {
         let uri = Url::parse("file:///test.gcl").unwrap();
 
         let offset = source.find("x:").unwrap();
-        for keyword in ["node", "param", "index", "true", "unfold"] {
+        for keyword in ["node", "param", "index", "true"] {
             assert!(
                 rename(&analysis, &uri, offset, keyword).is_err(),
                 "renaming to keyword `{keyword}` must be rejected"
             );
+        }
+    }
+
+    #[test]
+    fn rename_to_contextual_keyword_is_allowed() {
+        let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let offset = source.find("x:").unwrap();
+
+        for name in ["scan", "unfold", "linspace", "step"] {
+            let edit = rename(&analysis, &uri, offset, name)
+                .unwrap_or_else(|error| panic!("rename to `{name}` failed: {error}"))
+                .expect("rename should produce a workspace edit");
+            assert_eq!(edit.changes.unwrap()[&uri].len(), 2);
         }
     }
 
@@ -510,6 +524,9 @@ node total: Velocity = @dv[Maneuver.Departure];
         assert!(is_valid_identifier("x"));
         assert!(is_valid_identifier("velocity"));
         assert!(is_valid_identifier("my_var_2"));
+        for contextual_keyword in ["scan", "unfold", "linspace", "step"] {
+            assert!(is_valid_identifier(contextual_keyword));
+        }
         assert!(!is_valid_identifier(""));
         assert!(!is_valid_identifier("123"));
         assert!(!is_valid_identifier("has space"));

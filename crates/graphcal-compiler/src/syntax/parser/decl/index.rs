@@ -1,6 +1,6 @@
 use crate::syntax::ast::{BindableVisibility, DeclKind, Declaration, IndexDecl, IndexDeclKind};
 use crate::syntax::index_name::{IndexName, IndexVariantName};
-use crate::syntax::token::Token;
+use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::super::{ParseError, Parser};
 
@@ -82,14 +82,14 @@ impl Parser<'_> {
                 })
             }
             // Range/linspace index: `index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);`
-            Some(&Token::Linspace) => {
-                self.expect(Token::Linspace)?;
+            Some(&Token::ContextualKeyword(ContextualKeyword::Linspace)) => {
+                self.expect(Token::ContextualKeyword(ContextualKeyword::Linspace))?;
                 self.expect(Token::LParen)?;
                 let start = self.parse_expr()?;
                 self.expect(Token::Comma)?;
                 let end = self.parse_expr()?;
                 self.expect(Token::Comma)?;
-                self.expect(Token::Step)?;
+                self.expect(Token::ContextualKeyword(ContextualKeyword::Step))?;
                 self.expect(Token::Colon)?;
                 let step = self.parse_expr()?;
                 let (_, end_span) = self.expect(Token::RParen)?;

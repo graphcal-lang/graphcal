@@ -266,7 +266,7 @@ impl Parser<'_> {
                 })?;
                 Ok(NatExpr::Literal(value, span))
             }
-            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
+            Some(token) if token.is_identifier() => {
                 let ident = self.parse_any_ident()?;
                 Ok(NatExpr::Var(ident))
             }

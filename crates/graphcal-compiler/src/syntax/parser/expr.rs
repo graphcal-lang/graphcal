@@ -4,7 +4,7 @@ use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::token::Token;
+use crate::syntax::token::{ContextualKeyword, Token};
 use crate::syntax::type_name::FieldName;
 
 use super::{ParseError, Parser};
@@ -360,17 +360,19 @@ impl Parser<'_> {
                 Ok(Expr::new(ExprKind::StringLiteral(text), span))
             }
             Some(Token::At) => self.parse_at_expr(),
-            Some(Token::Scan) if self.lexer.peek_second() == Some(&Token::LParen) => {
+            Some(Token::ContextualKeyword(ContextualKeyword::Scan))
+                if self.lexer.peek_second() == Some(&Token::LParen) =>
+            {
                 let (_, span) = self.advance()?;
                 self.parse_scan(span)
             }
-            Some(Token::Unfold) if self.lexer.peek_second() == Some(&Token::LParen) => {
+            Some(Token::ContextualKeyword(ContextualKeyword::Unfold))
+                if self.lexer.peek_second() == Some(&Token::LParen) =>
+            {
                 let (_, span) = self.advance()?;
                 self.parse_unfold(span)
             }
-            Some(Token::Ident | Token::Scan | Token::Unfold | Token::Linspace | Token::Step) => {
-                self.parse_identifier_expr()
-            }
+            Some(token) if token.is_identifier() => self.parse_identifier_expr(),
             Some(Token::For) => {
                 // For comprehension: for m: Maneuver { expr }
                 self.parse_for_comp()
@@ -440,7 +442,10 @@ impl Parser<'_> {
         // chain — the same shape `apply_postfix` would have produced.
         let mut segments = vec![first_seg];
         while self.lexer.peek() == Some(&Token::Dot)
-            && self.lexer.peek_second() == Some(&Token::Ident)
+            && self
+                .lexer
+                .peek_second()
+                .is_some_and(|token| token.is_identifier())
         {
             self.advance()?; // consume `.`
             let seg = self.parse_any_ident()?;
@@ -538,7 +543,7 @@ impl Parser<'_> {
         if is_integer {
             // Integer literal: no decimal point or scientific notation
             let next_ident_span = match self.lexer.peek_with_span() {
-                Some((Token::Ident, next_span)) => Some(next_span),
+                Some((token, next_span)) if token.is_identifier() => Some(next_span),
                 _ => None,
             };
             if next_ident_span
@@ -568,7 +573,7 @@ impl Parser<'_> {
             // without this guard, a missing comma between match arms could be
             // misread as `1.0 NextArm`.
             let next_ident_span = match self.lexer.peek_with_span() {
-                Some((Token::Ident, next_span)) => Some(next_span),
+                Some((token, next_span)) if token.is_identifier() => Some(next_span),
                 _ => None,
             };
             if next_ident_span
@@ -664,7 +669,9 @@ impl Parser<'_> {
     fn parse_brace_expr(&mut self) -> Result<Expr, ParseError> {
         // Consume '{' and peek at what follows
         let (_, start_span) = self.advance()?;
-        if let Some((Token::Ident, ident_span)) = self.lexer.peek_with_span() {
+        if let Some((token, ident_span)) = self.lexer.peek_with_span()
+            && token.is_identifier()
+        {
             // Could be map literal: { Index.Variant: expr, ... }
             let saved_text = self.lexer.slice_at(ident_span).to_string();
             if self.lexer.peek_second() == Some(&Token::Dot) {
@@ -752,9 +759,12 @@ impl Parser<'_> {
     ///    - If it's a single-segment unresolved path → convert to `IndexArg::Var`.
     ///    - Otherwise → `IndexArg::Expr`.
     fn parse_index_arg(&mut self) -> Result<IndexArg, ParseError> {
-        if self.lexer.peek() == Some(&Token::Ident)
+        if self.lexer.peek().is_some_and(|token| token.is_identifier())
             && self.lexer.peek_second() == Some(&Token::Dot)
-            && self.lexer.peek_third() == Some(&Token::Ident)
+            && self
+                .lexer
+                .peek_third()
+                .is_some_and(|token| token.is_identifier())
         {
             let (index, variant, _) = self.parse_index_variant_path()?;
             return Ok(IndexArg::Variant { index, variant });
@@ -1238,6 +1248,37 @@ mod tests {
             assert_eq!(args.len(), 1);
         } else {
             panic!("expected FnCall");
+        }
+    }
+
+    #[test]
+    fn qualified_contextual_keyword_call_is_ordinary_call() {
+        let expr = parse_node_expr("plugin.scan(1.0)");
+        match &expr.kind {
+            ExprKind::FnCall { callee, args, .. } => {
+                assert_eq!(callee.display_path(), "plugin.scan");
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected ordinary FnCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn contextual_keyword_paths_and_generic_calls_are_ordinary_expressions() {
+        let path_call = parse_node_expr("scan.unfold.linspace.step()");
+        assert!(
+            matches!(&path_call.kind, ExprKind::FnCall { callee, .. } if callee.display_path() == "scan.unfold.linspace.step")
+        );
+
+        let generic_call = parse_node_expr("scan<Length>()");
+        assert!(matches!(generic_call.kind, ExprKind::FnCall { .. }));
+
+        for name in ["linspace", "step"] {
+            let ordinary_call = parse_node_expr(&format!("{name}()"));
+            assert!(
+                matches!(ordinary_call.kind, ExprKind::FnCall { .. }),
+                "`{name}(` must be an ordinary call outside an index declaration"
+            );
         }
     }
 

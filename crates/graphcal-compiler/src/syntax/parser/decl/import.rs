@@ -4,7 +4,6 @@ use crate::syntax::ast::ImportKind;
 use crate::syntax::ast::ModulePath;
 use crate::syntax::ast::Visibility;
 use crate::syntax::module_name::ModuleAliasName;
-use crate::syntax::names::NameAtom;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
@@ -239,7 +238,10 @@ impl Parser<'_> {
         let mut rest = Vec::new();
 
         while self.lexer.peek() == Some(&Token::Dot)
-            && self.lexer.peek_second() == Some(&Token::Ident)
+            && self
+                .lexer
+                .peek_second()
+                .is_some_and(|token| token.is_identifier())
         {
             self.advance()?; // consume `.`
             let seg = self.parse_any_ident()?;
@@ -347,43 +349,12 @@ impl Parser<'_> {
             };
 
             // Accept any identifier (imports can be any casing).
-            let (name_str, name_span) = match p.lexer.next_token() {
-                Some((Token::Ident, span)) => (
-                    NameAtom::new_unchecked_for_parser(p.lexer.slice_at(span).to_string()),
-                    span,
-                ),
-                Some((tok, span)) => {
-                    return Err(p.unexpected_token("an identifier", &tok.to_string(), span));
-                }
-                None => {
-                    return Err(p.unexpected_eof("an identifier or `}`"));
-                }
-            };
+            let name = p.parse_any_ident()?;
 
             // Optional `as` alias.
             let alias = if p.lexer.peek() == Some(&Token::As) {
                 p.lexer.next_token(); // consume `as`
-                match p.lexer.next_token() {
-                    Some((Token::Ident, alias_span)) => {
-                        let alias_str = NameAtom::new_unchecked_for_parser(
-                            p.lexer.slice_at(alias_span).to_string(),
-                        );
-                        Some(crate::syntax::ast::Ident {
-                            name: alias_str,
-                            span: alias_span,
-                        })
-                    }
-                    Some((tok, span)) => {
-                        return Err(p.unexpected_token(
-                            "an identifier after `as`",
-                            &tok.to_string(),
-                            span,
-                        ));
-                    }
-                    None => {
-                        return Err(p.unexpected_eof("an identifier after `as`"));
-                    }
-                }
+                Some(p.parse_any_ident()?)
             } else {
                 None
             };
@@ -392,10 +363,7 @@ impl Parser<'_> {
                 attributes: item_attributes,
                 is_pub,
                 namespace,
-                name: crate::syntax::ast::Ident {
-                    name: name_str,
-                    span: name_span,
-                },
+                name,
                 alias,
             })
         })?;
