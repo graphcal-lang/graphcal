@@ -237,14 +237,14 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
     );
     // Multi-argument same-dimension functions
     m.insert(
-        "min",
+        "least",
         BuiltinFunction {
             eval: |a| a[0].min(a[1]),
             signature: FunctionSignature::same_dim(&["a", "b"]),
         },
     );
     m.insert(
-        "max",
+        "greatest",
         BuiltinFunction {
             eval: |a| a[0].max(a[1]),
             signature: FunctionSignature::same_dim(&["a", "b"]),
@@ -328,10 +328,10 @@ mod tests {
     }
 
     #[test]
-    fn builtin_min_max() {
+    fn builtin_least_greatest() {
         let fns = builtin_functions();
-        assert!(((fns["min"].eval)(&[3.0, 5.0]) - 3.0).abs() < f64::EPSILON);
-        assert!(((fns["max"].eval)(&[3.0, 5.0]) - 5.0).abs() < f64::EPSILON);
+        assert!(((fns["least"].eval)(&[3.0, 5.0]) - 3.0).abs() < f64::EPSILON);
+        assert!(((fns["greatest"].eval)(&[3.0, 5.0]) - 5.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -356,7 +356,7 @@ mod tests {
                     "unexpected 1-arity fn: {name}"
                 ),
                 2 => assert!(
-                    ["atan2", "min", "max", "hypot", "log"].contains(name),
+                    ["atan2", "least", "greatest", "hypot", "log"].contains(name),
                     "unexpected 2-arity fn: {name}"
                 ),
                 3 => assert!(["clamp"].contains(name), "unexpected 3-arity fn: {name}"),

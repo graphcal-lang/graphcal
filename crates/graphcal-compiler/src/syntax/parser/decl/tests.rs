@@ -328,7 +328,7 @@ const node r_earth: Length = 6371.0 km;
 
 node circumference: Length = 2.0 * PI * (@r_earth + @alt);
 node speed: Velocity = @circumference / @period;
-node speed_kmh: Velocity = @speed -> km/hour;
+node speed_kmh: Velocity = @speed -> km/h;
 ";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 7);

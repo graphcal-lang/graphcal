@@ -171,7 +171,7 @@ node x: Dimensionless[T] = for t: T { 1.0 };
 fn range_zero_is_rejected() {
     let source = r"
 node s: Dimensionless = sum(for i: range(0) { 1.0 });
-node m: Dimensionless = min(for i: range(0) { 1.0 });
+node m: Dimensionless = minimum(for i: range(0) { 1.0 });
 ";
     let result = compile_and_eval(source);
     assert!(

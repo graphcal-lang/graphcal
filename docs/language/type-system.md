@@ -517,7 +517,7 @@ node row1: Dimensionless[Col] = for c: Col { @matrix[Row.R1, c] }
 
 ```
 sum(for m: Maneuver { @fuel[m] })    // Mass[Maneuver] -> Mass
-max(for m: Maneuver { @delta_v[m] }) // Velocity[Maneuver] -> Velocity
+maximum(for m: Maneuver { @delta_v[m] }) // Velocity[Maneuver] -> Velocity
 ```
 
 **Scan** -- ordered accumulation:
@@ -612,7 +612,7 @@ Built-in math functions have specific dimension constraints:
 | `atan2(y, x)` | Both same `D` | `Angle` |
 | `exp(x)`, `ln(x)`, `log10(x)` | `Dimensionless` | `Dimensionless` |
 | `abs(x)` | Any `D` | `D` |
-| `min(a, b)`, `max(a, b)` | Both same `D` | `D` |
+| `least(a, b)`, `greatest(a, b)` | Both same `D` | `D` |
 | `floor(x)`, `ceil(x)`, `round(x)`, `trunc(x)` | Any `D` | `D` |
 
 ## Unit Conversion
@@ -620,7 +620,7 @@ Built-in math functions have specific dimension constraints:
 The `->` operator converts between units of the same dimension. It binds at the lowest precedence.
 
 ```
-node speed_kmh: Velocity = @speed -> km/hour;
+node speed_kmh: Velocity = @speed -> km/h;
 ```
 
 There is no type-cast operator. To change a value's phantom type parameter (e.g., re-label a reference frame), construct a new instance and assign each field explicitly:

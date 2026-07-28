@@ -58,7 +58,7 @@ fn negate_exponent(exp: Rational) -> Rational {
 }
 
 /// Format a `UnitExpr` as a human-readable label.
-/// E.g., `m`, `km/hour`, `kg * m / s^2`
+/// E.g., `m`, `km/h`, `kg * m / s^2`
 ///
 /// If `parenthesize_multi_denom` is true, multi-term denominators are wrapped in parentheses:
 /// `m / (s * kg)` instead of `m / s * kg`.
@@ -101,7 +101,7 @@ pub fn format_unit_expr_with_config(
 }
 
 /// Format a `UnitExpr` as a human-readable label.
-/// E.g., `m`, `km/hour`, `kg * m / s^2`
+/// E.g., `m`, `km/h`, `kg * m / s^2`
 #[must_use]
 pub fn format_unit_expr(expr: &crate::syntax::ast::UnitExpr) -> String {
     format_unit_expr_with_config(expr, false)

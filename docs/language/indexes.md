@@ -87,15 +87,15 @@ Reduce an indexed quantity to a single quantity:
 
 | Function | Description | Result Type |
 |----------|-------------|-------------|
-| `sum(...)` | Sum of all elements | Same dimension as elements |
-| `max(...)` | Maximum element | Same dimension as elements |
-| `min(...)` | Minimum element | Same dimension as elements |
-| `mean(...)` | Arithmetic mean | Same dimension as elements |
-| `count(...)` | Number of elements | `Dimensionless` |
+| `sum(values)` | Sum of all elements | Same dimension as elements |
+| `maximum(values)` | Maximum element | Same dimension as elements |
+| `minimum(values)` | Minimum element | Same dimension as elements |
+| `mean(values)` | Arithmetic mean | Same dimension as elements |
+| `count(values)` | Number of elements | `Dimensionless` |
 
 ```
 node total: Velocity = sum(for m: Maneuver { @delta_v[m] });
-node largest: Velocity = max(for m: Maneuver { @delta_v[m] });
+node largest: Velocity = maximum(for m: Maneuver { @delta_v[m] });
 node n: Dimensionless = count(for m: Maneuver { @delta_v[m] });
 ```
 
@@ -198,7 +198,7 @@ node total_v: Velocity[TimeStep] = for t: TimeStep {
 
 // Max over the time axis for each maneuver
 node max_v: Velocity[Maneuver] = for m: Maneuver {
-    max(for t: TimeStep { @v[m, t] })
+    maximum(for t: TimeStep { @v[m, t] })
 };
 ```
 
@@ -508,4 +508,4 @@ Use aggregation functions directly on indexed values:
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 ```
 
-Built-in aggregation functions (`sum`, `min`, `max`, `mean`, `count`) work with any index type.
+Built-in aggregation functions (`sum`, `minimum`, `maximum`, `mean`, `count`) work with any index type.

@@ -91,7 +91,7 @@ Convert a value to a different unit of the same dimension:
 
 ```
 node alt_m: Length = @altitude -> m;
-node time_h: Time = @duration -> hour;
+node time_h: Time = @duration -> h;
 ```
 
 The target follows unit scoping rules: bare names for local, selectively

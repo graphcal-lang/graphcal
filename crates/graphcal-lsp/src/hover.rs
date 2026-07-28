@@ -127,3 +127,34 @@ fn format_hover(def: &DefinitionInfo) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_extremum_builtins_hover() {
+        let source = "\
+index Case = { A, B };
+param values: Dimensionless[Case] = for c: Case { 1.0 };
+node lower: Dimensionless = least(1.0, 2.0);
+node upper: Dimensionless = greatest(1.0, 2.0);
+node low: Dimensionless = minimum(@values);
+node high: Dimensionless = maximum(@values);
+";
+        let uri = tower_lsp::lsp_types::Url::parse("untitled:hover.gcl").unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, source);
+
+        for builtin in ["least", "greatest", "minimum", "maximum"] {
+            let result = hover(&analysis, source.find(builtin).unwrap()).unwrap();
+            let HoverContents::Markup(markup) = result.contents else {
+                panic!("builtin hover should be Markdown");
+            };
+            assert!(
+                markup.value.contains(&format!("fn {builtin}")),
+                "hover should name canonical builtin `{builtin}`: {}",
+                markup.value
+            );
+        }
+    }
+}

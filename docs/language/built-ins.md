@@ -66,12 +66,15 @@ The set of bare-callable functions is closed: user code cannot add to it. Extern
 | `acosh(x)` | `Dimensionless -> Dimensionless` | Inverse hyperbolic cosine |
 | `atanh(x)` | `Dimensionless -> Dimensionless` | Inverse hyperbolic tangent |
 
-### Comparison Functions
+### Selection Functions
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `min(a, b)` | `(D, D) -> D` | Minimum of two values |
-| `max(a, b)` | `(D, D) -> D` | Maximum of two values |
+| `least(a, b)` | `(D, D) -> D` | Lesser of two values |
+| `greatest(a, b)` | `(D, D) -> D` | Greater of two values |
+
+These selectors always take exactly two values. To reduce an indexed value, use
+`minimum(values)` or `maximum(values)` instead.
 
 ### Type Conversion Functions
 
@@ -142,11 +145,11 @@ These functions operate on `for` comprehensions or indexed values:
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `sum(...)` | `D[I] -> D` | Sum of all elements |
-| `max(...)` | `D[I] -> D` | Maximum element |
-| `min(...)` | `D[I] -> D` | Minimum element |
-| `mean(...)` | `D[I] -> D` | Arithmetic mean |
-| `count(...)` | `D[I] -> Dimensionless` | Number of elements |
+| `sum(values)` | `D[I] -> D` | Sum of all elements |
+| `maximum(values)` | `D[I] -> D` | Maximum element |
+| `minimum(values)` | `D[I] -> D` | Minimum element |
+| `mean(values)` | `D[I] -> D` | Arithmetic mean |
+| `count(values)` | `D[I] -> Dimensionless` | Number of elements |
 
 ## Prelude Base Dimensions
 
@@ -193,7 +196,10 @@ These functions operate on `for` comprehensions or indexed values:
 |------|-----------|
 | `s` | Base unit (second) |
 | `min` | 60 s |
-| `hour` | 3600 s |
+| `h` | 3600 s |
+
+`h` is the only prelude spelling for the hour unit; `hour(value)` remains the
+datetime extractor.
 
 ### Mass
 

@@ -271,7 +271,7 @@ fn check_length_unit_literal() {
 
 #[test]
 fn check_velocity_from_division() {
-    let source = "param dist: Length = 100.0 km;\nparam time: Time = 2.0 hour;\nnode speed: Velocity = @dist / @time;";
+    let source = "param dist: Length = 100.0 km;\nparam time: Time = 2.0 h;\nnode speed: Velocity = @dist / @time;";
     let types = check(source).unwrap();
     let velocity = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
         / Dimension::base(BaseDimId::Prelude("Time".to_string())))
@@ -383,7 +383,7 @@ assert order = @flags;
 #[test]
 fn check_conversion_same_dimension() {
     let source =
-        "param speed: Velocity = 100.0 m / s;\nnode speed_kmh: Velocity = @speed -> km / hour;";
+        "param speed: Velocity = 100.0 m / s;\nnode speed_kmh: Velocity = @speed -> km / h;";
     let types = check(source).unwrap();
     let velocity = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
         / Dimension::base(BaseDimId::Prelude("Time".to_string())))
@@ -611,6 +611,25 @@ Maneuver.Insertion: 1.8 km / s,
 };
 node avg_dv: Velocity = mean(@dv);";
     check(source).unwrap();
+}
+
+#[test]
+fn check_minimum_maximum_aggregations() {
+    let source = "\
+pub index Case = { Low, High };
+param values: Length[Case] = {
+Case.Low: 1.0 m,
+Case.High: 2.0 m,
+};
+node low: Length = minimum(@values);
+node high: Length = maximum(@values);";
+    check(source).unwrap();
+}
+
+#[test]
+fn reduction_functions_have_fixed_arity() {
+    let err = check("node x: Dimensionless = minimum(1.0, 2.0);").unwrap_err();
+    assert!(matches!(err, GraphcalError::WrongArity { .. }));
 }
 
 #[test]

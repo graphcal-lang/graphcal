@@ -20,5 +20,5 @@ const node mass_per_unit:     Mass[Component]
 // pure sugar, so cross-slot refs are ordinary `@name[Variant]` deps.
 node avg_power: Power[Component] = for c: Component { @power_consumption[c] * @duty_cycle[c] };
 
-node peak_power: Power = max(for c: Component { @avg_power[c] });
+node peak_power: Power = maximum(for c: Component { @avg_power[c] });
 node total_mass: Mass = sum(for c: Component { @mass_per_unit[c] });

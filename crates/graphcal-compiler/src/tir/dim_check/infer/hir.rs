@@ -603,7 +603,16 @@ fn infer_hir_fn_call(
         }
     };
     match type_rule_for_builtin(name) {
-        BuiltinTypeRule::CollectionAggregation(kind) if args.len() == 1 => {
+        BuiltinTypeRule::CollectionAggregation(kind) => {
+            if args.len() != 1 {
+                return Err(GraphcalError::WrongArity {
+                    name: crate::syntax::function_name::FnName::expect_valid(name.as_str()),
+                    expected: 1,
+                    got: args.len(),
+                    src: src.clone(),
+                    span: callee.span.into(),
+                });
+            }
             let arg_type = infer_arg(
                 &args[0],
                 declared_types,
@@ -614,41 +623,36 @@ fn infer_hir_fn_call(
                 builtin_fns,
                 src,
             )?;
-            if let InferredType::Indexed { element, .. } = arg_type {
-                return match kind {
-                    AggregationFn::Count => Ok(InferredType::Quantity(Dimension::dimensionless())),
-                    AggregationFn::Sum
-                    | AggregationFn::Min
-                    | AggregationFn::Max
-                    | AggregationFn::Mean => element.quantity_dimension().cloned().map_or_else(
-                        || {
-                            Err(GraphcalError::DimensionMismatch {
-                                expected: "indexed quantity collection".to_string(),
-                                found: format_inferred_type(&element, registry),
-                                help: format!(
-                                    "{}() requires every indexed element to be quantity",
-                                    name.as_str()
-                                ),
-                                src: src.clone(),
-                                span: args[0].span.into(),
-                            })
-                        },
-                        |dimension| Ok(InferredType::Quantity(dimension)),
-                    ),
-                };
+            let InferredType::Indexed { element, .. } = arg_type else {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "indexed collection".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: format!("{}() requires an indexed value", name.as_str()),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
+            };
+            match kind {
+                AggregationFn::Count => Ok(InferredType::Quantity(Dimension::dimensionless())),
+                AggregationFn::Sum
+                | AggregationFn::Minimum
+                | AggregationFn::Maximum
+                | AggregationFn::Mean => element.quantity_dimension().cloned().map_or_else(
+                    || {
+                        Err(GraphcalError::DimensionMismatch {
+                            expected: "indexed quantity collection".to_string(),
+                            found: format_inferred_type(&element, registry),
+                            help: format!(
+                                "{}() requires every indexed element to be quantity",
+                                name.as_str()
+                            ),
+                            src: src.clone(),
+                            span: args[0].span.into(),
+                        })
+                    },
+                    |dimension| Ok(InferredType::Quantity(dimension)),
+                ),
             }
-            infer_hir_builtin_fn(
-                name,
-                callee.span,
-                args,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )
         }
         BuiltinTypeRule::TypeConversion(kind) => infer_hir_type_conversion(
             kind,
@@ -755,20 +759,18 @@ fn infer_hir_fn_call(
             src,
             InferredType::Quantity(Dimension::dimensionless()),
         ),
-        BuiltinTypeRule::RegistrySignature | BuiltinTypeRule::CollectionAggregation(_) => {
-            infer_hir_builtin_fn(
-                name,
-                callee.span,
-                args,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )
-        }
+        BuiltinTypeRule::RegistrySignature => infer_hir_builtin_fn(
+            name,
+            callee.span,
+            args,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        ),
     }
 }
 

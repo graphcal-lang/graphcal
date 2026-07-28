@@ -120,7 +120,7 @@ fn preserves_blank_line_between_declarations() {
 
 #[test]
 fn formats_fn_call_argument_trailing_comment_before_comma() {
-    let source = "node x: Dimensionless = min(\n    1.0, // first\n    2.0,\n);\n";
+    let source = "node x: Dimensionless = least(\n    1.0, // first\n    2.0,\n);\n";
     let formatted = format_source(source).expect("format_source should succeed");
     assert!(
         formatted.contains("1.0, // first"),

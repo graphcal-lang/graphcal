@@ -67,7 +67,7 @@ constructor, so the payload field set is unambiguous:
 
 ```
 node total: Velocity = @result.total_dv;
-node time_hours: Time = @result.tof -> hour;
+node time_hours: Time = @result.tof -> h;
 ```
 
 For types with multiple constructors, field access is rejected — destructure

@@ -64,7 +64,7 @@ const node speed_of_light: Velocity = 299792458.0 m/s;
 | Dimension | Units |
 |-----------|-------|
 | Length | `m`, `km`, `cm`, `mm` |
-| Time | `s`, `min`, `hour` |
+| Time | `s`, `min`, `h` |
 | Mass | `kg`, `g` |
 | Temperature | `K` |
 | ElectricCurrent | `A` |
@@ -83,10 +83,10 @@ Use `const unit` for custom units whose scale is known at compile time:
 
 ```
 const unit mile: Length = 1609.344 m;
-const unit mph: Velocity = 1.0 mile / hour;
+const unit mph: Velocity = 1.0 mile / h;
 ```
 
-`hour` is already a prelude unit, so the `mph` definition can reuse it directly.
+`h` is already a prelude unit, so the `mph` definition can reuse it directly.
 
 ## Unit Conversion
 

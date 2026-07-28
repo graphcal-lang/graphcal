@@ -35,7 +35,7 @@ pub type DimName = NameDef<DimNameNamespace>;
 /// Module-resolved dimension name.
 pub type ResolvedDimName = ResolvedName<DimNameNamespace>;
 
-/// Name of a unit (e.g., `"m"`, `"km"`, `"hour"`).
+/// Name of a unit (e.g., `"m"`, `"km"`, `"h"`).
 pub type UnitName = NameDef<UnitNameNamespace>;
 
 /// Module-resolved unit name.
@@ -44,7 +44,7 @@ pub(crate) type ResolvedUnitName = ResolvedName<UnitNameNamespace>;
 /// Name of a dimension variable in a built-in function signature (e.g., `"D"`).
 ///
 /// Built-in signatures use these variables to relate argument and result
-/// dimensions, such as `sqrt: D -> D^(1/2)` or `min: (D, D) -> D`.
+/// dimensions, such as `sqrt: D -> D^(1/2)` or `least: (D, D) -> D`.
 pub type DimVarName = NameDef<DimVarNameNamespace>;
 
 /// A unit reference, optionally qualified by a module alias.

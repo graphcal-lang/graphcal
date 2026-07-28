@@ -612,9 +612,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_unit_expr_km_per_hour() {
+    fn resolve_unit_expr_km_per_h() {
         let r = make_registry();
-        // km / hour
+        // km / h
         let expr = UnitExpr {
             terms: vec![
                 UnitExprItem {
@@ -624,7 +624,7 @@ mod tests {
                 },
                 UnitExprItem {
                     op: MulDivOp::Div,
-                    name: make_unit_name("hour"),
+                    name: make_unit_name("h"),
                     power: None,
                 },
             ],
@@ -633,7 +633,7 @@ mod tests {
         let (dim, scale) = r.units.resolve_unit_expr(&expr).unwrap();
         let expected_dim = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         assert_eq!(dim, expected_dim);
-        // km/hour = 1000 m / 3600 s ≈ 0.2778 m/s
+        // km/h = 1000 m / 3600 s ≈ 0.2778 m/s
         assert!((scale - 1000.0 / 3600.0).abs() < 1e-10);
     }
 

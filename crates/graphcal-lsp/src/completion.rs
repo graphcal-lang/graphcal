@@ -52,14 +52,14 @@ pub fn completion(
 }
 
 /// Build completion items for definitions whose category maps to a kind
-/// via `category_to_kind`. Definitions without a `name_span` are skipped
-/// (they are synthetic / not user-visible).
+/// via `category_to_kind`. Source-less built-ins remain user-visible; other
+/// synthetic definitions without a `name_span` are skipped.
 fn build_definition_items(
     analysis: &AnalysisResult,
     category_to_kind: impl Fn(SymbolCategory) -> Option<CompletionItemKind>,
 ) -> Vec<CompletionItem> {
     all_definitions(analysis)
-        .filter(|def| !def.name_span.is_empty())
+        .filter(|def| !def.name_span.is_empty() || def.is_builtin())
         .filter_map(|def| {
             let kind = category_to_kind(def.category)?;
             Some(CompletionItem {
@@ -254,16 +254,43 @@ mod tests {
         let offset = main_text.find("-> km").unwrap() + 3;
         let items = completion(&analysis, main_text, offset).unwrap_or_default();
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        for expected in ["m", "km", "s", "mile"] {
+        for expected in ["m", "km", "s", "min", "h", "mile"] {
             assert!(
                 labels.contains(&expected),
                 "conversion-target completion must offer `{expected}`: {labels:?}"
             );
         }
         assert!(
+            !labels.contains(&"hour"),
+            "conversion-target completion must not offer the removed `hour` unit: {labels:?}"
+        );
+        assert!(
             !labels.contains(&"sqrt"),
             "conversion-target completion must not offer functions: {labels:?}"
         );
+    }
+
+    #[test]
+    fn canonical_extremum_functions_complete() {
+        let source = "node result: Dimensionless = greatest(1.0, 2.0);";
+        let uri = tower_lsp::lsp_types::Url::parse("untitled:builtins.gcl").unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        let offset = source.find("greatest").unwrap();
+        let items = completion(&analysis, source, offset).unwrap_or_default();
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+
+        for expected in ["least", "greatest", "minimum", "maximum"] {
+            assert!(
+                labels.contains(&expected),
+                "expression completion must offer `{expected}`: {labels:?}"
+            );
+        }
+        for obsolete in ["min", "max"] {
+            assert!(
+                !labels.contains(&obsolete),
+                "expression completion must not offer obsolete `{obsolete}()`: {labels:?}"
+            );
+        }
     }
 
     #[test]

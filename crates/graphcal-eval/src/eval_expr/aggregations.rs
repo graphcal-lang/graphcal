@@ -1,4 +1,5 @@
 use super::builtin_call::AggregationFn;
+use graphcal_compiler::builtin::BuiltinFnName;
 use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueError};
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use indexmap::IndexMap;
@@ -12,7 +13,7 @@ pub(super) enum AggregationError {
     /// An indexed entry was not quantity-like.
     #[error(transparent)]
     ElementType(#[from] RuntimeValueError),
-    /// `min()` / `max()` have no identity element.
+    /// `minimum()` / `maximum()` have no identity element.
     #[error("{function}() over an empty Indexed value is undefined")]
     EmptyExtremum { function: &'static str },
     /// `mean()` has no identity element.
@@ -30,8 +31,8 @@ pub(super) fn aggregate_indexed_quantities(
 ) -> Result<RuntimeValue, AggregationError> {
     match kind {
         AggregationFn::Sum => aggregate_sum(entries).map(RuntimeValue::Quantity),
-        AggregationFn::Min => aggregate_min(entries).map(RuntimeValue::Quantity),
-        AggregationFn::Max => aggregate_max(entries).map(RuntimeValue::Quantity),
+        AggregationFn::Minimum => aggregate_minimum(entries).map(RuntimeValue::Quantity),
+        AggregationFn::Maximum => aggregate_maximum(entries).map(RuntimeValue::Quantity),
         AggregationFn::Mean => aggregate_mean(entries).map(RuntimeValue::Quantity),
         AggregationFn::Count => aggregate_count(entries).map(RuntimeValue::Quantity),
     }
@@ -54,34 +55,38 @@ fn aggregate_sum(
     numeric::computed_finite_quantity(total, "sum()").map_err(AggregationError::from)
 }
 
-fn aggregate_min(
+fn aggregate_minimum(
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
 ) -> Result<f64, AggregationError> {
     if entries.is_empty() {
-        return Err(AggregationError::EmptyExtremum { function: "min" });
+        return Err(AggregationError::EmptyExtremum {
+            function: BuiltinFnName::Minimum.as_str(),
+        });
     }
-    let min = entries.values().try_fold(
+    let minimum = entries.values().try_fold(
         f64::INFINITY,
         |acc, value| -> Result<f64, AggregationError> {
-            Ok(acc.min(quantity_entry(value, "min element")?))
+            Ok(acc.min(quantity_entry(value, "minimum element")?))
         },
     )?;
-    numeric::computed_finite_quantity(min, "min()").map_err(AggregationError::from)
+    numeric::computed_finite_quantity(minimum, "minimum()").map_err(AggregationError::from)
 }
 
-fn aggregate_max(
+fn aggregate_maximum(
     entries: &IndexMap<IndexVariantName, RuntimeValue>,
 ) -> Result<f64, AggregationError> {
     if entries.is_empty() {
-        return Err(AggregationError::EmptyExtremum { function: "max" });
+        return Err(AggregationError::EmptyExtremum {
+            function: BuiltinFnName::Maximum.as_str(),
+        });
     }
-    let max = entries.values().try_fold(
+    let maximum = entries.values().try_fold(
         f64::NEG_INFINITY,
         |acc, value| -> Result<f64, AggregationError> {
-            Ok(acc.max(quantity_entry(value, "max element")?))
+            Ok(acc.max(quantity_entry(value, "maximum element")?))
         },
     )?;
-    numeric::computed_finite_quantity(max, "max()").map_err(AggregationError::from)
+    numeric::computed_finite_quantity(maximum, "maximum()").map_err(AggregationError::from)
 }
 
 fn aggregate_mean(
@@ -120,15 +125,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_min_max_report_empty_collection() {
+    fn empty_minimum_maximum_report_empty_collection() {
         let entries = IndexMap::new();
         assert!(matches!(
-            aggregate_min(&entries),
-            Err(AggregationError::EmptyExtremum { function: "min" })
+            aggregate_minimum(&entries),
+            Err(AggregationError::EmptyExtremum {
+                function: "minimum"
+            })
         ));
         assert!(matches!(
-            aggregate_max(&entries),
-            Err(AggregationError::EmptyExtremum { function: "max" })
+            aggregate_maximum(&entries),
+            Err(AggregationError::EmptyExtremum {
+                function: "maximum"
+            })
         ));
     }
 }

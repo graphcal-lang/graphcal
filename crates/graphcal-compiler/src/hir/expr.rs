@@ -984,14 +984,14 @@ pub enum PatternBinding {
     },
 }
 
-/// Returns `true` when HIR cannot validate arity from the ordinary fixed-arity
-/// built-in registry because the type checker may accept a different call shape.
+/// Returns `true` when a custom type-inference rule, rather than the ordinary
+/// built-in signature registry, owns arity validation.
 const fn builtin_has_type_checker_arity(name: BuiltinFnName) -> bool {
     matches!(
         name,
         BuiltinFnName::Sum
-            | BuiltinFnName::Min
-            | BuiltinFnName::Max
+            | BuiltinFnName::Minimum
+            | BuiltinFnName::Maximum
             | BuiltinFnName::Mean
             | BuiltinFnName::Count
     )

@@ -40,4 +40,4 @@ node total_active_power: Power[Phase] = for p: Phase {
     )
 };
 
-node peak_active_power: Power = max(for p: Phase { @total_active_power[p] });
+node peak_active_power: Power = maximum(for p: Phase { @total_active_power[p] });
