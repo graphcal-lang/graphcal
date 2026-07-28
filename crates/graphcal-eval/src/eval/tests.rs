@@ -2212,9 +2212,9 @@ fn project_map_literal_missing_variants_uses_resolved_owner() {
 #[test]
 fn project_table_literal_uses_resolved_owner_with_same_leaf_indexes() {
     let (_dir, root) = write_same_leaf_index_project(
-        "import collide.a.{ Phase };\n\
+        "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series: Dimensionless[Phase] = table[Phase] {\n\
+         node series: Dimensionless[a.Phase] = table[a.Phase] {\n\
              Burn: 1.0;\n\
              Coast: 2.0;\n\
          };\n",

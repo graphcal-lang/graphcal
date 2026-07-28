@@ -377,10 +377,10 @@ impl<'a> HirRefCollector<'a> {
     fn variant_reference(&self, variant: &hir::expr::IndexVariantRef, table: &mut SymbolTable) {
         let target = self.variant_key(&variant.variant);
         Self::reference(table, variant.variant_span, target);
-        if let Some(index_span) = variant.index_span {
-            let index = variant.variant.index();
-            let key = self.name_key(index.owner(), index.as_str());
-            Self::reference(table, index_span, key);
+        let index = variant.variant.index();
+        let key = self.name_key(index.owner(), index.as_str());
+        for index_span in variant.index_spans() {
+            Self::reference(table, index_span, key.clone());
         }
     }
 

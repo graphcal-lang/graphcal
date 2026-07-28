@@ -52,7 +52,8 @@ use crate::syntax::ast::{
 };
 #[cfg(test)]
 use crate::syntax::ast::{DeclKind, Declaration};
-use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Raw};
 use crate::syntax::span::Spanned;
@@ -138,7 +139,7 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
         let mut slot_entries: Vec<MapEntry> = Vec::new();
         let mut slot_indexes: Vec<TableIndexSpec> = slice_axis_specs.to_vec();
         slot_indexes.push(row_index_spec.clone());
-        let mut extra_axis_name: Option<Spanned<IndexName>> = None;
+        let mut extra_axis_name: Option<Spanned<NamePath>> = None;
 
         for slice in &multi.slices {
             let col_span = &slice.column_layout[slot_idx];
@@ -147,6 +148,7 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
                     for row in &slice.rows {
                         let row_key = MapEntryKey {
                             index: row_index_name.clone(),
+                            additional_index_spans: Vec::new(),
                             variant: row.label.clone(),
                         };
                         slot_entries.push(MapEntry {
@@ -163,27 +165,32 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
                     if extra_axis_name.is_none() {
                         extra_axis_name = Some(extra_axis.clone());
                     }
-                    let extra_index_name = Spanned::new(
-                        MapEntryIndex::Named(extra_axis.value.clone().into()),
-                        extra_axis.span,
-                    );
-                    let col_variants: Vec<Spanned<IndexVariantName>> = slice.header_cells
-                        [*start..*end]
+                    let col_variants: Vec<(Spanned<NamePath>, Spanned<IndexVariantName>)> = slice
+                        .header_cells[*start..*end]
                         .iter()
                         .filter_map(|c| match c {
-                            MultiHeaderCell::Variant { variant, .. } => Some(variant.clone()),
+                            MultiHeaderCell::Variant { axis, variant, .. } => {
+                                Some((axis.clone(), variant.clone()))
+                            }
                             MultiHeaderCell::Underscore { .. } => None,
                         })
                         .collect();
                     for row in &slice.rows {
-                        for (local_col, col_variant) in col_variants.iter().enumerate() {
+                        for (local_col, (column_axis, col_variant)) in
+                            col_variants.iter().enumerate()
+                        {
                             let global_col = start + local_col;
                             let row_key = MapEntryKey {
                                 index: row_index_name.clone(),
+                                additional_index_spans: Vec::new(),
                                 variant: row.label.clone(),
                             };
                             let extra_key = MapEntryKey {
-                                index: extra_index_name.clone(),
+                                index: Spanned::new(
+                                    MapEntryIndex::Named(column_axis.value.clone()),
+                                    column_axis.span,
+                                ),
+                                additional_index_spans: vec![extra_axis.span],
                                 variant: col_variant.clone(),
                             };
                             slot_entries.push(MapEntry {
@@ -201,10 +208,7 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
         }
 
         if let Some(extra) = extra_axis_name {
-            slot_indexes.push(TableIndexSpec::Named(Spanned::new(
-                extra.value.into(),
-                extra.span,
-            )));
+            slot_indexes.push(TableIndexSpec::Named(extra));
         }
 
         let table_expr = Expr::new(

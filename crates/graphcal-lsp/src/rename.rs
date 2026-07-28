@@ -520,6 +520,56 @@ node total: Velocity = @dv[Maneuver.Departure];
     }
 
     #[test]
+    fn rename_index_updates_multi_decl_axis_and_qualified_headers() {
+        let source = "\
+index Component = { A };
+index Mode = { Safe, Nominal };
+param scalar: Dimensionless[Component],
+param enabled: Bool[Component, Mode]
+    = table[Component, (_, Mode)] {
+        : _, Mode.Safe, Mode.Nominal;
+        A: 1.0, true, false;
+    };
+";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let offset = source.find("Mode =").unwrap();
+        let result = rename(&analysis, &uri, offset, "State").unwrap().unwrap();
+        let file_edits = &result.changes.unwrap()[&uri];
+
+        assert_eq!(
+            file_edits.len(),
+            source.match_indices("Mode").count(),
+            "every type, slot-axis, and header-axis occurrence must be renamed: {file_edits:?}"
+        );
+        for edit in file_edits {
+            let line = source.lines().nth(edit.range.start.line as usize).unwrap();
+            assert_eq!(
+                &line[edit.range.start.character as usize..edit.range.end.character as usize],
+                "Mode"
+            );
+        }
+
+        let safe_offset = source.find("Safe,").unwrap();
+        let variant_result = rename(&analysis, &uri, safe_offset, "Active")
+            .unwrap()
+            .unwrap();
+        let variant_edits = &variant_result.changes.unwrap()[&uri];
+        assert_eq!(
+            variant_edits.len(),
+            source.match_indices("Safe").count(),
+            "the declaration and qualified header variant must both be renamed"
+        );
+        for edit in variant_edits {
+            let line = source.lines().nth(edit.range.start.line as usize).unwrap();
+            assert_eq!(
+                &line[edit.range.start.character as usize..edit.range.end.character as usize],
+                "Safe"
+            );
+        }
+    }
+
+    #[test]
     fn is_valid_identifier_cases() {
         assert!(is_valid_identifier("x"));
         assert!(is_valid_identifier("velocity"));

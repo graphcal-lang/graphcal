@@ -838,7 +838,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         .iter()
         .map(|a| match a {
             MultiSlotAxis::Underscore => "_".to_string(),
-            MultiSlotAxis::Axis(s) => s.value.as_str().to_string(),
+            MultiSlotAxis::Axis(s) => s.value.to_string(),
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -975,6 +975,8 @@ fn compute_multi_decl_layout(
 fn header_cell_text(cell: &MultiHeaderCell) -> String {
     match cell {
         MultiHeaderCell::Underscore { .. } => "_".to_string(),
-        MultiHeaderCell::Variant { variant, .. } => variant.value.as_str().to_string(),
+        MultiHeaderCell::Variant { axis, variant, .. } => {
+            format!("{}.{}", axis.value, variant.value)
+        }
     }
 }

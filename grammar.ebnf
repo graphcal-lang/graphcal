@@ -262,7 +262,6 @@ multi_header_row
 
 header_label
    = "_"
-   | IDENT
    | qualified_variant;
 
 multi_data_row
@@ -327,9 +326,11 @@ unit_scale
    The body is a constructor list. Each entry is disambiguated
    structurally — by the token after the constructor's identifier —
    never by identifier casing:
-     `ident ( ... )`    → constructor with payload (parens form)
-     `ident { ... }`    → constructor with struct-like payload (brace form)
+     `ident ( ... )`      → constructor with a payload
      `ident` then `,`|`}` → unit constructor
+
+   Constructor payloads are always parenthesized. Braces delimit the type
+   body and are not an alternate payload spelling.
 *)
 type_decl
    = "type", IDENT, [ generic_params ], type_decl_body;
@@ -345,8 +346,7 @@ constructor_decl
    = IDENT, [ constructor_payload ];
 
 constructor_payload
-   = "(", [ field_list ], ")"                         (* parens form *)
-   | "{", [ field_list ], "}";                        (* brace form *)
+   = "(", [ field_list ], ")";
 
 field_list
    = field_decl, { ",", field_decl }, [ "," ];
@@ -964,7 +964,7 @@ table_data_row_1d
    = [ IDENT, ":" ], expr, ";";
 
 qualified_variant
-   = ident_path;                         (* path must contain at least two segments *)
+   = IDENT, ".", IDENT, { ".", IDENT };
 
 (* --- Parenthesized expression --- *)
 paren_expr

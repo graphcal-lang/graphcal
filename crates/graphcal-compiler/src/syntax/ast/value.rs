@@ -820,10 +820,16 @@ impl TableIndexSpec {
     }
 }
 
-/// A single key in a map literal entry: `Index.Variant`
+/// A single key in a map literal entry: `Index.Variant`.
+///
+/// Table sugar can mention the same semantic index more than once for one
+/// desugared key: once in `table[...]` and again in a qualified slice or
+/// heterogeneous header label. `additional_index_spans` preserves those
+/// source references for editor features without duplicating the key value.
 #[derive(Debug, Clone)]
 pub struct MapEntryKey {
     pub index: Spanned<MapEntryIndex>,
+    pub additional_index_spans: Vec<Span>,
     pub variant: Spanned<IndexVariantName>,
 }
 

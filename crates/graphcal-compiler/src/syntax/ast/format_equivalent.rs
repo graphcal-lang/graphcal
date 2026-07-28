@@ -1359,9 +1359,14 @@ impl FormatEquivalent for MultiDeclSharedAxes {
 
 impl FormatEquivalent for MapEntryKey {
     fn format_equivalent(&self, other: &Self) -> bool {
-        let Self { index, variant } = self;
+        let Self {
+            index,
+            additional_index_spans: _,
+            variant,
+        } = self;
         let Self {
             index: other_index,
+            additional_index_spans: _,
             variant: other_variant,
         } = other;
         index.format_equivalent(other_index) && variant.format_equivalent(other_variant)

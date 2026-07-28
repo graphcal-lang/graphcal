@@ -28,7 +28,7 @@ impl Parser<'_> {
 
     /// Parse a table expression: `table[Index1, Index2] { ... }`
     ///
-    /// Each index is either a named identifier or an integer literal that
+    /// Each index is either a named identifier path or an integer literal that
     /// desugars to a `range(N)` index with synthetic variants `#0..#N-1`.
     pub(super) fn parse_table_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, start_span) = self.expect(Token::Table)?;
@@ -73,8 +73,8 @@ impl Parser<'_> {
         ))
     }
 
-    /// Parse a single index spec in `table[...]`: either an identifier or an
-    /// integer literal (for `range(N)` Nat indexes).
+    /// Parse a single index spec in `table[...]`: either an identifier path or
+    /// an integer literal (for `range(N)` Nat indexes).
     fn parse_table_index_spec(&mut self) -> Result<TableIndexSpec, ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {
@@ -87,10 +87,9 @@ impl Parser<'_> {
                 })?;
                 Ok(TableIndexSpec::NatRange(value, span))
             }
-            Some(token) if token.is_identifier() => {
-                let ident = self.parse_any_ident()?;
-                Ok(TableIndexSpec::Named(ident.into_spanned::<NamePath>()))
-            }
+            Some(token) if token.is_identifier() => Ok(TableIndexSpec::Named(
+                self.parse_ident_path()?.into_spanned_name_path(),
+            )),
             _ => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token("index name or integer literal", &tok.to_string(), span))
@@ -140,6 +139,7 @@ impl Parser<'_> {
             entries.push(MapEntry {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: Self::named_index_spanned(index),
+                    additional_index_spans: Vec::new(),
                     variant: label.into_spanned::<IndexVariantName>(),
                 }),
                 value,
@@ -159,6 +159,7 @@ impl Parser<'_> {
             entries.push(MapEntry {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: index.clone(),
+                    additional_index_spans: Vec::new(),
                     variant: Self::nat_range_variant_spanned(i, value.span),
                 }),
                 value,
@@ -284,10 +285,12 @@ impl Parser<'_> {
             for (col_idx, value) in row_values.into_iter().enumerate() {
                 let row_key = MapEntryKey {
                     index: row_index_template.clone(),
+                    additional_index_spans: Vec::new(),
                     variant: row_label.clone(),
                 };
                 let column_key = MapEntryKey {
                     index: col_index_template.clone(),
+                    additional_index_spans: Vec::new(),
                     variant: col_labels[col_idx].clone(),
                 };
                 entries.push(MapEntry {
@@ -335,21 +338,17 @@ impl Parser<'_> {
                 }
                 match slice_index {
                     TableIndexSpec::Named(axis) => {
-                        let index_ident = self.parse_any_ident()?;
-                        if index_ident.name != axis.value.leaf().as_str() {
+                        let (index, variant, _) = self.parse_index_variant_path()?;
+                        if index.value != axis.value {
                             return Err(self.unexpected_token(
                                 &format!("slice axis `{}`", axis.value.display_path()),
-                                index_ident.name.as_str(),
-                                index_ident.span,
+                                &index.value.display_path(),
+                                index.span,
                             ));
                         }
-                        self.expect(Token::Dot)?;
-                        let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
                         prefix_keys.push(MapEntryKey {
-                            index: Spanned::new(
-                                MapEntryIndex::Named(NamePath::local(index_ident.name.clone())),
-                                index_ident.span,
-                            ),
+                            index: Spanned::new(MapEntryIndex::Named(index.value), index.span),
+                            additional_index_spans: vec![axis.span],
                             variant,
                         });
                     }
@@ -374,6 +373,7 @@ impl Parser<'_> {
                         let variant_span = hash_span.merge(num_span);
                         prefix_keys.push(MapEntryKey {
                             index: Self::nat_range_index_spanned(*n, *sp),
+                            additional_index_spans: Vec::new(),
                             variant: Spanned::new(
                                 IndexVariantName::range_step(value),
                                 variant_span,
@@ -408,6 +408,7 @@ impl Parser<'_> {
         let mut entries = vec![MapEntry {
             keys: NonEmpty::singleton(MapEntryKey {
                 index: Self::named_index_spanned_owned(first_index),
+                additional_index_spans: Vec::new(),
                 variant: first_variant,
             }),
             value,
@@ -424,6 +425,7 @@ impl Parser<'_> {
             entries.push(MapEntry {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: Self::named_index_spanned_owned(index),
+                    additional_index_spans: Vec::new(),
                     variant,
                 }),
                 value,
@@ -450,6 +452,7 @@ impl Parser<'_> {
             let (index, variant, _) = self.parse_index_variant_path()?;
             let first_key = MapEntryKey {
                 index: Self::named_index_spanned_owned(index),
+                additional_index_spans: Vec::new(),
                 variant,
             };
             let mut rest_keys = Vec::new();
@@ -458,6 +461,7 @@ impl Parser<'_> {
                 let (index, variant, _) = self.parse_index_variant_path()?;
                 rest_keys.push(MapEntryKey {
                     index: Self::named_index_spanned_owned(index),
+                    additional_index_spans: Vec::new(),
                     variant,
                 });
             }
@@ -767,6 +771,61 @@ mod tests {
     }
 
     #[test]
+    fn parse_table_qualified_axis_path() {
+        let source = r"param v: Dimensionless[mission.Maneuver] = table[mission.Maneuver] {
+        Departure: 2.46;
+    };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
+                    let TableIndexSpec::Named(axis) = &indexes[0] else {
+                        panic!("expected named axis")
+                    };
+                    assert_eq!(axis.value.display_path(), "mission.Maneuver");
+                    assert_eq!(
+                        entries[0].keys[0].index.value.to_string(),
+                        "mission.Maneuver"
+                    );
+                }
+                other => panic!("expected TableLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_table_qualified_slice_path() {
+        let source = r"param m: Dimensionless[mission.Time, Phase, Maneuver] = table[mission.Time, Phase, Maneuver] {
+        [mission.Time.T1]
+        : Departure;
+        Launch: 1.0;
+    };";
+        let file = Parser::new(source).parse_file().unwrap();
+        match &file.declarations[0].kind {
+            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
+                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
+                    indexes,
+                    entries,
+                }) => {
+                    let TableIndexSpec::Named(axis) = &indexes[0] else {
+                        panic!("expected named axis")
+                    };
+                    assert_eq!(axis.value.display_path(), "mission.Time");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "mission.Time");
+                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "T1");
+                    assert_eq!(entries[0].keys[0].additional_index_spans, vec![axis.span]);
+                }
+                other => panic!("expected TableLiteral, got {other:?}"),
+            },
+            _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
     fn parse_table_contextual_keyword_index_name() {
         let source = r"param m: Dimensionless[step] = table[step] {
         A: 1.0;
@@ -789,6 +848,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_table_rejects_qualified_ordinary_labels() {
+        let qualified_column = r"param m: Dimensionless[Phase, Maneuver] = table[Phase, Maneuver] {
+        : Maneuver.Departure;
+        Launch: 1.0;
+    };";
+        assert!(Parser::new(qualified_column).parse_file().is_err());
+
+        let qualified_row = r"param m: Dimensionless[Phase] = table[Phase] {
+        Phase.Launch: 1.0;
+    };";
+        assert!(Parser::new(qualified_row).parse_file().is_err());
+    }
+
+    #[test]
     fn parse_table_3d_rejects_wrong_slice_axis_qualifier() {
         let source = r"param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
         [Phase.T1]
@@ -800,6 +873,21 @@ mod tests {
             err,
             ParseError::UnexpectedToken { expected, found, .. }
                 if expected == "slice axis `Time`" && found == "Phase"
+        ));
+    }
+
+    #[test]
+    fn parse_table_3d_rejects_wrong_qualified_slice_path_with_same_leaf() {
+        let source = r"param m: Mass[a.Time, Phase, Maneuver] = table[a.Time, Phase, Maneuver] {
+        [b.Time.T1]
+        : Departure;
+        Launch: 5000.0 kg;
+    };";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        assert!(matches!(
+            err,
+            ParseError::UnexpectedToken { expected, found, .. }
+                if expected == "slice axis `a.Time`" && found == "b.Time"
         ));
     }
 

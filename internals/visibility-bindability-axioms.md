@@ -236,7 +236,7 @@ For the four kinds that admit bindability (A5), the surface form for
 | `param` | `param x: T;`                 | `param x: T = expr;`                                            | none — implicit V=visible, B=bindable (see §4) |
 | `index` | `index I;` / `index I: Time;` | `index I = { … };` / `linspace(…)`                              | bare / `pub` / `pub(bind)`                     |
 | `dim`   | `dim D;`                      | `dim D = expr;` (and the non-bindable form `base dim D;`)       | bare / `pub` / `pub(bind)`                     |
-| `type`  | `type T;`                     | `type T {…}` (record), `type T = …` (union), `type T {}` (unit) | bare / `pub` / `pub(bind)`                     |
+| `type`  | `type T;`                     | `type T { C(...), U }` (constructors); unit marker: `type T { T }` | bare / `pub` / `pub(bind)`                     |
 
 Combined with A4, this means any required declaration must be bindable.
 For `param` this is automatic (all params are bindable); for the other

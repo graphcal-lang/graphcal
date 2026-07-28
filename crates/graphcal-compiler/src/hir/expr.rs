@@ -394,17 +394,15 @@ impl Expr {
     }
 }
 
-/// A resolved index-variant reference with the source spans of its two
-/// written segments kept separate.
+/// A resolved index-variant reference with its source spans kept separate.
 ///
-/// The index segment and the variant segment are not necessarily adjacent:
-/// table desugaring reuses the `table[Axis]` axis token's span as the index
-/// span of every row key, so a single merged span would cover unrelated
-/// source (and make different rows' spans contain each other). Keeping the
-/// segments separate lets diagnostics on contiguous `Index.Variant` paths
-/// use the whole written path ([`IndexVariantRef::path_span`]) while
-/// span-precise consumers (rename, find-references) address exactly the
-/// variant segment.
+/// The index path and variant segment are not necessarily adjacent: table
+/// desugaring can associate a bare row label with the axis in `table[...]`.
+/// Qualified slices and heterogeneous headers can also repeat that same index
+/// path, so additional index occurrences are retained for editor features.
+/// Diagnostics on a contiguous primary `Index.Variant` path can still use
+/// [`IndexVariantRef::path_span`], while span-precise consumers address each
+/// written occurrence independently.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexVariantRef {
     /// The resolved index variant.
@@ -414,14 +412,24 @@ pub struct IndexVariantRef {
     /// `None` when the variant is written without an index segment (a bare
     /// label in a match pattern whose index is inferred).
     pub index_span: Option<Span>,
+    /// Other written occurrences of the same index path introduced by table
+    /// syntax, such as the axis in `table[...]` beside a qualified slice.
+    pub additional_index_spans: Vec<Span>,
     /// Span of just the variant segment (the final path segment / row label).
     pub variant_span: Span,
 }
 
 impl IndexVariantRef {
-    /// Whole-reference span for diagnostics on contiguous `Index.Variant`
-    /// paths. For desugared table rows the index segment lives inside
-    /// `table[...]`, so prefer [`Self::variant_span`] there.
+    /// Iterate over every written occurrence of the resolved index path.
+    pub fn index_spans(&self) -> impl Iterator<Item = Span> + '_ {
+        self.index_span
+            .into_iter()
+            .chain(self.additional_index_spans.iter().copied())
+    }
+
+    /// Whole-reference span for diagnostics on a contiguous primary
+    /// `Index.Variant` path. For desugared table rows the primary index span
+    /// may live elsewhere, so prefer [`Self::variant_span`] there.
     #[must_use]
     pub fn path_span(&self) -> Span {
         self.index_span
@@ -1371,6 +1379,7 @@ impl<'a> ExprLowerer<'a> {
                 return Ok(ExprKind::VariantLiteral(IndexVariantRef {
                     variant: resolved,
                     index_span: Some(qualifier.span),
+                    additional_index_spans: Vec::new(),
                     variant_span: member.span,
                 }));
             }
@@ -1441,6 +1450,7 @@ impl<'a> ExprLowerer<'a> {
         Some(IndexVariantRef {
             variant: resolved,
             index_span: Some(index_span),
+            additional_index_spans: Vec::new(),
             variant_span: member.span,
         })
     }
@@ -1719,6 +1729,7 @@ impl<'a> ExprLowerer<'a> {
                 Ok(MapEntryKey::IndexVariant(IndexVariantRef {
                     variant,
                     index_span: Some(key.index.span),
+                    additional_index_spans: key.additional_index_spans.clone(),
                     variant_span: key.variant.span,
                 }))
             }
@@ -1766,6 +1777,7 @@ impl<'a> ExprLowerer<'a> {
                 Ok(IndexArg::Variant(IndexVariantRef {
                     variant: resolved,
                     index_span: Some(index.span),
+                    additional_index_spans: Vec::new(),
                     variant_span: variant.span,
                 }))
             }
@@ -1833,6 +1845,7 @@ impl<'a> ExprLowerer<'a> {
                     variant: IndexVariantRef {
                         variant: resolved,
                         index_span: Some(index.span),
+                        additional_index_spans: Vec::new(),
                         variant_span: variant.span,
                     },
                     span: *span,
@@ -1868,6 +1881,7 @@ impl<'a> ExprLowerer<'a> {
                 variant: IndexVariantRef {
                     variant,
                     index_span,
+                    additional_index_spans: Vec::new(),
                     variant_span: member.span,
                 },
                 span,

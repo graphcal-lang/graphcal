@@ -28,7 +28,7 @@ use crate::syntax::ast::{
     TableIndexSpec, TypeExpr, Visibility,
 };
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
@@ -388,22 +388,24 @@ impl Parser<'_> {
             }
             match axis_spec {
                 TableIndexSpec::Named(axis) => {
-                    let axis_ident = self.parse_any_ident()?;
-                    self.expect(Token::Dot)?;
-                    let variant_ident = self.parse_any_ident()?;
-                    if axis_ident.name != axis.value.leaf().as_str() {
+                    let (label_axis, variant, _) = self.parse_index_variant_path()?;
+                    if label_axis.value != axis.value {
                         return Err(ParseError::MultiDeclUnsupportedShape {
                             reason: format!(
                                 "slice label qualifies axis `{}`, but the shared axis at this position is `{}`",
-                                axis_ident.name, axis.value,
+                                label_axis.value, axis.value,
                             ),
                             src: self.named_source(),
-                            span: axis_ident.span.into(),
+                            span: label_axis.span.into(),
                         });
                     }
                     keys.push(MapEntryKey {
-                        index: Spanned::new(MapEntryIndex::Named(axis.value.clone()), axis.span),
-                        variant: variant_ident.into_spanned::<IndexVariantName>(),
+                        index: Spanned::new(
+                            MapEntryIndex::Named(label_axis.value),
+                            label_axis.span,
+                        ),
+                        additional_index_spans: vec![axis.span],
+                        variant,
                     });
                 }
                 TableIndexSpec::NatRange(n, sp) => {
@@ -427,6 +429,7 @@ impl Parser<'_> {
                     let variant_span = hash_span.merge(num_span);
                     keys.push(MapEntryKey {
                         index: Spanned::new(MapEntryIndex::NatRange(*n), *sp),
+                        additional_index_spans: Vec::new(),
                         variant: Spanned::new(IndexVariantName::range_step(value), variant_span),
                     });
                 }
@@ -522,9 +525,9 @@ impl Parser<'_> {
 
     /// Parse a table index spec inside a multi-decl's shared-axis prefix.
     ///
-    /// Same shape as the single-decl `parse_table_index_spec`, but split
-    /// out so the multi-decl parser can stop at the opening paren of the
-    /// slot tuple without also advancing past a comma.
+    /// Same shape as the single-decl `parse_table_index_spec`, but split out
+    /// so the multi-decl parser can stop at the opening paren of the slot tuple
+    /// without also advancing past a comma. Named axes retain their full path.
     fn parse_table_index_spec_for_multi(&mut self) -> Result<TableIndexSpec, ParseError> {
         match self.lexer.peek() {
             Some(Token::Number) => {
@@ -537,10 +540,9 @@ impl Parser<'_> {
                 })?;
                 Ok(TableIndexSpec::NatRange(value, span))
             }
-            Some(token) if token.is_identifier() => {
-                let ident = self.parse_any_ident()?;
-                Ok(TableIndexSpec::Named(ident.into_spanned::<NamePath>()))
-            }
+            Some(token) if token.is_identifier() => Ok(TableIndexSpec::Named(
+                self.parse_ident_path()?.into_spanned_name_path(),
+            )),
             _ => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token("index name or integer literal", &tok.to_string(), span))
@@ -550,7 +552,7 @@ impl Parser<'_> {
 
     /// Parse a slot tuple: `( slot_axes { , slot_axes } [,] )`.
     ///
-    /// Each entry is either `_` (no extra axis) or an identifier naming
+    /// Each entry is either `_` (no extra axis) or an identifier path naming
     /// the slot's extra axis. Nat-range extras are not supported in v1.
     fn parse_slot_tuple(&mut self) -> Result<(Vec<SlotAxis>, Span), ParseError> {
         let (_, lparen_span) = self.expect(Token::LParen)?;
@@ -577,14 +579,13 @@ impl Parser<'_> {
                 self.advance()?;
                 Ok(SlotAxis::Underscore)
             }
-            Some(token) if token.is_identifier() => {
-                let ident = self.parse_any_ident()?;
-                Ok(SlotAxis::Axis(ident.into_spanned::<IndexName>()))
-            }
+            Some(token) if token.is_identifier() => Ok(SlotAxis::Axis(
+                self.parse_ident_path()?.into_spanned_name_path(),
+            )),
             _ => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token(
-                    "`_` or an axis identifier in slot tuple",
+                    "`_` or an axis identifier path in slot tuple",
                     &tok.to_string(),
                     span,
                 ))
@@ -616,28 +617,17 @@ impl Parser<'_> {
                 Ok(HeaderCell::Underscore(span))
             }
             Some(token) if token.is_identifier() => {
-                let ident = self.parse_any_ident()?;
-                if self.lexer.peek() == Some(&Token::Dot) {
-                    self.lexer.next_token();
-                    let variant = self.parse_any_ident()?;
-                    let span = ident.span.merge(variant.span);
-                    return Ok(HeaderCell::Variant {
-                        axis: Some(Spanned::new(IndexName::from_atom(ident.name), ident.span)),
-                        variant: variant.into_spanned::<IndexVariantName>(),
-                        span,
-                    });
-                }
-                let span = ident.span;
+                let (axis, variant, span) = self.parse_index_variant_path()?;
                 Ok(HeaderCell::Variant {
-                    axis: None,
-                    variant: ident.into_spanned::<IndexVariantName>(),
+                    axis,
+                    variant,
                     span,
                 })
             }
             _ => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token(
-                    "`_` or a variant identifier in header row",
+                    "`_` or a qualified `Axis.Variant` label in header row",
                     &tok.to_string(),
                     span,
                 ))
@@ -925,9 +915,9 @@ param      n_installed:       Int[Component],
 const node mass_per_unit:     Mass[Component],
 param      power_mode:        Bool[Component, OperationMode]
   = table[Component, (_, _, _, OperationMode)] {
-      :            _,       _, _,      Safe,  Nominal;
-      ComponentA:  10.0 W,  1, 2.5 kg, true,  true;
-      ComponentB:  12.0 W,  2, 3.1 kg, false, true;
+      :            _,       _, _,      OperationMode.Safe,  OperationMode.Nominal;
+      ComponentA:  10.0 W,  1, 2.5 kg,                true,                   true;
+      ComponentB:  12.0 W,  2, 3.1 kg,               false,                   true;
   };
 ";
         let file = Parser::new(source).parse_file().unwrap();
@@ -967,8 +957,8 @@ param      power_mode:        Bool[Component, OperationMode]
 param a: Bool[Component, OperationMode],
 param b: Bool[Component, OperationMode]
   = table[Component, (OperationMode, OperationMode)] {
-      :           Safe, Nominal, OpMode.Safe, OpMode.Nominal;
-      ComponentA: true, false,   false,        true;
+      :           OperationMode.Safe, OperationMode.Nominal, OperationMode.Safe, OperationMode.Nominal;
+      ComponentA:               true,                 false,               false,                  true;
   };
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
@@ -1052,9 +1042,8 @@ param q: Int[Phase, Component]
     }
 
     #[test]
-    fn multi_decl_v2_qualified_header_cells_accepted() {
-        // Author may qualify header cells for readability. The parser accepts
-        // and uses the bare variant name.
+    fn multi_decl_v2_canonical_qualified_header_cells_accepted() {
+        // Heterogeneous header labels must retain the extra-axis owner.
         let source = r"
 index Component = { ComponentA };
 index OpMode = { Safe, Nominal };
@@ -1072,6 +1061,57 @@ param m: Bool[Component, OpMode]
         let multi = sole_multi_decl(&file);
         assert_eq!(multi.slots.len(), 2);
     }
+
+    #[test]
+    fn multi_decl_v2_bare_header_cells_rejected() {
+        let source = r"
+param p: Power[Component],
+param m: Bool[Component, OpMode]
+  = table[Component, (_, OpMode)] {
+      :           _,      Safe, Nominal;
+      ComponentA: 10.0 W, true, false;
+  };
+";
+        assert!(Parser::new(source).parse_file().is_err());
+    }
+
+    #[test]
+    fn multi_decl_preserves_qualified_axis_and_label_paths() {
+        let source = r"
+param p: Int[mission.Phase, mission.Component],
+param m: Bool[mission.Phase, mission.Component, mission.Mode]
+  = table[mission.Phase, mission.Component, (_, mission.Mode)] {
+      [mission.Phase.Launch]
+      :           _, mission.Mode.Safe;
+      ComponentA: 1, true;
+  };
+";
+        let file = Parser::new(source).parse_file().unwrap();
+        let multi = sole_multi_decl(&file);
+
+        let TableIndexSpec::Named(slice_axis) = &multi.shared_axes[0] else {
+            panic!("expected named slice axis")
+        };
+        assert_eq!(slice_axis.value.display_path(), "mission.Phase");
+        let TableIndexSpec::Named(row_axis) = &multi.shared_axes[1] else {
+            panic!("expected named row axis")
+        };
+        assert_eq!(row_axis.value.display_path(), "mission.Component");
+        let ast::MultiSlotAxis::Axis(slot_axis) = &multi.slot_axes[1] else {
+            panic!("expected named slot axis")
+        };
+        assert_eq!(slot_axis.value.display_path(), "mission.Mode");
+        let ast::MultiHeaderCell::Variant { axis, variant, .. } = &multi.slices[0].header_cells[1]
+        else {
+            panic!("expected qualified header variant")
+        };
+        assert_eq!(axis.value.display_path(), "mission.Mode");
+        assert_eq!(variant.value.as_str(), "Safe");
+        assert_eq!(
+            multi.slices[0].prefix_keys[0].index.value.to_string(),
+            "mission.Phase"
+        );
+    }
 }
 
 /// A parsed entry in a slot tuple: either `_` or a named extra axis.
@@ -1079,17 +1119,17 @@ param m: Bool[Component, OpMode]
 pub(super) enum SlotAxis {
     /// `_` — slot has no extra axis (1-D, shares only the row axis).
     Underscore,
-    /// Identifier — slot has a single extra axis (heterogeneous, 2-D).
-    Axis(Spanned<IndexName>),
+    /// Identifier path — slot has a single extra axis (heterogeneous, 2-D).
+    Axis(Spanned<NamePath>),
 }
 
-/// A parsed header-row cell: `_`, a bare variant, or a qualified variant.
+/// A parsed header-row cell: `_` or a qualified axis variant.
 #[derive(Debug, Clone)]
 pub(super) enum HeaderCell {
     Underscore(Span),
     Variant {
-        /// Axis qualifier, if the author wrote `Axis.Variant`.
-        axis: Option<Spanned<IndexName>>,
+        /// Required axis path from the canonical `Axis.Variant` spelling.
+        axis: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
         span: Span,
     },
@@ -1115,7 +1155,7 @@ pub(super) enum SlotColumnSpan {
     Range {
         start: usize,
         end: usize,
-        extra_axis: Spanned<IndexName>,
+        extra_axis: Spanned<NamePath>,
     },
 }
 
@@ -1242,14 +1282,12 @@ fn build_column_layout(
                     match &header_cells[cursor] {
                         HeaderCell::Underscore(_) => break,
                         HeaderCell::Variant { axis, span, .. } => {
-                            if let Some(axis) = axis
-                                && axis.value != extra_axis.value
-                            {
+                            if axis.value != extra_axis.value {
                                 return Err(LayoutError::AxisMismatch {
                                     span: *span,
                                     slot_name,
-                                    expected_axis: extra_axis.value.as_str().to_string(),
-                                    got_axis: axis.value.as_str().to_string(),
+                                    expected_axis: extra_axis.value.display_path(),
+                                    got_axis: axis.value.display_path(),
                                 });
                             }
                             cursor += 1;

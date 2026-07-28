@@ -12,8 +12,8 @@ multiple-constructor alternatives use the same declaration and type semantics.
 ## Constructors
 
 A type lists its **constructors** inside the braced body. Each constructor has
-an optional payload (declared with parens or braces) or is a bare unit
-constructor:
+an optional parenthesized payload or is a bare unit constructor. Braces delimit
+the type body, not an alternate payload form:
 
 ```
 type ManeuverKind {
@@ -22,6 +22,8 @@ type ManeuverKind {
     Coast,
 }
 ```
+
+The outer braces are the declaration's member body, so `type T { ... }` uses neither `=` nor a trailing semicolon. This differs intentionally from named RHS definitions such as `index I = { ... };`, which use `= rhs;` even when the RHS is braced.
 
 Constructors live in a namespace that is distinct from the type
 namespace — a single lexeme can name both a type and a constructor
