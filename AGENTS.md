@@ -27,6 +27,17 @@
   - The Zed extension in the `graphcal-lang/zed-graphcal` repository (syntax highlighting, LSP features, etc.).
   - The VS Code extension in the `graphcal-lang/vscode-graphcal` repository, including the TextMate grammar and LSP features.
 
+## GitHub Issues and Pull Requests
+
+When opening or updating a GitHub Pull Request, comply with `.github/pull_request_template.md`.
+
+When an agent files a GitHub Issue or opens a GitHub Pull Request, put this alert note at the very top of the description. Add the same note at the beginning of any issue or pull request comment written by an agent:
+
+> [!WARNING]
+> This content was written by an AI agent and must be verified by a human developer. After human verification, this alert may be removed.
+
+The human developer must remove this note after verifying the description or comment's contents.
+
 ## Type Safety: Encode Semantics in Types, Not Conventions
 
 The compiler is the language's first user — its own implementation must hold itself to the same explicitness standard the language enforces on graphcal programs. Distinct semantic concepts must be distinct types; never lean on a string convention, naming pattern, or "everyone knows" rule when a typed alternative is possible.
