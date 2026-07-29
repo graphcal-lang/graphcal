@@ -140,7 +140,9 @@ fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
     let crate::eval_expr::RuntimeValue::Indexed { entries, .. } = &values[&key] else {
         panic!("expected indexed value, got {:?}", values[&key]);
     };
-    let burn = graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn");
+    let burn = graphcal_compiler::syntax::index_name::IndexEntryKey::named(
+        graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
+    );
     let value = entries[&burn].expect_quantity("Burn entry").unwrap();
     assert!((value - 1.0).abs() < f64::EPSILON);
 }
@@ -297,23 +299,23 @@ fn indexed_comparison_broadcasts_element_wise() {
 }
 
 #[test]
-fn expected_fail_range_key_passes_when_step_fails() {
-    // #816: `#[expected_fail(#N)]` keys bind to Nat range axes positionally.
+fn expected_fail_finite_position_passes_when_element_fails() {
+    // #816: `#[expected_fail(#N)]` keys bind to finite structural axes positionally.
     let result = compile_and_eval(
         "#[expected_fail(#1)]\n\
-         assert r = for i: range(2) { i == 0 };",
+         assert r = for i: Fin(2) { i == 0 };",
     )
     .unwrap();
     assert_eq!(result.assertions[0].1, super::types::AssertResult::Pass);
 }
 
 #[test]
-fn expected_fail_range_key_unexpected_pass_fails() {
-    // The "unexpected pass" tripwire works for range keys: #0 passes but was
+fn expected_fail_finite_position_unexpected_pass_fails() {
+    // The "unexpected pass" tripwire works for Fin positions: #0 passes but was
     // marked expected_fail, and #1 fails without being marked.
     let result = compile_and_eval(
         "#[expected_fail(#0)]\n\
-         assert r = for i: range(2) { i == 0 };",
+         assert r = for i: Fin(2) { i == 0 };",
     )
     .unwrap();
     match &result.assertions[0].1 {
@@ -328,12 +330,12 @@ fn expected_fail_range_key_unexpected_pass_fails() {
 }
 
 #[test]
-fn expected_fail_mixed_named_and_range_tuple_key() {
+fn expected_fail_mixed_named_and_finite_tuple_key() {
     let result = compile_and_eval(
         "index Mode = { Boost, Cruise };\n\
          #[expected_fail((Mode.Boost, #1))]\n\
          assert m = for m: Mode {\n\
-             for i: range(2) {\n\
+             for i: Fin(2) {\n\
                  match m {\n\
                      Mode.Boost => if i == 1 { false } else { true },\n\
                      Mode.Cruise => true,\n\
@@ -745,7 +747,14 @@ fn indexed_si_values(value: &Value) -> Vec<(&str, f64)> {
     match value {
         Value::Indexed { entries, .. } => entries
             .iter()
-            .map(|(k, v)| (k.as_str(), v.si_value().unwrap()))
+            .map(|(k, v)| {
+                (
+                    k.as_named()
+                        .expect("helper is only used with named indexes")
+                        .as_str(),
+                    v.si_value().unwrap(),
+                )
+            })
             .collect(),
         _ => panic!("expected indexed value, got {value:?}"),
     }
@@ -854,30 +863,30 @@ node y: Dimensionless[Phase] = scan(@x, 0.0, |acc, val| acc + val);
 }
 
 #[test]
-fn eval_table_literal_nat_range_1d() {
+fn eval_table_literal_finite_index_1d() {
     let source = r"
-param v: Dimensionless[3] = table[3] {
+param v: Dimensionless[Fin(3)] = table[Fin(3)] {
     1.0;
     2.0;
     3.0;
 };
-node total: Dimensionless = sum(for i: range(3) { @v[i] });
+node total: Dimensionless = sum(for i: Fin(3) { @v[i] });
 ";
     let result = compile_and_eval(source).unwrap();
     assert!((find_value(&result, "total") - 6.0).abs() < f64::EPSILON);
 }
 
 #[test]
-fn eval_table_literal_nat_range_2d() {
+fn eval_table_literal_finite_index_2d() {
     let source = r"
-param m: Dimensionless[2, 3] = table[2, 3] {
+param m: Dimensionless[Fin(2), Fin(3)] = table[Fin(2), Fin(3)] {
     1.0, 2.0, 3.0;
     4.0, 5.0, 6.0;
 };
-node row_sums: Dimensionless[2] = for i: range(2) {
-    sum(for j: range(3) { @m[i, j] })
+node row_sums: Dimensionless[Fin(2)] = for i: Fin(2) {
+    sum(for j: Fin(3) { @m[i, j] })
 };
-node total: Dimensionless = sum(for i: range(2) { @row_sums[i] });
+node total: Dimensionless = sum(for i: Fin(2) { @row_sums[i] });
 ";
     let result = compile_and_eval(source).unwrap();
     assert!((find_value(&result, "total") - 21.0).abs() < f64::EPSILON);
@@ -1384,6 +1393,38 @@ fn project_instantiated_import_graph_ref() {
 }
 
 #[test]
+fn project_import_preserves_structural_finite_index_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_dir = dir.path().join("src/app");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"app\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source_dir.join("lib.gcl"),
+        "pub const node values: Dimensionless[Fin(2)] = table[Fin(2)] { 1.0; 2.0; };\n",
+    )
+    .unwrap();
+    let root = source_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import app.lib.{ values };\nconst node copied: Dimensionless[Fin(2)] = values;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let copied = result
+        .consts
+        .iter()
+        .find(|(name, _)| name.to_string() == "copied")
+        .and_then(|(_, value)| value.as_ref().ok())
+        .expect("copied imported finite-indexed value");
+    assert!(matches!(copied, Value::Indexed { entries, .. } if entries.len() == 2));
+}
+
+#[test]
 fn project_selective_import_item_rejects_unknown_attribute() {
     let dir = tempfile::tempdir().unwrap();
     let root_dir = dir.path().join("src/attr");
@@ -1509,12 +1550,12 @@ fn write_same_leaf_range_index_project(
     .unwrap();
     std::fs::write(
         root_dir.join("a.gcl"),
-        "pub index Step = linspace(0.0 s, 1.0 s, step: 1.0 s);\n",
+        "pub index Step = range(0.0 s, 1.0 s, step: 1.0 s);\n",
     )
     .unwrap();
     std::fs::write(
         root_dir.join("b.gcl"),
-        "pub index Step = linspace(0.0 s, 2.0 s, step: 1.0 s);\n",
+        "pub index Step = range(0.0 s, 2.0 s, step: 1.0 s);\n",
     )
     .unwrap();
     let root = root_dir.join("main.gcl");
@@ -2215,11 +2256,66 @@ param value: Holder<Fixed<Dimensionless>> = Holder<Fixed<Dimensionless>>(
 }
 
 #[test]
+fn multi_declaration_supports_finite_shared_axes() {
+    let source = r"
+param x: Dimensionless[Fin(2)],
+param y: Dimensionless[Fin(2)]
+  = table[Fin(2), (_, _)] {
+      : _, _;
+      1.0, 2.0;
+      3.0, 4.0;
+  };
+";
+    let result = compile_and_eval(source).unwrap();
+    for name in ["x", "y"] {
+        let value = result
+            .params
+            .iter()
+            .find(|(candidate, _)| candidate.to_string() == name)
+            .and_then(|(_, value)| value.as_ref().ok())
+            .expect("finite multi-decl param");
+        assert!(matches!(value, Value::Indexed { entries, .. } if entries.len() == 2));
+    }
+}
+
+#[test]
+fn finite_indexes_remain_distinct_from_nat_generic_arguments() {
+    let source = r"
+pub type Vector<N: Nat, D: Dim> {
+    Vector(values: D[Fin(N)]),
+}
+pub type IndexedVector<I: Index, D: Dim> {
+    IndexedVector(values: D[I]),
+}
+pub type DefaultIndexed<I: Index = Fin(2)> {
+    DefaultIndexed(values: Dimensionless[I]),
+}
+
+param defaulted: DefaultIndexed = DefaultIndexed(
+    values: table[Fin(2)] { 7.0; 8.0; },
+);
+param vector: Vector<3, Dimensionless> = Vector<3, Dimensionless>(
+    values: table[Fin(3)] { 1.0; 2.0; 3.0; },
+);
+param indexed: IndexedVector<Fin(3), Dimensionless> =
+    IndexedVector<Fin(3), Dimensionless>(
+        values: table[Fin(3)] { 4.0; 5.0; 6.0; },
+    );
+";
+
+    compile_and_eval(source).unwrap();
+}
+
+#[test]
 fn generic_arguments_reject_sort_crossing() {
     let cases = [
         (
             "pub type ByIndex<I: Index> { ByIndex(value: Dimensionless) }\nparam value: ByIndex<3>;",
-            "sort `Index`",
+            "expected Index, found Nat `3`",
+        ),
+        (
+            "pub type ByNat<N: Nat> { ByNat(value: Dimensionless) }\nparam value: ByNat<Fin(3)>;",
+            "sort `Nat`",
         ),
         (
             "pub index Phase = { A };\npub type ByNat<N: Nat> { ByNat(value: Dimensionless) }\nparam value: ByNat<Phase>;",
@@ -2232,6 +2328,52 @@ fn generic_arguments_reject_sort_crossing() {
     ];
 
     for (source, expected) in cases {
+        let error = compile_and_eval(source).unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn bare_nat_index_positions_are_rejected() {
+    for source in [
+        "param value: Dimensionless[3];",
+        "pub type Sized<N: Nat> { Sized(values: Dimensionless[N]) }",
+    ] {
+        let error = compile_and_eval(source).unwrap_err();
+        assert!(
+            error.to_string().contains("expected Index, found Nat"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn finite_index_cardinality_is_validated_before_allocation() {
+    for (source, expected) in [
+        (
+            "param value: Dimensionless[Fin(0)];",
+            "Fin(0) is not allowed",
+        ),
+        (
+            "param value: Dimensionless[Fin(1000001)];",
+            "exceeds the practical limit",
+        ),
+        (
+            "pub type Vector<N: Nat> { Vector(values: Dimensionless[Fin(N)]) }\nparam value: Vector<0>;",
+            "Fin(0) is not allowed",
+        ),
+        (
+            "pub type Vector<N: Nat> { Vector(values: Dimensionless[Fin(N)]) }\nparam value: Vector<1000001>;",
+            "exceeds the practical limit",
+        ),
+        (
+            "pub type InvalidDefault<I: Index = Fin(0)> { InvalidDefault(value: Dimensionless) }",
+            "Fin(0) is not allowed",
+        ),
+    ] {
         let error = compile_and_eval(source).unwrap_err();
         assert!(
             error.to_string().contains(expected),
@@ -2391,7 +2533,13 @@ fn project_map_literal_missing_variants_uses_resolved_owner() {
     match compile_to_tir_project(&root, None, &fs()) {
         Err(CompileError::Eval(GraphcalError::MissingVariants { missing, .. })) => {
             assert_eq!(missing.len(), 1);
-            assert_eq!(missing[0].as_str(), "Coast");
+            assert_eq!(
+                missing[0]
+                    .as_named()
+                    .expect("Phase is a named index")
+                    .as_str(),
+                "Coast"
+            );
         }
         other => panic!("expected MissingVariants, got {other:?}"),
     }
@@ -2647,11 +2795,15 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     );
     let mut entries = indexmap::IndexMap::new();
     entries.insert(
-        graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
+        graphcal_compiler::syntax::index_name::IndexEntryKey::named(
+            graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
+        ),
         crate::eval_expr::RuntimeValue::Quantity(99.0),
     );
     entries.insert(
-        graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Coast"),
+        graphcal_compiler::syntax::index_name::IndexEntryKey::named(
+            graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Coast"),
+        ),
         crate::eval_expr::RuntimeValue::Quantity(100.0),
     );
     let values = HashMap::from([(

@@ -96,7 +96,9 @@ pub fn expr_lower_error_to_graphcal(
         } => {
             return GraphcalError::ExtraVariants {
                 index_name: index_name.clone(),
-                extra: vec![variant_name.clone()],
+                extra: vec![crate::syntax::index_name::IndexEntryKey::named(
+                    variant_name.clone(),
+                )],
                 src: src.clone(),
                 span: (*span).into(),
             };
@@ -150,6 +152,7 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::UnknownGraphRef { span, .. }
         | hir::ExprLowerError::TooManyLocals { span }
         | hir::ExprLowerError::EmptyMapEntry { span }
+        | hir::ExprLowerError::InvalidMapEntryKey { span }
         | hir::ExprLowerError::ExtraMapVariant { span, .. }
         | hir::ExprLowerError::UnknownPattern { span, .. }
         | hir::ExprLowerError::UnknownFunction { span, .. }
@@ -170,10 +173,18 @@ pub fn hir_lower_error_to_graphcal(
     err: &hir::HirLowerError,
     src: &NamedSource<Arc<String>>,
 ) -> GraphcalError {
+    if let hir::HirLowerError::ExpectedIndexFoundNat { expression, span } = err {
+        return GraphcalError::ExpectedIndexFoundNat {
+            expression: expression.clone(),
+            src: src.clone(),
+            span: (*span).into(),
+        };
+    }
     let span = match &err {
         hir::HirLowerError::ModuleResolve { span, .. }
         | hir::HirLowerError::UnknownTypePath { span, .. }
         | hir::HirLowerError::GenericConstraintMismatch { span, .. }
+        | hir::HirLowerError::ExpectedIndexFoundNat { span, .. }
         | hir::HirLowerError::UnknownGenericParam { span, .. }
         | hir::HirLowerError::WrongGenericArgCount { span, .. }
         | hir::HirLowerError::GenericArgumentSortMismatch { span, .. }

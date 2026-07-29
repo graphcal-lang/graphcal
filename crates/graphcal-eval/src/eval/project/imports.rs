@@ -495,7 +495,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
             }));
         }
 
-        // Validate kind matching (named-to-named, range-to-range).
+        // Validate kind matching (named-to-named, coordinate-to-coordinate).
         let dep_is_named = matches!(
             dep_idx.kind,
             graphcal_compiler::desugar::desugared_ast::IndexDeclKind::Named { .. }
@@ -518,19 +518,19 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         {
             return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
                 dep_index: binding_name.to_string(),
-                dep_kind: if dep_is_named { "named" } else { "range" }.to_string(),
+                dep_kind: if dep_is_named { "named" } else { "coordinate" }.to_string(),
                 bound_index: rhs_name,
                 bound_kind: match (ambiguous_registry_kind, imp_is_named) {
                     (true, _) => "ambiguous".to_string(),
                     (false, Some(true)) => "named".to_string(),
-                    (false, Some(false)) => "range".to_string(),
+                    (false, Some(false)) => "coordinate".to_string(),
                     (false, None) => "unknown".to_string(),
                 },
                 src: file_src.clone(),
                 span: binding.name.span.into(),
             }));
         }
-        // Dimension matching for range indexes is deferred to
+        // Dimension matching for coordinate indexes is deferred to
         // process_deferred_dag_includes() where registries are available.
     }
 

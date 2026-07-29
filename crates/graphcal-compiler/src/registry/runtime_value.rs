@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 
 use crate::dag_id::DagId;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
-use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::type_name::{FieldName, StructTypeName};
 
 /// The kind of a [`RuntimeValue`], used in type-mismatch error reporting.
@@ -23,7 +23,7 @@ pub enum RuntimeValueKind {
     Indexed {
         index_name: IndexTypeRef,
     },
-    RangeLabel {
+    CoordinateLabel {
         index_name: IndexTypeRef,
     },
     Datetime,
@@ -44,7 +44,7 @@ impl std::fmt::Display for RuntimeValueKind {
             }
             Self::Struct { type_name } => write!(f, "struct `{type_name}`"),
             Self::Indexed { index_name } => write!(f, "indexed value `{index_name}[...]`"),
-            Self::RangeLabel { index_name } => write!(f, "range label `{index_name}`"),
+            Self::CoordinateLabel { index_name } => write!(f, "coordinate label `{index_name}`"),
             Self::Datetime => write!(f, "Datetime"),
         }
     }
@@ -96,16 +96,16 @@ pub enum RuntimeValue {
         type_name: StructTypeRef,
         fields: IndexMap<FieldName, Self>,
     },
-    /// An indexed collection: maps variant names to values, preserving declaration order.
+    /// An indexed collection keyed by named labels or typed positions.
     Indexed {
         index_name: IndexTypeRef,
-        entries: IndexMap<IndexVariantName, Self>,
+        entries: IndexMap<IndexEntryKey, Self>,
     },
-    /// A range index label during range-index iteration.
-    /// Carries the index identity, step index, and SI value (for arithmetic like `t - prev_t`).
-    RangeLabel {
+    /// A coordinate label during coordinate-index iteration.
+    /// Carries the index identity, position, and SI value.
+    CoordinateLabel {
         index_name: IndexTypeRef,
-        step_index: usize,
+        position: usize,
         value: f64,
     },
     /// A datetime instant (internally stored as a `hifitime::Epoch`).
@@ -153,7 +153,7 @@ impl RuntimeValue {
     pub fn indexed_with_owner(
         owner: DagId,
         index_name: IndexName,
-        entries: IndexMap<IndexVariantName, Self>,
+        entries: IndexMap<IndexEntryKey, Self>,
     ) -> Self {
         Self::Indexed {
             index_name: IndexTypeRef::with_owner(owner, index_name),
@@ -181,7 +181,7 @@ impl RuntimeValue {
             Self::Indexed { index_name, .. } => RuntimeValueKind::Indexed {
                 index_name: index_name.clone(),
             },
-            Self::RangeLabel { index_name, .. } => RuntimeValueKind::RangeLabel {
+            Self::CoordinateLabel { index_name, .. } => RuntimeValueKind::CoordinateLabel {
                 index_name: index_name.clone(),
             },
             Self::Datetime(_) => RuntimeValueKind::Datetime,
@@ -192,7 +192,7 @@ impl RuntimeValue {
     /// (Type mismatches should be caught by `dim_check`; this is defense-in-depth.)
     pub fn expect_quantity(&self, context: &str) -> Result<f64, RuntimeValueError> {
         match self {
-            Self::Quantity(v) | Self::RangeLabel { value: v, .. } => Ok(*v),
+            Self::Quantity(v) | Self::CoordinateLabel { value: v, .. } => Ok(*v),
             other => Err(RuntimeValueError {
                 expected: "quantity",
                 context: context.to_string(),

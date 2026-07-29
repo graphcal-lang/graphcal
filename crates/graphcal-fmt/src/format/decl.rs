@@ -1,10 +1,11 @@
 use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
     Encoding, Expr, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl,
-    IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis,
-    MultiSlotKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl, TableIndexSpec, TypeDecl,
-    TypeDeclBody, TypeExpr, UnitConstness, UnitDecl, UnitDef, Visibility,
+    IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, MapEntryIndex, MapEntryKey, MultiDecl,
+    MultiHeaderCell, MultiSlotAxis, MultiSlotKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl,
+    TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr, UnitConstness, UnitDecl, UnitDef, Visibility,
 };
+use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use pretty::RcDoc;
 
 use super::{
@@ -118,8 +119,8 @@ fn format_attribute_arg(arg: &graphcal_compiler::syntax::ast::AttributeArg) -> R
                 .collect();
             RcDoc::intersperse(parts, RcDoc::text("."))
         }
-        graphcal_compiler::syntax::ast::AttributeArg::RangeStep { step, .. } => {
-            RcDoc::text(format!("#{step}"))
+        graphcal_compiler::syntax::ast::AttributeArg::FinitePosition { position, .. } => {
+            RcDoc::text(format!("#{position}"))
         }
         graphcal_compiler::syntax::ast::AttributeArg::Group { elements, .. } => {
             let inner: Vec<RcDoc<'static>> = elements.iter().map(format_attribute_arg).collect();
@@ -369,13 +370,13 @@ fn format_generic_params(fmt: &mut Formatter<'_>, params: &[GenericParam]) -> Rc
 }
 
 /// `index Name = { V1, V2, V3 };` or `index Name;` (required named)
-/// or `index Name = linspace(start, end, step: step);` or `index Name: Dim;` (required range)
+/// or a concrete coordinate constructor (`range` / `linspace`) or `index Name: Dim;`
 fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
     match &d.kind {
         IndexDeclKind::RequiredNamed => RcDoc::text("index ")
             .append(RcDoc::text(d.name.value.as_str().to_string()))
             .append(RcDoc::text(";")),
-        IndexDeclKind::RequiredRange { dimension } => RcDoc::text("index ")
+        IndexDeclKind::RequiredCoordinate { dimension } => RcDoc::text("index ")
             .append(RcDoc::text(d.name.value.as_str().to_string()))
             .append(RcDoc::text(": "))
             .append(format_dim_expr_inline(dimension))
@@ -420,6 +421,19 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
                 RcDoc::text("step: ").append(format_expr(fmt, step)),
             ];
 
+            header
+                .append(RcDoc::text(" = range"))
+                .append(soft_parenthesized_list(args, false))
+                .append(RcDoc::text(";"))
+        }
+        IndexDeclKind::Linspace { start, end, points } => {
+            let header =
+                RcDoc::text("index ").append(RcDoc::text(d.name.value.as_str().to_string()));
+            let args = vec![
+                format_expr(fmt, start),
+                format_expr(fmt, end),
+                RcDoc::text(format!("points: {points}")),
+            ];
             header
                 .append(RcDoc::text(" = linspace"))
                 .append(soft_parenthesized_list(args, false))
@@ -829,7 +843,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         .iter()
         .map(|spec| match spec {
             TableIndexSpec::Named(s) => s.value.to_string(),
-            TableIndexSpec::NatRange(n, _) => n.to_string(),
+            TableIndexSpec::Finite { cardinality, .. } => format!("Fin({cardinality})"),
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -849,6 +863,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
 
     // Body.
     let body_indent = " ".repeat((INDENT * 2) as usize);
+    let finite_row_axis = info.shared_axes.row_axis().is_finite_index();
     let (max_row_label, col_widths, rendered_rows) = compute_multi_decl_layout(fmt, info);
 
     for (si, slice) in info.slices.iter().enumerate() {
@@ -860,7 +875,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
             let labels = slice
                 .prefix_keys
                 .iter()
-                .map(|k| format!("{}.{}", k.index.value, k.variant.value.as_str()))
+                .map(format_multi_decl_key)
                 .collect::<Vec<_>>()
                 .join(", ");
             out.push('\n');
@@ -895,12 +910,16 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
                 .collect();
             out.push('\n');
             out.push_str(&body_indent);
-            let _ = write!(
-                out,
-                "{}: {};",
-                pad_right_to_width(row.label.value.as_str(), max_row_label),
-                cells.join(", "),
-            );
+            if finite_row_axis {
+                let _ = write!(out, "{};", cells.join(", "));
+            } else {
+                let _ = write!(
+                    out,
+                    "{}: {};",
+                    pad_right_to_width(&row.label.value.to_string(), max_row_label),
+                    cells.join(", "),
+                );
+            }
         }
     }
 
@@ -909,6 +928,18 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
     out.push_str("};");
 
     text_with_hardlines(&out)
+}
+
+fn format_multi_decl_key(key: &MapEntryKey) -> String {
+    match (&key.index.value, &key.variant.value) {
+        (MapEntryIndex::Named(index), IndexEntryKey::Named(variant)) => {
+            format!("{index}.{variant}")
+        }
+        (MapEntryIndex::Finite(_), IndexEntryKey::Position(position)) => {
+            format!("#{position}")
+        }
+        (index, variant) => format!("{index}.{variant}"),
+    }
 }
 
 fn render_multi_decl_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
@@ -961,13 +992,16 @@ fn compute_multi_decl_layout(
         }
     }
 
-    let max_row_label = info
-        .slices
-        .iter()
-        .flat_map(|s| s.rows.iter())
-        .map(|r| display_width(r.label.value.as_str()))
-        .max()
-        .unwrap_or(0);
+    let max_row_label = if info.shared_axes.row_axis().is_finite_index() {
+        0
+    } else {
+        info.slices
+            .iter()
+            .flat_map(|s| s.rows.iter())
+            .map(|r| display_width(&r.label.value.to_string()))
+            .max()
+            .unwrap_or(0)
+    };
 
     (max_row_label, col_widths, rendered_rows)
 }

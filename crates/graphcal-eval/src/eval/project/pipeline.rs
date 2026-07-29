@@ -223,7 +223,7 @@ fn compile_single_file_in_project(
 fn tir_has_required_indexes(tir: &graphcal_compiler::tir::typed::TIR) -> bool {
     tir.registry
         .indexes
-        .all_indexes()
+        .declared_indexes()
         .any(graphcal_compiler::registry::types::IndexDef::is_required)
         || tir
             .root()
@@ -242,7 +242,7 @@ fn first_required_index_diagnostic(
     tir: &graphcal_compiler::tir::typed::TIR,
     ast: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> Option<(String, miette::SourceSpan)> {
-    for idx_def in tir.registry.indexes.all_indexes() {
+    for idx_def in tir.registry.indexes.declared_indexes() {
         if idx_def.is_required() {
             let span = ast
                 .declarations

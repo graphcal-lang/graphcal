@@ -9,7 +9,7 @@ use crate::dag_id::DagId;
 use crate::desugar::desugared_ast::{AssertBody, Expr, FigureDecl, LayerDecl, PlotDecl};
 use crate::registry::declared_type::IndexTypeRef;
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
@@ -142,12 +142,12 @@ pub enum ExpectedFailKeyPart<I = IndexTypeRef> {
         variant: IndexVariantName,
         span: Span,
     },
-    /// A `#N` segment for a Nat range axis (#816).
+    /// A `#N` segment for a finite structural axis (#816).
     ///
-    /// Range axes have no source-level index name, so the axis identity is
+    /// Finite axes have no source-level index name, so the axis identity is
     /// positional: the segment binds to the assertion's axis at the same
     /// tuple position, validated at dim-check time.
-    RangeStep { step: u64, span: Span },
+    FinitePosition { position: u64, span: Span },
 }
 
 impl<I> ExpectedFailKeyPart<I> {
@@ -155,16 +155,16 @@ impl<I> ExpectedFailKeyPart<I> {
     #[must_use]
     pub(crate) const fn span(&self) -> Span {
         match self {
-            Self::Named { span, .. } | Self::RangeStep { span, .. } => *span,
+            Self::Named { span, .. } | Self::FinitePosition { span, .. } => *span,
         }
     }
 
     /// The variant key this segment selects within its axis.
     #[must_use]
-    pub(crate) fn variant(&self) -> IndexVariantName {
+    pub(crate) fn entry_key(&self) -> IndexEntryKey {
         match self {
-            Self::Named { variant, .. } => variant.clone(),
-            Self::RangeStep { step, .. } => IndexVariantName::range_step(*step),
+            Self::Named { variant, .. } => IndexEntryKey::named(variant.clone()),
+            Self::FinitePosition { position, .. } => IndexEntryKey::position(*position),
         }
     }
 }
@@ -188,7 +188,7 @@ impl ExpectedFailKeyPart<NamePath> {
     pub(crate) const fn index_path(&self) -> Option<&NamePath> {
         match self {
             Self::Named { index, .. } => Some(index),
-            Self::RangeStep { .. } => None,
+            Self::FinitePosition { .. } => None,
         }
     }
 }
@@ -223,27 +223,31 @@ impl ExpectedFailKeyPart<IndexTypeRef> {
     pub(crate) const fn named_index(&self) -> Option<&IndexTypeRef> {
         match self {
             Self::Named { index, .. } => Some(index),
-            Self::RangeStep { .. } => None,
+            Self::FinitePosition { .. } => None,
         }
     }
 
     /// Whether this segment selects the given entry of an indexed value.
     ///
     /// Named segments require the entry's index identity to match; `#N`
-    /// segments match the `#N` entry of any Nat range axis (the axis itself
+    /// segments match the `#N` entry of any finite structural axis (the axis itself
     /// was bound positionally at dim-check time).
     #[must_use]
-    pub fn matches_entry(&self, index: &IndexTypeRef, variant: &IndexVariantName) -> bool {
-        match self {
-            Self::Named {
-                index: expected,
-                variant: expected_variant,
-                ..
-            } => expected.matches_ref(index) && variant == expected_variant,
-            Self::RangeStep { step, .. } => {
-                matches!(index, IndexTypeRef::NatRange(_))
-                    && *variant == IndexVariantName::range_step(*step)
+    pub fn matches_entry(&self, index: &IndexTypeRef, key: &IndexEntryKey) -> bool {
+        match (self, key) {
+            (
+                Self::Named {
+                    index: expected,
+                    variant: expected_variant,
+                    ..
+                },
+                IndexEntryKey::Named(actual),
+            ) => expected.matches_ref(index) && actual == expected_variant,
+            (Self::FinitePosition { position, .. }, IndexEntryKey::Position(actual)) => {
+                matches!(index, IndexTypeRef::Finite(_)) && actual == position
             }
+            (Self::Named { .. }, IndexEntryKey::Position(_))
+            | (Self::FinitePosition { .. }, IndexEntryKey::Named(_)) => false,
         }
     }
 
@@ -252,7 +256,7 @@ impl ExpectedFailKeyPart<IndexTypeRef> {
     pub(crate) fn display(&self) -> String {
         match self {
             Self::Named { index, variant, .. } => format!("{}.{variant}", index.display_name()),
-            Self::RangeStep { step, .. } => format!("#{step}"),
+            Self::FinitePosition { position, .. } => format!("#{position}"),
         }
     }
 }

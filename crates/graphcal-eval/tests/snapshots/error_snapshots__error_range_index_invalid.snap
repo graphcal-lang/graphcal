@@ -2,11 +2,12 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-range index `TimeStep`: start (100) must be <= end (0)
+coordinate index `TimeStep`: step 0.1 moves away from endpoint 0
     Diagnostic severity: error
 Begin snippet for range_index_invalid.gcl starting at line 1, column 1
 
-snippet line 1: // Error: range index with start > end
-snippet line 2: index TimeStep = linspace(100.0 s, 0.0 s, step: 0.1 s);
-    label at line 2, columns 1 to 54: invalid range
+snippet line 1: // Error: positive step cannot traverse descending bounds.
+snippet line 2: index TimeStep = range(100.0 s, 0.0 s, step: 0.1 s);
+    label at line 2, columns 1 to 51: invalid coordinate index
+diagnostic help: use a positive step for an ascending range and a negative step for a descending range
 diagnostic code: graphcal::I007

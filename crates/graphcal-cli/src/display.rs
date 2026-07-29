@@ -206,7 +206,7 @@ pub fn format_table_grid(value: &Value) -> String {
     // deriving columns from the first row alone silently hid cells of any
     // row with extra columns and rendered phantom blanks for missing ones.
     // Capture each header label from the row where the column key is first
-    // observed so range-index display labels are not resolved through an
+    // observed so coordinate-index display labels are not resolved through an
     // unrelated first row that may not contain that key.
     let mut columns: Vec<_> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -327,7 +327,7 @@ mod tests {
     use super::*;
     use graphcal_compiler::dimension::Dimension;
     use graphcal_compiler::registry::declared_type::IndexTypeRef;
-    use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
+    use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
     use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use indexmap::IndexMap;
 
@@ -346,7 +346,10 @@ mod tests {
     fn indexed_1d(name: &str, pairs: &[(&str, Value)]) -> Value {
         let mut entries = IndexMap::new();
         for (k, v) in pairs {
-            entries.insert(IndexVariantName::expect_valid(*k), v.clone());
+            entries.insert(
+                IndexEntryKey::named(IndexVariantName::expect_valid(*k)),
+                v.clone(),
+            );
         }
         Value::indexed_with_owner(test_owner(), IndexName::expect_valid(name), entries)
     }
@@ -358,11 +361,17 @@ mod tests {
     ) -> Value {
         let mut entries = IndexMap::new();
         for (k, v) in pairs {
-            entries.insert(IndexVariantName::expect_valid(*k), v.clone());
+            entries.insert(
+                IndexEntryKey::named(IndexVariantName::expect_valid(*k)),
+                v.clone(),
+            );
         }
         let mut entry_display_names = IndexMap::new();
         for (k, display) in displays {
-            entry_display_names.insert(IndexVariantName::expect_valid(*k), (*display).to_string());
+            entry_display_names.insert(
+                IndexEntryKey::named(IndexVariantName::expect_valid(*k)),
+                (*display).to_string(),
+            );
         }
         Value::Indexed {
             index_name: IndexTypeRef::with_owner(test_owner(), IndexName::expect_valid(name)),

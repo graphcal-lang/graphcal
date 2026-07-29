@@ -375,14 +375,13 @@ pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDo
         let key_doc = if e.keys.len() == 1 {
             RcDoc::text(format!(
                 "{}.{}",
-                e.keys[0].index.value,
-                e.keys[0].variant.value.as_str()
+                e.keys[0].index.value, e.keys[0].variant.value
             ))
         } else {
             let key_parts: Vec<String> = e
                 .keys
                 .iter()
-                .map(|k| format!("{}.{}", k.index.value, k.variant.value.as_str()))
+                .map(|k| format!("{}.{}", k.index.value, k.variant.value))
                 .collect();
             RcDoc::text(format!("({})", key_parts.join(", ")))
         };
@@ -423,7 +422,7 @@ pub fn format_table_literal(
         .iter()
         .map(|i| match i {
             TableIndexSpec::Named(s) => s.value.to_string(),
-            TableIndexSpec::NatRange(n, _) => n.to_string(),
+            TableIndexSpec::Finite { cardinality, .. } => format!("Fin({cardinality})"),
         })
         .collect();
     let header = format!("table[{}]", idx_names.join(", "));
@@ -438,22 +437,22 @@ pub fn format_table_literal(
 }
 
 /// Format a 1D table: `table[Maneuver] { Label: expr; ... }` or
-/// `table[3] { expr; ... }` for Nat range indexes.
+/// `table[Fin(3)] { expr; ... }` for finite structural indexes.
 fn format_table_1d(
     fmt: &mut Formatter<'_>,
     header: &str,
     index: &TableIndexSpec,
     entries: &[MapEntry],
 ) -> RcDoc<'static> {
-    let nat_range = index.is_nat_range();
+    let finite_index = index.is_finite_index();
 
-    // Compute max label width for alignment (unused for NatRange)
-    let max_label_width = if nat_range {
+    // Compute max label width for alignment (unused for Finite)
+    let max_label_width = if finite_index {
         0
     } else {
         entries
             .iter()
-            .map(|e| display_width(e.keys[0].variant.value.as_str()))
+            .map(|e| display_width(&e.keys[0].variant.value.to_string()))
             .max()
             .unwrap_or(0)
     };
@@ -478,11 +477,11 @@ fn format_table_1d(
         let leading = fmt.drain_comments_before(e.value.span.offset());
 
         let value_padding = max_value_width - display_width(rendered);
-        let row_text = if nat_range {
+        let row_text = if finite_index {
             format!("{}{};", " ".repeat(value_padding), rendered)
         } else {
-            let label = e.keys[0].variant.value.as_str();
-            let padding = max_label_width - display_width(label);
+            let label = e.keys[0].variant.value.to_string();
+            let padding = max_label_width - display_width(&label);
             format!(
                 "{}:{} {};",
                 label,
@@ -542,13 +541,13 @@ fn format_table_2d_body(
     // Row index is second-to-last, column index is last
     let col_idx = ndim - 1;
     let row_idx = ndim - 2;
-    let row_is_nat = indexes[row_idx].is_nat_range();
-    let col_is_nat = indexes[col_idx].is_nat_range();
+    let row_is_nat = indexes[row_idx].is_finite_index();
+    let col_is_nat = indexes[col_idx].is_finite_index();
 
     // Extract unique column labels (from the last key, preserving order)
     let mut col_labels: Vec<String> = Vec::new();
     for e in entries {
-        let col_label = e.keys[col_idx].variant.value.as_str().to_string();
+        let col_label = e.keys[col_idx].variant.value.to_string();
         if !col_labels.contains(&col_label) {
             col_labels.push(col_label);
         }
@@ -558,7 +557,7 @@ fn format_table_2d_body(
     // Extract unique row labels (from the second-to-last key, preserving order)
     let mut row_labels: Vec<String> = Vec::new();
     for e in entries {
-        let row_label = e.keys[row_idx].variant.value.as_str().to_string();
+        let row_label = e.keys[row_idx].variant.value.to_string();
         if !row_labels.contains(&row_label) {
             row_labels.push(row_label);
         }
@@ -568,14 +567,14 @@ fn format_table_2d_body(
     let mut grid: Vec<Vec<String>> = vec![vec![String::new(); num_cols]; row_labels.len()];
     let mut entry_indices: Vec<Vec<Option<usize>>> = vec![vec![None; num_cols]; row_labels.len()];
     for (ei, e) in entries.iter().enumerate() {
-        let row_label = e.keys[row_idx].variant.value.as_str();
-        let col_label = e.keys[col_idx].variant.value.as_str();
+        let row_label = e.keys[row_idx].variant.value.to_string();
+        let col_label = e.keys[col_idx].variant.value.to_string();
         // Labels were built from the same entries, so lookup cannot miss.
         // If it somehow does, skip this entry rather than silently using row/col 0.
-        let Some(ri) = row_labels.iter().position(|r| r == row_label) else {
+        let Some(ri) = row_labels.iter().position(|r| r == &row_label) else {
             continue;
         };
-        let Some(ci) = col_labels.iter().position(|c| c == col_label) else {
+        let Some(ci) = col_labels.iter().position(|c| c == &col_label) else {
             continue;
         };
         grid[ri][ci] = render_table_cell_value(fmt, &e.value);
@@ -583,7 +582,7 @@ fn format_table_2d_body(
     }
 
     // Compute column widths: max of (column label width, max cell width in that column)
-    // When the column axis is a NatRange, no header row is emitted, so column labels
+    // When the column axis is a Finite, no header row is emitted, so column labels
     // do not contribute to width.
     let col_widths: Vec<usize> = (0..num_cols)
         .map(|ci| {
@@ -601,7 +600,7 @@ fn format_table_2d_body(
         })
         .collect();
 
-    // Compute max row label width (0 when row axis is NatRange — no labels emitted)
+    // Compute max row label width (0 when row axis is Finite — no labels emitted)
     let max_row_label_width = if row_is_nat {
         0
     } else {
@@ -684,18 +683,15 @@ fn format_table_sliced(
     let slice_dims = ndim - 2;
 
     // Group entries by their slice keys (first N-2 keys).
-    // Named axes render as `Index.Variant`; NatRange axes render as `#N`
-    // (the variant name is already the synthetic `#N` form).
+    // Named axes render as `Index.Variant`; finite positions render as `#N`.
     let mut slices: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
     for (idx, e) in entries.iter().enumerate() {
         let slice_key: Vec<String> = (0..slice_dims)
             .map(|i| match &indexes[i] {
-                TableIndexSpec::Named(_) => format!(
-                    "{}.{}",
-                    e.keys[i].index.value,
-                    e.keys[i].variant.value.as_str()
-                ),
-                TableIndexSpec::NatRange(_, _) => e.keys[i].variant.value.as_str().to_string(),
+                TableIndexSpec::Named(_) => {
+                    format!("{}.{}", e.keys[i].index.value, e.keys[i].variant.value)
+                }
+                TableIndexSpec::Finite { .. } => e.keys[i].variant.value.to_string(),
             })
             .collect();
 
@@ -766,10 +762,9 @@ pub fn format_for_comp(
                     graphcal_compiler::syntax::ast::ForBindingIndex::Named(spanned) => {
                         RcDoc::text(spanned.value.to_string())
                     }
-                    graphcal_compiler::syntax::ast::ForBindingIndex::Range { arg, .. } => {
-                        let arg_str = arg.to_string();
-                        RcDoc::text(format!("range({arg_str})"))
-                    }
+                    graphcal_compiler::syntax::ast::ForBindingIndex::Finite {
+                        cardinality, ..
+                    } => RcDoc::text(format!("Fin({cardinality})")),
                 })
         })
         .collect();

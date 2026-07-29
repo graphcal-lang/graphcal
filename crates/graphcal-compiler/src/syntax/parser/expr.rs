@@ -1239,7 +1239,7 @@ mod tests {
         let generic_call = parse_node_expr("scan<Length>()");
         assert!(matches!(generic_call.kind, ExprKind::FnCall { .. }));
 
-        for name in ["linspace", "step"] {
+        for name in ["range", "linspace", "step", "points", "Fin"] {
             let ordinary_call = parse_node_expr(&format!("{name}()"));
             assert!(
                 matches!(ordinary_call.kind, ExprKind::FnCall { .. }),

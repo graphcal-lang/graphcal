@@ -30,7 +30,7 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
         (DeclaredType::Bool, InferredType::Bool) => true,
         (DeclaredType::Int, inferred) if inferred.is_int_like() => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
-        (DeclaredType::IndexArg(d), InferredType::NamedIndex(i)) => i.matches_ref(d),
+        (DeclaredType::IndexArg(d), InferredType::IndexArg(i)) => i.matches_ref(d),
         (DeclaredType::Struct(d, d_args), InferredType::Struct(i, i_args)) => {
             i.matches_ref(d)
                 && d_args.len() == i_args.len()
@@ -92,7 +92,7 @@ pub(super) fn resolved_type_matches_inferred(
         (ResolvedTypeExpr::Quantity(expected), inferred) => {
             inferred.quantity_dimension() == Some(expected)
         }
-        (ResolvedTypeExpr::IndexArg(expected), InferredType::NamedIndex(actual)) => {
+        (ResolvedTypeExpr::IndexArg(expected), InferredType::IndexArg(actual)) => {
             resolved_index_matches_inferred(expected, actual)
         }
         (ResolvedTypeExpr::Struct(expected, _), InferredType::Struct(actual, args)) => {
@@ -166,13 +166,13 @@ fn resolved_indexed_type_matches_inferred(
 fn resolved_index_matches_inferred(index: &ResolvedIndex, actual: &InferredIndex) -> bool {
     match index {
         ResolvedIndex::Concrete(expected, _) => actual.matches_resolved(expected),
-        ResolvedIndex::NatExpr(form, _) => actual
-            .nat_range_form()
+        ResolvedIndex::Finite(form, _) => actual
+            .finite_index_form()
             .is_some_and(|actual_form| actual_form == *form),
         // An unbound generic index parameter never reaches this comparison:
         // DAG declaration types and inline-DAG param types resolve with no
         // generic params in scope, and HIR inference only constructs
-        // `InferredIndex` from concrete (resolved or Nat-range) identities —
+        // `InferredIndex` from concrete (resolved or finite-index) identities —
         // the syntax engine's leaf-name fallback that could fabricate a
         // generic-named index is gone (#765). No display-name comparison can
         // therefore be meaningful here.
@@ -211,13 +211,15 @@ pub fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
 impl From<&InferredType> for DeclaredType {
     fn from(it: &InferredType) -> Self {
         match it {
-            InferredType::Quantity(d) | InferredType::RangeIndexLabel { dimension: d, .. } => {
+            InferredType::Quantity(d) | InferredType::CoordinateIndexLabel { dimension: d, .. } => {
                 Self::Quantity(d.clone())
             }
             InferredType::Bool => Self::Bool,
             InferredType::Int | InferredType::Fin(_) => Self::Int,
             InferredType::Datetime(scale) => Self::Datetime(*scale),
-            InferredType::NamedIndex(index) => Self::IndexArg(index.type_ref().clone()),
+            InferredType::NamedIndexCase(index) | InferredType::IndexArg(index) => {
+                Self::IndexArg(index.type_ref().clone())
+            }
             InferredType::Struct(n, args) => Self::Struct(
                 n.type_ref().clone(),
                 args.iter().map(DeclaredGenericArg::from).collect(),
@@ -259,9 +261,7 @@ impl From<&DeclaredType> for InferredType {
             DeclaredType::Bool => Self::Bool,
             DeclaredType::Int => Self::Int,
             DeclaredType::Datetime(scale) => Self::Datetime(*scale),
-            DeclaredType::IndexArg(index) => {
-                Self::NamedIndex(InferredIndex::from_ref(index.clone()))
-            }
+            DeclaredType::IndexArg(index) => Self::IndexArg(InferredIndex::from_ref(index.clone())),
             DeclaredType::Struct(n, args) => Self::Struct(
                 InferredStructType::from_ref(n.clone()),
                 args.iter().map(InferredGenericArg::from).collect(),
@@ -281,13 +281,14 @@ pub fn expect_quantity(
     span: crate::syntax::span::Span,
 ) -> Result<Dimension, GraphcalError> {
     let found_kind = match inferred {
-        InferredType::Quantity(d) | InferredType::RangeIndexLabel { dimension: d, .. } => {
+        InferredType::Quantity(d) | InferredType::CoordinateIndexLabel { dimension: d, .. } => {
             return Ok(d.clone());
         }
         InferredType::Bool => "a Bool value",
         InferredType::Int | InferredType::Fin(_) => "an Int value",
         InferredType::Datetime(_) => "a Datetime value",
-        InferredType::NamedIndex(_) => "a named-index loop variable",
+        InferredType::NamedIndexCase(_) => "a named-index loop variable",
+        InferredType::IndexArg(_) => "an Index argument",
         InferredType::Struct(..) => "a struct",
         InferredType::Indexed { .. } => "an indexed value",
     };

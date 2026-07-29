@@ -8,7 +8,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{IndexDef, IndexKind};
-use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::StructTypeName;
@@ -505,7 +505,7 @@ fn eval_hir_fn_call(
 
 fn eval_hir_aggregation_fn(
     kind: AggregationFn,
-    entries: &IndexMap<IndexVariantName, RuntimeValue>,
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
@@ -704,11 +704,11 @@ fn epoch_from_gregorian_str_at_scale(
 }
 
 /// The concrete index an extern call bound to one of its index variables:
-/// the index identity plus the variant keys of the binding argument, in
+/// the index identity plus its typed entry keys, in
 /// declaration order. Result arrays are rebuilt over exactly these keys.
 struct BoundExternIndex {
     index_name: graphcal_compiler::registry::declared_type::IndexTypeRef,
-    keys: Vec<graphcal_compiler::syntax::index_name::IndexVariantName>,
+    keys: Vec<IndexEntryKey>,
 }
 
 /// Evaluate an extern (plugin) function call through the embedder-injected
@@ -1189,8 +1189,8 @@ fn index_def_for_ref<'a>(
     index_ref: &IndexTypeRef,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a IndexDef> {
-    if let Some(nat_range) = index_ref.nat_range() {
-        return ctx.registry.indexes.get_nat_range(nat_range);
+    if let Some(finite_index) = index_ref.finite_index() {
+        return ctx.registry.indexes.get_finite_index(finite_index);
     }
     ctx.current_dag
         .map(|dag| &dag.semantic.collection_refs)
@@ -1224,10 +1224,10 @@ fn map_entry_index_ref(
         hir::expr::MapEntryKey::IndexVariant(variant) => {
             Ok(IndexTypeRef::from_resolved(variant.variant.index().clone()))
         }
-        hir::expr::MapEntryKey::NatRangeVariant { size, variant } => {
-            let nat_range = graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(*size)
-                .map_err(|err| ctx.eval_error(err.to_string(), variant.span))?;
-            Ok(IndexTypeRef::from_nat_range(nat_range))
+        hir::expr::MapEntryKey::FinitePosition { size, position } => {
+            let finite_index = graphcal_compiler::registry::types::FiniteIndex::try_from_u64(*size)
+                .map_err(|err| ctx.eval_error(err.to_string(), position.span))?;
+            Ok(IndexTypeRef::from_finite_index(finite_index))
         }
     }
 }
@@ -1236,7 +1236,7 @@ fn map_entry_variant_for_axis(
     key: &hir::expr::MapEntryKey,
     axis: &IndexTypeRef,
     ctx: &EvalContext<'_>,
-) -> Result<IndexVariantName, GraphcalError> {
+) -> Result<IndexEntryKey, GraphcalError> {
     match key {
         hir::expr::MapEntryKey::IndexVariant(variant) => {
             ensure_index_ref_matches_resolved(
@@ -1245,9 +1245,11 @@ fn map_entry_variant_for_axis(
                 variant.variant_span,
                 ctx,
             )?;
-            Ok(variant.variant.variant().clone())
+            Ok(IndexEntryKey::named(variant.variant.variant().clone()))
         }
-        hir::expr::MapEntryKey::NatRangeVariant { variant, .. } => Ok(variant.value.clone()),
+        hir::expr::MapEntryKey::FinitePosition { position, .. } => {
+            Ok(IndexEntryKey::position(position.value))
+        }
     }
 }
 
@@ -1261,7 +1263,7 @@ fn map_entry_index_def<'a>(
             .current_dag
             .map(|dag| &dag.semantic.collection_refs)
             .and_then(|refs| refs.index_defs.get(variant.variant.index())),
-        hir::expr::MapEntryKey::NatRangeVariant { .. } => index_def_for_ref(index_ref, ctx),
+        hir::expr::MapEntryKey::FinitePosition { .. } => index_def_for_ref(index_ref, ctx),
     }
 }
 
@@ -1290,7 +1292,7 @@ fn eval_hir_map_literal(
             evaluated.insert(variant, val);
         }
         let mut result = IndexMap::new();
-        for variant in idx_def.variants() {
+        for variant in idx_def.entry_keys() {
             let val = evaluated.swap_remove(&variant).ok_or_else(|| {
                 ctx.internal_error(
                     format!(
@@ -1310,7 +1312,7 @@ fn eval_hir_map_literal(
     let idx_def = map_entry_index_def(first_key, &idx_name, ctx).ok_or_else(|| {
         ctx.internal_error(format!("unknown index `{idx_name}`"), Span::new(0, 0))
     })?;
-    let variants = idx_def.variants();
+    let variants = idx_def.entry_keys();
     let mut outer = IndexMap::new();
     for variant in &variants {
         let mut sub_entries = Vec::new();
@@ -1386,26 +1388,20 @@ fn eval_hir_for_comp(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let binding = &bindings[0];
-    let (idx_name, error_span, dynamic_nat_size) = match &binding.index {
+    let (idx_name, error_span, dynamic_finite_index) = match &binding.index {
         hir::expr::ForBindingIndex::Named(index) => (
             IndexTypeRef::from_resolved(index.value.clone()),
             index.span,
             None,
         ),
-        hir::expr::ForBindingIndex::Range { arg, span } => {
-            let size = eval_hir_nat_expr(arg, ctx)?;
-            if size == 0 {
-                return Err(ctx.eval_error(
-                    "range(0) is not allowed; indexes must contain at least one element",
-                    *span,
-                ));
-            }
-            let nat_range = graphcal_compiler::registry::types::NatRangeIndex::try_from_u64(size)
+        hir::expr::ForBindingIndex::Finite { cardinality, span } => {
+            let size = eval_hir_nat_expr(cardinality, ctx)?;
+            let finite_index = graphcal_compiler::registry::types::FiniteIndex::try_from_u64(size)
                 .map_err(|err| ctx.eval_error(err.to_string(), *span))?;
             (
-                IndexTypeRef::from_nat_range(nat_range),
+                IndexTypeRef::from_finite_index(finite_index),
                 *span,
-                Some(nat_range),
+                Some(finite_index),
             )
         }
     };
@@ -1413,11 +1409,11 @@ fn eval_hir_for_comp(
     let dynamic_nat_def;
     let idx_def = if let Some(def) = index_def_for_ref(&idx_name, ctx) {
         def
-    } else if let Some(nat_range) = dynamic_nat_size {
+    } else if let Some(finite_index) = dynamic_finite_index {
         dynamic_nat_def = IndexDef {
-            name: nat_range.display_name(),
-            kind: IndexKind::NatRange {
-                size: nat_range.size(),
+            name: finite_index.display_name(),
+            kind: IndexKind::Finite {
+                cardinality: finite_index.cardinality(),
             },
         };
         &dynamic_nat_def
@@ -1426,30 +1422,43 @@ fn eval_hir_for_comp(
     };
 
     let remaining = &bindings[1..];
-    let variants = idx_def.variants();
+    let variants = idx_def.entry_keys();
     let mut entries = IndexMap::new();
     let mut inner_locals = local_values.child(Vec::new());
-    for (step_index, variant) in variants.iter().enumerate() {
-        let binding_value = match &idx_def.kind {
-            IndexKind::Named { .. } | IndexKind::RequiredNamed => RuntimeValue::Label {
-                index_name: idx_name.clone(),
-                variant: variant.clone(),
-            },
-            IndexKind::Range(data) => RuntimeValue::RangeLabel {
-                index_name: idx_name.clone(),
-                step_index,
-                value: data.step_value(step_index),
-            },
-            IndexKind::RequiredRange { .. } => {
-                return Err(ctx.internal_error("RequiredRange should have been bound", error_span));
+    for (position, variant) in variants.iter().enumerate() {
+        let binding_value = match (&idx_def.kind, variant) {
+            (IndexKind::Named { .. } | IndexKind::RequiredNamed, IndexEntryKey::Named(name)) => {
+                RuntimeValue::Label {
+                    index_name: idx_name.clone(),
+                    variant: name.clone(),
+                }
             }
-            IndexKind::NatRange { .. } => {
-                RuntimeValue::Int(i64::try_from(step_index).map_err(|_| {
+            (IndexKind::Coordinate(data), IndexEntryKey::Position(_)) => {
+                RuntimeValue::CoordinateLabel {
+                    index_name: idx_name.clone(),
+                    position,
+                    value: data.coordinate_value(position),
+                }
+            }
+            (IndexKind::Finite { .. }, IndexEntryKey::Position(_)) => {
+                RuntimeValue::Int(i64::try_from(position).map_err(|_| {
                     ctx.internal_error(
-                        format!("nat range step {step_index} too large for i64"),
+                        format!("Fin position {position} is too large for i64"),
                         error_span,
                     )
                 })?)
+            }
+            (IndexKind::RequiredCoordinate { .. }, _) => {
+                return Err(
+                    ctx.internal_error("RequiredCoordinate should have been bound", error_span)
+                );
+            }
+            (IndexKind::Named { .. } | IndexKind::RequiredNamed, IndexEntryKey::Position(_))
+            | (IndexKind::Coordinate(_) | IndexKind::Finite { .. }, IndexEntryKey::Named(_)) => {
+                return Err(ctx.internal_error(
+                    "registry entry-key category does not match its index kind",
+                    error_span,
+                ));
             }
         };
         inner_locals.bind(binding.local.id, binding_value);
@@ -1483,7 +1492,7 @@ fn eval_hir_index_access(
         else {
             return Err(ctx.eval_error("indexing a non-indexed value", span));
         };
-        let variant_name = match arg {
+        let entry_key = match arg {
             hir::expr::IndexArg::Variant(variant) => {
                 ensure_index_ref_matches_resolved(
                     &index_name,
@@ -1491,7 +1500,7 @@ fn eval_hir_index_access(
                     variant.path_span(),
                     ctx,
                 )?;
-                variant.variant.variant().clone()
+                IndexEntryKey::named(variant.variant.variant().clone())
             }
             hir::expr::IndexArg::Var(local) => {
                 let var_val = local_values
@@ -1508,14 +1517,14 @@ fn eval_hir_index_access(
                                 local.span,
                             ));
                         }
-                        variant.clone()
+                        IndexEntryKey::named(variant.clone())
                     }
                     RuntimeValue::Struct { type_name, .. } => {
-                        IndexVariantName::expect_valid(type_name.as_str())
+                        IndexEntryKey::named(IndexVariantName::expect_valid(type_name.as_str()))
                     }
-                    RuntimeValue::RangeLabel {
+                    RuntimeValue::CoordinateLabel {
                         index_name: label_index,
-                        step_index,
+                        position,
                         ..
                     } => {
                         if !index_name.matches_ref(label_index) {
@@ -1528,7 +1537,9 @@ fn eval_hir_index_access(
                                 local.span,
                             ));
                         }
-                        IndexVariantName::range_step(step_index)
+                        IndexEntryKey::position(u64::try_from(*position).map_err(|_| {
+                            ctx.internal_error("coordinate position does not fit u64", local.span)
+                        })?)
                     }
                     RuntimeValue::Int(n) => {
                         if *n < 0 {
@@ -1537,7 +1548,9 @@ fn eval_hir_index_access(
                                 local.span,
                             ));
                         }
-                        IndexVariantName::range_step(n)
+                        IndexEntryKey::position(u64::try_from(*n).map_err(|_| {
+                            ctx.eval_error(format!("index variable is too large: {n}"), local.span)
+                        })?)
                     }
                     _ => return Err(ctx.eval_error("value is not a loop variable", local.span)),
                 }
@@ -1556,13 +1569,18 @@ fn eval_hir_index_access(
                         index_expr.span,
                     ));
                 }
-                IndexVariantName::range_step(n)
+                IndexEntryKey::position(u64::try_from(n).map_err(|_| {
+                    ctx.eval_error(
+                        format!("index expression is too large: {n}"),
+                        index_expr.span,
+                    )
+                })?)
             }
         };
         current = entries
-            .get(variant_name.as_str())
+            .get(&entry_key)
             .cloned()
-            .ok_or_else(|| ctx.eval_error(format!("variant `{variant_name}` not found"), span))?;
+            .ok_or_else(|| ctx.eval_error(format!("index entry `{entry_key}` not found"), span))?;
     }
     Ok(current)
 }
@@ -1634,11 +1652,13 @@ fn eval_hir_unfold(
     };
     let idx_def = index_def_for_ref(&index_ref, ctx)
         .ok_or_else(|| ctx.eval_error(format!("unknown index `{index_ref}`"), Span::new(0, 0)))?;
-    let step_count = idx_def.step_count();
-    let variants = idx_def.variants();
-    let range_data = idx_def.range_data().ok_or_else(|| {
+    let cardinality = idx_def.cardinality();
+    let variants = idx_def.entry_keys();
+    let coordinate_data = idx_def.coordinate_data().ok_or_else(|| {
         ctx.eval_error(
-            format!("unfold requires a range index, but `{index_ref}` is not a range"),
+            format!(
+                "unfold requires a coordinate index, but `{index_ref}` is not coordinate-valued"
+            ),
             Span::new(0, 0),
         )
     })?;
@@ -1658,27 +1678,27 @@ fn eval_hir_unfold(
     let mut scan_locals = HirLocalValueMap::root();
     #[expect(
         clippy::needless_range_loop,
-        reason = "step index addresses both variants and accumulated values"
+        reason = "position addresses both labels and accumulated values"
     )]
-    for i in 1..step_count {
+    for i in 1..cardinality {
         if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(&self_key) {
             *entries = std::mem::take(&mut result_entries);
         }
-        let previous_step_index = i.saturating_sub(1);
+        let previous_position = i.saturating_sub(1);
         scan_locals.bind(
             prev.id,
-            RuntimeValue::RangeLabel {
+            RuntimeValue::CoordinateLabel {
                 index_name: index_ref.clone(),
-                step_index: previous_step_index,
-                value: range_data.step_value(previous_step_index),
+                position: previous_position,
+                value: coordinate_data.coordinate_value(previous_position),
             },
         );
         scan_locals.bind(
             curr.id,
-            RuntimeValue::RangeLabel {
+            RuntimeValue::CoordinateLabel {
                 index_name: index_ref.clone(),
-                step_index: i,
-                value: range_data.step_value(i),
+                position: i,
+                value: coordinate_data.coordinate_value(i),
             },
         );
         let body_val = eval_hir_expr(body, &overlay_values, &scan_locals, ctx)?;

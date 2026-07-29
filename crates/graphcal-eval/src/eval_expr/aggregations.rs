@@ -1,7 +1,7 @@
 use super::builtin_call::AggregationFn;
 use graphcal_compiler::builtin::BuiltinFnName;
 use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueError};
-use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use indexmap::IndexMap;
 use thiserror::Error;
 
@@ -27,7 +27,7 @@ pub(super) enum AggregationError {
 /// Evaluate an aggregation function over indexed entries.
 pub(super) fn aggregate_indexed_quantities(
     kind: AggregationFn,
-    entries: &IndexMap<IndexVariantName, RuntimeValue>,
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
 ) -> Result<RuntimeValue, AggregationError> {
     match kind {
         AggregationFn::Sum => aggregate_sum(entries).map(RuntimeValue::Quantity),
@@ -43,9 +43,7 @@ fn quantity_entry(value: &RuntimeValue, context: &'static str) -> Result<f64, Ag
     numeric::finite_quantity(quantity, context).map_err(AggregationError::from)
 }
 
-fn aggregate_sum(
-    entries: &IndexMap<IndexVariantName, RuntimeValue>,
-) -> Result<f64, AggregationError> {
+fn aggregate_sum(entries: &IndexMap<IndexEntryKey, RuntimeValue>) -> Result<f64, AggregationError> {
     let total =
         entries
             .values()
@@ -56,7 +54,7 @@ fn aggregate_sum(
 }
 
 fn aggregate_minimum(
-    entries: &IndexMap<IndexVariantName, RuntimeValue>,
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
 ) -> Result<f64, AggregationError> {
     if entries.is_empty() {
         return Err(AggregationError::EmptyExtremum {
@@ -73,7 +71,7 @@ fn aggregate_minimum(
 }
 
 fn aggregate_maximum(
-    entries: &IndexMap<IndexVariantName, RuntimeValue>,
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
 ) -> Result<f64, AggregationError> {
     if entries.is_empty() {
         return Err(AggregationError::EmptyExtremum {
@@ -90,7 +88,7 @@ fn aggregate_maximum(
 }
 
 fn aggregate_mean(
-    entries: &IndexMap<IndexVariantName, RuntimeValue>,
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
 ) -> Result<f64, AggregationError> {
     if entries.is_empty() {
         return Err(AggregationError::EmptyMean);
@@ -110,7 +108,7 @@ fn aggregate_mean(
 }
 
 fn aggregate_count(
-    entries: &IndexMap<IndexVariantName, RuntimeValue>,
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
 ) -> Result<f64, AggregationError> {
     #[expect(
         clippy::cast_precision_loss,

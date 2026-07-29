@@ -24,7 +24,10 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
                     graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
                         RcDoc::text(name.value.display_path())
                     }
-                    graphcal_compiler::syntax::ast::IndexExpr::NatExpr(nat_expr) => {
+                    graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. } => {
+                        RcDoc::text(format!("Fin({cardinality})"))
+                    }
+                    graphcal_compiler::syntax::ast::IndexExpr::BareNat(nat_expr) => {
                         RcDoc::text(nat_expr.to_string())
                     }
                 })
@@ -71,6 +74,15 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
 pub fn format_generic_arg_inline(fmt: &mut Formatter<'_>, arg: &GenericArg) -> RcDoc<'static> {
     match arg {
         GenericArg::Type(type_expr) => format_type_expr_inline(fmt, type_expr),
+        GenericArg::Index(index) => match index {
+            graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. } => {
+                RcDoc::text(format!("Fin({cardinality})"))
+            }
+            graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
+                RcDoc::text(name.value.display_path())
+            }
+            graphcal_compiler::syntax::ast::IndexExpr::BareNat(nat) => RcDoc::text(nat.to_string()),
+        },
         GenericArg::Nat(nat_expr) => RcDoc::text(nat_expr.to_string()),
         GenericArg::Ambiguous(ambiguous) => RcDoc::text(ambiguous.to_string()),
     }

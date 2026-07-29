@@ -77,7 +77,7 @@ pub struct EvalContext<'a> {
 /// Context required to evaluate an `unfold(...)` expression inline.
 ///
 /// Provides the self-referencing runtime key and declared type needed
-/// to look up the range index for iterative evaluation.
+/// to look up the coordinate index for iterative evaluation.
 pub struct UnfoldContext<'a> {
     pub self_key: RuntimeDeclKey,
     pub self_declared_type: &'a DeclaredType,

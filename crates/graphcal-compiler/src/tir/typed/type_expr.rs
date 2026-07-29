@@ -109,7 +109,8 @@ fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
             type_expr_has_index_name_at_span(base, span)
                 || indexes.iter().any(|index| match index {
                     crate::desugar::desugared_ast::IndexExpr::Name(name) => name.span == span,
-                    crate::desugar::desugared_ast::IndexExpr::NatExpr(_) => false,
+                    crate::desugar::desugared_ast::IndexExpr::Finite { .. }
+                    | crate::desugar::desugared_ast::IndexExpr::BareNat(_) => false,
                 })
         }
         TypeExprKind::TypeApplication { generic_args, .. } => generic_args.iter().any(|arg| {
@@ -254,7 +255,7 @@ const fn hir_index_ref_span(index: &hir::IndexRef) -> Span {
     match index {
         hir::IndexRef::Concrete(name) => name.span,
         hir::IndexRef::GenericParam(param) => param.span,
-        hir::IndexRef::NatExpr(nat_expr) => nat_expr.span(),
+        hir::IndexRef::Finite(nat_expr) => nat_expr.span(),
     }
 }
 
@@ -262,7 +263,7 @@ fn format_hir_index_ref(index: &hir::IndexRef) -> String {
     match index {
         hir::IndexRef::Concrete(name) => name.value.as_str().to_string(),
         hir::IndexRef::GenericParam(param) => param.value.name.to_string(),
-        hir::IndexRef::NatExpr(nat_expr) => format!("range({})", format_hir_nat_expr(nat_expr)),
+        hir::IndexRef::Finite(nat_expr) => format!("Fin({})", format_hir_nat_expr(nat_expr)),
     }
 }
 
@@ -440,7 +441,7 @@ fn resolve_hir_index_ref(
             param.value.name.clone(),
             param.span,
         )),
-        hir::IndexRef::NatExpr(nat_expr) => Ok(ResolvedIndex::NatExpr(
+        hir::IndexRef::Finite(nat_expr) => Ok(ResolvedIndex::Finite(
             normalize_hir_nat_expr(nat_expr)
                 .map_err(|err| nat_overflow_error(err, ctx.src, nat_expr.span()))?,
             nat_expr.span(),
@@ -702,7 +703,7 @@ fn substitute_params_in_resolved_index(
                 *index = replacement.clone();
             }
         }
-        ResolvedIndex::NatExpr(form, _) => {
+        ResolvedIndex::Finite(form, _) => {
             *form = form.substitute_forms(&substitutions.nats)?;
         }
         ResolvedIndex::Concrete(_, _) => {}
@@ -1001,11 +1002,12 @@ fn resolve_index_expr_name(
 ) -> Result<ResolvedIndex, GraphcalError> {
     if let Some(atom) = path.as_bare() {
         let text = atom.as_str();
-        if let Some(gp) = nat_params.iter().find(|p| p.as_str() == text) {
-            return Ok(ResolvedIndex::NatExpr(
-                NatPolyForm::from_var(gp.clone()),
-                span,
-            ));
+        if nat_params.iter().any(|param| param.as_str() == text) {
+            return Err(GraphcalError::ExpectedIndexFoundNat {
+                expression: text.to_string(),
+                src: src.clone(),
+                span: span.into(),
+            });
         }
         if let Some(gp) = index_params.iter().find(|p| p.as_str() == text) {
             return Ok(ResolvedIndex::GenericParam(gp.clone(), span));
@@ -1311,9 +1313,16 @@ pub(super) fn resolve_type_expr_inner(
             let mut resolved_indexes = Vec::with_capacity(indexes.len());
             for idx in indexes {
                 match idx {
-                    crate::desugar::desugared_ast::IndexExpr::NatExpr(nat_expr) => {
-                        let form = normalize_nat_expr(nat_expr, nat_params, src)?;
-                        resolved_indexes.push(ResolvedIndex::NatExpr(form, nat_expr.span()));
+                    crate::desugar::desugared_ast::IndexExpr::Finite { cardinality, span } => {
+                        let form = normalize_nat_expr(cardinality, nat_params, src)?;
+                        resolved_indexes.push(ResolvedIndex::Finite(form, *span));
+                    }
+                    crate::desugar::desugared_ast::IndexExpr::BareNat(nat_expr) => {
+                        return Err(GraphcalError::ExpectedIndexFoundNat {
+                            expression: nat_expr.to_string(),
+                            src: src.clone(),
+                            span: nat_expr.span().into(),
+                        });
                     }
                     crate::desugar::desugared_ast::IndexExpr::Name(path) => {
                         resolved_indexes.push(resolve_index_expr_name(
@@ -1702,7 +1711,8 @@ fn resolve_known_type_application(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "passes full type resolution context from resolve_type_application"
+    clippy::too_many_lines,
+    reason = "keeps sorted generic-argument dispatch and its shared resolution context together"
 )]
 fn resolve_type_arg_for_param(
     param: &crate::registry::types::TypeGenericParam,
@@ -1722,6 +1732,9 @@ fn resolve_type_arg_for_param(
             crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
                 ambiguous_as_type = hir::lower::ambiguous_generic_arg_as_type(ambiguous);
                 &ambiguous_as_type
+            }
+            crate::desugar::desugared_ast::GenericArg::Index(_) => {
+                return Err(generic_sort_error(param, "Index", arg.span(), src));
             }
             crate::desugar::desugared_ast::GenericArg::Nat(_) => {
                 return Err(generic_sort_error(param, "Nat", arg.span(), src));
@@ -1748,6 +1761,9 @@ fn resolve_type_arg_for_param(
                     ambiguous_as_nat = hir::lower::ambiguous_generic_arg_as_nat(ambiguous);
                     &ambiguous_as_nat
                 }
+                crate::desugar::desugared_ast::GenericArg::Index(_) => {
+                    return Err(generic_sort_error(param, "Index", arg.span(), src));
+                }
                 crate::desugar::desugared_ast::GenericArg::Type(_) => {
                     return Err(generic_sort_error(param, "type", arg.span(), src));
                 }
@@ -1758,10 +1774,49 @@ fn resolve_type_arg_for_param(
         TypeGenericConstraint::Dim => resolved_type_as_dim_arg(resolve_as_type()?)
             .map(ResolvedGenericArg::Dim)
             .ok_or_else(|| generic_sort_error(param, "non-dimension type", arg.span(), src)),
-        TypeGenericConstraint::Index => match resolve_as_type()? {
-            ResolvedTypeExpr::IndexArg(index) => Ok(ResolvedGenericArg::Index(index)),
-            _ => Err(generic_sort_error(param, "non-index type", arg.span(), src)),
-        },
+        TypeGenericConstraint::Index => {
+            if let crate::desugar::desugared_ast::GenericArg::Index(index) = arg {
+                let resolved = match index {
+                    crate::desugar::desugared_ast::IndexExpr::Finite { cardinality, span } => {
+                        ResolvedIndex::Finite(
+                            normalize_nat_expr(cardinality, nat_params, src)?,
+                            *span,
+                        )
+                    }
+                    crate::desugar::desugared_ast::IndexExpr::Name(path) => {
+                        resolve_index_expr_name(
+                            &path.value,
+                            path.span,
+                            registry,
+                            owner,
+                            index_params,
+                            nat_params,
+                            src,
+                            module_ctx,
+                        )?
+                    }
+                    crate::desugar::desugared_ast::IndexExpr::BareNat(nat) => {
+                        return Err(GraphcalError::ExpectedIndexFoundNat {
+                            expression: nat.to_string(),
+                            src: src.clone(),
+                            span: nat.span().into(),
+                        });
+                    }
+                };
+                return Ok(ResolvedGenericArg::Index(resolved));
+            }
+            if let crate::desugar::desugared_ast::GenericArg::Nat(nat) = arg {
+                return Err(GraphcalError::ExpectedIndexFoundNat {
+                    expression: nat.to_string(),
+                    src: src.clone(),
+                    span: nat.span().into(),
+                });
+            }
+            match resolve_as_type()? {
+                ResolvedTypeExpr::IndexArg(index) => Ok(ResolvedGenericArg::Index(index)),
+                _ => Err(generic_sort_error(param, "non-index type", arg.span(), src)),
+            }
+        }
         TypeGenericConstraint::Type => match resolve_as_type()? {
             ResolvedTypeExpr::IndexArg(_) => {
                 Err(generic_sort_error(param, "Index", arg.span(), src))

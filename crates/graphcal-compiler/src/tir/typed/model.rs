@@ -184,7 +184,7 @@ fn format_resolved_index(index: &ResolvedIndex) -> String {
     match index {
         ResolvedIndex::Concrete(name, _) => name.as_str().to_string(),
         ResolvedIndex::GenericParam(name, _) => name.to_string(),
-        ResolvedIndex::NatExpr(form, _) => format!("range({})", form.format()),
+        ResolvedIndex::Finite(form, _) => format!("Fin({})", form.format()),
     }
 }
 
@@ -241,28 +241,28 @@ impl ResolvedDimTerm {
     }
 }
 
-/// Typed identity for a Nat-range index used by type inference.
+/// Typed identity for a structural finite index used by type inference.
 ///
-/// Generic forms such as `range(N + 1)` are carried as normalized
-/// [`NatPolyForm`] values. They are rendered to `range(...)` only for
+/// Generic forms such as `Fin(N + 1)` are carried as normalized
+/// [`NatPolyForm`] values. They are rendered to `Fin(...)` only for
 /// diagnostics or display adapters; semantic comparisons use the typed form.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NatRangeIndexIdentity {
+pub struct FiniteIndexIdentity {
     form: NatPolyForm,
 }
 
-impl NatRangeIndexIdentity {
-    /// Create a Nat-range identity from a normalized Nat polynomial form.
+impl FiniteIndexIdentity {
+    /// Create a finite-index identity from a normalized Nat polynomial form.
     ///
     /// # Errors
     ///
     /// Returns an error when the form is a concrete `0` or cannot be
-    /// represented as a non-empty in-memory Nat range on this target.
+    /// represented as a non-empty in-memory finite structural on this target.
     pub(crate) fn try_from_form(
         form: NatPolyForm,
-    ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
+    ) -> Result<Self, crate::registry::types::FiniteIndexError> {
         if form.is_constant() {
-            crate::registry::types::NatRangeIndex::try_from_u64(form.constant())?;
+            crate::registry::types::FiniteIndex::try_from_u64(form.constant())?;
         }
         Ok(Self { form })
     }
@@ -285,27 +285,28 @@ impl NatRangeIndexIdentity {
     /// # Errors
     ///
     /// Returns an error if the identity invariant was violated before this
-    /// conversion (for example, a concrete zero-sized range).
+    /// conversion (for example, a concrete zero-sized `Fin` axis).
     pub(crate) fn to_index_type_ref(
         &self,
-    ) -> Result<IndexTypeRef, crate::registry::types::NatRangeIndexError> {
-        IndexTypeRef::from_nat_range_form(self.form.clone())
+    ) -> Result<IndexTypeRef, crate::registry::types::FiniteIndexError> {
+        IndexTypeRef::from_finite_index_form(self.form.clone())
     }
 }
 
 impl NatPolyForm {
-    /// Wrap this normalized Nat form as a typed Nat-range index identity.
+    /// Wrap this normalized Nat form as a typed finite-index index identity.
     ///
     /// # Errors
     ///
-    /// Returns an error when the form is a concrete invalid Nat range size.
+    /// Returns an error when the form is a concrete invalid finite structural size.
     #[cfg(test)]
-    pub(crate) fn to_nat_range_identity(
+    pub(crate) fn to_finite_index_identity(
         &self,
-    ) -> Result<NatRangeIndexIdentity, crate::registry::types::NatRangeIndexError> {
-        NatRangeIndexIdentity::try_from_form(self.clone())
+    ) -> Result<FiniteIndexIdentity, crate::registry::types::FiniteIndexError> {
+        FiniteIndexIdentity::try_from_form(self.clone())
     }
 }
+
 /// Normalize an AST `NatExpr` into a `NatPolyForm`.
 ///
 /// All variables referenced must be Nat generic parameters in scope.
@@ -364,11 +365,8 @@ pub enum ResolvedIndex {
     Concrete(ResolvedIndexName, Span),
     /// A generic index parameter, e.g. `I`
     GenericParam(GenericParamName, Span),
-    /// A Nat expression in index position (covers literals, variables, addition, and multiplication).
-    ///
-    /// Examples: `3` → constant form, `N` → single-variable form, `N + 1` → linear,
-    /// `M * N` → polynomial.
-    NatExpr(NatPolyForm, Span),
+    /// A structural finite index `Fin(N)` carrying a normalized Nat cardinality.
+    Finite(NatPolyForm, Span),
 }
 
 impl ResolvedIndex {
@@ -377,7 +375,7 @@ impl ResolvedIndex {
         match self {
             Self::Concrete(name, _) => name.as_str().to_string(),
             Self::GenericParam(name, _) => name.to_string(),
-            Self::NatExpr(form, _) => format!("range({})", form.format()),
+            Self::Finite(form, _) => format!("Fin({})", form.format()),
         }
     }
 }
@@ -451,7 +449,7 @@ impl ModuleTypeRegistry {
                 dim.clone(),
             );
         }
-        for index in registry.indexes.all_indexes() {
+        for index in registry.indexes.declared_indexes() {
             self.indexes.insert(
                 ResolvedIndexName::from_def(owner.clone(), index.name.clone()),
                 index.clone(),
@@ -850,7 +848,7 @@ impl TIR {
             || self
                 .registry
                 .indexes
-                .all_indexes()
+                .declared_indexes()
                 .any(crate::registry::types::IndexDef::is_required)
     }
 

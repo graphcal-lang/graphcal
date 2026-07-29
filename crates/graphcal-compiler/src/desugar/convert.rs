@@ -278,8 +278,15 @@ impl From<IndexDeclKind<Raw>> for IndexDeclKind<Desugared> {
                 end: Box::new((*end).into()),
                 step: Box::new((*step).into()),
             },
+            IndexDeclKind::Linspace { start, end, points } => Self::Linspace {
+                start: Box::new((*start).into()),
+                end: Box::new((*end).into()),
+                points,
+            },
             IndexDeclKind::RequiredNamed => Self::RequiredNamed,
-            IndexDeclKind::RequiredRange { dimension } => Self::RequiredRange { dimension },
+            IndexDeclKind::RequiredCoordinate { dimension } => {
+                Self::RequiredCoordinate { dimension }
+            }
         }
     }
 }
@@ -467,6 +474,7 @@ impl From<GenericArg<Raw>> for GenericArg<Desugared> {
     fn from(g: GenericArg<Raw>) -> Self {
         match g {
             GenericArg::Type(t) => Self::Type(t.into()),
+            GenericArg::Index(index) => Self::Index(index),
             GenericArg::Nat(n) => Self::Nat(n),
             GenericArg::Ambiguous(arg) => Self::Ambiguous(arg),
         }
@@ -598,8 +606,8 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
                 entries,
             }) => {
                 // Drop the `indexes` metadata — the entries already carry
-                // full `Index.Variant` keys (the parser materializes synthetic
-                // names for `NatRange` axes during `parse_table_*`). The
+                // full typed keys (including numeric positions for `Fin`
+                // axes). The
                 // `table` keyword is purely surface syntax preserved by the
                 // formatter via the raw AST; downstream stages see the
                 // canonical map form.

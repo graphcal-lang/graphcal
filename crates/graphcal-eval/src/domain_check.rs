@@ -52,7 +52,7 @@ pub fn check_domain_constraint(
             }
             Ok(())
         }
-        // Bool, Label, Struct, Datetime, RangeLabel: no constraint checking
+        // Bool, Label, Struct, Datetime, CoordinateLabel: no constraint checking
         _ => Ok(()),
     }
 }

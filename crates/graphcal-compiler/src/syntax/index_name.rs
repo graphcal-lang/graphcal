@@ -35,6 +35,51 @@ pub type ResolvedIndexName = ResolvedName<IndexNameNamespace>;
 /// Name of an index variant (e.g., `"Departure"`, `"Correction"`).
 pub type IndexVariantName = NameDef<IndexVariantNameNamespace>;
 
+/// Typed key for one element of an indexed collection.
+///
+/// Named axes use declared variant names. Coordinate and `Fin(N)` axes use a
+/// numeric position; `#N` is only its source/diagnostic rendering.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum IndexEntryKey {
+    Named(IndexVariantName),
+    Position(u64),
+}
+
+impl IndexEntryKey {
+    #[must_use]
+    pub const fn named(name: IndexVariantName) -> Self {
+        Self::Named(name)
+    }
+
+    #[must_use]
+    pub const fn position(position: u64) -> Self {
+        Self::Position(position)
+    }
+
+    #[must_use]
+    pub const fn as_named(&self) -> Option<&IndexVariantName> {
+        match self {
+            Self::Named(name) => Some(name),
+            Self::Position(_) => None,
+        }
+    }
+}
+
+impl From<IndexVariantName> for IndexEntryKey {
+    fn from(value: IndexVariantName) -> Self {
+        Self::Named(value)
+    }
+}
+
+impl std::fmt::Display for IndexEntryKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Named(name) => name.fmt(f),
+            Self::Position(position) => write!(f, "#{position}"),
+        }
+    }
+}
+
 /// Name of an index variable declared by an extern signature's `<I: Index>`
 /// binder (parallel to [`crate::syntax::dimension::DimVarName`] for `<D: Dim>`).
 pub type IndexVarName = NameDef<IndexVarNameNamespace>;
@@ -46,14 +91,6 @@ impl From<IndexName> for NamePath {
 }
 
 impl IndexVariantName {
-    /// Build the variant name for the `n`-th step of a range index
-    /// (`#0`, `#1`, …). Centralises the `"#"`-prefix format so registry,
-    /// parser, and evaluator can't disagree on it.
-    #[must_use]
-    pub fn range_step(n: impl std::fmt::Display) -> Self {
-        Self::expect_valid(format!("#{n}"))
-    }
-
     /// Pair this variant with its index name for qualified rendering.
     #[must_use]
     pub fn qualified_by(&self, index: &IndexName) -> QualifiedIndexVariantName {

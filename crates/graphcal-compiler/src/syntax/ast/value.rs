@@ -4,7 +4,7 @@ use crate::dimension::Rational;
 use crate::syntax::ast::common::{Ident, ModulePath};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::UnitRef;
-use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NamePath;
@@ -20,7 +20,7 @@ use crate::syntax::type_name::{ConstructorName, FieldName};
 /// `Desugared`, the `Sugar` slot is `Infallible` and these variants vanish.
 #[derive(Debug, Clone)]
 pub enum RawExprSugar {
-    /// Table literal: `table[Phase, 3] { ... }`.
+    /// Table literal: `table[Phase, Fin(3)] { ... }`.
     ///
     /// Desugars to [`ExprKind::MapLiteral`] — the `indexes` metadata is
     /// dropped (entries already carry full `Index.Variant` keys), and the
@@ -312,19 +312,21 @@ pub struct DomainBound<P: Phase = Raw> {
     pub(crate) span: Span,
 }
 
-/// A type expression (dimension annotation on declarations).
 /// An expression in index position of an indexed type.
 ///
 /// In `Velocity[Maneuver]` or `Velocity[module.Maneuver]`, the index path is
-/// an `IndexExpr::Name`.
-/// In `Dimensionless[3, 4]`, `3` and `4` are `IndexExpr::NatExpr(NatExpr::Literal(..))`.
-/// In `D[N + 1]`, `N + 1` is an `IndexExpr::NatExpr`.
+/// an [`IndexExpr::Name`]. Structural indexes use the explicit
+/// [`IndexExpr::Finite`] constructor, as in `Dimensionless[Fin(N)]`.
 #[derive(Debug, Clone)]
 pub enum IndexExpr {
-    /// A named index or generic parameter path: `Maneuver`, `I`, `N`, `module.Maneuver`
+    /// A named index or generic Index parameter path: `Maneuver`, `I`, `module.Maneuver`.
     Name(Spanned<NamePath>),
-    /// A type-level natural-number expression in index position: `3`, `N + 1`, `M + N`.
-    NatExpr(NatExpr),
+    /// The built-in finite structural-index constructor `Fin(N)`.
+    Finite { cardinality: NatExpr, span: Span },
+    /// A bare Nat written in an Index slot. Retained only so semantic lowering
+    /// can issue the targeted `Fin(...)` migration diagnostic; it is never
+    /// accepted as an index.
+    BareNat(NatExpr),
 }
 
 impl IndexExpr {
@@ -333,7 +335,8 @@ impl IndexExpr {
     pub(crate) const fn span(&self) -> Span {
         match self {
             Self::Name(name) => name.span,
-            Self::NatExpr(nat_expr) => nat_expr.span(),
+            Self::Finite { span, .. } => *span,
+            Self::BareNat(nat_expr) => nat_expr.span(),
         }
     }
 }
@@ -385,7 +388,7 @@ pub enum TypeExprKind<P: Phase = Raw> {
     DatetimeApplication { type_args: Vec<TypeExpr<P>> },
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
     DimExpr(DimExpr),
-    /// An indexed type like `Velocity[Maneuver]`, `Dimensionless[3, 4]`, or `D[M, N]`
+    /// An indexed type such as `Velocity[Maneuver]`, `Dimensionless[Fin(3)]`, or `D[I]`
     Indexed {
         base: Box<TypeExpr<P>>,
         indexes: Vec<IndexExpr>,
@@ -608,7 +611,7 @@ pub enum ExprKind<P: Phase = Raw> {
     },
     /// Unfold: `unfold(init, |prev_i, i| body)`
     ///
-    /// Generates an indexed value from a seed by iterating over a range index.
+    /// Generates an indexed value from a seed over a coordinate index.
     /// The closure receives `(prev_i, i)` bindings for the previous and current
     /// step indices, and the body can reference `@node_name[prev_i]`.
     Unfold {
@@ -662,16 +665,14 @@ pub enum ExprKind<P: Phase = Raw> {
     Sugar(P::ExprSugar),
 }
 
-/// An index specification in a table literal's bracket list: `table[Phase, 3]`
-///
-/// Named indexes reference declared index types, while Nat range literals
-/// desugar to `range(N)` with synthetic variants `#0`, `#1`, etc.
+/// An index specification in a table literal's bracket list:
+/// `table[Phase, Fin(3)]`.
 #[derive(Debug, Clone)]
 pub enum TableIndexSpec {
-    /// A named index: `Phase`, `Maneuver`, or `module.Maneuver`
+    /// A named index: `Phase`, `Maneuver`, or `module.Maneuver`.
     Named(Spanned<NamePath>),
-    /// A Nat range literal: `3` (desugars to `range(3)`)
-    NatRange(u64, Span),
+    /// An explicit finite structural index: `Fin(3)`.
+    Finite { cardinality: u64, span: Span },
 }
 
 /// Shared axes in a multi-declaration table prefix.
@@ -715,7 +716,7 @@ impl MultiDeclSharedAxes {
 
     /// The row axis.
     #[must_use]
-    pub(crate) const fn row_axis(&self) -> &TableIndexSpec {
+    pub const fn row_axis(&self) -> &TableIndexSpec {
         &self.row_axis
     }
 
@@ -760,29 +761,15 @@ impl std::ops::Index<usize> for MultiDeclSharedAxes {
 
 /// An index key in a map literal entry.
 ///
-/// Plain map literals use named indexes. Table literals over Nat axes desugar
-/// to map entries with an explicitly typed Nat range key so downstream passes
-/// do not have to recover `range(N)` semantics from a fabricated index name.
+/// Plain map literals use named indexes. Tables over `Fin(N)` axes desugar to
+/// map entries with an explicitly typed structural key, so downstream passes
+/// never recover index structure from a fabricated name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MapEntryIndex {
     /// A declared named index.
     Named(NamePath),
-    /// A Nat range literal index, `range(N)`.
-    NatRange(u64),
-}
-
-impl MapEntryIndex {
-    /// Return the leaf registry name for declared named indexes only.
-    ///
-    /// Nat ranges are not declared registry indexes; callers must pattern-match
-    /// and use a typed Nat-range identity instead of fabricating an `IndexName`.
-    #[must_use]
-    pub fn named_registry_name(&self) -> Option<IndexName> {
-        match self {
-            Self::Named(name) => Some(IndexName::from(name.leaf().clone())),
-            Self::NatRange(_) => None,
-        }
-    }
+    /// A finite structural index, `Fin(N)`.
+    Finite(u64),
 }
 
 impl From<IndexName> for MapEntryIndex {
@@ -801,7 +788,7 @@ impl std::fmt::Display for MapEntryIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Named(name) => write!(f, "{name}"),
-            Self::NatRange(size) => write!(f, "range({size})"),
+            Self::Finite(size) => write!(f, "Fin({size})"),
         }
     }
 }
@@ -812,14 +799,14 @@ impl TableIndexSpec {
     pub const fn span(&self) -> Span {
         match self {
             Self::Named(spanned) => spanned.span,
-            Self::NatRange(_, span) => *span,
+            Self::Finite { span, .. } => *span,
         }
     }
 
-    /// Returns `true` if this is a Nat range index.
+    /// Returns `true` if this is a structural `Fin(N)` index.
     #[must_use]
-    pub const fn is_nat_range(&self) -> bool {
-        matches!(self, Self::NatRange(..))
+    pub const fn is_finite_index(&self) -> bool {
+        matches!(self, Self::Finite { .. })
     }
 }
 
@@ -833,7 +820,7 @@ impl TableIndexSpec {
 pub struct MapEntryKey {
     pub index: Spanned<MapEntryIndex>,
     pub additional_index_spans: Vec<Span>,
-    pub variant: Spanned<IndexVariantName>,
+    pub variant: Spanned<IndexEntryKey>,
 }
 
 /// An entry in a map literal.
@@ -846,25 +833,20 @@ pub struct MapEntry<P: Phase = Raw> {
     pub value: Expr<P>,
 }
 
-/// A binding in a `for` comprehension: `m: Maneuver` or `i: range(3)`
+/// A binding in a `for` comprehension: `m: Maneuver` or `i: Fin(3)`
 #[derive(Debug, Clone)]
 pub struct ForBinding {
     pub var: Spanned<LocalName>,
     pub index: ForBindingIndex,
 }
 
-/// The index in a for binding: either a named index or a `range(...)` expression.
+/// The index in a for binding: either a named index or `Fin(N)`.
 #[derive(Debug, Clone)]
 pub enum ForBindingIndex {
-    /// A named index: `for m: Maneuver { ... }` or `for m: module.Maneuver { ... }`
+    /// A named index: `for m: Maneuver { ... }` or `for m: module.Maneuver { ... }`.
     Named(Spanned<NamePath>),
-    /// A range expression: `for i: range(3) { ... }` or `for i: range(N) { ... }`
-    Range {
-        /// The argument to `range(...)` — a nat literal or generic nat param.
-        arg: NatExpr,
-        /// Span of the entire `range(...)` expression.
-        span: Span,
-    },
+    /// An explicit structural index: `for i: Fin(N) { ... }`.
+    Finite { cardinality: NatExpr, span: Span },
 }
 
 /// A Nat expression (type-level natural number).
@@ -1026,6 +1008,8 @@ impl std::fmt::Display for AmbiguousGenericArg {
 pub enum GenericArg<P: Phase = Raw> {
     /// An unambiguously type-shaped expression, such as `D[I]` or `D / Time`.
     Type(TypeExpr<P>),
+    /// An explicit index-shaped expression, currently `Fin(N)`.
+    Index(IndexExpr),
     /// An unambiguously Nat-shaped expression, such as `3` or `N + 1`.
     Nat(NatExpr),
     /// A bare name or name-only product that may denote either sort.
@@ -1038,6 +1022,7 @@ impl<P: Phase> GenericArg<P> {
     pub const fn span(&self) -> Span {
         match self {
             Self::Type(te) => te.span,
+            Self::Index(index) => index.span(),
             Self::Nat(ne) => ne.span(),
             Self::Ambiguous(arg) => arg.span(),
         }

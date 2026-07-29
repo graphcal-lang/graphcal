@@ -194,12 +194,14 @@ fn check_property_value(
             }
             match infer_property_type(ctx, field)? {
                 InferredType::Int => Ok(()),
-                InferredType::Quantity(d) | InferredType::RangeIndexLabel { dimension: d, .. }
+                InferredType::Quantity(d)
+                | InferredType::CoordinateIndexLabel { dimension: d, .. }
                     if d.is_dimensionless() =>
                 {
                     Ok(())
                 }
-                InferredType::Quantity(d) | InferredType::RangeIndexLabel { dimension: d, .. } => {
+                InferredType::Quantity(d)
+                | InferredType::CoordinateIndexLabel { dimension: d, .. } => {
                     Err(GraphcalError::PlotPropertyDimensioned {
                         property,
                         dimension: ctx.registry.dimensions.format_dimension(&d),

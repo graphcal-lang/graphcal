@@ -3100,14 +3100,14 @@ fn eval_plot_line_json() {
         "expected line mark: {stdout}"
     );
 
-    // Range-index data must plot as numeric values, not nominal "#N"
+    // Coordinate-index data must plot as numeric values, not positional "#N"
     // variant labels (#839).
     let json = parse_plot_json_stdout(&stdout);
     let spec = &json[0]["spec"];
     assert_eq!(
         spec["encoding"]["x"]["type"].as_str(),
         Some("quantitative"),
-        "expected quantitative x for range-index data: {stdout}"
+        "expected quantitative x for coordinate-index data: {stdout}"
     );
     let values = spec["data"]["values"]
         .as_array()

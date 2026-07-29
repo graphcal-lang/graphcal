@@ -4,4 +4,4 @@ import plugin "graphcal:demo" as demo {
     fn make<D: Dim, I: Index>(x: D) -> D[I];
 }
 
-node y: Velocity[3] = demo.make(1.0 m/s);
+node y: Velocity[Fin(3)] = demo.make(1.0 m/s);

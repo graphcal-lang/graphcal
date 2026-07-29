@@ -1,12 +1,11 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 679
 expression: formatted
 ---
 // Required index declarations — bindable via parameterized import.
 // Required named index (no variants specified)
 pub(bind) index Phase;
 
-// Required range indexes with dim constraints
+// Required coordinate indexes with dimension constraints
 pub(bind) index Step: Time;
 pub(bind) index Accel: Length / Time^2;

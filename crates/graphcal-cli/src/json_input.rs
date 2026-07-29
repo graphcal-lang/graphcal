@@ -24,7 +24,7 @@ use graphcal_compiler::syntax::ast::{
     Expr, ExprKind, FieldInit, Ident, IdentPath, MapEntry, MapEntryIndex, MapEntryKey,
 };
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::names::{NameAtom, NameAtomError, NamePath};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::{Span, Spanned};
@@ -443,14 +443,14 @@ fn convert_indexed(
                     index: Spanned::new(MapEntryIndex::Named(index_path.clone()), SYNTH_SPAN),
                     additional_index_spans: Vec::new(),
                     variant: Spanned::new(
-                        IndexVariantName::try_new(variant.clone()).map_err(|reason| {
-                            JsonInputError::InvalidName {
+                        IndexEntryKey::named(IndexVariantName::try_new(variant.clone()).map_err(
+                            |reason| JsonInputError::InvalidName {
                                 param: format!("{param_name}[{variant}]"),
                                 role: "index variant",
                                 value: variant.clone(),
                                 reason,
-                            }
-                        })?,
+                            },
+                        )?),
                         SYNTH_SPAN,
                     ),
                 }),

@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+expected Index, found Nat `3`
+    Diagnostic severity: error
+Begin snippet for bare_nat_index_position.gcl starting at line 1, column 1
+
+snippet line 1: // Nat values are not implicitly converted to structural indexes.
+snippet line 2: param values: Dimensionless[3];
+    label at line 2, column 29: Nat is not implicitly converted to Index
+diagnostic help: write `Fin(3)` for an explicit finite structural index
+diagnostic code: graphcal::I008

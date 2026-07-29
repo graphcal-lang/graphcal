@@ -156,7 +156,7 @@ impl GenericArg {
             Self::Index(index) => match index {
                 IndexRef::Concrete(name) => name.span,
                 IndexRef::GenericParam(param) => param.span,
-                IndexRef::NatExpr(nat) => nat.span(),
+                IndexRef::Finite(cardinality) => cardinality.span(),
             },
             Self::Nat(nat) => nat.span(),
             Self::Type(type_expr) => type_expr.span,
@@ -203,8 +203,8 @@ pub enum IndexRef {
     Concrete(Spanned<ResolvedIndexName>),
     /// A generic index parameter (`I: Index`).
     GenericParam(Spanned<GenericParamId>),
-    /// A type-level natural-number expression.
-    NatExpr(NatExpr),
+    /// A structural finite index `Fin(N)`.
+    Finite(NatExpr),
 }
 
 /// A resolved type-level natural-number expression.

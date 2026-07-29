@@ -56,8 +56,10 @@ KEYWORD
    as keywords only in specific syntactic positions and are otherwise
    valid identifiers. In particular, only bare "scan"/"unfold" immediately
    followed by "(" select recurrence forms; qualified path segments do not.
-   "linspace" and "step" are special only in the range-index production.
-   The full contextual set is: "scan", "unfold", "step", "linspace", "range",
+   "range", "linspace", "step", and "points" are special only in
+   coordinate-index declarations; "Fin" is special only in Index positions.
+   The full contextual set includes: "scan", "unfold", "range", "linspace",
+   "step", "points", "Fin",
    "mark", "encode", "plots", "point", "line", "bar", "area", "rect",
    "tick", "min", "max", "Dim", "Index", "Nat", "Type",
    "Dimensionless", "Bool", "Int", "Datetime". *)
@@ -161,16 +163,16 @@ attribute_arg_list
 
 attribute_arg
    = attribute_path
-   | attribute_range_step
+   | attribute_finite_position
    | attribute_group;
 
 attribute_path
    = IDENT, { ".", IDENT };
 
-(* Key for a Nat range axis (e.g. `#[expected_fail(#2)]`), matching the   *)
-(* `#N` slice-label syntax that `table` expressions use for range axes.   *)
-attribute_range_step
-   = "#", NUMBER;
+(* Positional key for a Fin axis (e.g. `#[expected_fail(#2)]`), matching *)
+(* the `#N` slice-label syntax used by `table` expressions.              *)
+attribute_finite_position
+   = "#", NAT_LITERAL;
 
 attribute_group
    = "(", attribute_arg, { ",", attribute_arg }, [ "," ], ")";
@@ -209,7 +211,8 @@ const_decl
 (*                                                                      *)
 (* A single surface form introducing N parallel declarations (of        *)
 (* possibly-mixed kinds) that share the row axis of a table literal.    *)
-(* Attributes and `pub` / `pub(bind)` are forbidden on multi-decls.     *)
+(* Attributes are forbidden. Visibility is written per slot and follows  *)
+(* the same declaration-kind rules as ordinary declarations.             *)
 (*                                                                      *)
 (* v1: homogeneous 1-D slots (every slot typed `T[SharedAxis]`),        *)
 (*     tuple entries all `_`, header cells all `_`.                     *)
@@ -220,7 +223,7 @@ multi_decl
      "=", multi_table_expr, ";";
 
 multi_decl_slot
-   = decl_kind, IDENT, ":", type_expr;
+   = [ visibility ], decl_kind, IDENT, ":", type_expr;
 
 decl_kind
    = "param"
@@ -235,7 +238,7 @@ multi_index_list
 
 axis_ref
    = ident_path
-   | NUMBER;
+   | "Fin", "(", NAT_LITERAL, ")";
 
 slot_tuple
    = "(", slot_axes, { ",", slot_axes }, [ "," ], ")";
@@ -252,7 +255,8 @@ multi_slice_section
    = "[", multi_slice_label, { ",", multi_slice_label }, "]", multi_single;
 
 multi_slice_label
-   = qualified_variant;
+   = qualified_variant
+   | "#", NAT_LITERAL;
 
 multi_single
    = multi_header_row, multi_data_row, { multi_data_row };
@@ -265,7 +269,8 @@ header_label
    | qualified_variant;
 
 multi_data_row
-   = IDENT, ":", expr, { ",", expr }, ";";
+   = [ IDENT, ":" ], expr, { ",", expr }, ";";
+(* The row label is required for a named row axis and omitted for `Fin(N)`. *)
 
 (* --- dimension --- *)
 (* Three forms:
@@ -380,22 +385,30 @@ generic_constraint
 (* "Dim", "Index", "Nat", and "Type" are contextual keywords here. *)
 
 (* --- index --- *)
-(* Four forms of index declaration:
+(* Five forms of index declaration:
    1. Named (categorical):  index Maneuver = { Departure, Correction, Insertion };
-   2. Linspace (range):     index TimeStep = linspace(0.0 s, 1.0 s, step: 0.1 s);
-   3. Required named:       index Foo;
-   4. Required range:       index Foo: Time;
+   2. Exact increment:      index Time = range(0.0 s, 1.0 s, step: 0.1 s);
+   3. Exact point count:    index Samples = linspace(0.0 s, 1.0 s, points: 11);
+   4. Required named:       index Foo;
+   5. Required coordinate:  index Foo: Time;
 *)
 index_decl
    = "index", IDENT, "=",
      "{", IDENT, { ",", IDENT }, [ "," ], "}", ";"
    | "index", IDENT, "=",
-     "linspace", "(", expr, ",", expr, ",", "step", ":", expr, ")", ";"
+     "range", "(", expr, ",", expr, ",", "step", ":", expr, ")", ";"
+   | "index", IDENT, "=",
+     "linspace", "(", expr, ",", expr, ",", "points", ":", nat_expr, ")", ";"
    | "index", IDENT, ";"
    | "index", IDENT, ":", dim_expr, ";";
 
-(* "step" and "linspace" are contextual keywords.
-   Required indexes must be bound via parameterized include. *)
+(* Coordinate constructor names and labels are contextual identifiers.
+   Their bounds/step are static finite quantities of one dimension. `range`
+   requires a nonzero direction-compatible step that lands on the endpoint;
+   `linspace` requires a static positive Nat count and preserves both endpoints
+   when the count is at least two. `Fin(N)` is structural and is not legal on
+   the right side of index_decl. Required indexes must be bound via
+   parameterized include. *)
 
 (* --- import --- *)
 (* Import brings names (types, dimensions, units, consts, dags,
@@ -632,8 +645,9 @@ layer_named_field
    type_expr corresponds to DeclType: a value_type optionally indexed
    or constrained.
    type_expr_base corresponds to ValueType (without indexing/constraints).
-   Constructor payload fields must be ValueTypes, not DeclTypes.
-   param, node, const node annotations use DeclType (type_expr). *)
+   Constructor payload fields and param, node, const node annotations use
+   DeclType (type_expr), including explicit indexed payloads such as
+   `D[Fin(N)]`. *)
 type_expr
    = type_expr_base, [ type_constraints ], [ "[", index_expr_list, "]" ]
    | type_expr_base, [ "[", index_expr_list, "]" ];
@@ -667,13 +681,19 @@ type_constraint
 type_application
    = ident_path, "<", generic_arg, { ",", generic_arg }, [ "," ], ">";
 
-(* Index expressions in indexed types: T[I], T[3], T[N + 1], T[M * N], T[module.I] *)
+(* Index expressions in indexed types: T[I], T[Fin(3)], T[Fin(N + 1)],
+   T[module.I]. Nat expressions are never lifted implicitly to Index. *)
 index_expr_list
    = index_expr, { ",", index_expr }, [ "," ];
 
 index_expr
-   = nat_expr
+   = finite_index
    | ident_path;
+
+finite_index
+   = "Fin", "(", nat_expr, ")";
+(* After generic substitution, N must be positive and within the compiler's
+   practical index-cardinality limit. *)
 
 nat_expr
    = nat_mul_expr, { "+", nat_mul_expr };
@@ -685,7 +705,7 @@ nat_atom
    = IDENT
    | NAT_LITERAL;
 (* Nat subtraction is deliberately unsupported. Express the larger side with
-   addition, e.g. input `D[N + 1]` and smaller output `D[N]`. *)
+   addition, e.g. input `D[Fin(N + 1)]` and smaller output `D[Fin(N)]`. *)
 
 NAT_LITERAL
    = DIGIT_SEQ;
@@ -902,6 +922,7 @@ generic_arg_list
 
 generic_arg
    = type_expr
+   | finite_index
    | nat_expr;
 (* A bare IDENT or name-only product is syntactically ambiguous between a
    dimension/type expression and a Nat expression. The compiler preserves
@@ -940,15 +961,19 @@ tuple_key_entry
 (*                                                                      *)
 (* The body grammar is context-sensitive: whether a header row is       *)
 (* expected, whether data rows carry row labels, and whether slice      *)
-(* labels are `Index.Variant` / `module.Index.Variant` or `#N` all    *)
-(* corresponding axis in `index_list` is named or a Nat range literal.  *)
+(* labels are `Index.Variant` / `module.Index.Variant` or `#N` all      *)
+(* depend on whether the corresponding axis is named or `Fin(N)`.       *)
 table_expr
    = "table", "[", index_list, "]", "{", table_body, "}";
 
-(* Each index is a named identifier path or an integer literal which    *)
-(* desugars to `range(N)` with synthetic variants `#0`, `#1`, ...       *)
+(* Table finite axes currently require a concrete Nat literal because   *)
+(* table shape is validated while parsing the body.                     *)
 index_list
-   = (ident_path | NUMBER), { ",", (ident_path | NUMBER) }, [ "," ];
+   = table_index, { ",", table_index }, [ "," ];
+
+table_index
+   = ident_path
+   | "Fin", "(", NAT_LITERAL, ")";
 
 table_body
    = table_slice_section, { table_slice_section }   (* 3D+: slice sections *)
@@ -960,20 +985,20 @@ table_slice_section
 
 table_slice_label
    = qualified_variant          (* for named axes *)
-   | "#", NUMBER;               (* for Nat range axes *)
+   | "#", NAT_LITERAL;          (* for Fin axes *)
 
-(* When the column axis is a Nat range, `table_header_row` is omitted.  *)
+(* When the column axis is Fin, `table_header_row` is omitted.          *)
 table_single
    = [ table_header_row ], table_data_row, { table_data_row };
 
 table_header_row
    = ":", IDENT, { ",", IDENT }, ";";
 
-(* When the row axis is a Nat range, `IDENT, ":"` is omitted.           *)
+(* When the row axis is Fin, `IDENT, ":"` is omitted.                  *)
 table_data_row
    = [ IDENT, ":" ], expr, { ",", expr }, ";";
 
-(* When the index is a Nat range, `IDENT, ":"` is omitted.              *)
+(* When the index is Fin, `IDENT, ":"` is omitted.                     *)
 table_data_row_1d
    = [ IDENT, ":" ], expr, ";";
 
@@ -1022,10 +1047,10 @@ for_binding
 
 for_binding_index
    = ident_path                               (* named index *)
-   | "range", "(", nat_expr, ")";                         (* nat range *)
+   | finite_index;                            (* structural index *)
 
-(* "range" is a contextual keyword in for bindings. Its argument uses the
-   same precedence-aware nat_expr defined with type expressions above. *)
+(* `Fin` is contextual in Index position. Its argument uses the same
+   precedence-aware nat_expr defined with type expressions above. *)
 
 scan_expr
    = "scan", "(", expr, ",", expr, ",",

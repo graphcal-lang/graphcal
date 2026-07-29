@@ -1,6 +1,6 @@
-// range_index.gcl -- Range index and unfold
-// A range index with time dim
-pub index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
+// range_index.gcl -- Exact-step coordinate index and unfold
+// A coordinate index with time dimension
+pub index TimeStep = range(0.0 s, 1.0 s, step: 0.5 s);
 
 // Growth rate (1/s)
 param rate: Frequency = 0.5 Hz;

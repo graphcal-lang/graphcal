@@ -30,6 +30,14 @@ pub enum CompletionContext {
     Expression,
 }
 
+/// Contextual completion inside an `index Name = ...` declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateIndexCompletionContext {
+    Constructor,
+    StepLabel,
+    PointsLabel,
+}
+
 /// Tokenize the source and collect all `(Token, Span)` pairs.
 fn tokenize(source: &str) -> Vec<(Token, Span)> {
     let mut lexer = Lexer::new(source);
@@ -158,6 +166,74 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
     None
 }
 
+/// Determine whether the cursor is at a contextual coordinate-constructor or
+/// authoritative-argument label position.
+pub fn determine_coordinate_index_completion_context(
+    source: &str,
+    offset: usize,
+) -> Option<CoordinateIndexCompletionContext> {
+    let tokens = tokenize(source);
+    let end = find_token_before(&tokens, offset, Boundary::Exclusive)?;
+    let statement_start = tokens[..=end]
+        .iter()
+        .rposition(|(token, _)| matches!(token, Token::Semicolon | Token::LBrace | Token::RBrace))
+        .map_or(0, |position| position + 1);
+    let statement = &tokens[statement_start..=end];
+    let index_position = statement
+        .iter()
+        .position(|(token, _)| *token == Token::Index)?;
+    let equals_position = statement[index_position + 1..]
+        .iter()
+        .position(|(token, _)| *token == Token::Eq)
+        .map(|position| position + index_position + 1)?;
+    let Some((head, _)) = statement.get(equals_position + 1) else {
+        return Some(CoordinateIndexCompletionContext::Constructor);
+    };
+    let constructor = match head {
+        Token::ContextualKeyword(graphcal_compiler::syntax::token::ContextualKeyword::Range) => {
+            CoordinateIndexCompletionContext::StepLabel
+        }
+        Token::ContextualKeyword(graphcal_compiler::syntax::token::ContextualKeyword::Linspace) => {
+            CoordinateIndexCompletionContext::PointsLabel
+        }
+        token if token.is_identifier() => {
+            return Some(CoordinateIndexCompletionContext::Constructor);
+        }
+        _ => return None,
+    };
+
+    let mut depth = 0_usize;
+    let mut commas = 0_usize;
+    let mut label_has_colon = false;
+    for (token, _) in &statement[equals_position + 2..] {
+        match token {
+            Token::LParen => depth += 1,
+            Token::RParen if depth == 0 => return None,
+            Token::RParen => depth -= 1,
+            Token::Comma if depth == 1 => commas += 1,
+            Token::Colon if depth == 1 && commas >= 2 => label_has_colon = true,
+            _ => {}
+        }
+    }
+    (commas >= 2 && !label_has_colon).then_some(constructor)
+}
+
+fn is_in_table_index_list(tokens: &[(Token, Span)], idx: usize) -> bool {
+    let mut nested_brackets = 0_usize;
+    for position in (0..=idx).rev() {
+        match tokens[position].0 {
+            Token::RBracket => nested_brackets += 1,
+            Token::LBracket if nested_brackets == 0 => {
+                return position > 0 && tokens[position - 1].0 == Token::Table;
+            }
+            Token::LBracket => nested_brackets -= 1,
+            Token::Semicolon if nested_brackets == 0 => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Determine the completion context at the given cursor offset.
 pub fn determine_completion_context(source: &str, offset: usize) -> CompletionContext {
     let tokens = tokenize(source);
@@ -177,6 +253,10 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
 
     let (ref tok, _span) = tokens[idx];
 
+    if is_in_table_index_list(&tokens, idx) {
+        return CompletionContext::TypeAnnotation;
+    }
+
     // If cursor is inside or immediately after an identifier, look at what's before it.
     if tok.is_identifier() && idx > 0 {
         let (ref prev_tok, _) = tokens[idx - 1];
@@ -193,13 +273,55 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
         Token::Colon => CompletionContext::TypeAnnotation,
         Token::Arrow => CompletionContext::ConversionTarget,
         Token::Semicolon | Token::RBrace => CompletionContext::TopLevel,
-        _ => CompletionContext::Expression,
+        _ => {
+            // A type annotation can contain nested index and generic syntax,
+            // so the immediately preceding token is often `[`, `<`, or `,`
+            // rather than the declaration's `:`. The nearest assignment or
+            // statement boundary distinguishes that left-hand type region
+            // from an expression such as `table[...]` on the right-hand side.
+            let boundary = tokens[..=idx].iter().rev().find_map(|(token, _)| {
+                matches!(token, Token::Colon | Token::Eq | Token::Semicolon).then_some(token)
+            });
+            if matches!(boundary, Some(Token::Colon)) {
+                CompletionContext::TypeAnnotation
+            } else {
+                CompletionContext::Expression
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coordinate_index_completion_positions_are_contextual() {
+        for (source, expected) in [
+            (
+                "index Axis = ",
+                CoordinateIndexCompletionContext::Constructor,
+            ),
+            (
+                "index Axis = range(0.0, 1.0, )",
+                CoordinateIndexCompletionContext::StepLabel,
+            ),
+            (
+                "index Axis = linspace(0.0, 1.0, )",
+                CoordinateIndexCompletionContext::PointsLabel,
+            ),
+        ] {
+            assert_eq!(
+                determine_coordinate_index_completion_context(source, source.len()),
+                Some(expected)
+            );
+        }
+        let after_label = "index Axis = range(0.0, 1.0, step: )";
+        assert_eq!(
+            determine_coordinate_index_completion_context(after_label, after_label.len()),
+            None
+        );
+    }
 
     // ---- FnCallContext tests ----
 
@@ -299,7 +421,9 @@ mod tests {
 
     #[test]
     fn context_after_contextual_identifier_after_at() {
-        for name in ["scan", "unfold", "linspace", "step"] {
+        for name in [
+            "scan", "unfold", "range", "linspace", "step", "points", "Fin",
+        ] {
             let source = format!("@{name}");
             assert!(matches!(
                 determine_completion_context(&source, source.len()),
@@ -346,6 +470,26 @@ mod tests {
         // param x: Len|
         let source = "param x: Len";
         let offset = source.len();
+        assert!(matches!(
+            determine_completion_context(source, offset),
+            CompletionContext::TypeAnnotation
+        ));
+    }
+
+    #[test]
+    fn context_in_nested_index_type() {
+        let source = "param values: Dimensionless[Fin(3)];";
+        let offset = source.find("Fin").unwrap();
+        assert!(matches!(
+            determine_completion_context(source, offset),
+            CompletionContext::TypeAnnotation
+        ));
+    }
+
+    #[test]
+    fn context_in_table_index_list() {
+        let source = "param values: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0; 2.0; 3.0; };";
+        let offset = source.rfind("Fin").unwrap();
         assert!(matches!(
             determine_completion_context(source, offset),
             CompletionContext::TypeAnnotation

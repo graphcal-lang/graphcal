@@ -7,7 +7,6 @@
 //! HIR — the frozen `IR` carries no syntax-AST expression.
 
 use std::collections::{HashMap, HashSet};
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -1720,8 +1719,8 @@ impl UnfrozenIR {
                             .into_iter()
                             .filter(|key| {
                                 // Drop keys that reference any overridden index.
-                                // `#N` range segments never name an index, so
-                                // they cannot reference an overridden one.
+                                // `#N` finite-position segments never name an
+                                // index, so they cannot reference an overridden one.
                                 !key.iter().any(|part| {
                                     part.index_path().is_some_and(|index_path| {
                                         index_bindings.contains_key(&IndexName::from_atom(
@@ -1862,7 +1861,8 @@ impl OverrideReconciliationChecker<'_> {
                                 }
                             }
                         }
-                        crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
+                        crate::desugar::desugared_ast::GenericArg::Index(_)
+                        | crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
                     }
                 }
                 Ok(())
@@ -2301,6 +2301,9 @@ fn substitute_generic_arg_index_names(
         crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
             substitute_type_expr_index_names(type_expr, bindings);
         }
+        crate::desugar::desugared_ast::GenericArg::Index(index) => {
+            substitute_index_expr_names(index, bindings);
+        }
         crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
             rewrite_ambiguous_generic_arg_names(ambiguous, bindings);
         }
@@ -2318,10 +2321,23 @@ fn substitute_generic_arg_nominal_names<K>(
         crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
             substitute_type_expr_nominal_names(type_expr, bindings);
         }
+        crate::desugar::desugared_ast::GenericArg::Index(_)
+        | crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
         crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
             rewrite_ambiguous_generic_arg_names(ambiguous, bindings);
         }
-        crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
+    }
+}
+
+fn substitute_index_expr_names(
+    index: &mut crate::desugar::desugared_ast::IndexExpr,
+    bindings: &HashMap<IndexName, IndexName>,
+) {
+    if let crate::desugar::desugared_ast::IndexExpr::Name(path) = index
+        && let Some(atom) = path.value.as_bare()
+        && let Some(new_name) = bindings.get(atom.as_str())
+    {
+        path.value = crate::syntax::names::NamePath::expect_local(new_name.as_str());
     }
 }
 
@@ -2346,13 +2362,8 @@ pub fn substitute_type_expr_index_names(
     }
     match &mut type_expr.kind {
         TypeExprKind::Indexed { base, indexes } => {
-            for idx_expr in indexes.iter_mut() {
-                if let crate::desugar::desugared_ast::IndexExpr::Name(path) = idx_expr
-                    && let Some(atom) = path.value.as_bare()
-                    && let Some(new_name) = bindings.get(atom.as_str())
-                {
-                    path.value = crate::syntax::names::NamePath::expect_local(new_name.as_str());
-                }
+            for index in indexes {
+                substitute_index_expr_names(index, bindings);
             }
             substitute_type_expr_index_names(base, bindings);
         }
@@ -2645,9 +2656,9 @@ pub fn register_selected_declarations(
 ///
 /// 1. Base dimensions, types, union types, named/required-named indexes
 /// 2. Derived dimensions (topologically sorted by inter-dependency)
-/// 3. Required-range indexes (depend only on dimensions)
+/// 3. Required-coordinate indexes (depend only on dimensions)
 /// 4. Units (topologically sorted by inter-dependency)
-/// 5. Range indexes (depend on dimensions and units)
+/// 5. Coordinate indexes (depend on dimensions and units)
 ///
 /// When `filter` is `None`, all declarations are registered.
 /// When `filter` is `Some(names)`, default-namespace declarations and type
@@ -2668,8 +2679,8 @@ fn register_declarations_impl(
     // Collect declarations by kind for phased registration.
     let mut derived_dims: Vec<&DimDecl> = Vec::new();
     let mut units: Vec<&UnitDecl> = Vec::new();
-    let mut required_range_indexes: Vec<(&IndexDecl, Span)> = Vec::new();
-    let mut range_indexes: Vec<(&IndexDecl, Span)> = Vec::new();
+    let mut required_coordinate_indexes: Vec<(&IndexDecl, Span)> = Vec::new();
+    let mut coordinate_indexes: Vec<(&IndexDecl, Span)> = Vec::new();
 
     // Phase 1: Register base dimensions, types, union types, named/required-named indexes.
     // Also collect derived dims, units, and dependent indexes for later phases.
@@ -2694,11 +2705,11 @@ fn register_declarations_impl(
             }
             DeclKind::Index(idx) if should_register_default(idx.name.value.as_str()) => {
                 match &idx.kind {
-                    IndexDeclKind::RequiredRange { .. } => {
-                        required_range_indexes.push((idx, decl.span));
+                    IndexDeclKind::RequiredCoordinate { .. } => {
+                        required_coordinate_indexes.push((idx, decl.span));
                     }
-                    IndexDeclKind::Range { .. } => {
-                        range_indexes.push((idx, decl.span));
+                    IndexDeclKind::Range { .. } | IndexDeclKind::Linspace { .. } => {
+                        coordinate_indexes.push((idx, decl.span));
                     }
                     IndexDeclKind::Named { .. } | IndexDeclKind::RequiredNamed => {
                         register_index_decl(idx, registry, src, decl.span)?;
@@ -2723,8 +2734,8 @@ fn register_declarations_impl(
         }
     }
 
-    // Phase 3: Register required-range indexes (depend only on dimensions).
-    for (idx, span) in &required_range_indexes {
+    // Phase 3: Register required-coordinate indexes (depend only on dimensions).
+    for (idx, span) in &required_coordinate_indexes {
         register_index_decl(idx, registry, src, *span)?;
     }
 
@@ -2736,25 +2747,44 @@ fn register_declarations_impl(
         }
     }
 
-    // Phase 5: Register range indexes (depend on dimensions and units).
-    for (idx, span) in &range_indexes {
+    // Phase 5: Register coordinate indexes (depend on dimensions and units).
+    for (idx, span) in &coordinate_indexes {
         register_index_decl(idx, registry, src, *span)?;
     }
 
-    // Phase 6: Register synthetic nat range indexes for any integer literals
-    // appearing in type position (e.g., `param A: Length[3, 4]`) or
-    // for-range expressions (e.g., `for i: range(3) { ... }`).
+    // Phase 6: Register concrete Fin definitions under typed structural identities
+    // appearing in type positions (e.g., `Length[Fin(3), Fin(4)]`) or
+    // finite comprehensions (e.g., `for i: Fin(3) { ... }`).
     for decl in &file.declarations {
         match &decl.kind {
             DeclKind::Param(d) => {
-                collect_nat_ranges_from_type_expr(&d.type_ann, registry, src)?;
+                collect_finite_indexes_from_type_expr(&d.type_ann, registry, src)?;
                 if let Some(ref value) = d.value {
-                    collect_nat_ranges_from_expr(value, registry, src)?;
+                    collect_finite_indexes_from_expr(value, registry, src)?;
                 }
             }
             DeclKind::Node(d) | DeclKind::ConstNode(d) => {
-                collect_nat_ranges_from_type_expr(&d.type_ann, registry, src)?;
-                collect_nat_ranges_from_expr(&d.value, registry, src)?;
+                collect_finite_indexes_from_type_expr(&d.type_ann, registry, src)?;
+                collect_finite_indexes_from_expr(&d.value, registry, src)?;
+            }
+            DeclKind::Type(d) => {
+                for default in d
+                    .generic_params
+                    .iter()
+                    .filter_map(|param| param.default.as_ref())
+                {
+                    collect_finite_indexes_from_generic_arg(default, registry, src)?;
+                }
+                if let crate::desugar::desugared_ast::TypeDeclBody::Constructors(members) = &d.body
+                {
+                    for field in members
+                        .iter()
+                        .filter_map(|member| member.payload.as_ref())
+                        .flatten()
+                    {
+                        collect_finite_indexes_from_type_expr(&field.type_ann, registry, src)?;
+                    }
+                }
             }
             _ => {}
         }
@@ -3182,58 +3212,102 @@ fn contains_graph_ref(expr: &Expr) -> bool {
     crate::ir::resolve::contains_graph_ref(expr)
 }
 
-/// Convert an AST-level `u64` nat literal to the `usize` size the registry
-/// stores, raising a graceful runtime error if the value doesn't fit in
-/// `usize` on the current target (e.g., a > 4G literal on a 32-bit build).
-fn nat_size_to_usize(
-    n: u64,
-    span: Span,
+fn concrete_nat_value(
+    expr: &crate::desugar::desugared_ast::NatExpr,
     src: &NamedSource<Arc<String>>,
-) -> Result<NonZeroUsize, GraphcalError> {
-    let size = usize::try_from(n).map_err(|_| GraphcalError::EvalError {
-        message: format!("nat range size {n} does not fit in usize on this target"),
-        src: src.clone(),
-        span: span.into(),
-    })?;
-    NonZeroUsize::new(size).ok_or_else(|| {
-        eval_error(
-            "range(0) is not allowed; indexes must contain at least one element",
-            src,
-            span,
-        )
-    })
+) -> Result<Option<u64>, GraphcalError> {
+    use crate::desugar::desugared_ast::NatExpr;
+    match expr {
+        NatExpr::Literal(value, _) => Ok(Some(*value)),
+        NatExpr::Var(_) => Ok(None),
+        NatExpr::Add(lhs, rhs, span) => {
+            match (concrete_nat_value(lhs, src)?, concrete_nat_value(rhs, src)?) {
+                (Some(lhs), Some(rhs)) => lhs
+                    .checked_add(rhs)
+                    .map(Some)
+                    .ok_or_else(|| eval_error("Fin cardinality addition overflow", src, *span)),
+                _ => Ok(None),
+            }
+        }
+        NatExpr::Mul(lhs, rhs, span) => {
+            match (concrete_nat_value(lhs, src)?, concrete_nat_value(rhs, src)?) {
+                (Some(lhs), Some(rhs)) => lhs.checked_mul(rhs).map(Some).ok_or_else(|| {
+                    eval_error("Fin cardinality multiplication overflow", src, *span)
+                }),
+                _ => Ok(None),
+            }
+        }
+    }
 }
 
-/// Recursively scan a type expression for nat literals in index position
-/// and register the corresponding synthetic nat range indexes in the registry.
-fn collect_nat_ranges_from_type_expr(
+fn ensure_concrete_finite_index(
+    cardinality: u64,
+    span: Span,
+    registry: &mut RegistryBuilder,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let index = types::FiniteIndex::try_from_u64(cardinality)
+        .map_err(|error| eval_error(error.to_string(), src, span))?;
+    registry.ensure_finite_index(index.cardinality());
+    Ok(())
+}
+
+fn collect_finite_index_expr(
+    index: &crate::desugar::desugared_ast::IndexExpr,
+    registry: &mut RegistryBuilder,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    match index {
+        crate::desugar::desugared_ast::IndexExpr::Finite { cardinality, span } => {
+            if let Some(value) = concrete_nat_value(cardinality, src)? {
+                ensure_concrete_finite_index(value, *span, registry, src)?;
+            }
+        }
+        crate::desugar::desugared_ast::IndexExpr::Name(_)
+        | crate::desugar::desugared_ast::IndexExpr::BareNat(_) => {}
+    }
+    Ok(())
+}
+
+fn collect_finite_indexes_from_generic_arg(
+    arg: &crate::desugar::desugared_ast::GenericArg,
+    registry: &mut RegistryBuilder,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    match arg {
+        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
+            collect_finite_indexes_from_type_expr(type_expr, registry, src)
+        }
+        crate::desugar::desugared_ast::GenericArg::Index(index) => {
+            collect_finite_index_expr(index, registry, src)
+        }
+        crate::desugar::desugared_ast::GenericArg::Nat(_)
+        | crate::desugar::desugared_ast::GenericArg::Ambiguous(_) => Ok(()),
+    }
+}
+
+/// Register every concrete `Fin(N)` identity used by a type expression.
+fn collect_finite_indexes_from_type_expr(
     type_expr: &crate::desugar::desugared_ast::TypeExpr,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     if let crate::desugar::desugared_ast::TypeExprKind::Indexed { base, indexes } = &type_expr.kind
     {
-        collect_nat_ranges_from_type_expr(base, registry, src)?;
-        for idx in indexes {
-            match idx {
-                crate::desugar::desugared_ast::IndexExpr::NatExpr(nat_expr) => {
-                    collect_nat_range_literals_from_nat_expr(nat_expr, registry, src)?;
-                }
-                crate::desugar::desugared_ast::IndexExpr::Name(_) => {}
-            }
+        collect_finite_indexes_from_type_expr(base, registry, src)?;
+        for index in indexes {
+            collect_finite_index_expr(index, registry, src)?;
         }
     }
     match &type_expr.kind {
         crate::desugar::desugared_ast::TypeExprKind::TypeApplication { generic_args, .. } => {
             for arg in generic_args {
-                if let crate::desugar::desugared_ast::GenericArg::Type(type_expr) = arg {
-                    collect_nat_ranges_from_type_expr(type_expr, registry, src)?;
-                }
+                collect_finite_indexes_from_generic_arg(arg, registry, src)?;
             }
         }
         crate::desugar::desugared_ast::TypeExprKind::DatetimeApplication { type_args } => {
             for arg in type_args {
-                collect_nat_ranges_from_type_expr(arg, registry, src)?;
+                collect_finite_indexes_from_type_expr(arg, registry, src)?;
             }
         }
         _ => {}
@@ -3241,48 +3315,20 @@ fn collect_nat_ranges_from_type_expr(
     Ok(())
 }
 
-/// Collect nat range literal values from a `NatExpr` tree.
-///
-/// Only literal-only expressions can be registered at compile time;
-/// expressions containing variables are resolved at call sites.
-fn collect_nat_range_literals_from_nat_expr(
-    expr: &crate::desugar::desugared_ast::NatExpr,
-    registry: &mut RegistryBuilder,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    use crate::desugar::desugared_ast::NatExpr;
-    match expr {
-        NatExpr::Literal(n, span) => {
-            let size = nat_size_to_usize(*n, *span, src)?;
-            registry.ensure_nat_range_index(size);
-        }
-        NatExpr::Var(_) => {}
-        NatExpr::Add(lhs, rhs, _) | NatExpr::Mul(lhs, rhs, _) => {
-            collect_nat_range_literals_from_nat_expr(lhs, registry, src)?;
-            collect_nat_range_literals_from_nat_expr(rhs, registry, src)?;
-        }
-    }
-    Ok(())
-}
-
-/// Recursively scan an expression for `for i: range(N)` and register
-/// nat range indexes for concrete nat literals.
-fn collect_nat_ranges_from_expr(
+/// Register concrete `Fin(N)` identities used by comprehensions and tables.
+fn collect_finite_indexes_from_expr(
     expr: &crate::desugar::desugared_ast::Expr,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     use crate::desugar::desugared_ast::{ExprKind, ForBindingIndex};
 
-    // Use the visitor trait to walk all sub-expressions
-    struct NatRangeCollector<'a> {
+    struct FiniteCollector<'a> {
         registry: &'a mut RegistryBuilder,
         src: &'a NamedSource<Arc<String>>,
     }
 
-    impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared>
-        for NatRangeCollector<'_>
-    {
+    impl crate::syntax::visitor::ExprVisitor<crate::syntax::phase::Desugared> for FiniteCollector<'_> {
         type Error = GraphcalError;
 
         fn visit_expr(
@@ -3292,18 +3338,25 @@ fn collect_nat_ranges_from_expr(
             match &expr.kind {
                 ExprKind::ForComp { bindings, .. } => {
                     for binding in bindings {
-                        if let ForBindingIndex::Range { arg, .. } = &binding.index {
-                            collect_nat_range_literals_from_nat_expr(arg, self.registry, self.src)?;
+                        if let ForBindingIndex::Finite { cardinality, span } = &binding.index
+                            && let Some(value) = concrete_nat_value(cardinality, self.src)?
+                        {
+                            ensure_concrete_finite_index(value, *span, self.registry, self.src)?;
                         }
                     }
                 }
                 ExprKind::MapLiteral { entries } => {
                     for entry in entries {
                         for key in &entry.keys {
-                            if let crate::syntax::ast::MapEntryIndex::NatRange(n) = &key.index.value
+                            if let crate::syntax::ast::MapEntryIndex::Finite(cardinality) =
+                                &key.index.value
                             {
-                                let size = nat_size_to_usize(*n, key.index.span, self.src)?;
-                                self.registry.ensure_nat_range_index(size);
+                                ensure_concrete_finite_index(
+                                    *cardinality,
+                                    key.index.span,
+                                    self.registry,
+                                    self.src,
+                                )?;
                             }
                         }
                     }
@@ -3314,7 +3367,7 @@ fn collect_nat_ranges_from_expr(
         }
     }
 
-    let mut collector = NatRangeCollector { registry, src };
+    let mut collector = FiniteCollector { registry, src };
     collector.visit_expr(expr)
 }
 
@@ -3343,14 +3396,27 @@ fn register_index_decl(
             src,
             decl_span,
         )?,
+        crate::desugar::desugared_ast::IndexDeclKind::Linspace {
+            start: start_expr,
+            end: end_expr,
+            points,
+        } => lower_linspace_index(
+            &idx.name.value,
+            start_expr,
+            end_expr,
+            points,
+            registry,
+            src,
+            decl_span,
+        )?,
         crate::desugar::desugared_ast::IndexDeclKind::RequiredNamed => {
             types::IndexKind::RequiredNamed
         }
-        crate::desugar::desugared_ast::IndexDeclKind::RequiredRange { dimension } => {
+        crate::desugar::desugared_ast::IndexDeclKind::RequiredCoordinate { dimension } => {
             let dim = registry
                 .resolve_dim_expr_detailed(dimension)
                 .map_err(|err| dimension_resolve_error(err, src, dimension.span))?;
-            types::IndexKind::RequiredRange { dimension: dim }
+            types::IndexKind::RequiredCoordinate { dimension: dim }
         }
     };
     registry.register_index(types::IndexDef {
@@ -3476,6 +3542,9 @@ fn find_non_earlier_generic_reference(
         crate::syntax::ast::GenericArg::Type(type_expr) => {
             find_non_earlier_type_reference(type_expr, current_index, positions)
         }
+        crate::syntax::ast::GenericArg::Index(index) => {
+            find_non_earlier_index_reference(index, current_index, positions)
+        }
         crate::syntax::ast::GenericArg::Nat(nat_expr) => {
             find_non_earlier_nat_reference(nat_expr, current_index, positions)
         }
@@ -3540,12 +3609,28 @@ fn find_non_earlier_nat_reference(
     }
 }
 
+fn find_non_earlier_index_reference(
+    index: &crate::syntax::ast::IndexExpr,
+    current_index: usize,
+    positions: &GenericParamPositions,
+) -> Option<(GenericParamName, Span)> {
+    match index {
+        crate::syntax::ast::IndexExpr::Name(path) => {
+            find_non_earlier_path_reference(path, current_index, positions)
+        }
+        crate::syntax::ast::IndexExpr::Finite { cardinality, .. }
+        | crate::syntax::ast::IndexExpr::BareNat(cardinality) => {
+            find_non_earlier_nat_reference(cardinality, current_index, positions)
+        }
+    }
+}
+
 fn find_non_earlier_type_reference(
     type_expr: &TypeExpr,
     current_index: usize,
     positions: &GenericParamPositions,
 ) -> Option<(GenericParamName, Span)> {
-    use crate::desugar::desugared_ast::{IndexExpr, TypeExprKind};
+    use crate::desugar::desugared_ast::TypeExprKind;
 
     match &type_expr.kind {
         TypeExprKind::Dimensionless
@@ -3557,13 +3642,8 @@ fn find_non_earlier_type_reference(
         }),
         TypeExprKind::Indexed { base, indexes } => {
             find_non_earlier_type_reference(base, current_index, positions).or_else(|| {
-                indexes.iter().find_map(|index| match index {
-                    IndexExpr::Name(path) => {
-                        find_non_earlier_path_reference(path, current_index, positions)
-                    }
-                    IndexExpr::NatExpr(expr) => {
-                        find_non_earlier_nat_reference(expr, current_index, positions)
-                    }
+                indexes.iter().find_map(|index| {
+                    find_non_earlier_index_reference(index, current_index, positions)
                 })
             })
         }
@@ -3638,225 +3718,467 @@ fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, G
     }
 }
 
-/// Evaluate a range expression (e.g. `0.0 s`) to get its SI value and dimension.
+/// Evaluate a statically known coordinate expression to its SI value and dimension.
 ///
-/// Range expressions are syntactically restricted to numeric literals and
-/// unit-annotated literals, so we evaluate them directly against the
-/// `RegistryBuilder` instead of going through the full `eval_expr` pipeline.
-///
-/// Returns `(si_value, dimension)`.
-fn eval_range_expr(
+/// This is a pure compile-time evaluator: graph references, calls, integer
+/// values, and dynamic units are rejected. Arithmetic over quantity literals is
+/// accepted so coordinate declarations are not limited to a single literal.
+fn eval_coordinate_expr(
     expr: &Expr,
     registry: &RegistryBuilder,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(f64, crate::dimension::Dimension), GraphcalError> {
+    use crate::desugar::desugared_ast::BinOp;
     use crate::dimension::Dimension;
 
     let ensure_finite = |value: f64, span: Span| {
-        if value.is_finite() {
-            Ok(value)
-        } else {
-            Err(eval_error(
-                format!("range expression must be finite, got {value}"),
+        value.is_finite().then_some(value).ok_or_else(|| {
+            eval_error(
+                format!("coordinate expression must evaluate to a finite quantity, got {value}"),
                 src,
                 span,
-            ))
-        }
+            )
+        })
     };
 
     match &expr.kind {
-        ExprKind::Number(n) => Ok((ensure_finite(*n, expr.span)?, Dimension::dimensionless())),
+        ExprKind::Number(value) => Ok((
+            ensure_finite(*value, expr.span)?,
+            Dimension::dimensionless(),
+        )),
         ExprKind::UnitLiteral { value, unit } => {
-            let (dim, scale) = registry
+            let (dimension, scale) = registry
                 .resolve_unit_expr(unit)
-                .map_err(|err| unit_resolve_to_graphcal(err, src, unit.span))?;
-            let scale = validate_positive_finite_scale(scale, "range unit scale", src, unit.span)?;
-            Ok((ensure_finite(*value * scale.get(), expr.span)?, dim))
+                .map_err(|error| unit_resolve_to_graphcal(error, src, unit.span))?;
+            let scale =
+                validate_positive_finite_scale(scale, "coordinate unit scale", src, unit.span)?;
+            Ok((ensure_finite(*value * scale.get(), expr.span)?, dimension))
+        }
+        ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
+            let value = path
+                .as_bare()
+                .and_then(|ident| crate::builtin::BuiltinConst::parse(ident.name.as_str()))
+                .map(crate::builtin::BuiltinConst::value)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!(
+                        "coordinate expression must be statically evaluable; `{}` is not a built-in constant",
+                        path.display_path()
+                    ),
+                    src: src.clone(),
+                    span: path.span().into(),
+                })?;
+            Ok((value, Dimension::dimensionless()))
         }
         ExprKind::UnaryOp {
             op: crate::desugar::desugared_ast::UnaryOp::Neg,
             operand,
         } => {
-            let (val, dim) = eval_range_expr(operand, registry, src)?;
-            Ok((ensure_finite(-val, expr.span)?, dim))
+            let (value, dimension) = eval_coordinate_expr(operand, registry, src)?;
+            Ok((ensure_finite(-value, expr.span)?, dimension))
         }
-        _ => Err(GraphcalError::EvalError {
-            message: "range expression must be a numeric or unit literal".to_string(),
-            src: src.clone(),
-            span: expr.span.into(),
-        }),
+        ExprKind::BinOp { op, lhs, rhs } => {
+            let (lhs_value, lhs_dimension) = eval_coordinate_expr(lhs, registry, src)?;
+            let (rhs_value, rhs_dimension) = eval_coordinate_expr(rhs, registry, src)?;
+            let overflow = || GraphcalError::DimensionOverflow {
+                src: src.clone(),
+                span: expr.span.into(),
+            };
+            let (value, dimension) = match op {
+                BinOp::Add | BinOp::Sub => {
+                    if lhs_dimension != rhs_dimension {
+                        return Err(GraphcalError::EvalError {
+                            message: "addition or subtraction in a coordinate expression requires matching dimensions".to_string(),
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        });
+                    }
+                    let value = if *op == BinOp::Add {
+                        lhs_value + rhs_value
+                    } else {
+                        lhs_value - rhs_value
+                    };
+                    (value, lhs_dimension)
+                }
+                BinOp::Mul => (
+                    lhs_value * rhs_value,
+                    lhs_dimension
+                        .checked_mul(&rhs_dimension)
+                        .map_err(|_| overflow())?,
+                ),
+                BinOp::Div => (
+                    lhs_value / rhs_value,
+                    lhs_dimension
+                        .checked_div(&rhs_dimension)
+                        .map_err(|_| overflow())?,
+                ),
+                _ => {
+                    return Err(eval_error(
+                        "coordinate arguments support only static quantity arithmetic",
+                        src,
+                        expr.span,
+                    ));
+                }
+            };
+            Ok((ensure_finite(value, expr.span)?, dimension))
+        }
+        _ => Err(eval_error(
+            "coordinate arguments must be statically evaluable quantities; Int values and runtime expressions are not supported",
+            src,
+            expr.span,
+        )),
     }
 }
 
-fn checked_range_step_count(
+fn coordinate_invalid(
+    name: &IndexName,
+    message: impl Into<String>,
+    help: impl Into<String>,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    GraphcalError::CoordinateIndexInvalid {
+        name: name.clone(),
+        message: message.into(),
+        help: help.into(),
+        src: src.clone(),
+        span: span.into(),
+    }
+}
+
+/// One centralized binary64 endpoint comparison for coordinate construction.
+fn coordinate_values_equal(actual: f64, expected: f64, scale_hint: f64) -> bool {
+    let scale = actual.abs().max(expected.abs()).max(scale_hint.abs());
+    // Keep the tolerance relative even for coordinates near zero. A unit-scale
+    // floor would accept steps that miss tiny endpoints by a large fraction.
+    // The subnormal floor covers a small number of binary64 ULPs at zero.
+    let tolerance = (scale * (32.0 * f64::EPSILON)).max(f64::from_bits(32));
+    (actual - expected).abs() <= tolerance
+}
+
+/// Exact numeric endpoint equality after finite-value validation.
+fn coordinate_endpoints_equal(start: f64, end: f64) -> bool {
+    matches!(start.partial_cmp(&end), Some(std::cmp::Ordering::Equal))
+}
+
+fn checked_range_cardinality(
     name: &IndexName,
     start: f64,
     end: f64,
     step: f64,
     src: &NamedSource<Arc<String>>,
     span: Span,
-) -> Result<NonZeroUsize, GraphcalError> {
-    let raw_steps = (end - start) / step;
-    if !raw_steps.is_finite() {
-        return Err(GraphcalError::RangeIndexInvalid {
-            name: name.clone(),
-            message: "range cardinality is not finite".to_string(),
-            src: src.clone(),
-            span: span.into(),
+) -> Result<types::IndexCardinality, GraphcalError> {
+    if step == 0.0 {
+        return Err(coordinate_invalid(
+            name,
+            "step must be nonzero",
+            "use an explicitly positive or negative quantity step",
+            src,
+            span,
+        ));
+    }
+    if (start < end && step < 0.0) || (start > end && step > 0.0) {
+        return Err(coordinate_invalid(
+            name,
+            format!("step {step} moves away from endpoint {end}"),
+            "use a positive step for an ascending range and a negative step for a descending range",
+            src,
+            span,
+        ));
+    }
+    if coordinate_endpoints_equal(start, end) {
+        return types::IndexCardinality::try_from_u64(1).map_err(|error| {
+            coordinate_invalid(name, error.to_string(), "reduce the index size", src, span)
         });
     }
 
-    let nearest = raw_steps.round();
-    let tolerance = f64::EPSILON.mul_add(raw_steps.abs().max(1.0) * 16.0, 1e-12);
-    let whole_steps = if (raw_steps - nearest).abs() <= tolerance {
-        nearest
-    } else {
-        raw_steps.floor()
-    };
-    if whole_steps < 0.0 {
-        return Err(GraphcalError::RangeIndexInvalid {
-            name: name.clone(),
-            message: "range cardinality is negative".to_string(),
-            src: src.clone(),
-            span: span.into(),
-        });
+    let raw_intervals = (end - start) / step;
+    if !raw_intervals.is_finite() || raw_intervals < 0.0 {
+        return Err(coordinate_invalid(
+            name,
+            "range interval count is not a finite non-negative value",
+            "choose finite bounds and a finite nonzero step with matching direction",
+            src,
+            span,
+        ));
+    }
+    let intervals = raw_intervals.round();
+    let reconstructed_end = intervals.mul_add(step, start);
+    if intervals < 1.0 || !coordinate_values_equal(reconstructed_end, end, intervals * step) {
+        return Err(coordinate_invalid(
+            name,
+            format!("step {step} does not land on endpoint {end}"),
+            "change the endpoint or use `linspace(start, end, points: N)` when the point count is authoritative",
+            src,
+            span,
+        ));
     }
 
-    let count = whole_steps + 1.0;
     #[expect(
         clippy::cast_precision_loss,
-        reason = "usize upper bound check for f64 range count"
+        reason = "the practical limit is far below f64's exact integer range"
     )]
-    let max_count = usize::MAX as f64;
-    if count >= max_count {
-        return Err(GraphcalError::RangeIndexInvalid {
-            name: name.clone(),
-            message: format!("range has too many steps ({count})"),
-            src: src.clone(),
-            span: span.into(),
-        });
+    if intervals >= types::MAX_INDEX_CARDINALITY as f64 {
+        return Err(coordinate_invalid(
+            name,
+            format!(
+                "range requires {} coordinate points, which exceeds the practical limit of {}",
+                intervals + 1.0,
+                types::MAX_INDEX_CARDINALITY
+            ),
+            format!(
+                "reduce the index to at most {} points",
+                types::MAX_INDEX_CARDINALITY
+            ),
+            src,
+            span,
+        ));
     }
-
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "range count is finite, non-negative, and bounded by usize::MAX"
+        reason = "the rounded interval count is finite, non-negative, and practically bounded"
     )]
-    let count = count as usize;
-    NonZeroUsize::new(count).ok_or_else(|| GraphcalError::RangeIndexInvalid {
-        name: name.clone(),
-        message: "range must contain at least one step".to_string(),
-        src: src.clone(),
-        span: span.into(),
+    let count = intervals as u64 + 1;
+    types::IndexCardinality::try_from_u64(count).map_err(|error| {
+        coordinate_invalid(name, error.to_string(), "reduce the index size", src, span)
     })
 }
 
-/// Lower a range index declaration, evaluating start/end/step and validating dimensions.
+fn eval_static_nat_expr(
+    expr: &crate::desugar::desugared_ast::NatExpr,
+    src: &NamedSource<Arc<String>>,
+) -> Result<u64, GraphcalError> {
+    use crate::desugar::desugared_ast::NatExpr;
+    match expr {
+        NatExpr::Literal(value, _) => Ok(*value),
+        NatExpr::Var(ident) => Err(GraphcalError::EvalError {
+            message: format!(
+                "linspace point count must be statically known; `{}` is not a constant Nat",
+                ident.name
+            ),
+            src: src.clone(),
+            span: ident.span.into(),
+        }),
+        NatExpr::Add(lhs, rhs, span) => eval_static_nat_expr(lhs, src)?
+            .checked_add(eval_static_nat_expr(rhs, src)?)
+            .ok_or_else(|| eval_error("linspace point-count addition overflow", src, *span)),
+        NatExpr::Mul(lhs, rhs, span) => eval_static_nat_expr(lhs, src)?
+            .checked_mul(eval_static_nat_expr(rhs, src)?)
+            .ok_or_else(|| eval_error("linspace point-count multiplication overflow", src, *span)),
+    }
+}
+
+fn coordinate_display_unit(
+    start_expr: &Expr,
+    registry: &RegistryBuilder,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(Option<String>, f64), GraphcalError> {
+    let unit = match &start_expr.kind {
+        ExprKind::UnitLiteral { unit, .. } => unit,
+        ExprKind::UnaryOp {
+            op: crate::desugar::desugared_ast::UnaryOp::Neg,
+            operand,
+        } => return coordinate_display_unit(operand, registry, src),
+        _ => return Ok((None, 1.0)),
+    };
+    match registry.resolve_unit_expr(unit) {
+        Ok((_dimension, scale)) => {
+            let scale = validate_positive_finite_scale(
+                scale,
+                "coordinate display unit scale",
+                src,
+                unit.span,
+            )?;
+            Ok((Some(format_unit_expr_with_config(unit, true)), scale.get()))
+        }
+        Err(crate::registry::types::UnitResolveError::Overflow(_)) => {
+            Err(GraphcalError::DimensionOverflow {
+                src: src.clone(),
+                span: unit.span.into(),
+            })
+        }
+        Err(crate::registry::types::UnitResolveError::InvalidScale { value, reason }) => {
+            let reason = match reason {
+                PositiveFiniteScaleError::NonFinite => "must be finite",
+                PositiveFiniteScaleError::NonPositive => "must be greater than zero",
+            };
+            Err(eval_error(
+                format!("coordinate display unit scale {reason}, got {value}"),
+                src,
+                unit.span,
+            ))
+        }
+        Err(_) => Ok((None, 1.0)),
+    }
+}
+
+fn validate_coordinate_values(
+    name: &IndexName,
+    data: &types::CoordinateIndexData,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), GraphcalError> {
+    let direction = data.end.total_cmp(&data.start);
+    let count = data.cardinality.get();
+    let first = data.coordinate_value(0);
+    (1..count).try_fold(first, |previous, position| {
+        let current = data.coordinate_value(position);
+        if !current.is_finite() {
+            return Err(coordinate_invalid(
+                name,
+                format!("coordinate at position {position} is not finite"),
+                "reduce the cardinality or use bounds and spacing with stable binary64 coordinates",
+                src,
+                span,
+            ));
+        }
+        let monotonic = match direction {
+            std::cmp::Ordering::Less => current < previous,
+            std::cmp::Ordering::Equal => false,
+            std::cmp::Ordering::Greater => current > previous,
+        };
+        if !monotonic {
+            return Err(coordinate_invalid(
+                name,
+                format!(
+                    "coordinates at positions {} and {position} are duplicate or non-monotonic in binary64",
+                    position - 1
+                ),
+                "reduce the cardinality or increase the spacing between adjacent coordinates",
+                src,
+                span,
+            ));
+        }
+        Ok(current)
+    })?;
+    Ok(())
+}
+
+/// Lower `range(start, end, step: delta)` with exact endpoint semantics.
 fn lower_range_index(
-    name: &crate::syntax::index_name::IndexName,
+    name: &IndexName,
     start_expr: &Expr,
     end_expr: &Expr,
     step_expr: &Expr,
     registry: &RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-    decl_span: crate::syntax::span::Span,
+    decl_span: Span,
 ) -> Result<types::IndexKind, GraphcalError> {
-    let (start_val, start_dim) = eval_range_expr(start_expr, registry, src)?;
-    let (end_val, end_dim) = eval_range_expr(end_expr, registry, src)?;
-    let (step_val, step_dim) = eval_range_expr(step_expr, registry, src)?;
-
-    // All three must have the same dimension
-    if start_dim != end_dim || start_dim != step_dim {
-        return Err(GraphcalError::RangeIndexDimensionMismatch {
+    let (start, start_dimension) = eval_coordinate_expr(start_expr, registry, src)?;
+    let (end, end_dimension) = eval_coordinate_expr(end_expr, registry, src)?;
+    let (step, step_dimension) = eval_coordinate_expr(step_expr, registry, src)?;
+    if start_dimension != end_dimension || start_dimension != step_dimension {
+        return Err(GraphcalError::CoordinateIndexDimensionMismatch {
             name: name.clone(),
-            start_dim: format!("Dimension({})", registry.format_dimension(&start_dim)),
-            end_dim: format!("Dimension({})", registry.format_dimension(&end_dim)),
-            step_dim: format!("Dimension({})", registry.format_dimension(&step_dim)),
+            message: format!(
+                "range start, end, and step have dimensions {}, {}, and {}",
+                registry.format_dimension(&start_dimension),
+                registry.format_dimension(&end_dimension),
+                registry.format_dimension(&step_dimension)
+            ),
             src: src.clone(),
             span: decl_span.into(),
         });
     }
-
-    for (label, value) in [("start", start_val), ("end", end_val), ("step", step_val)] {
-        if !value.is_finite() {
-            return Err(GraphcalError::RangeIndexInvalid {
-                name: name.clone(),
-                message: format!("{label} ({value}) must be finite"),
-                src: src.clone(),
-                span: decl_span.into(),
-            });
-        }
-    }
-
-    // Validate: start <= end
-    if start_val > end_val {
-        return Err(GraphcalError::RangeIndexInvalid {
-            name: name.clone(),
-            message: format!("start ({start_val}) must be <= end ({end_val})"),
-            src: src.clone(),
-            span: decl_span.into(),
-        });
-    }
-
-    // Validate: step > 0
-    if step_val <= 0.0 {
-        return Err(GraphcalError::RangeIndexInvalid {
-            name: name.clone(),
-            message: format!("step ({step_val}) must be > 0"),
-            src: src.clone(),
-            span: decl_span.into(),
-        });
-    }
-
-    let step_count = checked_range_step_count(name, start_val, end_val, step_val, src, decl_span)?;
-
-    // Extract display unit from the start expression's unit annotation.
-    let (display_label, display_scale) = match &start_expr.kind {
-        ExprKind::UnitLiteral { unit, .. } => {
-            // Unknown/dynamic units have no static display scale; the
-            // expression itself is validated elsewhere.
-            match registry.resolve_unit_expr(unit) {
-                Ok((_dim, scale)) => {
-                    let scale = validate_positive_finite_scale(
-                        scale,
-                        "range display unit scale",
-                        src,
-                        unit.span,
-                    )?;
-                    (Some(format_unit_expr_with_config(unit, true)), scale.get())
-                }
-                Err(crate::registry::types::UnitResolveError::Overflow(_)) => {
-                    return Err(GraphcalError::DimensionOverflow {
-                        src: src.clone(),
-                        span: unit.span.into(),
-                    });
-                }
-                Err(crate::registry::types::UnitResolveError::InvalidScale { value, reason }) => {
-                    let reason = match reason {
-                        PositiveFiniteScaleError::NonFinite => "must be finite",
-                        PositiveFiniteScaleError::NonPositive => "must be greater than zero",
-                    };
-                    return Err(eval_error(
-                        format!("range display unit scale {reason}, got {value}"),
-                        src,
-                        unit.span,
-                    ));
-                }
-                Err(_) => (None, 1.0),
-            }
-        }
-        _ => (None, 1.0),
-    };
-
-    Ok(types::IndexKind::Range(types::RangeIndexData {
-        start: start_val,
-        end: end_val,
-        step: step_val,
-        step_count,
-        dimension: start_dim,
+    let cardinality = checked_range_cardinality(name, start, end, step, src, decl_span)?;
+    let (display_label, display_scale) = coordinate_display_unit(start_expr, registry, src)?;
+    let data = types::CoordinateIndexData {
+        start,
+        end,
+        spacing: types::CoordinateSpacing::Step { step },
+        cardinality,
+        dimension: start_dimension,
         display_label,
         display_scale,
-    }))
+    };
+    if cardinality.get() > 1 {
+        validate_coordinate_values(name, &data, src, decl_span)?;
+    }
+    Ok(types::IndexKind::Coordinate(data))
+}
+
+/// Lower `linspace(start, end, points: N)` with exact endpoint semantics.
+fn lower_linspace_index(
+    name: &IndexName,
+    start_expr: &Expr,
+    end_expr: &Expr,
+    points_expr: &crate::desugar::desugared_ast::NatExpr,
+    registry: &RegistryBuilder,
+    src: &NamedSource<Arc<String>>,
+    decl_span: Span,
+) -> Result<types::IndexKind, GraphcalError> {
+    let (start, start_dimension) = eval_coordinate_expr(start_expr, registry, src)?;
+    let (end, end_dimension) = eval_coordinate_expr(end_expr, registry, src)?;
+    if start_dimension != end_dimension {
+        return Err(GraphcalError::CoordinateIndexDimensionMismatch {
+            name: name.clone(),
+            message: format!(
+                "linspace start and end have dimensions {} and {}",
+                registry.format_dimension(&start_dimension),
+                registry.format_dimension(&end_dimension)
+            ),
+            src: src.clone(),
+            span: decl_span.into(),
+        });
+    }
+    let points = eval_static_nat_expr(points_expr, src)?;
+    if points == 0 {
+        return Err(coordinate_invalid(
+            name,
+            "linspace requires at least one point",
+            "use `points: 1` or greater",
+            src,
+            points_expr.span(),
+        ));
+    }
+    let cardinality = types::IndexCardinality::try_from_u64(points).map_err(|error| {
+        coordinate_invalid(
+            name,
+            error.to_string(),
+            format!(
+                "use a point count from 1 through {}",
+                types::MAX_INDEX_CARDINALITY
+            ),
+            src,
+            points_expr.span(),
+        )
+    })?;
+    match (cardinality.get(), coordinate_endpoints_equal(start, end)) {
+        (1, false) => {
+            return Err(coordinate_invalid(
+                name,
+                "linspace with one point requires identical start and end values",
+                "set end equal to start or request at least two points",
+                src,
+                decl_span,
+            ));
+        }
+        (2.., true) => {
+            return Err(coordinate_invalid(
+                name,
+                "linspace with two or more points requires distinct endpoints",
+                "use `points: 1` for a singleton or choose distinct endpoints",
+                src,
+                decl_span,
+            ));
+        }
+        _ => {}
+    }
+    let (display_label, display_scale) = coordinate_display_unit(start_expr, registry, src)?;
+    let data = types::CoordinateIndexData {
+        start,
+        end,
+        spacing: types::CoordinateSpacing::Linspace,
+        cardinality,
+        dimension: start_dimension,
+        display_label,
+        display_scale,
+    };
+    if cardinality.get() > 1 {
+        validate_coordinate_values(name, &data, src, decl_span)?;
+    }
+    Ok(types::IndexKind::Coordinate(data))
 }
 
 /// Extract a map of type annotations from const/param/node declarations,
@@ -4278,7 +4600,7 @@ fn resolve_extern_struct_field(
 /// [`crate::function_signature::ValueKind::Indexed`].
 ///
 /// The index position must name exactly one of the signature's `Index`
-/// binders: concrete index names, Nat lengths, and multi-axis forms are all
+/// binders: concrete declared/structural indexes and multi-axis forms are all
 /// rejected — an extern function is generic over the index it receives, and
 /// its result length always comes from an input.
 fn resolve_extern_array_kind(
@@ -4307,12 +4629,12 @@ fn resolve_extern_array_kind(
                 .find(|var| var.as_str() == atom.as_str())
                 .cloned()
         }),
-        IndexExpr::NatExpr(_) => None,
+        IndexExpr::Finite { .. } | IndexExpr::BareNat(_) => None,
     };
     let Some(index) = index_var else {
         return Err(GraphcalError::InvalidExternSignature {
             message: "extern array indexes must name one of the signature's `Index` binders \
-                      (concrete indexes and Nat lengths cannot cross the plugin boundary)"
+                      (concrete indexes and `Fin(N)` axes cannot cross the plugin boundary)"
                 .to_string(),
             src: src.clone(),
             span: index_expr.span().into(),

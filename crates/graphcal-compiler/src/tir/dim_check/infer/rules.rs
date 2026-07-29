@@ -139,12 +139,19 @@ pub(super) fn binop_rule(
         // (#809): `T[I] == T[I]` and `T[I] == unindexed T` infer `Bool[I]`.
         BinOp::Eq | BinOp::Ne => {
             let (axes, lhs_elem, rhs_elem) = comparison_axes(lhs, rhs, registry, src)?;
-            if matches!(lhs_elem, InferredType::NamedIndex(_))
-                || matches!(rhs_elem, InferredType::NamedIndex(_))
-            {
+            if matches!(
+                lhs_elem,
+                InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
+            ) || matches!(
+                rhs_elem,
+                InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
+            ) {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "value expression".to_string(),
-                    found: if matches!(lhs_elem, InferredType::NamedIndex(_)) {
+                    found: if matches!(
+                        lhs_elem,
+                        InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
+                    ) {
                         format_inferred_type(lhs_elem, registry)
                     } else {
                         format_inferred_type(rhs_elem, registry)
@@ -152,7 +159,10 @@ pub(super) fn binop_rule(
                     help: "named index labels are not values; use `match` for index case analysis"
                         .to_string(),
                     src: src.clone(),
-                    span: if matches!(lhs_elem, InferredType::NamedIndex(_)) {
+                    span: if matches!(
+                        lhs_elem,
+                        InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
+                    ) {
                         lhs.span
                     } else {
                         rhs.span
@@ -483,13 +493,13 @@ pub(super) fn unary_rule(
         }
         UnaryOp::Neg => match &operand.ty {
             InferredType::Quantity(_) | InferredType::Int => Ok(operand.ty.clone()),
-            InferredType::RangeIndexLabel { dimension, .. } => {
+            InferredType::CoordinateIndexLabel { dimension, .. } => {
                 Ok(InferredType::Quantity(dimension.clone()))
             }
             InferredType::Fin(_) => Err(GraphcalError::DimensionMismatch {
                 expected: "Int or Quantity".to_string(),
                 found: format_inferred_type(&operand.ty, registry),
-                help: "range(N) loop variables are bounded natural indexes; convert explicitly before negating"
+                help: "Fin(N loop variables are bounded natural indexes; convert explicitly before negating)"
                     .to_string(),
                 src: src.clone(),
                 span: operand.span.into(),

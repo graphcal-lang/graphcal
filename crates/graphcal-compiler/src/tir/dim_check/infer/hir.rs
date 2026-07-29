@@ -20,7 +20,7 @@ use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeDef, TypeGenericConstraint, UnionMemberDef};
 use crate::syntax::ast::UnaryOp;
-use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::index_name::{IndexEntryKey, ResolvedIndexVariant};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{FieldName, GenericParamName};
@@ -1521,8 +1521,8 @@ fn nat_overflow_error(
     }
 }
 
-fn nat_range_error(
-    err: crate::registry::types::NatRangeIndexError,
+fn finite_index_error(
+    err: crate::registry::types::FiniteIndexError,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> GraphcalError {
@@ -1560,27 +1560,28 @@ fn infer_hir_for_comp(
                 match &idx_def.kind {
                     crate::registry::types::IndexKind::Named { .. }
                     | crate::registry::types::IndexKind::RequiredNamed => {
-                        InferredType::NamedIndex(index_identity)
+                        InferredType::NamedIndexCase(index_identity)
                     }
-                    crate::registry::types::IndexKind::Range(data) => {
-                        InferredType::RangeIndexLabel {
+                    crate::registry::types::IndexKind::Coordinate(data) => {
+                        InferredType::CoordinateIndexLabel {
                             index: index_identity,
                             dimension: data.dimension.clone(),
                         }
                     }
-                    crate::registry::types::IndexKind::RequiredRange { dimension } => {
-                        InferredType::RangeIndexLabel {
+                    crate::registry::types::IndexKind::RequiredCoordinate { dimension } => {
+                        InferredType::CoordinateIndexLabel {
                             index: index_identity,
                             dimension: dimension.clone(),
                         }
                     }
-                    crate::registry::types::IndexKind::NatRange { size } => {
-                        InferredType::Fin(NatPolyForm::from_constant(size.get() as u64))
+                    crate::registry::types::IndexKind::Finite { cardinality } => {
+                        InferredType::Fin(NatPolyForm::from_constant(cardinality.get() as u64))
                     }
                 }
             }
-            hir::expr::ForBindingIndex::Range { arg, span } => InferredType::Fin(
-                hir_nat_to_linear_form(arg).map_err(|err| nat_overflow_error(err, src, *span))?,
+            hir::expr::ForBindingIndex::Finite { cardinality, span } => InferredType::Fin(
+                hir_nat_to_linear_form(cardinality)
+                    .map_err(|err| nat_overflow_error(err, src, *span))?,
             ),
         };
         inner_locals.bind(binding.local.id, var_type);
@@ -1601,11 +1602,11 @@ fn infer_hir_for_comp(
             hir::expr::ForBindingIndex::Named(index) => {
                 InferredIndex::from_resolved(index.value.clone())
             }
-            hir::expr::ForBindingIndex::Range { arg, span } => {
-                let form = hir_nat_to_linear_form(arg)
+            hir::expr::ForBindingIndex::Finite { cardinality, span } => {
+                let form = hir_nat_to_linear_form(cardinality)
                     .map_err(|err| nat_overflow_error(err, src, *span))?;
-                InferredIndex::from_nat_range_form(form)
-                    .map_err(|err| nat_range_error(err, src, *span))?
+                InferredIndex::from_finite_index_form(form)
+                    .map_err(|err| finite_index_error(err, src, *span))?
             }
         };
         result = InferredType::Indexed {
@@ -1670,7 +1671,7 @@ fn infer_hir_index_access(
                     });
                 };
                 match var_type {
-                    InferredType::NamedIndex(label_index) => {
+                    InferredType::NamedIndexCase(label_index) => {
                         if label_index != &index {
                             return Err(GraphcalError::IndexMismatch {
                                 expected: index.name(),
@@ -1680,7 +1681,7 @@ fn infer_hir_index_access(
                             });
                         }
                     }
-                    InferredType::RangeIndexLabel {
+                    InferredType::CoordinateIndexLabel {
                         index: label_index,
                         dimension: label_dimension,
                     } => {
@@ -1691,14 +1692,14 @@ fn infer_hir_index_access(
                                 span: local.span.into(),
                             })?;
                         let expected_dimension = match &idx_def.kind {
-                            crate::registry::types::IndexKind::Range(data) => &data.dimension,
-                            crate::registry::types::IndexKind::RequiredRange { dimension } => {
+                            crate::registry::types::IndexKind::Coordinate(data) => &data.dimension,
+                            crate::registry::types::IndexKind::RequiredCoordinate { dimension } => {
                                 dimension
                             }
                             _ => {
                                 return Err(GraphcalError::EvalError {
                                     message: format!(
-                                        "range-index loop variable cannot index into non-range index `{}`",
+                                        "coordinate-index loop variable cannot index into non-coordinate index `{}`",
                                         index.name()
                                     ),
                                     src: src.clone(),
@@ -1718,7 +1719,7 @@ fn infer_hir_index_access(
                             return Err(GraphcalError::DimensionMismatch {
                                 expected: registry.dimensions.format_dimension(expected_dimension),
                                 found: registry.dimensions.format_dimension(label_dimension),
-                                help: "range-index loop variable dimension must match the indexed range"
+                                help: "coordinate-index loop variable dimension must match the indexed coordinate axis"
                                     .to_string(),
                                 src: src.clone(),
                                 span: local.span.into(),
@@ -1728,7 +1729,7 @@ fn infer_hir_index_access(
                     InferredType::Quantity(_) => {
                         return Err(GraphcalError::EvalError {
                             message: format!(
-                                "quantity local cannot index into range index `{}`; use that range index's loop variable",
+                                "quantity local cannot index into coordinate index `{}`; use that coordinate index's loop variable",
                                 index.name()
                             ),
                             src: src.clone(),
@@ -1736,13 +1737,13 @@ fn infer_hir_index_access(
                         });
                     }
                     InferredType::Int => {
-                        if let Some(idx_def) =
-                            super::index_def_for_inferred(&index, Some(dag), registry)
-                            && !idx_def.is_nat_range()
-                        {
+                        let is_finite = index.finite_index_form().is_some()
+                            || super::index_def_for_inferred(&index, Some(dag), registry)
+                                .is_some_and(crate::registry::types::IndexDef::is_finite_index);
+                        if !is_finite {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
-                                    "Int local cannot index into non-nat-range index `{}`",
+                                    "Int local cannot index into non-finite-index index `{}`",
                                     index.name()
                                 ),
                                 src: src.clone(),
@@ -1753,18 +1754,18 @@ fn infer_hir_index_access(
                     InferredType::Fin(fin_bound) => {
                         let index_form = super::index_def_for_inferred(&index, Some(dag), registry)
                             .map_or_else(
-                                || index.nat_range_form(),
+                                || index.finite_index_form(),
                                 |idx_def| {
-                                    if !idx_def.is_nat_range() {
+                                    if !idx_def.is_finite_index() {
                                         return None;
                                     }
-                                    idx_def.nat_range_size().map(NatPolyForm::from_constant)
+                                    idx_def.finite_index_size().map(NatPolyForm::from_constant)
                                 },
                             );
                         let Some(index_form) = index_form else {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
-                                    "Fin({}) local cannot index into non-nat-range index `{}`",
+                                    "Fin({}) local cannot index into non-finite-index index `{}`",
                                     fin_bound.format(),
                                     index.name()
                                 ),
@@ -1810,18 +1811,18 @@ fn infer_hir_index_access(
                 )?;
                 let index_form = super::index_def_for_inferred(&index, Some(dag), registry)
                     .map_or_else(
-                        || index.nat_range_form(),
+                        || index.finite_index_form(),
                         |idx_def| {
-                            if !idx_def.is_nat_range() {
+                            if !idx_def.is_finite_index() {
                                 return None;
                             }
-                            idx_def.nat_range_size().map(NatPolyForm::from_constant)
+                            idx_def.finite_index_size().map(NatPolyForm::from_constant)
                         },
                     );
                 let Some(index_form) = index_form else {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "integer expression cannot index into non-nat-range index `{}`",
+                            "integer expression cannot index into non-finite-index index `{}`",
                             index.name()
                         ),
                         src: src.clone(),
@@ -1830,7 +1831,7 @@ fn infer_hir_index_access(
                 };
                 match expr_type {
                     InferredType::Int => {
-                        check_constant_nat_range_index(index_expr, &index_form, src)?;
+                        check_constant_finite_index_index(index_expr, &index_form, src)?;
                     }
                     InferredType::Fin(ref fin_bound) => {
                         if !fin_bound.is_leq(&index_form) {
@@ -1844,7 +1845,7 @@ fn infer_hir_index_access(
                                 span: index_expr.span.into(),
                             });
                         }
-                        check_constant_nat_range_index(index_expr, &index_form, src)?;
+                        check_constant_finite_index_index(index_expr, &index_form, src)?;
                     }
                     _ => {
                         return Err(GraphcalError::EvalError {
@@ -1864,7 +1865,7 @@ fn infer_hir_index_access(
     Ok(current)
 }
 
-fn check_constant_nat_range_index(
+fn check_constant_finite_index_index(
     index_expr: &hir::Expr,
     index_form: &NatPolyForm,
     src: &NamedSource<Arc<String>>,
@@ -1886,7 +1887,7 @@ fn check_constant_nat_range_index(
     if index_u64 >= size {
         return Err(GraphcalError::EvalError {
             message: format!(
-                "index {index} out of bounds for range({})",
+                "index {index} out of bounds for Fin({})",
                 index_form.format()
             ),
             src: src.clone(),
@@ -2162,6 +2163,85 @@ fn resolved_field_type(
     substitute_resolved_type_with_type_params(resolved, &subs, src)
 }
 
+pub(in crate::tir::dim_check) fn validate_finite_index_obligations(
+    inferred: &InferredType,
+    dag: &crate::tir::typed::DagTIR,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), GraphcalError> {
+    validate_finite_index_obligations_inner(inferred, dag, registry, src, span, &mut Vec::new())
+}
+
+fn validate_finite_index_obligations_inner(
+    inferred: &InferredType,
+    dag: &crate::tir::typed::DagTIR,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+    visited: &mut Vec<InferredStructType>,
+) -> Result<(), GraphcalError> {
+    match inferred {
+        InferredType::Struct(type_name, type_args) => {
+            for arg in type_args {
+                if let InferredGenericArg::Type(type_arg) = arg {
+                    validate_finite_index_obligations_inner(
+                        type_arg, dag, registry, src, span, visited,
+                    )?;
+                }
+            }
+            if visited.contains(type_name) {
+                return Ok(());
+            }
+            let type_def = struct_type_def_for_inferred(type_name, Some(dag), registry)
+                .ok_or_else(|| GraphcalError::UnknownStructType {
+                    name: type_name.to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                })?;
+            visited.push(type_name.clone());
+            if let Some(members) = type_def.union_members() {
+                for member in members {
+                    for field in &member.fields {
+                        let field_type = resolved_field_type(
+                            type_name.resolved(),
+                            member,
+                            &field.name,
+                            type_def,
+                            type_args,
+                            dag,
+                            registry,
+                            src,
+                            span,
+                        )?;
+                        validate_finite_index_obligations_inner(
+                            &field_type,
+                            dag,
+                            registry,
+                            src,
+                            span,
+                            visited,
+                        )?;
+                    }
+                }
+            }
+            visited.pop();
+            Ok(())
+        }
+        InferredType::Indexed { element, .. } => {
+            validate_finite_index_obligations_inner(element, dag, registry, src, span, visited)
+        }
+        InferredType::Quantity(_)
+        | InferredType::CoordinateIndexLabel { .. }
+        | InferredType::Bool
+        | InferredType::Int
+        | InferredType::Fin(_)
+        | InferredType::Datetime(_)
+        | InferredType::NamedIndexCase(_)
+        | InferredType::IndexArg(_) => Ok(()),
+    }
+}
+
 fn record_member(type_def: &TypeDef) -> Option<&UnionMemberDef> {
     let members = type_def.union_members()?;
     let [only] = members else {
@@ -2267,7 +2347,7 @@ fn infer_hir_generic_type_arg(
         hir::TypeExprKind::DimExpr(dim_expr) => {
             infer_hir_dim_expr_arg(dim_expr, registry, src).map(InferredType::Quantity)
         }
-        hir::TypeExprKind::Index(index) => Ok(InferredType::NamedIndex(
+        hir::TypeExprKind::Index(index) => Ok(InferredType::IndexArg(
             inferred_index_from_type_arg(index, src)?,
         )),
         hir::TypeExprKind::Struct(name) => Ok(InferredType::Struct(
@@ -2326,11 +2406,11 @@ fn infer_hir_generic_type_arg(
                             span: param.span.into(),
                         });
                     }
-                    hir::IndexRef::NatExpr(nat) => {
+                    hir::IndexRef::Finite(nat) => {
                         let form = hir_nat_to_linear_form(nat)
                             .map_err(|err| nat_overflow_error(err, src, nat.span()))?;
-                        InferredIndex::from_nat_range_form(form)
-                            .map_err(|err| nat_range_error(err, src, nat.span()))?
+                        InferredIndex::from_finite_index_form(form)
+                            .map_err(|err| finite_index_error(err, src, nat.span()))?
                     }
                 };
                 result = InferredType::Indexed {
@@ -2382,11 +2462,11 @@ fn inferred_index_from_type_arg(
             src: src.clone(),
             span: param.span.into(),
         }),
-        hir::IndexRef::NatExpr(nat_expr) => {
+        hir::IndexRef::Finite(nat_expr) => {
             let form = hir_nat_to_linear_form(nat_expr)
                 .map_err(|err| nat_overflow_error(err, src, nat_expr.span()))?;
-            InferredIndex::from_nat_range_form(form)
-                .map_err(|err| nat_range_error(err, src, nat_expr.span()))
+            InferredIndex::from_finite_index_form(form)
+                .map_err(|err| finite_index_error(err, src, nat_expr.span()))
         }
     }
 }
@@ -2679,26 +2759,21 @@ fn resolve_applied_generic_args(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum MapLiteralVariantKey {
     Declared(ResolvedIndexVariant),
-    NatRange {
-        form: NatPolyForm,
-        variant: IndexVariantName,
-    },
+    Finite { form: NatPolyForm, position: u64 },
 }
 
 impl MapLiteralVariantKey {
-    const fn variant(&self) -> &IndexVariantName {
+    fn entry_key(&self) -> IndexEntryKey {
         match self {
-            Self::Declared(resolved) => resolved.variant(),
-            Self::NatRange { variant, .. } => variant,
+            Self::Declared(resolved) => IndexEntryKey::named(resolved.variant().clone()),
+            Self::Finite { position, .. } => IndexEntryKey::position(*position),
         }
     }
 
-    fn display_index(&self) -> IndexName {
+    fn display(&self) -> String {
         match self {
-            Self::Declared(resolved) => resolved.index().to_unowned_def_name(),
-            Self::NatRange { form, .. } => {
-                IndexName::expect_valid(format!("range({})", form.format()))
-            }
+            Self::Declared(resolved) => resolved.to_string(),
+            Self::Finite { form, position } => format!("Fin({}).#{position}", form.format()),
         }
     }
 }
@@ -2706,19 +2781,25 @@ impl MapLiteralVariantKey {
 #[derive(Debug, Clone)]
 struct MapLiteralAxis {
     index: InferredIndex,
-    variants: Vec<IndexVariantName>,
+    entry_keys: Vec<IndexEntryKey>,
 }
 
 impl MapLiteralAxis {
-    fn variant_key(&self, variant: IndexVariantName) -> MapLiteralVariantKey {
-        match self.index.type_ref() {
-            IndexTypeRef::Declared(reference) => MapLiteralVariantKey::Declared(
-                ResolvedIndexVariant::new(reference.resolved().clone(), variant),
-            ),
-            IndexTypeRef::NatRange(reference) => MapLiteralVariantKey::NatRange {
-                form: reference.form(),
-                variant,
-            },
+    fn variant_key(&self, key: IndexEntryKey) -> Result<MapLiteralVariantKey, IndexEntryKey> {
+        match (self.index.type_ref(), key) {
+            (IndexTypeRef::Declared(reference), IndexEntryKey::Named(variant)) => {
+                Ok(MapLiteralVariantKey::Declared(ResolvedIndexVariant::new(
+                    reference.resolved().clone(),
+                    variant,
+                )))
+            }
+            (IndexTypeRef::Finite(reference), IndexEntryKey::Position(position)) => {
+                Ok(MapLiteralVariantKey::Finite {
+                    form: reference.form(),
+                    position,
+                })
+            }
+            (_, incompatible) => Err(incompatible),
         }
     }
 }
@@ -2731,17 +2812,21 @@ fn inferred_index_for_hir_map_key(
         hir::expr::MapEntryKey::IndexVariant(variant) => Ok(InferredIndex::from_resolved(
             variant.variant.index().clone(),
         )),
-        hir::expr::MapEntryKey::NatRangeVariant { size, variant } => {
-            InferredIndex::from_nat_range_form(NatPolyForm::from_constant(*size))
-                .map_err(|err| nat_range_error(err, src, variant.span))
+        hir::expr::MapEntryKey::FinitePosition { size, position } => {
+            InferredIndex::from_finite_index_form(NatPolyForm::from_constant(*size))
+                .map_err(|err| finite_index_error(err, src, position.span))
         }
     }
 }
 
-fn hir_map_key_variant(key: &hir::expr::MapEntryKey) -> IndexVariantName {
+fn hir_map_entry_key(key: &hir::expr::MapEntryKey) -> IndexEntryKey {
     match key {
-        hir::expr::MapEntryKey::IndexVariant(variant) => variant.variant.variant().clone(),
-        hir::expr::MapEntryKey::NatRangeVariant { variant, .. } => variant.value.clone(),
+        hir::expr::MapEntryKey::IndexVariant(variant) => {
+            IndexEntryKey::named(variant.variant.variant().clone())
+        }
+        hir::expr::MapEntryKey::FinitePosition { position, .. } => {
+            IndexEntryKey::position(position.value)
+        }
     }
 }
 
@@ -2793,10 +2878,10 @@ fn infer_hir_map_literal(
                     span: expr.span.into(),
                 }
             })?;
-        if idx_def.is_range() {
+        if idx_def.is_coordinate() {
             return Err(GraphcalError::EvalError {
                 message: format!(
-                    "range index `{}` cannot be used as a map/table literal key; use a `for` comprehension instead",
+                    "coordinate index `{}` cannot be used as a map/table literal key; use a `for` comprehension instead",
                     index.name()
                 ),
                 src: src.clone(),
@@ -2805,7 +2890,7 @@ fn infer_hir_map_literal(
         }
         axes.push(MapLiteralAxis {
             index,
-            variants: idx_def.variants(),
+            entry_keys: idx_def.entry_keys(),
         });
     }
     for entry in entries.iter().skip(1) {
@@ -2822,16 +2907,21 @@ fn infer_hir_map_literal(
         }
     }
 
+    let incompatible_key_error = |key: IndexEntryKey| GraphcalError::EvalError {
+        message: format!("map entry key `{key}` does not match its index category"),
+        src: src.clone(),
+        span: expr.span.into(),
+    };
     let axes_variant_keys: Vec<Vec<MapLiteralVariantKey>> = axes
         .iter()
         .map(|axis| {
-            axis.variants
+            axis.entry_keys
                 .iter()
                 .cloned()
-                .map(|variant| axis.variant_key(variant))
-                .collect()
+                .map(|key| axis.variant_key(key).map_err(&incompatible_key_error))
+                .collect::<Result<Vec<_>, _>>()
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     let mut expected_tuples = std::collections::HashSet::new();
     cartesian_product(&axes_variant_keys, &mut Vec::new(), &mut expected_tuples);
     let mut provided_tuples = std::collections::HashSet::new();
@@ -2840,15 +2930,12 @@ fn infer_hir_map_literal(
             .keys
             .iter()
             .enumerate()
-            .map(|(i, key)| match key {
-                hir::expr::MapEntryKey::IndexVariant(variant) => {
-                    MapLiteralVariantKey::Declared(variant.variant.clone())
-                }
-                hir::expr::MapEntryKey::NatRangeVariant { variant, .. } => {
-                    axes[i].variant_key(variant.value.clone())
-                }
+            .map(|(i, key)| {
+                axes[i]
+                    .variant_key(hir_map_entry_key(key))
+                    .map_err(&incompatible_key_error)
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         if !provided_tuples.insert(tuple.clone()) {
             return Err(GraphcalError::EvalError {
                 message: "duplicate map literal entry".to_string(),
@@ -2858,18 +2945,24 @@ fn infer_hir_map_literal(
         }
         if arity > 1 {
             for (i, key) in entry.keys.iter().enumerate() {
-                let key_variant = hir_map_key_variant(key);
-                if !axes[i]
-                    .variants
-                    .iter()
-                    .any(|variant| variant == &key_variant)
-                {
-                    return Err(GraphcalError::UnknownVariant {
-                        index_name: axes[i].index.name(),
-                        variant_name: key_variant,
-                        src: src.clone(),
-                        span: expr.span.into(),
-                    });
+                let entry_key = hir_map_entry_key(key);
+                if !axes[i].entry_keys.contains(&entry_key) {
+                    return match entry_key {
+                        IndexEntryKey::Named(variant_name) => Err(GraphcalError::UnknownVariant {
+                            index_name: axes[i].index.name(),
+                            variant_name,
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        }),
+                        IndexEntryKey::Position(position) => Err(GraphcalError::EvalError {
+                            message: format!(
+                                "position #{position} is outside index `{}`",
+                                axes[i].index.name()
+                            ),
+                            src: src.clone(),
+                            span: expr.span.into(),
+                        }),
+                    };
                 }
             }
         }
@@ -2883,10 +2976,7 @@ fn infer_hir_map_literal(
         if arity == 1 {
             return Err(GraphcalError::ExtraVariants {
                 index_name: axes[0].index.name(),
-                extra: extra
-                    .iter()
-                    .map(|tuple| tuple[0].variant().clone())
-                    .collect(),
+                extra: extra.iter().map(|tuple| tuple[0].entry_key()).collect(),
                 src: src.clone(),
                 span: expr.span.into(),
             });
@@ -2896,10 +2986,7 @@ fn infer_hir_map_literal(
             .map(|tuple| {
                 tuple
                     .iter()
-                    .map(|variant| {
-                        let display_index = variant.display_index();
-                        variant.variant().qualified_by(&display_index).to_string()
-                    })
+                    .map(MapLiteralVariantKey::display)
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -2921,10 +3008,7 @@ fn infer_hir_map_literal(
         if arity == 1 {
             return Err(GraphcalError::MissingVariants {
                 index_name: axes[0].index.name(),
-                missing: missing
-                    .iter()
-                    .map(|tuple| tuple[0].variant().clone())
-                    .collect(),
+                missing: missing.iter().map(|tuple| tuple[0].entry_key()).collect(),
                 src: src.clone(),
                 span: expr.span.into(),
             });
@@ -2934,10 +3018,7 @@ fn infer_hir_map_literal(
             .map(|tuple| {
                 tuple
                     .iter()
-                    .map(|variant| {
-                        let display_index = variant.display_index();
-                        variant.variant().qualified_by(&display_index).to_string()
-                    })
+                    .map(MapLiteralVariantKey::display)
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -2965,7 +3046,7 @@ fn infer_hir_map_literal(
     )?;
     if let InferredType::Indexed { index, .. } = &first_type {
         let inner_is_label = super::index_def_for_inferred(index, Some(dag), registry)
-            .is_some_and(|def| !def.is_range());
+            .is_some_and(|def| !def.is_coordinate());
         if inner_is_label {
             return Err(GraphcalError::EvalError {
                 message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
@@ -3110,7 +3191,7 @@ fn infer_hir_unfold(
         builtin_fns,
         src,
     )?;
-    let owner_range_index = owner_decl_name.and_then(|name| {
+    let owner_coordinate_index = owner_decl_name.and_then(|name| {
         let resolved = dag.resolved_decl_types.get(&ScopedName::local(name))?;
         let crate::tir::typed::ResolvedTypeExpr::Indexed { indexes, .. } = resolved else {
             return None;
@@ -3120,22 +3201,22 @@ fn infer_hir_unfold(
         };
         let idx_def = dag.semantic.collection_refs.index_defs.get(index)?;
         idx_def
-            .is_range()
+            .is_coordinate()
             .then(|| (InferredIndex::from_resolved(index.clone()), idx_def))
     });
-    let (index, idx_def) = owner_range_index.ok_or_else(|| GraphcalError::EvalError {
+    let (index, idx_def) = owner_coordinate_index.ok_or_else(|| GraphcalError::EvalError {
         message:
-            "unfold expression must appear in a declaration with a concrete range-indexed type"
+            "unfold expression must appear in a declaration with a concrete coordinate-indexed type"
                 .to_string(),
         src: src.clone(),
         span: body.span.into(),
     })?;
     let dimension = match &idx_def.kind {
-        crate::registry::types::IndexKind::Range(data) => data.dimension.clone(),
-        crate::registry::types::IndexKind::RequiredRange { dimension } => dimension.clone(),
+        crate::registry::types::IndexKind::Coordinate(data) => data.dimension.clone(),
+        crate::registry::types::IndexKind::RequiredCoordinate { dimension } => dimension.clone(),
         _ => {
             return Err(GraphcalError::EvalError {
-                message: format!("unfold requires a range index, got `{}`", index.name()),
+                message: format!("unfold requires a coordinate index, got `{}`", index.name()),
                 src: src.clone(),
                 span: body.span.into(),
             });
@@ -3144,14 +3225,14 @@ fn infer_hir_unfold(
     let scan_locals = local_types.child(vec![
         (
             prev.id,
-            InferredType::RangeIndexLabel {
+            InferredType::CoordinateIndexLabel {
                 index: index.clone(),
                 dimension: dimension.clone(),
             },
         ),
         (
             curr.id,
-            InferredType::RangeIndexLabel {
+            InferredType::CoordinateIndexLabel {
                 index: index.clone(),
                 dimension,
             },
@@ -3245,7 +3326,7 @@ fn infer_hir_match(
         src,
     )?;
     match &scrutinee_type {
-        InferredType::NamedIndex(index_identity) => {
+        InferredType::NamedIndexCase(index_identity) => {
             let index_def = super::index_def_for_inferred(index_identity, Some(dag), registry)
                 .ok_or_else(|| GraphcalError::UnknownIndex {
                     name: index_identity.name(),
@@ -3258,7 +3339,7 @@ fn infer_hir_match(
                 _ => {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "cannot match on range index `{}`; only named indexes can be matched",
+                            "cannot match on coordinate index `{}`; only named indexes can be matched",
                             index_identity.name()
                         ),
                         src: src.clone(),

@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`range(N)` is no longer a structural index constructor
+    Diagnostic severity: error
+Begin snippet for obsolete_structural_range.gcl starting at line 1, column 1
+
+snippet line 1: // `range` constructs coordinate indexes; structural axes use `Fin`.
+snippet line 2: node values: Dimensionless[Fin(3)] = for i: range(3) { 1.0 };
+    label at line 2, columns 45 to 52: use `Fin(...)` here
+diagnostic help: write `Fin(3)`; `range` is reserved for coordinate indexes with an explicit `step:`
+diagnostic code: graphcal::P024

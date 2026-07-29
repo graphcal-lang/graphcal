@@ -1,0 +1,3 @@
+// `#N` expected-fail keys are checked against the Fin cardinality.
+#[expected_fail(#5)]
+assert r = for i: Fin(2) { i == 0 };
