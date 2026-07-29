@@ -412,6 +412,7 @@ impl<'a> HirRefCollector<'a> {
             | hir::ExprKind::StringLiteral(_)
             | hir::ExprKind::OffsetDateTimeLiteral(_)
             | hir::ExprKind::CivilDateTimeLiteral(_)
+            | hir::ExprKind::ZonedDateTimeLiteral(_)
             | hir::ExprKind::IanaTimeZoneLiteral(_) => {}
             hir::ExprKind::GraphRef(target) => {
                 let key = self.name_key(target.value.owner(), target.value.as_str());

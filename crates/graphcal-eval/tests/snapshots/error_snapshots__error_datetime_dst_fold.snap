@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+local civil datetime `2024-11-03T01:30:00` occurs twice in timezone `America/New_York`
+    Diagnostic severity: error
+Begin snippet for datetime_dst_fold.gcl starting at line 1, column 1
+
+snippet line 1: // Error: New York repeats 01:30 when daylight saving time ends
+snippet line 2: param fold: Datetime = datetime("2024-11-03T01:30:00", "America/New_York");
+    label at line 2, columns 33 to 53: this local time is repeated
+    label at line 2, columns 56 to 73: fold occurs in this timezone
+diagnostic help: the repeated time can use offset -04 or -05; use one-argument `datetime` with an explicit offset to select an instant
+diagnostic code: graphcal::D025

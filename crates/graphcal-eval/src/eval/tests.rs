@@ -771,10 +771,21 @@ node displayed: Datetime = @meeting -> "america/new_york";
     else {
         panic!("expected datetime function call");
     };
+    let graphcal_compiler::hir::ExprKind::ZonedDateTimeLiteral(datetime) = &args[0].kind else {
+        panic!(
+            "expected a resolved zoned datetime literal, got {:?}",
+            args[0]
+        );
+    };
     let graphcal_compiler::hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = &args[1].kind else {
         panic!("expected a typed IANA timezone literal, got {:?}", args[1]);
     };
     assert_eq!(time_zone_id.as_str(), "Asia/Tokyo");
+    assert_eq!(datetime.time_zone(), time_zone_id);
+    assert_eq!(
+        datetime.timestamp(),
+        "2024-11-05T01:00:00Z".parse::<jiff::Timestamp>().unwrap()
+    );
 
     let result = compile_and_eval(source).unwrap();
     let Value::Datetime {
@@ -835,6 +846,35 @@ fn datetime_constructors_reject_conflicting_or_missing_interpretation_sources() 
             "constructor contract was not checked: {error}"
         );
     }
+}
+
+#[test]
+fn dst_gaps_and_folds_are_rejected_during_checking() {
+    let gap = compile_to_tir(
+        r#"const node gap: Datetime = datetime("2024-03-10T02:30:00", "America/New_York");"#,
+        "test.gcl",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        gap,
+        CompileError::Eval(GraphcalError::NonexistentCivilDateTime { .. })
+    ));
+
+    let fold = compile_to_tir(
+        r#"
+node fold: Datetime = if true {
+    datetime("2024-11-03T01:30:00", "America/New_York")
+} else {
+    datetime("2024-11-03T01:30:00Z")
+};
+"#,
+        "test.gcl",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        fold,
+        CompileError::Eval(GraphcalError::RepeatedCivilDateTime { .. })
+    ));
 }
 
 #[test]

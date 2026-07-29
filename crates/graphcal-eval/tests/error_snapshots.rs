@@ -632,6 +632,20 @@ fn error_datetime_invalid_constructor_timezone() {
 }
 
 #[test]
+fn error_datetime_dst_gap() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_dst_gap.gcl");
+    let rendered = render_error(source, "datetime_dst_gap.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_dst_fold() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_dst_fold.gcl");
+    let rendered = render_error(source, "datetime_dst_fold.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_datetime_invalid_date() {
     let source = include_str!("../../../tests/fixtures/invalid/datetime_invalid_date.gcl");
     let rendered = render_error(source, "datetime_invalid_date.gcl");

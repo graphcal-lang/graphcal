@@ -344,6 +344,31 @@ mod tests {
     }
 
     #[test]
+    fn dst_gap_and_fold_have_distinct_check_diagnostics() {
+        let cases = [
+            (
+                "node gap: Datetime = datetime(\"2024-03-10T02:30:00\", \"America/New_York\");",
+                "graphcal::D024",
+                "does not exist",
+            ),
+            (
+                "node fold: Datetime = datetime(\"2024-11-03T01:30:00\", \"America/New_York\");",
+                "graphcal::D025",
+                "occurs twice",
+            ),
+        ];
+        for (source, expected_code, expected_message) in cases {
+            let diagnostics = produce_diagnostics(source, "test.gcl");
+            assert!(diagnostics.iter().any(|diagnostic| {
+                matches!(
+                    &diagnostic.code,
+                    Some(NumberOrString::String(code)) if code == expected_code
+                ) && diagnostic.message.contains(expected_message)
+            }));
+        }
+    }
+
+    #[test]
     fn positional_epoch_scale_suggests_static_argument() {
         let source = "node bad: Datetime<TT> = epoch(\"2024-11-05T12:00:00\", TT);";
         let diagnostics = produce_diagnostics(source, "test.gcl");
