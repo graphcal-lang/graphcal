@@ -356,6 +356,21 @@ mod tests {
     }
 
     #[test]
+    fn multi_axis_count_produces_rank_diagnostic() {
+        let source = "index Row = { A, B };\n\
+                      index Column = { X, Y };\n\
+                      node matrix: Bool[Row, Column] = for row: Row, column: Column { true };\n\
+                      node n: Int = count(@matrix);";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                &diagnostic.code,
+                Some(NumberOrString::String(code)) if code == "graphcal::D021"
+            ) && diagnostic.message.contains("rank-2")
+        }));
+    }
+
+    #[test]
     fn float_power_on_dimensioned_base_produces_exact_syntax_diagnostic() {
         let source = "param x: Length = 1.0 m;\nnode bad: Length^(1/4) = @x ^ 0.25;";
         let diagnostics = produce_diagnostics(source, "test.gcl");

@@ -530,12 +530,17 @@ No partial indexing -- all axes must be specified. To extract a "slice" along on
 node row1: Dimensionless[Col] = for c: Col { @matrix[Row.R1, c] }
 ```
 
-**Aggregation** -- collapses one or more axes:
+**Aggregation** -- reduces exactly one axis. Direct multi-axis aggregation is
+rejected with `D021`; select one axis first with an explicit `for`:
 
 ```
-sum(for m: Maneuver { @fuel[m] })    // Mass[Maneuver] -> Mass
+sum(for m: Maneuver { @fuel[m] })        // Mass[Maneuver] -> Mass
 maximum(for m: Maneuver { @delta_v[m] }) // Velocity[Maneuver] -> Velocity
+count(for m: Maneuver { @fuel[m] })      // Mass[Maneuver] -> Int
 ```
+
+The quantity reductions require quantity elements. `count` accepts any
+non-indexed element type and preserves cardinality as `Int`.
 
 **Scan** -- ordered accumulation:
 

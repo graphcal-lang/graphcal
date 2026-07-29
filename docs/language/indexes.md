@@ -23,7 +23,9 @@ in index access, map/table keys, expected-fail keys, include index bindings, and
 !!! note "No empty indexes"
     Every index has at least one element. A named index must declare a label,
     `Fin(0)` is invalid, and coordinate constructors must produce at least one
-    coordinate. This keeps aggregations total and indexed values nonempty.
+    coordinate. Completed indexed values are therefore always nonempty. If an
+    empty value reaches an aggregation internally, Graphcal reports `X001` as a
+    compiler invariant violation; empty aggregation has no user-facing semantics.
 
 !!! note "Contextual syntax names"
     `scan` and `unfold` select recurrence syntax only as bare call heads followed
@@ -92,7 +94,9 @@ node v: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
 
 ## Aggregation Functions
 
-Reduce an indexed quantity to a single quantity:
+Aggregation functions currently accept exactly one index axis. Numeric
+aggregations require quantity elements and preserve their dimension. `count`
+accepts any non-indexed element type and returns the exact cardinality as `Int`.
 
 | Function | Description | Result Type |
 |----------|-------------|-------------|
@@ -100,13 +104,19 @@ Reduce an indexed quantity to a single quantity:
 | `maximum(values)` | Maximum element | Same dimension as elements |
 | `minimum(values)` | Minimum element | Same dimension as elements |
 | `mean(values)` | Arithmetic mean | Same dimension as elements |
-| `count(values)` | Number of elements | `Dimensionless` |
+| `count(values)` | Number of elements | `Int` |
 
 ```
 node total: Velocity = sum(for m: Maneuver { @delta_v[m] });
 node largest: Velocity = maximum(for m: Maneuver { @delta_v[m] });
-node n: Dimensionless = count(for m: Maneuver { @delta_v[m] });
+node n: Int = count(for m: Maneuver { @delta_v[m] });
+node normalized: Velocity = sum(@delta_v) / to_float(count(@delta_v));
 ```
+
+`Int` and quantity arithmetic never mix implicitly. Use `to_float(count(...))`
+when a scalar calculation needs the cardinality. A multi-axis value must first be
+projected to a single axis with an explicit `for` comprehension (`D021`); total-
+and partial-axis aggregation are not yet defined.
 
 ## `scan` (Cumulative Fold)
 

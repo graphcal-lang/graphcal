@@ -563,11 +563,20 @@ fn eval_hir_aggregation_fn(
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    super::aggregations::aggregate_indexed_quantities(kind, entries).map_err(|err| {
-        GraphcalError::EvalError {
-            message: err.to_string(),
-            src: src.clone(),
-            span: span.into(),
+    super::aggregations::aggregate_indexed_values(kind, entries).map_err(|error| {
+        let message = error.to_string();
+        if error.is_internal_invariant() {
+            GraphcalError::InternalError {
+                message,
+                src: src.clone(),
+                span: span.into(),
+            }
+        } else {
+            GraphcalError::EvalError {
+                message,
+                src: src.clone(),
+                span: span.into(),
+            }
         }
     })
 }
@@ -2068,4 +2077,31 @@ fn check_inline_dag_asserts(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use miette::Diagnostic;
+
+    use super::*;
+
+    #[test]
+    fn empty_aggregation_is_reported_as_x001() {
+        let entries = IndexMap::new();
+        let src = NamedSource::new("test.gcl", Arc::new(String::new()));
+
+        for function in [
+            AggregationFn::Sum,
+            AggregationFn::Minimum,
+            AggregationFn::Maximum,
+            AggregationFn::Mean,
+            AggregationFn::Count,
+        ] {
+            let error =
+                eval_hir_aggregation_fn(function, &entries, Span::new(0, 0), &src).unwrap_err();
+            assert!(matches!(&error, GraphcalError::InternalError { .. }));
+            let code = error.code().map(|code| code.to_string());
+            assert_eq!(code.as_deref(), Some("graphcal::X001"));
+        }
+    }
 }

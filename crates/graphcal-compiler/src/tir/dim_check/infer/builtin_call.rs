@@ -39,6 +39,20 @@ pub(super) enum AggregationFn {
     Count,
 }
 
+impl AggregationFn {
+    /// Canonical built-in function identity for diagnostics.
+    #[must_use]
+    pub(super) const fn builtin_name(self) -> BuiltinFnName {
+        match self {
+            Self::Sum => BuiltinFnName::Sum,
+            Self::Minimum => BuiltinFnName::Minimum,
+            Self::Maximum => BuiltinFnName::Maximum,
+            Self::Mean => BuiltinFnName::Mean,
+            Self::Count => BuiltinFnName::Count,
+        }
+    }
+}
+
 /// Type conversion functions handled by HIR type inference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TypeConversionFn {

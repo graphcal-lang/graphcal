@@ -588,16 +588,39 @@ node total_dv: Velocity = sum(@dv);";
 }
 
 #[test]
-fn check_count_aggregation() {
+fn check_count_aggregation_returns_int_for_non_quantity_elements() {
     let source = "\
-pub index Maneuver = { Departure, Correction, Insertion };
-param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
-};
-node n: Dimensionless = count(@dv);";
+pub index Case = { First, Second, Third };
+node flags: Bool[Case] = for case: Case { true };
+node n: Int = count(@flags);";
     check(source).unwrap();
+}
+
+#[test]
+fn check_count_no_longer_returns_dimensionless_quantity() {
+    let source = "\
+pub index Case = { First, Second };
+node values: Bool[Case] = for case: Case { true };
+node n: Dimensionless = count(@values);";
+    let error = check(source).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphcalError::DimensionMismatchInAnnotation { .. }
+    ));
+}
+
+#[test]
+fn check_count_rejects_multi_axis_input() {
+    let source = "\
+pub index Row = { A, B };
+pub index Column = { X, Y, Z };
+node matrix: Bool[Row, Column] = for row: Row, column: Column { true };
+node n: Int = count(@matrix);";
+    let error = check(source).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphcalError::MultiAxisAggregation { rank: 2, .. }
+    ));
 }
 
 #[test]

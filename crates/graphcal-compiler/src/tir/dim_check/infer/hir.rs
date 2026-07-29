@@ -625,7 +625,7 @@ fn infer_hir_fn_call(
                 builtin_fns,
                 src,
             )?;
-            let InferredType::Indexed { element, .. } = arg_type else {
+            let InferredType::Indexed { element, .. } = &arg_type else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "indexed collection".to_string(),
                     found: format_inferred_type(&arg_type, registry),
@@ -634,8 +634,17 @@ fn infer_hir_fn_call(
                     span: args[0].span.into(),
                 });
             };
+            let rank = arg_type.indexed_rank();
+            if rank > 1 {
+                return Err(GraphcalError::MultiAxisAggregation {
+                    function: kind.builtin_name(),
+                    rank,
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
+            }
             match kind {
-                AggregationFn::Count => Ok(InferredType::Quantity(Dimension::dimensionless())),
+                AggregationFn::Count => Ok(InferredType::Int),
                 AggregationFn::Sum
                 | AggregationFn::Minimum
                 | AggregationFn::Maximum
@@ -643,7 +652,7 @@ fn infer_hir_fn_call(
                     || {
                         Err(GraphcalError::DimensionMismatch {
                             expected: "indexed quantity collection".to_string(),
-                            found: format_inferred_type(&element, registry),
+                            found: format_inferred_type(element, registry),
                             help: format!(
                                 "{}() requires every indexed element to be quantity",
                                 name.as_str()

@@ -64,7 +64,7 @@ node min_dv: Velocity = minimum(for m: Maneuver { @delta_v[m] });
 node mean_dv: Velocity = mean(for m: Maneuver { @delta_v[m] });
 
 // Aggregation: count
-node n_maneuvers: Dimensionless = count(for m: Maneuver { @delta_v[m] });
+node n_maneuvers: Int = count(for m: Maneuver { @delta_v[m] });
 
 // Direct variant access (extracted to param to avoid variant literal in node)
 param departure_maneuver: Velocity = @delta_v[Maneuver.Departure];

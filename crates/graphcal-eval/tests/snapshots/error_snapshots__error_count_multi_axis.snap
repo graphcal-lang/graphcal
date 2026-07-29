@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`count()` does not accept a rank-2 indexed value
+    Diagnostic severity: error
+Begin snippet for count_multi_axis.gcl starting at line 5, column 1
+
+snippet line 5: node matrix: Bool[Row, Column] = for row: Row, column: Column { true };
+snippet line 6: node invalid_count: Int = count(@matrix);
+    label at line 6, columns 33 to 39: rank-2 input
+diagnostic help: reduce one axis at a time with an explicit `for` comprehension; total- and partial-axis aggregation are not yet defined
+diagnostic code: graphcal::D021

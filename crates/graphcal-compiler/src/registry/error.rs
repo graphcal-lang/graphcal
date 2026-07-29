@@ -3,6 +3,7 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
+use crate::builtin::BuiltinFnName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::function_name::FnName;
@@ -587,6 +588,22 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("indexed operand has type {found}")]
+        span: SourceSpan,
+    },
+
+    #[error("`{function}()` does not accept a rank-{rank} indexed value")]
+    #[diagnostic(
+        code(graphcal::D021),
+        help(
+            "reduce one axis at a time with an explicit `for` comprehension; total- and partial-axis aggregation are not yet defined"
+        )
+    )]
+    MultiAxisAggregation {
+        function: BuiltinFnName,
+        rank: usize,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("rank-{rank} input")]
         span: SourceSpan,
     },
 
@@ -1903,6 +1920,7 @@ impl GraphcalError {
             | Self::DimensionMismatch { src, .. }
             | Self::IndexedShapeMismatch { src, .. }
             | Self::IndexedComparisonOperand { src, .. }
+            | Self::MultiAxisAggregation { src, .. }
             | Self::DimensionMismatchInAnnotation { src, .. }
             | Self::UnknownUnit { src, .. }
             | Self::UnknownDimension { src, .. }

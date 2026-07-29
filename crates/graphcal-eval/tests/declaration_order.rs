@@ -158,7 +158,7 @@ fn forward_ref_range_index_unit() {
     let source = r"
         index Distances = range(0.0 custom_m, 100.0 custom_m, step: 10.0 custom_m);
         base unit custom_m: Length;
-        node num_points: Dimensionless = count(for d: Distances { 1.0 });
+        node num_points: Int = count(for d: Distances { 1.0 });
     ";
     compile_and_eval(source).expect("range index with forward-ref unit must compile and evaluate");
 }

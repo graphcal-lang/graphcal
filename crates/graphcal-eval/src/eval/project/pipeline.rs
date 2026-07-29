@@ -350,7 +350,7 @@ fn evaluate_and_store_file(
         &compiled.declared_types,
         file_src,
         host_fns,
-    );
+    )?;
     let file_runtime_values = filter_local_runtime_values(&compiled.tir, &runtime_values);
     let top_level_consts = top_level_const_values(&compiled.tir, &plan.const_values);
     // Dynamic-unit scales resolve against this file's final values here, so
@@ -487,7 +487,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
                 &compiled.declared_types,
                 file_src,
                 host_fns,
-            );
+            )?;
 
             // Build a mapping from each dependency file path to the root-level
             // import statement span that (directly or transitively) brought it in.
