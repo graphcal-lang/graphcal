@@ -3112,7 +3112,7 @@ fn infer_hir_scan(
             span: source.span.into(),
         });
     };
-    let init_type = infer_hir_type(
+    let accumulator_type = infer_hir_type(
         init,
         owner_decl_name,
         declared_types,
@@ -3123,17 +3123,8 @@ fn infer_hir_scan(
         builtin_fns,
         src,
     )?;
-    if init_type != *element {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: format_inferred_type(&element, registry),
-            found: format_inferred_type(&init_type, registry),
-            help: "scan init value must match element type of source".to_string(),
-            src: src.clone(),
-            span: init.span.into(),
-        });
-    }
     let scan_locals =
-        local_types.child(vec![(acc.id, *element.clone()), (val.id, *element.clone())]);
+        local_types.child(vec![(acc.id, accumulator_type.clone()), (val.id, *element)]);
     let body_type = infer_hir_type(
         body,
         owner_decl_name,
@@ -3145,16 +3136,19 @@ fn infer_hir_scan(
         builtin_fns,
         src,
     )?;
-    if body_type != *element {
+    if body_type != accumulator_type {
         return Err(GraphcalError::DimensionMismatch {
-            expected: format_inferred_type(&element, registry),
+            expected: format_inferred_type(&accumulator_type, registry),
             found: format_inferred_type(&body_type, registry),
             help: "scan body must return the same type as the accumulator".to_string(),
             src: src.clone(),
             span: body.span.into(),
         });
     }
-    Ok(InferredType::Indexed { element, index })
+    Ok(InferredType::Indexed {
+        element: Box::new(accumulator_type),
+        index,
+    })
 }
 
 #[expect(clippy::too_many_arguments, reason = "unfold expression context")]

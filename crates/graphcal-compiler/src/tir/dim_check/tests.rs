@@ -669,6 +669,22 @@ node cum_dv: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc + val);";
 }
 
 #[test]
+fn check_scan_supports_heterogeneous_accumulator() {
+    let source = "\
+pub index Flag = { A, B };
+param flags: Bool[Flag] = {
+Flag.A: true,
+Flag.B: false,
+};
+node count_true: Int[Flag] = scan(
+    @flags,
+    0,
+    |count, flag| if flag { count + 1 } else { count }
+);";
+    check(source).unwrap();
+}
+
+#[test]
 fn check_scan_type_mismatch() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };

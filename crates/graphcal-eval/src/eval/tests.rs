@@ -876,6 +876,35 @@ node y: Dimensionless[Phase] = scan(@x, 0.0, |acc, val| acc + val);
 }
 
 #[test]
+fn eval_scan_supports_heterogeneous_accumulator() {
+    let source = r"
+index Flag = { A, B, C };
+node flags: Bool[Flag] = {
+    Flag.A: true,
+    Flag.B: false,
+    Flag.C: true,
+};
+node count_true: Int[Flag] = scan(
+    @flags,
+    0,
+    |count, flag| if flag { count + 1 } else { count }
+);
+";
+    let result = compile_and_eval(source).unwrap();
+    let Value::Indexed { entries, .. } = find_entry(&result, "count_true") else {
+        panic!("expected indexed scan result");
+    };
+    let counts = entries
+        .values()
+        .map(|value| match value {
+            Value::Int(count) => *count,
+            other => panic!("expected integer scan entry, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(counts, [1, 1, 2]);
+}
+
+#[test]
 fn eval_table_literal_finite_index_1d() {
     let source = r"
 param v: Dimensionless[Fin(3)] = table[Fin(3)] {
