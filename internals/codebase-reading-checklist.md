@@ -12,11 +12,12 @@ All Rust files in the workspace, in library-consumer order: every `use`d file ap
 - [x] `crates/graphcal-compiler/src/registry/mod.rs`
 - [x] `crates/graphcal-compiler/src/registry/time_scale.rs`
 - [ ] `crates/graphcal-compiler/src/registry/time_zone.rs`
-- [x] `crates/graphcal-compiler/src/builtin.rs`
 - [x] `crates/graphcal-compiler/src/registry/manifest.rs`
 - [x] `crates/graphcal-compiler/src/ir/mod.rs`
 - [x] `crates/graphcal-compiler/src/tir/mod.rs`
 - [x] `crates/graphcal-compiler/src/lib.rs`
+- [ ] `crates/graphcal-compiler/src/datetime_literal.rs`
+- [x] `crates/graphcal-compiler/src/builtin.rs`
 - [x] `crates/graphcal-compiler/src/dag_id.rs`
 
 ## Stage 1 - Names, spans, tokens, lexer, and syntax-domain leaves

@@ -631,6 +631,21 @@ fn error_datetime_invalid_constructor_timezone() {
     insta::assert_snapshot!(rendered);
 }
 
+#[test]
+fn error_datetime_invalid_date() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_invalid_date.gcl");
+    let rendered = render_error(source, "datetime_invalid_date.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_positional_epoch_scale() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/datetime_positional_epoch_scale.gcl");
+    let rendered = render_error(source, "datetime_positional_epoch_scale.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
 // --- Domain constraint error tests ---
 
 #[test]

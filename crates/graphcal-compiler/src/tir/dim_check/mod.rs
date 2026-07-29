@@ -583,6 +583,8 @@ fn check_ineffective_conversions_inner(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
+        | ExprKind::OffsetDateTimeLiteral(_)
+        | ExprKind::CivilDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::TypeSystemRef(_)
         | ExprKind::GraphRef(_)

@@ -68,11 +68,13 @@ fn eval_hir_expr_inner(
         hir::ExprKind::Number(n) => checked_finite_quantity(*n, "numeric literal", expr.span, ctx),
         hir::ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
         hir::ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
-        hir::ExprKind::StringLiteral(_) | hir::ExprKind::IanaTimeZoneLiteral(_) => Err(ctx
-            .eval_error(
-                "unexpected contextual literal in evaluation context",
-                expr.span,
-            )),
+        hir::ExprKind::StringLiteral(_)
+        | hir::ExprKind::OffsetDateTimeLiteral(_)
+        | hir::ExprKind::CivilDateTimeLiteral(_)
+        | hir::ExprKind::IanaTimeZoneLiteral(_) => Err(ctx.eval_error(
+            "unexpected contextual literal in evaluation context",
+            expr.span,
+        )),
         hir::ExprKind::TypeSystemRef(name) => Err(ctx.eval_error(
             format!(
                 "unexpected type-system name `{:?}` in evaluation context",
@@ -435,8 +437,9 @@ fn eval_hir_fn_call(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let name = match &callee.value {
-        FunctionRef::Builtin(name) => *name,
+    let (name, epoch_scale) = match &callee.value {
+        FunctionRef::Builtin(name) => (*name, None),
+        FunctionRef::Epoch { scale } => (BuiltinFnName::Epoch, Some(scale.value)),
         FunctionRef::External(ext) => {
             return eval_hir_extern_fn(expr, ext, args, values, local_values, ctx);
         }
@@ -469,9 +472,14 @@ fn eval_hir_fn_call(
                 epoch.to_time_scale(scale.to_hifitime()),
             ))
         }
-        EvalBuiltinRule::DatetimeConstructor(kind) => {
-            eval_hir_datetime_constructor(kind, expr.span, args, ctx.src, &ctx.registry.time_zones)
-        }
+        EvalBuiltinRule::DatetimeConstructor(kind) => eval_hir_datetime_constructor(
+            kind,
+            epoch_scale,
+            expr.span,
+            args,
+            ctx.src,
+            &ctx.registry.time_zones,
+        ),
         EvalBuiltinRule::DatetimeExtract(kind) => {
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
@@ -645,6 +653,7 @@ fn exact_numeric_datetime_arg(
 
 fn eval_hir_datetime_constructor(
     kind: DatetimeConstructorFn,
+    epoch_scale: Option<TimeScale>,
     span: Span,
     args: &[hir::Expr],
     src: &NamedSource<Arc<String>>,
@@ -662,110 +671,87 @@ fn eval_hir_datetime_constructor(
                     span: span.into(),
                 });
             }
-            let hir::ExprKind::StringLiteral(s) = &args[0].kind else {
-                return Err(GraphcalError::InternalError {
-                    message: "datetime() received non-string argument".to_string(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
-            };
-            let epoch = if args.len() == 2 {
-                let hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = &args[1].kind else {
+            let epoch = match args {
+                [arg] => {
+                    let hir::ExprKind::OffsetDateTimeLiteral(datetime) = &arg.kind else {
+                        return Err(GraphcalError::InternalError {
+                            message: "datetime() received an unparsed offset literal".to_string(),
+                            src: src.clone(),
+                            span: arg.span.into(),
+                        });
+                    };
+                    Ok(super::functions::datetime_from_offset(*datetime))
+                }
+                [datetime_arg, timezone_arg] => {
+                    let hir::ExprKind::CivilDateTimeLiteral(datetime) = &datetime_arg.kind else {
+                        return Err(GraphcalError::InternalError {
+                            message: "datetime() received an unparsed civil literal".to_string(),
+                            src: src.clone(),
+                            span: datetime_arg.span.into(),
+                        });
+                    };
+                    let hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = &timezone_arg.kind
+                    else {
+                        return Err(GraphcalError::InternalError {
+                            message: "datetime() received an unvalidated timezone argument"
+                                .to_string(),
+                            src: src.clone(),
+                            span: timezone_arg.span.into(),
+                        });
+                    };
+                    super::functions::datetime_with_timezone(*datetime, time_zone_id, time_zones)
+                }
+                _ => {
                     return Err(GraphcalError::InternalError {
-                        message: "datetime() received an unvalidated timezone argument".to_string(),
+                        message: "datetime arity changed after validation".to_string(),
                         src: src.clone(),
-                        span: args[1].span.into(),
+                        span: span.into(),
                     });
-                };
-                super::functions::datetime_with_timezone(s, time_zone_id, time_zones).map_err(
-                    |e| GraphcalError::EvalError {
-                        message: format!("invalid datetime with timezone: {e}"),
-                        src: src.clone(),
-                        span: args[0].span.into(),
-                    },
-                )?
-            } else {
-                hifitime::Epoch::from_gregorian_str(s).map_err(|e| GraphcalError::EvalError {
-                    message: format!("invalid datetime string: {e}"),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                })?
-            };
+                }
+            }
+            .map_err(|error| GraphcalError::InternalError {
+                message: format!("validated datetime literal failed evaluation: {error}"),
+                src: src.clone(),
+                span: args[0].span.into(),
+            })?;
             Ok(RuntimeValue::Datetime(epoch))
         }
         DatetimeConstructorFn::Epoch => {
-            if args.len() != 2 {
+            let [arg] = args else {
                 return Err(GraphcalError::InternalError {
                     message: format!(
-                        "epoch() received {} argument(s) after dim-check accepted arity 2",
+                        "epoch() received {} argument(s) after dim-check accepted arity 1",
                         args.len()
                     ),
                     src: src.clone(),
                     span: span.into(),
                 });
-            }
-            let hir::ExprKind::StringLiteral(s) = &args[0].kind else {
+            };
+            let hir::ExprKind::CivilDateTimeLiteral(datetime) = &arg.kind else {
                 return Err(GraphcalError::InternalError {
-                    message: "epoch() received non-string first argument".to_string(),
+                    message: "epoch() received an unparsed civil literal".to_string(),
                     src: src.clone(),
-                    span: args[0].span.into(),
+                    span: arg.span.into(),
                 });
             };
-            let hir::ExprKind::ConstRef(scale_ref) = &args[1].kind else {
+            let Some(scale) = epoch_scale else {
                 return Err(GraphcalError::InternalError {
-                    message: "epoch() received non-time-scale second argument".to_string(),
-                    src: src.clone(),
-                    span: args[1].span.into(),
-                });
-            };
-            let ConstRef::TimeScale(scale) = &scale_ref.value else {
-                return Err(GraphcalError::InternalError {
-                    message: "epoch() received non-time-scale second argument".to_string(),
-                    src: src.clone(),
-                    span: args[1].span.into(),
-                });
-            };
-            if has_time_scale_suffix(s) {
-                return Err(GraphcalError::EvalError {
-                    message: "epoch() date string must not include a time scale; pass it as the second argument".to_string(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
-            }
-            let epoch = epoch_from_gregorian_str_at_scale(s, *scale).map_err(|e| {
-                GraphcalError::EvalError {
-                    message: format!("invalid epoch string: {e}"),
+                    message: "epoch() reached evaluation without a static time scale".to_string(),
                     src: src.clone(),
                     span: span.into(),
-                }
-            })?;
+                });
+            };
+            let epoch =
+                super::functions::epoch_from_civil_datetime(*datetime, scale).map_err(|error| {
+                    GraphcalError::InternalError {
+                        message: format!("validated epoch literal failed evaluation: {error}"),
+                        src: src.clone(),
+                        span: arg.span.into(),
+                    }
+                })?;
             Ok(RuntimeValue::Datetime(epoch))
         }
     }
-}
-
-fn has_time_scale_suffix(s: &str) -> bool {
-    s.split_whitespace()
-        .last()
-        .is_some_and(|suffix| suffix.parse::<TimeScale>().is_ok())
-}
-
-fn epoch_from_gregorian_str_at_scale(
-    s: &str,
-    scale: TimeScale,
-) -> Result<hifitime::Epoch, hifitime::HifitimeError> {
-    let parsed = hifitime::Epoch::from_gregorian_str(s)?;
-    let (year, month, day, hour, minute, second, nanos) = parsed.to_gregorian_utc();
-    hifitime::Epoch::maybe_from_gregorian(
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        nanos,
-        scale.to_hifitime(),
-    )
 }
 
 /// The concrete index an extern call bound to one of its index variables:

@@ -194,11 +194,18 @@ node active: Bool = @enabled && @count > 0;
 `Datetime` represents a precise point in time. It is parameterized by a **time scale** that determines how the instant is interpreted. Bare `Datetime` defaults to UTC.
 
 ```
-param launch: Datetime = datetime("2024-11-05T12:00:00 UTC");
-param t_tt: Datetime<TT> = epoch("2024-11-05T12:00:00", TT);
+param launch: Datetime = datetime("2024-11-05T12:00:00Z");
+param t_tt: Datetime<TT> = epoch<TT>("2024-11-05T12:00:00");
 ```
 
 Supported time scales: `UTC`, `TAI`, `TT`, `TDB`, `ET`, `GPST`, `GST`, `BDT`, `QZSST`.
+
+Civil `datetime` and scientific `epoch<S>` construction are deliberately
+separate. `datetime("...")` requires an explicit `Z` or numeric UTC offset;
+`datetime("...", timezone)` accepts only offset-free local civil coordinates;
+and `epoch<S>("...")` accepts only offset/zone/scale-free calendar coordinates
+whose interpretation comes from static `S`. All literal forms are parsed while
+the program is checked, so their static and runtime scales cannot disagree.
 
 Named civil timezones use quoted contextual `TimezoneLiteral`s. A timezone
 literal is not a first-class `String` value: checking validates and
@@ -743,8 +750,9 @@ function_name(arg1, arg2, ...)
 - Arguments are matched positionally against the function's parameter types.
 - Generic dimensions and indexes in built-in or extern signatures are inferred
   from ordinary value arguments.
-- Explicit non-empty function generic arguments are not supported. A form such
-  as `sqrt<3>(x)` is rejected rather than silently ignoring `<3>`.
+- `epoch<S>(civil_literal)` consumes one explicit static time-scale argument.
+  Other non-empty function generic arguments, such as `sqrt<3>(x)`, are
+  rejected rather than silently ignored.
 - The result type is the function's return type after generic substitution.
 
 ### Field Access

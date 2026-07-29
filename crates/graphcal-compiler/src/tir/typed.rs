@@ -978,6 +978,8 @@ impl HirPolicyChecker<'_> {
             | hir::ExprKind::Integer(_)
             | hir::ExprKind::Bool(_)
             | hir::ExprKind::StringLiteral(_)
+            | hir::ExprKind::OffsetDateTimeLiteral(_)
+            | hir::ExprKind::CivilDateTimeLiteral(_)
             | hir::ExprKind::IanaTimeZoneLiteral(_)
             | hir::ExprKind::TypeSystemRef(_)
             | hir::ExprKind::ConstRef(_)

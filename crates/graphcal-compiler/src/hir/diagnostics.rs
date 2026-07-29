@@ -101,6 +101,38 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
+        hir::ExprLowerError::InvalidDatetimeLiteral {
+            expectation,
+            reason,
+            span,
+        } => {
+            return GraphcalError::InvalidDatetimeLiteral {
+                expectation: *expectation,
+                reason: reason.clone(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::EpochTimeScaleArgumentCount { got, span } => {
+            return GraphcalError::EpochTimeScaleArgumentCount {
+                got: *got,
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::InvalidEpochTimeScaleArgument { span } => {
+            return GraphcalError::InvalidEpochTimeScaleArgument {
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::UnsupportedEpochTimeScale { name, span } => {
+            return GraphcalError::UnsupportedEpochTimeScale {
+                name: name.clone(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
         hir::ExprLowerError::ExtraMapVariant {
             index_name,
             variant_name,
@@ -171,7 +203,11 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::UnknownExternFunction { span, .. }
         | hir::ExprLowerError::UnsupportedFunctionGenericArgs { span, .. }
         | hir::ExprLowerError::WrongArity { span, .. }
-        | hir::ExprLowerError::InvalidTimezone { span, .. } => *span,
+        | hir::ExprLowerError::InvalidTimezone { span, .. }
+        | hir::ExprLowerError::EpochTimeScaleArgumentCount { span, .. }
+        | hir::ExprLowerError::InvalidEpochTimeScaleArgument { span }
+        | hir::ExprLowerError::UnsupportedEpochTimeScale { span, .. }
+        | hir::ExprLowerError::InvalidDatetimeLiteral { span, .. } => *span,
         hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. } => *duplicate,
     };
     GraphcalError::EvalError {

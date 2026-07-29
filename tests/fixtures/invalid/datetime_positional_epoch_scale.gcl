@@ -1,0 +1,2 @@
+// Error: epoch time scales are static generic arguments
+param bad: Datetime<TT> = epoch("2024-11-05T12:00:00", TT);

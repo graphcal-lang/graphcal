@@ -9,6 +9,7 @@ use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::function_name::FnName;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
+use crate::syntax::names::NameAtom;
 use crate::syntax::type_name::{FieldName, StructTypeName};
 
 fn format_index_entry_keys(keys: &[IndexEntryKey]) -> String {
@@ -1542,6 +1543,57 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("invalid datetime literal: {reason}")]
+    #[diagnostic(code(graphcal::D022), help("{expectation}"))]
+    InvalidDatetimeLiteral {
+        expectation: crate::datetime_literal::DatetimeLiteralExpectation,
+        reason: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("does not satisfy this constructor's datetime literal contract")]
+        span: SourceSpan,
+    },
+
+    #[error("epoch requires exactly one static time-scale argument, got {got}")]
+    #[diagnostic(
+        code(graphcal::D023),
+        help(
+            "write a supported scale in angle brackets, for example `epoch<TT>(\"2024-11-05T12:00:00\")`"
+        )
+    )]
+    EpochTimeScaleArgumentCount {
+        got: usize,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("expected exactly one time scale here")]
+        span: SourceSpan,
+    },
+
+    #[error("epoch's static time-scale argument must be a bare name")]
+    #[diagnostic(
+        code(graphcal::D023),
+        help("use one of UTC, TAI, TT, TDB, ET, GPST, GST, BDT, or QZSST")
+    )]
+    InvalidEpochTimeScaleArgument {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("expected a supported bare time-scale name")]
+        span: SourceSpan,
+    },
+
+    #[error("unsupported epoch time scale `{name}`")]
+    #[diagnostic(
+        code(graphcal::D023),
+        help("use one of UTC, TAI, TT, TDB, ET, GPST, GST, BDT, or QZSST")
+    )]
+    UnsupportedEpochTimeScale {
+        name: NameAtom,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a supported time scale")]
+        span: SourceSpan,
+    },
+
     #[error("domain violation: `{name}` value {value} is {violation}")]
     #[diagnostic(
         code(graphcal::C001),
@@ -1988,6 +2040,10 @@ impl GraphcalError {
             | Self::RequiredIndexNotBound { src, .. }
             | Self::ImportRuntimeItem { src, .. }
             | Self::InvalidTimezone { src, .. }
+            | Self::InvalidDatetimeLiteral { src, .. }
+            | Self::EpochTimeScaleArgumentCount { src, .. }
+            | Self::InvalidEpochTimeScaleArgument { src, .. }
+            | Self::UnsupportedEpochTimeScale { src, .. }
             | Self::DomainViolation { src, .. }
             | Self::DomainDimensionMismatch { src, .. }
             | Self::DomainMinExceedsMax { src, .. }

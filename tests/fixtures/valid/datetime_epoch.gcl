@@ -1,7 +1,7 @@
-// epoch() constructor with explicit time scales
-param t_tt: Datetime<TT> = epoch("2024-11-05T12:00:00", TT);
-param t_tai: Datetime<TAI> = epoch("2024-11-05T12:00:00", TAI);
-param t_gpst: Datetime<GPST> = epoch("2024-11-05T12:00:00", GPST);
+// epoch<S>() constructor with explicit static time scales
+param t_tt: Datetime<TT> = epoch<TT>("2024-11-05T12:00:00");
+param t_tai: Datetime<TAI> = epoch<TAI>("2024-11-05T12:00:00");
+param t_gpst: Datetime<GPST> = epoch<GPST>("2024-11-05T12:00:00");
 
 // Arithmetic within the same time scale
 node t_tt_later: Datetime<TT> = @t_tt + 3600.0 s;

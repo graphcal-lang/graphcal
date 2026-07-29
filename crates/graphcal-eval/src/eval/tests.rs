@@ -820,9 +820,128 @@ fn invalid_datetime_timezone_is_rejected_in_every_expression_owner() {
 }
 
 #[test]
+fn datetime_constructors_reject_conflicting_or_missing_interpretation_sources() {
+    let cases = [
+        r#"node bad: Datetime = datetime("2024-11-05T12:00:00");"#,
+        r#"node bad: Datetime = datetime("2024-11-05T12:00:00 TT");"#,
+        r#"node bad: Datetime = datetime("2024-11-05T12:00:00Z", "UTC");"#,
+        r#"node bad: Datetime<TT> = epoch<TT>("2024-11-05T12:00:00Z");"#,
+        r#"node bad: Datetime<TT> = epoch<TT>("2024-11-05T12:00:00 TT");"#,
+    ];
+    for source in cases {
+        let error = compile_to_tir(source, "test.gcl").unwrap_err();
+        assert!(
+            error.to_string().contains("invalid datetime literal"),
+            "constructor contract was not checked: {error}"
+        );
+    }
+}
+
+#[test]
+fn every_civil_datetime_constructor_has_matching_static_and_runtime_scales() {
+    let result = compile_and_eval(
+        r#"
+node offset: Datetime = datetime("2024-11-05T21:00:00.123456789+09:00");
+node utc: Datetime = datetime("2024-11-05T12:00:00.123456789Z");
+node zoned: Datetime = datetime("2024-11-05T21:00:00.123456789", "Asia/Tokyo");
+node offset_delta: Time = @offset - @utc;
+node zoned_delta: Time = @zoned - @utc;
+"#,
+    )
+    .unwrap();
+    assert!((find_value(&result, "offset_delta")).abs() < f64::EPSILON);
+    assert!((find_value(&result, "zoned_delta")).abs() < f64::EPSILON);
+
+    for name in ["offset", "utc", "zoned"] {
+        let Value::Datetime {
+            epoch, time_scale, ..
+        } = find_entry(&result, name)
+        else {
+            panic!("expected datetime value for {name}");
+        };
+        let expected = graphcal_compiler::registry::time_scale::TimeScale::UTC;
+        assert_eq!(time_scale, expected);
+        assert_eq!(epoch.time_scale, expected.to_hifitime());
+    }
+}
+
+#[test]
+fn every_epoch_constructor_has_matching_static_and_runtime_scales() {
+    let source = r#"
+node utc: Datetime<UTC> = epoch<UTC>("2024-11-05T12:00:00");
+node tai: Datetime<TAI> = epoch<TAI>("2024-11-05T12:00:00");
+node tt: Datetime<TT> = epoch<TT>("2024-11-05T12:00:00");
+node tdb: Datetime<TDB> = epoch<TDB>("2024-11-05T12:00:00");
+node et: Datetime<ET> = epoch<ET>("2024-11-05T12:00:00");
+node gpst: Datetime<GPST> = epoch<GPST>("2024-11-05T12:00:00");
+node gst: Datetime<GST> = epoch<GST>("2024-11-05T12:00:00");
+node bdt: Datetime<BDT> = epoch<BDT>("2024-11-05T12:00:00");
+node qzsst: Datetime<QZSST> = epoch<QZSST>("2024-11-05T12:00:00");
+"#;
+    let result = compile_and_eval(source).unwrap();
+    let expected = [
+        (
+            "utc",
+            graphcal_compiler::registry::time_scale::TimeScale::UTC,
+        ),
+        (
+            "tai",
+            graphcal_compiler::registry::time_scale::TimeScale::TAI,
+        ),
+        ("tt", graphcal_compiler::registry::time_scale::TimeScale::TT),
+        (
+            "tdb",
+            graphcal_compiler::registry::time_scale::TimeScale::TDB,
+        ),
+        ("et", graphcal_compiler::registry::time_scale::TimeScale::ET),
+        (
+            "gpst",
+            graphcal_compiler::registry::time_scale::TimeScale::GPST,
+        ),
+        (
+            "gst",
+            graphcal_compiler::registry::time_scale::TimeScale::GST,
+        ),
+        (
+            "bdt",
+            graphcal_compiler::registry::time_scale::TimeScale::BDT,
+        ),
+        (
+            "qzsst",
+            graphcal_compiler::registry::time_scale::TimeScale::QZSST,
+        ),
+    ];
+    for (name, expected_scale) in expected {
+        let Value::Datetime {
+            epoch, time_scale, ..
+        } = find_entry(&result, name)
+        else {
+            panic!("expected datetime value for {name}");
+        };
+        assert_eq!(time_scale, expected_scale);
+        assert_eq!(epoch.time_scale, expected_scale.to_hifitime());
+    }
+}
+
+#[test]
+fn positional_epoch_scale_is_rejected_during_checking() {
+    let error = compile_to_tir(
+        r#"node bad: Datetime<TT> = epoch("2024-11-05T12:00:00", TT);"#,
+        "test.gcl",
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("epoch requires exactly one static time-scale argument"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn epoch_constructor_applies_explicit_scale_without_suffix_concat() {
     let result =
-        compile_and_eval(r#"node tt: Datetime<TT> = epoch("2000-01-01T12:00:00", TT);"#).unwrap();
+        compile_and_eval(r#"node tt: Datetime<TT> = epoch<TT>("2000-01-01T12:00:00");"#).unwrap();
     let Value::Datetime { epoch, .. } = find_entry(&result, "tt") else {
         panic!("expected datetime value");
     };
@@ -833,13 +952,14 @@ fn epoch_constructor_applies_explicit_scale_without_suffix_concat() {
 }
 
 #[test]
-fn epoch_constructor_rejects_embedded_scale_suffix() {
-    let result =
-        compile_and_eval(r#"node bad: Datetime<TT> = epoch("2000-01-01T12:00:00 UTC", TT);"#)
-            .unwrap();
-    let err = result.nodes[0].1.as_ref().unwrap_err().to_string();
+fn epoch_constructor_rejects_embedded_scale_suffix_during_checking() {
+    let err = compile_to_tir(
+        r#"node bad: Datetime<TT> = epoch<TT>("2000-01-01T12:00:00 TT");"#,
+        "test.gcl",
+    )
+    .unwrap_err();
     assert!(
-        err.contains("must not include a time scale"),
+        err.to_string().contains("invalid datetime literal"),
         "unexpected error: {err}"
     );
 }

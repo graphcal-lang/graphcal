@@ -532,7 +532,7 @@ pub enum ExprKind<P: Phase = Raw> {
     Integer(i64),
     /// Boolean literal: `true`, `false`
     Bool(bool),
-    /// String literal: `"hello"` (used as arguments to `datetime()`, `epoch()`, etc.)
+    /// String literal: `"hello"` (classified contextually during HIR lowering).
     StringLiteral(String),
     /// Graph reference: `@name` or `@alias.member`. The payload encodes
     /// qualification structurally — `Local` for bare `@name`, `Qualified`
