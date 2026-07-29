@@ -89,12 +89,26 @@ These selectors always take exactly two values. To reduce an indexed value, use
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `datetime("...")` | `String -> Datetime` | Parse ISO 8601/RFC 3339 datetime string (UTC) |
-| `datetime("...", "tz")` | `(String, TimezoneLiteral) -> Datetime` | Parse civil datetime in a timezone (e.g., `"Asia/Tokyo"`) |
-| `epoch("...", Scale)` | `(String, TimeScale) -> Datetime<Scale>` | Parse datetime in a specific time scale |
+| `datetime("...")` | `OffsetDateTimeLiteral -> Datetime` | Parse RFC 3339 with an explicit `Z` or numeric offset |
+| `datetime("...", "tz")` | `(CivilDateTimeLiteral, TimezoneLiteral) -> Datetime` | Interpret local civil time in an IANA timezone |
+| `epoch<S>("...")` | `CivilDateTimeLiteral -> Datetime<S>` | Interpret scale-free calendar coordinates in static time scale `S` |
 | `from_jd(x)` | `Dimensionless -> Datetime` | Construct from Julian Date (UTC) |
 | `from_mjd(x)` | `Dimensionless -> Datetime` | Construct from Modified Julian Date (UTC) |
 | `from_unix(x)` | `Dimensionless -> Datetime` | Construct from Unix timestamp in seconds |
+
+Each constructor has exactly one interpretation source:
+
+- one-argument `datetime` requires `Z` or a numeric offset;
+- timezone-based `datetime` requires local civil coordinates with no embedded
+  offset, timezone, or time-scale suffix;
+- `epoch<S>` requires local calendar coordinates with no embedded offset,
+  timezone, or time-scale suffix, and `S` must be one supported bare time
+  scale.
+
+Datetime literals are parsed during checking. Invalid calendar dates and
+missing or contradictory interpretation sources are compile errors, not
+runtime failures. The obsolete positional form `epoch("...", TT)` is rejected;
+write `epoch<TT>("...")`.
 
 #### Time Scale Conversions
 

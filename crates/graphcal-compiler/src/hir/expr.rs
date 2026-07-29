@@ -25,6 +25,9 @@ use thiserror::Error;
 
 use crate::builtin::{BuiltinConst, BuiltinFnName};
 use crate::dag_id::DagId;
+use crate::datetime_literal::{
+    CivilDateTimeLiteral, DatetimeLiteralExpectation, OffsetDateTimeLiteral,
+};
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
@@ -122,6 +125,22 @@ pub enum ExprLowerError {
     InvalidTimezone {
         timezone: String,
         tzdb_version: &'static str,
+        span: Span,
+    },
+    /// `epoch` had the wrong number of static time-scale arguments.
+    #[error("epoch requires exactly one static time-scale argument, got {got}")]
+    EpochTimeScaleArgumentCount { got: usize, span: Span },
+    /// `epoch`'s static argument was not a bare source name.
+    #[error("epoch's static time-scale argument must be a bare name")]
+    InvalidEpochTimeScaleArgument { span: Span },
+    /// `epoch`'s bare static argument did not name a supported time scale.
+    #[error("unsupported epoch time scale `{name}`")]
+    UnsupportedEpochTimeScale { name: NameAtom, span: Span },
+    /// A contextual datetime literal did not satisfy its constructor contract.
+    #[error("invalid datetime literal: {reason}")]
+    InvalidDatetimeLiteral {
+        expectation: DatetimeLiteralExpectation,
+        reason: String,
         span: Span,
     },
     /// A path-pattern could not be resolved to a constructor or index label.
@@ -467,6 +486,10 @@ pub enum ExprKind {
     Integer(i64),
     Bool(bool),
     StringLiteral(String),
+    /// An offset-bearing instant parsed during HIR lowering.
+    OffsetDateTimeLiteral(OffsetDateTimeLiteral),
+    /// An offset/scale-free civil coordinate parsed during HIR lowering.
+    CivilDateTimeLiteral(CivilDateTimeLiteral),
     /// An IANA timezone literal validated and canonicalized during HIR lowering.
     IanaTimeZoneLiteral(IanaTimeZoneId),
     TypeSystemRef(Spanned<TypeSystemRef>),
@@ -589,6 +612,8 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
+        | ExprKind::OffsetDateTimeLiteral(_)
+        | ExprKind::CivilDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::TypeSystemRef(_)
         | ExprKind::LocalRef(_)
@@ -714,8 +739,24 @@ pub enum ConstRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionRef {
     Builtin(BuiltinFnName),
+    /// `epoch<S>` with its required static time scale resolved at the HIR boundary.
+    Epoch {
+        scale: Spanned<TimeScale>,
+    },
     /// An externally-provided function declared by an `import plugin` block.
     External(ExternFnRef),
+}
+
+impl FunctionRef {
+    /// Return the built-in identity represented by this reference.
+    #[must_use]
+    pub const fn builtin_name(&self) -> Option<BuiltinFnName> {
+        match self {
+            Self::Builtin(name) => Some(*name),
+            Self::Epoch { .. } => Some(BuiltinFnName::Epoch),
+            Self::External(_) => None,
+        }
+    }
 }
 
 /// A resolved reference to an extern (plugin) function.
@@ -769,6 +810,8 @@ fn find_extern_call_inner(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
+        | ExprKind::OffsetDateTimeLiteral(_)
+        | ExprKind::CivilDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::TypeSystemRef(_)
         | ExprKind::GraphRef(_)
@@ -1010,15 +1053,13 @@ impl<'a> ExprLowerer<'a> {
                 generic_args,
                 args,
             } => {
-                if !generic_args.is_empty() {
-                    return Err(ExprLowerError::UnsupportedFunctionGenericArgs {
-                        path: callee.display_path(),
-                        span: generic_args
-                            .first()
-                            .map_or_else(|| callee.span(), ast::GenericArg::span),
-                    });
-                }
                 let function_ref = self.lower_function_ref(callee)?;
+                let function_ref = Self::lower_function_application(
+                    function_ref,
+                    generic_args,
+                    callee.display_path(),
+                    callee.span(),
+                )?;
                 Self::check_function_arity(&function_ref, args.len(), callee.span())?;
                 let args = self.lower_function_args(&function_ref, args)?;
                 ExprKind::FnCall {
@@ -1574,8 +1615,54 @@ impl<'a> ExprLowerer<'a> {
         })
     }
 
-    /// Lower function arguments, promoting contextual timezone strings into
-    /// validated typed HIR literals only in `datetime(civil, timezone)`.
+    fn lower_function_application(
+        function_ref: FunctionRef,
+        generic_args: &[ast::GenericArg],
+        path: String,
+        callee_span: Span,
+    ) -> Result<FunctionRef, ExprLowerError> {
+        match function_ref {
+            FunctionRef::Builtin(BuiltinFnName::Epoch) => {
+                Self::lower_epoch_function_ref(generic_args, callee_span)
+            }
+            other if generic_args.is_empty() => Ok(other),
+            _ => Err(ExprLowerError::UnsupportedFunctionGenericArgs {
+                path,
+                span: generic_args
+                    .first()
+                    .map_or(callee_span, ast::GenericArg::span),
+            }),
+        }
+    }
+
+    fn lower_epoch_function_ref(
+        generic_args: &[ast::GenericArg],
+        callee_span: Span,
+    ) -> Result<FunctionRef, ExprLowerError> {
+        let [arg] = generic_args else {
+            return Err(ExprLowerError::EpochTimeScaleArgumentCount {
+                got: generic_args.len(),
+                span: generic_args
+                    .first()
+                    .map_or(callee_span, ast::GenericArg::span),
+            });
+        };
+        let ast::GenericArg::Ambiguous(ast::AmbiguousGenericArg::Name(ident)) = arg else {
+            return Err(ExprLowerError::InvalidEpochTimeScaleArgument { span: arg.span() });
+        };
+        let scale = ident.name.as_str().parse::<TimeScale>().map_err(|_| {
+            ExprLowerError::UnsupportedEpochTimeScale {
+                name: ident.name.clone(),
+                span: ident.span,
+            }
+        })?;
+        Ok(FunctionRef::Epoch {
+            scale: Spanned::new(scale, ident.span),
+        })
+    }
+
+    /// Lower constructor-context strings into parsed semantic datetime and
+    /// timezone literals. Ordinary strings remain syntax-only HIR leaves.
     fn lower_function_args(
         &mut self,
         function_ref: &FunctionRef,
@@ -1583,20 +1670,69 @@ impl<'a> ExprLowerer<'a> {
     ) -> Result<Vec<Expr>, ExprLowerError> {
         args.iter()
             .enumerate()
-            .map(|(index, arg)| {
-                let is_datetime_timezone =
-                    matches!(function_ref, FunctionRef::Builtin(BuiltinFnName::Datetime))
-                        && index == 1;
-                match (&arg.kind, is_datetime_timezone) {
-                    (ast::ExprKind::StringLiteral(timezone), true) => self
+            .map(
+                |(index, arg)| match (function_ref, index, args.len(), &arg.kind) {
+                    (
+                        FunctionRef::Builtin(BuiltinFnName::Datetime),
+                        0,
+                        1,
+                        ast::ExprKind::StringLiteral(source),
+                    ) => Self::lower_offset_datetime_literal(source, arg.span),
+                    (
+                        FunctionRef::Builtin(BuiltinFnName::Datetime),
+                        0,
+                        2,
+                        ast::ExprKind::StringLiteral(source),
+                    ) => Self::lower_civil_datetime_literal(
+                        source,
+                        DatetimeLiteralExpectation::ZonedCivilDateTime,
+                        arg.span,
+                    ),
+                    (
+                        FunctionRef::Builtin(BuiltinFnName::Datetime),
+                        1,
+                        2,
+                        ast::ExprKind::StringLiteral(timezone),
+                    ) => self
                         .lower_iana_time_zone_id(timezone, arg.span)
                         .map(|timezone| {
                             Expr::new(ExprKind::IanaTimeZoneLiteral(timezone), arg.span)
                         }),
+                    (FunctionRef::Epoch { scale }, 0, 1, ast::ExprKind::StringLiteral(source)) => {
+                        Self::lower_civil_datetime_literal(
+                            source,
+                            DatetimeLiteralExpectation::Epoch(scale.value),
+                            arg.span,
+                        )
+                    }
                     _ => Ok(self.lower_expr(arg)),
-                }
-            })
+                },
+            )
             .collect()
+    }
+
+    fn lower_offset_datetime_literal(source: &str, span: Span) -> Result<Expr, ExprLowerError> {
+        OffsetDateTimeLiteral::parse(source)
+            .map(|literal| Expr::new(ExprKind::OffsetDateTimeLiteral(literal), span))
+            .map_err(|error| ExprLowerError::InvalidDatetimeLiteral {
+                expectation: DatetimeLiteralExpectation::OffsetDateTime,
+                reason: error.to_string(),
+                span,
+            })
+    }
+
+    fn lower_civil_datetime_literal(
+        source: &str,
+        expectation: DatetimeLiteralExpectation,
+        span: Span,
+    ) -> Result<Expr, ExprLowerError> {
+        CivilDateTimeLiteral::parse(source)
+            .map(|literal| Expr::new(ExprKind::CivilDateTimeLiteral(literal), span))
+            .map_err(|error| ExprLowerError::InvalidDatetimeLiteral {
+                expectation,
+                reason: error.to_string(),
+                span,
+            })
     }
 
     fn lower_iana_time_zone_id(
@@ -1615,19 +1751,16 @@ impl<'a> ExprLowerer<'a> {
     }
 
     /// Validate a built-in call's argument count against the registry's
-    /// arity table. Aggregations are variadic over collections and skip the
-    /// check; their argument shapes are validated during type checking.
+    /// arity table. Custom built-ins and externs defer shape checks to their
+    /// typed rules.
     fn check_function_arity(
         function_ref: &FunctionRef,
         got: usize,
         span: Span,
     ) -> Result<(), ExprLowerError> {
-        let FunctionRef::Builtin(builtin) = function_ref else {
-            // Extern call shapes (arity, kinds) are validated against the
-            // resolved FunctionSignature during dimension checking.
+        let Some(builtin) = function_ref.builtin_name() else {
             return Ok(());
         };
-        let builtin = *builtin;
         if builtin_has_type_checker_arity(builtin) {
             return Ok(());
         }
@@ -2169,6 +2302,38 @@ mod tests {
         };
         assert_eq!(constructor.owner(), &lib_id);
         assert_eq!(constructor.as_str(), "Impulsive");
+    }
+
+    #[test]
+    fn lowers_epoch_static_scale_and_civil_literal_to_typed_hir() {
+        let owner = DagId::root_in_package("test", "main");
+        let file = desugared_source("node t: Datetime<TT> = epoch<TT>(\"2024-11-05T12:00:00\");");
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(owner.clone(), &file.declarations)
+            .unwrap();
+        let scope = GenericScope::new();
+
+        let expr = lower_expr(
+            node_value(&file, "t"),
+            ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        )
+        .unwrap();
+
+        let ExprKind::FnCall { callee, args } = expr.kind else {
+            panic!("expected function call, got {expr:?}");
+        };
+        let FunctionRef::Epoch { scale } = callee.value else {
+            panic!("expected typed epoch reference, got {callee:?}");
+        };
+        assert_eq!(scale.value, TimeScale::TT);
+        assert!(matches!(
+            args.as_slice(),
+            [Expr {
+                kind: ExprKind::CivilDateTimeLiteral(_),
+                ..
+            }]
+        ));
     }
 
     #[test]

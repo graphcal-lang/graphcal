@@ -154,6 +154,17 @@ param value:Matrix<2,3> =Matrix<2,3>(value:1.0);\n";
 }
 
 #[test]
+fn epoch_static_time_scale_argument_round_trips() {
+    let source = "node t:Datetime<TT> =epoch<TT>(\"2024-11-05T12:00:00\");\n";
+    let formatted = format_source(source).expect("epoch static argument should format");
+    assert_eq!(
+        formatted,
+        "node t: Datetime<TT> = epoch<TT>(\"2024-11-05T12:00:00\");\n"
+    );
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
 fn explicit_finite_index_generic_argument_round_trips() {
     let source = "param value: IndexedVector<Fin(N+1),Dimensionless>;\n";
     let formatted = format_source(source).expect("Fin generic argument should format");

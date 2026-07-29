@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+epoch requires exactly one static time-scale argument, got 0
+    Diagnostic severity: error
+Begin snippet for datetime_positional_epoch_scale.gcl starting at line 1, column 1
+
+snippet line 1: // Error: epoch time scales are static generic arguments
+snippet line 2: param bad: Datetime<TT> = epoch("2024-11-05T12:00:00", TT);
+    label at line 2, columns 27 to 31: expected exactly one time scale here
+diagnostic help: write a supported scale in angle brackets, for example `epoch<TT>("2024-11-05T12:00:00")`
+diagnostic code: graphcal::D023

@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+invalid datetime literal: parsed date is not valid: parameter 'day' for `2023-02` is invalid, must be in range `1..=28`
+    Diagnostic severity: error
+Begin snippet for datetime_invalid_date.gcl starting at line 1, column 1
+
+snippet line 1: // Error: Feb 30 is not a valid Gregorian date; the literal fails during checking.
+snippet line 2: const node bad: Datetime = datetime("2023-02-30T00:00:00Z");
+    label at line 2, columns 37 to 58: does not satisfy this constructor's datetime literal contract
+diagnostic help: one-argument datetime literal; expected RFC 3339 with `Z` or a numeric offset; use `epoch<S>("...")` for scientific time-scale coordinates
+diagnostic code: graphcal::D022

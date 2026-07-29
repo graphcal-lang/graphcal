@@ -934,9 +934,11 @@ generic_arg
    | nat_expr;
 (* A bare IDENT or name-only product is syntactically ambiguous between a
    dimension/type expression and a Nat expression. The compiler preserves
-   that ambiguity until the declaration's GenericConstraint is known. Non-empty
-   generic argument lists on function calls are rejected; only constructors
-   currently consume this application surface. *)
+   that ambiguity until the declaration's GenericConstraint is known.
+   Constructors consume sorted generic arguments. Among function calls, only
+   the built-in scientific-time constructor consumes a static argument:
+   `epoch<S>(civil_literal)`, where S is one supported time scale. Every other
+   non-empty function generic argument list is rejected. *)
 
 expr_list
    = expr, { ",", expr }, [ "," ];

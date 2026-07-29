@@ -127,7 +127,10 @@ fn infer_hir_type_inner(
         hir::ExprKind::Number(_) => InferredType::Quantity(Dimension::dimensionless()),
         hir::ExprKind::Integer(_) => InferredType::Int,
         hir::ExprKind::Bool(_) => InferredType::Bool,
-        hir::ExprKind::StringLiteral(_) | hir::ExprKind::IanaTimeZoneLiteral(_) => {
+        hir::ExprKind::StringLiteral(_)
+        | hir::ExprKind::OffsetDateTimeLiteral(_)
+        | hir::ExprKind::CivilDateTimeLiteral(_)
+        | hir::ExprKind::IanaTimeZoneLiteral(_) => {
             return Err(GraphcalError::DimensionMismatch {
                 expected: "a numeric or boolean expression".to_string(),
                 found: "contextual string literal".to_string(),
@@ -496,7 +499,7 @@ fn infer_hir_const_ref(
         ConstRef::TimeScale(_) => Err(GraphcalError::DimensionMismatch {
             expected: "value expression".to_string(),
             found: "time scale".to_string(),
-            help: "time scales can only be used as the second argument to epoch()".to_string(),
+            help: "time scales are static arguments; write `epoch<TT>(\"...\")`".to_string(),
             src: src.clone(),
             span: target.span.into(),
         }),
@@ -587,8 +590,9 @@ fn infer_hir_fn_call(
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let name = match &callee.value {
-        FunctionRef::Builtin(name) => *name,
+    let (name, epoch_scale) = match &callee.value {
+        FunctionRef::Builtin(name) => (*name, None),
+        FunctionRef::Epoch { scale } => (BuiltinFnName::Epoch, Some(scale.value)),
         FunctionRef::External(ext) => {
             return infer_extern_fn_call(
                 ext,
@@ -692,6 +696,7 @@ fn infer_hir_fn_call(
         ),
         BuiltinTypeRule::DatetimeConstructor(kind) => infer_hir_datetime_constructor(
             kind,
+            epoch_scale,
             callee.span,
             args,
             declared_types,
@@ -1165,6 +1170,7 @@ fn infer_hir_timescale_conversion(
 #[expect(clippy::too_many_arguments, reason = "function-call context")]
 fn infer_hir_datetime_constructor(
     kind: DatetimeConstructorFn,
+    epoch_scale: Option<crate::registry::time_scale::TimeScale>,
     span: crate::syntax::span::Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -1184,7 +1190,12 @@ fn infer_hir_datetime_constructor(
                     span: span.into(),
                 });
             }
-            if !matches!(args[0].kind, hir::ExprKind::StringLiteral(_)) {
+            let first_is_valid = match args.len() {
+                1 => matches!(args[0].kind, hir::ExprKind::OffsetDateTimeLiteral(_)),
+                2 => matches!(args[0].kind, hir::ExprKind::CivilDateTimeLiteral(_)),
+                _ => false,
+            };
+            if !first_is_valid {
                 let found = infer_arg(
                     &args[0],
                     declared_types,
@@ -1196,9 +1207,9 @@ fn infer_hir_datetime_constructor(
                     src,
                 )?;
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: "string literal".to_string(),
+                    expected: "datetime literal".to_string(),
                     found: format_inferred_type(&found, registry),
-                    help: "datetime() requires a string literal argument".to_string(),
+                    help: "datetime() requires a contextual datetime string literal".to_string(),
                     src: src.clone(),
                     span: args[0].span.into(),
                 });
@@ -1215,10 +1226,9 @@ fn infer_hir_datetime_constructor(
                     src,
                 )?;
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: "string literal (IANA timezone)".to_string(),
+                    expected: "timezone literal".to_string(),
                     found: format_inferred_type(&found, registry),
-                    help: "datetime() second argument must be a timezone string literal"
-                        .to_string(),
+                    help: "datetime() second argument must be an IANA timezone literal".to_string(),
                     src: src.clone(),
                     span: args[1].span.into(),
                 });
@@ -1228,45 +1238,42 @@ fn infer_hir_datetime_constructor(
             ))
         }
         DatetimeConstructorFn::Epoch => {
-            if args.len() != 2 {
+            if args.len() != 1 {
                 return Err(GraphcalError::WrongArity {
                     name: crate::syntax::function_name::FnName::expect_valid("epoch"),
-                    expected: 2,
+                    expected: 1,
                     got: args.len(),
                     src: src.clone(),
                     span: span.into(),
                 });
             }
-            if !matches!(args[0].kind, hir::ExprKind::StringLiteral(_)) {
+            if !matches!(args[0].kind, hir::ExprKind::CivilDateTimeLiteral(_)) {
+                let found = infer_arg(
+                    &args[0],
+                    declared_types,
+                    local_types,
+                    dag,
+                    tir,
+                    registry,
+                    builtin_fns,
+                    src,
+                )?;
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: "string literal".to_string(),
-                    found: "non-string".to_string(),
-                    help: "epoch() requires a string literal as its first argument".to_string(),
+                    expected: "scale-free datetime literal".to_string(),
+                    found: format_inferred_type(&found, registry),
+                    help: "epoch<S>() requires one civil datetime string literal".to_string(),
                     src: src.clone(),
                     span: args[0].span.into(),
                 });
             }
-            let hir::ExprKind::ConstRef(scale_ref) = &args[1].kind else {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "time scale".to_string(),
-                    found: "value".to_string(),
-                    help: "epoch() requires a time scale identifier as its second argument"
+            epoch_scale
+                .map(InferredType::Datetime)
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: "epoch call reached type inference without a static time scale"
                         .to_string(),
                     src: src.clone(),
-                    span: args[1].span.into(),
-                });
-            };
-            let ConstRef::TimeScale(scale) = scale_ref.value else {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "time scale".to_string(),
-                    found: "value".to_string(),
-                    help: "epoch() requires a time scale identifier as its second argument"
-                        .to_string(),
-                    src: src.clone(),
-                    span: args[1].span.into(),
-                });
-            };
-            Ok(InferredType::Datetime(scale))
+                    span: span.into(),
+                })
         }
     }
 }

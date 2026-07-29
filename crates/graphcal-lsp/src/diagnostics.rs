@@ -322,6 +322,40 @@ mod tests {
     }
 
     #[test]
+    fn epoch_static_time_scale_argument_produces_no_diagnostics() {
+        let source = "node t: Datetime<TT> = epoch<TT>(\"2024-11-05T12:00:00\");";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn invalid_datetime_literal_is_reported_during_checking() {
+        let source = "node bad: Datetime = datetime(\"2024-11-05T12:00:00 TT\");";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                &diagnostic.code,
+                Some(NumberOrString::String(code)) if code == "graphcal::D022"
+            ) && diagnostic.message.contains("invalid datetime literal")
+        }));
+    }
+
+    #[test]
+    fn positional_epoch_scale_suggests_static_argument() {
+        let source = "node bad: Datetime<TT> = epoch(\"2024-11-05T12:00:00\", TT);";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                &diagnostic.code,
+                Some(NumberOrString::String(code)) if code == "graphcal::D023"
+            ) && diagnostic.message.contains("epoch<TT>")
+        }));
+    }
+
+    #[test]
     fn invalid_datetime_timezone_points_at_the_timezone_argument() {
         let source = "node bad: Datetime = datetime(\"2024-11-05T10:00\", \"Not/A_Timezone\");";
         let diagnostics = produce_diagnostics(source, "test.gcl");

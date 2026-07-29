@@ -410,6 +410,8 @@ impl<'a> HirRefCollector<'a> {
             | hir::ExprKind::Integer(_)
             | hir::ExprKind::Bool(_)
             | hir::ExprKind::StringLiteral(_)
+            | hir::ExprKind::OffsetDateTimeLiteral(_)
+            | hir::ExprKind::CivilDateTimeLiteral(_)
             | hir::ExprKind::IanaTimeZoneLiteral(_) => {}
             hir::ExprKind::GraphRef(target) => {
                 let key = self.name_key(target.value.owner(), target.value.as_str());
@@ -471,6 +473,18 @@ impl<'a> HirRefCollector<'a> {
                         callee.span,
                         SymbolKey::TopLevel(builtin.as_str().to_string()),
                     ),
+                    hir::FunctionRef::Epoch { scale } => {
+                        Self::reference(
+                            table,
+                            callee.span,
+                            SymbolKey::TopLevel(BuiltinFnName::Epoch.as_str().to_string()),
+                        );
+                        Self::reference(
+                            table,
+                            scale.span,
+                            SymbolKey::TopLevel(scale.value.to_string()),
+                        );
+                    }
                     hir::FunctionRef::External(ext) => Self::reference(
                         table,
                         callee.span,

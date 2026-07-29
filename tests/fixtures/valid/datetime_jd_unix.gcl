@@ -1,5 +1,5 @@
 // Test from_jd, from_mjd, from_unix, to_jd, to_mjd, to_unix
-param t: Datetime = datetime("2024-11-05T12:00:00 UTC");
+param t: Datetime = datetime("2024-11-05T12:00:00Z");
 
 // Roundtrip: to_jd -> from_jd
 node jd: Dimensionless = to_jd(@t);

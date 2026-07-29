@@ -1,5 +1,5 @@
 // Time scale conversion functions
-param t_tt: Datetime<TT> = epoch("2024-11-05T12:00:00", TT);
+param t_tt: Datetime<TT> = epoch<TT>("2024-11-05T12:00:00");
 
 // Convert TT -> UTC
 node t_utc: Datetime = to_utc(@t_tt);
