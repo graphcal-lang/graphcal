@@ -336,6 +336,20 @@ mod tests {
     }
 
     #[test]
+    fn indexed_comparison_produces_explicit_for_diagnostic() {
+        let source = "index Case = { A, B };\n\
+                      node values: Length[Case] = { Case.A: 1.0 m, Case.B: 2.0 m };\n\
+                      node bad: Bool[Case] = @values < 3.0 m;";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                &diagnostic.code,
+                Some(NumberOrString::String(code)) if code == "graphcal::D019"
+            ) && diagnostic.message.contains("explicit `for` comprehension")
+        }));
+    }
+
+    #[test]
     fn nat_subtraction_produces_targeted_parse_diagnostic() {
         let diagnostics = produce_diagnostics("param x: Dimensionless[N - 1];", "test.gcl");
         assert!(diagnostics.iter().any(|diagnostic| {

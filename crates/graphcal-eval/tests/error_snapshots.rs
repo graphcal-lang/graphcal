@@ -442,10 +442,9 @@ fn error_assert_not_bool() {
 }
 
 #[test]
-fn error_indexed_comparison_axis_mismatch() {
-    let source =
-        include_str!("../../../tests/fixtures/invalid/indexed_comparison_axis_mismatch.gcl");
-    let rendered = render_error(source, "indexed_comparison_axis_mismatch.gcl");
+fn error_indexed_comparison_operand() {
+    let source = include_str!("../../../tests/fixtures/invalid/indexed_comparison_operand.gcl");
+    let rendered = render_error(source, "indexed_comparison_operand.gcl");
     insta::assert_snapshot!(rendered);
 }
 

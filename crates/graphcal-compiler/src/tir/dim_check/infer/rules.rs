@@ -17,8 +17,8 @@ use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::span::Span;
 
+use super::super::InferredType;
 use super::super::helpers::{expect_quantity, format_inferred_type};
-use super::super::{InferredIndex, InferredType};
 
 /// A typed operand with the span diagnostics should point at.
 pub(super) struct Operand {
@@ -26,59 +26,23 @@ pub(super) struct Operand {
     pub span: Span,
 }
 
-/// Peel the index axes off an inferred type, outermost first.
-fn peel_axes(ty: &InferredType) -> (Vec<&InferredIndex>, &InferredType) {
-    let mut axes = Vec::new();
-    let mut current = ty;
-    while let InferredType::Indexed { element, index } = current {
-        axes.push(index);
-        current = element;
-    }
-    (axes, current)
-}
-
-/// Wrap `Bool` back into the given axes, outermost first.
-fn bool_with_axes(axes: &[&InferredIndex]) -> InferredType {
-    axes.iter()
-        .rev()
-        .fold(InferredType::Bool, |element, index| InferredType::Indexed {
-            element: Box::new(element),
-            index: (*index).clone(),
-        })
-}
-
-/// Resolve the broadcast axes of two comparison operands (#809).
+/// Require one comparison operand to be an unindexed value.
 ///
-/// Either both operands carry the same axes (in order), or one side is
-/// unindexed and broadcasts to every key of the other. Returns the shared
-/// axes plus each operand's element type.
-fn comparison_axes<'a>(
-    lhs: &'a Operand,
-    rhs: &'a Operand,
+/// Comparisons deliberately follow arithmetic's no-broadcasting rule: callers
+/// must use an explicit `for` comprehension and compare one element at a time.
+fn comparison_operand_type<'a>(
+    operand: &'a Operand,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<(Vec<&'a InferredIndex>, &'a InferredType, &'a InferredType), GraphcalError> {
-    let (lhs_axes, lhs_elem) = peel_axes(&lhs.ty);
-    let (rhs_axes, rhs_elem) = peel_axes(&rhs.ty);
-    let axes = match (lhs_axes.is_empty(), rhs_axes.is_empty()) {
-        (_, true) => lhs_axes,
-        (true, false) => rhs_axes,
-        (false, false) => {
-            if lhs_axes.len() != rhs_axes.len()
-                || lhs_axes.iter().zip(&rhs_axes).any(|(l, r)| l != r)
-            {
-                return Err(GraphcalError::IndexedShapeMismatch {
-                    context: "comparison".to_string(),
-                    lhs: format_inferred_type(&lhs.ty, registry),
-                    rhs: format_inferred_type(&rhs.ty, registry),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
-            }
-            lhs_axes
-        }
-    };
-    Ok((axes, lhs_elem, rhs_elem))
+) -> Result<&'a InferredType, GraphcalError> {
+    match &operand.ty {
+        InferredType::Indexed { .. } => Err(GraphcalError::IndexedComparisonOperand {
+            found: format_inferred_type(&operand.ty, registry),
+            src: src.clone(),
+            span: operand.span.into(),
+        }),
+        ty => Ok(ty),
+    }
 }
 
 /// A compile-time-known exponent literal (possibly behind a unary minus).
@@ -134,33 +98,33 @@ pub(super) fn binop_rule(
             }
             Ok(InferredType::Bool)
         }
-        // Equality: element types must have the same ValueType (Int and
-        // Fin(N) are compatible). Indexed operands broadcast element-wise
-        // (#809): `T[I] == T[I]` and `T[I] == unindexed T` infer `Bool[I]`.
+        // Equality: operands must be unindexed and have the same ValueType
+        // (Int and Fin(N) are compatible).
         BinOp::Eq | BinOp::Ne => {
-            let (axes, lhs_elem, rhs_elem) = comparison_axes(lhs, rhs, registry, src)?;
+            let lhs_type = comparison_operand_type(lhs, registry, src)?;
+            let rhs_type = comparison_operand_type(rhs, registry, src)?;
             if matches!(
-                lhs_elem,
+                lhs_type,
                 InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
             ) || matches!(
-                rhs_elem,
+                rhs_type,
                 InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
             ) {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "value expression".to_string(),
                     found: if matches!(
-                        lhs_elem,
+                        lhs_type,
                         InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
                     ) {
-                        format_inferred_type(lhs_elem, registry)
+                        format_inferred_type(lhs_type, registry)
                     } else {
-                        format_inferred_type(rhs_elem, registry)
+                        format_inferred_type(rhs_type, registry)
                     },
                     help: "named index labels are not values; use `match` for index case analysis"
                         .to_string(),
                     src: src.clone(),
                     span: if matches!(
-                        lhs_elem,
+                        lhs_type,
                         InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
                     ) {
                         lhs.span
@@ -170,58 +134,57 @@ pub(super) fn binop_rule(
                     .into(),
                 });
             }
-            if lhs_elem == rhs_elem || (lhs_elem.is_int_like() && rhs_elem.is_int_like()) {
-                return Ok(bool_with_axes(&axes));
+            if lhs_type == rhs_type || (lhs_type.is_int_like() && rhs_type.is_int_like()) {
+                return Ok(InferredType::Bool);
             }
             if let (Some(lhs_dim), Some(rhs_dim)) =
-                (lhs_elem.quantity_dimension(), rhs_elem.quantity_dimension())
+                (lhs_type.quantity_dimension(), rhs_type.quantity_dimension())
                 && lhs_dim == rhs_dim
             {
-                return Ok(bool_with_axes(&axes));
+                return Ok(InferredType::Bool);
             }
             Err(GraphcalError::DimensionMismatch {
-                expected: format_inferred_type(lhs_elem, registry),
-                found: format_inferred_type(rhs_elem, registry),
+                expected: format_inferred_type(lhs_type, registry),
+                found: format_inferred_type(rhs_type, registry),
                 help: "equality operands must have the same type".to_string(),
                 src: src.clone(),
                 span: rhs.span.into(),
             })
         }
-        // Ordering comparisons: element types must be same-type quantity,
-        // Int/Fin, or same-scale Datetime. Indexed operands broadcast
-        // element-wise (#809): `T[I] op T[I]` and `T[I] op unindexed T` infer
-        // `Bool[I]`.
+        // Ordering comparisons require unindexed operands that are same-type
+        // quantities, Int/Fin values, or same-scale Datetimes.
         BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-            let (axes, lhs_elem, rhs_elem) = comparison_axes(lhs, rhs, registry, src)?;
-            if lhs_elem.is_int_like() || rhs_elem.is_int_like() {
-                if !lhs_elem.is_int_like() || !rhs_elem.is_int_like() {
+            let lhs_type = comparison_operand_type(lhs, registry, src)?;
+            let rhs_type = comparison_operand_type(rhs, registry, src)?;
+            if lhs_type.is_int_like() || rhs_type.is_int_like() {
+                if !lhs_type.is_int_like() || !rhs_type.is_int_like() {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(lhs_elem, registry),
-                        found: format_inferred_type(rhs_elem, registry),
+                        expected: format_inferred_type(lhs_type, registry),
+                        found: format_inferred_type(rhs_type, registry),
                         help: "comparison operands must have the same type".to_string(),
                         src: src.clone(),
                         span: rhs.span.into(),
                     });
                 }
-                return Ok(bool_with_axes(&axes));
+                return Ok(InferredType::Bool);
             }
             // Datetime comparisons: same time scale required
-            if let InferredType::Datetime(ls) = lhs_elem
-                && let InferredType::Datetime(rs) = rhs_elem
+            if let InferredType::Datetime(ls) = lhs_type
+                && let InferredType::Datetime(rs) = rhs_type
             {
                 if ls != rs {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(lhs_elem, registry),
-                        found: format_inferred_type(rhs_elem, registry),
+                        expected: format_inferred_type(lhs_type, registry),
+                        found: format_inferred_type(rhs_type, registry),
                         help: "cannot compare datetimes with different time scales".to_string(),
                         src: src.clone(),
                         span: rhs.span.into(),
                     });
                 }
-                return Ok(bool_with_axes(&axes));
+                return Ok(InferredType::Bool);
             }
-            let lhs_dim = expect_quantity(lhs_elem, registry, src, lhs.span)?;
-            let rhs_dim = expect_quantity(rhs_elem, registry, src, rhs.span)?;
+            let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
+            let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
             if lhs_dim != rhs_dim {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(&lhs_dim),
@@ -231,7 +194,7 @@ pub(super) fn binop_rule(
                     span: rhs.span.into(),
                 });
             }
-            Ok(bool_with_axes(&axes))
+            Ok(InferredType::Bool)
         }
         // Arithmetic operators: require matching numeric operands (Int or Quantity)
         BinOp::Add | BinOp::Sub => {

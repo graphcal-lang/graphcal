@@ -575,6 +575,21 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("comparison operators require unindexed operands, found {found}")]
+    #[diagnostic(
+        code(graphcal::D019),
+        help(
+            "comparison operators do not broadcast; use an explicit `for` comprehension and compare individual indexed elements in its body"
+        )
+    )]
+    IndexedComparisonOperand {
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("indexed operand has type {found}")]
+        span: SourceSpan,
+    },
+
     #[error("type annotation mismatch: declared {declared}, inferred {inferred}")]
     #[diagnostic(
         code(graphcal::D002),
@@ -1873,6 +1888,7 @@ impl GraphcalError {
             | Self::DimensionOverflow { src, .. }
             | Self::DimensionMismatch { src, .. }
             | Self::IndexedShapeMismatch { src, .. }
+            | Self::IndexedComparisonOperand { src, .. }
             | Self::DimensionMismatchInAnnotation { src, .. }
             | Self::UnknownUnit { src, .. }
             | Self::UnknownDimension { src, .. }

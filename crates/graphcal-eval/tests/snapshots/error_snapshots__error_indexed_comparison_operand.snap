@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 448
+expression: rendered
+---
+comparison operators require unindexed operands, found Length[Case]
+    Diagnostic severity: error
+Begin snippet for indexed_comparison_operand.gcl starting at line 9, column 1
+
+snippet line 9: 
+snippet line 10: node implicit: Bool[Case] = @values < 3.0 m;
+    label at line 10, columns 29 to 35: indexed operand has type Length[Case]
+diagnostic help: comparison operators do not broadcast; use an explicit `for` comprehension and compare individual indexed elements in its body
+diagnostic code: graphcal::D019

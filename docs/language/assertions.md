@@ -51,16 +51,18 @@ index Stage = { First, Second, Third };
 param thrust: Force[Stage] = ...;
 param min_thrust: Force = 100.0 kN;
 
-assert all_stages_ok = @thrust > @min_thrust;
+assert all_stages_ok = for stage: Stage {
+    @thrust[stage] > @min_thrust
+};
 // If First and Third fail:
 //   FAIL  (failed at Stage.First, Stage.Third)
 ```
 
-Comparisons broadcast element-wise over indexed operands: `T[I] op T[I]`
-zips the two collections per key, and `T[I] op unindexed T` applies the
-unindexed operand to every key — both produce `Bool[I]`. A `for` comprehension yielding
-`Bool[I]` works the same way. Indexed operands must share the same axes in
-the same order; mismatched axes are a compile error (`D011`).
+Comparison operators require unindexed operands and never broadcast. Use an
+explicit `for` comprehension, as above, to produce `Bool[I]` one element at a
+time. Passing an indexed collection directly to a comparison operator is a
+compile error (`D019`). The explicit spelling makes the assertion's axes and
+element pairing visible.
 
 ### Tolerance Assertions
 
@@ -146,10 +148,11 @@ assert velocity_approx = @velocity ~= 49.5 m/s +/- 5 %;
 
 #### Indexed Tolerance Assertions
 
-Tolerance assertions broadcast element-wise over indexed operands. The
-assertion's index shape comes from `actual`; `expected` and `tolerance` are
-each either unindexed (applied to every key) or indexed by exactly the same
-axes in the same order (`D011` otherwise):
+Tolerance assertions have their own element-wise semantics; unlike ordinary
+comparison operators, they accept indexed operands. The assertion's index
+shape comes from `actual`; `expected` and `tolerance` are each either
+unindexed (applied to every key) or indexed by exactly the same axes in the
+same order (`D011` otherwise):
 
 ```
 index Case = { A, B };

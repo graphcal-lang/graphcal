@@ -248,15 +248,14 @@ fn indexed_tolerance_respects_per_variant_expected_fail() {
 }
 
 #[test]
-fn indexed_comparison_broadcasts_element_wise() {
-    // #809: `T[I] == T[I]` and `T[I] op unindexed T` evaluate per key.
+fn explicit_for_compares_indexed_values_element_wise() {
     let result = compile_and_eval(
         "index Case = { A, B };\n\
          node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
          node expected: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.5 };\n\
-         node same: Bool[Case] = @actual == @expected;\n\
-         node below: Bool[Case] = @actual < 3.0;\n\
-         assert per_key_report = @actual == @expected;",
+         node same: Bool[Case] = for case: Case { @actual[case] == @expected[case] };\n\
+         node below: Bool[Case] = for case: Case { @actual[case] < 3.0 };\n\
+         assert per_key_report = for case: Case { @actual[case] == @expected[case] };",
     )
     .unwrap();
     let node = |name: &str| {

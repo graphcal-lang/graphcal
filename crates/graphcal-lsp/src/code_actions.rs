@@ -485,6 +485,22 @@ mod tests {
     }
 
     #[test]
+    fn d019_indexed_comparison_has_no_automatic_rewrite() {
+        let analysis = analysis_from_source(
+            "index Case = { A, B };\nnode values: Length[Case] = { Case.A: 1.0 m, Case.B: 2.0 m };\nnode bad: Bool[Case] = @values < 3.0 m;",
+        );
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let diag = make_diag(
+            "graphcal::D019",
+            "comparison operators require unindexed operands, found Length[Case]",
+            Range::default(),
+            None,
+        );
+        let params = make_params(&uri, vec![diag]);
+        assert!(code_actions(&params, &analysis, &analysis.source).is_none());
+    }
+
+    #[test]
     fn no_actions_for_unrelated_diagnostic() {
         let analysis = analysis_from_source("node x: Dimensionless = @nonexistent;");
         let uri = Url::parse("file:///test.gcl").unwrap();
