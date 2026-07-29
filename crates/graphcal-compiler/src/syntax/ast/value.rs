@@ -602,7 +602,7 @@ pub enum ExprKind<P: Phase = Raw> {
         expr: Box<Expr<P>>,
         args: Vec<IndexArg<P>>,
     },
-    /// Scan: `scan(source, init, |acc, val| body)`
+    /// Scan: `scan(source, init, |acc, item| body)`
     Scan {
         source: Box<Expr<P>>,
         init: Box<Expr<P>>,

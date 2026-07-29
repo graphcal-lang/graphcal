@@ -123,14 +123,14 @@ and partial-axis aggregation are not yet defined.
 `scan` computes a running accumulation across the index order:
 
 ```
-node cumulative: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, val| acc + val);
+node cumulative: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, item| acc + item);
 ```
 
 Arguments:
 
 1. The indexed value to scan over
 2. The initial accumulator value
-3. A closure `|acc, val| expr` that combines the accumulator with each element
+3. A closure `|acc, item| expr` that combines the accumulator with each item
 
 The result is an indexed value where each element is the accumulated result up to and including that element.
 

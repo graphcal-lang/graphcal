@@ -314,7 +314,7 @@ impl Parser<'_> {
 
     // --- Scan expression ---
 
-    /// Parse a scan expression: `scan(source, init, |acc, val| body)` → `ExprKind::Scan`
+    /// Parse a scan expression: `scan(source, init, |acc, item| body)` → `ExprKind::Scan`
     ///
     /// The `scan` keyword has already been consumed; `keyword_span` is its span.
     pub(super) fn parse_scan(&mut self, keyword_span: Span) -> Result<Expr, ParseError> {
@@ -323,7 +323,7 @@ impl Parser<'_> {
         self.expect(Token::Comma)?;
         let init = self.parse_expr()?;
         self.expect(Token::Comma)?;
-        // Parse lambda: |acc, val| body
+        // Parse lambda: |acc, item| body
         self.expect(Token::Pipe)?;
         let acc_name = self.parse_any_ident()?.into_spanned();
         self.expect(Token::Comma)?;

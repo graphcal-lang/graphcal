@@ -548,7 +548,7 @@ non-indexed element type and preserves cardinality as `Int`.
 scan(
     for m: Maneuver { @delta_v[m] },
     0.0 m/s,
-    |acc, val| acc + val,
+    |acc, item| acc + item,
 )   // Velocity[Maneuver] -> Velocity[Maneuver]
 ```
 
@@ -845,16 +845,16 @@ for v1: Index1, v2: Index2 { body_expr }
 ### Scan
 
 ```
-scan(source, init, |acc, val| body)
+scan(source, init, |acc, item| body)
 ```
 
 - `source` must be an indexed type `T[I]`.
 - `init` must have type `U` (the accumulator type).
-- `acc` is bound to type `U`; `val` is bound to type `T`.
+- `acc` is bound to type `U`; `item` is bound to type `T`.
 - `body` must have type `U`.
 - The result type is `U[I]` (accumulated values for each index element).
 
-The `|acc, val| body` is special syntax, not a function value.
+The `|acc, item| body` is special syntax, not a function value.
 
 ### Unfold
 

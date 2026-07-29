@@ -1065,7 +1065,7 @@ scan_expr
      "|", IDENT, ",", IDENT, "|",
      expr, ")";
 
-(* scan(source, init, |acc, val| body)
+(* scan(source, init, |acc, item| body)
    Folds over an indexed value, accumulating a result. *)
 unfold_expr
    = "unfold", "(", ident_path, ",", expr, ",",
