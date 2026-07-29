@@ -1036,7 +1036,7 @@ For a first pass, read in pipeline order:
 40. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
 41. `crates/graphcal-eval/src/eval_expr/conversions.rs`
 42. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
-43. `crates/graphcal-eval/src/eval_expr/functions.rs`
+43. `crates/graphcal-eval/src/eval_expr/datetime.rs`
 44. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
 45. `crates/graphcal-eval/src/eval/types.rs`
 46. `crates/graphcal-eval/src/eval/plot_data.rs`

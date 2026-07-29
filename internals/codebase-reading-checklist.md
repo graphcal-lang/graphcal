@@ -180,7 +180,7 @@ Note: `eval_expr/builtin_call.rs`, `eval_expr/arithmetic.rs`, `eval_expr/aggrega
 - [ ] `crates/graphcal-eval/src/decl_key.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/numeric.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/conversions.rs`
-- [ ] `crates/graphcal-eval/src/eval_expr/functions.rs`
+- [ ] `crates/graphcal-eval/src/eval_expr/datetime.rs`
 - [ ] `crates/graphcal-eval/src/lib.rs`
 - [ ] `crates/graphcal-eval/src/host_fns.rs`
 - [ ] `crates/graphcal-eval/src/domain_check.rs`

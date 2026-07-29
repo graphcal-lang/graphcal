@@ -233,6 +233,12 @@ Datetime values cannot be added together, multiplied, divided, or used as the ri
 
 Cross-scale operations are type errors: `Datetime<UTC> - Datetime<TT>` does not compile. Use explicit time scale conversion functions (`to_utc`, `to_tt`, etc.) first.
 
+Calendar extractors (`year`, `month`, `day`, `hour`, `minute`, `second`,
+`weekday`, and `day_of_year`) use the value's declared `Datetime<S>` scale.
+`weekday` follows ISO 8601 numbering from Monday = 1 through Sunday = 7.
+Timezone metadata applied with `-> "Area/Location"` affects display only and
+never changes these computational fields.
+
 See [Built-in Reference](built-ins.md#datetime-functions) for the full list of datetime constructors, conversions, and extraction functions.
 
 ### Value Types (Level 2)

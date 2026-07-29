@@ -906,6 +906,95 @@ node zoned_delta: Time = @zoned - @utc;
 }
 
 #[test]
+fn every_datetime_extractor_uses_each_supported_declared_scale() {
+    use std::fmt::Write as _;
+
+    let scales = graphcal_compiler::registry::time_scale::TimeScale::ALL;
+    let source = scales.iter().fold(String::new(), |mut source, scale| {
+        let id = scale.to_string().to_ascii_lowercase();
+        write!(
+            source,
+            "node {id}: Datetime<{scale}> = epoch<{scale}>(\"2024-01-01T00:00:00\");\n\
+             node {id}_year: Int = year(@{id});\n\
+             node {id}_month: Int = month(@{id});\n\
+             node {id}_day: Int = day(@{id});\n\
+             node {id}_hour: Int = hour(@{id});\n\
+             node {id}_minute: Int = minute(@{id});\n\
+             node {id}_second: Int = second(@{id});\n\
+             node {id}_weekday: Int = weekday(@{id});\n\
+             node {id}_day_of_year: Int = day_of_year(@{id});\n"
+        )
+        .unwrap();
+        source
+    });
+    let result = compile_and_eval(&source).unwrap();
+
+    for scale in scales {
+        let id = scale.to_string().to_ascii_lowercase();
+        assert_eq!(find_int_value(&result, &format!("{id}_year")), 2024);
+        assert_eq!(find_int_value(&result, &format!("{id}_month")), 1);
+        assert_eq!(find_int_value(&result, &format!("{id}_day")), 1);
+        assert_eq!(find_int_value(&result, &format!("{id}_hour")), 0);
+        assert_eq!(find_int_value(&result, &format!("{id}_minute")), 0);
+        assert_eq!(find_int_value(&result, &format!("{id}_second")), 0);
+        assert_eq!(find_int_value(&result, &format!("{id}_weekday")), 1);
+        assert_eq!(find_int_value(&result, &format!("{id}_day_of_year")), 1);
+    }
+}
+
+#[test]
+fn declared_scale_and_utc_extract_different_fields_near_year_boundary() {
+    let result = compile_and_eval(
+        r#"
+node tt: Datetime<TT> = epoch<TT>("2024-01-01T00:00:30");
+node utc: Datetime = to_utc(@tt);
+node tt_year: Int = year(@tt);
+node tt_day: Int = day(@tt);
+node tt_hour: Int = hour(@tt);
+node tt_weekday: Int = weekday(@tt);
+node tt_day_of_year: Int = day_of_year(@tt);
+node utc_year: Int = year(@utc);
+node utc_day: Int = day(@utc);
+node utc_hour: Int = hour(@utc);
+node utc_weekday: Int = weekday(@utc);
+node utc_day_of_year: Int = day_of_year(@utc);
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(find_int_value(&result, "tt_year"), 2024);
+    assert_eq!(find_int_value(&result, "tt_day"), 1);
+    assert_eq!(find_int_value(&result, "tt_hour"), 0);
+    assert_eq!(find_int_value(&result, "tt_weekday"), 1);
+    assert_eq!(find_int_value(&result, "tt_day_of_year"), 1);
+    assert_eq!(find_int_value(&result, "utc_year"), 2023);
+    assert_eq!(find_int_value(&result, "utc_day"), 31);
+    assert_eq!(find_int_value(&result, "utc_hour"), 23);
+    assert_eq!(find_int_value(&result, "utc_weekday"), 7);
+    assert_eq!(find_int_value(&result, "utc_day_of_year"), 365);
+}
+
+#[test]
+fn display_timezone_metadata_does_not_change_datetime_extractors() {
+    let result = compile_and_eval(
+        r#"
+node utc: Datetime = datetime("2024-11-05T23:30:00Z");
+node displayed: Datetime = @utc -> "Asia/Tokyo";
+node utc_day: Int = day(@utc);
+node displayed_day: Int = day(@displayed);
+node utc_hour: Int = hour(@utc);
+node displayed_hour: Int = hour(@displayed);
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(find_int_value(&result, "utc_day"), 5);
+    assert_eq!(find_int_value(&result, "displayed_day"), 5);
+    assert_eq!(find_int_value(&result, "utc_hour"), 23);
+    assert_eq!(find_int_value(&result, "displayed_hour"), 23);
+}
+
+#[test]
 fn every_epoch_constructor_has_matching_static_and_runtime_scales() {
     let source = r#"
 node utc: Datetime<UTC> = epoch<UTC>("2024-11-05T12:00:00");
@@ -919,42 +1008,11 @@ node bdt: Datetime<BDT> = epoch<BDT>("2024-11-05T12:00:00");
 node qzsst: Datetime<QZSST> = epoch<QZSST>("2024-11-05T12:00:00");
 "#;
     let result = compile_and_eval(source).unwrap();
-    let expected = [
-        (
-            "utc",
-            graphcal_compiler::registry::time_scale::TimeScale::UTC,
-        ),
-        (
-            "tai",
-            graphcal_compiler::registry::time_scale::TimeScale::TAI,
-        ),
-        ("tt", graphcal_compiler::registry::time_scale::TimeScale::TT),
-        (
-            "tdb",
-            graphcal_compiler::registry::time_scale::TimeScale::TDB,
-        ),
-        ("et", graphcal_compiler::registry::time_scale::TimeScale::ET),
-        (
-            "gpst",
-            graphcal_compiler::registry::time_scale::TimeScale::GPST,
-        ),
-        (
-            "gst",
-            graphcal_compiler::registry::time_scale::TimeScale::GST,
-        ),
-        (
-            "bdt",
-            graphcal_compiler::registry::time_scale::TimeScale::BDT,
-        ),
-        (
-            "qzsst",
-            graphcal_compiler::registry::time_scale::TimeScale::QZSST,
-        ),
-    ];
-    for (name, expected_scale) in expected {
+    for expected_scale in graphcal_compiler::registry::time_scale::TimeScale::ALL {
+        let name = expected_scale.to_string().to_ascii_lowercase();
         let Value::Datetime {
             epoch, time_scale, ..
-        } = find_entry(&result, name)
+        } = find_entry(&result, &name)
         else {
             panic!("expected datetime value for {name}");
         };

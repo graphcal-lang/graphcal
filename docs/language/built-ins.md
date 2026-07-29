@@ -140,14 +140,19 @@ The obsolete positional form `epoch("...", TT)` is rejected; write
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `year(x)` | `Datetime -> Int` | Extract year |
-| `month(x)` | `Datetime -> Int` | Extract month (1-12) |
-| `day(x)` | `Datetime -> Int` | Extract day of month (1-31) |
-| `hour(x)` | `Datetime -> Int` | Extract hour (0-23) |
-| `minute(x)` | `Datetime -> Int` | Extract minute (0-59) |
-| `second(x)` | `Datetime -> Int` | Extract second (0-59) |
-| `weekday(x)` | `Datetime -> Int` | Day of week (0=Monday, 6=Sunday) |
-| `day_of_year(x)` | `Datetime -> Int` | Day of year (1-366) |
+| `year(x)` | `Datetime<S> -> Int` | Extract year |
+| `month(x)` | `Datetime<S> -> Int` | Extract month (1-12) |
+| `day(x)` | `Datetime<S> -> Int` | Extract day of month (1-31) |
+| `hour(x)` | `Datetime<S> -> Int` | Extract hour (0-23) |
+| `minute(x)` | `Datetime<S> -> Int` | Extract minute (0-59) |
+| `second(x)` | `Datetime<S> -> Int` | Extract second (0-59) |
+| `weekday(x)` | `Datetime<S> -> Int` | ISO weekday (1=Monday, 7=Sunday) |
+| `day_of_year(x)` | `Datetime<S> -> Int` | Day of year (1-366) |
+
+All calendar extractors use the input's declared time scale. For example,
+`hour(epoch<TT>("2024-11-05T12:00:00"))` is `12`, even though the same instant
+has a different UTC coordinate. A display timezone applied with `->` remains
+formatting metadata and does not change extractor results.
 
 #### Timezone Display
 

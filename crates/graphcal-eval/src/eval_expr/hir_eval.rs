@@ -485,36 +485,21 @@ fn eval_hir_fn_call(
                     args[0].span,
                 ));
             };
-            let (year, month, day, hour, minute, second, _) = epoch.to_gregorian_utc();
+            let fields = super::datetime::GregorianFields::from_epoch(epoch).map_err(|error| {
+                ctx.internal_error(
+                    format!("invalid declared-scale Gregorian fields: {error}"),
+                    args[0].span,
+                )
+            })?;
             let result = match kind {
-                DatetimeExtractFn::Year => i64::from(year),
-                DatetimeExtractFn::Month => i64::from(month),
-                DatetimeExtractFn::Day => i64::from(day),
-                DatetimeExtractFn::Hour => i64::from(hour),
-                DatetimeExtractFn::Minute => i64::from(minute),
-                DatetimeExtractFn::Second => i64::from(second),
-                DatetimeExtractFn::Weekday => i64::from(u8::from(epoch.weekday_utc())),
-                DatetimeExtractFn::DayOfYear => {
-                    let start = hifitime::Epoch::from_gregorian_utc_at_midnight(year, 1, 1);
-                    #[expect(
-                        clippy::arithmetic_side_effects,
-                        reason = "hifitime exposes Epoch subtraction for elapsed-day calculation"
-                    )]
-                    let doy = (epoch - start).to_seconds().div_euclid(86400.0);
-                    if !doy.is_finite() || !(0.0..366.0).contains(&doy) {
-                        return Err(ctx.eval_error(
-                            format!(
-                                "day_of_year() input is outside the current Gregorian year: {doy}"
-                            ),
-                            args[0].span,
-                        ));
-                    }
-                    #[expect(clippy::cast_possible_truncation, reason = "bounds-checked above")]
-                    let day_index = doy as i64;
-                    day_index.checked_add(1).ok_or_else(|| {
-                        ctx.eval_error("day_of_year() overflowed i64", args[0].span)
-                    })?
-                }
+                DatetimeExtractFn::Year => fields.year(),
+                DatetimeExtractFn::Month => fields.month(),
+                DatetimeExtractFn::Day => fields.day(),
+                DatetimeExtractFn::Hour => fields.hour(),
+                DatetimeExtractFn::Minute => fields.minute(),
+                DatetimeExtractFn::Second => fields.second(),
+                DatetimeExtractFn::Weekday => fields.iso_weekday(),
+                DatetimeExtractFn::DayOfYear => fields.day_of_year(),
             };
             Ok(RuntimeValue::Int(result))
         }
@@ -675,7 +660,7 @@ fn eval_hir_datetime_constructor(
                             span: arg.span.into(),
                         });
                     };
-                    super::functions::datetime_from_offset(*datetime)
+                    super::datetime::datetime_from_offset(*datetime)
                 }
                 [datetime_arg, timezone_arg] => {
                     let hir::ExprKind::ZonedDateTimeLiteral(datetime) = &datetime_arg.kind else {
@@ -702,7 +687,7 @@ fn eval_hir_datetime_constructor(
                             span: timezone_arg.span.into(),
                         });
                     }
-                    super::functions::datetime_from_zoned(datetime)
+                    super::datetime::datetime_from_zoned(datetime)
                 }
                 _ => {
                     return Err(GraphcalError::InternalError {
@@ -740,7 +725,7 @@ fn eval_hir_datetime_constructor(
                 });
             };
             let epoch =
-                super::functions::epoch_from_civil_datetime(*datetime, scale).map_err(|error| {
+                super::datetime::epoch_from_civil_datetime(*datetime, scale).map_err(|error| {
                     GraphcalError::InternalError {
                         message: format!("validated epoch literal failed evaluation: {error}"),
                         src: src.clone(),
