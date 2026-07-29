@@ -961,11 +961,11 @@ pub struct DagTIR {
         HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
     /// Runtime source bindings for imported DAG-body values.
     pub imported_value_sources: HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
-    /// Names of `pub` nodes declared in this dag body.
+    /// Value declarations callers may project from this DAG body.
     ///
-    /// Used by `dim_check` to reject cross-file projection of private
-    /// nodes (`@mod.dag(args).private_node` → `ImportPrivateItem`). The
-    /// same-file case reads visibility from the AST; cross-file merges
-    /// drop the AST, so this set is the compiled proxy.
-    pub(crate) pub_nodes: std::collections::HashSet<DeclName>,
+    /// Contains explicitly exported nodes and all param input ports. A param
+    /// projection reads its effective bound/default value. Private nodes remain
+    /// absent, and this compiled set preserves the rule when cross-file DAG
+    /// merging no longer has the source AST.
+    pub(crate) projectable_outputs: std::collections::HashSet<DeclName>,
 }

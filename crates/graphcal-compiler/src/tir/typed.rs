@@ -24,6 +24,7 @@ use miette::NamedSource;
 use crate::ir::lower::IR;
 use crate::ir::resolve::{DeclCategory, ParsedExpectedFail};
 use crate::registry::error::GraphcalError;
+use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::registry::types::{Registry, TypeDef, TypeGenericConstraint};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::ModuleResolver;
@@ -71,15 +72,26 @@ impl DagTIR {
         Ok(declared_types)
     }
 
-    /// Populate this DAG's `pub_nodes` set from its source body.
-    pub fn populate_pub_nodes(&mut self, body: &[crate::desugar::desugared_ast::Declaration]) {
+    /// Populate the values that callers may project from this DAG.
+    ///
+    /// Explicitly exported nodes and annotation-free param input ports are both
+    /// readable outputs. Projecting a param returns its effective value after
+    /// applying the call binding or default.
+    pub fn populate_projectable_outputs(
+        &mut self,
+        body: &[crate::desugar::desugared_ast::Declaration],
+    ) {
         use crate::desugar::desugared_ast::DeclKind;
 
         for decl in body {
-            if let DeclKind::Node(n) = &decl.kind
-                && n.visibility.is_public()
-            {
-                self.pub_nodes.insert(n.name.value.clone());
+            match &decl.kind {
+                DeclKind::Param(param) => {
+                    self.projectable_outputs.insert(param.name.value.clone());
+                }
+                DeclKind::Node(node) if node.visibility.is_public() => {
+                    self.projectable_outputs.insert(node.name.value.clone());
+                }
+                _ => {}
             }
         }
     }
@@ -180,7 +192,7 @@ fn type_resolve_impl(
     check_hir_body_policies(
         &root_dag.semantic,
         &ir.registry,
-        &ir.pub_names,
+        &ir.external_surface,
         module_ctx,
         src,
     )?;
@@ -246,7 +258,13 @@ fn type_resolve_single_impl(
     )?;
     lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut dag.semantic);
     augment_runtime_deps_for_dynamic_units(&mut dag.semantic);
-    check_hir_body_policies(&dag.semantic, &ir.registry, &ir.pub_names, module_ctx, src)?;
+    check_hir_body_policies(
+        &dag.semantic,
+        &ir.registry,
+        &ir.external_surface,
+        module_ctx,
+        src,
+    )?;
     Ok(dag)
 }
 
@@ -817,13 +835,14 @@ struct LoweredDagExpressions {
 fn check_hir_body_policies(
     semantic: &DagSemanticBody,
     registry: &Registry,
-    pub_names: &std::collections::HashSet<DeclName>,
+    external_surface: &ExternalDeclSurface,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let checker = HirPolicyChecker { registry, ctx, src };
     let local = |key: &ResolvedDeclName| key.owner() == ctx.owner;
-    let is_pub = |leaf: &str| pub_names.contains(&DeclName::expect_valid(leaf));
+    let is_explicit_export =
+        |leaf: &str| external_surface.is_explicit_export(&DeclName::expect_valid(leaf));
 
     for (key, expr) in &semantic.expressions.consts {
         checker.check_expr(expr, true, local(key))?;
@@ -868,7 +887,7 @@ fn check_hir_body_policies(
         checker.check_expr(expr, false, false)?;
     }
     for (key, body) in &semantic.expressions.asserts {
-        let check_literals = local(key) && is_pub(key.as_str());
+        let check_literals = local(key) && is_explicit_export(key.as_str());
         match body {
             hir::AssertBody::Expr(expr) => checker.check_expr(expr, false, check_literals)?,
             hir::AssertBody::Tolerance {
@@ -884,7 +903,7 @@ fn check_hir_body_policies(
         }
     }
     for (name, body) in &semantic.plot_exprs.plots {
-        let check_literals = !name.is_qualified() && is_pub(name.member());
+        let check_literals = !name.is_qualified() && is_explicit_export(name.member());
         for (_, expr) in &body.encodings {
             checker.check_expr(expr, false, check_literals)?;
         }
@@ -898,7 +917,7 @@ fn check_hir_body_policies(
         .iter()
         .chain(&semantic.plot_exprs.layers)
     {
-        let check_literals = !name.is_qualified() && is_pub(name.member());
+        let check_literals = !name.is_qualified() && is_explicit_export(name.member());
         for field in fields {
             checker.check_expr(&field.value, false, check_literals)?;
         }
@@ -1218,7 +1237,7 @@ impl DagTIRSeed {
             imported_values,
             imported_decl_types,
             imported_value_sources,
-            pub_nodes: std::collections::HashSet::new(),
+            projectable_outputs: std::collections::HashSet::new(),
         })
     }
 }

@@ -200,7 +200,7 @@ pub enum ParseError {
     #[diagnostic(
         code(graphcal::P014),
         help(
-            "add `.<output_name>` after the call; an instantiated DAG without a projection is not a node"
+            "add `.<output_name>` after the call; an instantiated DAG without a projection is not a graph value"
         )
     )]
     InlineDagCallMissingProjection {

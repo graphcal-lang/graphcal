@@ -528,6 +528,17 @@ mod tests {
     }
 
     #[test]
+    fn inline_dag_param_projection_produces_no_diagnostic() {
+        let source = "\
+dag config {
+    param factor: Dimensionless = 2.0;
+}
+node factor: Dimensionless = @config().factor;
+";
+        assert!(produce_diagnostics(source, "test.gcl").is_empty());
+    }
+
+    #[test]
     fn v002_required_index_not_pub_produces_diagnostic() {
         let source = "index Phase;";
         let diags = produce_diagnostics(source, "test.gcl");
@@ -559,7 +570,7 @@ mod tests {
     fn v004_pub_bind_index_variant_literal_produces_diagnostic() {
         // V004 fires on `node` / `const` bodies that mention a
         // `pub(bind)` index's variant literal (A10(c)). Param defaults
-        // are OK because `param` is implicitly bindable.
+        // are OK because `param` directly declares an input port.
         let source = concat!(
             "pub(bind) index Phase = { Design, Test };\n",
             "param x: Dimensionless[Phase] = { Phase.Design: 1.0, Phase.Test: 2.0 };\n",

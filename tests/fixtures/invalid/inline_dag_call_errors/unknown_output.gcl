@@ -1,4 +1,4 @@
-// Error fixture: inline call projects a name that is not a node of the dag.
+// Error fixture: inline call projects a name that is not a projectable DAG value.
 // Expected diagnostic: `graphcal.G005` — unknown output in inline dag call.
 dag id_len {
     param v: Length;

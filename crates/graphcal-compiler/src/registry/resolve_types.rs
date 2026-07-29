@@ -283,6 +283,81 @@ pub enum ExpectedFail<I = IndexTypeRef> {
     Variants(Vec<ExpectedFailKey<I>>),
 }
 
+/// Roles that form a file or DAG's externally addressable declaration surface.
+///
+/// An explicit `pub`/`pub(bind)` export and an annotation-free `param` input
+/// port have different provenance and capabilities. Both are externally
+/// readable and may be selected as effective outputs, while only input ports
+/// accept value bindings. Keeping the roles distinct prevents output selection
+/// from erasing binding semantics or making a param look explicitly `pub`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExternalDeclRole {
+    ExplicitExport,
+    InputPort,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExternalDeclSurface {
+    roles: HashMap<DeclName, ExternalDeclRole>,
+}
+
+impl ExternalDeclSurface {
+    /// Record a declaration carrying an explicit `pub` or `pub(bind)` export.
+    pub fn insert_explicit_export(&mut self, name: DeclName) {
+        self.insert(name, ExternalDeclRole::ExplicitExport);
+    }
+
+    /// Record a `param` declaration as a named input port.
+    pub fn insert_input_port(&mut self, name: DeclName) {
+        self.insert(name, ExternalDeclRole::InputPort);
+    }
+
+    fn insert(&mut self, name: DeclName, role: ExternalDeclRole) {
+        match self.roles.entry(name) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(role);
+            }
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                debug_assert_eq!(
+                    *entry.get(),
+                    role,
+                    "a declaration cannot be both an explicit export and an input port"
+                );
+            }
+        }
+    }
+
+    /// Whether the declaration carries an explicit `pub` or `pub(bind)` export.
+    #[must_use]
+    pub fn is_explicit_export(&self, name: &DeclName) -> bool {
+        self.roles.get(name) == Some(&ExternalDeclRole::ExplicitExport)
+    }
+
+    /// Whether the declaration is a named `param` input port.
+    #[must_use]
+    pub fn is_input_port(&self, name: &DeclName) -> bool {
+        self.roles.get(name) == Some(&ExternalDeclRole::InputPort)
+    }
+
+    /// Whether external syntax may resolve the declaration in either role.
+    #[must_use]
+    pub fn is_externally_nameable(&self, name: &DeclName) -> bool {
+        self.roles.contains_key(name)
+    }
+
+    /// Whether the declaration may be selected from the external output surface.
+    ///
+    /// For an input port this selects its effective value after applying a
+    /// call/include binding or its default.
+    #[must_use]
+    pub fn can_select_output(&self, name: &DeclName) -> bool {
+        matches!(
+            self.roles.get(name),
+            Some(ExternalDeclRole::ExplicitExport | ExternalDeclRole::InputPort)
+        )
+    }
+}
+
 /// The result of declaration collection: declarations separated by category.
 #[derive(Debug)]
 pub(crate) struct ResolvedFile {
@@ -313,6 +388,6 @@ pub(crate) struct ResolvedFile {
     /// Plot names carrying `#[hidden]`: evaluated and referenceable from
     /// figures/layers, but excluded from standalone output (#847).
     pub(crate) hidden_plots: HashSet<DeclName>,
-    /// Names of all declarations marked `pub` in this file (values + type-system).
-    pub(crate) pub_names: HashSet<DeclName>,
+    /// Explicit exports and annotation-free `param` input ports, classified by role.
+    pub(crate) external_surface: ExternalDeclSurface,
 }

@@ -224,8 +224,9 @@ alias of a selectively included/imported parameter). Qualified strings such as
 `module.x=...` are rejected at the CLI boundary instead of being interpreted as
 leaf names; the override key never carries module identity.
 
-Params not given via `--set` or `--input` keep their declared defaults.
-Params declared without a default (required params) must be provided.
+Entry-file params are the entry DAG's named input ports. Ports not supplied via
+`--set` or `--input` keep their declared defaults; ports without a default are
+required and must be supplied.
 
 Output entries (text and JSON) are keyed by the full alias-qualified path for
 declarations instantiated through `include ... as alias` (e.g. `good.out`,

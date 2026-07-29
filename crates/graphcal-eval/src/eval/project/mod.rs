@@ -19,12 +19,13 @@ use graphcal_compiler::syntax::type_name::StructTypeName;
 use graphcal_compiler::syntax::visitor::ExprVisitorMut;
 
 pub(in crate::eval::project) use crate::import_surface::{
-    ImportItemPresence, decl_is_public, extract_pub_names, file_exports_import_item,
-    file_has_import_item, file_import_item_presence,
+    ImportItemPresence, decl_has_external_role, extract_external_decl_surface,
+    file_exposes_import_item, file_has_import_item, file_import_item_presence,
 };
 use graphcal_compiler::ir::resolve::{DeclCategory, ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{PositiveFiniteScale, Registry, RegistryBuilder};
 
@@ -159,9 +160,9 @@ struct EvaluatedFile {
     plots: HashMap<DeclName, super::types::PlotSpec>,
     /// The file's frozen registry (for type-system import by downstream files).
     registry: Registry,
-    /// Names of declarations marked `pub` in the source file.
-    /// Used to enforce private-by-default visibility during imports.
-    pub_names: HashSet<DeclName>,
+    /// Explicit exports and annotation-free `param` input ports, classified
+    /// separately for import/include boundary checks.
+    external_surface: ExternalDeclSurface,
     /// Concrete scale factors for this file's own dynamic units, resolved
     /// against the file's evaluated runtime values. Module importers convert
     /// the dynamic units to static scales at registry-merge time — the scale
@@ -317,8 +318,9 @@ struct ImportContext<'a> {
 struct ModuleRegistryImport<'a> {
     /// The dependency's frozen registry.
     registry: &'a Registry,
-    /// Names declared `pub` in the dependency — only these cross the boundary.
-    pub_names: &'a HashSet<DeclName>,
+    /// The dependency's external declaration surface. Registry items cross
+    /// only when explicitly exported; input ports remain a distinct role.
+    external_surface: &'a ExternalDeclSurface,
     /// The import alias that keys the dependency's `pub` units in the
     /// importer's unit scope (`alias.unit`).
     unit_alias: ModuleAliasName,

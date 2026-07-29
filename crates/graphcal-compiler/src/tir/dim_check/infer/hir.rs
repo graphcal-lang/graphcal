@@ -3710,16 +3710,17 @@ fn infer_hir_inline_dag_ref(
             span: output.span.into(),
         });
     }
-    let output_decl = node_decl_types_by_key.get(output_key).ok_or_else(|| {
-        GraphcalError::UnknownInlineDagOutput {
+    let output_decl = node_decl_types_by_key
+        .get(output_key)
+        .or_else(|| param_decl_types_by_key.get(output_key))
+        .ok_or_else(|| GraphcalError::UnknownInlineDagOutput {
             name: output_key.as_str().to_string(),
             dag_name: display_path.clone(),
             src: src.clone(),
             span: output.span.into(),
-        }
-    })?;
+        })?;
     let output_name = output_key.as_str();
-    if !dag_tir.pub_nodes.contains(output_name) {
+    if !dag_tir.projectable_outputs.contains(output_name) {
         return Err(GraphcalError::ImportPrivateItem {
             name: output_name.to_string(),
             file_path: display_path,

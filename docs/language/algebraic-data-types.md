@@ -90,7 +90,7 @@ frames).
 
 > **Note**: `type T;` (semicolon, no body) is **not** a unit marker — it
 > declares a *required* type that importers must bind. See
-> [Multi-File Projects → Visibility and Bindability](multi-file.md#visibility-and-bindability).
+> [Multi-File Projects → Visibility, Bindability, and Input Ports](multi-file.md#visibility-bindability-and-input-ports).
 
 ### Constructing Algebraic Values
 

@@ -15,14 +15,16 @@ use graphcal_compiler::ir::lower::{DagBodySelfImports, ImportedValueSource};
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type};
 
 use crate::import_surface::{ImportItemPresence, file_import_item_presence};
 
-/// Public parent-file value declarations visible to an inline DAG self-import
-/// classifier.
+/// Parent-file value declarations externally nameable by an inline DAG
+/// self-import classifier. Runtime entries include exported nodes and param
+/// input ports as distinct source roles, though both are rejected as imports.
 #[derive(Debug, Clone, Default)]
 pub struct ParentValueDecls {
     consts: HashMap<DeclName, DeclaredType>,
@@ -30,11 +32,11 @@ pub struct ParentValueDecls {
 }
 
 impl ParentValueDecls {
-    fn public_const_type(&self, name: &str) -> Option<&DeclaredType> {
+    fn external_const_type(&self, name: &str) -> Option<&DeclaredType> {
         self.consts.get(name)
     }
 
-    fn is_public_runtime(&self, name: &str) -> bool {
+    fn is_external_runtime(&self, name: &str) -> bool {
         self.runtime.contains(name)
     }
 }
@@ -70,8 +72,8 @@ impl ParentValueDecls {
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if a self-import names a runtime declaration
-/// (param/node), a private declaration (no `pub`), or a name that does not
-/// exist in the parent.
+/// (a param input port or node), a private non-param declaration, or a name
+/// that does not exist in the parent.
 pub fn preprocess_dag_body_self_imports(
     body: &[Declaration],
     parent_dag_id: &DagId,
@@ -133,7 +135,7 @@ pub fn preprocess_dag_body_self_imports(
                                 span: span.into(),
                             });
                         }
-                        ImportItemPresence::Public => {}
+                        ImportItemPresence::ExplicitExport | ImportItemPresence::InputPort => {}
                     }
 
                     match item.namespace {
@@ -143,7 +145,7 @@ pub fn preprocess_dag_body_self_imports(
                             // separate default item.
                         }
                         ImportItemNamespace::Default => {
-                            match parent_values.public_const_type(orig_name.as_str()) {
+                            match parent_values.external_const_type(orig_name.as_str()) {
                                 Some(dt) => {
                                     let scoped = ScopedName::local(local_name);
                                     names.const_names.push((scoped.clone(), span));
@@ -156,7 +158,7 @@ pub fn preprocess_dag_body_self_imports(
                                         },
                                     );
                                 }
-                                None if parent_values.is_public_runtime(orig_name.as_str()) => {
+                                None if parent_values.is_external_runtime(orig_name.as_str()) => {
                                     return Err(GraphcalError::ImportRuntimeItem {
                                         name: orig_name.to_string(),
                                         src: src.clone(),
@@ -207,9 +209,9 @@ pub fn classify_value_decls_in_ast(
                 values.consts.insert(c.name.value.clone(), placeholder());
             }
             DeclKind::Param(p) => {
-                // Params are always visible/bindable across import/include
-                // boundaries, but they are runtime values and cannot be
-                // imported into an inline DAG body.
+                // Params are named input ports across import/include boundaries,
+                // but they are runtime values and cannot be imported into an
+                // inline DAG body.
                 values.runtime.insert(p.name.value.clone());
             }
             DeclKind::Node(n) if n.visibility.is_public() => {
@@ -234,14 +236,14 @@ pub fn classify_value_decls_in_ast(
 /// back to a [`DeclaredType`].
 pub fn classify_value_decls_in_tir(
     tir: &TIR,
-    parent_pub_names: &HashSet<DeclName>,
+    parent_external_surface: &ExternalDeclSurface,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ParentValueDecls, GraphcalError> {
     let root = tir.root();
     let mut values = ParentValueDecls::default();
     for entry in &root.consts {
         let name = DeclName::expect_valid(entry.name.member());
-        if !parent_pub_names.contains(&name) {
+        if !parent_external_surface.is_explicit_export(&name) {
             continue;
         }
         let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
@@ -252,13 +254,14 @@ pub fn classify_value_decls_in_tir(
             .insert(name, resolved_to_declared_type(resolved, src)?);
     }
     for entry in &root.params {
-        values
-            .runtime
-            .insert(DeclName::expect_valid(entry.name.member()));
+        let name = DeclName::expect_valid(entry.name.member());
+        if parent_external_surface.is_input_port(&name) {
+            values.runtime.insert(name);
+        }
     }
     for entry in &root.nodes {
         let name = DeclName::expect_valid(entry.name.member());
-        if parent_pub_names.contains(&name) {
+        if parent_external_surface.is_explicit_export(&name) {
             values.runtime.insert(name);
         }
     }

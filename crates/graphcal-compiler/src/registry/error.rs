@@ -1314,7 +1314,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::O003),
         help(
-            "provide a value via `--set '{name}=<value>'`, `--input`, or a parameterized import binding"
+            "supply the entry-DAG input via `--set '{name}=<value>'` / `--input`, or bind this named input port at an include/call site"
         )
     )]
     RequiredParamNotProvided {
@@ -1651,8 +1651,8 @@ pub enum GraphcalError {
 
     /// A required `index`, `type`, or `dim` is not marked `pub(bind)`.
     ///
-    /// `param` is excluded: required `param` is implicitly bindable (A5);
-    /// it never carries a visibility annotation.
+    /// `param` is excluded: the declaration kind itself creates a required or
+    /// defaulted input port and never carries a visibility annotation.
     #[error("required {kind} `{name}` must be declared `pub(bind)`")]
     #[diagnostic(
         code(graphcal::V002),
@@ -1673,8 +1673,8 @@ pub enum GraphcalError {
     /// its written signature (A9 case 1).
     ///
     /// The `pub_kind` string is the declaration kind (e.g. `"param"`,
-    /// `"pub node"`, `"pub type"`). `param` is always visible (A5 §4.0)
-    /// and never carries an explicit annotation.
+    /// `"pub node"`, `"pub type"`). A `param` contributes an external
+    /// input-port signature rather than an explicitly exported signature.
     #[error(
         "`{pub_kind}` `{pub_name}` references private {ref_kind} `{ref_name}` in its signature"
     )]
@@ -1826,14 +1826,16 @@ pub enum GraphcalError {
     #[error("unknown output `{name}` in inline dag call to `{dag_name}`")]
     #[diagnostic(
         code(graphcal::G005),
-        help("the projection after `).` must name a `node` declared in the called dag")
+        help(
+            "the projection after `).` must name a param input port or an explicitly exported node in the called dag"
+        )
     )]
     UnknownInlineDagOutput {
         name: String,
         dag_name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("not a node in `{dag_name}`")]
+        #[label("not a projectable value in `{dag_name}`")]
         span: SourceSpan,
     },
 

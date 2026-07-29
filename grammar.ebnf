@@ -140,12 +140,14 @@ source_file
 (* ================================================================== *)
 (* 3. Declarations                                                    *)
 (* ================================================================== *)
-(* Declarations may carry an optional visibility annotation:
-   - bare:         private (not visible outside the library)
-   - "pub":        visible at include boundary (not bindable)
-   - "pub(bind)":  visible AND bindable via include param bindings
-   "bind" is a contextual keyword parsed only inside the parens after
-   "pub"; it remains a valid identifier elsewhere. *)
+(* Eligible ordinary declarations may carry a visibility annotation:
+   - bare:         private (not exported outside the library)
+   - "pub":        exported at an include/import boundary (fixed)
+   - "pub(bind)":  exported AND bindable via include bindings
+   A `param` instead declares an annotation-free named input port; both
+   `pub param` and `pub(bind) param` are rejected semantically. "bind" is
+   contextual inside the parens after "pub" and remains an identifier
+   elsewhere. *)
 declaration
    = regular_declaration
    | multi_decl;
@@ -194,9 +196,11 @@ regular_declaration_kind
    | layer_decl;
 
 (* --- param --- *)
-(* Params may have a default value or be required (no `= expr`).
-   Required params must be bound via `--set`, `--input`, or include
-   param bindings. *)
+(* A param is a named DAG input port, tracked separately from declarations
+   carrying an explicit `pub` marker. Its effective bound/default value remains
+   externally selectable as an output. Params may have a default or be required
+   (no `= expr`). Required entry-DAG ports use `--set` / `--input`; required
+   callable-DAG ports use include/call bindings. Params never take visibility. *)
 param_decl
    = "param", IDENT, [ ":", type_expr ], [ "=", expr ], ";";
 
@@ -871,13 +875,13 @@ inline_dag_call_suffix
                                          reference (no `(` follows the path).
 
    What `@` enforces is semantic, not syntactic: the post-`@` expression
-   must denote a *node*. `@dag(args).out` is well-formed because `out` is a
-   node belonging to the instantiated DAG `dag(args)`, and likewise
-   `@module.dag(args).out` projects an output node from a DAG brought into
-   scope via `import`. Bare `@dag(args)` (no `.<out>` projection) is
-   rejected — a DAG instance with no projection is not a node — and so is
-   `@module.dag(args)` for the same reason; the rule is about what `@`
-   resolves to, not about how many segments precede the `(`.
+   must denote a graph value. `@dag(args).out` projects an externally
+   projectable value from the fresh DAG instance: either an explicitly
+   exported node or a param's effective bound/default value. The qualified
+   `@module.dag(args).out` form has the same rule. Bare `@dag(args)` and
+   `@module.dag(args)` are rejected because an unprojected DAG instance is
+   not itself a graph value; the rule does not depend on how many segments
+   precede the `(`.
 
    Each inline-call call site denotes a fresh DAG instantiation and
    desugars to a synthetic `include ... as <id>; @<id>.out` during TIR

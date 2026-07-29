@@ -1,4 +1,4 @@
 // This const node is private (no `pub` keyword).
-// Params are implicitly visible under the A5 rule, so a private
+// Params declare externally nameable input ports, so a private value
 // example must use `node` or `const node`.
 const node secret: Dimensionless = 42.0;

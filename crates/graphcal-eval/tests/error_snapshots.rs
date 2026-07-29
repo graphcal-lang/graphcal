@@ -739,9 +739,10 @@ fn error_required_index_standalone() {
 // --- Visibility errors ---
 
 #[test]
-fn error_required_param_not_pub() {
-    let source = include_str!("../../../tests/fixtures/runtime_error/required_param_not_pub.gcl");
-    let rendered = render_error(source, "required_param_not_pub.gcl");
+fn error_required_param_unsatisfied() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/required_param_unsatisfied.gcl");
+    let rendered = render_error(source, "required_param_unsatisfied.gcl");
     insta::assert_snapshot!(rendered);
 }
 

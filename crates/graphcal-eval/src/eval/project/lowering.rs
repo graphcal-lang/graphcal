@@ -109,7 +109,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
         module_types.insert_registry(dep_dag_id, &evaluated.registry);
     }
 
-    let parent_pub_names = ir.pub_names.clone();
+    let parent_external_surface = ir.external_surface.clone();
     let mut tir = graphcal_compiler::tir::typed::type_resolve_with_modules(
         ir,
         file_dag_id.clone(),
@@ -122,7 +122,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
         project,
         file_dag_id,
         file_src,
-        &parent_pub_names,
+        &parent_external_surface,
         evaluated_files,
         &module_resolver,
         &module_types,
@@ -214,14 +214,14 @@ fn compile_inline_dag_modules<'a>(
     project: &'a crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
-    parent_pub_names: &HashSet<DeclName>,
+    parent_external_surface: &ExternalDeclSurface,
     evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_types: &graphcal_compiler::tir::typed::ModuleTypeRegistry,
 ) -> Result<(), CompileError> {
     let loaded_file = &project.files[file_dag_id];
     let parent_values =
-        crate::inline_dag::classify_value_decls_in_tir(tir, parent_pub_names, file_src)?;
+        crate::inline_dag::classify_value_decls_in_tir(tir, parent_external_surface, file_src)?;
 
     for loaded_dag in &loaded_file.inline_dags {
         let dag_ir = compile_loaded_dag_module_ir(
@@ -240,7 +240,7 @@ fn compile_inline_dag_modules<'a>(
             module_resolver,
             module_types,
         )?;
-        compiled_dag.populate_pub_nodes(&loaded_dag.body);
+        compiled_dag.populate_projectable_outputs(&loaded_dag.body);
         tir.dags.insert(loaded_dag.dag_id.clone(), compiled_dag);
     }
 
@@ -504,8 +504,8 @@ fn find_inline_dag_decl_in_declarations<'a>(
 /// (`@alias.dag(...).out`) resolve through the same flat lookup as
 /// same-file calls.
 ///
-/// Only `pub` DAGs are exposed across the import boundary; private DAGs
-/// in the dep stay local (the dep's `pub_names` filters them).
+/// Only explicitly exported DAGs cross the import boundary; private DAGs
+/// in the dependency stay local.
 ///
 /// Each cloned DAG TIR also receives the dep-file values named by the
 /// DAG body's explicit imports, so `import dep.{const as local}`
@@ -539,7 +539,10 @@ fn merge_dep_dag_tirs(
             let is_root = dep_id == dep_dag_id;
             if !is_root {
                 let leaf = dep_id.name();
-                if !dep_eval.pub_names.contains(leaf) {
+                if !dep_eval
+                    .external_surface
+                    .is_explicit_export(&DeclName::expect_valid(leaf))
+                {
                     continue;
                 }
             }
@@ -602,7 +605,7 @@ fn process_deferred_dag_includes(
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> Result<(), CompileError> {
-    let importer_pub_names = super::extract_pub_names(importer_ast);
+    let importer_external_surface = super::extract_external_decl_surface(importer_ast);
     let importer_local_type_names = collect_local_type_names(importer_ast);
     let empty_resolved: HashMap<
         crate::loader::ModulePathKey,
@@ -858,7 +861,7 @@ fn process_deferred_dag_includes(
             &deferred.index_bindings,
             &deferred.type_bindings,
             &deferred.dim_bindings,
-            &importer_pub_names,
+            &importer_external_surface,
             &importer_local_type_names,
             importer_src,
             deferred.import_span,
@@ -1086,7 +1089,7 @@ fn seed_imported_type_system(
         }
     }
     for import in extra_registry_builders {
-        merge_registry_into_builder_pub_filtered(builder, import).map_err(|conflict| {
+        merge_registry_into_builder_export_filtered(builder, import).map_err(|conflict| {
             GraphcalError::ConflictingImportedUnit {
                 name: conflict.name,
                 src: file_src.clone(),
@@ -1130,10 +1133,10 @@ fn replace_dynamic_units_with_resolved_scales(
     }
 }
 
-/// Merge type-system declarations from a dependency's frozen Registry into a
-/// builder, restricted to names listed in `pub_names`. Used for module imports
-/// where only public items should cross the boundary.
-fn merge_registry_into_builder_pub_filtered(
+/// Merge type-system declarations from a dependency's frozen registry into a
+/// builder, restricted to its explicit export surface. Param input ports are
+/// intentionally irrelevant here because they are not type-system exports.
+fn merge_registry_into_builder_export_filtered(
     builder: &mut RegistryBuilder,
     import: &ModuleRegistryImport<'_>,
 ) -> Result<(), UnitMergeConflict> {
@@ -1143,7 +1146,7 @@ fn merge_registry_into_builder_pub_filtered(
         &HashMap::new(),
         &HashMap::new(),
         &HashMap::new(),
-        Some(import.pub_names),
+        Some(import.external_surface),
         Some((&import.unit_alias, import.resolved_dynamic_scales)),
     )
 }
@@ -1165,7 +1168,7 @@ fn merge_registry_into_builder_filtered(
     index_bindings: &HashMap<IndexName, IndexName>,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
-    pub_names: Option<&HashSet<DeclName>>,
+    external_surface: Option<&ExternalDeclSurface>,
     unit_alias: Option<(
         &ModuleAliasName,
         &HashMap<
@@ -1179,7 +1182,9 @@ fn merge_registry_into_builder_filtered(
         if dim_bindings.contains_key(name.as_str()) {
             continue;
         }
-        if pub_names.is_some_and(|visible| !visible.contains(name.as_str())) {
+        if external_surface.is_some_and(|surface| {
+            !surface.is_explicit_export(&DeclName::expect_valid(name.as_str()))
+        }) {
             continue;
         }
         builder.register_base_dimension(
@@ -1193,7 +1198,9 @@ fn merge_registry_into_builder_filtered(
         if dim_bindings.contains_key(name.as_str()) {
             continue;
         }
-        if pub_names.is_some_and(|visible| !visible.contains(name.as_str())) {
+        if external_surface.is_some_and(|surface| {
+            !surface.is_explicit_export(&DeclName::from_atom(name.atom().clone()))
+        }) {
             continue;
         }
         builder.register_dimension(name.clone(), dim.clone());
@@ -1224,7 +1231,9 @@ fn merge_registry_into_builder_filtered(
             if name.is_qualified() {
                 continue;
             }
-            if pub_names.is_some_and(|visible| !visible.contains(name.name().as_str())) {
+            if external_surface.is_some_and(|surface| {
+                !surface.is_explicit_export(&DeclName::from_atom(name.name().atom().clone()))
+            }) {
                 continue;
             }
             graphcal_compiler::syntax::dimension::UnitRef::qualified(
@@ -1232,7 +1241,9 @@ fn merge_registry_into_builder_filtered(
                 name.name().clone(),
             )
         } else {
-            if pub_names.is_some_and(|visible| !visible.contains(name.name().as_str())) {
+            if external_surface.is_some_and(|surface| {
+                !surface.is_explicit_export(&DeclName::from_atom(name.name().atom().clone()))
+            }) {
                 continue;
             }
             name.clone()
@@ -1267,16 +1278,18 @@ fn merge_registry_into_builder_filtered(
     }
 
     // Import indexes — skip bound indexes (they are replaced by the importer's index).
-    // Module imports use `pub_names` filtering and keep required indexes in the
+    // Module imports use explicit-export filtering and keep required indexes in the
     // dependency's module registry only; pulling an unbound `pub(bind)` index
     // into the importer would incorrectly make the importer a library even if
     // it only needs a qualified type from the dependency.
     for idx_def in dep_registry.indexes.declared_indexes() {
-        if pub_names.is_some() && idx_def.is_required() {
+        if external_surface.is_some() && idx_def.is_required() {
             continue;
         }
         if !index_bindings.contains_key(idx_def.name.as_str()) {
-            if pub_names.is_some_and(|visible| !visible.contains(idx_def.name.as_str())) {
+            if external_surface.is_some_and(|surface| {
+                !surface.is_explicit_export(&DeclName::from_atom(idx_def.name.atom().clone()))
+            }) {
                 continue;
             }
             builder.register_index(idx_def.clone());
@@ -1293,7 +1306,9 @@ fn merge_registry_into_builder_filtered(
         if type_bindings.contains_key(type_def.name.as_str()) {
             continue;
         }
-        if pub_names.is_some_and(|visible| !visible.contains(type_def.name.as_str())) {
+        if external_surface.is_some_and(|surface| {
+            !surface.is_explicit_export(&DeclName::from_atom(type_def.name.atom().clone()))
+        }) {
             continue;
         }
         builder.register_type(type_def.clone());
@@ -1651,8 +1666,8 @@ fn collect_ambiguous_generic_names(
 /// `pub include` / `pub import`, or selectively via `{ pub name }`),
 /// walk its signature, apply the include's substitution map, and check
 /// each referenced type/dim/index name: if the name resolves to a
-/// declaration that exists locally in the importer but is not in the
-/// importer's `pub_names`, the re-export leaks a private symbol.
+/// declaration that exists locally in the importer but is not explicitly
+/// exported, the re-export leaks a private symbol.
 #[expect(
     clippy::too_many_arguments,
     reason = "the check needs the dep AST, the three substitution maps, and the importer's visibility tables"
@@ -1664,7 +1679,7 @@ fn check_generics_leakage(
     index_bindings: &HashMap<IndexName, IndexName>,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
-    importer_pub_names: &HashSet<DeclName>,
+    importer_external_surface: &ExternalDeclSurface,
     importer_local_type_names: &HashMap<String, &'static str>,
     importer_src: &NamedSource<Arc<String>>,
     include_span: Span,
@@ -1687,7 +1702,7 @@ fn check_generics_leakage(
             _ => continue,
         };
         let reexported = if pub_reexport_whole {
-            decl_is_public(decl)
+            decl_has_external_role(decl)
         } else {
             pub_reexport_items.contains(decl_name.as_str())
         };
@@ -1745,7 +1760,8 @@ fn check_generics_leakage(
                 .unwrap_or(raw_name.as_str());
 
             if let Some(kind) = importer_local_type_names.get(substituted)
-                && !importer_pub_names.contains(substituted)
+                && !importer_external_surface
+                    .is_explicit_export(&DeclName::expect_valid(substituted))
             {
                 return Err(CompileError::Eval(GraphcalError::GenericsLeakage {
                     reexport_kind: decl_kind_str.to_string(),

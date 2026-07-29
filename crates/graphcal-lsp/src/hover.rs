@@ -28,9 +28,8 @@ pub fn hover(analysis: &AnalysisResult, offset: usize) -> Option<Hover> {
 /// Prefix for the declaration keyword in a hover label, based on visibility.
 ///
 /// Returns `"pub "` for `Public`, `"pub(bind) "` for `PublicBind`, and
-/// the empty string for `Private` or unknown visibility. `param` never
-/// carries an annotation (axiom A5), so we always use the empty string
-/// there regardless of the stored visibility.
+/// the empty string for `Private` or unknown visibility. `param` declares an
+/// input port rather than an export, so it never carries this annotation.
 const fn visibility_prefix(vis: Option<BindableVisibility>) -> &'static str {
     match vis {
         Some(BindableVisibility::Public) => "pub ",
@@ -45,8 +44,8 @@ fn format_hover(def: &DefinitionInfo) -> String {
     match def.category {
         SymbolCategory::Param => {
             let type_str = def.type_description.as_deref().unwrap_or("(unknown type)");
-            // `param` is always implicitly bindable (axiom A5) and never
-            // carries a `pub` / `pub(bind)` annotation — drop the prefix.
+            // `param` declares an annotation-free input port rather than an
+            // ordinary export, so drop any visibility prefix.
             format!("```graphcal\nparam {}: {type_str}\n```", def.name)
         }
         SymbolCategory::Node => {

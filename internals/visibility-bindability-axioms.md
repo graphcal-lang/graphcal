@@ -15,11 +15,26 @@ are the running discussion.
 
 ## 1. Primitive notions
 
-A **symbol** is a named declaration. Each symbol has three attributes:
+A **symbol** is a named declaration. Ordinary declarations have these
+attributes:
 
-- **V** (visibility) ∈ {`private`, `visible`}
+- **V** (export visibility) ∈ {`private`, `exported`}
 - **B** (bindability) ∈ {`fixed`, `bindable`}
 - **R** (requiredness) ∈ {`optional`, `required`}
+
+A `param` instead has the distinct external role **input port**. It does not
+occupy an implicit `V = exported` state: the declaration kind itself makes the
+port externally nameable and bindable. Requiredness still distinguishes a port
+without a default from one with a default.
+
+Write **N(s)** for external nameability: `N(s)` holds when `s` is either an
+explicitly exported ordinary declaration or a param input port. For value
+symbols, both roles are also output-selectable: selecting a param reads its
+effective bound/default value. Keeping the provenance separate is load-bearing,
+because only input ports accept value bindings and only explicit exports carry
+the `pub`/`pub(bind)` role. Compiler queries should therefore be operation-
+specific (`is_input_port`, `is_explicit_export`, `can_select_output`) rather
+than treating the union as one undifferentiated visibility set.
 
 Symbol identity is **nominal**: identified by (file, name), not by
 structure. Two symbols sharing a surface name in different files (or at
@@ -75,15 +90,15 @@ file.
 
 | #       | Statement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **A1**  | A cross-file reference to `s` requires `V(s) = visible`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **A1**  | A cross-file reference to `s` requires `N(s)`: the target must be an explicit export or a param input port.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | **A2**  | An `include` may override `s` only if `B(s) = bindable`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **A3**  | `B(s) = bindable ⇒ V(s) = visible`. (You can't bind what you can't name.)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **A3**  | `B(s) = bindable ⇒ N(s)`. (You cannot bind what you cannot name.) For ordinary declarations this requires export visibility; params satisfy it through their input-port role.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | **A4**  | `R(s) = required ⇒ B(s) = bindable`. (External binding is the only way to satisfy.)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| **A5**  | `B = bindable` is meaningful for `param`, `index`, `type`, `dimension`. For all other kinds (including `unit`, `const`, `node`, `dag`, `assert`, `plot`, `figure`, `layer`), `B ≡ fixed`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **A5**  | Every `param` is an input port and therefore bindable. Annotation-controlled `B = bindable` is meaningful for `index`, `type`, and `dimension`. For all other kinds (including `unit`, `const`, `node`, `dag`, `assert`, `plot`, `figure`, `layer`), `B ≡ fixed`.                                                                                                                                                                                                                                                                        |
 | **A6**  | **Nominal identity.** Two symbols with the same surface name but distinct declaration sites are distinct. The compiler never silently re-keys values between them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | **A7**  | **No inference at boundaries.** Every type in a declaration's signature is written explicitly; no `impl Trait`-shaped escape hatch exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | **A8**  | **Importer obligation under override.** When an `include` overrides a bindable `s`, every `bindable` symbol whose body or default mentions a name nominally tied to `s` (in the sense of §1) must be re-bound by the importer in the _same include statement that performs the override_. Plain `@s` graph references do not trigger A8.                                                                                                                                                                                                                                                                                                                       |
-| **A9**  | **Visibility composition.** Every name appearing in a `visible` signature — written or introduced via an `include` binding that the importer re-exports — must itself satisfy `V = visible` at the importing site.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **A9**  | **External-signature composition.** Every type-system name appearing in an export signature or input-port signature — written or introduced via an `include` binding that the importer re-exports — must itself be explicitly exported at the importing site.                                                                                                                                                                                                                                                                                                                                      |
 | **A10** | **Library-local bindability propagation.** For every declaration `x` whose body or default mentions a name nominally tied to a `bindable` symbol `s` (in the sense of §1): (a) if `x`'s kind admits bindability (`param`/`index`/`type`/`dimension`), then `B(x) = bindable`; (b) else if `x`'s kind is a sink kind (`plot`/`assert`/`figure`/`layer`), then `V(x) = private` — public sink kinds must abstract over `s`; (c) otherwise (`node`/`const`/…), the body must abstract over `s` — i.e. mention `s` only via plain refs like `@s` or via binders like `for p : s { … }`, never via nominally-tied names. Checkable from the library's source alone. |
 
 ### Notes on the axioms
@@ -97,8 +112,9 @@ file.
   when structurally identical. It generalises to types and dimensions.
   For `unit`, nominality is moot under A5.
 - **A3 and A4 are technically theorems from {A1, A2}.** A3 (`B = bindable
-⇒ V = visible`) follows because override at an include site requires
-  naming the symbol cross-file (A1 + A2). A4 (`R = required ⇒ B = bindable`)
+  ⇒ N(s)`) follows because override at an include site requires naming the
+  symbol across the boundary (A1 + A2). For params that nameability comes from
+  the input-port role, not from export visibility. A4 (`R = required ⇒ B = bindable`)
   follows because required symbols have no body and external `include`
   binding (A2) is the only supply mechanism. Both are listed as axioms
   for clarity; flagged here as derived for honesty.
@@ -120,9 +136,9 @@ file.
   variant — every triggering symbol is itself bindable, so re-binding is
   always possible. The error therefore always blames the importer.
 - **A10 makes nominal mention part of the bindable contract.** Combined
-  with A3 (`bindable ⇒ visible`), A10(a) has the consequence that _any_
-  non-sink declaration mentioning a name nominally tied to a `pub(bind)`
-  symbol becomes part of the bindable + visible API surface. There is no
+  with A3 (`bindable ⇒ externally nameable`), A10(a) has the consequence that
+  _any_ non-sink declaration mentioning a name nominally tied to a
+  `pub(bind)` symbol becomes part of the bindable external surface. There is no
   legal "private node helper that names `I::v` for a `pub(bind)` index
   `I`" — such a helper would still participate in the merged IR after
   override, and the importer would have no name through which to re-bind
@@ -131,7 +147,7 @@ file.
   - **Variant-free body** — refer to `s` only via plain refs (`@s`)
     or binders (`for p : s { … }`), never via nominally-tied names.
     The helper survives any override.
-  - **Fix `s`** — declare `s` as `pub` (visible + fixed) or as private,
+  - **Fix `s`** — declare `s` as `pub` (exported + fixed) or as private,
     not `pub(bind)`. Without the bindability promise, A10 does not fire
     on literal mentions in any declaration.
 
@@ -174,7 +190,8 @@ only A1–A10, without reference to any include site of `F`.
 
 - **Per-declaration, file-local** (A1, A2, A3, A4, A5, A7, A9, A10):
   each is checkable from `F`'s source alone — they constrain the
-  attributes (V, B, R), kind eligibility, signature visibility, and
+  external role, attributes (V/B/R where applicable), kind eligibility,
+  signature exportability, and
   nominal-mention propagation, all of which are syntactically present
   in `F`.
 - **Compiler / model** (A6, nominal identity): a property of how the
@@ -210,38 +227,42 @@ section enforces.
 
 ## 3. Legal attribute states
 
+For ordinary declaration kinds that admit annotation-controlled bindability,
 A1–A4 collapse 2 × 2 × 2 = 8 combinations to **4 legal states**:
 
-| V       | B        | R        | Meaning                               |
-| ------- | -------- | -------- | ------------------------------------- |
-| private | fixed    | optional | file-local (default)                  |
-| visible | fixed    | optional | exported, frozen                      |
-| visible | bindable | optional | exported + overridable, has default   |
-| visible | bindable | required | exported + overridable, must be bound |
+| V        | B        | R        | Meaning                               |
+| -------- | -------- | -------- | ------------------------------------- |
+| private  | fixed    | optional | file-local (default)                  |
+| exported | fixed    | optional | exported, frozen                      |
+| exported | bindable | optional | exported + overridable, has default   |
+| exported | bindable | required | exported + overridable, must be bound |
 
 Excluded (all four illegal combinations enumerated):
 
 - V=private + B=bindable + R=optional → A3.
 - V=private + B=bindable + R=required → A3.
-- V=visible + B=fixed + R=required → A4.
+- V=exported + B=fixed + R=required → A4.
 - V=private + B=fixed + R=required → A3 _and_ A4 (either alone suffices).
+
+Params are not a fifth visibility state in this table. They have the input-port
+role, inherent bindability, and either optional or required `R` depending on
+whether a default is present.
 
 ### 3.1 Per-kind required forms
 
-For the four kinds that admit bindability (A5), the surface form for
-`R = required` is uniformly "no body":
+For the three annotation-controlled bindable kinds plus param input ports, the
+surface form for `R = required` is uniformly "no body":
 
-| Kind    | required form                 | optional / with default                                         | V/B annotation                                 |
-| ------- | ----------------------------- | --------------------------------------------------------------- | ---------------------------------------------- |
-| `param` | `param x: T;`                 | `param x: T = expr;`                                            | none — implicit V=visible, B=bindable (see §4) |
-| `index` | `index I;` / `index I: Time;` | `index I = { … };` / `range(…)` / `linspace(…)`                 | bare / `pub` / `pub(bind)`                     |
-| `dim`   | `dim D;`                      | `dim D = expr;` (and the non-bindable form `base dim D;`)       | bare / `pub` / `pub(bind)`                     |
-| `type`  | `type T;`                     | `type T { C(...), U }` (constructors); unit marker: `type T { T }` | bare / `pub` / `pub(bind)`                     |
+| Kind    | required form                 | optional / with default                                            | External annotation/role                    |
+| ------- | ----------------------------- | ------------------------------------------------------------------ | ------------------------------------------- |
+| `param` | `param x: T;`                 | `param x: T = expr;`                                               | named input port; no visibility annotation  |
+| `index` | `index I;` / `index I: Time;` | `index I = { … };` / `range(…)` / `linspace(…)`                    | bare / `pub` / `pub(bind)`                  |
+| `dim`   | `dim D;`                      | `dim D = expr;` (and the non-bindable form `base dim D;`)          | bare / `pub` / `pub(bind)`                  |
+| `type`  | `type T;`                     | `type T { C(...), U }`; unit marker: `type T { T }`                | bare / `pub` / `pub(bind)`                  |
 
-Combined with A4, this means any required declaration must be bindable.
-For `param` this is automatic (all params are bindable); for the other
-three kinds, the required form must carry `pub(bind)` (i.e. `pub(bind)
-index I;`, `pub(bind) dim D;`, `pub(bind) type T;`).
+Combined with A4, this means any required declaration must be bindable. A param
+already is an input port; the other three kinds must carry `pub(bind)` (for
+example, `pub(bind) index I;`, `pub(bind) dim D;`, or `pub(bind) type T;`).
 
 **Grammar adjustments required to land this matrix** (vs. pre-axiom
 grammar):
@@ -255,8 +276,8 @@ grammar):
   by `base unit USD: Money;`.
 
 These changes make "no body" mean `R = required` uniformly across the
-four bindable kinds, removing the `type T;` ↔ unit-type collision and
-the missing `dim` required form.
+three annotation-controlled bindable kinds and param input ports, removing the
+`type T;` ↔ unit-type collision and the missing `dim` required form.
 
 **Wrinkle within `dim` (and analogously `unit`).** `dim` is in the
 bindable set per A5, but the `base dim D;` form declares a _new
@@ -276,9 +297,9 @@ declaration. Illustrated for `index` (the canonical example since all
 three states are reachable):
 
 ```text
-              index I = { … };    // private          (V=private, B=fixed)
-pub           index I = { … };    // visible, fixed   (V=visible, B=fixed)
-pub(bind)     index I = { … };    // visible+bindable (V=visible, B=bindable)
+              index I = { … };    // private           (V=private, B=fixed)
+pub           index I = { … };    // exported, fixed   (V=exported, B=fixed)
+pub(bind)     index I = { … };    // exported+bindable (V=exported, B=bindable)
 ```
 
 Same shape applies to `type` and `dim`. Reuses Rust's `pub(...)` shape,
@@ -289,31 +310,53 @@ For all kinds outside the bindable set (`node`, `const`, `unit`, `dag`,
 sink kinds, …), only `pub` or bare are legal — there is no `pub(bind)`
 form.
 
-### 4.0 `param` is annotation-free
+### 4.0 `param` declares an annotation-free input port
 
-`param` is special: it is inherently V=visible + B=bindable (the only
-state in which the kind earns its name — a configurable knob exposed
-to importers). The annotation conveys no choice and is forbidden:
+`param` is not an ordinary declaration with an implicit visibility default. It
+selects the named-input-port role directly, analogous to a function parameter.
+The role is externally nameable and bindable by definition, so a visibility or
+bindability annotation would encode no additional state and is forbidden:
 
 ```text
-param x: Length = 10 m;        // legal — implicit pub(bind)
-param x: Length;               // legal — required (R=required)
+param x: Length = 10 m;        // legal — input port with a default
+param x: Length;               // legal — required input port
 
-pub param x: …;                // ILLEGAL — annotation conveys no info
-pub(bind) param x: …;          // ILLEGAL — likewise
+pub param x: …;                // ILLEGAL — `pub` is not the input-port spelling
+pub(bind) param x: …;          // ILLEGAL — the port role already permits binding
 ```
 
-The annotation-free states that other kinds express via bare /
-`pub` are not reachable for `param` and have alternative spellings:
+Fixed or computed values use node declarations instead:
 
-| If you wanted this on `param`… | Use this instead              |
-| ------------------------------ | ----------------------------- |
-| Private + fixed value          | `const node x: T = expr;`     |
-| Public + fixed value           | `pub const node x: T = expr;` |
+| Intended role                  | Declaration                             |
+| ------------------------------ | --------------------------------------- |
+| Private computed value         | `node x: T = expr;`                     |
+| Private fixed value            | `const node x: T = expr;`               |
+| Exported computed value        | `pub node x: T = expr;`                 |
+| Exported fixed value           | `pub const node x: T = expr;`           |
 
-This specialisation is purely a surface-syntax economy. The axioms
-A1–A10 still treat `param` the same as any other declaration — they
-just observe that for `param`, V and B are constants of the kind.
+The effective port value remains externally readable and projectable:
+
+```text
+include model().{ x as default_x };      // reads x's default
+include model(x: 20 m).{ x as bound_x }; // reads the supplied value
+node y: Length = @model().x;              // inline-call projection
+```
+
+Automatic projectability also preserves output compatibility when an eligible
+`pub node x = default` is refactored into `param x = default`: callers retain
+access to `x`, while gaining the option to bind it.
+
+Selecting or re-exporting the effective value does not preserve the input-port
+role through an intermediate DAG. That DAG must declare and forward its own
+param if its callers should still bind the value.
+
+If internal parameterization is needed, put the input port on a private DAG or
+behind a private module boundary. Do not encode an "internal param" distinction
+with a naming convention.
+
+A1–A10 still apply to param ports through external nameability `N`, bindability
+`B`, and requiredness `R`, while preserving the port role separately from
+ordinary export visibility `V`.
 
 ### 4.1 Visibility on `include` and `import`
 
@@ -422,9 +465,9 @@ axioms in this document.
 | Rule                                   | Derivation                                                      | Surface change vs. today                                                                                                                                                                                                  |
 | -------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **V001** ImportPrivateItem             | A1                                                              | rename only — same rule under the new model                                                                                                                                                                               |
-| **V002** RequiredMustBeBindable        | A4 (with A3)                                                    | re-stated: "required → must be `pub(bind)`"                                                                                                                                                                               |
-| **V003** PrivateInPublic               | A9 on written annotations                                       | unchanged in spirit; A7 keeps it a syntactic walk                                                                                                                                                                         |
-| **V004** VariantLiteralOfBindableIndex | A10 (non-bindable case)                                         | re-stated: "variant literal of a `pub(bind)` index in a `node` / `const` / public-sink body". Does not fire for `param` (always bindable; A10 case (a) trivially satisfied) or for private sink kinds (A10(b) carve-out). |
+| **V002** RequiredMustBeBindable        | A4 (with A3)                                                    | required `index` / `type` / `dim` must be `pub(bind)`; required params are already input ports                                                                                                                             |
+| **V003** PrivateInPublic               | A9 on written external signatures                               | applies to explicit export signatures and param input-port signatures                                                                                                                                                     |
+| **V004** VariantLiteralOfBindableIndex | A10 (non-bindable case)                                         | re-stated: "variant literal of a `pub(bind)` index in a `node` / `const` / public-sink body". Does not fire for `param` (input ports are bindable; A10 case (a) trivially satisfied) or for private sink kinds (A10(b) carve-out). |
 | **V005** IncludeMustReconcileOverride  | A8 at the include site                                          | new                                                                                                                                                                                                                       |
 | **V006** GenericsLeakage               | A9 applied to `include` bindings of bindable `type`/`dimension` | new                                                                                                                                                                                                                       |
 
@@ -442,9 +485,9 @@ readers but cannot be overridden, and its default names variants of a
 - As `pub const node y: D[I] = { I::a: …, I::b: … }` — rejected by
   V004 (A10 case c, `const node` is not a bindable kind, body has
   literals).
-- As `param y: D[I] = { I::a: …, I::b: … }` — legal, but `param` is
-  inherently V=visible + B=bindable (see §4), so the importer _can_
-  override `y`. Not "fixed."
+- As `param y: D[I] = { I::a: …, I::b: … }` — legal, but `param`
+  declares a bindable input port (see §4), so the importer _can_ override
+  `y`. Not "fixed."
 - Removing the literals (variant-free body) requires a constructor
   that doesn't name `I`'s variants, which is rare for a value of type
   `D[I]` populated from per-variant data.
@@ -466,20 +509,21 @@ fire on `pub const node y`) or (b) accept that exposing `y` as a
 | 3   | Library declares `pub(bind) index Phase` and `node total = @cost[Phase::a] + @cost[Phase::b]`           | A10: `node` is non-bindable, body has `Phase::v` literals → forbidden at declaration                                  | **V004 at library compile time** (no include needed)                  |
 | 4   | Dependency abstracts over `Phase` via `sum(p in Phase, …)`                                              | body mentions no name nominally tied to `Phase`; A8 vacuous                                                           | **OK**                                                                |
 | 5   | `pub include "container.gcl"(Element: PrivateInner) as c;` (or `{ pub items }`)                         | A9 Case 2: re-exported items' effective signatures name `PrivateInner` (V=private at importer)                        | **V006**                                                              |
-| 6   | Required `index I;` declared without `pub(bind)` (bare → V=private)                                     | A4 (with A3) forbids the state — required forces bindable, bindable forces visible                                    | **V002**                                                              |
+| 6   | Required `index I;` declared without `pub(bind)` (bare → V=private)                                     | A4 (with A3) forbids the state — required forces bindable; an ordinary bindable declaration must be exported          | **V002**                                                              |
 | 7   | `pub` declaration whose annotation names a private symbol                                               | A9 directly                                                                                                           | **V003**                                                              |
 | 8   | Library uses `100 jpy`; importer wants different rate; library follows §5.2 idiom                       | importer binds `jpy_in_usd`; A8 trivially satisfied                                                                   | **OK**                                                                |
 | 9   | Library uses `100 jpy`; library defines `jpy` directly with literal rate; importer wants different rate | A5 says `unit` is `fixed`; no override possible                                                                       | **rejected at include site** — library must refactor to §5.2 idiom    |
 | 10  | Library declares `pub(bind) index I = {a,b}` and `pub const node y: D[I] = {I::a:1, I::b:2}`            | A10 case (c): `const node` is non-bindable, body has `I::v` literals → forbidden at declaration                       | **V004 at library compile time** (foreclosed design point — see §6.1) |
-| 11  | Library declares `pub(bind) index I = {a,b}` and `param y: D[I] = {I::a:1, I::b:2}`                     | A10 case (a) trivially satisfied (`param` is inherently bindable). Importer overrides `I` and forgets to re-bind `y`. | **V005 at importer**                                                  |
+| 11  | Library declares `pub(bind) index I = {a,b}` and `param y: D[I] = {I::a:1, I::b:2}`                     | A10 case (a) trivially satisfied (a param input port is bindable). Importer overrides `I` and forgets to re-bind `y`. | **V005 at importer**                                                  |
 
 ## 8. What the axioms intentionally don't decide
 
 - **Re-export semantics.** Resolved by issue #452: `pub include` / `pub
 import` for whole-module, `{ pub items }` for selective. See §4.1.
   V006 becomes implementable once #452 lands.
-- **Scoped visibility.** A1 / A9 generalise trivially by replacing
-  `visible` with a lattice of scopes. `pub(bind)` syntax composes as
+- **Scoped visibility.** A1 / A9 generalise by replacing `exported` with a
+  lattice of export scopes while retaining input ports as a distinct role.
+  `pub(bind)` syntax composes as
   `pub(crate, bind)` etc. Not needed for the initial implementation.
 - **Sealed bindability.** A symbol bindable by direct importers but not
   by transitive ones — would need a fourth attribute. Open.
@@ -503,7 +547,7 @@ import` for whole-module, `{ pub items }` for selective. See §4.1.
    in §3.1: `dim D;` is added, `type T;` is repurposed (unit type moves
    to `type T {}`), and `base unit U: Dim;` is added (with `unit_decl`
    tightened). "No body" then means `R = required` uniformly across
-   the four bindable kinds.
+   the three annotation-controlled bindable kinds and param input ports.
 4. **Validation of the per-kind "nominally tied" table (§1).** Index
    (variant literals), dim (none — total algebraic substitution), and
    param (none) are settled. The `type` entry — constructors, field
@@ -544,12 +588,13 @@ These are the load-bearing choices the axioms encode. Each is the
 outcome of an explicit design decision rather than a derivation from
 something more primitive.
 
-- **Bindable set is `{param, index, type, dimension}`.** `unit` is
-  deliberately excluded in favour of the §5.2 canonical idiom
+- **Bindable operations target param input ports plus exported bindable
+  `{index, type, dimension}` declarations.** `unit` is deliberately excluded
+  in favour of the §5.2 canonical idiom
   (rate-as-`param`, unit derives via `@`). `const unit` marks the
   runtime-independent case.
 - **Surface syntax is `pub(bind)`** (Option B in #444 §9). Bare for
-  private, `pub` for visible-only, `pub(bind)` for visible + bindable.
+  private, `pub` for exported-only, `pub(bind)` for exported + bindable.
   Re-exports use `pub include` / `pub import` and `{ pub item }` per
   #452.
 - **A8 covers both flavours.** Value-override (`param`) and nominal-
@@ -565,7 +610,7 @@ something more primitive.
 - **Bindability is contagious through nominal mention.** Marking a
   symbol `pub(bind)` commits every non-sink in-library declaration that
   names its nominal substructure (variants, constructors, base-dim
-  refs, …) to also be part of the bindable + visible API surface.
+  refs, …) to also be part of the bindable external API surface.
   Authors who want to keep helpers private must either keep them
   variant-free or downgrade `s` from `pub(bind)`. See the A10 note in
   §2 for the full statement.
@@ -583,12 +628,13 @@ something more primitive.
   `type T;` (unit type moves to `type T {}`), and add `base unit U: Dim;`
   while tightening `unit_decl` to require bodies on non-base units.
   See §3.1.
-- **`param` is annotation-free.** `param` declarations omit the V/B
-  annotation entirely; `param` is implicitly V=visible + B=bindable.
-  `pub param` and `pub(bind) param` are illegal — the kind itself
-  encodes the only meaningful state. The "private fixed value" and
-  "public fixed value" states reachable for other kinds via bare /
-  `pub` map to `const node` / `pub const node` instead. See §4.0.
+- **`param` is an annotation-free named input port.** It is not an ordinary
+  declaration with implicit `pub` visibility, but its effective bound/default
+  value is externally readable and projectable. `pub param` and
+  `pub(bind) param` are illegal because the declaration kind already encodes
+  the only meaningful input-port state. Internal computed/fixed values use
+  `node` / `const node`; internal parameterization uses a private DAG or module
+  boundary. See §4.0.
 - **A10 inspects body/default only, not type annotations.** Sufficient
   because the language enforces explicit construction: any value of a
   generic / indexed type whose annotation mentions a `pub(bind)` symbol
@@ -627,7 +673,7 @@ something more primitive.
   `param`s / `pub(bind) index`es / etc. at A's level, and forward them
   to B in A's `include` statement. This is the manual re-declaration
   pattern. It is verbose but legible, and matches the language's
-  "explicit over implicit" stance — the bindable surface visible at
+  "explicit over implicit" stance — the bindable surface nameable at
   any include site is exactly what the importer can read from the
   file's declarations.
 
