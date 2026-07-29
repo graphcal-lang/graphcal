@@ -464,9 +464,9 @@ fn resolve_scan_expression() {
 }
 
 #[test]
-fn resolve_unfold_self_edge_excluded() {
-    // The unfold body references @x[prev_t], which creates a self-reference.
-    // extract_all_refs should exclude this self-edge from runtime_deps.
+fn resolve_unfold_self_edge_is_an_ordinary_dependency() {
+    // The previous state is a lexical binding. An explicit @x reference in
+    // the body remains an ordinary self-edge even when indexed by prev_t.
     let source = r"
         index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
         node x: Dimensionless[TimeStep] = unfold(
@@ -478,8 +478,8 @@ fn resolve_unfold_self_edge_excluded() {
     let tir = compile_to_tir(source).unwrap();
     let deps = &tir.root().semantic.dependencies;
     assert!(
-        !dep_names_of(&deps.runtime_deps, "x").contains(&"x"),
-        "unfold self-reference should be excluded from runtime_deps"
+        dep_names_of(&deps.runtime_deps, "x").contains(&"x"),
+        "explicit unfold self-reference must remain in runtime_deps"
     );
 }
 

@@ -583,8 +583,10 @@ node total: Dimensionless = sum(
 );
 ```
 
-Use the `prev_x` binding directly when computing the next step. This is useful
-for time-stepping simulations and discrete dynamic systems.
+Use the `prev_x` binding directly when computing the next step. A reference to
+`@x` in its own initializer is an ordinary dependency cycle, including
+`@x[prev_t]`, `@x[t]`, and future-coordinate forms. This is useful for
+time-stepping simulations and discrete dynamic systems.
 
 ## Aggregation Over Any Index
 

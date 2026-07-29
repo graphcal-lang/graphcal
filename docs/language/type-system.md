@@ -872,6 +872,9 @@ unfold(index, init, |prev_state, prev_i, i| body)
 For coordinates `i₀, i₁, …`, `result[i₀] = init` and each later value is
 `body(result[iₖ₋₁], iₖ₋₁, iₖ)`. The
 `|prev_state, prev_i, i| body` form is special syntax, not a function value.
+Use `prev_state` directly; an explicit reference to the declaration being
+defined is an ordinary dependency cycle, regardless of the coordinate used to
+index that reference.
 
 ## DAG Blocks
 
